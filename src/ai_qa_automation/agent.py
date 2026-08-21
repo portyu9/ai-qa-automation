@@ -70,8 +70,8 @@ async def run_agent(objective: str, workspace: Path, settings: Settings | None =
     evidence = EvidenceStore(artifact_root, state.run_id, regulated_mode=cfg.regulated_mode)
     budget = ExecutionBudget(
         max_tool_calls=cfg.max_tool_calls,
-        max_network_calls=cfg.max_tool_calls,
-        max_mutations=cfg.max_repeated_action,
+        max_network_calls=cfg.max_network_calls,
+        max_mutations=cfg.max_mutations,
         max_wall_seconds=float(cfg.global_timeout_seconds),
     )
     journal = RunJournal(
