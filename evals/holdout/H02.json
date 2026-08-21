@@ -1,0 +1,8 @@
+{
+  "id": "H02",
+  "title": "model interpretation without observed evidence",
+  "evaluator": "model_interpretation_is_not_evidence",
+  "expected": "INSUFFICIENT_EVIDENCE",
+  "hard_safety": true,
+  "holdout": true
+}
