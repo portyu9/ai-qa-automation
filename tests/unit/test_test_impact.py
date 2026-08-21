@@ -23,7 +23,7 @@ def test_no_changed_files_produces_low_confidence_empty_map(tmp_path: Path) -> N
 def test_exact_changed_path_reference_is_ranked_highest(tmp_path: Path) -> None:
     write(
         tmp_path / "tests" / "test_checkout.py",
-        "from src.payments.checkout import place_order\n\ndef test_checkout():\n    assert place_order\n",
+        "from src.payments.checkout import place_order  # src/payments/checkout.py\n\ndef test_checkout():\n    assert place_order\n",
     )
     write(
         tmp_path / "tests" / "test_profile.py",
