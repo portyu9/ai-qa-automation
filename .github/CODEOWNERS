@@ -1,6 +1,7 @@
 # Governance-sensitive paths should receive owner review.
 # CODEOWNERS expresses review routing; actual enforcement depends on repository/branch-protection settings.
 /CLAUDE.md @portyu9
+/LICENSE @portyu9
 /.claude/ @portyu9
 /.mcp.json @portyu9
 /.github/CODEOWNERS @portyu9
