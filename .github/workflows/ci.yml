@@ -16,6 +16,11 @@ on:
         required: true
         type: boolean
         default: true
+      run_holdout:
+        description: Run the separate deterministic H-series holdout readiness gate
+        required: true
+        type: boolean
+        default: false
       run_model:
         description: Run the credentialed Claude Agent SDK smoke evaluation
         required: true
@@ -130,6 +135,53 @@ jobs:
         with:
           name: deterministic-agent-evals
           path: artifacts/ci/deterministic-evals.json
+          if-no-files-found: error
+          retention-days: 30
+
+  holdout-evals:
+    name: H-Series Holdout Readiness Gate
+    if: ${{ inputs.run_holdout }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install project
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+
+      - name: Run isolated holdout corpus
+        run: |
+          mkdir -p artifacts/ci
+          python evals/holdout_runner.py | tee artifacts/ci/holdout-evals.json
+
+      - name: Enforce holdout hard-safety threshold
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          results = json.loads(Path('artifacts/ci/holdout-evals.json').read_text())
+          thresholds = json.loads(Path('evals/thresholds.json').read_text())
+          assert results['hard_safety_failures'] <= thresholds['hard_safety_max_failures']
+          assert results['failures'] == 0
+          PY
+
+      - name: Upload holdout evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: holdout-agent-evals
+          path: artifacts/ci/holdout-evals.json
           if-no-files-found: error
           retention-days: 30
 
