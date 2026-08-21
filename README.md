@@ -206,9 +206,9 @@ See [`docs/MCP.md`](docs/MCP.md).
 
 ## Evaluation
 
-The agent is tested as software. The repository includes unit, integration, policy, security, and evaluation tests plus a 34-scenario adversarial corpus.
+The agent is tested as software. The repository includes unit, integration, policy, security, and evaluation tests, a fixed 34-scenario adversarial corpus, and a separate H-series holdout corpus that is not part of routine tuning execution.
 
-The scenario set covers:
+The primary scenario set covers:
 
 - application versus automation defects
 - locator changes and flaky behavior
@@ -225,11 +225,14 @@ The scenario set covers:
 - governance-file modification attempts
 - target `CLAUDE.md` and `.mcp.json` injection
 
-Hard-safety scenarios use zero known failures as their threshold.
+Hard-safety scenarios use zero known failures as their threshold. The holdout suite has its own runner and is executed only at an intentional readiness/release checkpoint.
 
 ```bash
 pytest
 python evals/runner.py
+
+# Explicit holdout gate — do not use as an everyday tuning loop
+python evals/holdout_runner.py
 ```
 
 See [`docs/EVALUATION.md`](docs/EVALUATION.md).
@@ -284,6 +287,7 @@ The live path requires the trusted control root and target workspace to be disjo
 ```text
 .
 ├── CLAUDE.md
+├── LICENSE
 ├── .claude/                  # trusted project settings, hooks, Skills
 ├── .mcp.json                 # trusted developer MCP configuration
 ├── src/ai_qa_automation/
@@ -295,7 +299,7 @@ The live path requires the trusted control root and target workspace to be disjo
 │   ├── tools/                # execution and evidence adapters
 │   └── integrations/         # external MCP configuration and health mapping
 ├── tests/                    # unit/integration/policy/security/evaluation tests
-├── evals/                    # 34-scenario corpus + fixed thresholds
+├── evals/                    # 34-scenario primary corpus + separate holdouts
 ├── examples/reference_sut/
 ├── performance/
 └── docs/
@@ -303,11 +307,11 @@ The live path requires the trusted control root and target workspace to be disjo
 
 ## Verification boundaries
 
-Repository-contained deterministic behavior is exercised through pytest and `evals/runner.py`. Environment-dependent integrations are not represented as verified without actual execution.
+Repository-contained deterministic behavior is exercised through pytest and the primary/holdout evaluators. Environment-dependent integrations are not represented as verified without actual execution.
 
 Current environment-dependent boundaries include live Anthropic execution, authenticated GitHub/Atlassian MCP sessions, external target browsers, k6 against a real approved workload, Appium device/emulator sessions, and infrastructure-level sandbox/egress controls.
 
-See [`docs/VERIFICATION_BOUNDARIES.md`](docs/VERIFICATION_BOUNDARIES.md).
+See [`docs/VERIFICATION_BOUNDARIES.md`](docs/VERIFICATION_BOUNDARIES.md) and [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md).
 
 ## Change intelligence and traceability
 
@@ -319,7 +323,7 @@ Persisted runs can be exported as an evidence/validation/artifact/runtime-event 
 
 `.github/workflows/ci.yml` is manual-only and exposes `workflow_dispatch`. It has no `push`, `pull_request`, or scheduled trigger.
 
-The workflow contains deterministic quality, evaluation, security, browser-reference-SUT, and optional model-smoke jobs. The model job is disabled by default unless its manual input is explicitly enabled.
+The workflow contains deterministic quality, primary evaluation, security, browser-reference-SUT, optional holdout, and optional model-smoke gates. Environment-dependent and holdout gates remain opt-in rather than being implied by workflow definition.
 
 ## Technical walkthrough
 
@@ -327,4 +331,6 @@ The workflow contains deterministic quality, evaluation, security, browser-refer
 
 ## License
 
-No open-source license is currently specified for this repository.
+This project is licensed under the [MIT License](LICENSE).
+
+Copyright (c) 2026 Yunior Portal.
