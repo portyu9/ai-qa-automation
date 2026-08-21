@@ -9,6 +9,9 @@ from .agent import run_agent_sync
 from .config import Settings
 from .demo import run_demo
 from .doctor import environment_report
+from .intelligence.contract_drift import OpenAPIContractDriftAnalyzer
+from .runtime.attestation import build_run_attestation
+from .runtime.lineage import build_run_lineage
 from .runtime.recovery import inspect_recovery
 
 app = typer.Typer(help="AI QA Automation command-line interface", no_args_is_help=True)
@@ -35,11 +38,53 @@ def recover_command(
     typer.echo(json.dumps(inspect_recovery(run_dir), indent=2, default=str))
 
 
+@app.command("lineage")
+def lineage_command(
+    run_dir: Path = typer.Argument(..., exists=True, file_okay=False, resolve_path=True),
+    output_format: str = typer.Option("json", "--format", help="json or dot"),
+) -> None:
+    """Export evidence, artifact, validation, hypothesis, and runtime-event lineage."""
+    graph = build_run_lineage(run_dir)
+    normalized = output_format.casefold().strip()
+    if normalized == "dot":
+        typer.echo(graph.to_dot())
+        return
+    if normalized != "json":
+        raise typer.BadParameter("--format must be json or dot")
+    typer.echo(json.dumps(graph.as_dict(), indent=2, default=str))
+
+
+@app.command("attest")
+def attest_command(
+    run_dir: Path = typer.Argument(..., exists=True, file_okay=False, resolve_path=True),
+) -> None:
+    """Emit an unsigned content-addressed integrity attestation for persisted run records."""
+    typer.echo(json.dumps(build_run_attestation(run_dir), indent=2, default=str))
+
+
+@app.command("contract-diff")
+def contract_diff_command(
+    baseline: Path = typer.Option(..., "--baseline", exists=True, dir_okay=False, resolve_path=True),
+    current: Path = typer.Option(..., "--current", exists=True, dir_okay=False, resolve_path=True),
+) -> None:
+    """Deterministically report conservative OpenAPI/Swagger compatibility drift."""
+    report = OpenAPIContractDriftAnalyzer().analyze(
+        path=current.name,
+        baseline=baseline.read_bytes(),
+        current=current.read_bytes(),
+    )
+    typer.echo(json.dumps(report.as_dict(), indent=2, default=str))
+
+
 @app.command("agent")
 def agent_command(
     objective: str = typer.Argument(..., help="Bounded QA objective"),
-    workspace: Path = typer.Option(..., "--workspace", exists=True, file_okay=False, resolve_path=True),
-    control_root: Path | None = typer.Option(None, "--control-root", exists=True, file_okay=False, resolve_path=True),
+    workspace: Path = typer.Option(
+        ..., "--workspace", exists=True, file_okay=False, resolve_path=True
+    ),
+    control_root: Path | None = typer.Option(
+        None, "--control-root", exists=True, file_okay=False, resolve_path=True
+    ),
 ) -> None:
     """Run one bounded Claude Agent SDK session."""
     settings = Settings(control_root=control_root) if control_root is not None else Settings()

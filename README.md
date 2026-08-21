@@ -172,7 +172,9 @@ Localhost/reference-SUT execution can use those application controls directly. A
 
 Process-level controls are intentionally separate from that decision model. Each run also maintains `runtime.json` for the workspace lease identifier, current workspace fingerprint, execution-budget counters, open tool circuits, pending mutation transaction, and journal head. `journal.jsonl` is append-only and SHA-256 hash chained so interrupted runs can be inspected without relying on conversational memory.
 
-Before Claude receives the objective, the runtime deterministically captures the Git/worktree fingerprint, changed-file risk, repository technology/test topology, and dependency-manifest inventory. Only a bounded sanitized summary is added to model context; the underlying observations are persisted as evidence.
+Before Claude receives the objective, the runtime deterministically captures the Git/worktree fingerprint, changed-file risk, repository technology/test topology, dependency-manifest inventory, CODEOWNERS routing, and explainable test-impact candidates. When `AI_QA_BASE_REF` is set, the runtime resolves that trusted ref to immutable baseline/merge-base SHAs so a clean feature branch is analyzed against the real committed change set rather than appearing to have no changes. Changed OpenAPI/Swagger contracts are structurally compared with the merge-base version and classified `BREAKING`, `RISKY`, `NON_BREAKING`, or `NOT_ANALYZED`. Only a bounded sanitized summary is added to model context; the underlying observations are persisted as evidence.
+
+The test-impact mapper is intentionally advisory: it uses deterministic path/component overlap and bounded source references to identify relevant tests, but low confidence or a truncated scan must broaden regression rather than being interpreted as proof that omitted tests are safe.
 
 Autonomous test mutations are transactional. The pre-tool hook snapshots the target file into the trusted artifact area, a mutation remains pending while the new revision is validated, and the rollback point is committed only after patch-safety, targeted pytest, and full-regression closure. A failed/interrupted/unverified run restores the previous file (or removes an unverified newly created test) before the terminal report. A mutation is also blocked if the Git-backed target worktree differs from the fingerprint captured by the runtime.
 
@@ -306,6 +308,12 @@ Repository-contained deterministic behavior is exercised through pytest and `eva
 Current environment-dependent boundaries include live Anthropic execution, authenticated GitHub/Atlassian MCP sessions, external target browsers, k6 against a real approved workload, Appium device/emulator sessions, and infrastructure-level sandbox/egress controls.
 
 See [`docs/VERIFICATION_BOUNDARIES.md`](docs/VERIFICATION_BOUNDARIES.md).
+
+## Change intelligence and traceability
+
+`AI_QA_BASE_REF=origin/main` enables merge-base-aware committed-change analysis, CODEOWNERS resolution, deterministic test-impact candidates, and conservative OpenAPI/Swagger drift detection. See [`docs/CHANGE_INTELLIGENCE.md`](docs/CHANGE_INTELLIGENCE.md).
+
+Persisted runs can be exported as an evidence/validation/artifact/runtime-event lineage graph with `ai-qa lineage artifacts/run-<id>` (JSON or Graphviz DOT), and `ai-qa attest artifacts/run-<id>` emits an explicitly unsigned content-addressed integrity attestation. See [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md).
 
 ## GitHub Actions
 

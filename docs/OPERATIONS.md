@@ -39,6 +39,19 @@ ai-qa recover artifacts/run-<id>
 
 Recovery verifies `state.json`, the runtime journal hash chain, current revision closure, and pending mutation metadata. It reports whether a new model session can safely start from persisted evidence. It does not replay a previous Claude conversation.
 
+## Change baseline and traceability
+
+Set `AI_QA_BASE_REF=origin/main` (or another explicit trusted ref) when the run should analyze committed branch/PR changes relative to a baseline. The ref is validated and resolved to immutable baseline and merge-base SHAs. Bootstrap also records CODEOWNERS resolution, deterministic test-impact candidates, and changed OpenAPI/Swagger compatibility drift when applicable.
+
+```bash
+ai-qa lineage artifacts/run-<id>
+ai-qa lineage artifacts/run-<id> --format dot
+ai-qa attest artifacts/run-<id>
+ai-qa contract-diff --baseline old-openapi.yaml --current new-openapi.yaml
+```
+
+The attestation is content-addressed but intentionally unsigned; it does not alter the run terminal status or claim compliance.
+
 ## Network behavior
 
 External network access is disabled by default. Allowed hosts are explicit configuration. API probes are read-only unless mutating methods are separately enabled, and API/browser adapters do not inherit ambient proxy configuration. Browser HTTP(S)/WebSocket traffic and k6 targets pass through the runtime allowlist. For non-local k6 execution, `AI_QA_K6_EXTERNAL_EGRESS_ENFORCED=true` is also required as an explicit trusted assertion that infrastructure-level egress controls are present.

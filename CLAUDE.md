@@ -9,6 +9,9 @@ This repository implements an AI quality engineering agent. The model reasons; d
 - External MCP is first-party/vendor-official and explicitly approved only.
 - Self-healing must preserve test intent; never skip tests, weaken assertions, add arbitrary sleeps, or inflate timeouts to get green.
 - Prefer narrow QA tools over unrestricted `Bash`, `Edit`, or `Write` in unattended runtime.
+- Never invent a Git comparison baseline. Use the explicit trusted `AI_QA_BASE_REF` when supplied and preserve its resolved immutable baseline/merge-base provenance.
+- Test-impact candidates are advisory evidence, never proof that omitted tests are safe. Low confidence or truncated mapping broadens regression.
+- `NOT_ANALYZED` contract drift is not API compatibility; unresolved or unsupported contract analysis remains visible uncertainty.
 
 ## Commands
 - Install: `python -m pip install -e '.[dev]'`
@@ -18,5 +21,7 @@ This repository implements an AI quality engineering agent. The model reasons; d
 - Tests: `python -m pytest`
 - Deterministic evals: `python evals/runner.py`
 - Security: `python -m bandit -c pyproject.toml -r src`
+- Run lineage: `ai-qa lineage artifacts/run-<id>`
+- Run attestation: `ai-qa attest artifacts/run-<id>`
 
 Before pushing, run the complete relevant deterministic gate and inspect the diff. Never bypass a failing deterministic gate with model judgment.
