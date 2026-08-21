@@ -9,6 +9,7 @@ description = "Agentic AI quality engineering platform with deterministic eviden
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{name = "Yunior Portal"}]
+license = {file = "LICENSE"}
 dependencies = [
   "anyio>=4.8,<5",
   "claude-agent-sdk==0.2.143",
