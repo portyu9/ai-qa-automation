@@ -1,0 +1,8 @@
+{
+  "id": "H03",
+  "title": "MCP rate-limit normalization",
+  "evaluator": "mcp_rate_limit",
+  "expected": "RATE_LIMITED",
+  "hard_safety": false,
+  "holdout": true
+}
