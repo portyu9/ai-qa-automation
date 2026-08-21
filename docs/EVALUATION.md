@@ -4,19 +4,24 @@ The agent is evaluated as a software system, not only by subjective response qua
 
 ## Layers
 
-1. **Unit tests** — schemas, policies, redaction, intelligence logic, runtime budgets, evidence integrity.
-2. **Integration tests** — evidence/state/report flow, artifact manifests, regulated audit chaining, reference behavior.
+1. **Unit tests** — schemas, policies, redaction, intelligence logic, runtime budgets, evidence integrity, recovery, change intelligence, and traceability.
+2. **Integration tests** — evidence/state/report flow, artifact manifests, regulated audit chaining, reference behavior, and Agent SDK contracts.
 3. **Security tests** — governance protection, prompt-injection-shaped data, destructive operations, path and tool boundaries.
-4. **Deterministic scenario evaluator** — 34 functional/adversarial scenarios in `evals/scenarios/`.
-5. **Model-marked tests** — tests requiring Anthropic credentials are isolated behind the `model` marker and are not treated as verified when they are not executed.
+4. **Deterministic primary scenario evaluator** — the fixed 34 functional/adversarial scenarios in `evals/scenarios/`, executed by `python evals/runner.py`.
+5. **Deterministic holdout evaluator** — a separate H-series corpus in `evals/holdout/`, executed only by `python evals/holdout_runner.py` during an intentional holdout/readiness gate.
+6. **Model-marked tests** — tests requiring Anthropic credentials are isolated behind the `model` marker and are not treated as verified when they are not executed.
+
+The primary and holdout catalogs are deliberately disjoint. Primary scenarios must set `"holdout": false`; H-series scenarios must set `"holdout": true`. Routine tuning/regression execution does not consume the holdout directory.
 
 ## Fixed thresholds
 
 `evals/thresholds.json` defines release thresholds independently of an individual run. Hard-safety scenarios require zero known failures. A weak run is not repaired by relaxing the threshold afterward.
 
+The same zero-known-failure hard-safety principle applies to the holdout suite. Holdout expected results are not changed merely to accommodate a failing implementation.
+
 ## Important assertions
 
-The deterministic suite directly checks behaviors including:
+The deterministic suites directly check behaviors including:
 
 - a retry at the same change revision cannot hide a conflicting failure; only a newer approved revision of the same gate can supersede historical failure
 - unknown tools and unapproved MCP namespaces fail closed
@@ -28,8 +33,23 @@ The deterministic suite directly checks behaviors including:
 - k6 scripts must bind to the approved target; external runs require a trusted infrastructure-egress precondition
 - test patching cannot remove meaningful assertion coverage
 - regulated evidence records maintain a hash chain
-- repeated identical actions and total tool calls are bounded
-- MCP auth/outage/invalid-response states are normalized without invented remote evidence
+- operational journals detect tampering and preserve append-only hash lineage
+- repeated identical actions and total/network/mutation tool budgets are bounded
+- concurrent agent runs cannot silently share a target-workspace mutation lease
+- interrupted mutations rollback only when persisted fingerprints prove no newer human/out-of-band change would be overwritten
+- persisted run lineage connects evidence, artifacts, hypotheses, validations, and runtime events
+- run attestations remain unsigned integrity statements and never convert `NOT_VERIFIED` into PASS
+- merge-base-aware change intelligence broadens regression for critical/high-risk paths
+- CODEOWNERS unsupported grammar is reported instead of guessed
+- OpenAPI drift distinguishes breaking/risky/additive change classes
+- low-confidence or truncated test-impact maps cannot justify aggressive omission
+- MCP auth/outage/rate-limit/invalid-response states are normalized without invented remote evidence
+
+## Holdout discipline
+
+The H-series intentionally exercises variants not represented as ordinary primary fixtures, including competing evidence signals, model-interpretation isolation, MCP rate limiting, nested governance protection, security-critical test preservation, and very-low-confidence regression broadening.
+
+The holdout suite should be executed at an explicit readiness/release checkpoint, recorded as its own evidence, and then interpreted conservatively. It is not a substitute for live model, authenticated MCP, browser/device, sandbox, or production-environment verification.
 
 ## Metrics
 
@@ -44,3 +64,5 @@ The models and reports support metrics such as:
 ## Interpretation
 
 The number of generated tests or repairs that become green is not sufficient evidence of quality. False healing, escaped regressions, fabricated PASS, unsafe policy bypasses, and omitted mandatory coverage are hard failures.
+
+Anything not actually executed remains `NOT_VERIFIED`, including the holdout suite itself until an explicit holdout run is performed.
