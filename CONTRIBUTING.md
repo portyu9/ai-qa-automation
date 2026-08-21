@@ -1,18 +1,77 @@
 # Contributing
 
-This repository treats deterministic safety gates as higher authority than model judgment.
+AI QA Automation treats deterministic safety gates as higher authority than model judgment. Contributions should preserve that hierarchy.
 
-Before proposing a change:
+## Local contribution gates
+
+After installing the development dependencies, the routine repository-contained checks are intentionally separated by concern:
 
 ```bash
-python -m compileall -q src evals examples
-pytest
-python evals/runner.py
-ruff format --check .
-ruff check .
-mypy src
+make quality
+make test
+make eval
+make security
 ```
 
-Never make a test green by skipping it, weakening a meaningful assertion, adding an arbitrary sleep, suppressing a failure, or changing predefined safety thresholds after seeing evaluation results.
+Or run the same routine set with:
 
-Changes to `CLAUDE.md`, `.claude/`, `.mcp.json`, runtime hooks/policy, or `evals/thresholds.json` are governance changes and deserve explicit review.
+```bash
+make verify-local
+```
+
+The H-series holdout corpus is **not** part of the everyday contribution loop. It exists to preserve an independent readiness signal and should be run only at an intentional checkpoint:
+
+```bash
+make holdout
+```
+
+A command existing in this repository is not evidence that it passed on a given commit; record actual execution results before describing current-head gates as verified.
+
+## Non-negotiable test-integrity rules
+
+Never make a test or evaluation green by:
+
+- skipping or x-failing the behavior under investigation;
+- weakening or removing a meaningful assertion;
+- replacing an assertion with a tautology;
+- adding an arbitrary sleep;
+- inflating timeouts without evidence;
+- broadly suppressing exceptions/failures;
+- changing predefined safety thresholds after seeing a failing result;
+- moving a failing holdout case into the normal tuning corpus to hide the readiness failure.
+
+If behavior is genuinely wrong, fix the implementation or update a test only when the test's intended contract is demonstrably incorrect.
+
+## Governance-sensitive changes
+
+Changes to the following deserve explicit security/architecture review because they can alter runtime authority or what counts as evidence:
+
+- `CLAUDE.md`;
+- `.claude/` settings, hooks, or Skills;
+- `.mcp.json` and external MCP registry/configuration;
+- `src/ai_qa_automation/policy.py`;
+- runtime hooks, terminal-outcome rules, mutation/recovery controls, or evidence semantics;
+- `evals/thresholds.json`;
+- primary/holdout corpus membership or expected hard-safety outcomes;
+- GitHub Actions permissions/triggers;
+- secret/network/write/performance safety defaults.
+
+A governance change should explain why authority is not being widened accidentally and should add deterministic coverage for any newly allowed behavior.
+
+## Documentation standard
+
+Documentation must distinguish:
+
+- **implemented** source/configuration;
+- **observed/verified** execution evidence;
+- **not verified** current-head behavior;
+- **environment-required** capabilities;
+- **not configured** optional integrations.
+
+Avoid wording that implies a live model, MCP, browser/device, load, sandbox, or production deployment was verified solely because supporting code exists.
+
+Start with [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/SETUP.md`](docs/SETUP.md), [`docs/EVALUATION.md`](docs/EVALUATION.md), and [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md).
+
+## Security reports
+
+Do not put real credentials, private customer data, production artifacts, or sensitive exploit material in a public contribution. Follow the root [`SECURITY.md`](SECURITY.md) disclosure guidance.
