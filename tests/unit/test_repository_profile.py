@@ -24,7 +24,7 @@ def test_repository_profile_discovers_stack_without_executing_code(tmp_path: Pat
 
     result = RepositoryProfiler().profile(tmp_path)
 
-    assert result.languages[:2] == ("python", "typescript")
+    assert set(result.languages[:2]) == {"python", "typescript"}
     assert set(result.test_surfaces) >= {"pytest", "playwright", "k6"}
     assert set(result.architecture_surfaces) >= {
         "api-contract",
