@@ -9,14 +9,24 @@ from pathlib import Path
 
 PROTECTED = (
     "CLAUDE.md",
+    "LICENSE",
+    "SECURITY.md",
     ".mcp.json",
     ".claude/settings.json",
     ".claude/hooks/",
     ".claude/skills/",
+    ".github/CODEOWNERS",
     ".github/workflows/",
+    ".pre-commit-config.yaml",
+    "pyproject.toml",
+    "Dockerfile",
+    "docs/SECURITY.md",
+    "docs/THREAT_MODEL.md",
+    "docs/PRODUCTION_READINESS.md",
+    "docs/VERIFICATION_BOUNDARIES.md",
     "src/ai_qa_automation/policy.py",
-    "src/ai_qa_automation/runtime/runtime_hooks.py",
-    "evals/thresholds.json",
+    "src/ai_qa_automation/runtime/",
+    "evals/",
 )
 DESTRUCTIVE = [
     re.compile(r"\bgit\s+push\b.*(?:--force|-f)"),
@@ -56,7 +66,7 @@ def main() -> int:
         except ValueError:
             deny("SEC-FS-001: write outside control repository denied")
             return 0
-        if any(relative == p or relative.startswith(p) for p in PROTECTED):
+        if any(relative == protected or relative.startswith(protected) for protected in PROTECTED):
             deny("SEC-GOV-001: governance file change requires reviewed engineering process")
             return 0
     return 0
