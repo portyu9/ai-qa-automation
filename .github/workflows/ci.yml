@@ -1,6 +1,6 @@
 name: Manual CI — AI QA Automation
 
-# Final repository code/config step after static review; remains operator-dispatched only.
+# Final repository code/config step after pre-execution completeness audit; remains operator-dispatched only.
 # Intentionally manual-only during portfolio bootstrap.
 # Do not add push/pull_request/schedule triggers until repository secrets,
 # branch policy, and desired execution cost have been reviewed.
@@ -211,7 +211,7 @@ jobs:
           python -m pip check
 
       - name: Bandit static security scan
-        run: bandit -q -r src
+        run: bandit -c pyproject.toml -q -r src
 
       - name: Dependency vulnerability audit
         run: pip-audit
