@@ -1,176 +1,224 @@
 # Production Readiness Matrix
 
-This document is the truth table for the build contract.
+This document is the authoritative truth table for the build contract.
 
-The repository is intentionally **production-shaped**, but it must not be represented as production-ready until every applicable release gate has actually been executed in the target environment. A code path, test definition, workflow, or model response is not evidence that a gate passed.
+AI QA Automation is intentionally **production-shaped**: it contains real runtime boundaries, deterministic validation, security policy, recovery controls, evaluation architecture, and operational documentation. It must not be represented as production-ready merely because those controls exist in source.
+
+> **Implementation is not execution evidence. A model response is not test evidence. A workflow definition is not a workflow result.**
 
 ## Status vocabulary
 
 | Status | Meaning |
 |---|---|
-| `IMPLEMENTED` | The capability/control exists in source/configuration. |
-| `PREVIOUSLY_VERIFIED` | An earlier repository state was exercised successfully; this is useful historical evidence but is not a current-head release certificate. |
-| `NOT_VERIFIED` | The applicable current-head execution has not occurred or its result is unavailable. |
-| `ENVIRONMENT_REQUIRED` | Verification requires credentials, services, devices, browsers, network enforcement, or organization infrastructure not contained in this repository. |
-| `MANUAL_ONLY` | The gate is deliberately operator-triggered and has not been dispatched automatically. |
-| `NOT_CONFIGURED` | The integration is intentionally absent until an approved production requirement/configuration exists. |
+| `IMPLEMENTED` | The capability/control exists in source or trusted configuration. |
+| `PREVIOUSLY_VERIFIED` | An earlier repository state was exercised successfully; useful history, but not a current-head release certificate. |
+| `NOT_VERIFIED` | Applicable current-head execution has not occurred, is incomplete, or its result is unavailable. |
+| `ENVIRONMENT_REQUIRED` | Verification requires credentials, provider services, devices, browsers, target systems, network enforcement, or organization infrastructure outside this repository. |
+| `MANUAL_ONLY` | The gate is deliberately operator-triggered rather than automatic. |
+| `NOT_CONFIGURED` | An optional integration is intentionally absent until an approved use case/configuration exists. |
+| `BLOCKED` | A deterministic safety/integrity prerequisite prevented the action from proceeding. |
+
+These terms are intentionally narrower than words such as “ready,” “works,” or “secure.”
 
 ## Current release statement
 
-**Current status: `NOT_VERIFIED` for production release.**
+**Current production-release status: `NOT_VERIFIED`.**
 
-The implementation is suitable as a production-shaped engineering portfolio/reference system. The current feature branch contains deterministic safety controls, a fixed primary evaluation corpus, a separate holdout corpus, manual CI release gates, and explicit environment boundaries. The complete current-head quality gate has not been executed through GitHub Actions, by design.
+The feature branch is a production-shaped engineering portfolio/reference implementation. A pre-execution static architecture/documentation review has been performed and material static inconsistencies found during that review have been corrected, including independent runtime network/mutation budgets, configuration-reference completeness, local/security command parity, explicit setup guidance, and clearer integration/readiness boundaries.
 
-The manual workflow must remain undispatched until the operator explicitly authorizes it.
+That static review is **not** a substitute for current-head Ruff/Mypy/pytest/evaluation/security/browser execution. Those gates remain `NOT_VERIFIED` until deliberately run.
 
-## Architecture
+The checked-in GitHub Actions workflow remains manual-only and must not be dispatched automatically during the current bootstrap constraint.
+
+## Architecture and trust model
 
 | Contract requirement | Implementation | Verification status |
 |---|---|---|
-| Real Agent SDK loop | `src/ai_qa_automation/agent.py` uses the official Claude Agent SDK | `IMPLEMENTED`; credentialed live execution `ENVIRONMENT_REQUIRED` / `NOT_VERIFIED` |
-| Probabilistic reasoning separated from deterministic validation | Agent orchestration + typed decisions; independent policy/test/schema/performance validation | `IMPLEMENTED` |
-| Canonical state outside conversation history | `AgentRunState`, `StateStore`, `state.json` | `IMPLEMENTED` |
-| Evidence provenance | `EvidenceItem`, `EvidenceStore`, hashed manifest/artifact references | `IMPLEMENTED` |
-| Bounded execution | turn/repeat limits plus wall/tool/network/mutation budgets and circuits | `IMPLEMENTED`; current-head suite `NOT_VERIFIED` |
-| Control plane separated from SUT | disjoint control root/target workspace plus trusted project setting source | `IMPLEMENTED`; infrastructure deployment boundary `ENVIRONMENT_REQUIRED` |
+| Real Agent SDK loop | `src/ai_qa_automation/agent.py` uses the official Claude Agent SDK | `IMPLEMENTED`; live credentialed behavior `ENVIRONMENT_REQUIRED` / `NOT_VERIFIED` |
+| Probabilistic reasoning separated from deterministic authority | model reasoning + controlled tools + independent validation/result rules | `IMPLEMENTED` |
+| Canonical state outside conversation history | `AgentRunState`, `StateStore`, persisted `state.json` | `IMPLEMENTED` |
+| Process-control state separated from QA state | `runtime.json`, journal, lease/budget/mutation metadata | `IMPLEMENTED` |
+| Evidence provenance | typed evidence, run-scoped manifest, hashed artifacts | `IMPLEMENTED` |
+| Trusted control plane separated from SUT | disjoint control/artifact/target roots; project-only Agent SDK settings | `IMPLEMENTED`; deployment isolation `ENVIRONMENT_REQUIRED` |
+| Untrusted target instructions/config | target `CLAUDE.md`, `.claude/`, `.mcp.json`, DOM/log/API/source treated as data | `IMPLEMENTED` |
+| Bounded execution | independent turn/tool/network/mutation/repetition/time/cost limits + circuits | `IMPLEMENTED`; current-head execution `NOT_VERIFIED` |
 
 ## Runtime security
 
-| Contract requirement | Implementation | Verification status |
+| Requirement | Implementation | Verification status |
 |---|---|---|
-| Explicit setting source policy | trusted project source only | `IMPLEMENTED` |
-| Restricted runtime tool set | no generic runtime Bash/Edit/Write/Web; narrow QA tools | `IMPLEMENTED` |
-| Fail-closed permissions | policy callback + runtime hooks | `IMPLEMENTED` |
-| Strict MCP configuration | explicit trusted MCP configuration | `IMPLEMENTED` |
-| Protected governance files | policy + Claude Code hook protections | `IMPLEMENTED` |
-| Isolated target workspace | disjoint workspace + OS-backed lease + fingerprint checks | `IMPLEMENTED`; hardened container/VM enforcement `ENVIRONMENT_REQUIRED` |
-| Restricted egress | application-level allowlists and k6 precondition | `IMPLEMENTED` at application layer; high-assurance infrastructure egress `ENVIRONMENT_REQUIRED` |
+| Explicit Agent SDK setting source | trusted project source only | `IMPLEMENTED` |
+| Restricted base tool surface | no generic runtime Bash/Edit/Write/Web authority; narrow QA tools | `IMPLEMENTED` |
+| Fail-closed authorization | policy callback + universal runtime hooks | `IMPLEMENTED` |
+| Strict MCP configuration | explicit trusted server registry/config | `IMPLEMENTED` |
+| Governance protection | policy/settings/hooks/threshold paths protected from autonomous mutation | `IMPLEMENTED` |
+| Workspace ownership | OS-backed lease outside target repository | `IMPLEMENTED`; dedicated tests present, current head `NOT_VERIFIED` |
+| Workspace drift protection | content-sensitive Git/worktree fingerprint before mutation | `IMPLEMENTED` |
+| Transactional mutation | trusted rollback snapshot until revision closure | `IMPLEMENTED`; dedicated tests present, current head `NOT_VERIFIED` |
+| Human-edit protection after crash | stale rollback only when persisted fingerprint still matches | `IMPLEMENTED`; dedicated tests present, current head `NOT_VERIFIED` |
+| Restricted egress | application host/method/browser/k6 controls | `IMPLEMENTED` at application layer; infrastructure enforcement `ENVIRONMENT_REQUIRED` |
 
-## Core quality automation
+## Core QA automation
 
 | Capability | Implementation | Verification status |
 |---|---|---|
-| pytest | bounded deterministic runner, evidence capture, targeted/regression scopes | `IMPLEMENTED`; current-head full gate `NOT_VERIFIED` |
-| Playwright | browser evidence, semantic locator verification, request/WebSocket policy | `IMPLEMENTED`; browser runtime `ENVIRONMENT_REQUIRED` / `NOT_VERIFIED` on current head |
-| API | `httpx` probing, auth/headers/status/schema support, mutating-method policy | `IMPLEMENTED`; external target execution `ENVIRONMENT_REQUIRED` |
-| Regression | deterministic prioritizer, mandatory preservation, uncertainty broadening, test-impact candidates | `IMPLEMENTED`; current-head full gate `NOT_VERIFIED` |
-| Performance | controlled k6 invocation + p50/p90/p95/p99/error/throughput assessment | `IMPLEMENTED`; real approved staging workload `ENVIRONMENT_REQUIRED` |
-| Mobile | Appium capability/runtime inspection | `IMPLEMENTED` as capability boundary; actual device/app validation `ENVIRONMENT_REQUIRED` |
+| pytest | bounded deterministic runner, targeted/regression scopes, evidence capture | `IMPLEMENTED`; current-head full suite `NOT_VERIFIED` |
+| Playwright | browser evidence, locator verification, HTTP(S)/WebSocket policy | `IMPLEMENTED`; reference/external runtime execution remains applicable `NOT_VERIFIED` / `ENVIRONMENT_REQUIRED` |
+| API | `httpx` probing, auth/headers/status/schema support, read-only default | `IMPLEMENTED`; real external target `ENVIRONMENT_REQUIRED` |
+| Regression selection | deterministic prioritizer + mandatory preservation + uncertainty broadening | `IMPLEMENTED`; current-head gate `NOT_VERIFIED` |
+| Performance | controlled k6 target/script policy + deterministic threshold assessment | `IMPLEMENTED`; real approved workload `ENVIRONMENT_REQUIRED` |
+| Mobile | Appium runtime/capability inspection | `IMPLEMENTED` capability boundary; real app/device execution `ENVIRONMENT_REQUIRED` |
+| CI failure analysis | normalized CI evidence analysis | `IMPLEMENTED`; provider-specific live inputs `ENVIRONMENT_REQUIRED` when used |
 
 ## AI quality features
 
 | Feature | Deterministic protection | Verification status |
 |---|---|---|
-| Failure classification | evidence-weighted taxonomy; interpretation-only input cannot prove a class | primary + holdout fixtures implemented; current-head execution `NOT_VERIFIED` |
-| Safe self-healing | semantic candidate ranking, Playwright-observed uniqueness, policy-gated locator-only mutation | `IMPLEMENTED`; live/browser repair path `ENVIRONMENT_REQUIRED` |
-| Test generation | observed coverage search → evidence-bound plan → guarded creation | `IMPLEMENTED`; current-head gate `NOT_VERIFIED` |
-| Regression prioritization | mandatory/security/safety/regulatory preservation; low confidence broadens | `IMPLEMENTED`; primary + holdout fixtures present |
-| Automated test quality review | meaningful-assertion and unsafe-shortcut validation | `IMPLEMENTED` |
-| CI failure analysis | normalized CI evidence analysis | `IMPLEMENTED`; provider-specific live evidence `ENVIRONMENT_REQUIRED` |
+| Failure classification | evidence-weighted taxonomy; interpretation alone cannot prove class | `IMPLEMENTED`; primary/holdout fixtures present; current-head execution `NOT_VERIFIED` |
+| Safe self-healing | browser-observed uniqueness, semantic ranking, hash/evidence binding, locator-only mutation | `IMPLEMENTED`; real browser repair path `ENVIRONMENT_REQUIRED` where external |
+| Test generation | observed coverage → evidence-bound plan → guarded creation | `IMPLEMENTED`; current-head deterministic gate `NOT_VERIFIED` |
+| Test-quality review | meaningful-assertion and unsafe-shortcut checks | `IMPLEMENTED` |
+| Regression prioritization | mandatory/security/safety/regulatory preservation; low confidence broadens | `IMPLEMENTED` |
+| Prompt-injection resistance | target/remote content treated as untrusted data; policy outside model | `IMPLEMENTED`; adversarial scenarios present |
 
 ## Change intelligence
 
 | Capability | Implementation | Verification status |
 |---|---|---|
-| Merge-base change set | trusted base-ref validation, baseline SHA, merge-base, committed + dirty union | `IMPLEMENTED` |
-| Risk-domain classification | deterministic changed-path risk/layer/tag mapping | `IMPLEMENTED`; dedicated unit tests added |
-| CODEOWNERS | bounded last-match-wins resolver with unsupported-pattern reporting | `IMPLEMENTED`; dedicated unit tests added |
-| Test-impact mapping | bounded path/component/reference scoring; advisory only | `IMPLEMENTED`; dedicated unit tests added |
-| OpenAPI drift | JSON/YAML structural comparison; `BREAKING`/`RISKY`/`NON_BREAKING`/`NOT_ANALYZED` | `IMPLEMENTED`; dedicated unit tests added |
-| Incomplete-map behavior | low confidence/truncation must broaden, never justify omission | `IMPLEMENTED` |
+| Merge-base change set | trusted base-ref validation; immutable baseline/merge-base; committed + dirty union | `IMPLEMENTED` |
+| Risk-domain classification | deterministic path/domain mapping and recommendations | `IMPLEMENTED`; dedicated tests present |
+| Repository profiling | bounded languages/test/API/data/container/IaC/mobile/CI discovery | `IMPLEMENTED`; dedicated tests present |
+| Dependency inventory | bounded manifest paths/sizes/content hashes without executing target code | `IMPLEMENTED` |
+| CODEOWNERS | precedence/last-match resolver; unsupported patterns surfaced | `IMPLEMENTED`; dedicated tests present |
+| Test-impact mapping | bounded explainable path/component/reference scoring; advisory only | `IMPLEMENTED`; dedicated tests present |
+| OpenAPI/Swagger drift | conservative `BREAKING`/`RISKY`/`NON_BREAKING`/`NOT_ANALYZED` analysis | `IMPLEMENTED`; dedicated tests present |
+| Incomplete-map behavior | low confidence/truncation broadens; never proves omission safe | `IMPLEMENTED` |
 
 ## Reliability and interrupted-run safety
 
 | Capability | Implementation | Verification status |
 |---|---|---|
-| Concurrent-run isolation | OS-backed workspace lease outside target repository | `IMPLEMENTED`; dedicated unit tests added |
-| Workspace drift detection | content-sensitive Git/worktree fingerprint | `IMPLEMENTED` |
-| Transactional mutation | trusted rollback snapshot until validation closure | `IMPLEMENTED`; dedicated unit tests added |
-| Crash recovery | stale mutation restored only when fingerprint still matches | `IMPLEMENTED`; dedicated unit tests added |
-| Human-edit protection | changed post-crash workspace blocks automatic rollback | `IMPLEMENTED`; dedicated unit tests added |
-| Tool circuit breaker | repeatedly failing tool becomes unavailable without widening authority | `IMPLEMENTED`; dedicated unit tests added |
-| Recovery inspection | `ai-qa recover` evaluates persisted state/journal without claiming conversation replay | `IMPLEMENTED`; dedicated unit tests added |
-| Cancellation/cleanup | bounded agent/runtime paths and rollback cleanup | `IMPLEMENTED`; environment-specific process interruption behavior remains `NOT_VERIFIED` on current head |
+| Concurrent-run isolation | OS-backed workspace lease | `IMPLEMENTED`; current-head suite `NOT_VERIFIED` |
+| Independent execution budgets | separate tool/network/mutation/repetition/wall/model dimensions | `IMPLEMENTED`; configuration/runtime tests present; current-head `NOT_VERIFIED` |
+| Tool circuit breaker | repeated tool failures open a scoped circuit without widening authority | `IMPLEMENTED`; dedicated tests present |
+| Transactional autonomous mutation | snapshot, pending transaction, validation closure, commit/rollback | `IMPLEMENTED`; dedicated tests present |
+| Crash recovery | stale mutation restoration only on exact fingerprint match | `IMPLEMENTED`; dedicated tests present |
+| Human change preservation | fingerprint mismatch blocks automatic stale rollback | `IMPLEMENTED`; dedicated tests present |
+| Recovery inspection | persisted state/journal/revision/mutation review without claiming chat replay | `IMPLEMENTED`; dedicated tests present |
+| Cancellation/cleanup | bounded runtime/finally rollback paths | `IMPLEMENTED`; process/platform edge behavior current-head `NOT_VERIFIED` |
 
-## Traceability and observability
+## Evidence, traceability, and observability
 
 | Capability | Implementation | Verification status |
 |---|---|---|
 | Run/session IDs | typed state | `IMPLEMENTED` |
-| Structured logs/events | runtime telemetry + journal | `IMPLEMENTED` |
-| Evidence manifest | hashed evidence/artifact records | `IMPLEMENTED` |
-| Hash-chained operational journal | `journal.jsonl` | `IMPLEMENTED`; tamper tests added |
-| Lineage graph | run → evidence/artifact/hypothesis/validation/runtime events | `IMPLEMENTED`; dedicated tests added |
-| Unsigned integrity attestation | content hashes + journal verification; explicitly not a signature | `IMPLEMENTED`; dedicated tests added |
-| Metrics | run/tool/classification/healing/regression/security/cost metrics model | `IMPLEMENTED` |
+| Structured runtime events | telemetry + journal | `IMPLEMENTED` |
+| Evidence manifest | run-scoped evidence/artifact metadata + hashes | `IMPLEMENTED` |
+| Hash-chained operational journal | `journal.jsonl` | `IMPLEMENTED`; tamper tests present |
+| Optional regulated audit chain | additional evidence/artifact registration chain | `IMPLEMENTED`; not a compliance certification |
+| Lineage graph | run → evidence/artifacts/hypotheses/validations/runtime events | `IMPLEMENTED`; dedicated tests present |
+| Unsigned integrity attestation | content hashes + journal verification; explicitly not a signature | `IMPLEMENTED`; dedicated tests present |
+| Metrics model | run/tool/classification/healing/regression/security/cost dimensions | `IMPLEMENTED` |
 | OpenTelemetry compatibility | optional observability dependency/integration | `IMPLEMENTED`; backend export `ENVIRONMENT_REQUIRED` |
-| Model/config provenance | model/SDK/policy/tool/config versions and config fingerprint | `IMPLEMENTED` |
-| Token/cost reporting | captured when observed from model runtime | `IMPLEMENTED`; live values `ENVIRONMENT_REQUIRED` |
+| Model/config provenance | model/SDK/config fingerprint and target provenance | `IMPLEMENTED` |
+| Token/cost reporting | captured when observed from live model result | `IMPLEMENTED`; live values `ENVIRONMENT_REQUIRED` |
 
 ## MCP and external systems
 
 | Requirement | Implementation | Verification status |
 |---|---|---|
-| Only approved official external MCP | explicit GitHub/Atlassian registry/policy | `IMPLEMENTED` |
-| GitHub official MCP | pinned official `github/github-mcp-server`, read-only mode | configuration `IMPLEMENTED`; authenticated runtime `ENVIRONMENT_REQUIRED` / `NOT_VERIFIED` |
-| Atlassian official Rovo MCP | official endpoint integration | configuration `IMPLEMENTED`; authenticated runtime `ENVIRONMENT_REQUIRED` / `NOT_VERIFIED` |
-| Tool-level least privilege | read/write/destructive classification and fail-closed unattended policy | `IMPLEMENTED` |
-| MCP failure normalization | available/not configured/unauthorized/rate limited/unavailable/invalid/failed | `IMPLEMENTED`; primary/holdout fixtures present |
-| MCP prompt injection | untrusted external content cannot redefine policy | `IMPLEMENTED`; adversarial scenarios present |
-| Non-official fallback | community MCP forbidden; vendor API adapter or `NOT_CONFIGURED` | `IMPLEMENTED` policy |
+| Approved official MCP only | explicit GitHub/Atlassian provider policy | `IMPLEMENTED` |
+| GitHub official MCP | `github/github-mcp-server` `v1.0.5`, read-only container configuration | configuration `IMPLEMENTED`; authenticated runtime `ENVIRONMENT_REQUIRED` / `NOT_VERIFIED` |
+| Atlassian Rovo MCP | official `/v1/mcp/authv2` endpoint | configuration `IMPLEMENTED`; authenticated runtime `ENVIRONMENT_REQUIRED` / `NOT_VERIFIED` |
+| Tool-level least privilege | read/write/destructive/unknown external action handling | `IMPLEMENTED` |
+| Health normalization | not-configured/auth/rate-limit/unavailable/invalid/failed states | `IMPLEMENTED`; deterministic fixtures present |
+| Remote prompt injection | sanitized untrusted evidence; cannot redefine control plane | `IMPLEMENTED`; adversarial scenarios present |
+| Non-official fallback | unofficial community MCP not substituted automatically | `IMPLEMENTED` policy |
 
-## Evaluation
+## Evaluation architecture
 
 | Gate | Current state |
 |---|---|
-| Fixed 34-scenario deterministic corpus | present under `evals/scenarios/`; all entries are primary (`holdout: false`) |
-| Separate holdout corpus | H-series present under `evals/holdout/`; all entries are `holdout: true` |
-| Primary runner | `python evals/runner.py` |
-| Holdout runner | `python evals/holdout_runner.py` |
-| Hard-safety threshold | zero known failures, predefined in `evals/thresholds.json` |
-| Earlier baseline deterministic suite | `PREVIOUSLY_VERIFIED` before the newest hardening/change-intelligence/traceability test additions |
+| Unit/integration/policy/security tests | repository suite present, including newest runtime/change/traceability coverage |
+| Fixed primary corpus | exactly 34 primary scenarios under `evals/scenarios/` (`holdout: false`) |
+| Separate holdout corpus | H-series under `evals/holdout/` (`holdout: true`) |
+| Primary runner | `python evals/runner.py` / `make eval` |
+| Holdout runner | `python evals/holdout_runner.py` / `make holdout` |
+| Hard-safety threshold | predefined zero known failures |
+| Routine local aggregate | `make verify-local` = quality + pytest + primary eval + security; excludes holdout |
+| Earlier deterministic baseline | `PREVIOUSLY_VERIFIED` before newest hardening/change-intelligence/traceability/config/doc work |
 | Current-head deterministic suite | `NOT_VERIFIED` until deliberately executed |
-| Current-head holdout suite | `NOT_VERIFIED` until deliberately executed |
+| Current-head holdout | `NOT_VERIFIED` until deliberately executed |
 | Model-backed smoke | `ENVIRONMENT_REQUIRED`; opt-in only |
 
-A holdout failure is a release signal. Do not reclassify the failing scenario as non-holdout, weaken its expected result, or relax a hard-safety threshold to manufacture a green gate.
+A holdout failure is a release/readiness signal. Do not reclassify it, weaken its expected outcome, or relax a hard-safety threshold to manufacture green status.
 
 ## Security red-team questions
 
-The implementation must continue to answer these with deterministic controls/evidence, not model reassurance:
+The implementation should continue to answer these with deterministic controls/evidence rather than model reassurance:
 
 - Can a failed test become a false-positive product defect?
-- Can self-healing change test intent or select the wrong nearby element?
-- Can a generated test pass while asserting nothing meaningful?
-- Can regression selection omit mandatory, security, safety, or regulatory coverage?
-- Can DOM/API/GitHub/Jira content override trusted policy?
+- Can a model interpretation become “observed” without evidence?
+- Can self-healing select a nearby but wrong element or change test intent?
+- Can generated tests pass while asserting nothing meaningful?
+- Can regression selection omit mandatory/security/safety/regulatory coverage?
+- Can DOM/API/GitHub/Jira/target-source content override trusted policy?
 - Can target `CLAUDE.md`, `.claude/`, or `.mcp.json` alter runtime authority?
-- Can developer-local Claude settings/MCP leak into production runtime configuration?
-- Can an unofficial MCP server be introduced accidentally?
-- Can an approved MCP server receive excessive privileges?
-- Can the agent weaken its own hooks/settings/policy/evaluation thresholds?
-- Can secrets enter prompts, logs, or artifacts?
-- Can concurrent or crashed runs overwrite human work?
+- Can developer-local settings or unofficial MCP leak into live configuration?
+- Can an approved MCP receive excessive authority as its tool surface evolves?
+- Can secrets enter prompts, logs, subprocess environments, or artifacts?
+- Can concurrent/crashed runs overwrite developer work?
 - Can retries hide flakiness or contradictory validation?
-- Can outages be converted into fabricated external evidence?
-- Can the loop run indefinitely or exceed tool/network/mutation/cost bounds?
-- Can a model/config upgrade silently remove provenance or reduce quality?
-- Can k6 generate production load without explicit authorization and infrastructure controls?
+- Can external outages become fabricated evidence?
+- Can the loop exceed turn/tool/network/mutation/time/cost bounds?
+- Can a model/SDK/MCP upgrade silently change behavior without provenance/review?
+- Can k6 reach production or escape approved network boundaries?
+- Can an integrity hash be mistaken for a trusted signature or test PASS?
 
-Any newly discovered material weakness requires a deterministic control, policy, or evaluation followed by the applicable verification gate.
+A material weakness should produce a deterministic control, safer tool contract, test/evaluation, or explicit environment boundary before it is considered addressed.
 
 ## Manual CI release gate
 
-`.github/workflows/ci.yml` is intentionally manual-only. It must have no `push`, `pull_request`, or scheduled trigger while this bootstrap constraint is active.
+`.github/workflows/ci.yml` is intentionally `workflow_dispatch`-only during the current bootstrap constraint. It must not acquire `push`, `pull_request`, or scheduled triggers without deliberate operator review.
 
-The workflow defines the repository quality/security/evaluation/browser/model gates, but a workflow definition is not an execution result. Until a run is explicitly authorized and completed, current-head CI status remains `NOT_VERIFIED`.
+The workflow defines quality, primary evaluation, optional holdout, security, browser-reference, and optional live-model jobs. Workflow definition does not constitute execution evidence.
+
+Until an authorized run completes and its evidence is inspected, current-head CI remains `NOT_VERIFIED`.
+
+## Documentation/readiness controls
+
+The repository now separates:
+
+- [`SETUP.md`](SETUP.md) — exact credentials/configuration by mode;
+- [`OPERATIONS.md`](OPERATIONS.md) — staged execution ladder;
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — authority/trust design;
+- [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md) — transaction/recovery mechanics;
+- [`EVALUATION.md`](EVALUATION.md) — primary/holdout governance;
+- [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md) — repository versus environment evidence;
+- [`SHOWCASE.md`](SHOWCASE.md) — defensible portfolio/interview narrative.
+
+Documentation is treated as part of the safety boundary: it must not teach an operator or reviewer to interpret unexecuted capability as PASS.
 
 ## License
 
-The repository is licensed under the MIT License. See the root `LICENSE` file:
+The repository is licensed under the MIT License. See root `LICENSE`:
 
 `Copyright (c) 2026 Yunior Portal`
 
 ## Definition of done for a true production release
 
-A future production release may be called ready only after all applicable current-head gates are actually green, including quality/lint/type/unit/integration/policy/security evaluations, the intentional holdout gate, and every environment-dependent integration required by the deployment. Any excluded capability must remain explicitly `NOT_VERIFIED`, `NOT_CONFIGURED`, or `ENVIRONMENT_REQUIRED` rather than being implied by code presence.
+A future deployment may be called production-ready only after all applicable **current-head** gates have actual evidence, including:
+
+1. quality/static/type checks;
+2. deterministic unit/integration/policy/security tests;
+3. primary adversarial evaluation;
+4. intentional holdout evaluation;
+5. dependency/static/security/secret gates;
+6. browser/reference or external browser gates required by the deployment;
+7. live model validation if Claude is part of the deployment;
+8. authenticated external integrations actually required by the deployment;
+9. approved performance/device testing where applicable;
+10. infrastructure isolation/egress/identity/secret/retention controls required by the organization;
+11. final red-team review of material authority/evidence changes.
+
+Any intentionally excluded capability must remain explicitly `NOT_VERIFIED`, `NOT_CONFIGURED`, or `ENVIRONMENT_REQUIRED` rather than being implied by nearby green gates.
