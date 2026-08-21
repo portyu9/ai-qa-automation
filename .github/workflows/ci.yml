@@ -1,0 +1,273 @@
+name: Manual CI — AI QA Automation
+
+# Intentionally manual-only during portfolio bootstrap.
+# Do not add push/pull_request/schedule triggers until repository secrets,
+# branch policy, and desired execution cost have been reviewed.
+on:
+  workflow_dispatch:
+    inputs:
+      run_browser:
+        description: Run the Playwright reference-SUT integration job
+        required: true
+        type: boolean
+        default: true
+      run_security:
+        description: Run dependency/secret/static security gates
+        required: true
+        type: boolean
+        default: true
+      run_model:
+        description: Run the credentialed Claude Agent SDK smoke evaluation
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-qa-manual-ci-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  quality:
+    name: Quality / Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install project and development gates
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+          python -m pip check
+
+      - name: Compile Python sources
+        run: python -m compileall -q src evals examples
+
+      - name: Ruff format
+        run: ruff format --check .
+
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Mypy
+        if: matrix.python-version == '3.11'
+        run: mypy src
+
+      - name: Deterministic pytest suite
+        run: |
+          mkdir -p artifacts/ci
+          pytest --cov=ai_qa_automation --cov-report=term-missing --cov-report=xml:artifacts/ci/coverage.xml --junitxml=artifacts/ci/junit-${{ matrix.python-version }}.xml
+
+      - name: Upload deterministic test evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: deterministic-tests-py${{ matrix.python-version }}
+          path: artifacts/ci/
+          if-no-files-found: warn
+          retention-days: 14
+
+  deterministic-evals:
+    name: 34-Scenario Agent Evaluation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install project
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+
+      - name: Run fixed adversarial corpus
+        run: |
+          mkdir -p artifacts/ci
+          python evals/runner.py | tee artifacts/ci/deterministic-evals.json
+
+      - name: Enforce hard-safety threshold
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          results = json.loads(Path('artifacts/ci/deterministic-evals.json').read_text())
+          thresholds = json.loads(Path('evals/thresholds.json').read_text())
+          assert results['hard_safety_failures'] <= thresholds['hard_safety_max_failures']
+          assert results['failures'] == 0
+          PY
+
+      - name: Upload evaluation evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: deterministic-agent-evals
+          path: artifacts/ci/deterministic-evals.json
+          if-no-files-found: error
+          retention-days: 30
+
+  security:
+    name: Security Gates
+    if: ${{ inputs.run_security }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install project and security tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+          python -m pip check
+
+      - name: Bandit static security scan
+        run: bandit -q -r src
+
+      - name: Dependency vulnerability audit
+        run: pip-audit
+
+      - name: Secret scan
+        run: |
+          detect-secrets scan --all-files --exclude-files '(^|/)\.git/' > artifacts-secret-scan.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('artifacts-secret-scan.json').read_text())
+          findings = data.get('results', {})
+          if findings:
+              for path, items in findings.items():
+                  print(path, len(items))
+              raise SystemExit('Potential secrets detected; review before proceeding.')
+          print('No potential secrets detected by configured scan.')
+          PY
+
+      - name: Upload security scan metadata
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: security-scan-metadata
+          path: artifacts-secret-scan.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  browser-reference-sut:
+    name: Playwright Reference SUT
+    if: ${{ inputs.run_browser }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install project
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+          python -m playwright install --with-deps chromium
+
+      - name: Start deterministic reference SUT
+        run: |
+          uvicorn examples.reference_sut.app:app --host 127.0.0.1 --port 8000 > /tmp/reference-sut.log 2>&1 &
+          echo $! > /tmp/reference-sut.pid
+          curl --fail --retry 20 --retry-delay 1 --retry-all-errors http://127.0.0.1:8000/health
+
+      - name: Execute Playwright evidence test
+        run: pytest -o addopts='' -q -m browser tests/integration/test_reference_sut_browser.py --junitxml=artifacts-browser.xml
+
+      - name: Print reference SUT log on failure
+        if: failure()
+        run: cat /tmp/reference-sut.log
+
+      - name: Upload browser test metadata
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-reference-sut
+          path: artifacts-browser.xml
+          if-no-files-found: warn
+          retention-days: 14
+
+  model-smoke:
+    name: Claude Agent SDK Smoke (Optional)
+    if: ${{ inputs.run_model }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Require explicit credential
+        run: |
+          test -n "$ANTHROPIC_API_KEY" || { echo 'ANTHROPIC_API_KEY secret is required when run_model=true'; exit 1; }
+
+      - name: Install project
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+
+      - name: Run bounded live Agent SDK evaluation
+        run: pytest -o addopts='' -q -m model tests/evaluations/test_live_agent_smoke.py --junitxml=model-smoke.xml
+
+      - name: Upload model evaluation metadata
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: claude-agent-sdk-smoke
+          path: model-smoke.xml
+          if-no-files-found: warn
+          retention-days: 14
