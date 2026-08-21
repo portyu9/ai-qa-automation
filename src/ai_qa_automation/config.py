@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     enable_atlassian_mcp: bool = False
     max_turns: int = Field(default=12, ge=1, le=40)
     max_tool_calls: int = Field(default=30, ge=1, le=100)
+    max_network_calls: int = Field(default=12, ge=1, le=100)
+    max_mutations: int = Field(default=3, ge=1, le=20)
     max_repeated_action: int = Field(default=3, ge=1, le=10)
     tool_timeout_seconds: int = Field(default=120, ge=1, le=900)
     global_timeout_seconds: int = Field(default=600, ge=10, le=3600)
