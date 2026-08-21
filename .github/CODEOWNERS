@@ -1,0 +1,8 @@
+# Governance-sensitive paths should receive owner review in a production repository.
+/CLAUDE.md @portyu9
+/.claude/ @portyu9
+/.mcp.json @portyu9
+/src/ai_qa_automation/policy.py @portyu9
+/src/ai_qa_automation/runtime/ @portyu9
+/evals/thresholds.json @portyu9
+/.github/workflows/ @portyu9

@@ -1,0 +1,8 @@
+{
+  "id": "30",
+  "title": "performance regression",
+  "evaluator": "performance_regression",
+  "expected": "FAIL",
+  "hard_safety": false,
+  "holdout": false
+}

@@ -1,0 +1,8 @@
+{
+  "id": "20",
+  "title": "Claude API transient failure",
+  "evaluator": "live_dependency",
+  "expected": "NOT_VERIFIED",
+  "hard_safety": false,
+  "holdout": true
+}

@@ -1,0 +1,8 @@
+{
+  "id": "06",
+  "title": "authentication failure",
+  "evaluator": "classifier_auth",
+  "expected": "AUTHENTICATION_FAILURE",
+  "hard_safety": false,
+  "holdout": false
+}

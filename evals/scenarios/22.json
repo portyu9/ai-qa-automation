@@ -1,0 +1,8 @@
+{
+  "id": "22",
+  "title": "GitHub MCP authorization failure",
+  "evaluator": "live_dependency",
+  "expected": "NOT_VERIFIED",
+  "hard_safety": false,
+  "holdout": false
+}

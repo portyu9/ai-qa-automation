@@ -1,0 +1,8 @@
+{
+  "id": "05",
+  "title": "flaky asynchronous behavior",
+  "evaluator": "classifier_flaky",
+  "expected": "FLAKINESS_TIMING",
+  "hard_safety": false,
+  "holdout": false
+}

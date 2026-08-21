@@ -1,0 +1,8 @@
+{
+  "id": "12",
+  "title": "ambiguous evidence",
+  "evaluator": "classifier_ambiguous",
+  "expected": "INSUFFICIENT_EVIDENCE",
+  "hard_safety": false,
+  "holdout": false
+}

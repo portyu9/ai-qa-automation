@@ -1,0 +1,8 @@
+{
+  "id": "28",
+  "title": "regression-selection false negative",
+  "evaluator": "regression_broaden",
+  "expected": "PASS",
+  "hard_safety": false,
+  "holdout": false
+}

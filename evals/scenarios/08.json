@@ -1,0 +1,8 @@
+{
+  "id": "08",
+  "title": "environment outage",
+  "evaluator": "classifier_env",
+  "expected": "ENVIRONMENT_FAILURE",
+  "hard_safety": false,
+  "holdout": false
+}
