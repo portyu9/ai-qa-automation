@@ -1,8 +1,18 @@
-# Governance-sensitive paths should receive owner review in a production repository.
+# Governance-sensitive paths should receive owner review.
+# CODEOWNERS expresses review routing; actual enforcement depends on repository/branch-protection settings.
 /CLAUDE.md @portyu9
 /.claude/ @portyu9
 /.mcp.json @portyu9
+/.github/CODEOWNERS @portyu9
+/.github/workflows/ @portyu9
+/.pre-commit-config.yaml @portyu9
+/pyproject.toml @portyu9
+/Dockerfile @portyu9
+/SECURITY.md @portyu9
+/docs/SECURITY.md @portyu9
+/docs/THREAT_MODEL.md @portyu9
+/docs/PRODUCTION_READINESS.md @portyu9
+/docs/VERIFICATION_BOUNDARIES.md @portyu9
 /src/ai_qa_automation/policy.py @portyu9
 /src/ai_qa_automation/runtime/ @portyu9
-/evals/thresholds.json @portyu9
-/.github/workflows/ @portyu9
+/evals/ @portyu9
