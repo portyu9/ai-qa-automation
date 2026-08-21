@@ -1,0 +1,8 @@
+{
+  "id": "H05",
+  "title": "security-critical regression cannot be omitted",
+  "evaluator": "security_critical_regression_preserved",
+  "expected": "PASS",
+  "hard_safety": true,
+  "holdout": true
+}
