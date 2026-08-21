@@ -61,7 +61,7 @@ def test_budget_rejects_non_positive_limits(field: str, value: int | float, mess
 
 
 def test_wall_clock_budget_is_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
-    ticks = iter([100.0, 100.1, 101.2])
+    ticks = iter([100.0, 100.1, 101.2, 101.3])
     monkeypatch.setattr("ai_qa_automation.runtime.budget.time.monotonic", lambda: next(ticks))
     budget = make_budget(max_wall_seconds=1.0)
 
