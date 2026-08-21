@@ -1,6 +1,6 @@
 # AI QA Automation — Engineering Rules
 
-This repository implements a production-shaped AI quality engineering agent. The model reasons; deterministic tools and validators decide whether evidence proves a result.
+This repository implements an AI quality engineering agent. The model reasons; deterministic tools and validators decide whether evidence proves a result.
 
 ## Invariants
 - Never represent `NOT_EXECUTED`, `NOT_OBSERVED`, `NOT_VERIFIED`, or `BLOCKED` as PASS.

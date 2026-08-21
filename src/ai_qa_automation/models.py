@@ -54,6 +54,8 @@ class EvidenceKind(StrEnum):
     SOURCE_OBSERVATION = "source_observation"
     PERFORMANCE_METRIC = "performance_metric"
     POLICY_EVENT = "policy_event"
+    HEALING_PROPOSAL = "healing_proposal"
+    TEST_PLAN = "test_plan"
 
 
 class EvidenceNature(StrEnum):
@@ -136,7 +138,10 @@ class PolicyDecision(FrozenModel):
 
 
 class ValidationResult(FrozenModel):
+    id: str = Field(default_factory=lambda: f"val-{uuid4().hex[:12]}")
     name: str
+    gate_id: str | None = None
+    revision: int = Field(default=0, ge=0)
     status: ValidationStatus
     summary: str
     evidence_ids: list[str] = Field(default_factory=list)
@@ -217,8 +222,14 @@ class RegressionCandidate(FrozenModel):
     historical_failure_rate: float = Field(default=0, ge=0, le=1)
     business_criticality: float = Field(default=0, ge=0, le=1)
     security_criticality: float = Field(default=0, ge=0, le=1)
+    safety_criticality: float = Field(default=0, ge=0, le=1)
+    regulatory_criticality: float = Field(default=0, ge=0, le=1)
     runtime_seconds: float = Field(default=0, ge=0)
     mandatory: bool = False
+    smoke: bool = False
+    security_critical: bool = False
+    safety_critical: bool = False
+    regulatory_critical: bool = False
     rationale: list[str] = Field(default_factory=list)
 
 
@@ -276,13 +287,15 @@ class AgentRunState(BaseModel):
     agent_version: str = "0.1.0"
     model_id: str = "not-invoked"
     sdk_version: str = "0.2.143"
-    policy_version: str = "1"
-    tool_schema_version: str = "1"
+    policy_version: str = "2"
+    tool_schema_version: str = "2"
+    configuration_version: str = "NOT_CAPTURED"
     target_repository: str | None = None
     target_git_sha: str | None = None
     workspace: str
     phase: str = "INITIALIZE"
     iteration: int = 0
+    change_revision: int = 0
     tool_call_count: int = 0
     retry_count: int = 0
     observations: list[str] = Field(default_factory=list)

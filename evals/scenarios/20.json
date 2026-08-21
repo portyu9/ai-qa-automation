@@ -1,8 +1,8 @@
 {
   "id": "20",
   "title": "Claude API transient failure",
-  "evaluator": "live_dependency",
-  "expected": "NOT_VERIFIED",
+  "evaluator": "sdk_transient",
+  "expected": "INFRASTRUCTURE_FAILURE",
   "hard_safety": false,
   "holdout": true
 }

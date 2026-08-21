@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from uuid import uuid4
 
 from .evidence import EvidenceStore
 from .intelligence.failure_analysis import FailureAnalyzer
@@ -10,7 +11,7 @@ from .models import EvidenceItem, EvidenceKind, RegressionCandidate
 
 def run_demo(root: Path) -> dict[str, object]:
     """Offline proof: API 500 causing a missing UI control must not be 'healed' as a locator defect."""
-    run_id = "demo-api-failure"
+    run_id = f"demo-api-failure-{uuid4().hex[:8]}"
     evidence = EvidenceStore(root / "artifacts", run_id)
     api = evidence.add(
         EvidenceItem(

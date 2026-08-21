@@ -8,25 +8,197 @@ from typing import Any
 from urllib.parse import urlparse
 
 from ..evidence import EvidenceStore
+from ..intelligence.ci_analysis import analyze_ci_failure
 from ..intelligence.failure_analysis import FailureAnalyzer
+from ..intelligence.performance import PerformanceAssessor
 from ..intelligence.prioritization import RegressionPrioritizer
 from ..intelligence.quality_review import review_python_test_source
+from ..intelligence.self_healing import SelfHealingEngine
 from ..intelligence.test_generation import TestGenerationPlanner
 from ..models import (
     AgentRunState,
     EvidenceItem,
     EvidenceKind,
     EvidenceNature,
+    FailureClass,
+    LocatorCandidate,
+    RegressionCandidate,
+    RiskLevel,
     ValidationResult,
     ValidationStatus,
-    RegressionCandidate,
 )
 from ..policy import PolicyEngine
-from ..tools.api_testing import ApiProbe
-from ..tools.browser_evidence import BrowserProbe
+from ..redaction import redact_text
+from ..state import StateStore
+from ..tools.api_testing import ApiProbe, ApiProbeTransportError
+from ..tools.browser_evidence import BrowserProbe, BrowserProbeExecutionError
+from ..tools.contracts import validate_json_schema
+from ..tools.mobile import MobileRuntimeInspector
+from ..tools.performance import K6Runner
 from ..tools.repository import RepositoryInspector
 from ..tools.safe_patch import SafeTestPatcher
 from ..tools.test_execution import TestRunner
+
+_MAX_MODEL_SOURCE_BYTES = 1_000_000
+_MAX_MODEL_SOURCE_CHARS = 12_000
+
+
+def _read_bounded_utf8(path: Path, *, max_bytes: int = _MAX_MODEL_SOURCE_BYTES) -> str:
+    size = path.stat().st_size
+    if size > max_bytes:
+        raise ValueError(f"file exceeds {max_bytes} byte model-facing source limit")
+    return path.read_text(encoding="utf-8")
+
+
+def _stable_gate_id(prefix: str, payload: Any) -> str:
+    rendered = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    digest = hashlib.sha256(rendered.encode("utf-8")).hexdigest()[:16]
+    return f"{prefix}:{digest}"
+
+
+def _pytest_scope(args: list[str]) -> str:
+    """Classify pytest as full regression or filtered/targeted execution."""
+    options_with_value = {"-k", "-m", "--maxfail", "--tb"}
+    selectors: list[str] = []
+    filtered = False
+    skip_next = False
+    for raw in args:
+        item = str(raw)
+        if skip_next:
+            skip_next = False
+            continue
+        if item in {"-k", "-m"}:
+            filtered = True
+            skip_next = True
+            continue
+        if item in {"--maxfail", "--tb"}:
+            skip_next = True
+            continue
+        if item.startswith(("-k=", "-m=")):
+            filtered = True
+            continue
+        if item.startswith(("--maxfail=", "--tb=")) or item.startswith("-"):
+            continue
+        selectors.append(item)
+    return "targeted" if filtered or selectors else "regression"
+
+
+def _change_revision_closed(state: AgentRunState) -> bool:
+    """Require each mutation revision to close before another mutation begins."""
+    if state.change_revision == 0:
+        return True
+    current = [item for item in state.validation_results if item.revision == state.change_revision]
+    if not current or any(item.status != ValidationStatus.PASS for item in current):
+        return False
+    patch_safe = any(item.name == "test_patch_safety" for item in current)
+    targeted = any(
+        item.name == "pytest" and item.details.get("scope") == "targeted" for item in current
+    )
+    regression = any(
+        item.name == "pytest" and item.details.get("scope") == "regression" for item in current
+    )
+    return patch_safe and targeted and regression
+
+
+def _require_closed_revision_before_mutation(services: "RuntimeServices") -> str | None:
+    if _change_revision_closed(services.state):
+        return None
+    return (
+        f"change revision {services.state.change_revision} is not closed; "
+        "run a passing targeted pytest gate and a passing full regression before another mutation"
+    )
+
+
+
+
+def _is_test_code_path(path: Path) -> bool:
+    if path.suffix.lower() not in {".py", ".js", ".ts", ".java", ".cs"}:
+        return False
+    parts = {part.lower() for part in path.parts}
+    name = path.name.lower()
+    return (
+        bool(parts & {"tests", "test", "generated_tests"})
+        or name.startswith("test_")
+        or name.endswith("_test.py")
+        or ".spec." in name
+        or ".test." in name
+    )
+
+
+def _coverage_search(
+    workspace: Path, *, query: str, max_results: int = 100
+) -> list[dict[str, Any]]:
+    if not 1 <= max_results <= 200:
+        raise ValueError("max_results must be between 1 and 200")
+    if len(query) > 200:
+        raise ValueError("coverage search query exceeds 200 characters")
+    needle = query.casefold().strip()
+    ignored = {".git", ".venv", "venv", "node_modules", "dist", "build", ".tox", ".pytest_cache", "__pycache__"}
+    rows: list[dict[str, Any]] = []
+    for path in sorted(workspace.rglob("*")):
+        if len(rows) >= max_results:
+            break
+        try:
+            relative = path.relative_to(workspace)
+        except ValueError:
+            continue
+        if any(part in ignored for part in relative.parts):
+            continue
+        if path.is_symlink() or not path.is_file() or not _is_test_code_path(relative):
+            continue
+        if path.stat().st_size > _MAX_MODEL_SOURCE_BYTES:
+            continue
+        if not needle:
+            rows.append({"path": relative.as_posix(), "matches": []})
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            continue
+        matches: list[str] = []
+        for line_no, line in enumerate(text.splitlines(), 1):
+            if needle in line.casefold():
+                matches.append(f"{line_no}: {redact_text(line[:240])}")
+                if len(matches) >= 3:
+                    break
+        if matches or needle in relative.as_posix().casefold():
+            rows.append({"path": relative.as_posix(), "matches": matches})
+    return rows
+
+def _record_patch_safety_validation(
+    services: "RuntimeServices",
+    *,
+    path: str,
+    evidence_id: str,
+    summary: str,
+) -> None:
+    services.state.validation_results.append(
+        ValidationResult(
+            name="test_patch_safety",
+            gate_id=f"test_patch_safety:{path}",
+            revision=services.state.change_revision,
+            status=ValidationStatus.PASS,
+            summary=summary,
+            evidence_ids=[evidence_id],
+            details={"path": path, "scope": "static_patch_safety"},
+        )
+    )
+
+
+
+def _record_capability_validation(
+    services: "RuntimeServices", *, name: str, status: ValidationStatus, summary: str
+) -> None:
+    services.state.validation_results.append(
+        ValidationResult(
+            name=name,
+            gate_id=name,
+            revision=services.state.change_revision,
+            status=status,
+            summary=summary,
+        )
+    )
+    services.checkpoint()
 
 
 @dataclass
@@ -40,6 +212,9 @@ class RuntimeServices:
     max_repeated_action: int
     allowed_network_hosts: set[str] = field(default_factory=set)
     allow_external_network: bool = False
+    allow_mutating_api_methods: bool = False
+    k6_external_egress_enforced: bool = False
+    state_store: StateStore | None = None
     _fingerprints: dict[str, int] = field(default_factory=dict)
 
     def consume(self, tool_name: str, tool_input: dict[str, Any]) -> None:
@@ -52,14 +227,22 @@ class RuntimeServices:
         if seen > self.max_repeated_action:
             raise RuntimeError("repeated identical action budget exhausted")
         self.state.tool_call_count += 1
+        self.checkpoint()
+
+    def checkpoint(self) -> None:
+        if self.state_store is not None:
+            self.state_store.save(self.state)
 
     def network_hosts(self, url: str) -> set[str]:
         host = (urlparse(url).hostname or "").lower()
         if not host or host not in self.allowed_network_hosts:
             raise PermissionError(f"network host is not explicitly allowlisted: {host or '<missing>'}")
-        if not self.allow_external_network and host not in {"localhost", "127.0.0.1", "::1"}:
+        local_hosts = {"localhost", "127.0.0.1", "::1"}
+        if not self.allow_external_network and host not in local_hosts:
             raise PermissionError("external network access is disabled")
-        return self.allowed_network_hosts
+        if not self.allow_external_network:
+            return self.allowed_network_hosts & local_hosts
+        return set(self.allowed_network_hosts)
 
 
 def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]]:
@@ -85,42 +268,167 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
         )
         services.state.evidence_ids.append(item.id)
         services.state.target_git_sha = snapshot.git_sha
+        services.checkpoint()
         return {"content": [{"type": "text", "text": item.model_dump_json()}]}
 
     @tool("run_pytest", "Execute pytest in the isolated target workspace and capture deterministic evidence.", {"args": list[str]})
     async def run_pytest(args: dict[str, Any]) -> dict[str, Any]:
         services.consume("run_pytest", args)
-        result = services.test_runner.run_pytest(args.get("args") or [])
+        pytest_args = [str(item) for item in (args.get("args") or [])]
+        result = services.test_runner.run_pytest(pytest_args)
         services.state.tests_executed.append(" ".join(result.command))
         services.state.evidence_ids.extend(eid for eid in result.evidence_ids if eid not in services.state.evidence_ids)
         services.state.validation_results.append(
             ValidationResult(
                 name="pytest",
+                gate_id=_stable_gate_id("pytest", pytest_args),
+                revision=services.state.change_revision,
                 status=ValidationStatus.PASS if result.exit_code == 0 else ValidationStatus.FAIL,
                 summary=f"pytest exited with {result.exit_code}",
                 evidence_ids=list(result.evidence_ids),
-                details={"duration_seconds": result.duration_seconds},
+                details={
+                    "duration_seconds": result.duration_seconds,
+                    "scope": _pytest_scope(pytest_args),
+                    "args": pytest_args,
+                },
             )
         )
+        services.checkpoint()
         text = {"exit_code": result.exit_code, "duration_seconds": result.duration_seconds, "evidence_ids": result.evidence_ids, "stdout_tail": result.stdout[-3000:], "stderr_tail": result.stderr[-3000:]}
         return {"content": [{"type": "text", "text": str(text)}], "is_error": result.exit_code != 0}
 
-    @tool("probe_api", "Make one allowlisted HTTP request and register response evidence.", {"method": str, "url": str})
+    @tool("probe_api", "Make one policy-approved HTTP request and register sanitized response evidence.", {"method": str, "url": str})
     async def probe_api(args: dict[str, Any]) -> dict[str, Any]:
         services.consume("probe_api", args)
+        method_decision = services.policy.authorize_api_method(
+            args["method"], allow_mutating=services.allow_mutating_api_methods
+        )
+        services.state.policy_decisions.append(method_decision)
+        if method_decision.decision.value != "ALLOW":
+            services.checkpoint()
+            return {
+                "content": [{"type": "text", "text": f"DENIED {method_decision.rule_id}: {method_decision.reason}"}],
+                "is_error": True,
+            }
         allow_hosts = services.network_hosts(args["url"])
-        result = await ApiProbe(services.evidence, allow_hosts=allow_hosts).request(args["method"], args["url"])
+        try:
+            result = await ApiProbe(
+                services.evidence,
+                allow_hosts=allow_hosts,
+                allowed_methods={args["method"]},
+            ).request(args["method"], args["url"])
+        except ApiProbeTransportError as exc:
+            if exc.evidence_id not in services.state.evidence_ids:
+                services.state.evidence_ids.append(exc.evidence_id)
+            services.checkpoint()
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps(
+                            {
+                                "status": "NETWORK_ERROR",
+                                "error": str(exc),
+                                "evidence_id": exc.evidence_id,
+                            }
+                        ),
+                    }
+                ],
+                "is_error": True,
+            }
         services.state.evidence_ids.append(result.evidence_id)
-        return {"content": [{"type": "text", "text": json.dumps({"status_code": result.status_code, "elapsed_ms": result.elapsed_ms, "evidence_id": result.evidence_id, "body": result.body}, default=str)[:12000]}]}
+        services.checkpoint()
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": json.dumps(
+                        {
+                            "status_code": result.status_code,
+                            "elapsed_ms": result.elapsed_ms,
+                            "evidence_id": result.evidence_id,
+                            "body": result.body,
+                            "truncated": result.truncated,
+                        },
+                        default=str,
+                    )[:12000],
+                }
+            ]
+        }
 
     @tool("inspect_browser", "Collect allowlisted browser accessibility, screenshot, console, and network evidence.", {"url": str})
     async def inspect_browser(args: dict[str, Any]) -> dict[str, Any]:
         services.consume("inspect_browser", args)
         allow_hosts = services.network_hosts(args["url"])
-        result = await BrowserProbe(services.evidence, allow_hosts=allow_hosts).inspect(args["url"])
-        ids = [eid for eid in [result.screenshot_evidence_id, result.dom_evidence_id] if eid]
+        try:
+            result = await BrowserProbe(services.evidence, allow_hosts=allow_hosts).inspect(
+                args["url"]
+            )
+        except BrowserProbeExecutionError as exc:
+            if exc.evidence_id not in services.state.evidence_ids:
+                services.state.evidence_ids.append(exc.evidence_id)
+            services.checkpoint()
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps(
+                            {
+                                "status": "BROWSER_ERROR",
+                                "error": str(exc),
+                                "evidence_id": exc.evidence_id,
+                            }
+                        ),
+                    }
+                ],
+                "is_error": True,
+            }
+        except RuntimeError as exc:
+            _record_capability_validation(
+                services,
+                name="browser_runtime",
+                status=ValidationStatus.NOT_VERIFIED,
+                summary=redact_text(str(exc)),
+            )
+            return {
+                "content": [{"type": "text", "text": f"NOT_VERIFIED: {redact_text(str(exc))}"}],
+                "is_error": True,
+            }
+        _record_capability_validation(
+            services,
+            name="browser_runtime",
+            status=ValidationStatus.PASS,
+            summary="Playwright Chromium launched and collected browser evidence.",
+        )
+        ids = [
+            evidence_id
+            for evidence_id in [
+                result.screenshot_evidence_id,
+                result.dom_evidence_id,
+                result.network_evidence_id,
+            ]
+            if evidence_id
+        ]
         services.state.evidence_ids.extend(eid for eid in ids if eid not in services.state.evidence_ids)
-        return {"content": [{"type": "text", "text": json.dumps({"url": result.url, "title": result.title, "console_errors": result.console_errors, "failed_requests": result.failed_requests, "evidence_ids": ids})}]}
+        services.checkpoint()
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": json.dumps(
+                        {
+                            "url": result.url,
+                            "title": result.title,
+                            "accessibility_snapshot": result.accessibility_snapshot,
+                            "console_errors": result.console_errors,
+                            "failed_requests": result.failed_requests,
+                            "http_errors": result.http_errors,
+                            "evidence_ids": ids,
+                        }
+                    )[:16000],
+                }
+            ]
+        }
 
     @tool("classify_failure", "Classify currently collected evidence with a deterministic first-pass classifier.", {})
     async def classify_failure(args: dict[str, Any]) -> dict[str, Any]:
@@ -128,6 +436,7 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
         result = FailureAnalyzer().classify(services.evidence.all())
         services.state.classification = result.classification
         services.state.classification_confidence = result.confidence
+        services.checkpoint()
         return {"content": [{"type": "text", "text": result.model_dump_json()}]}
 
     @tool("read_test_file", "Read a UTF-8 test file after deterministic path authorization.", {"path": str})
@@ -141,22 +450,126 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
         target = (services.workspace / relative).resolve()
         if not target.is_file() or target.suffix not in {".py", ".ts", ".js", ".java", ".cs"}:
             return {"content": [{"type": "text", "text": "DENIED: file is not an approved test-code type"}], "is_error": True}
-        text = target.read_text(encoding="utf-8")[:12000]
+        try:
+            source = _read_bounded_utf8(target)
+        except (OSError, UnicodeError, ValueError) as exc:
+            return {"content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}], "is_error": True}
+        text = redact_text(source[:_MAX_MODEL_SOURCE_CHARS])
+        digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
         services.state.files_read.append(relative.as_posix())
-        return {"content": [{"type": "text", "text": text}]}
+        services.checkpoint()
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": json.dumps(
+                        {
+                            "path": relative.as_posix(),
+                            "sha256": digest,
+                            "content": text,
+                            "truncated": len(source) > _MAX_MODEL_SOURCE_CHARS,
+                        }
+                    )[:16000],
+                }
+            ]
+        }
 
-    @tool("plan_tests", "Create a deterministic coverage-aware test-generation plan.", {"requirement": str})
+    @tool(
+        "search_test_coverage",
+        "Search bounded test-code paths/content and record observed repository coverage evidence.",
+        {"query": str, "max_results": int},
+    )
+    async def search_test_coverage(args: dict[str, Any]) -> dict[str, Any]:
+        services.consume("search_test_coverage", args)
+        try:
+            rows = _coverage_search(
+                services.workspace,
+                query=str(args.get("query", "")),
+                max_results=int(args.get("max_results", 100)),
+            )
+        except (ValueError, OSError) as exc:
+            return {"content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}], "is_error": True}
+        item = services.evidence.add(
+            EvidenceItem(
+                run_id=services.state.run_id,
+                kind=EvidenceKind.SOURCE_OBSERVATION,
+                nature=EvidenceNature.OBSERVED_FACT,
+                source="repository_test_coverage_search",
+                source_identifier=redact_text(str(args.get("query", ""))),
+                summary=f"Observed {len(rows)} bounded test coverage search result(s)",
+                structured_data={"query": redact_text(str(args.get("query", ""))), "results": rows},
+            )
+        )
+        services.state.evidence_ids.append(item.id)
+        services.checkpoint()
+        return {"content": [{"type": "text", "text": json.dumps({"coverage_evidence_id": item.id, "results": rows})[:16000]}]}
+
+    @tool(
+        "plan_tests",
+        "Create a deterministic coverage-aware test-generation plan.",
+        {"requirement": str, "existing_coverage_json": str, "coverage_evidence_id": str},
+    )
     async def plan_tests(args: dict[str, Any]) -> dict[str, Any]:
         services.consume("plan_tests", args)
-        result = TestGenerationPlanner().plan(args["requirement"])
-        return {"content": [{"type": "text", "text": result.model_dump_json()}]}
+        try:
+            coverage_evidence = services.evidence.get(args["coverage_evidence_id"])
+        except KeyError:
+            return {"content": [{"type": "text", "text": "DENIED: coverage evidence does not exist in this run"}], "is_error": True}
+        if (
+            coverage_evidence.kind != EvidenceKind.SOURCE_OBSERVATION
+            or coverage_evidence.nature != EvidenceNature.OBSERVED_FACT
+            or coverage_evidence.source != "repository_test_coverage_search"
+            or coverage_evidence.id not in services.state.evidence_ids
+        ):
+            return {"content": [{"type": "text", "text": "DENIED: test planning requires observed repository coverage-search evidence"}], "is_error": True}
+        try:
+            existing_coverage = json.loads(args["existing_coverage_json"])
+        except json.JSONDecodeError as exc:
+            return {"content": [{"type": "text", "text": f"DENIED: malformed coverage JSON: {redact_text(str(exc))}"}], "is_error": True}
+        if not isinstance(existing_coverage, list) or not all(
+            isinstance(item, str) and len(item) <= 500 for item in existing_coverage
+        ) or len(existing_coverage) > 500:
+            return {
+                "content": [{"type": "text", "text": "DENIED: existing coverage must be a JSON string list with at most 500 bounded entries"}],
+                "is_error": True,
+            }
+        requirement = str(args["requirement"])
+        if not requirement.strip() or len(requirement) > 8000:
+            return {"content": [{"type": "text", "text": "DENIED: requirement must be 1-8000 characters"}], "is_error": True}
+        result = TestGenerationPlanner().plan(
+            requirement, existing_coverage=existing_coverage
+        )
+        item = services.evidence.add(
+            EvidenceItem(
+                run_id=services.state.run_id,
+                kind=EvidenceKind.TEST_PLAN,
+                nature=EvidenceNature.MODEL_INTERPRETATION,
+                source="test_generation_planner",
+                source_identifier=coverage_evidence.id,
+                summary="Coverage-aware test-generation plan created",
+                structured_data={
+                    "coverage_evidence_id": coverage_evidence.id,
+                    "plan": result.model_dump(mode="json"),
+                },
+            )
+        )
+        services.state.evidence_ids.append(item.id)
+        services.checkpoint()
+        return {"content": [{"type": "text", "text": json.dumps({"plan_evidence_id": item.id, "plan": result.model_dump(mode="json")})[:16000]}]}
 
     @tool("prioritize_regression", "Risk-rank regression candidates; low confidence broadens selection.", {"candidates_json": str, "dependency_confidence": float})
     async def prioritize_regression(args: dict[str, Any]) -> dict[str, Any]:
         services.consume("prioritize_regression", args)
-        raw = json.loads(args["candidates_json"])
-        candidates = [RegressionCandidate.model_validate(item) for item in raw]
-        result = RegressionPrioritizer().select(candidates, dependency_confidence=float(args["dependency_confidence"]))
+        try:
+            raw = json.loads(args["candidates_json"])
+            if not isinstance(raw, list) or len(raw) > 1000:
+                raise ValueError("candidates_json must contain at most 1000 candidates")
+            candidates = [RegressionCandidate.model_validate(item) for item in raw]
+            result = RegressionPrioritizer().select(
+                candidates, dependency_confidence=float(args["dependency_confidence"])
+            )
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            return {"content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}], "is_error": True}
         return {"content": [{"type": "text", "text": result.model_dump_json()}]}
 
     @tool("review_python_test", "Run deterministic test-quality checks against a Python test file.", {"path": str})
@@ -169,44 +582,519 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
         target = (services.workspace / relative).resolve()
         if target.suffix != ".py" or not target.is_file():
             return {"content": [{"type": "text", "text": "DENIED: only existing Python test files are supported"}], "is_error": True}
-        findings = [item.__dict__ for item in review_python_test_source(target.read_text(encoding="utf-8"))]
+        try:
+            source = _read_bounded_utf8(target)
+        except (OSError, UnicodeError, ValueError) as exc:
+            return {"content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}], "is_error": True}
+        findings = [item.__dict__ for item in review_python_test_source(source)]
         return {"content": [{"type": "text", "text": json.dumps({"findings": findings})}]}
 
-    @tool("create_test_file", "Create a new policy-approved test file after deterministic syntax/quality checks.", {"path": str, "content": str})
+    @tool("create_test_file", "Create a new policy-approved test file from a coverage-aware plan after deterministic syntax/quality checks.", {"path": str, "content": str, "plan_evidence_id": str})
     async def create_test_file(args: dict[str, Any]) -> dict[str, Any]:
         services.consume("create_test_file", args)
+        if reason := _require_closed_revision_before_mutation(services):
+            return {"content": [{"type": "text", "text": f"DENIED: {reason}"}], "is_error": True}
+        try:
+            plan_item = services.evidence.get(args["plan_evidence_id"])
+        except KeyError:
+            return {"content": [{"type": "text", "text": "DENIED: test-generation plan evidence does not exist in this run"}], "is_error": True}
+        if (
+            plan_item.kind != EvidenceKind.TEST_PLAN
+            or plan_item.nature != EvidenceNature.MODEL_INTERPRETATION
+            or plan_item.source != "test_generation_planner"
+            or plan_item.id not in services.state.evidence_ids
+        ):
+            return {"content": [{"type": "text", "text": "DENIED: test creation requires a coverage-aware plan from this run"}], "is_error": True}
         patcher = SafeTestPatcher(services.workspace, services.policy)
         try:
             result = patcher.create_test(relative_path=args["path"], content=args["content"])
         except (PermissionError, ValueError, SyntaxError, FileExistsError) as exc:
             return {"content": [{"type": "text", "text": f"DENIED: {exc}"}], "is_error": True}
         services.state.files_modified.append(result.path)
-        item = services.evidence.add(EvidenceItem(run_id=services.state.run_id, kind=EvidenceKind.GIT_DIFF, source="safe_test_patcher", summary="Generated test file created; execution validation still required", structured_data={"path": result.path, "new_sha256": result.new_sha256, "diff": result.diff[:12000]}))
+        services.state.change_revision += 1
+        item = services.evidence.add(EvidenceItem(run_id=services.state.run_id, kind=EvidenceKind.GIT_DIFF, source="safe_test_patcher", summary="Generated test file created; execution validation still required", structured_data={"path": result.path, "new_sha256": result.new_sha256, "diff": result.diff[:12000], "plan_evidence_id": plan_item.id}))
         services.state.evidence_ids.append(item.id)
+        _record_patch_safety_validation(
+            services,
+            path=result.path,
+            evidence_id=item.id,
+            summary="Generated test passed deterministic syntax, path, assertion, and unsafe-diff checks.",
+        )
+        services.checkpoint()
         return {"content": [{"type": "text", "text": f"TEST_CREATED evidence_id={item.id}; run deterministic validation next"}]}
 
-    @tool("safe_replace_test_text", "Atomically replace one exact test-code fragment with optimistic concurrency and unsafe-diff guards.", {"path": str, "expected_sha256": str, "old_text": str, "new_text": str})
-    async def safe_replace_test_text(args: dict[str, Any]) -> dict[str, Any]:
-        services.consume("safe_replace_test_text", args)
+    @tool(
+        "verify_locator_candidates",
+        "Use Playwright to deterministically measure locator candidate uniqueness in the current DOM.",
+        {"url": str, "original_locator": str, "candidates_json": str},
+    )
+    async def verify_locator_candidates(args: dict[str, Any]) -> dict[str, Any]:
+        services.consume("verify_locator_candidates", args)
+        try:
+            payload = json.loads(args["candidates_json"])
+            if not isinstance(payload, list):
+                raise ValueError("candidates_json must contain a JSON list")
+            candidates = [LocatorCandidate.model_validate(item) for item in payload]
+            allow_hosts = services.network_hosts(args["url"])
+            verified, evidence_id = await BrowserProbe(
+                services.evidence, allow_hosts=allow_hosts
+            ).verify_locator_candidates(args["url"], args["original_locator"], candidates)
+        except (ValueError, PermissionError, BrowserProbeExecutionError) as exc:
+            return {
+                "content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}],
+                "is_error": True,
+            }
+        except RuntimeError as exc:
+            _record_capability_validation(
+                services,
+                name="browser_runtime",
+                status=ValidationStatus.NOT_VERIFIED,
+                summary=redact_text(str(exc)),
+            )
+            return {
+                "content": [{"type": "text", "text": f"NOT_VERIFIED: {redact_text(str(exc))}"}],
+                "is_error": True,
+            }
+        _record_capability_validation(
+            services,
+            name="browser_runtime",
+            status=ValidationStatus.PASS,
+            summary="Playwright Chromium launched and verified locator candidates.",
+        )
+        verification_item = services.evidence.get(evidence_id)
+        context_ids = verification_item.structured_data.get("context_evidence_ids", [])
+        if isinstance(context_ids, list):
+            for context_id in context_ids:
+                context_id = str(context_id)
+                if context_id not in services.state.evidence_ids:
+                    services.state.evidence_ids.append(context_id)
+        if evidence_id not in services.state.evidence_ids:
+            services.state.evidence_ids.append(evidence_id)
+        services.checkpoint()
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": json.dumps(
+                        {
+                            "verification_evidence_id": evidence_id,
+                            "candidates": [item.model_dump(mode="json") for item in verified],
+                        }
+                    )[:16000],
+                }
+            ]
+        }
+
+    @tool(
+        "propose_locator_heal",
+        "Evaluate only browser-verified semantic locator candidates; does not change test code.",
+        {
+            "path": str,
+            "expected_sha256": str,
+            "original_locator": str,
+            "candidates_json": str,
+            "verification_evidence_id": str,
+        },
+    )
+    async def propose_locator_heal(args: dict[str, Any]) -> dict[str, Any]:
+        services.consume("propose_locator_heal", args)
+        classification = services.state.classification
+        confidence = services.state.classification_confidence or 0.0
+        if classification not in {
+            FailureClass.LOCATOR_UI_CONTRACT_CHANGE,
+            FailureClass.TEST_AUTOMATION_DEFECT,
+        } or confidence < 0.75:
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "DENIED: current deterministic failure classification does not support a sufficiently confident locator repair",
+                    }
+                ],
+                "is_error": True,
+            }
+        try:
+            verification = services.evidence.get(args["verification_evidence_id"])
+        except KeyError:
+            return {"content": [{"type": "text", "text": "DENIED: locator verification evidence does not exist in this run"}], "is_error": True}
+        if (
+            verification.kind != EvidenceKind.SOURCE_OBSERVATION
+            or verification.nature != EvidenceNature.OBSERVED_FACT
+            or verification.source != "playwright_locator_verification"
+            or verification.id not in services.state.evidence_ids
+        ):
+            return {"content": [{"type": "text", "text": "DENIED: supplied evidence is not authoritative Playwright locator verification from this run"}], "is_error": True}
+
+        all_items = {item.id: item for item in services.evidence.all()}
+        context_ids = verification.structured_data.get("context_evidence_ids", [])
+        if not isinstance(context_ids, list) or len(context_ids) != 2:
+            return {
+                "content": [{"type": "text", "text": "DENIED: locator verification is missing same-DOM context evidence"}],
+                "is_error": True,
+            }
+        try:
+            context_items = [all_items[str(eid)] for eid in context_ids]
+        except KeyError:
+            return {
+                "content": [{"type": "text", "text": "DENIED: locator verification context evidence is unavailable in this run"}],
+                "is_error": True,
+            }
+        if any(item.id not in services.state.evidence_ids for item in context_items):
+            return {
+                "content": [{"type": "text", "text": "DENIED: locator verification context is not registered in canonical run state"}],
+                "is_error": True,
+            }
+        context_kinds = {item.kind for item in context_items}
+        if context_kinds != {EvidenceKind.SCREENSHOT, EvidenceKind.ACCESSIBILITY_SNAPSHOT} or any(
+            item.source != "playwright_locator_verification"
+            or item.source_identifier != verification.source_identifier
+            for item in context_items
+        ):
+            return {
+                "content": [{"type": "text", "text": "DENIED: locator repair requires screenshot and accessibility evidence captured by the same Playwright verification"}],
+                "is_error": True,
+            }
+
+        if str(verification.structured_data.get("original_locator") or "") != args["original_locator"]:
+            return {"content": [{"type": "text", "text": "DENIED: original locator does not match the browser verification evidence"}], "is_error": True}
+        observed_rows = verification.structured_data.get("candidates", [])
+        observed_map = {
+            (str(row.get("locator")), str(row.get("strategy"))): row
+            for row in observed_rows
+            if isinstance(row, dict)
+        }
+        try:
+            requested = json.loads(args["candidates_json"])
+            if not isinstance(requested, list):
+                raise ValueError("candidates_json must contain a JSON list")
+            bound: list[LocatorCandidate] = []
+            for raw in requested:
+                candidate = LocatorCandidate.model_validate(raw)
+                observed = observed_map.get((candidate.locator, candidate.strategy))
+                if observed is None:
+                    raise ValueError("candidate was not measured by the supplied Playwright verification evidence")
+                bound.append(
+                    candidate.model_copy(
+                        update={
+                            "uniqueness_count": int(observed.get("uniqueness_count", 0)),
+                            "rejected_reason": observed.get("rejected_reason"),
+                        }
+                    )
+                )
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            return {"content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}], "is_error": True}
+
+        proposal = SelfHealingEngine().propose(
+            classification=classification,
+            original_locator=args["original_locator"],
+            candidates=bound,
+            evidence_ids=[verification.id],
+            policy=services.policy,
+        )
+        proposal_item = services.evidence.add(
+            EvidenceItem(
+                run_id=services.state.run_id,
+                kind=EvidenceKind.HEALING_PROPOSAL,
+                nature=EvidenceNature.MODEL_INTERPRETATION,
+                source="self_healing_engine",
+                source_identifier=verification.id,
+                summary="Locator healing proposal evaluated against browser-verified candidates",
+                structured_data={
+                    **proposal.model_dump(mode="json"),
+                    "path": args["path"],
+                    "expected_sha256": args["expected_sha256"],
+                    "classification": classification.value,
+                    "classification_confidence": confidence,
+                    "verification_evidence_id": verification.id,
+                },
+            )
+        )
+        services.state.evidence_ids.append(proposal_item.id)
+        services.checkpoint()
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": json.dumps(
+                        {
+                            "proposal_evidence_id": proposal_item.id,
+                            "proposal": proposal.model_dump(mode="json"),
+                        }
+                    ),
+                }
+            ],
+            "is_error": not proposal.allowed,
+        }
+
+    @tool(
+        "apply_locator_heal",
+        "Apply one previously approved, browser-verified locator proposal to its bound test file.",
+        {"proposal_evidence_id": str, "path": str},
+    )
+    async def apply_locator_heal(args: dict[str, Any]) -> dict[str, Any]:
+        services.consume("apply_locator_heal", args)
+        if reason := _require_closed_revision_before_mutation(services):
+            return {"content": [{"type": "text", "text": f"DENIED: {reason}"}], "is_error": True}
+        try:
+            proposal_item = services.evidence.get(args["proposal_evidence_id"])
+        except KeyError:
+            return {"content": [{"type": "text", "text": "DENIED: healing proposal evidence does not exist in this run"}], "is_error": True}
+        data = proposal_item.structured_data
+        if (
+            proposal_item.kind != EvidenceKind.HEALING_PROPOSAL
+            or proposal_item.nature != EvidenceNature.MODEL_INTERPRETATION
+            or proposal_item.id not in services.state.evidence_ids
+            or data.get("allowed") is not True
+            or data.get("risk") not in {RiskLevel.LOW.value, RiskLevel.MEDIUM.value}
+        ):
+            return {"content": [{"type": "text", "text": "DENIED: proposal is not an approved low/medium-risk healing decision from this run"}], "is_error": True}
+        path = str(data.get("path") or "")
+        if str(args.get("path") or "") != path:
+            return {"content": [{"type": "text", "text": "DENIED: requested path does not match the path bound into the healing proposal"}], "is_error": True}
+        expected_sha256 = str(data.get("expected_sha256") or "")
+        original_locator = str(data.get("original_locator") or "")
+        proposed_locator = str(data.get("proposed_locator") or "")
+        if not all((path, expected_sha256, original_locator, proposed_locator)):
+            return {"content": [{"type": "text", "text": "DENIED: healing proposal is incomplete"}], "is_error": True}
         patcher = SafeTestPatcher(services.workspace, services.policy)
         try:
-            result = patcher.replace_once(relative_path=args["path"], expected_sha256=args["expected_sha256"], old_text=args["old_text"], new_text=args["new_text"])
+            result = patcher.replace_locator_once(
+                relative_path=path,
+                expected_sha256=expected_sha256,
+                old_locator=original_locator,
+                new_locator=proposed_locator,
+            )
         except (PermissionError, RuntimeError, ValueError, FileNotFoundError) as exc:
-            return {"content": [{"type": "text", "text": f"DENIED: {exc}"}], "is_error": True}
+            return {"content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}], "is_error": True}
+        services.state.change_revision += 1
         services.state.files_modified.append(result.path)
         item = services.evidence.add(
             EvidenceItem(
                 run_id=services.state.run_id,
                 kind=EvidenceKind.GIT_DIFF,
                 source="safe_test_patcher",
-                summary="Guarded test-code replacement applied; validation still required",
-                structured_data={"path": result.path, "old_sha256": result.old_sha256, "new_sha256": result.new_sha256, "diff": result.diff[:12000]},
+                source_identifier=proposal_item.id,
+                summary="Browser-verified locator replacement applied; execution validation still required",
+                structured_data={
+                    "path": result.path,
+                    "old_sha256": result.old_sha256,
+                    "new_sha256": result.new_sha256,
+                    "diff": result.diff[:12000],
+                    "proposal_evidence_id": proposal_item.id,
+                },
             )
         )
         services.state.evidence_ids.append(item.id)
-        return {"content": [{"type": "text", "text": f"PATCH_APPLIED evidence_id={item.id}; deterministic test validation is still required"}]}
+        _record_patch_safety_validation(
+            services,
+            path=result.path,
+            evidence_id=item.id,
+            summary="Locator-only patch passed deterministic path, syntax, quality, and unsafe-diff checks.",
+        )
+        services.checkpoint()
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"LOCATOR_PATCH_APPLIED evidence_id={item.id} revision={services.state.change_revision}; run targeted test and relevant regression next",
+                }
+            ]
+        }
 
-    tools = [inspect_repository, run_pytest, probe_api, inspect_browser, classify_failure, read_test_file, plan_tests, prioritize_regression, review_python_test, create_test_file, safe_replace_test_text]
+    @tool(
+        "validate_json_contract",
+        "Validate a JSON instance against a JSON Schema deterministically.",
+        {"instance_json": str, "schema_json": str},
+    )
+    async def validate_json_contract(args: dict[str, Any]) -> dict[str, Any]:
+        services.consume("validate_json_contract", args)
+        try:
+            if len(args["instance_json"]) > 1_000_000 or len(args["schema_json"]) > 1_000_000:
+                raise ValueError("JSON contract inputs exceed 1 MB limit")
+            instance = json.loads(args["instance_json"])
+            schema = json.loads(args["schema_json"])
+            result = validate_json_schema(instance, schema)
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            return {"content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}], "is_error": True}
+        result = result.model_copy(
+            update={
+                "gate_id": _stable_gate_id(
+                    "json_schema",
+                    {"instance": instance, "schema": schema},
+                ),
+                "revision": services.state.change_revision,
+            }
+        )
+        services.state.validation_results.append(result)
+        services.checkpoint()
+        return {"content": [{"type": "text", "text": result.model_dump_json()}]}
+
+    @tool(
+        "analyze_ci_failure",
+        "Classify a CI command failure from an exit code and sanitized log tail.",
+        {"exit_code": int, "log_tail": str},
+    )
+    async def analyze_ci_failure_tool(args: dict[str, Any]) -> dict[str, Any]:
+        services.consume("analyze_ci_failure", args)
+        signal = analyze_ci_failure(
+            exit_code=int(args["exit_code"]), log_tail=redact_text(args["log_tail"][-12000:])
+        )
+        return {"content": [{"type": "text", "text": json.dumps(signal.__dict__)}]}
+
+    @tool("inspect_mobile_runtime", "Report whether an Appium mobile runtime is actually configured.", {})
+    async def inspect_mobile_runtime(args: dict[str, Any]) -> dict[str, Any]:
+        services.consume("inspect_mobile_runtime", args)
+        result = MobileRuntimeInspector().inspect()
+        result = result.model_copy(
+            update={"gate_id": "mobile_runtime", "revision": services.state.change_revision}
+        )
+        services.state.validation_results.append(result)
+        services.checkpoint()
+        return {"content": [{"type": "text", "text": result.model_dump_json()}]}
+
+    @tool(
+        "run_k6",
+        "Run a target-bound k6 script against an explicitly non-production environment and assess thresholds.",
+        {
+            "script": str,
+            "target_url": str,
+            "environment": str,
+            "max_p95_ms": float,
+            "max_error_rate": float,
+            "min_request_rate": float,
+        },
+    )
+    async def run_k6(args: dict[str, Any]) -> dict[str, Any]:
+        services.consume("run_k6", args)
+        services.network_hosts(args["target_url"])
+        target_host = (urlparse(args["target_url"]).hostname or "").lower()
+        if (
+            target_host not in {"localhost", "127.0.0.1", "::1"}
+            and not services.k6_external_egress_enforced
+        ):
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "DENIED: external k6 execution requires trusted infrastructure-level egress enforcement",
+                    }
+                ],
+                "is_error": True,
+            }
+        runner = K6Runner(services.workspace, services.policy)
+        try:
+            metrics = runner.run(
+                Path(args["script"]),
+                target_url=args["target_url"],
+                environment=args["environment"],
+            )
+            assessment = PerformanceAssessor().assess(
+                metrics,
+                max_p95_ms=float(args["max_p95_ms"]),
+                max_error_rate=float(args["max_error_rate"]),
+                min_request_rate=float(args["min_request_rate"]),
+            )
+        except PermissionError as exc:
+            return {"content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}], "is_error": True}
+        except (RuntimeError, OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+            status = (
+                ValidationStatus.NOT_VERIFIED
+                if "not installed" in str(exc).lower()
+                else ValidationStatus.FAIL
+            )
+            services.state.validation_results.append(
+                ValidationResult(
+                    name="k6",
+                    gate_id=_stable_gate_id("k6", {"script": args["script"], "target_url": args["target_url"], "environment": args["environment"]}),
+                    revision=services.state.change_revision,
+                    status=status,
+                    summary=redact_text(str(exc)),
+                )
+            )
+            services.checkpoint()
+            return {"content": [{"type": "text", "text": f"{status.value}: {redact_text(str(exc))}"}], "is_error": True}
+        item = services.evidence.add(
+            EvidenceItem(
+                run_id=services.state.run_id,
+                kind=EvidenceKind.PERFORMANCE_METRIC,
+                source="k6",
+                summary=assessment.summary,
+                structured_data={
+                    "metrics": metrics.model_dump(mode="json"),
+                    "threshold_breached": assessment.status == ValidationStatus.FAIL,
+                },
+            )
+        )
+        services.state.evidence_ids.append(item.id)
+        services.state.validation_results.append(
+            ValidationResult(
+                name="k6",
+                gate_id=_stable_gate_id(
+                    "k6",
+                    {
+                        "script": args["script"],
+                        "target_url": args["target_url"],
+                        "environment": args["environment"],
+                        "max_p95_ms": float(args["max_p95_ms"]),
+                        "max_error_rate": float(args["max_error_rate"]),
+                        "min_request_rate": float(args["min_request_rate"]),
+                    },
+                ),
+                revision=services.state.change_revision,
+                status=assessment.status,
+                summary=assessment.summary,
+                evidence_ids=[item.id],
+                details={
+                    "metrics": metrics.model_dump(mode="json"),
+                    "breached_thresholds": assessment.breached_thresholds,
+                },
+            )
+        )
+        services.checkpoint()
+        return {"content": [{"type": "text", "text": assessment.model_dump_json()}]}
+
+    tools = [
+        inspect_repository,
+        run_pytest,
+        probe_api,
+        inspect_browser,
+        classify_failure,
+        read_test_file,
+        search_test_coverage,
+        plan_tests,
+        prioritize_regression,
+        review_python_test,
+        create_test_file,
+        verify_locator_candidates,
+        propose_locator_heal,
+        apply_locator_heal,
+        validate_json_contract,
+        analyze_ci_failure_tool,
+        inspect_mobile_runtime,
+        run_k6,
+    ]
     server = create_sdk_mcp_server(name="qa", version="1.0.0", tools=tools)
-    names = [f"mcp__qa__{name}" for name in ["inspect_repository", "run_pytest", "probe_api", "inspect_browser", "classify_failure", "read_test_file", "plan_tests", "prioritize_regression", "review_python_test", "create_test_file", "safe_replace_test_text"]]
+    names = [
+        f"mcp__qa__{name}"
+        for name in [
+            "inspect_repository",
+            "run_pytest",
+            "probe_api",
+            "inspect_browser",
+            "classify_failure",
+            "read_test_file",
+            "search_test_coverage",
+            "plan_tests",
+            "prioritize_regression",
+            "review_python_test",
+            "create_test_file",
+            "verify_locator_candidates",
+            "propose_locator_heal",
+            "apply_locator_heal",
+            "validate_json_contract",
+            "analyze_ci_failure",
+            "inspect_mobile_runtime",
+            "run_k6",
+        ]
+    ]
     return server, names

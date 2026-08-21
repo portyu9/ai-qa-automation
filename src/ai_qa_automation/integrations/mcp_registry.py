@@ -17,7 +17,8 @@ def build_external_mcp(settings: Settings, policy: PolicyEngine) -> tuple[dict[s
         decision = policy.validate_mcp_server("github", "github/github-mcp-server")
         if decision.decision == ToolDecision.ALLOW:
             status, config = github_mcp_config()
-            statuses["github"] = status
+            if status is not None:
+                statuses["github"] = status
             if config:
                 servers["github"] = config
     else:
@@ -26,7 +27,8 @@ def build_external_mcp(settings: Settings, policy: PolicyEngine) -> tuple[dict[s
     decision = policy.validate_mcp_server("atlassian", "atlassian/rovo-mcp")
     if settings.enable_atlassian_mcp and decision.decision == ToolDecision.ALLOW:
         status, config = atlassian_mcp_config(enabled=True)
-        statuses["atlassian"] = status
+        if status is not None:
+            statuses["atlassian"] = status
         if config:
             servers["atlassian"] = config
     else:

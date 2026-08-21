@@ -11,7 +11,9 @@ PROTECTED = (
     "CLAUDE.md",
     ".mcp.json",
     ".claude/settings.json",
+    ".claude/hooks/",
     ".claude/skills/",
+    ".github/workflows/",
     "src/ai_qa_automation/policy.py",
     "src/ai_qa_automation/runtime/runtime_hooks.py",
     "evals/thresholds.json",
@@ -25,7 +27,17 @@ DESTRUCTIVE = [
 
 
 def deny(reason: str) -> None:
-    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason}}))
+    print(
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": reason,
+                }
+            }
+        )
+    )
 
 
 def main() -> int:

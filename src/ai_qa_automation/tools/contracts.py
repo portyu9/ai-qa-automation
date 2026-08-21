@@ -18,9 +18,11 @@ def validate_json_schema(instance: Any, schema: dict[str, Any]) -> ValidationRes
     try:
         jsonschema.validate(instance=instance, schema=schema)
     except jsonschema.ValidationError as exc:
+        path = "/".join(str(part) for part in exc.path) or "<root>"
         return ValidationResult(
             name="json_schema",
             status=ValidationStatus.FAIL,
-            summary=f"Schema mismatch at {'/'.join(str(p) for p in exc.path) or '<root>'}: {exc.message}",
+            summary=f"Schema mismatch at {path} (validator={exc.validator}).",
+            details={"path": path, "validator": str(exc.validator)},
         )
     return ValidationResult(name="json_schema", status=ValidationStatus.PASS, summary="Payload matches JSON Schema.")

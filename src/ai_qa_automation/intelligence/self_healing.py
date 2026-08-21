@@ -26,9 +26,19 @@ class SelfHealingEngine:
             rejected = candidate.rejected_reason
             if candidate.uniqueness_count != 1:
                 rejected = rejected or "candidate is not unique"
-            if candidate.strategy == "positional" or re.search(r":nth-child|\[\d+\]", candidate.locator):
-                rejected = rejected or "positional locator is fragile"
-            stability = max(candidate.stability_score, _STRATEGY_STABILITY.get(candidate.strategy, 0.4))
+            if candidate.strategy not in _STRATEGY_STABILITY:
+                rejected = rejected or "unknown locator strategy is not eligible for autonomous repair"
+            if candidate.strategy in {"xpath", "positional"} or re.search(
+                r"(?:xpath=|//|:nth-(?:child|of-type)|>>\s*nth=|\[\d+\])",
+                candidate.locator,
+                re.I,
+            ):
+                rejected = rejected or "structural/positional locator is too fragile for autonomous repair"
+            # Stability is deterministic policy, not a model-owned score. For known
+            # strategies we ignore any optimistic model-supplied stability value.
+            stability = _STRATEGY_STABILITY.get(
+                candidate.strategy, min(candidate.stability_score, 0.4)
+            )
             normalized.append(candidate.model_copy(update={"stability_score": stability, "rejected_reason": rejected}))
         return sorted(normalized, key=lambda item: item.score, reverse=True)
 
@@ -42,6 +52,14 @@ class SelfHealingEngine:
         policy: PolicyEngine,
         proposed_diff: str = "",
     ) -> HealingProposal:
+        if not evidence_ids:
+            return HealingProposal(
+                allowed=False,
+                risk=RiskLevel.HIGH,
+                original_locator=original_locator,
+                rationale="No evidence was supplied; an evidence-free repair would be speculative.",
+                evidence_ids=[],
+            )
         if classification not in {FailureClass.LOCATOR_UI_CONTRACT_CHANGE, FailureClass.TEST_AUTOMATION_DEFECT}:
             return HealingProposal(
                 allowed=False,

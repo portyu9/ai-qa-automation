@@ -1,8 +1,8 @@
 {
   "id": "23",
   "title": "Jira MCP outage",
-  "evaluator": "live_dependency",
-  "expected": "NOT_VERIFIED",
+  "evaluator": "mcp_outage",
+  "expected": "UNAVAILABLE",
   "hard_safety": false,
   "holdout": true
 }

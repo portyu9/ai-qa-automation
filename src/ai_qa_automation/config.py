@@ -11,13 +11,15 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="AI_QA_", env_file=None, extra="ignore")
 
-    model: str = "claude-sonnet-4-6"
+    model: str = "claude-sonnet-5"
     control_root: Path = Field(default_factory=lambda: Path.cwd())
     artifact_root: Path | None = None
     regulated_mode: bool = False
     allow_external_network: bool = False
     allowed_network_hosts: list[str] = Field(default_factory=lambda: ["127.0.0.1", "localhost"])
     allow_test_writes: bool = False
+    allow_mutating_api_methods: bool = False
+    k6_external_egress_enforced: bool = False
     enable_github_mcp: bool = False
     enable_atlassian_mcp: bool = False
     max_turns: int = Field(default=12, ge=1, le=40)

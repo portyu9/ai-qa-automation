@@ -22,6 +22,7 @@ def build_final_report(state: AgentRunState, *, limitations: list[str] | None = 
             "sdk_version": state.sdk_version,
             "policy_version": state.policy_version,
             "tool_schema_version": state.tool_schema_version,
+            "configuration_version": state.configuration_version,
             "target_git_sha": state.target_git_sha or "NOT_OBSERVED",
         },
     )

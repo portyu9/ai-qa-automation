@@ -5,10 +5,9 @@ build-backend = "hatchling.build"
 [project]
 name = "ai-qa-automation"
 version = "0.1.0"
-description = "Portfolio-grade, production-shaped agentic AI quality engineering platform"
+description = "Agentic AI quality engineering platform with deterministic evidence and policy controls"
 readme = "README.md"
 requires-python = ">=3.11"
-license = {text = "MIT"}
 authors = [{name = "Yunior Portal"}]
 dependencies = [
   "anyio>=4.8,<5",

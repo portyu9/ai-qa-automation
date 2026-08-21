@@ -1,49 +1,42 @@
 # AI QA Automation — Agentic Quality Engineering Platform
 
-> A portfolio-grade, production-shaped reference implementation of an AI Test Automation Agent that **reasons probabilistically but proves outcomes deterministically**.
+I built this project around one rule: **model reasoning is not test evidence**.
 
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
-[![Claude Agent SDK](https://img.shields.io/badge/Claude-Agent%20SDK-orange.svg)](https://github.com/anthropics/claude-agent-sdk-python)
-[![Tests](https://img.shields.io/badge/tests-pytest-informational.svg)](#quality-engineering)
-[![Security](https://img.shields.io/badge/security-fail--closed-important.svg)](#security-model)
-
-## Why this project exists
-
-Most “AI testing agents” stop at *LLM generates a test*. This repository demonstrates the engineering needed around the model: typed state, evidence provenance, tool boundaries, deterministic gates, adversarial evaluations, policy enforcement, safe test healing, risk-based regression selection, observability, and official MCP integration boundaries.
-
-The governing principle is simple:
+Claude can interpret failures, form hypotheses, select controlled actions, propose repairs, design tests, and assess risk. Test runners, policy checks, schemas, exit codes, performance thresholds, and other deterministic controls decide whether a result is actually verified.
 
 ```text
 Claude reasons. Controlled tools execute. Deterministic systems decide whether gates passed.
 ```
 
-A model saying “looks good” is never a PASS. `NOT_EXECUTED`, `NOT_OBSERVED`, `NOT_VERIFIED`, and `BLOCKED` are first-class states.
+`NOT_EXECUTED`, `NOT_OBSERVED`, `NOT_VERIFIED`, and `BLOCKED` are explicit states. A successful model response by itself is never converted into PASS.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    U[Authorized Objective] --> A[Claude Agent SDK]
-    A --> P[Runtime Policy + Hooks]
-    A --> Q[Trusted in-process QA MCP tools]
+    U[Authorized objective] --> A[Claude Agent SDK]
+    A --> P[Runtime policy + hooks]
+    A --> Q[Trusted in-process QA tools]
     A --> X[Approved official external MCP]
 
     Q --> T1[pytest]
     Q --> T2[Playwright]
     Q --> T3[httpx / API]
     Q --> T4[k6]
+    Q --> T5[Schema / quality validation]
 
-    T1 --> E[Evidence Store]
+    T1 --> E[Evidence store]
     T2 --> E
     T3 --> E
     T4 --> E
+    T5 --> E
     X --> E
 
-    E --> I[Failure / Healing / Generation / Prioritization Intelligence]
-    I --> V[Deterministic Validation Gate]
-    V --> R[Structured Final Report]
+    E --> I[Failure / healing / generation / prioritization intelligence]
+    I --> V[Deterministic validation]
+    V --> R[Structured final report]
 
-    subgraph Trusted Control Plane
+    subgraph Trusted control plane
       A
       P
       Q
@@ -52,87 +45,224 @@ flowchart LR
       V
     end
 
-    subgraph Untrusted Target Plane
+    subgraph Untrusted target plane
       SUT[Target repository / SUT]
     end
 
     Q <--> SUT
 ```
 
-### Three trust zones
+### Trust boundaries
 
-| Zone | Trust | Examples |
+| Zone | Treatment | Examples |
 |---|---|---|
-| Control plane | Trusted | runtime policy, CLAUDE.md, Skills, tool schemas, eval thresholds |
-| Target/SUT plane | Untrusted data | source, tests, DOM, logs, `.mcp.json`, target `CLAUDE.md` |
+| Control plane | Trusted | runtime policy, `CLAUDE.md`, Skills, hooks, tool schemas, eval thresholds |
+| Target/SUT plane | Untrusted data | source, tests, DOM, logs, target `.mcp.json`, target `CLAUDE.md` |
 | Integration plane | Explicitly approved | GitHub official MCP, Atlassian Rovo MCP |
 
-The SUT cannot redefine the control plane. Content retrieved from code, DOM, APIs, GitHub/Jira, CI, or MCP is **data**, not instructions.
+Source comments, DOM text, API responses, CI logs, GitHub/Jira content, and MCP responses are evidence inputs. They cannot redefine control-plane policy.
 
-## What is implemented
+## Implemented runtime
 
-### Agent runtime
-- Official Claude Agent SDK integration (`ClaudeSDKClient`)
-- Project-only trusted setting source
+The live runtime uses the official Claude Agent SDK and a narrow in-process QA tool server. Its configuration includes:
+
+- `tools=[]` so generic built-in tools are not part of the base runtime surface
+- explicit internal QA tool names
+- explicit `disallowed_tools` for Bash/Edit/Write/Web capabilities
+- `setting_sources=["project"]` plus an explicit allowlist of the five project Skills
 - `strict_mcp_config=True`
-- no unrestricted built-in Bash/Edit/Write/Web tools in runtime
-- fail-closed unattended permission callback (read-only external actions only; writes denied unless a reviewed approval path is added)
-- PreToolUse/PostToolUse hooks
-- bounded turns, tool budget, timeouts, and model-cost budget
-- live model path separated from deterministic offline demo
+- deterministic `PreToolUse`, `PostToolUse`, and failure hooks
+- a fail-closed permission handler
+- bounded turns, tool calls, repeated actions, network operations, autonomous mutations, execution time, and model cost
+- an exclusive OS-backed workspace lease so concurrent agent runs cannot mutate the same SUT worktree
+- deterministic repository fingerprints that block autonomous writes after out-of-band workspace drift
+- transactional test mutations with trusted rollback snapshots until targeted + regression validation closes the revision
+- per-tool failure circuits that stop repeatedly failing integrations without widening tool authority
+- canonical QA state persisted outside conversation history, with separate runtime-control metadata
+- an append-only hash-chained run journal plus run-scoped evidence/artifact manifests
+- bounded repository profiling, change-impact analysis, and dependency-manifest inventory before model execution
 
-### Quality intelligence
-- evidence-driven failure classification
-- hypothesis-friendly failure taxonomy
-- semantic locator ranking and guarded self-healing proposals
-- deterministic anti-pattern detection for generated/modified tests
-- coverage-aware test-generation planning
-- risk-based regression prioritization with mandatory-coverage invariants
-- deterministic performance threshold assessment
+### Internal QA tools
 
-### Execution adapters
-- narrow pytest runner
-- safe repository inspection
-- httpx API probe with host allowlist
-- Playwright evidence collector (optional dependency)
-- k6 performance runner with production-load denial
-- artifact hashing and evidence manifests
+The Agent SDK tool surface currently includes:
 
-### Security engineering
-- path confinement
-- secret redaction
-- governance-file protection
-- destructive Git/command denial
-- unsafe patch detection (`skip`, `xfail`, arbitrary sleeps, assertion removal, broad suppression)
-- official-first-party MCP allowlist
-- prompt-injection adversarial scenarios
-- no runtime self-modification of governing policy
+- repository inspection
+- pytest execution
+- API probing
+- Playwright browser evidence collection
+- deterministic failure classification
+- policy-approved bounded test-file reads
+- observed repository test-coverage search
+- coverage-evidence-bound test planning
+- regression prioritization
+- deterministic Python test-quality review
+- plan-bound guarded test-file creation
+- Playwright locator verification, semantic healing proposals, and locator-only repair
+- JSON Schema validation
+- CI failure analysis
+- Appium runtime inspection
+- controlled k6 execution and threshold assessment
 
-### Claude project configuration
-- concise `CLAUDE.md`
-- five focused Skills:
-  - `investigate-test-failure`
-  - `self-heal-test`
-  - `generate-test`
-  - `prioritize-regression`
-  - `performance-test`
-- project hooks for destructive/governance changes
+These are project-owned application tools. They are separate from external third-party MCP integrations.
+
+## Failure investigation
+
+Failure analysis starts with evidence rather than a product-defect assumption. The classifier distinguishes categories such as:
+
+- application defect
+- test automation defect
+- locator/UI contract change
+- test-data failure
+- timing/flakiness
+- environment failure
+- external dependency failure
+- authentication failure
+- configuration failure
+- performance regression
+- insufficient evidence
+
+A missing UI element does not automatically trigger locator repair. For example, if the page API returns HTTP 500 and the expected form never renders, the evidence points toward an application/API failure instead of a test locator defect.
+
+## Safe self-healing
+
+Locator repair is treated as a guarded maintenance operation, not a search for any selector that makes a test green.
+
+Candidate ranking favors:
+
+```text
+stable test id > accessible role/name > stable semantic attribute > fragile structural selector
+```
+
+The repair path does not accept Claude's claim that a candidate is unique. Playwright measures the original and replacement locator counts in the same DOM, and the proposal is bound to that observed evidence, the current deterministic failure classification, the exact test path, and the expected file hash. The live agent can apply only the approved locator expression; it does not expose a generic existing-test text replacement tool.
+
+After a repair, patch safety, a targeted pytest run, and a full regression must pass at the new change revision before another mutation can occur. Historical failures stay recorded, while only a newer approved revision of the same deterministic gate can supersede an older failure. Conflicting PASS/FAIL results at the same revision remain `NOT_VERIFIED` rather than being treated as a successful retry.
+
+The repair path also blocks common shortcuts such as:
+
+- skipped or xfailed tests
+- arbitrary sleeps
+- indiscriminate timeout inflation
+- assertion removal or weakening
+- tautological assertions
+- broad exception suppression
+
+Test writes are disabled by default. When explicitly enabled, writes remain restricted to approved test directories and pass deterministic patch-quality checks.
+
+## Coverage-aware test generation
+
+Test generation starts with a bounded read-only repository coverage search. That observed search is stored as evidence; `plan_tests` must reference its evidence ID, and a new test file can be created only from a same-run plan bound to that search. This keeps coverage discovery, planning, and mutation connected by provenance instead of accepting an ungrounded model claim that coverage is missing.
+
+Generated Python/JavaScript/TypeScript tests are checked for meaningful assertions and unsafe shortcuts before creation. Comments or strings containing assertion-like text do not count as assertion coverage.
+
+## API and browser controls
+
+API probes are host-allowlisted and read-only by default. `GET`, `HEAD`, and `OPTIONS` are permitted; mutating methods require explicit runtime configuration.
+
+Playwright checks initial navigation, HTTP(S) subresources, and WebSocket connections against the host allowlist. Service workers are disabled in the evidence-collection context so they cannot silently extend the network surface. Off-allowlist requests are blocked and recorded. Screenshot files are retained as `RAW` binary evidence and are not inserted into model context as sanitized text.
+
+## Performance controls
+
+k6 execution is restricted to an explicitly classified non-production environment and the runtime network allowlist. The runner requires the script to consume an injected `BASE_URL` or `TARGET_URL`, recursively inspects bounded relative JavaScript imports, rejects remote modules, `k6/x/*` extensions, local-file reads, and unapproved hard-coded external hosts, disables k6 usage reporting, and keeps runtime summary files outside the SUT workspace.
+
+Localhost/reference-SUT execution can use those application controls directly. A non-local k6 target additionally requires trusted configuration to assert infrastructure-level egress enforcement (`AI_QA_K6_EXTERNAL_EGRESS_ENFORCED=true`). This is an explicit precondition rather than a claim that static script inspection creates an OS/network sandbox. Performance assessment supports p50/p90/p95/p99, request rate, error rate, and deterministic thresholds.
+
+## Evidence, state, and runtime control
+
+`AgentRunState` is the canonical QA decision state. It tracks the objective, model/SDK/policy versions, a SHA-256 fingerprint of the trusted runtime configuration, target SHA, change revision, iterations, tool calls, hypotheses, evidence IDs, classifications, modified files, validation lineage, MCP status, cost, duration, and terminal status.
+
+Process-level controls are intentionally separate from that decision model. Each run also maintains `runtime.json` for the workspace lease identifier, current workspace fingerprint, execution-budget counters, open tool circuits, pending mutation transaction, and journal head. `journal.jsonl` is append-only and SHA-256 hash chained so interrupted runs can be inspected without relying on conversational memory.
+
+Before Claude receives the objective, the runtime deterministically captures the Git/worktree fingerprint, changed-file risk, repository technology/test topology, and dependency-manifest inventory. Only a bounded sanitized summary is added to model context; the underlying observations are persisted as evidence.
+
+Autonomous test mutations are transactional. The pre-tool hook snapshots the target file into the trusted artifact area, a mutation remains pending while the new revision is validated, and the rollback point is committed only after patch-safety, targeted pytest, and full-regression closure. A failed/interrupted/unverified run restores the previous file (or removes an unverified newly created test) before the terminal report. A mutation is also blocked if the Git-backed target worktree differs from the fingerprint captured by the runtime.
+
+`EvidenceStore` keeps evidence and artifacts under:
+
+```text
+artifacts/<run_id>/
+```
+
+Artifacts are content-hashed and recorded in `evidence-manifest.json`. Text emitted by test execution is redacted before it is returned to the model or persisted as a sanitized artifact.
+
+When `AI_QA_REGULATED_MODE=true`, the store additionally writes `audit-log.jsonl` with a SHA-256 hash chain and marks newly registered artifacts with the `regulated` retention classification. This is an engineering traceability control; it is not a compliance certification.
+
+## MCP integration
+
+External MCP is restricted to first-party/vendor-official integrations that are explicitly enabled.
+
+| Integration | Runtime configuration | Default |
+|---|---|---|
+| GitHub | official `github/github-mcp-server` v1.0.5 container in read-only mode | disabled |
+| Jira / Confluence | official Atlassian Rovo MCP endpoint | disabled |
+| Other services | narrow vendor API adapter or `NOT_CONFIGURED` | not configured |
+
+The runtime supplies its MCP configuration explicitly and enables strict MCP mode. Target-repository, user, plugin, and unrelated local MCP configuration are not accepted as runtime authority.
+
+External read operations can be allowed by tool-level policy. The GitHub server is also configured read-only. External writes from other approved integrations require approval and fail closed in unattended execution; destructive external actions are denied by default. MCP `AVAILABLE` is recorded only after an observed successful tool call, not merely because configuration exists.
+
+See [`docs/MCP.md`](docs/MCP.md).
+
+## Evaluation
+
+The agent is tested as software. The repository includes unit, integration, policy, security, and evaluation tests plus a 34-scenario adversarial corpus.
+
+The scenario set covers:
+
+- application versus automation defects
+- locator changes and flaky behavior
+- auth/data/environment/dependency failures
+- unsafe healing attempts
+- assertion weakening, sleeps, timeout inflation, and skipping
+- malformed structured model output
+- bounded-loop behavior
+- Claude SDK transient failure classification
+- GitHub/Atlassian MCP outage and authorization states
+- prompt injection through GitHub, Jira, DOM, and API/test data
+- regression-selection false negatives and mandatory-test preservation
+- performance regression and production-load denial
+- governance-file modification attempts
+- target `CLAUDE.md` and `.mcp.json` injection
+
+Hard-safety scenarios use zero known failures as their threshold.
+
+```bash
+pytest
+python evals/runner.py
+```
+
+See [`docs/EVALUATION.md`](docs/EVALUATION.md).
+
+## Reference SUT
+
+`examples/reference_sut/` is a small deterministic FastAPI application with controlled modes for:
+
+- passing checkout
+- application defect
+- API failure
+- timing behavior
+- prompt-injection content
+
+It gives the deterministic tooling a stable target without coupling the agent architecture to one application.
 
 ## Quick start
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -e '.[dev]'
+python -m pip install -e '.[dev]'
 
-# deterministic showcase — no Anthropic key required
-ai-qa demo
-
-# capability truth table
+# Environment capability report
 ai-qa doctor
 
-# deterministic test suite
+# Deterministic local scenario; no Anthropic key required
+ai-qa demo
+
+# Inspect an interrupted run without claiming conversation replay
+ai-qa recover /path/to/artifacts/run-<id>
+
+# Repository-contained deterministic tests/evaluations
 pytest
+python evals/runner.py
 ```
 
 ### Live Claude Agent SDK path
@@ -140,131 +270,53 @@ pytest
 ```bash
 export ANTHROPIC_API_KEY='...'
 ai-qa agent \
+  --control-root /path/to/ai-qa-automation \
   --workspace /path/to/isolated/sut-worktree \
   'Investigate the failing checkout test. Do not modify tests unless evidence proves a test defect.'
 ```
 
-The live path intentionally does **not** convert model completion into PASS. A successful model response without deterministic validation finishes `NOT_VERIFIED`.
-
-## Showcase scenario
-
-`ai-qa demo` demonstrates a classic failure-analysis trap:
-
-1. UI test cannot find the checkout control.
-2. Network evidence shows `/api/order` returned HTTP 500.
-3. DOM evidence confirms the form was not rendered.
-4. The deterministic classifier favors `APPLICATION_DEFECT`.
-5. The system does **not** “self-heal” a locator to manufacture green status.
-6. Regression prioritization preserves mandatory smoke coverage and broadens when dependency confidence is low.
-
-That behavior is more important than generating a clever selector.
-
-## Safe self-healing contract
-
-A locator repair is eligible only when the intended business behavior still exists and a unique, semantically equivalent control is proven. Candidate preference is:
-
-```text
-stable test id > accessible role/name > stable semantic attribute > fragile structural selector
-```
-
-The repair gate rejects ambiguous/positional selectors and diffs that weaken intent. Even an allowed repair still requires targeted rerun + relevant regression + assertion-intent review.
-
-## Regression prioritization
-
-The selector combines changed-component overlap, dependency overlap, historical failures, business criticality, and security criticality. It is intentionally recall-biased:
-
-- mandatory coverage is always selected
-- low dependency confidence lowers the selection threshold
-- incomplete/conflicting impact evidence broadens regression
-- reduction ratio is reported alongside confidence, never by itself
-
-## MCP strategy
-
-External production MCP is vendor-official and explicitly approved only.
-
-| Integration | Strategy | Default |
-|---|---|---|
-| GitHub | official `github/github-mcp-server` container | disabled |
-| Jira/Confluence | official Atlassian Rovo MCP endpoint | disabled |
-| Other systems | vendor API via narrow internal adapter unless an official MCP passes review | not configured |
-
-`.mcp.json` is useful for trusted developer tooling. The **runtime separately supplies MCP configuration and enables strict MCP mode** so target/user/plugin MCP configuration is not silently inherited.
-
-## Evaluation philosophy
-
-The AI tester is itself tested. `evals/scenarios/` contains the 34 functional/adversarial scenarios in the build contract, including:
-
-- true application vs test defects
-- locator contract changes
-- auth/data/environment/dependency failures
-- unsafe healing strategies
-- prompt injection via GitHub/Jira/DOM/API data
-- unofficial MCP rejection
-- mandatory regression omission attempts
-- unauthorized production load
-- governance modification attempts
-- target `CLAUDE.md` / `.mcp.json` injection
-
-Hard safety invariants have a required threshold of **zero known failures**. Model-backed scenarios remain `NOT_VERIFIED` until credentials and the corresponding external systems are actually exercised.
-
-## Reference SUT
-
-`examples/reference_sut/` is deliberately small and deterministic. It exposes controlled modes for:
-
-- passing checkout
-- application defect
-- API failure
-- invalid test data
-- timing behavior
-- prompt-injection content
-
-It exists to demonstrate the agent; the platform itself remains SUT-agnostic.
+The live path requires the trusted control root and target workspace to be disjoint. The control root must contain the project `CLAUDE.md` and `.claude/settings.json`. Model completion is not translated into PASS; if no deterministic validation proves the objective, the run terminates `NOT_VERIFIED`.
 
 ## Repository map
 
 ```text
 .
 ├── CLAUDE.md
-├── .claude/                  # Skills, settings, hooks
+├── .claude/                  # trusted project settings, hooks, Skills
+├── .mcp.json                 # trusted developer MCP configuration
 ├── src/ai_qa_automation/
-│   ├── agent.py              # live Agent SDK orchestration
-│   ├── models.py             # typed state/evidence/output contracts
-│   ├── policy.py             # deterministic enforcement
-│   ├── runtime/              # system prompt, hooks, in-process MCP tools
-│   ├── intelligence/         # classification/healing/generation/prioritization
-│   ├── tools/                # narrow execution/evidence adapters
-│   └── integrations/         # official MCP configuration boundaries
-├── tests/                    # unit/integration/policy/security/evaluations
-├── evals/                    # adversarial corpus + fixed thresholds
+│   ├── agent.py              # Agent SDK orchestration
+│   ├── models.py             # state/evidence/result contracts
+│   ├── policy.py             # deterministic authorization
+│   ├── runtime/              # orchestration, leases, budgets, journal, hooks, QA tools
+│   ├── intelligence/         # failure/healing/generation/change-impact/topology analysis
+│   ├── tools/                # execution and evidence adapters
+│   └── integrations/         # external MCP configuration and health mapping
+├── tests/                    # unit/integration/policy/security/evaluation tests
+├── evals/                    # 34-scenario corpus + fixed thresholds
 ├── examples/reference_sut/
 ├── performance/
 └── docs/
 ```
 
-## GitHub Actions safety
+## Verification boundaries
 
-A complete CI workflow is included **but intentionally manual-only for the showcase bootstrap**. It uses `workflow_dispatch` and does not execute automatically on push/PR. No workflow run is triggered by repository creation. After review, triggers can be enabled deliberately.
+Repository-contained deterministic behavior is exercised through pytest and `evals/runner.py`. Environment-dependent integrations are not represented as verified without actual execution.
 
-## Production-shape vs production-complete
+Current environment-dependent boundaries include live Anthropic execution, authenticated GitHub/Atlassian MCP sessions, external target browsers, k6 against a real approved workload, Appium device/emulator sessions, and infrastructure-level sandbox/egress controls.
 
-This repository is intentionally honest about the boundary.
+See [`docs/VERIFICATION_BOUNDARIES.md`](docs/VERIFICATION_BOUNDARIES.md).
 
-**Implemented and locally verifiable:** deterministic reasoning support, state/evidence contracts, policies, quality intelligence, security rules, offline demo, tests/evals that do not require external systems.
+## GitHub Actions
 
-**Requires environment-specific verification before production claims:** live Anthropic execution, authenticated GitHub/Atlassian MCP, real browser infrastructure, k6 against an approved staging target, Appium device/emulator/cloud, enterprise secret management, hardened container/VM network isolation, organization-specific compliance controls.
+`.github/workflows/ci.yml` is manual-only and exposes `workflow_dispatch`. It has no `push`, `pull_request`, or scheduled trigger.
 
-Those capabilities are reported `NOT_VERIFIED` until actually exercised. That is a feature of the architecture, not a missing honesty layer.
+The workflow contains deterministic quality, evaluation, security, browser-reference-SUT, and optional model-smoke jobs. The model job is disabled by default unless its manual input is explicitly enabled.
 
-## Design docs
+## Technical walkthrough
 
-- [Architecture](docs/ARCHITECTURE.md)
-- [Threat model](docs/THREAT_MODEL.md)
-- [Security](docs/SECURITY.md)
-- [Evaluation strategy](docs/EVALUATION.md)
-- [Operations](docs/OPERATIONS.md)
-- [MCP integrations](docs/MCP.md)
-- [Limitations / productionization](docs/LIMITATIONS.md)
+[`docs/TECHNICAL_WALKTHROUGH.md`](docs/TECHNICAL_WALKTHROUGH.md) follows the main execution path from objective → policy-controlled tool → evidence → deterministic validation → structured result.
 
 ## License
 
-MIT — built as an engineering portfolio/reference implementation.
+No open-source license is currently specified for this repository.

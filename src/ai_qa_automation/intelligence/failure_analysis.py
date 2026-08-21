@@ -5,6 +5,7 @@ from collections import Counter
 from ..models import (
     EvidenceItem,
     EvidenceKind,
+    EvidenceNature,
     FailureClass,
     FailureClassificationResult,
     Hypothesis,
@@ -15,15 +16,16 @@ class FailureAnalyzer:
     """Deterministic first-pass classifier; Claude may reason over the same evidence afterward."""
 
     def classify(self, evidence: list[EvidenceItem]) -> FailureClassificationResult:
-        if not evidence:
+        observed = [item for item in evidence if item.nature == EvidenceNature.OBSERVED_FACT]
+        if not observed:
             return self._result(
                 FailureClass.INSUFFICIENT_EVIDENCE,
                 1.0,
-                "No evidence was observed; classification would be fabrication.",
+                "No observed facts were available; model interpretation cannot prove a failure class.",
                 [],
             )
 
-        ids = [item.id for item in evidence]
+        ids = [item.id for item in observed]
         signals: Counter[FailureClass] = Counter()
         rationale: dict[FailureClass, list[str]] = {}
 
@@ -31,7 +33,7 @@ class FailureAnalyzer:
             signals[category] += weight
             rationale.setdefault(category, []).append(reason)
 
-        for item in evidence:
+        for item in observed:
             data = item.structured_data
             if item.kind == EvidenceKind.HTTP_RESPONSE:
                 status = int(data.get("status_code", 0) or 0)
@@ -50,6 +52,34 @@ class FailureAnalyzer:
                     add(FailureClass.LOCATOR_UI_CONTRACT_CHANGE, 8, "expected semantic control exists but locator failed")
                 if data.get("expected_control_absent") and data.get("business_state_expected"):
                     add(FailureClass.APPLICATION_DEFECT, 5, "expected control/behavior is absent")
+
+            if item.kind == EvidenceKind.SOURCE_OBSERVATION and item.source == "playwright_locator_verification":
+                original_count = int(data.get("original_count", -1))
+                stable_unique = [
+                    row
+                    for row in data.get("candidates", [])
+                    if isinstance(row, dict)
+                    and int(row.get("uniqueness_count", 0) or 0) == 1
+                    and not row.get("rejected_reason")
+                    and row.get("strategy")
+                    in {"test_id", "role_name", "label", "placeholder", "exact_text"}
+                ]
+                same_page_context = any(
+                    other.id != item.id
+                    and other.source_identifier == item.source_identifier
+                    and other.kind in {
+                        EvidenceKind.SCREENSHOT,
+                        EvidenceKind.ACCESSIBILITY_SNAPSHOT,
+                        EvidenceKind.DOM_SNAPSHOT,
+                    }
+                    for other in observed
+                )
+                if original_count == 0 and stable_unique and same_page_context:
+                    add(
+                        FailureClass.LOCATOR_UI_CONTRACT_CHANGE,
+                        8,
+                        "Playwright observed original locator missing while a stable semantic candidate was unique in the same evidenced page state",
+                    )
 
             if item.kind == EvidenceKind.EXCEPTION:
                 code = str(data.get("code", "")).lower()

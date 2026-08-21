@@ -6,12 +6,12 @@ from typing import Any
 from ..models import MCPStatus
 
 
-def github_mcp_config() -> tuple[MCPStatus, dict[str, Any] | None]:
+def github_mcp_config() -> tuple[MCPStatus | None, dict[str, Any] | None]:
     token = os.getenv("GITHUB_PERSONAL_ACCESS_TOKEN")
     if not token:
         return MCPStatus.NOT_CONFIGURED, None
     return (
-        MCPStatus.AVAILABLE,
+        None,
         {
             "type": "stdio",
             "command": "docker",
@@ -23,7 +23,9 @@ def github_mcp_config() -> tuple[MCPStatus, dict[str, Any] | None]:
                 "GITHUB_PERSONAL_ACCESS_TOKEN",
                 "-e",
                 "GITHUB_TOOLSETS=repos,issues,pull_requests,actions",
-                "ghcr.io/github/github-mcp-server",
+                "-e",
+                "GITHUB_READ_ONLY=1",
+                "ghcr.io/github/github-mcp-server:v1.0.5",
             ],
             "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": token},
         },

@@ -2,21 +2,33 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .models import EvidenceItem, SanitizationStatus
+from .models import ArtifactRecord, EvidenceItem, SanitizationStatus
 from .redaction import sanitize
 
 
 class EvidenceStore:
-    """Append-only evidence registry with content hashing and per-run manifests."""
+    """Append-only evidence registry with hashing, manifests, and optional audit chaining."""
 
-    def __init__(self, root: Path, run_id: str) -> None:
+    def __init__(self, root: Path, run_id: str, *, regulated_mode: bool = False) -> None:
         self.run_id = run_id
+        self.regulated_mode = regulated_mode
         self.run_root = (root / run_id).resolve()
         self.run_root.mkdir(parents=True, exist_ok=True)
         self._items: dict[str, EvidenceItem] = {}
+        self._artifacts: dict[str, ArtifactRecord] = {}
+        self._audit_sequence = 0
+        self._audit_previous_hash = "GENESIS"
+        self._restore_manifest()
+        if self.regulated_mode:
+            self._restore_audit_tail()
+            self._verify_artifact_hashes()
+            self._verify_registry_against_audit()
 
     @staticmethod
     def hash_bytes(content: bytes) -> str:
@@ -27,7 +39,17 @@ class EvidenceStore:
             raise ValueError("evidence run_id does not match store")
         safe_payload = sanitize(item.model_dump(mode="json"))
         safe_item = EvidenceItem.model_validate(safe_payload)
+        if safe_item.id in self._items:
+            raise ValueError(f"evidence id is immutable and already registered: {safe_item.id}")
         self._items[safe_item.id] = safe_item
+        self._append_audit_event(
+            "evidence_registered",
+            {
+                "evidence_id": safe_item.id,
+                "kind": safe_item.kind.value,
+                "content_hash": self.hash_bytes(safe_item.model_dump_json().encode("utf-8")),
+            },
+        )
         self._flush_manifest()
         return safe_item
 
@@ -37,14 +59,58 @@ class EvidenceStore:
         relative_path: str,
         content: bytes,
         originating_tool: str,
+        sanitization_status: SanitizationStatus = SanitizationStatus.RAW,
+        retention_classification: str | None = None,
     ) -> tuple[str, str]:
         destination = (self.run_root / relative_path).resolve()
         if self.run_root not in destination.parents and destination != self.run_root:
             raise ValueError("artifact path escapes run root")
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(content)
+        if destination.exists():
+            raise FileExistsError(f"artifact path is immutable and already exists: {relative_path}")
+        handle, raw_temp = tempfile.mkstemp(
+            dir=destination.parent, prefix=f".{destination.name}.", suffix=".artifact.tmp"
+        )
+        temp = Path(raw_temp)
+        try:
+            with os.fdopen(handle, "wb") as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            try:
+                os.link(temp, destination)
+            except FileExistsError:
+                raise FileExistsError(
+                    f"artifact path is immutable and already exists: {relative_path}"
+                ) from None
+        finally:
+            temp.unlink(missing_ok=True)
         digest = self.hash_bytes(content)
-        return str(destination), digest
+        record = ArtifactRecord(
+            type=destination.suffix.lstrip(".") or "binary",
+            path=destination.relative_to(self.run_root).as_posix(),
+            originating_tool=originating_tool,
+            content_hash=digest,
+            sanitization_status=sanitization_status,
+            retention_classification=(
+                retention_classification
+                if retention_classification is not None
+                else ("regulated" if self.regulated_mode else "standard")
+            ),
+        )
+        self._artifacts[record.artifact_id] = record
+        self._append_audit_event(
+            "artifact_registered",
+            {
+                "artifact_id": record.artifact_id,
+                "path": record.path,
+                "content_hash": record.content_hash,
+                "sanitization_status": record.sanitization_status.value,
+                "retention_classification": record.retention_classification,
+            },
+        )
+        self._flush_manifest()
+        return record.path, digest
 
     def get(self, evidence_id: str) -> EvidenceItem:
         return self._items[evidence_id]
@@ -52,11 +118,163 @@ class EvidenceStore:
     def all(self) -> list[EvidenceItem]:
         return list(self._items.values())
 
+    def _append_audit_event(self, event_type: str, payload: dict[str, Any]) -> None:
+        if not self.regulated_mode:
+            return
+        self._audit_sequence += 1
+        timestamp = datetime.now(UTC).isoformat()
+        core = {
+            "sequence": self._audit_sequence,
+            "timestamp": timestamp,
+            "event_type": event_type,
+            "payload": sanitize(payload),
+            "previous_hash": self._audit_previous_hash,
+        }
+        canonical = json.dumps(core, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+        event_hash = self.hash_bytes(canonical)
+        record = {**core, "event_hash": event_hash}
+        with (self.run_root / "audit-log.jsonl").open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(record, sort_keys=True, default=str) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        self._audit_previous_hash = event_hash
+
+
+    def _restore_manifest(self) -> None:
+        path = self.run_root / "evidence-manifest.json"
+        if not path.exists():
+            return
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if data.get("run_id") != self.run_id:
+                raise ValueError("evidence manifest run_id mismatch")
+            manifest_regulated = bool(data.get("regulated_mode", False))
+            if manifest_regulated != self.regulated_mode:
+                raise ValueError("evidence manifest regulated_mode mismatch")
+            self._items = {
+                item.id: item
+                for item in (EvidenceItem.model_validate(raw) for raw in data.get("evidence", []))
+            }
+            self._artifacts = {
+                item.artifact_id: item
+                for item in (
+                    ArtifactRecord.model_validate(raw) for raw in data.get("artifacts", [])
+                )
+            }
+        except (json.JSONDecodeError, TypeError, KeyError) as exc:
+            raise ValueError("evidence manifest could not be restored") from exc
+
+    def _verify_artifact_hashes(self) -> None:
+        for record in self._artifacts.values():
+            path = (self.run_root / record.path).resolve()
+            if self.run_root not in path.parents or not path.is_file():
+                raise ValueError(f"regulated artifact is missing or escaped run root: {record.path}")
+            if self.hash_bytes(path.read_bytes()) != record.content_hash:
+                raise ValueError(f"regulated artifact integrity check failed: {record.path}")
+
+    def _verify_registry_against_audit(self) -> None:
+        path = self.run_root / "audit-log.jsonl"
+        if not path.exists():
+            if self._items or self._artifacts:
+                raise ValueError("regulated registry exists without audit log")
+            return
+
+        evidence_hashes: dict[str, str] = {}
+        artifact_hashes: dict[str, str] = {}
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
+            if not raw_line.strip():
+                continue
+            record = json.loads(raw_line)
+            payload = record.get("payload") or {}
+            if record.get("event_type") == "evidence_registered":
+                evidence_hashes[str(payload.get("evidence_id"))] = str(
+                    payload.get("content_hash")
+                )
+            elif record.get("event_type") == "artifact_registered":
+                artifact_hashes[str(payload.get("artifact_id"))] = str(
+                    payload.get("content_hash")
+                )
+
+        if set(evidence_hashes) != set(self._items):
+            raise ValueError("regulated evidence registry does not match audit log")
+        if set(artifact_hashes) != set(self._artifacts):
+            raise ValueError("regulated artifact registry does not match audit log")
+
+        for evidence_id, item in self._items.items():
+            actual = self.hash_bytes(item.model_dump_json().encode("utf-8"))
+            if evidence_hashes[evidence_id] != actual:
+                raise ValueError(f"regulated evidence integrity check failed: {evidence_id}")
+        for artifact_id, item in self._artifacts.items():
+            if artifact_hashes[artifact_id] != item.content_hash:
+                raise ValueError(f"regulated artifact registry integrity check failed: {artifact_id}")
+
+    def verify_audit_chain(self) -> bool:
+        """Verify sequence, previous-hash linkage, and each regulated audit event hash."""
+        path = self.run_root / "audit-log.jsonl"
+        if not path.exists():
+            return self._audit_sequence == 0 and self._audit_previous_hash == "GENESIS"
+
+        expected_previous = "GENESIS"
+        expected_sequence = 1
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
+            if not raw_line.strip():
+                continue
+            record = json.loads(raw_line)
+            if int(record.get("sequence", -1)) != expected_sequence:
+                return False
+            if record.get("previous_hash") != expected_previous:
+                return False
+            core = {key: value for key, value in record.items() if key != "event_hash"}
+            canonical = json.dumps(
+                core, sort_keys=True, separators=(",", ":"), default=str
+            ).encode("utf-8")
+            calculated = self.hash_bytes(canonical)
+            if record.get("event_hash") != calculated:
+                return False
+            expected_previous = calculated
+            expected_sequence += 1
+        return True
+
+    def _restore_audit_tail(self) -> None:
+        path = self.run_root / "audit-log.jsonl"
+        if not path.exists():
+            return
+        if not self.verify_audit_chain():
+            raise ValueError("regulated audit log integrity check failed")
+        lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        if not lines:
+            return
+        last = json.loads(lines[-1])
+        self._audit_sequence = int(last["sequence"])
+        self._audit_previous_hash = str(last["event_hash"])
+
     def _flush_manifest(self) -> None:
         path = self.run_root / "evidence-manifest.json"
         data: dict[str, Any] = {
             "run_id": self.run_id,
+            "regulated_mode": self.regulated_mode,
             "evidence": [item.model_dump(mode="json") for item in self._items.values()],
+            "artifacts": [item.model_dump(mode="json") for item in self._artifacts.values()],
             "sanitization_status": SanitizationStatus.SANITIZED,
         }
-        path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+        if self.regulated_mode:
+            audit_path = self.run_root / "audit-log.jsonl"
+            data["audit_log"] = {
+                "path": audit_path.name,
+                "events": self._audit_sequence,
+                "last_event_hash": self._audit_previous_hash,
+                "content_hash": self.hash_bytes(audit_path.read_bytes()) if audit_path.exists() else None,
+            }
+        rendered = json.dumps(data, indent=2, sort_keys=True)
+        handle, raw_temp = tempfile.mkstemp(
+            dir=self.run_root, prefix=".evidence-manifest.", suffix=".tmp", text=True
+        )
+        temp = Path(raw_temp)
+        try:
+            with os.fdopen(handle, "w", encoding="utf-8") as stream:
+                stream.write(rendered)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temp, path)
+        finally:
+            temp.unlink(missing_ok=True)

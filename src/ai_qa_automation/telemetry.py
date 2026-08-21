@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+from contextlib import contextmanager
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Iterator
 
 from .redaction import sanitize
 
@@ -27,3 +28,14 @@ def get_tracer(name: str = "ai_qa_automation") -> Any:
     except ImportError:
         return None
     return trace.get_tracer(name)
+
+
+@contextmanager
+def trace_span(name: str) -> Iterator[Any | None]:
+    """Use OpenTelemetry when installed without making it a runtime requirement."""
+    tracer = get_tracer()
+    if tracer is None:
+        yield None
+        return
+    with tracer.start_as_current_span(name) as span:
+        yield span

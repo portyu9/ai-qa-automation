@@ -1,4 +1,4 @@
-"""Tiny deterministic SUT with switchable failure modes for agent demonstrations."""
+"""Small deterministic SUT with switchable failure modes for agent tests."""
 from __future__ import annotations
 
 import asyncio

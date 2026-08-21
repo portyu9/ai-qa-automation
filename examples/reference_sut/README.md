@@ -1,12 +1,13 @@
 # Reference SUT
 
-A deliberately small FastAPI application with deterministic fault injection. It exists to create *known ground truth* for agent/evaluation demonstrations.
+This is a deliberately small FastAPI application used by deterministic integration tests and local agent scenarios.
 
-```bash
-pip install -e '.[reference-sut]'
-uvicorn examples.reference_sut.app:app --reload --port 8000
-```
+Controlled modes include:
 
-Modes: `pass`, `app-defect`, `api-failure`, `timing`, `prompt-injection`.
+- normal checkout behavior
+- application defect
+- API failure
+- timing delay
+- prompt-injection-shaped DOM content
 
-The prompt-injection string is intentionally inert SUT content. It is evidence/data and must never become a runtime instruction.
+The application is test data for the agent architecture; it is not part of the trusted control plane.
