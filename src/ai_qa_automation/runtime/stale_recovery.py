@@ -32,7 +32,10 @@ def _confined_non_symlink_path(root: Path, requested: Path, *, label: str) -> Pa
 
 
 def _validated_backup_path(rollback_root: Path, backup_raw: str) -> Path:
-    rollback_root = rollback_root.expanduser().resolve()
+    raw_rollback_root = rollback_root.expanduser()
+    if raw_rollback_root.is_symlink():
+        raise ValueError("prior rollback directory is a symlink and has ambiguous ownership")
+    rollback_root = raw_rollback_root.resolve()
     raw = Path(backup_raw).expanduser()
     absolute = raw if raw.is_absolute() else rollback_root / raw
     try:
@@ -69,6 +72,11 @@ def recover_stale_mutation(
             artifact_root,
             Path(previous_run_id),
             label="prior run directory",
+        )
+        journal_path = _confined_non_symlink_path(
+            prior_run_dir,
+            Path("journal.jsonl"),
+            label="prior run journal",
         )
     except ValueError as exc:
         return {"status": "BLOCKED", "reason": str(exc)}
@@ -110,7 +118,7 @@ def recover_stale_mutation(
         original_sha = str(pending.get("original_sha256") or "")
         if not backup_raw or not original_sha:
             return {"status": "BLOCKED", "reason": "prior rollback backup metadata is incomplete"}
-        rollback_root = (prior_run_dir / "rollback").resolve()
+        rollback_root = prior_run_dir / "rollback"
         try:
             backup = _validated_backup_path(rollback_root, backup_raw)
         except ValueError as exc:
@@ -134,7 +142,7 @@ def recover_stale_mutation(
     atomic_write_json(runtime_path, metadata)
     try:
         RunJournal(
-            prior_run_dir / "journal.jsonl",
+            journal_path,
             max_events=max(5000, int(metadata.get("journal_event_count", 0)) + 10),
         ).try_append(
             "stale_mutation_recovered",
