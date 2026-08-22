@@ -1,24 +1,24 @@
-name: Ephemeral Ruff 0.16.2 Format — dd2d6d85
+name: Ephemeral Ruff 0.16.2 Format — PR 12
 
 # Temporary, exact-revision maintenance harness authorized by the repository owner.
 # It must be removed from main before PR #12 is merged.
 on:
-  push:
+  pull_request:
     branches: [main]
-    paths:
-      - .github/workflows/ephemeral-ruff-format-dd2d6d85.yml
+    types: [synchronize]
 
 permissions:
   contents: write
 
 env:
-  SOURCE_SHA: dd2d6d85b8a6cb7adc9bf0c98a56b2d1a91138b2
+  SOURCE_SHA: 9ca9c07dcbf223b2599663522f1a58684407cee0
   SOURCE_BRANCH: feature/observability-metrics-hardening
   PYTHONUNBUFFERED: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
 jobs:
   format:
+    if: github.event.pull_request.number == 12 && github.head_ref == 'feature/observability-metrics-hardening'
     name: Exact Ruff 0.16.2 mechanical formatting
     runs-on: ubuntu-latest
     timeout-minutes: 15
