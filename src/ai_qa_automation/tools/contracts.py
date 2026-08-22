@@ -17,6 +17,14 @@ def validate_json_schema(instance: Any, schema: dict[str, Any]) -> ValidationRes
         )
     try:
         jsonschema.validate(instance=instance, schema=schema)
+    except jsonschema.SchemaError as exc:
+        path = "/".join(str(part) for part in exc.path) or "<root>"
+        return ValidationResult(
+            name="json_schema",
+            status=ValidationStatus.NOT_VERIFIED,
+            summary=f"JSON Schema itself is invalid at {path}; payload validity was not proven.",
+            details={"schema_path": path, "validator": str(exc.validator)},
+        )
     except jsonschema.ValidationError as exc:
         path = "/".join(str(part) for part in exc.path) or "<root>"
         return ValidationResult(
@@ -25,4 +33,8 @@ def validate_json_schema(instance: Any, schema: dict[str, Any]) -> ValidationRes
             summary=f"Schema mismatch at {path} (validator={exc.validator}).",
             details={"path": path, "validator": str(exc.validator)},
         )
-    return ValidationResult(name="json_schema", status=ValidationStatus.PASS, summary="Payload matches JSON Schema.")
+    return ValidationResult(
+        name="json_schema",
+        status=ValidationStatus.PASS,
+        summary="Payload matches JSON Schema.",
+    )
