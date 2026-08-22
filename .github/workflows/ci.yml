@@ -1,7 +1,7 @@
 name: Manual CI — AI QA Automation
 
-# Final repository code/config step after pre-execution completeness audit; remains operator-dispatched only.
-# Intentionally manual-only during portfolio bootstrap.
+# Final repository code/config step after merge-readiness audit; remains operator-dispatched only.
+# Intentionally manual-only during the controlled verification stage.
 # Do not add push/pull_request/schedule triggers until repository secrets,
 # branch policy, and desired execution cost have been reviewed.
 on:
