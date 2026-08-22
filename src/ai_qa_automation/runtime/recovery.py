@@ -9,12 +9,55 @@ from ..state import StateStore
 from .journal import RunJournal
 
 
+def _revision_closed(state: Any) -> bool:
+    if state.change_revision == 0:
+        return True
+    current = [item for item in state.validation_results if item.revision == state.change_revision]
+    if not current or any(item.status != ValidationStatus.PASS for item in current):
+        return False
+    patch_paths = {
+        str(item.details.get("path") or "")
+        for item in current
+        if item.name == "test_patch_safety"
+        and item.status == ValidationStatus.PASS
+        and str(item.details.get("path") or "")
+    }
+    if len(patch_paths) != 1:
+        return False
+    mutation_path = next(iter(patch_paths))
+    targeted = any(
+        item.name == "pytest"
+        and item.status == ValidationStatus.PASS
+        and item.details.get("scope") == "targeted"
+        and item.details.get("mutation_target_bound") is True
+        and item.details.get("mutation_target") == mutation_path
+        for item in current
+    )
+    regression = any(
+        item.name == "pytest"
+        and item.status == ValidationStatus.PASS
+        and item.details.get("scope") == "regression"
+        for item in current
+    )
+    return targeted and regression
+
+
 def inspect_recovery(run_dir: Path) -> dict[str, Any]:
     """Assess persisted run integrity without claiming model-session replay."""
-    run_dir = run_dir.expanduser().resolve()
+    requested_run_dir = run_dir.expanduser()
+    if requested_run_dir.is_symlink():
+        return {"recoverable": False, "reason": "run directory has ambiguous symlink ownership"}
+    run_dir = requested_run_dir.resolve()
     state_path = run_dir / "state.json"
     journal_path = run_dir / "journal.jsonl"
     runtime_path = run_dir / "runtime.json"
+    for path, label in (
+        (state_path, "state.json"),
+        (journal_path, "journal.jsonl"),
+        (runtime_path, "runtime.json"),
+    ):
+        if path.is_symlink():
+            return {"recoverable": False, "reason": f"{label} has ambiguous symlink ownership"}
     if not state_path.is_file():
         return {"recoverable": False, "reason": "state.json is missing"}
     try:
@@ -28,17 +71,7 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
     if not journal_status["valid"]:
         return {"recoverable": False, "reason": "journal hash chain is invalid"}
 
-    current = [item for item in state.validation_results if item.revision == state.change_revision]
-    revision_closed = (
-        state.change_revision == 0
-        or (
-            bool(current)
-            and all(item.status == ValidationStatus.PASS for item in current)
-            and any(item.name == "test_patch_safety" for item in current)
-            and any(item.name == "pytest" and item.details.get("scope") == "targeted" for item in current)
-            and any(item.name == "pytest" and item.details.get("scope") == "regression" for item in current)
-        )
-    )
+    revision_closed = _revision_closed(state)
     runtime_metadata: dict[str, Any] = {}
     if runtime_path.is_file():
         try:
