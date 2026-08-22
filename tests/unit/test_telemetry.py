@@ -37,6 +37,10 @@ def _fake_instruments() -> dict[str, Any]:
     }
 
 
+def _raise_metrics_unavailable(*_args: object, **_kwargs: object) -> None:
+    raise RuntimeError("metrics unavailable")
+
+
 def test_run_metrics_are_low_cardinality_and_ignore_invalid_measurements(monkeypatch: Any) -> None:
     instruments = _fake_instruments()
     monkeypatch.setattr(telemetry, "_metric_instruments", lambda: instruments)
@@ -150,11 +154,7 @@ def test_journal_projects_metrics_only_after_durable_event_and_metrics_are_fail_
     ]
     assert journal.verify()["valid"] is True
 
-    monkeypatch.setattr(
-        journal_module,
-        "record_tool_event",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("metrics unavailable")),
-    )
+    monkeypatch.setattr(journal_module, "record_tool_event", _raise_metrics_unavailable)
     second_hash = journal.append("tool_requested", tool_name="mcp__qa__inspect_repository")
 
     assert len(second_hash) == 64
