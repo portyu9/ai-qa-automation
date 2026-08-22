@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="390" viewBox="0 0 1200 390" role="img" aria-labelledby="title desc">
+  <title id="title">ƳƤ AI QA Automation Framework — evidence-first control flow</title>
+  <desc id="desc">Authorized objective flows through Claude reasoning, deterministic policy, controlled QA tools, evidence and provenance, subject-bound validation, and a trusted structured result. The control plane is trusted while target and provider content remain untrusted evidence sources.</desc>
+  <rect width="1200" height="390" rx="28" fill="#f8fafc"/>
+  <rect x="1" y="1" width="1198" height="388" rx="27" fill="none" stroke="#d0d7de"/>
+
+  <text x="600" y="48" text-anchor="middle" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="24" font-weight="700" fill="#0f172a">Evidence-First Agentic Quality Engineering</text>
+  <text x="600" y="76" text-anchor="middle" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="14" fill="#475569">Reason broadly · authorize narrowly · observe with provenance · validate deterministically</text>
+
+  <g font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" text-anchor="middle">
+    <rect x="34" y="124" width="140" height="72" rx="14" fill="#ffffff" stroke="#94a3b8"/>
+    <text x="104" y="153" font-size="13" font-weight="700" fill="#0f172a">Authorized</text>
+    <text x="104" y="173" font-size="13" font-weight="700" fill="#0f172a">objective</text>
+
+    <rect x="194" y="124" width="140" height="72" rx="14" fill="#eef2ff" stroke="#818cf8"/>
+    <text x="264" y="153" font-size="13" font-weight="700" fill="#312e81">Claude</text>
+    <text x="264" y="173" font-size="13" font-weight="700" fill="#312e81">reasoning</text>
+
+    <rect x="354" y="124" width="140" height="72" rx="14" fill="#ecfdf5" stroke="#34d399"/>
+    <text x="424" y="153" font-size="13" font-weight="700" fill="#065f46">Deterministic</text>
+    <text x="424" y="173" font-size="13" font-weight="700" fill="#065f46">policy</text>
+
+    <rect x="514" y="124" width="140" height="72" rx="14" fill="#ecfeff" stroke="#22d3ee"/>
+    <text x="584" y="153" font-size="13" font-weight="700" fill="#155e75">Controlled</text>
+    <text x="584" y="173" font-size="13" font-weight="700" fill="#155e75">QA tools</text>
+
+    <rect x="674" y="124" width="140" height="72" rx="14" fill="#fff7ed" stroke="#fb923c"/>
+    <text x="744" y="153" font-size="13" font-weight="700" fill="#9a3412">Evidence +</text>
+    <text x="744" y="173" font-size="13" font-weight="700" fill="#9a3412">provenance</text>
+
+    <rect x="834" y="124" width="140" height="72" rx="14" fill="#fefce8" stroke="#eab308"/>
+    <text x="904" y="153" font-size="13" font-weight="700" fill="#713f12">Subject-bound</text>
+    <text x="904" y="173" font-size="13" font-weight="700" fill="#713f12">validation</text>
+
+    <rect x="994" y="124" width="172" height="72" rx="14" fill="#f0fdf4" stroke="#22c55e" stroke-width="2"/>
+    <text x="1080" y="153" font-size="13" font-weight="700" fill="#14532d">Trusted structured</text>
+    <text x="1080" y="173" font-size="13" font-weight="700" fill="#14532d">result</text>
+  </g>
+
+  <g fill="none" stroke="#64748b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M174 160 H190"/><path d="M186 156 L190 160 L186 164"/>
+    <path d="M334 160 H350"/><path d="M346 156 L350 160 L346 164"/>
+    <path d="M494 160 H510"/><path d="M506 156 L510 160 L506 164"/>
+    <path d="M654 160 H670"/><path d="M666 156 L670 160 L666 164"/>
+    <path d="M814 160 H830"/><path d="M826 156 L830 160 L826 164"/>
+    <path d="M974 160 H990"/><path d="M986 156 L990 160 L986 164"/>
+  </g>
+
+  <rect x="194" y="230" width="780" height="86" rx="18" fill="#ffffff" stroke="#cbd5e1" stroke-dasharray="6 5"/>
+  <text x="584" y="255" text-anchor="middle" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="12" font-weight="700" fill="#334155">TRUSTED CONTROL PLANE</text>
+  <text x="584" y="281" text-anchor="middle" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="14" fill="#0f172a">policy · permissions · hooks · budgets · controlled execution · evidence lineage · deterministic closure</text>
+  <text x="584" y="301" text-anchor="middle" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="12" fill="#64748b">The model can propose the next action; it cannot expand its own authority or certify its own success.</text>
+
+  <rect x="34" y="336" width="355" height="34" rx="10" fill="#fff1f2" stroke="#fda4af"/>
+  <text x="211" y="358" text-anchor="middle" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="12" font-weight="600" fill="#9f1239">UNTRUSTED TARGET / SUT CONTENT</text>
+  <rect x="811" y="336" width="355" height="34" rx="10" fill="#fff1f2" stroke="#fda4af"/>
+  <text x="988" y="358" text-anchor="middle" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="12" font-weight="600" fill="#9f1239">UNTRUSTED PROVIDER / MCP CONTENT</text>
+</svg>
