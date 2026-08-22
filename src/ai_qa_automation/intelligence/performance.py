@@ -27,6 +27,18 @@ class PerformanceAssessor:
         if max_error_rate > 1:
             raise ValueError("max_error_rate must be between 0 and 1")
 
+        observed = {
+            "p50_ms": metrics.p50_ms,
+            "p90_ms": metrics.p90_ms,
+            "p95_ms": metrics.p95_ms,
+            "p99_ms": metrics.p99_ms,
+            "request_rate": metrics.request_rate,
+            "error_rate": metrics.error_rate,
+        }
+        for name, value in observed.items():
+            if not math.isfinite(value):
+                raise ValueError(f"observed {name} must be finite")
+
         breached: list[str] = []
         if metrics.p95_ms > max_p95_ms:
             breached.append(f"p95 {metrics.p95_ms:.1f}ms > {max_p95_ms:.1f}ms")
