@@ -2,15 +2,14 @@
 
 > **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
-The ƳƤ AI QA Automation Framework separates **what the model says** from **what the system can prove**. A fluent answer, a confident diagnosis, or a successful Agent SDK result subtype never becomes a verified QA outcome by itself.
+The framework separates **what a model says** from **what the system can prove**. A fluent answer, confident diagnosis, green-looking retry, or successful Agent SDK result subtype never becomes a verified QA outcome by itself.
 
-> **Runtime outcomes are derived from deterministic policy, observed evidence, validation lineage, and integrity state.**
+> [!IMPORTANT]
+> **Runtime outcomes are derived from deterministic policy, observed evidence, subject-bound validation lineage, and integrity state.**
 
-This contract is part of the framework's safety model. It describes live run semantics—not repository-development progress.
+This document is the authoritative semantic contract for live terminal, validation, and provider outcomes.
 
 ## Decision hierarchy
-
-The authority order is intentionally asymmetric:
 
 ```text
 trusted policy / runtime invariants
@@ -19,7 +18,7 @@ observed evidence
         ↓
 deterministic validation lineage
         ↓
-model interpretation and proposed action
+model interpretation / proposed action
         ↓
 structured terminal report
 ```
@@ -30,68 +29,96 @@ Model reasoning can influence **what to investigate next**. It cannot redefine p
 
 | Outcome | Meaning |
 |---|---|
-| `SUCCESS` | The Agent SDK session completed successfully and every active deterministic validation gate required for the current revision passed. |
+| `SUCCESS` | Agent execution completed successfully and every active deterministic gate required by the current revision closed. |
 | `FAILURE` | A current deterministic validation failed, the Agent SDK returned a non-success subtype, or another definitive execution failure occurred. |
-| `BLOCKED` | A deterministic prerequisite prevented safe continuation, such as workspace ownership/drift or recovery ambiguity. |
+| `BLOCKED` | A deterministic safety/integrity prerequisite prevented safe continuation. |
 | `INSUFFICIENT_EVIDENCE` | Available evidence cannot support a reliable causal conclusion. |
 | `POLICY_DENIED` | The requested action is outside authorized runtime policy. |
-| `INFRASTRUCTURE_FAILURE` | Runtime infrastructure failed in a way that prevents trustworthy continuation or rollback guarantees. |
-| `CANCELLED` | Execution was cancelled before deterministic completion. |
+| `INFRASTRUCTURE_FAILURE` | Runtime integrity cannot be guaranteed, including rollback-integrity failure. |
+| `CANCELLED` | Execution ended before deterministic completion because cancellation was requested. |
 | `BUDGET_EXCEEDED` | An independent execution budget was exhausted. |
-| `NOT_VERIFIED` | The model/session completed, but deterministic validation is absent, incomplete, contradictory, or insufficient for verified success. |
+| `NOT_VERIFIED` | Evidence is absent, incomplete, stale, contradictory, or insufficient to prove success. |
 
-`NOT_VERIFIED` is deliberately different from `FAILURE`. It means the framework refuses to invent certainty where the validation record does not justify it.
+`NOT_VERIFIED` is deliberately different from `FAILURE`: it means the framework refuses to invent certainty where the validation record does not justify it.
 
 ## Validation outcomes
 
-Individual deterministic gates use a narrower validation vocabulary:
-
 | Outcome | Meaning |
 |---|---|
-| `PASS` | The gate executed for its bound scope/revision and satisfied its deterministic condition. |
+| `PASS` | The gate executed for its bound subject/scope/revision and satisfied its deterministic condition. |
 | `FAIL` | The gate executed and failed its deterministic condition. |
-| `NOT_EXECUTED` | The gate has no execution record for the relevant decision. |
-| `NOT_OBSERVED` | The required observation was not captured. |
+| `NOT_EXECUTED` | No execution record exists for the relevant decision. |
+| `NOT_OBSERVED` | A required observation was not captured. |
 | `NOT_VERIFIED` | Evidence exists but does not close the gate. |
-| `BLOCKED` | Policy, environment, integrity, or another prerequisite prevented the gate from running safely. |
+| `BLOCKED` | Policy, environment, integrity, or another prerequisite prevented safe execution. |
 
-None of the non-PASS validation outcomes is promoted to PASS by model judgment.
+None of the non-PASS outcomes is promoted by model judgment.
+
+---
 
 ## Revision-aware truth
 
-Autonomous mutation creates a new `change_revision`. Validation is bound to revisions so evidence from an older workspace state cannot silently certify newer bytes.
+Autonomous mutation advances `change_revision`. Validation is revision-bound so evidence from older bytes cannot silently certify newer bytes.
 
-For a changed test to close successfully, the current revision requires:
+A live autonomous mutation is deliberately constrained to the Python/pytest execution path. For a changed test to close, the current revision requires all three conditions:
 
-1. deterministic patch-safety PASS;
-2. targeted pytest PASS; and
-3. full-regression pytest PASS.
+1. **patch-safety PASS** bound to the exact changed path;
+2. **targeted pytest PASS** that explicitly selects that same pending mutation path; and
+3. **full-regression pytest PASS** at that revision.
 
-A failed gate remains active until the same gate identity is superseded by evidence at a newer revision. Re-running a different test selector cannot erase the original failed gate.
+A selector such as:
 
-If PASS and FAIL are both observed for the same gate at the same revision, the result is treated as contradictory evidence and resolves to `NOT_VERIFIED` rather than selecting the more convenient observation.
+```text
+tests/test_checkout.py::test_checkout_success
+```
+
+can bind validation to `tests/test_checkout.py`. A `-k` expression with no explicit file selector, or a run targeting another test file, cannot certify those changed bytes; it is diagnostic evidence only.
+
+> [!CAUTION]
+> “Targeted” is not a synonym for “relevant.” Mutation commit requires a deterministic subject binding to the exact file whose bytes are pending.
+
+A failed gate remains active until the **same gate identity** is superseded by evidence at a newer revision. Re-running a different selector cannot erase the original failure.
+
+If PASS and FAIL are both observed for the same gate at the same revision, the evidence is contradictory and terminal truth resolves to `NOT_VERIFIED` rather than selecting the more convenient observation.
 
 ## Mutation transaction semantics
 
-A permitted write is not immediately trusted.
+```mermaid
+stateDiagram-v2
+    [*] --> Authorized
+    Authorized --> Pending: owned rollback snapshot
+    Pending --> PatchSafe: exact-path patch safety PASS
+    PatchSafe --> Targeted: exact-path-bound pytest PASS
+    Targeted --> Regression: full regression PASS
+    Regression --> Committed: revision closed
 
-```text
-AUTHORIZED WRITE
-→ trusted rollback snapshot
-→ candidate revision
-→ patch-safety validation
-→ targeted validation
-→ full regression
-→ COMMIT
+    Pending --> Rollback: failure / incomplete closure
+    PatchSafe --> Rollback
+    Targeted --> Rollback
+    Regression --> Rollback
+    Rollback --> IntegrityFailure: rollback ownership/hash cannot be proven
 ```
 
-Any path that fails to establish deterministic closure returns through rollback. If rollback ownership or integrity cannot be guaranteed, the framework escalates to `INFRASTRUCTURE_FAILURE` rather than overwriting data optimistically.
+A permitted write is not immediately trusted. Any path that fails to establish deterministic closure returns through rollback. If rollback ownership or integrity cannot be guaranteed, the framework escalates to `INFRASTRUCTURE_FAILURE` rather than overwriting data optimistically.
 
-Crash recovery applies the same ownership rules: exact workspace fingerprint, confined paths, non-symlink ownership, and verified rollback bytes are required before stale restoration can occur.
+Crash recovery applies the same ownership standard: exact workspace fingerprint, confined non-symlink paths, owned rollback directory/backup, and verified original bytes are required before stale restoration can touch the target.
+
+## Recovery truth
+
+`ai-qa recover` uses the same closure rule as terminal execution. A persisted changed revision is considered closed only when:
+
+- one exact patch-safety target exists;
+- targeted pytest is explicitly bound to that target;
+- full regression passed; and
+- no pending mutation remains.
+
+Recovery does not reconstruct a previous hidden model conversation. It evaluates persisted state and determines whether a **new** session can safely start from that evidence.
+
+---
 
 ## External integration outcomes
 
-MCP/provider health is independent from QA terminal truth:
+Provider health is independent from QA terminal truth:
 
 | Provider outcome | Meaning |
 |---|---|
@@ -100,42 +127,68 @@ MCP/provider health is independent from QA terminal truth:
 | `UNAUTHORIZED` | Authentication or authorization was rejected. |
 | `RATE_LIMITED` | The provider reported throttling. |
 | `UNAVAILABLE` | Transport/provider availability prevented the operation. |
-| `INVALID_RESPONSE` | The response could not be safely interpreted as the expected provider contract. |
-| `FAILED` | A provider action failed without a more specific normalized class. |
+| `INVALID_RESPONSE` | The response could not be interpreted as the expected provider contract. |
+| `FAILED` | The provider action failed without a more specific normalized class. |
 
-Configuration presence alone does not manufacture `AVAILABLE`. Failed provider calls do not manufacture remote evidence.
+Configuration presence alone does not manufacture `AVAILABLE`, and failed provider calls do not manufacture remote evidence.
+
+Numeric business identifiers are not treated as HTTP status codes merely because they look like values such as `403` or `429`; failure normalization requires surrounding provider/transport semantics.
 
 ## Evidence classes
 
 The framework keeps observation and interpretation distinct:
 
-- `OBSERVED_FACT` — produced by controlled tools or deterministic inspection;
-- `MODEL_INTERPRETATION` — reasoning, plans, proposals, or hypotheses derived from evidence.
+- `OBSERVED_FACT` — produced by controlled tooling or deterministic inspection;
+- `MODEL_INTERPRETATION` — hypothesis, plan, proposal, ranking, or reasoning derived from evidence.
 
-A model interpretation can reference observed evidence, but it does not become an observed fact by repetition or confidence.
+A model interpretation can reference observed evidence, but repetition or confidence cannot turn it into an observed fact.
 
-## Result provenance
+This distinction is especially important for:
 
-The final report carries identifiers and provenance needed to reason about the conclusion, including:
+- locator semantic confidence;
+- test-generation coverage interpretation;
+- failure hypotheses;
+- regression prioritization;
+- external-provider content.
+
+## Integrity versus correctness
+
+Run integrity and QA correctness are separate dimensions.
+
+`ai-qa attest` can verify:
+
+- owned core persisted subjects;
+- runtime journal hash-chain integrity;
+- absence of a pending mutation; and
+- SHA-256 integrity for every artifact registered in the evidence manifest.
+
+That integrity result does **not** override terminal truth.
+
+> [!NOTE]
+> An intact `FAILURE` remains a failure. An intact `NOT_VERIFIED` remains unverified. An unsigned digest remains unsigned.
+
+## Final report provenance
+
+The structured report carries the identifiers needed to reason about its conclusion, including:
 
 - run ID and objective;
 - terminal outcome and reason;
 - deterministic validation results;
 - evidence identifiers;
-- failure classification and confidence when applicable;
-- modified files;
+- failure classification/confidence when applicable;
+- modified files after rollback accounting;
 - model and Agent SDK identity;
 - policy/tool-schema/configuration fingerprints;
 - target Git SHA when observed.
 
-Persisted evidence, manifests, journal hashes, and attestations support traceability. Integrity metadata does not transform a failed or unverified run into success.
-
 ## Core invariant
 
-The framework's final truth rule is intentionally simple:
+> **Unknown is not PASS. Model completion is not PASS. Configuration is not PASS. Historical evidence is not current-revision PASS. Integrity is not PASS. Only deterministic closure can produce verified success.**
 
-> **Unknown is not PASS. Model completion is not PASS. Configuration is not PASS. Historical evidence is not current-revision PASS. Only deterministic closure can produce verified success.**
+---
 
-See [`ARCHITECTURE.md`](ARCHITECTURE.md), [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md), [`TRACEABILITY.md`](TRACEABILITY.md), and [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md).
+Related: [`ARCHITECTURE.md`](ARCHITECTURE.md) · [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md) · [`TRACEABILITY.md`](TRACEABILITY.md) · [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md)
+
+[← Documentation home](README.md)
 
 Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
