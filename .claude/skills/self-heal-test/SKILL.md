@@ -51,6 +51,6 @@ High/ambiguous risk, non-unique candidate, semantic mismatch, unclear original i
 Return an allowed/denied proposal. An applied repair remains incomplete until the current revision is deterministically closed.
 
 ## Output
-Allowed/denied, risk, bound old/new locator, verification/proposal/patch evidence IDs, rationale, change revision, and deterministic validation status when executed.
+Allowed/denied, risk, bound old/new locator, verification/proposal/patch evidence IDs, rationale, change revision, and deterministic validation outcome when executed.
 
 Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../../../LICENSE`](../../../LICENSE).
