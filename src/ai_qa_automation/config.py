@@ -14,9 +14,9 @@ def canonicalize_network_host(value: str) -> str:
     """Validate and canonicalize one trusted host-only allowlist entry.
 
     The configuration surface accepts hostnames/IP literals, not URLs, ports,
-    wildcard patterns, paths, user-info, query strings, or fragments. Keeping
-    this boundary host-only prevents ambiguous policy interpretation later in
-    API, browser, and performance adapters.
+    wildcard patterns, paths, user-info, query strings, fragments, or scoped
+    interface identifiers. Keeping this boundary host-only prevents ambiguous
+    policy interpretation later in API, browser, and performance adapters.
     """
 
     raw = str(value).strip()
@@ -24,21 +24,33 @@ def canonicalize_network_host(value: str) -> str:
         raise ValueError("network allowlist entries must not be empty")
     if raw == "*" or raw.startswith("*."):
         raise ValueError("wildcard network allowlist entries are not supported")
-    if "://" in raw or any(token in raw for token in ("/", "?", "#", "@")):
-        raise ValueError("network allowlist entries must be hostnames or IP literals, not URLs")
+    if "://" in raw or any(token in raw for token in ("/", "?", "#", "@", "%")):
+        raise ValueError("network allowlist entries must be unscoped hostnames or IP literals")
 
-    candidate = raw[1:-1] if raw.startswith("[") and raw.endswith("]") else raw
+    bracketed = raw.startswith("[") or raw.endswith("]")
+    if bracketed and not (raw.startswith("[") and raw.endswith("]")):
+        raise ValueError("network allowlist entry has mismatched IP-literal brackets")
+    candidate = raw[1:-1] if bracketed else raw
     candidate = candidate.rstrip(".").casefold()
     if not candidate:
         raise ValueError("network allowlist entry is invalid")
 
     try:
-        return ipaddress.ip_address(candidate).compressed.casefold()
+        address = ipaddress.ip_address(candidate)
     except ValueError:
-        pass
+        address = None
+    if address is not None:
+        if bracketed and address.version != 6:
+            raise ValueError("brackets are supported only for IPv6 allowlist literals")
+        return address.compressed.casefold()
+    if bracketed:
+        raise ValueError("bracketed network allowlist entry must be a valid IPv6 literal")
 
     if ":" in candidate:
         raise ValueError("network allowlist entries must not include ports")
+    dotted_parts = candidate.split(".")
+    if len(dotted_parts) == 4 and all(part.isdigit() for part in dotted_parts):
+        raise ValueError("invalid dotted IPv4 literal is not accepted as a DNS hostname")
     try:
         ascii_host = candidate.encode("idna").decode("ascii")
     except UnicodeError as exc:
