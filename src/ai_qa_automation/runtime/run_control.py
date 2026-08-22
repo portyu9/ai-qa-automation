@@ -13,6 +13,8 @@ from .budget import BudgetExceededError, ExecutionBudget
 from .journal import RunJournal
 from .workspace_lease import WorkspaceBusyError, WorkspaceLease
 
+_MAX_ROLLBACK_BYTES = 2_000_000
+
 
 class CircuitOpenError(RuntimeError):
     """Raised when a repeatedly failing tool circuit has opened."""
@@ -45,6 +47,12 @@ class RuntimeControl:
     circuit_failures: dict[str, int] = field(default_factory=dict)
     open_circuits: set[str] = field(default_factory=set)
     pending_mutation: PendingMutation | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.circuit_failure_threshold) is not int or self.circuit_failure_threshold < 1:
+            raise ValueError("circuit_failure_threshold must be a positive integer")
+        self.workspace = self.workspace.expanduser().resolve()
+        self.metadata_path = self.metadata_path.expanduser()
 
     def before_tool(self, tool_name: str) -> None:
         if tool_name in self.open_circuits:
@@ -85,9 +93,9 @@ class RuntimeControl:
         if existed:
             if not target.is_file():
                 raise MutationPendingError("mutation target must be a regular file")
-            data = target.read_bytes()
-            if len(data) > 2_000_000:
+            if target.stat().st_size > _MAX_ROLLBACK_BYTES:
                 raise MutationPendingError("mutation target exceeds 2 MB rollback safety limit")
+            data = target.read_bytes()
             original_hash = hashlib.sha256(data).hexdigest()
             backup_path = rollback_root / (
                 f"{hashlib.sha256(relative_path.encode()).hexdigest()[:24]}.bin"
@@ -169,6 +177,8 @@ class RuntimeControl:
             raise RuntimeError("pending rollback backup escaped rollback directory") from exc
         if not backup.is_file():
             raise RuntimeError("pending rollback backup is missing or not a regular file")
+        if backup.stat().st_size > _MAX_ROLLBACK_BYTES:
+            raise RuntimeError("pending rollback backup exceeds 2 MB safety limit")
 
         data = backup.read_bytes()
         if hashlib.sha256(data).hexdigest() != pending.original_sha256:
