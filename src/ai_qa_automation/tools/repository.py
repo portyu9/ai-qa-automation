@@ -8,11 +8,12 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from .execution_env import restricted_subprocess_env
+from .execution_env import restricted_subprocess_env, run_bounded_subprocess
 
 _SAFE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@{}~^:+-]{0,255}$")
 _HEX_SHA = re.compile(r"^[0-9a-fA-F]{40,64}$")
 _MAX_FINGERPRINT_CHANGED_FILES = 1000
+_MAX_GIT_TEXT_OUTPUT_BYTES = 8_000_000
 
 
 @dataclass(frozen=True)
@@ -55,8 +56,12 @@ class RepositoryInspector:
     """Read-only Git/repository inspection with deterministic workspace fingerprints."""
 
     def __init__(self, workspace: Path, timeout_seconds: int = 20) -> None:
-        if timeout_seconds < 1:
-            raise ValueError("repository inspection timeout_seconds must be positive")
+        if (
+            isinstance(timeout_seconds, bool)
+            or not isinstance(timeout_seconds, int)
+            or timeout_seconds < 1
+        ):
+            raise ValueError("repository inspection timeout_seconds must be a positive integer")
         self.workspace = workspace.expanduser().resolve()
         self.timeout_seconds = timeout_seconds
 
@@ -68,7 +73,7 @@ class RepositoryInspector:
                 "status", "--porcelain=v1", "--untracked-files=all", allow_failure=True
             ) or ""
         except RuntimeError:
-            return self._incomplete_snapshot("git-inspection-timeout")
+            return self._incomplete_snapshot("git-inspection-incomplete")
         changed = self._changed_paths(status)
         fingerprint, complete, incomplete_reasons = self._fingerprint(sha, status, changed)
         return RepositorySnapshot(
@@ -144,8 +149,8 @@ class RepositoryInspector:
 
     def read_file_at(self, commit_sha: str, relative_path: str, *, max_bytes: int = 2_000_000) -> bytes:
         """Read one bounded tracked file from an immutable commit without checkout."""
-        if max_bytes < 1:
-            raise ValueError("max_bytes must be positive")
+        if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 1:
+            raise ValueError("max_bytes must be a positive integer")
         if not _HEX_SHA.fullmatch(commit_sha):
             raise ValueError("commit_sha must be a full hexadecimal object id")
         path = self._validate_relative_path(relative_path)
@@ -162,6 +167,8 @@ class RepositoryInspector:
         result = self._git_bytes("show", object_name, allow_failure=True)
         if result is None:
             raise FileNotFoundError(path)
+        if len(result) > max_bytes:
+            raise RuntimeError("Git returned more baseline bytes than the preflight object size allowed")
         return result
 
     def diff(self, *paths: str) -> str:
@@ -270,20 +277,17 @@ class RepositoryInspector:
             env = restricted_subprocess_env(
                 home=Path(temp_home), extra={"GIT_CONFIG_NOSYSTEM": "1"}
             )
-            try:
-                result = subprocess.run(
-                    ["git", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", *args],
-                    cwd=self.workspace,
-                    text=True,
-                    capture_output=True,
-                    timeout=self.timeout_seconds,
-                    check=False,
-                    env=env,
-                )
-            except subprocess.TimeoutExpired as exc:
-                raise RuntimeError(
-                    f"git command exceeded {self.timeout_seconds}s inspection budget"
-                ) from exc
+            result = run_bounded_subprocess(
+                ["git", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", *args],
+                cwd=self.workspace,
+                env=env,
+                timeout_seconds=self.timeout_seconds,
+                max_output_bytes=_MAX_GIT_TEXT_OUTPUT_BYTES,
+            )
+        if result.timed_out:
+            raise RuntimeError(f"git command exceeded {self.timeout_seconds}s inspection budget")
+        if result.stdout_truncated or result.stderr_truncated:
+            raise RuntimeError("git inspection output exceeded bounded capture limit")
         if result.returncode != 0:
             if allow_failure:
                 return None
@@ -291,6 +295,9 @@ class RepositoryInspector:
         return result.stdout.rstrip("\r\n")
 
     def _git_bytes(self, *args: str, allow_failure: bool = False) -> bytes | None:
+        # This exact-byte path is used after read_file_at() preflights the immutable
+        # Git object's size. Keeping bytes exact avoids UTF-8 replacement while the
+        # preceding object-size gate keeps capture_output bounded.
         with tempfile.TemporaryDirectory(prefix="aiqa-git-home-") as temp_home:
             env = restricted_subprocess_env(
                 home=Path(temp_home), extra={"GIT_CONFIG_NOSYSTEM": "1"}
