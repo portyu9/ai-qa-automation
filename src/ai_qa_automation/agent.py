@@ -121,13 +121,23 @@ async def run_agent(objective: str, workspace: Path, settings: Settings | None =
     try:
         state.phase = "RECOVERY_CHECK"
         pre_recovery_snapshot = RepositoryInspector(workspace).snapshot()
-        stale_recovery = recover_stale_mutation(
-            artifact_root=artifact_root,
-            workspace=workspace,
-            previous_lease=lease.previous_metadata,
-            current_workspace_fingerprint=pre_recovery_snapshot.fingerprint,
-            recovering_run_id=state.run_id,
-        )
+        if lease.previous_metadata and not pre_recovery_snapshot.fingerprint_complete:
+            stale_recovery = {
+                "status": "BLOCKED",
+                "reason": (
+                    "workspace fingerprint is incomplete; automatic stale rollback cannot prove "
+                    "ownership of every changed subject: "
+                    + ", ".join(pre_recovery_snapshot.fingerprint_incomplete_reasons)
+                ),
+            }
+        else:
+            stale_recovery = recover_stale_mutation(
+                artifact_root=artifact_root,
+                workspace=workspace,
+                previous_lease=lease.previous_metadata,
+                current_workspace_fingerprint=pre_recovery_snapshot.fingerprint,
+                recovering_run_id=state.run_id,
+            )
         if stale_recovery.get("status") == "BLOCKED":
             state.terminal_status = TerminalStatus.BLOCKED
             state.terminal_reason = str(
@@ -140,7 +150,7 @@ async def run_agent(objective: str, workspace: Path, settings: Settings | None =
                 state,
                 agent_result="",
                 limitations=[
-                    "A prior crashed run left a mutation transaction whose workspace fingerprint no longer matches; automatic rollback was intentionally refused."
+                    "A prior crashed run left a mutation transaction whose workspace ownership could not be proven safely; automatic rollback was intentionally refused."
                 ],
             )
         if stale_recovery.get("status") == "RECOVERED":
@@ -276,6 +286,7 @@ async def run_agent(objective: str, workspace: Path, settings: Settings | None =
                 )
         finally:
             if control.pending_mutation is not None:
+                pending = control.pending_mutation
                 try:
                     if state.terminal_status == TerminalStatus.SUCCESS:
                         control.commit_pending_mutation()
@@ -284,7 +295,9 @@ async def run_agent(objective: str, workspace: Path, settings: Settings | None =
                             reason="run ended without verified success"
                         )
                         if rolled_back:
-                            _remove_latest_modified_path(state, rolled_back)
+                            revision_before = pending.change_revision_before
+                            if revision_before is None or state.change_revision > revision_before:
+                                _remove_latest_modified_path(state, rolled_back)
                             state.observations.append(
                                 f"Unverified mutation rolled back before terminal report: {rolled_back}"
                             )
