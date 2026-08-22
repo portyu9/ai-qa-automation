@@ -14,9 +14,11 @@ from .redaction import sanitize
 _MAX_EVIDENCE_MANIFEST_BYTES = 16_000_000
 _MAX_EVIDENCE_AUDIT_LINE_BYTES = 1_000_000
 _MAX_EVIDENCE_AUDIT_BYTES = 64_000_000
+_MAX_EVIDENCE_COUNT = 10_000
 _MAX_ARTIFACT_BYTES = 32_000_000
 _MAX_ARTIFACT_COUNT = 5_000
 _MAX_TOTAL_ARTIFACT_BYTES = 256_000_000
+_MANIFEST_AUDIT_RESERVE_BYTES = 1_024
 
 
 class EvidenceStore:
@@ -105,16 +107,33 @@ class EvidenceStore:
         safe_item = EvidenceItem.model_validate(safe_payload)
         if safe_item.id in self._items:
             raise ValueError(f"evidence id is immutable and already registered: {safe_item.id}")
+        if len(self._items) >= _MAX_EVIDENCE_COUNT:
+            raise ValueError("evidence registry exceeds persistence count limit")
+
+        audit_sequence_before = self._audit_sequence
         self._items[safe_item.id] = safe_item
-        self._append_audit_event(
-            "evidence_registered",
-            {
-                "evidence_id": safe_item.id,
-                "kind": safe_item.kind.value,
-                "content_hash": self.hash_bytes(safe_item.model_dump_json().encode("utf-8")),
-            },
-        )
-        self._flush_manifest()
+        try:
+            self._assert_manifest_capacity(
+                reserve_bytes=_MANIFEST_AUDIT_RESERVE_BYTES if self.regulated_mode else 0
+            )
+            self._append_audit_event(
+                "evidence_registered",
+                {
+                    "evidence_id": safe_item.id,
+                    "kind": safe_item.kind.value,
+                    "content_hash": self.hash_bytes(safe_item.model_dump_json().encode("utf-8")),
+                },
+            )
+            self._flush_manifest()
+        except Exception:
+            # If no audit record was durably appended, the staged in-memory item is
+            # not authoritative and can be removed safely. If the audit advanced but
+            # manifest persistence failed, retain the item so live state still agrees
+            # with the append-only audit record; reopening will fail closed until the
+            # manifest is repaired/reconciled rather than pretending the event vanished.
+            if self._audit_sequence == audit_sequence_before:
+                self._items.pop(safe_item.id, None)
+            raise
         return safe_item
 
     def register_artifact(
@@ -155,6 +174,7 @@ class EvidenceStore:
                 ) from None
         finally:
             temp.unlink(missing_ok=True)
+
         digest = self.hash_bytes(content)
         record = ArtifactRecord(
             type=destination.suffix.lstrip(".") or "binary",
@@ -168,18 +188,28 @@ class EvidenceStore:
                 else ("regulated" if self.regulated_mode else "standard")
             ),
         )
+        audit_sequence_before = self._audit_sequence
         self._artifacts[record.artifact_id] = record
-        self._append_audit_event(
-            "artifact_registered",
-            {
-                "artifact_id": record.artifact_id,
-                "path": record.path,
-                "content_hash": record.content_hash,
-                "sanitization_status": record.sanitization_status.value,
-                "retention_classification": record.retention_classification,
-            },
-        )
-        self._flush_manifest()
+        try:
+            self._assert_manifest_capacity(
+                reserve_bytes=_MANIFEST_AUDIT_RESERVE_BYTES if self.regulated_mode else 0
+            )
+            self._append_audit_event(
+                "artifact_registered",
+                {
+                    "artifact_id": record.artifact_id,
+                    "path": record.path,
+                    "content_hash": record.content_hash,
+                    "sanitization_status": record.sanitization_status.value,
+                    "retention_classification": record.retention_classification,
+                },
+            )
+            self._flush_manifest()
+        except Exception:
+            if self._audit_sequence == audit_sequence_before:
+                self._artifacts.pop(record.artifact_id, None)
+                destination.unlink(missing_ok=True)
+            raise
         return record.path, digest
 
     def get(self, evidence_id: str) -> EvidenceItem:
@@ -192,10 +222,10 @@ class EvidenceStore:
         if not self.regulated_mode:
             return
         path = self._assert_control_file_owned("audit-log.jsonl")
-        self._audit_sequence += 1
+        next_sequence = self._audit_sequence + 1
         timestamp = datetime.now(UTC).isoformat()
         core = {
-            "sequence": self._audit_sequence,
+            "sequence": next_sequence,
             "timestamp": timestamp,
             "event_type": event_type,
             "payload": sanitize(payload),
@@ -217,6 +247,7 @@ class EvidenceStore:
             stream.write(rendered)
             stream.flush()
             os.fsync(stream.fileno())
+        self._audit_sequence = next_sequence
         self._audit_previous_hash = event_hash
 
     def _restore_manifest(self) -> None:
@@ -238,6 +269,8 @@ class EvidenceStore:
             raw_artifacts = data.get("artifacts", [])
             if not isinstance(raw_evidence, list) or not isinstance(raw_artifacts, list):
                 raise ValueError("evidence manifest registries must be lists")
+            if len(raw_evidence) > _MAX_EVIDENCE_COUNT:
+                raise ValueError("evidence manifest exceeds evidence count limit")
             if len(raw_artifacts) > _MAX_ARTIFACT_COUNT:
                 raise ValueError("evidence manifest exceeds artifact count limit")
             evidence_records = [EvidenceItem.model_validate(raw) for raw in raw_evidence]
@@ -369,8 +402,7 @@ class EvidenceStore:
         self._audit_sequence = int(last["sequence"])
         self._audit_previous_hash = str(last["event_hash"])
 
-    def _flush_manifest(self) -> None:
-        path = self._assert_control_file_owned("evidence-manifest.json")
+    def _manifest_data(self) -> dict[str, Any]:
         data: dict[str, Any] = {
             "run_id": self.run_id,
             "regulated_mode": self.regulated_mode,
@@ -388,7 +420,19 @@ class EvidenceStore:
                 "last_event_hash": self._audit_previous_hash,
                 "content_hash": self.hash_file(audit_path) if audit_path.exists() else None,
             }
-        rendered = json.dumps(data, indent=2, sort_keys=True)
+        return data
+
+    def _render_manifest(self) -> str:
+        return json.dumps(self._manifest_data(), indent=2, sort_keys=True)
+
+    def _assert_manifest_capacity(self, *, reserve_bytes: int = 0) -> None:
+        rendered_bytes = len(self._render_manifest().encode("utf-8"))
+        if rendered_bytes + reserve_bytes > _MAX_EVIDENCE_MANIFEST_BYTES:
+            raise ValueError("evidence manifest exceeds persistence size bound")
+
+    def _flush_manifest(self) -> None:
+        path = self._assert_control_file_owned("evidence-manifest.json")
+        rendered = self._render_manifest()
         if len(rendered.encode("utf-8")) > _MAX_EVIDENCE_MANIFEST_BYTES:
             raise ValueError("evidence manifest exceeds persistence size bound")
         handle, raw_temp = tempfile.mkstemp(
