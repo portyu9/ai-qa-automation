@@ -8,6 +8,12 @@ from typing import Any
 
 from .journal import RunJournal
 
+_MAX_STATE_BYTES = 16_000_000
+_MAX_MANIFEST_BYTES = 16_000_000
+_MAX_RUNTIME_BYTES = 2_000_000
+_MAX_JOURNAL_BYTES = 64_000_000
+_MAX_ARTIFACT_BYTES = 32_000_000
+
 
 def build_run_attestation(run_dir: Path) -> dict[str, Any]:
     """Build an unsigned, content-addressed run-integrity attestation.
@@ -28,25 +34,52 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
     if not state_path.is_file():
         raise FileNotFoundError("state.json is required for attestation")
 
-    state = _load_object(state_path)
-    runtime = _load_object(runtime_path) if runtime_path.is_file() else {}
-    manifest = _load_object(manifest_path) if manifest_path.is_file() else {}
+    state = _load_object(state_path, max_bytes=_MAX_STATE_BYTES)
+    runtime = (
+        _load_object(runtime_path, max_bytes=_MAX_RUNTIME_BYTES)
+        if runtime_path.is_file()
+        else {}
+    )
+    manifest = (
+        _load_object(manifest_path, max_bytes=_MAX_MANIFEST_BYTES)
+        if manifest_path.is_file()
+        else {}
+    )
 
     try:
-        journal = RunJournal(journal_path, regulated_mode=False).verify()
-    except (OSError, json.JSONDecodeError, RuntimeError, ValueError) as exc:
+        if journal_path.is_file() and journal_path.stat().st_size > _MAX_JOURNAL_BYTES:
+            journal = {"valid": False, "reason": "journal exceeds attestation size bound"}
+        else:
+            journal = RunJournal(journal_path, regulated_mode=False).verify()
+    except (OSError, UnicodeError, json.JSONDecodeError, RuntimeError, ValueError) as exc:
         journal = {"valid": False, "reason": f"{type(exc).__name__}"}
 
-    artifact_integrity = _verify_manifest_artifacts(root, manifest) if manifest_path.is_file() else {
-        "valid": False,
-        "checked": 0,
-        "reason": "evidence-manifest.json is missing",
-    }
+    artifact_integrity = (
+        _verify_manifest_artifacts(root, manifest)
+        if manifest_path.is_file()
+        else {
+            "valid": False,
+            "checked": 0,
+            "reason": "evidence-manifest.json is missing",
+        }
+    )
     subjects = {
-        "state.json": _file_digest(state_path),
-        "evidence-manifest.json": _file_digest(manifest_path) if manifest_path.is_file() else None,
-        "runtime.json": _file_digest(runtime_path) if runtime_path.is_file() else None,
-        "journal.jsonl": _file_digest(journal_path) if journal_path.is_file() else None,
+        "state.json": _file_digest(state_path, max_bytes=_MAX_STATE_BYTES),
+        "evidence-manifest.json": (
+            _file_digest(manifest_path, max_bytes=_MAX_MANIFEST_BYTES)
+            if manifest_path.is_file()
+            else None
+        ),
+        "runtime.json": (
+            _file_digest(runtime_path, max_bytes=_MAX_RUNTIME_BYTES)
+            if runtime_path.is_file()
+            else None
+        ),
+        "journal.jsonl": (
+            _file_digest(journal_path, max_bytes=_MAX_JOURNAL_BYTES)
+            if journal_path.is_file() and journal_path.stat().st_size <= _MAX_JOURNAL_BYTES
+            else None
+        ),
     }
     subjects_complete = all(value is not None for value in subjects.values())
     pending_mutation = runtime.get("pending_mutation") if isinstance(runtime, dict) else None
@@ -176,6 +209,12 @@ def _verify_manifest_artifacts(root: Path, manifest: dict[str, Any]) -> dict[str
                 "checked": checked,
                 "reason": f"registered artifact is missing: {relative_path}",
             }
+        if path.stat().st_size > _MAX_ARTIFACT_BYTES:
+            return {
+                "valid": False,
+                "checked": checked,
+                "reason": f"registered artifact exceeds attestation size bound: {relative_path}",
+            }
         actual_hash = _file_sha256(path)
         if expected_hash != f"sha256:{actual_hash}":
             return {
@@ -187,7 +226,9 @@ def _verify_manifest_artifacts(root: Path, manifest: dict[str, Any]) -> dict[str
     return {"valid": True, "checked": checked}
 
 
-def _load_object(path: Path) -> dict[str, Any]:
+def _load_object(path: Path, *, max_bytes: int) -> dict[str, Any]:
+    if path.stat().st_size > max_bytes:
+        raise ValueError(f"{path.name} exceeds attestation size bound")
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
         raise ValueError(f"{path.name} root must be an object")
@@ -202,8 +243,10 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _file_digest(path: Path) -> dict[str, object]:
+def _file_digest(path: Path, *, max_bytes: int) -> dict[str, object]:
     size = path.stat().st_size
+    if size > max_bytes:
+        raise ValueError(f"{path.name} exceeds attestation size bound")
     return {"size": size, "sha256": _file_sha256(path)}
 
 
