@@ -1,10 +1,10 @@
 # Architecture
 
-> **YP AI QA Automation Framework** · Designed and engineered by **Yunior Portal**
+> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
 ## Architectural thesis
 
-The YP AI QA Automation Framework treats an LLM as a **bounded reasoning component inside a quality-engineering control system**, not as the authority that decides whether software is correct.
+The ƳƤ AI QA Automation Framework treats an LLM as a **bounded reasoning component inside a quality-engineering control system**, not as the authority that decides whether software is correct.
 
 The governing invariant is:
 
@@ -221,3 +221,5 @@ See [`MCP.md`](MCP.md) and [`SETUP.md`](SETUP.md).
 Source structure is evidence that a control is implemented; it is not current-head execution evidence. Live model, authenticated MCP, external browser/device, approved load, infrastructure sandbox/egress, and organization security controls require their own environment-specific verification.
 
 The authoritative status language is maintained in [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) and [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md).
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
