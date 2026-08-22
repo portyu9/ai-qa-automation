@@ -112,6 +112,48 @@ class K6Runner:
             raise PermissionError("k6 script must consume an injected BASE_URL or TARGET_URL")
         return resolved
 
+    @staticmethod
+    def _metric_values(data: dict[str, Any], metric: str) -> dict[str, Any]:
+        metrics = data.get("metrics")
+        if not isinstance(metrics, dict):
+            raise RuntimeError("k6 summary is missing the metrics object")
+        raw_metric = metrics.get(metric)
+        if not isinstance(raw_metric, dict):
+            raise RuntimeError(f"k6 summary is missing required metric: {metric}")
+        values = raw_metric.get("values")
+        if not isinstance(values, dict):
+            raise RuntimeError(f"k6 metric lacks a values object: {metric}")
+        return values
+
+    @staticmethod
+    def _required_number(values: dict[str, Any], key: str, *, metric: str) -> float:
+        if key not in values:
+            raise RuntimeError(f"k6 metric {metric} is missing required value: {key}")
+        raw = values[key]
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            raise RuntimeError(f"k6 metric {metric}.{key} is not numeric")
+        return float(raw)
+
+    @classmethod
+    def _parse_metrics(cls, data: dict[str, Any]) -> PerformanceMetrics:
+        duration = cls._metric_values(data, "http_req_duration")
+        requests = cls._metric_values(data, "http_reqs")
+        failures = cls._metric_values(data, "http_req_failed")
+        if "p(99)" in duration:
+            p99 = cls._required_number(duration, "p(99)", metric="http_req_duration")
+        elif "max" in duration:
+            p99 = cls._required_number(duration, "max", metric="http_req_duration")
+        else:
+            raise RuntimeError("k6 metric http_req_duration is missing p(99) and max")
+        return PerformanceMetrics(
+            p50_ms=cls._required_number(duration, "med", metric="http_req_duration"),
+            p90_ms=cls._required_number(duration, "p(90)", metric="http_req_duration"),
+            p95_ms=cls._required_number(duration, "p(95)", metric="http_req_duration"),
+            p99_ms=p99,
+            request_rate=cls._required_number(requests, "rate", metric="http_reqs"),
+            error_rate=cls._required_number(failures, "rate", metric="http_req_failed"),
+        )
+
     def run(self, script: Path, *, target_url: str, environment: str) -> PerformanceMetrics:
         if not self.external_egress_enforced:
             raise PermissionError(
@@ -174,12 +216,4 @@ class K6Runner:
             if not isinstance(data, dict):
                 raise RuntimeError("k6 summary root must be a JSON object")
 
-        duration = data["metrics"]["http_req_duration"]["values"]
-        return PerformanceMetrics(
-            p50_ms=float(duration.get("med", 0)),
-            p90_ms=float(duration.get("p(90)", 0)),
-            p95_ms=float(duration.get("p(95)", 0)),
-            p99_ms=float(duration.get("p(99)", duration.get("max", 0))),
-            request_rate=float(data["metrics"]["http_reqs"]["values"].get("rate", 0)),
-            error_rate=float(data["metrics"]["http_req_failed"]["values"].get("rate", 0)),
-        )
+        return self._parse_metrics(data)
