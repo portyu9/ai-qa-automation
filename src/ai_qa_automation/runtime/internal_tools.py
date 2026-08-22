@@ -129,9 +129,9 @@ def _require_closed_revision_before_mutation(services: "RuntimeServices") -> str
 def _pytest_validation_status(exit_code: int) -> ValidationStatus:
     if exit_code == 0:
         return ValidationStatus.PASS
-    if exit_code in {124, 125}:
-        return ValidationStatus.NOT_VERIFIED
-    return ValidationStatus.FAIL
+    if exit_code == 1:
+        return ValidationStatus.FAIL
+    return ValidationStatus.NOT_VERIFIED
 
 
 def _is_test_code_path(path: Path) -> bool:
