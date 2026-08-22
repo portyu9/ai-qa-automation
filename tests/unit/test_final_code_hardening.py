@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,8 +17,10 @@ from ai_qa_automation.runtime.run_control import (
 )
 from ai_qa_automation.runtime.runtime_hooks import (
     _reconcile_rolled_back_mutation,
+    posttool_policy_output,
     pretool_policy_output,
 )
+from ai_qa_automation.runtime.stale_recovery import recover_stale_mutation
 from ai_qa_automation.tools.repository import RepositoryInspector
 
 
@@ -116,6 +119,75 @@ def test_mutation_denies_incomplete_workspace_fingerprint(
     assert control.pending_mutation is None
 
 
+def test_post_mutation_incomplete_fingerprint_rolls_candidate_back(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    control = _control(tmp_path)
+    generated = control.workspace / "tests" / "test_generated.py"
+    generated.parent.mkdir()
+    generated.write_text("def test_generated():\n    assert True\n", encoding="utf-8")
+    state = AgentRunState(
+        objective="generate",
+        workspace=str(control.workspace),
+        target_git_sha="a" * 40,
+        change_revision=1,
+        files_modified=["tests/test_generated.py"],
+    )
+    control.pending_mutation = PendingMutation(
+        relative_path="tests/test_generated.py",
+        existed=False,
+        backup_path=None,
+        original_sha256=None,
+        change_revision_before=0,
+    )
+
+    snapshots = iter(
+        [
+            SimpleNamespace(
+                fingerprint="sha256:candidate",
+                fingerprint_complete=False,
+                fingerprint_incomplete_reasons=("changed-file-limit-exceeded",),
+            ),
+            SimpleNamespace(
+                fingerprint="sha256:restored",
+                fingerprint_complete=True,
+                fingerprint_incomplete_reasons=(),
+            ),
+        ]
+    )
+
+    class FakeInspector:
+        def __init__(self, _workspace: Path) -> None:
+            pass
+
+        def snapshot(self) -> SimpleNamespace:
+            return next(snapshots)
+
+    monkeypatch.setattr(
+        "ai_qa_automation.runtime.runtime_hooks.RepositoryInspector",
+        FakeInspector,
+    )
+
+    result = posttool_policy_output(
+        {
+            "tool_name": "mcp__qa__create_test_file",
+            "tool_response": {"path": "tests/test_generated.py"},
+        },
+        state=state,
+        control=control,
+    )
+
+    hook = result["hookSpecificOutput"]
+    assert hook["updatedToolOutput"]["is_error"] is True
+    assert state.terminal_status is TerminalStatus.BLOCKED
+    assert control.pending_mutation is None
+    assert control.expected_workspace_fingerprint == "sha256:restored"
+    assert not generated.exists()
+    assert state.files_modified == []
+    assert state.validation_results[-1].status is ValidationStatus.NOT_VERIFIED
+
+
 def test_rollback_reconciliation_removes_only_advanced_attempt(tmp_path: Path) -> None:
     state = AgentRunState(objective="repair", workspace=str(tmp_path), change_revision=2)
     state.files_modified = [
@@ -176,3 +248,75 @@ def test_runtime_atomic_write_rejects_symlink_target(tmp_path: Path) -> None:
         atomic_write_json(runtime_path, {"owned": False})
 
     assert outside.read_text(encoding="utf-8") == '{"owned": true}\n'
+
+
+def test_incomplete_fingerprint_does_not_block_prior_run_without_pending_mutation(
+    tmp_path: Path,
+) -> None:
+    artifact_root = tmp_path / "artifacts"
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+    prior_run = artifact_root / "run-old"
+    prior_run.mkdir(parents=True)
+    (prior_run / "runtime.json").write_text(
+        json.dumps(
+            {
+                "workspace": str(workspace.resolve()),
+                "workspace_fingerprint": "sha256:prior",
+                "pending_mutation": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = recover_stale_mutation(
+        artifact_root=artifact_root,
+        workspace=workspace,
+        previous_lease={"run_id": "run-old"},
+        current_workspace_fingerprint="sha256:current",
+        current_workspace_fingerprint_complete=False,
+        current_workspace_fingerprint_reasons=("changed-file-limit-exceeded",),
+        recovering_run_id="run-new",
+    )
+
+    assert result == {"status": "NONE", "previous_run_id": "run-old"}
+
+
+def test_incomplete_fingerprint_blocks_real_stale_pending_mutation(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+    target = workspace / "tests" / "test_generated.py"
+    target.parent.mkdir()
+    target.write_text("generated but unverified\n", encoding="utf-8")
+    prior_run = artifact_root / "run-old"
+    prior_run.mkdir(parents=True)
+    (prior_run / "runtime.json").write_text(
+        json.dumps(
+            {
+                "workspace": str(workspace.resolve()),
+                "workspace_fingerprint": "sha256:prior",
+                "pending_mutation": {
+                    "relative_path": "tests/test_generated.py",
+                    "existed": False,
+                    "backup_path": None,
+                    "original_sha256": None,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = recover_stale_mutation(
+        artifact_root=artifact_root,
+        workspace=workspace,
+        previous_lease={"run_id": "run-old"},
+        current_workspace_fingerprint="sha256:prior",
+        current_workspace_fingerprint_complete=False,
+        current_workspace_fingerprint_reasons=("changed-file-limit-exceeded",),
+        recovering_run_id="run-new",
+    )
+
+    assert result["status"] == "BLOCKED"
+    assert "fingerprint is incomplete" in result["reason"]
+    assert target.exists()
