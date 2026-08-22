@@ -1,9 +1,9 @@
-# YP AI QA Automation Framework
+# ƳƤ AI QA Automation Framework
 
 **Evidence-First Agentic Quality Engineering**  
-**Designed and engineered by Yunior Portal**
+**Designed and engineered by Ƴunior Ƥortal (ƳƤ)**
 
-The **YP AI QA Automation Framework** is built around one non-negotiable rule:
+The **ƳƤ AI QA Automation Framework** is built around one non-negotiable rule:
 
 > **Model reasoning is not test evidence.**
 
@@ -35,7 +35,7 @@ The authoritative readiness vocabulary and release matrix live in [`docs/PRODUCT
 
 Many AI test agents optimize for “make the test pass.” That can be unsafe when the agent can also reinterpret failures, rewrite tests, trust hostile application content, or declare its own work successful.
 
-The YP AI QA Automation Framework instead optimizes for **defensible evidence, bounded authority, and visible uncertainty**:
+The ƳƤ AI QA Automation Framework instead optimizes for **defensible evidence, bounded authority, and visible uncertainty**:
 
 - a failed test is not automatically a product defect;
 - model interpretation is distinct from observed evidence;
@@ -406,6 +406,6 @@ A workflow definition is not execution evidence. Current-head gates remain `NOT_
 
 ## License
 
-The YP AI QA Automation Framework is licensed under the [MIT License](LICENSE).
+The ƳƤ AI QA Automation Framework is licensed under the [MIT License](LICENSE).
 
-Copyright (c) 2026 Yunior Portal.
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ).
