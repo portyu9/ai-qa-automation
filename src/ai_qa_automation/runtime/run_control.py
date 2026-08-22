@@ -72,13 +72,15 @@ class RuntimeControl:
         backup_path: Path | None = None
         original_hash: str | None = None
         if existed:
-            if target.is_symlink() or not target.is_file():
+            if not target.is_file():
                 raise MutationPendingError("mutation target must be a regular file")
             data = target.read_bytes()
             if len(data) > 2_000_000:
                 raise MutationPendingError("mutation target exceeds 2 MB rollback safety limit")
             original_hash = hashlib.sha256(data).hexdigest()
-            backup_path = rollback_root / f"{hashlib.sha256(relative_path.encode()).hexdigest()[:24]}.bin"
+            backup_path = rollback_root / (
+                f"{hashlib.sha256(relative_path.encode()).hexdigest()[:24]}.bin"
+            )
             _atomic_write_bytes(backup_path, data)
         self.pending_mutation = PendingMutation(
             relative_path=relative_path,
@@ -166,7 +168,21 @@ class RuntimeControl:
         }
 
     def _target(self, relative_path: str) -> Path:
-        target = (self.workspace / relative_path).resolve()
+        requested = Path(relative_path)
+        if requested.is_absolute() or ".." in requested.parts:
+            raise MutationPendingError("mutation path escapes the target workspace")
+
+        cursor = self.workspace
+        for part in requested.parts:
+            if part in {"", "."}:
+                continue
+            cursor = cursor / part
+            if cursor.is_symlink():
+                raise MutationPendingError(
+                    "mutation path contains a symlink and has ambiguous ownership"
+                )
+
+        target = (self.workspace / requested).resolve()
         try:
             target.relative_to(self.workspace)
         except ValueError as exc:
