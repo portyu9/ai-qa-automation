@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from ai_qa_automation.models import AgentRunState
 from ai_qa_automation.runtime.sdk_recovery import (
     retry_decision,
@@ -29,6 +31,7 @@ def test_transient_classifier_accepts_transport_rate_limit_and_wrapped_failures(
 
 def test_transient_classifier_rejects_auth_configuration_and_schema_failures() -> None:
     assert sdk_exception_is_transient(RuntimeError("401 invalid API key")) is False
+    assert sdk_exception_is_transient(ConnectionError("401 unauthorized")) is False
     assert sdk_exception_is_transient(RuntimeError("permission denied")) is False
     assert sdk_exception_is_transient(RuntimeError("argument list too long")) is False
     assert sdk_exception_is_transient(ValueError("malformed schema")) is False
@@ -105,3 +108,10 @@ def test_retry_budget_and_backoff_are_bounded_and_deterministic() -> None:
     assert retry_delay_seconds(2, base_seconds=1.0, max_seconds=4.0) == 2.0
     assert retry_delay_seconds(3, base_seconds=1.0, max_seconds=4.0) == 4.0
     assert retry_delay_seconds(8, base_seconds=1.0, max_seconds=4.0) == 4.0
+
+    with pytest.raises(ValueError):
+        retry_delay_seconds(0, base_seconds=1.0, max_seconds=4.0)
+    with pytest.raises(ValueError):
+        retry_delay_seconds(1, base_seconds=0.0, max_seconds=4.0)
+    with pytest.raises(ValueError):
+        retry_delay_seconds(1, base_seconds=2.0, max_seconds=1.0)
