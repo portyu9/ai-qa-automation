@@ -6,6 +6,7 @@ from ai_qa_automation.models import AgentRunState
 from ai_qa_automation.runtime.sdk_recovery import (
     SDKRetryDecision,
     retry_decision,
+    retry_failure_reason,
     retry_delay_seconds,
     sdk_exception_is_transient,
 )
@@ -126,3 +127,23 @@ def test_retry_budget_and_backoff_are_bounded_and_deterministic() -> None:
         retry_delay_seconds(1, base_seconds=0.0, max_seconds=4.0)
     with pytest.raises(ValueError):
         retry_delay_seconds(1, base_seconds=2.0, max_seconds=1.0)
+
+
+def test_retry_failure_reason_preserves_replay_denial_truth() -> None:
+    provider_started = _decision(
+        ConnectionError("connection reset"),
+        provider_request_started=True,
+    )
+    provider_reason = retry_failure_reason(provider_started, ConnectionError("connection reset"))
+    assert provider_reason is not None
+    assert "provider query submission already started" in provider_reason
+
+    exhausted = _decision(ConnectionError("connection reset"), retry_limit=0)
+    exhausted_reason = retry_failure_reason(exhausted, ConnectionError("connection reset"))
+    assert exhausted_reason is not None
+    assert "retry budget was exhausted" in exhausted_reason
+
+    clean = _decision(ConnectionError("connection reset"))
+    assert retry_failure_reason(clean, ConnectionError("connection reset")) is None
+    non_transient = _decision(RuntimeError("401 unauthorized"))
+    assert retry_failure_reason(non_transient, RuntimeError("401 unauthorized")) is None
