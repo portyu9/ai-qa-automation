@@ -426,6 +426,11 @@ class PolicyEngine:
 
     @classmethod
     def _is_protected(cls, relative: str) -> bool:
+        basename = Path(relative).name
+        if basename == ".env.example":
+            return False
+        if basename == ".env" or basename.startswith(".env."):
+            return True
         return any(
             relative == item or relative.startswith(f"{item}/")
             for item in cls._PROTECTED_RELATIVE_PATHS
