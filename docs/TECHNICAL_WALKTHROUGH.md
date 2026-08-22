@@ -1,6 +1,6 @@
 # Technical Walkthrough
 
-This walkthrough follows the system from **authorized objective → observed evidence → bounded reasoning/action → deterministic validation → persisted result**. It is written for a reviewer who wants to understand where authority lives, not only what features exist.
+This walkthrough follows the system from **authorized objective → observed evidence → bounded reasoning/action → deterministic validation → persisted result**. It is written for a technical reviewer who wants to understand where authority lives, not only what features exist.
 
 ## 1. Start with the result contract
 
@@ -186,7 +186,6 @@ Read these documents last:
 - [`SETUP.md`](SETUP.md) — exact configuration and credentials by operating mode;
 - [`OPERATIONS.md`](OPERATIONS.md) — staged verification ladder;
 - [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md) — repository-contained versus environment-dependent capability;
-- [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) — authoritative status vocabulary and release truth table;
-- [`SHOWCASE.md`](SHOWCASE.md) — concise portfolio/interview presentation path.
+- [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) — authoritative status vocabulary and release truth table.
 
 The intended conclusion is not “everything is production verified.” It is stronger and more defensible: **the architecture makes it difficult to accidentally claim verification that the system did not actually observe.**
