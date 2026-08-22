@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from ..models import PerformanceAssessment, PerformanceMetrics, ValidationStatus
 
 
@@ -12,6 +14,19 @@ class PerformanceAssessor:
         max_error_rate: float,
         min_request_rate: float = 0,
     ) -> PerformanceAssessment:
+        thresholds = {
+            "max_p95_ms": max_p95_ms,
+            "max_error_rate": max_error_rate,
+            "min_request_rate": min_request_rate,
+        }
+        for name, value in thresholds.items():
+            if not math.isfinite(value):
+                raise ValueError(f"{name} must be finite")
+            if value < 0:
+                raise ValueError(f"{name} must be non-negative")
+        if max_error_rate > 1:
+            raise ValueError("max_error_rate must be between 0 and 1")
+
         breached: list[str] = []
         if metrics.p95_ms > max_p95_ms:
             breached.append(f"p95 {metrics.p95_ms:.1f}ms > {max_p95_ms:.1f}ms")
@@ -23,5 +38,9 @@ class PerformanceAssessor:
             status=ValidationStatus.FAIL if breached else ValidationStatus.PASS,
             metrics=metrics,
             breached_thresholds=breached,
-            summary="Performance thresholds breached." if breached else "All configured performance thresholds passed.",
+            summary=(
+                "Performance thresholds breached."
+                if breached
+                else "All configured performance thresholds passed."
+            ),
         )
