@@ -1,0 +1,301 @@
+name: Ephemeral PR 12 Exact-Head Validation
+
+# Temporary exact-source validation authorized by the repository owner.
+# Remove this file from main before PR #12 is merged.
+on:
+  pull_request:
+    branches: [main]
+    types: [synchronize]
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_SHA: 0c7f1a360eec658be3e546be1f86f8c7b66022a6
+  FORMAT_BASE_SHA: dd2d6d85b8a6cb7adc9bf0c98a56b2d1a91138b2
+  FORMAT_COMMIT_SHA: 038ff9b880fbfdb2a9b85f7dd1a241a646e40b65
+  PYTHONUNBUFFERED: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  formatter-integrity:
+    if: github.event.pull_request.number == 12 && github.head_ref == 'feature/observability-metrics-hardening'
+    name: Ruff Formatting Semantic Integrity
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact validation source with history
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify source and formatter ancestry
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse "$FORMAT_COMMIT_SHA^")" = "$FORMAT_BASE_SHA"
+          test "$(git rev-parse "$SOURCE_SHA^{tree}")" = "$(git rev-parse "$FORMAT_COMMIT_SHA^{tree}")"
+
+      - name: Prove formatter delta is Python-only and AST/comment equivalent
+        run: |
+          python - <<'PY'
+          import ast
+          import io
+          import subprocess
+          import tokenize
+
+          base = "${{ env.FORMAT_BASE_SHA }}"
+          formatted = "${{ env.FORMAT_COMMIT_SHA }}"
+          raw = subprocess.check_output(["git", "diff", "--name-only", "-z", base, formatted])
+          paths = [item.decode() for item in raw.split(b"\0") if item]
+          if not paths:
+              raise SystemExit("formatter commit unexpectedly contains no changes")
+          non_python = [path for path in paths if not path.endswith(".py")]
+          if non_python:
+              raise SystemExit(f"formatter changed non-Python paths: {non_python}")
+
+          for path in paths:
+              before = subprocess.check_output(["git", "show", f"{base}:{path}"])
+              after = subprocess.check_output(["git", "show", f"{formatted}:{path}"])
+              before_text = before.decode("utf-8")
+              after_text = after.decode("utf-8")
+              before_ast = ast.dump(
+                  ast.parse(before_text, filename=path, type_comments=True),
+                  include_attributes=False,
+              )
+              after_ast = ast.dump(
+                  ast.parse(after_text, filename=path, type_comments=True),
+                  include_attributes=False,
+              )
+              if before_ast != after_ast:
+                  raise SystemExit(f"AST changed during formatting: {path}")
+
+              def comments(data: bytes) -> list[str]:
+                  return [
+                      token.string
+                      for token in tokenize.tokenize(io.BytesIO(data).readline)
+                      if token.type == tokenize.COMMENT
+                  ]
+
+              if comments(before) != comments(after):
+                  raise SystemExit(f"comment/tool-directive sequence changed during formatting: {path}")
+
+          print(f"Verified semantic/comment equivalence for {len(paths)} Ruff-formatted Python files.")
+          PY
+
+  quality:
+    if: github.event.pull_request.number == 12 && github.head_ref == 'feature/observability-metrics-hardening'
+    name: Quality / Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - name: Checkout exact validation source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - name: Verify exact source
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install project and development gates
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+          python -m pip check
+          test "$(ruff --version)" = "ruff 0.16.2"
+      - name: Compile Python sources
+        run: python -m compileall -q src evals examples
+      - name: Ruff format
+        run: ruff format --check .
+      - name: Ruff lint
+        run: ruff check .
+      - name: Mypy
+        if: matrix.python-version == '3.11'
+        run: mypy src
+      - name: Full deterministic pytest
+        run: |
+          mkdir -p artifacts/ci
+          pytest --cov=ai_qa_automation --cov-report=term-missing --cov-report=xml:artifacts/ci/coverage.xml --junitxml=artifacts/ci/junit-${{ matrix.python-version }}.xml
+      - name: Upload deterministic test evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pr12-tests-py${{ matrix.python-version }}
+          path: artifacts/ci/
+          if-no-files-found: warn
+          retention-days: 14
+
+  deterministic-evals:
+    if: github.event.pull_request.number == 12 && github.head_ref == 'feature/observability-metrics-hardening'
+    name: 34-Scenario Agent Evaluation
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+          python -m pip check
+      - name: Run and enforce primary corpus
+        run: |
+          set -o pipefail
+          mkdir -p artifacts/ci
+          python evals/runner.py | tee artifacts/ci/deterministic-evals.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          result = json.loads(Path('artifacts/ci/deterministic-evals.json').read_text())
+          thresholds = json.loads(Path('evals/thresholds.json').read_text())
+          assert result['hard_safety_failures'] <= thresholds['hard_safety_max_failures']
+          assert result['threshold_schema_version'] == thresholds['schema_version']
+          assert result['threshold_violations'] == []
+          assert result['failures'] == 0
+          PY
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pr12-primary-evals
+          path: artifacts/ci/deterministic-evals.json
+          if-no-files-found: error
+          retention-days: 30
+
+  holdout-evals:
+    if: github.event.pull_request.number == 12 && github.head_ref == 'feature/observability-metrics-hardening'
+    name: H-Series Holdout
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+          python -m pip check
+      - name: Run and enforce holdout
+        run: |
+          set -o pipefail
+          mkdir -p artifacts/ci
+          python evals/holdout_runner.py | tee artifacts/ci/holdout-evals.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          result = json.loads(Path('artifacts/ci/holdout-evals.json').read_text())
+          thresholds = json.loads(Path('evals/thresholds.json').read_text())
+          assert result['hard_safety_failures'] <= thresholds['hard_safety_max_failures']
+          assert result['failures'] == 0
+          PY
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pr12-holdout-evals
+          path: artifacts/ci/holdout-evals.json
+          if-no-files-found: error
+          retention-days: 30
+
+  security:
+    if: github.event.pull_request.number == 12 && github.head_ref == 'feature/observability-metrics-hardening'
+    name: Security Gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+      - run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+          python -m pip check
+      - name: Bandit
+        run: bandit -c pyproject.toml -q -r src
+      - name: Dependency vulnerability audit
+        run: pip-audit
+      - name: Secret scan
+        run: |
+          detect-secrets scan --all-files --exclude-files '(^|/)\.git/' > artifacts-secret-scan.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          findings = json.loads(Path('artifacts-secret-scan.json').read_text()).get('results', {})
+          if findings:
+              for path, items in findings.items():
+                  print(path, len(items))
+              raise SystemExit('Potential secrets detected.')
+          print('No potential secrets detected.')
+          PY
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pr12-security-metadata
+          path: artifacts-secret-scan.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  browser-reference-sut:
+    if: github.event.pull_request.number == 12 && github.head_ref == 'feature/observability-metrics-hardening'
+    name: Playwright Reference SUT
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+          python -m pip check
+          python -m playwright install --with-deps chromium
+      - name: Start reference SUT
+        run: |
+          uvicorn examples.reference_sut.app:app --host 127.0.0.1 --port 8000 > /tmp/reference-sut.log 2>&1 &
+          echo $! > /tmp/reference-sut.pid
+          curl --fail --retry 20 --retry-delay 1 --retry-all-errors http://127.0.0.1:8000/health
+      - name: Run browser evidence test
+        run: pytest -o addopts='' -q -m browser tests/integration/test_reference_sut_browser.py --junitxml=artifacts-browser.xml
+      - if: failure()
+        run: cat /tmp/reference-sut.log
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pr12-browser-metadata
+          path: artifacts-browser.xml
+          if-no-files-found: warn
+          retention-days: 14
