@@ -8,7 +8,7 @@
 
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white&style=flat-square)](pyproject.toml)
 [![MIT License](https://img.shields.io/badge/License-MIT-2ea44f?style=flat-square)](LICENSE)
-[![Claude Agent SDK](https://img.shields.io/badge/Claude%20Agent%20SDK-0.2.143-6B4FBB?style=flat-square)](docs/SETUP.md)
+[![Claude Agent SDK](https://img.shields.io/badge/Claude%20Agent%20SDK-0.2.136-6B4FBB?style=flat-square)](docs/SETUP.md)
 [![Evidence First](https://img.shields.io/badge/Architecture-Evidence--First-111827?style=flat-square)](docs/ARCHITECTURE.md)
 
 **A production-oriented AI quality engineering framework that gives an LLM room to reason without giving it authority to invent evidence, weaken tests, bypass policy, or certify its own work.**
@@ -166,7 +166,7 @@ Set that assertion only when the runtime environment actually enforces the inten
 
 ## Production control model
 
-The live path uses the Claude Agent SDK pinned to `claude-agent-sdk==0.2.143`, with `claude-sonnet-5` as the default model identifier.
+The live path uses the Claude Agent SDK pinned to `claude-agent-sdk==0.2.136`, with `claude-sonnet-5` as the default model identifier.
 
 The runtime deliberately narrows authority:
 
@@ -239,18 +239,18 @@ The framework distinguishes **terminal outcomes**, **validation outcomes**, and 
 
 | Terminal outcome | Meaning |
 |---|---|
-| `SUCCESS` | every active deterministic gate required by the revision is closed |
+| `SUCCESS` | every active deterministic gate required by the revision or objective is closed |
 | `FAILURE` | a definitive active execution or validation failure exists |
 | `BLOCKED` | a safety/integrity prerequisite prevented continuation |
 | `POLICY_DENIED` | requested authority is outside policy |
 | `INFRASTRUCTURE_FAILURE` | runtime integrity cannot be guaranteed |
 | `BUDGET_EXCEEDED` / `CANCELLED` | bounded execution terminated explicitly |
-| `NOT_VERIFIED` | evidence is absent, incomplete, stale, or contradictory, so success cannot be proven |
+| `NOT_VERIFIED` | evidence is absent, incomplete, stale, contradictory, unbound to the objective, or validator execution was inconclusive |
 
-Individual validations preserve values such as `NOT_EXECUTED` and `NOT_OBSERVED` rather than translating absence into green.
+Individual validations preserve values such as `NOT_EXECUTED` and `NOT_OBSERVED` rather than translating absence into green. For pytest specifically, exit `1` is an observed test failure; timeout, interruption, usage/internal errors, no-tests-collected, workspace-integrity failure, and other abnormal exits remain `NOT_VERIFIED` rather than being mislabeled as SUT failures.
 
 > [!IMPORTANT]
-> A model result subtype of `success` is only an input to terminal evaluation. It is never sufficient to produce framework `SUCCESS` on its own.
+> A model result subtype of `success` is only an input to terminal evaluation. It is never sufficient to produce framework `SUCCESS` on its own. For an unchanged revision, an unrelated green gate is also insufficient: success requires trusted deterministic validation explicitly bound to the run objective.
 
 For complete semantics, revision supersession, provider outcomes, and mutation closure, see the authoritative [Runtime Result Contract](docs/RESULT_CONTRACT.md).
 
@@ -359,6 +359,8 @@ See [Change Intelligence](docs/CHANGE_INTELLIGENCE.md).
 - WebSockets are routed through the same host boundary;
 - service workers are disabled in the evidence context so routing remains observable;
 - final navigation is rechecked against the allowlist;
+- event buffers are bounded and retain only a recent diagnostic window;
+- screenshots are viewport-scoped to prevent hostile page height from creating unbounded in-memory captures;
 - screenshots remain hashed `RAW` artifacts rather than being falsely represented as sanitized text.
 
 ### Performance / k6
@@ -366,10 +368,11 @@ See [Change Intelligence](docs/CHANGE_INTELLIGENCE.md).
 - production and production-like targets are denied;
 - the script must consume injected `BASE_URL` / `TARGET_URL`;
 - remote modules, `k6/x/*`, local `open()`, unrelated literal hosts, and unsupported imports are rejected;
-- runtime duration is bounded;
+- runtime duration and retained subprocess output are bounded;
 - **every k6 execution requires independently enforced infrastructure-level egress**, including localhost targets;
 - static JavaScript inspection is explicitly not treated as a network sandbox;
-- PASS/FAIL comes from predefined thresholds and measured metrics.
+- required summary measurements must actually exist and be finite numeric values;
+- only successfully parsed measurements can produce threshold PASS/FAIL; missing/malformed telemetry or execution infrastructure failures remain `NOT_VERIFIED`.
 
 ### Mobile / Appium
 
@@ -431,7 +434,7 @@ The framework can persist:
 - token/cost information when supplied by the provider;
 - unsigned run-integrity attestations.
 
-Evidence control files, journal files, registered artifacts, rollback paths, and lease paths reject ambiguous symlink ownership where the framework owns the filesystem boundary.
+Evidence control files, journal files, registered artifacts, rollback paths, and lease paths reject ambiguous symlink ownership where the framework owns the filesystem boundary. Persisted state, runtime metadata, manifests, journal records, artifacts, and restore/attestation reads are size-bounded so malformed run data cannot silently become an unbounded recovery operation.
 
 `ai-qa attest` verifies owned core persisted subjects, the runtime journal chain, pending-mutation state, and the SHA-256 of every artifact registered in the manifest before reporting `integrity_verified=true`.
 
