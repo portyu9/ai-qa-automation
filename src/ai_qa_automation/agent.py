@@ -164,6 +164,9 @@ async def run_agent(objective: str, workspace: Path, settings: Settings | None =
             control=control,
         )
         policy = PolicyEngine(cfg.control_root, workspace, allow_test_writes=cfg.allow_test_writes)
+        # Bind the deployment egress assertion to the same policy object used by
+        # the lower-level k6 runner so every workload path enforces it, including localhost.
+        setattr(policy, "k6_external_egress_enforced", cfg.k6_external_egress_enforced)
         runner = TestRunner(workspace, evidence, timeout_seconds=cfg.tool_timeout_seconds)
         services = RuntimeServices(
             workspace=workspace,
@@ -281,9 +284,7 @@ async def run_agent(objective: str, workspace: Path, settings: Settings | None =
                             reason="run ended without verified success"
                         )
                         if rolled_back:
-                            state.files_modified = [
-                                path for path in state.files_modified if path != rolled_back
-                            ]
+                            _remove_latest_modified_path(state, rolled_back)
                             state.observations.append(
                                 f"Unverified mutation rolled back before terminal report: {rolled_back}"
                             )
@@ -328,6 +329,14 @@ async def run_agent(objective: str, workspace: Path, settings: Settings | None =
         )
     finally:
         lease.release()
+
+
+def _remove_latest_modified_path(state: AgentRunState, path: str) -> None:
+    """Remove only the rolled-back mutation occurrence, preserving earlier committed history."""
+    for index in range(len(state.files_modified) - 1, -1, -1):
+        if state.files_modified[index] == path:
+            state.files_modified.pop(index)
+            return
 
 
 def _sync_operational_state(
@@ -464,12 +473,31 @@ def determine_terminal_outcome(
                 TerminalStatus.NOT_VERIFIED,
                 "Files changed, but deterministic patch-safety validation is missing for the current revision.",
             )
-        targeted = [item for item in current_pytest if item.details.get("scope") == "targeted"]
-        regression = [item for item in current_pytest if item.details.get("scope") == "regression"]
+        patch_paths = {
+            str(item.details.get("path") or "")
+            for item in patch_safety
+            if str(item.details.get("path") or "")
+        }
+        if len(patch_paths) != 1:
+            return (
+                TerminalStatus.NOT_VERIFIED,
+                "A changed revision must resolve to exactly one patch-safety target path before commit.",
+            )
+        mutation_path = next(iter(patch_paths))
+        targeted = [
+            item
+            for item in current_pytest
+            if item.details.get("scope") == "targeted"
+            and item.details.get("mutation_target_bound") is True
+            and item.details.get("mutation_target") == mutation_path
+        ]
+        regression = [
+            item for item in current_pytest if item.details.get("scope") == "regression"
+        ]
         if not targeted or not regression:
             return (
                 TerminalStatus.NOT_VERIFIED,
-                "A changed test requires both a passing targeted pytest gate and a passing full regression at the current revision.",
+                "A changed test requires an exact-path-bound targeted pytest PASS and a full-regression pytest PASS at the current revision.",
             )
     if all(item.status == ValidationStatus.PASS for item in active):
         return (

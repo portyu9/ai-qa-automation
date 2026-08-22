@@ -9,6 +9,18 @@ def test_api_requirement_prefers_api_layer() -> None:
     assert any(item.name == "authorization" for item in plan.scenarios)
 
 
-def test_existing_coverage_is_not_duplicated() -> None:
-    plan = TestGenerationPlanner().plan("orders API status code contract", existing_coverage=["api:happy path"])
-    assert all(item.name != "happy path" for item in plan.scenarios)
+def test_model_supplied_existing_coverage_cannot_suppress_candidate_scenarios() -> None:
+    plan = TestGenerationPlanner().plan(
+        "orders API status code contract",
+        existing_coverage=["api:happy path", "api:negative path", "api:boundary"],
+    )
+
+    assert {item.name for item in plan.scenarios} == {"happy path", "negative path", "boundary"}
+    assert "advisory" in plan.duplicate_risk.lower()
+
+
+def test_generation_plan_requires_same_run_coverage_review_before_implementation() -> None:
+    plan = TestGenerationPlanner().plan("checkout component behavior")
+
+    assert "same-run repository coverage evidence review" in plan.validation_plan
+    assert "inspect same-run repository coverage evidence" in plan.duplicate_risk.lower()

@@ -31,6 +31,8 @@ class EvidenceStore:
         if self.run_root == artifact_root or artifact_root not in self.run_root.parents:
             raise ValueError("evidence run_id escapes artifact root")
         self.run_root.mkdir(parents=True, exist_ok=True)
+        self._assert_control_file_owned("evidence-manifest.json")
+        self._assert_control_file_owned("audit-log.jsonl")
         self._items: dict[str, EvidenceItem] = {}
         self._artifacts: dict[str, ArtifactRecord] = {}
         self._audit_sequence = 0
@@ -44,6 +46,28 @@ class EvidenceStore:
     @staticmethod
     def hash_bytes(content: bytes) -> str:
         return f"sha256:{hashlib.sha256(content).hexdigest()}"
+
+    def _assert_control_file_owned(self, name: str) -> Path:
+        path = self.run_root / name
+        if path.is_symlink():
+            raise ValueError(f"evidence control file is a symlink and has ambiguous ownership: {name}")
+        return path
+
+    def _owned_artifact_path(self, relative_path: str) -> Path:
+        requested = Path(relative_path)
+        if requested.is_absolute() or not requested.parts or ".." in requested.parts:
+            raise ValueError("artifact path must be a non-traversing relative path under run root")
+        cursor = self.run_root
+        for part in requested.parts:
+            if part in {"", "."}:
+                continue
+            cursor = cursor / part
+            if cursor.is_symlink():
+                raise ValueError("artifact path contains a symlink and has ambiguous ownership")
+        destination = (self.run_root / requested).resolve()
+        if self.run_root not in destination.parents:
+            raise ValueError("artifact path escapes run root")
+        return destination
 
     def add(self, item: EvidenceItem) -> EvidenceItem:
         if item.run_id != self.run_id:
@@ -73,17 +97,7 @@ class EvidenceStore:
         sanitization_status: SanitizationStatus = SanitizationStatus.RAW,
         retention_classification: str | None = None,
     ) -> tuple[str, str]:
-        requested = Path(relative_path)
-        if requested.is_absolute() or not requested.parts or ".." in requested.parts:
-            raise ValueError("artifact path must be a non-traversing relative path under run root")
-        cursor = self.run_root
-        for part in requested.parts:
-            cursor = cursor / part
-            if cursor.is_symlink():
-                raise ValueError("artifact path contains a symlink and has ambiguous ownership")
-        destination = (self.run_root / requested).resolve()
-        if self.run_root not in destination.parents:
-            raise ValueError("artifact path escapes run root")
+        destination = self._owned_artifact_path(relative_path)
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.exists():
             raise FileExistsError(f"artifact path is immutable and already exists: {relative_path}")
@@ -140,6 +154,7 @@ class EvidenceStore:
     def _append_audit_event(self, event_type: str, payload: dict[str, Any]) -> None:
         if not self.regulated_mode:
             return
+        path = self._assert_control_file_owned("audit-log.jsonl")
         self._audit_sequence += 1
         timestamp = datetime.now(UTC).isoformat()
         core = {
@@ -154,14 +169,14 @@ class EvidenceStore:
         ).encode("utf-8")
         event_hash = self.hash_bytes(canonical)
         record = {**core, "event_hash": event_hash}
-        with (self.run_root / "audit-log.jsonl").open("a", encoding="utf-8") as stream:
+        with path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(record, sort_keys=True, default=str) + "\n")
             stream.flush()
             os.fsync(stream.fileno())
         self._audit_previous_hash = event_hash
 
     def _restore_manifest(self) -> None:
-        path = self.run_root / "evidence-manifest.json"
+        path = self._assert_control_file_owned("evidence-manifest.json")
         if not path.exists():
             return
         try:
@@ -186,14 +201,17 @@ class EvidenceStore:
 
     def _verify_artifact_hashes(self) -> None:
         for record in self._artifacts.values():
-            path = (self.run_root / record.path).resolve()
-            if self.run_root not in path.parents or not path.is_file():
+            try:
+                path = self._owned_artifact_path(record.path)
+            except ValueError as exc:
+                raise ValueError(f"regulated artifact ownership check failed: {record.path}") from exc
+            if not path.is_file():
                 raise ValueError(f"regulated artifact is missing or escaped run root: {record.path}")
             if self.hash_bytes(path.read_bytes()) != record.content_hash:
                 raise ValueError(f"regulated artifact integrity check failed: {record.path}")
 
     def _verify_registry_against_audit(self) -> None:
-        path = self.run_root / "audit-log.jsonl"
+        path = self._assert_control_file_owned("audit-log.jsonl")
         if not path.exists():
             if self._items or self._artifacts:
                 raise ValueError("regulated registry exists without audit log")
@@ -232,7 +250,7 @@ class EvidenceStore:
 
     def verify_audit_chain(self) -> bool:
         """Verify sequence, previous-hash linkage, and each regulated audit event hash."""
-        path = self.run_root / "audit-log.jsonl"
+        path = self._assert_control_file_owned("audit-log.jsonl")
         if not path.exists():
             return self._audit_sequence == 0 and self._audit_previous_hash == "GENESIS"
 
@@ -258,7 +276,7 @@ class EvidenceStore:
         return True
 
     def _restore_audit_tail(self) -> None:
-        path = self.run_root / "audit-log.jsonl"
+        path = self._assert_control_file_owned("audit-log.jsonl")
         if not path.exists():
             return
         if not self.verify_audit_chain():
@@ -273,7 +291,7 @@ class EvidenceStore:
         self._audit_previous_hash = str(last["event_hash"])
 
     def _flush_manifest(self) -> None:
-        path = self.run_root / "evidence-manifest.json"
+        path = self._assert_control_file_owned("evidence-manifest.json")
         data: dict[str, Any] = {
             "run_id": self.run_id,
             "regulated_mode": self.regulated_mode,
@@ -282,7 +300,7 @@ class EvidenceStore:
             "sanitization_status": SanitizationStatus.SANITIZED,
         }
         if self.regulated_mode:
-            audit_path = self.run_root / "audit-log.jsonl"
+            audit_path = self._assert_control_file_owned("audit-log.jsonl")
             data["audit_log"] = {
                 "path": audit_path.name,
                 "events": self._audit_sequence,

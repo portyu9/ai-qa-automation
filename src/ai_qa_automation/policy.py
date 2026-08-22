@@ -159,9 +159,20 @@ class PolicyEngine:
             path_value = tool_input.get("path") or tool_input.get("file_path")
             if path_value:
                 write = internal_name in {"create_test_file", "apply_locator_heal"}
-                path_decision = self.authorize_path(Path(str(path_value)), write=write)
+                path = Path(str(path_value))
+                path_decision = self.authorize_path(path, write=write)
                 if path_decision.decision != ToolDecision.ALLOW:
                     return path_decision
+                if write and path.suffix.lower() != ".py":
+                    return PolicyDecision(
+                        decision=ToolDecision.DENY,
+                        reason=(
+                            "Live autonomous mutation is restricted to Python tests because "
+                            "the current deterministic execution-closure adapter is pytest-backed."
+                        ),
+                        rule_id="WRITE-RUNTIME-001",
+                        risk=RiskLevel.HIGH,
+                    )
             if internal_name == "run_k6":
                 return self.authorize_performance_target(
                     str(tool_input.get("target_url", "")),
@@ -426,7 +437,12 @@ class PolicyEngine:
 
     @classmethod
     def _is_protected(cls, relative: str) -> bool:
-        return any(
+        if any(
             relative == item or relative.startswith(f"{item}/")
             for item in cls._PROTECTED_RELATIVE_PATHS
-        )
+        ):
+            return True
+        basename = Path(relative).name
+        if basename == ".env.example":
+            return False
+        return basename == ".env" or basename.startswith(".env.")

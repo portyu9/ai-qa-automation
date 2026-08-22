@@ -15,14 +15,31 @@ def vr(
     gate_id: str | None = None,
     revision: int = 0,
     scope: str | None = None,
+    mutation_path: str = "tests/test_x.py",
+    mutation_target_bound: bool = True,
 ) -> ValidationResult:
+    details: dict[str, object] = {}
+    if name == "test_patch_safety" and revision > 0:
+        details["path"] = mutation_path
+    if scope:
+        details["scope"] = scope
+    if scope == "targeted" and revision > 0:
+        details.update(
+            {
+                "args": [mutation_path],
+                "mutation_target": mutation_path,
+                "mutation_target_bound": mutation_target_bound,
+            }
+        )
+    if scope == "regression":
+        details["args"] = []
     return ValidationResult(
         name=name,
         gate_id=gate_id,
         revision=revision,
         status=status,
         summary=name,
-        details={"scope": scope} if scope else {},
+        details=details,
     )
 
 
@@ -220,6 +237,66 @@ def test_changed_revision_requires_both_targeted_and_regression_pytest(
     assert status is TerminalStatus.NOT_VERIFIED
     assert "targeted" in reason.lower()
     assert "regression" in reason.lower()
+
+
+def test_changed_revision_rejects_unbound_targeted_validation() -> None:
+    validations = [
+        vr(
+            "test_patch_safety",
+            ValidationStatus.PASS,
+            gate_id="test_patch_safety:tests/test_x.py",
+            revision=1,
+        ),
+        vr(
+            "pytest",
+            ValidationStatus.PASS,
+            gate_id="pytest:target",
+            revision=1,
+            scope="targeted",
+            mutation_target_bound=False,
+        ),
+        vr(
+            "pytest",
+            ValidationStatus.PASS,
+            gate_id="pytest:regression",
+            revision=1,
+            scope="regression",
+        ),
+    ]
+
+    status, reason = determine_terminal_outcome("success", validations, current_revision=1)
+    assert status is TerminalStatus.NOT_VERIFIED
+    assert "exact-path-bound" in reason
+
+
+def test_changed_revision_rejects_mismatched_patch_and_targeted_paths() -> None:
+    validations = [
+        vr(
+            "test_patch_safety",
+            ValidationStatus.PASS,
+            gate_id="test_patch_safety:tests/test_x.py",
+            revision=1,
+            mutation_path="tests/test_x.py",
+        ),
+        vr(
+            "pytest",
+            ValidationStatus.PASS,
+            gate_id="pytest:target",
+            revision=1,
+            scope="targeted",
+            mutation_path="tests/test_other.py",
+        ),
+        vr(
+            "pytest",
+            ValidationStatus.PASS,
+            gate_id="pytest:regression",
+            revision=1,
+            scope="regression",
+        ),
+    ]
+
+    status, _ = determine_terminal_outcome("success", validations, current_revision=1)
+    assert status is TerminalStatus.NOT_VERIFIED
 
 
 def test_runtime_roots_reject_target_as_control_root(tmp_path: Path) -> None:

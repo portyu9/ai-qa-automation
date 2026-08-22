@@ -23,14 +23,30 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
         self.workspace = workspace.expanduser().resolve()
         self.run_id = run_id
         key = hashlib.sha256(str(self.workspace).encode("utf-8")).hexdigest()[:24]
-        self.path = self.artifact_root / ".leases" / f"{key}.lock"
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        lease_root = self.artifact_root / ".leases"
+        if lease_root.is_symlink():
+            raise OSError("workspace lease directory is a symlink and has ambiguous ownership")
+        lease_root.mkdir(parents=True, exist_ok=True)
+        self.path = lease_root / f"{key}.lock"
+        if self.path.is_symlink():
+            raise OSError("workspace lease file is a symlink and has ambiguous ownership")
         self.lease_id = f"lease-{uuid4().hex[:16]}"
         self._stream: Any | None = None
         self.previous_metadata: dict[str, Any] | None = None
 
+    def _open_owned_stream(self) -> Any:
+        lease_root = self.path.parent
+        if lease_root.is_symlink() or self.path.is_symlink():
+            raise OSError("workspace lease path has ambiguous symlink ownership")
+        flags = os.O_RDWR | os.O_CREAT
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        if nofollow:
+            flags |= nofollow
+        fd = os.open(self.path, flags, 0o600)
+        return os.fdopen(fd, "r+", encoding="utf-8")
+
     def acquire(self) -> "WorkspaceLease":
-        stream = self.path.open("a+", encoding="utf-8")
+        stream = self._open_owned_stream()
         try:
             self._lock_stream(stream)
         except Exception:

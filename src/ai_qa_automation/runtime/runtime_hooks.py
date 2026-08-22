@@ -56,17 +56,76 @@ def _tool_response_failed(response: Any) -> bool:
     return isinstance(response, dict) and bool(response.get("is_error"))
 
 
-def _revision_closed(state: AgentRunState) -> bool:
+def _normalize_selector_path(value: str) -> str:
+    normalized = value.split("::", 1)[0].replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized.rstrip("/")
+
+
+def _pytest_validation_targets_path(validation: Any, expected_path: str) -> bool:
+    args = validation.details.get("args", [])
+    if not isinstance(args, list):
+        return False
+    expected = _normalize_selector_path(expected_path)
+    return any(
+        not str(raw).startswith("-")
+        and _normalize_selector_path(str(raw)) == expected
+        for raw in args
+    )
+
+
+def _bind_latest_targeted_pytest_to_pending_mutation(
+    state: AgentRunState,
+    control: RuntimeControl,
+) -> None:
+    """Prevent an unrelated targeted pytest run from certifying pending mutation bytes."""
+
+    pending = control.pending_mutation
+    if pending is None:
+        return
+    for index in range(len(state.validation_results) - 1, -1, -1):
+        item = state.validation_results[index]
+        if item.revision != state.change_revision or item.name != "pytest":
+            continue
+        if item.details.get("scope") != "targeted":
+            return
+        bound = _pytest_validation_targets_path(item, pending.relative_path)
+        details = {
+            **item.details,
+            "mutation_target": pending.relative_path,
+            "mutation_target_bound": bound,
+        }
+        if not bound:
+            details["scope"] = "diagnostic"
+        state.validation_results[index] = item.model_copy(update={"details": details})
+        return
+
+
+def _revision_closed(state: AgentRunState, *, expected_path: str) -> bool:
     if state.change_revision == 0:
         return True
     current = [item for item in state.validation_results if item.revision == state.change_revision]
-    return (
-        bool(current)
-        and all(item.status.value == "PASS" for item in current)
-        and any(item.name == "test_patch_safety" for item in current)
-        and any(item.name == "pytest" and item.details.get("scope") == "targeted" for item in current)
-        and any(item.name == "pytest" and item.details.get("scope") == "regression" for item in current)
+    patch_safety = any(
+        item.name == "test_patch_safety"
+        and item.details.get("path") == expected_path
+        and item.status.value == "PASS"
+        for item in current
     )
+    targeted = any(
+        item.name == "pytest"
+        and item.status.value == "PASS"
+        and item.details.get("scope") == "targeted"
+        and _pytest_validation_targets_path(item, expected_path)
+        for item in current
+    )
+    regression = any(
+        item.name == "pytest"
+        and item.status.value == "PASS"
+        and item.details.get("scope") == "regression"
+        for item in current
+    )
+    return bool(current) and all(item.status.value == "PASS" for item in current) and patch_safety and targeted and regression
 
 
 def pretool_policy_output(
@@ -142,8 +201,7 @@ def pretool_policy_output(
         if expected is None:
             state.terminal_status = TerminalStatus.BLOCKED
             state.terminal_reason = "Mutation blocked because no workspace fingerprint baseline exists"
-            if control is not None:
-                control.journal.append("workspace_drift_blocked", expected=None, actual=current)
+            control.journal.append("workspace_drift_blocked", expected=None, actual=current)
             _checkpoint(state, state_store, control)
             return {
                 "hookSpecificOutput": {
@@ -267,11 +325,16 @@ def posttool_policy_output(
                 RepositoryInspector(control.workspace).snapshot().fingerprint
             )
         elif tool_name == "mcp__qa__run_pytest" and not failed and state is not None:
-            if control.pending_mutation is not None and _revision_closed(state):
-                control.commit_pending_mutation()
-                control.set_workspace_fingerprint(
-                    RepositoryInspector(control.workspace).snapshot().fingerprint
-                )
+            if control.pending_mutation is not None:
+                _bind_latest_targeted_pytest_to_pending_mutation(state, control)
+                if _revision_closed(
+                    state,
+                    expected_path=control.pending_mutation.relative_path,
+                ):
+                    control.commit_pending_mutation()
+                    control.set_workspace_fingerprint(
+                        RepositoryInspector(control.workspace).snapshot().fingerprint
+                    )
         control.record_tool_result(tool_name, failed=failed)
         control.journal.append(
             "tool_completed",
@@ -348,7 +411,11 @@ def build_hooks(
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError("claude-agent-sdk is required for live agent mode") from exc
 
-    async def pre_tool_use(input_data: dict[str, Any], _tool_use_id: str | None, _context: Any) -> dict[str, Any]:
+    async def pre_tool_use(
+        input_data: dict[str, Any],
+        _tool_use_id: str | None,
+        _context: Any,
+    ) -> dict[str, Any]:
         return pretool_policy_output(
             policy,
             input_data,
@@ -357,7 +424,11 @@ def build_hooks(
             control=control,
         )
 
-    async def post_tool_use(input_data: dict[str, Any], _tool_use_id: str | None, _context: Any) -> dict[str, Any]:
+    async def post_tool_use(
+        input_data: dict[str, Any],
+        _tool_use_id: str | None,
+        _context: Any,
+    ) -> dict[str, Any]:
         return posttool_policy_output(
             input_data,
             state=state,
@@ -366,7 +437,11 @@ def build_hooks(
             control=control,
         )
 
-    async def post_tool_use_failure(input_data: dict[str, Any], _tool_use_id: str | None, _context: Any) -> dict[str, Any]:
+    async def post_tool_use_failure(
+        input_data: dict[str, Any],
+        _tool_use_id: str | None,
+        _context: Any,
+    ) -> dict[str, Any]:
         return posttool_failure_output(
             input_data,
             state=state,
@@ -377,5 +452,7 @@ def build_hooks(
     return {
         "PreToolUse": [HookMatcher(matcher=None, hooks=[pre_tool_use], timeout=10)],
         "PostToolUse": [HookMatcher(matcher=None, hooks=[post_tool_use], timeout=10)],
-        "PostToolUseFailure": [HookMatcher(matcher=None, hooks=[post_tool_use_failure], timeout=10)],
+        "PostToolUseFailure": [
+            HookMatcher(matcher=None, hooks=[post_tool_use_failure], timeout=10)
+        ],
     }

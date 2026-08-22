@@ -1,93 +1,119 @@
 # Claude Skills
 
-> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
+> [!IMPORTANT]
+> Skills are **reasoning/playbook context, not permission grants**. Runtime policy, hooks, narrow tools, evidence requirements, budgets, and deterministic validation remain authoritative regardless of Skill instructions.
 
-The ƳƤ AI QA Automation Framework uses five focused Claude Skills to load specialized QA procedures only when the objective needs them. Skills are **reasoning/playbook context**, not permission grants: deterministic runtime policy, hooks, controlled tools, evidence requirements, execution budgets, and validation remain authoritative regardless of what a Skill says.
+**ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
-The live Agent SDK configuration explicitly allowlists these five framework Skills rather than exposing an open-ended catalog.
+[Documentation home](README.md) · [Architecture](ARCHITECTURE.md) · [Evaluation](EVALUATION.md) · [Security](SECURITY.md)
+
+---
 
 ## Skill inventory
 
-| Skill | Purpose | Key deterministic boundary |
+The live Agent SDK configuration explicitly allowlists exactly five framework Skills.
+
+| Skill | Purpose | Deterministic authority boundary |
 |---|---|---|
-| `investigate-test-failure` | Evidence-driven root-cause investigation and classification | Material classifications reference observed evidence; model interpretation alone cannot prove a defect class. |
-| `self-heal-test` | Guarded semantic locator maintenance | Requires browser-observed candidate evidence, supported classification, bound file/hash/proposal, policy-authorized locator-only change, and current-revision validation. |
-| `generate-test` | Coverage-aware test design and creation | Requires observed repository coverage plus same-run plan provenance before guarded test creation. |
-| `prioritize-regression` | Risk-aware regression selection | Mandatory coverage is preserved; low confidence/incomplete dependency evidence broadens rather than shrinks execution. |
-| `performance-test` | Controlled k6 performance assessment | Production/unknown targets are blocked; thresholds are predefined and real measured evidence is required. |
+| `investigate-test-failure` | evidence-driven root-cause investigation | material classification references observed evidence; interpretation alone cannot prove defect class |
+| `self-heal-test` | semantic locator maintenance | Playwright uniqueness + deterministic locator semantics/stability + exact path/hash + validation lineage |
+| `generate-test` | coverage-aware test design/creation | observed coverage drives candidates; unsupported model coverage claims cannot suppress them |
+| `prioritize-regression` | risk-aware regression selection | mandatory coverage preserved; low confidence broadens execution |
+| `performance-test` | bounded k6 assessment | non-production/host/script/egress prerequisites + predefined measured thresholds |
+
+---
 
 ## Why Skills are separate
 
-A large permanent system prompt makes context noisier and encourages instructions for unrelated tasks to remain active. The Skill design instead keeps the always-on runtime contract small while loading a specific procedure for a specific quality-engineering activity.
+A monolithic permanent prompt mixes procedures that do not belong to every objective. Focused Skills keep the always-on contract smaller while making each QA workflow independently inspectable.
 
-That separation also makes each workflow reviewable. A reviewer can answer:
+For each Skill, a reviewer should be able to answer:
 
-- when is this procedure appropriate?
-- what evidence must exist first?
-- what may the model propose?
-- which side effects are actually available?
-- which shortcuts are prohibited?
-- what deterministic validation is required before completion?
-- when must the agent escalate or stop?
+1. When is the procedure appropriate?
+2. Which evidence must exist first?
+3. What may the model interpret or propose?
+4. Which side effects are actually available?
+5. Which shortcuts are prohibited?
+6. Which deterministic gates close the work?
+7. When must the workflow stop or escalate?
+
+---
 
 ## `investigate-test-failure`
-
-Path:
 
 ```text
 .claude/skills/investigate-test-failure/SKILL.md
 ```
 
-The Skill is used when a test failed but the cause is uncertain or contested. Its procedure favors discriminating evidence over repeated retries and considers competing hypotheses such as product, automation, locator/UI-contract, data, timing, environment, dependency, authentication, configuration, and performance causes.
+The procedure prioritizes discriminating evidence over repeated retries and considers competing hypotheses across application, automation, locator/UI-contract, data, timing, environment, dependency, authentication, configuration, and performance classes.
 
-> A test failure alone is not evidence of a product defect.
+> [!NOTE]
+> **A test failure alone is not evidence of a product defect.**
 
-The expected output cites evidence IDs and preserves unresolved ambiguity as insufficient evidence rather than forcing a classification.
+Evidence IDs remain distinct from model interpretation. Ambiguity is preserved when causal evidence is insufficient.
+
+---
 
 ## `self-heal-test`
-
-Path:
 
 ```text
 .claude/skills/self-heal-test/SKILL.md
 ```
 
-This Skill is intentionally narrow. It is not a generic “repair any failing test” capability.
+This Skill governs **semantic locator maintenance**, not arbitrary failing-test repair.
 
-The workflow requires the expected product behavior to still exist, Playwright-observed original/candidate locator evidence, an appropriate deterministic failure classification, an exact authorized test path/hash, and explicit test-write permission.
+The workflow expects:
 
-The Skill prohibits model-declared uniqueness, arbitrary dynamic selectors, generic text replacement, assertion weakening/removal, skip/xfail, arbitrary sleeps, timeout inflation, and product-code mutation solely to make the test green.
+- expected product behavior to remain present;
+- same-DOM Playwright evidence for original/candidate locators;
+- compatible deterministic failure classification;
+- supported original locator grammar;
+- exact authorized test path and file hash;
+- explicit autonomous-write enablement when mutation is requested.
 
-An applied locator change remains transactional until the current revision has patch-safety, targeted pytest, and full-regression PASS evidence.
+The deterministic healing engine—not model confidence—owns authorization:
+
+1. Playwright-observed match counts establish uniqueness.
+2. Original/candidate locator syntax is reparsed.
+3. Semantic-intent overlap is recomputed.
+4. Model semantic confidence is advisory only.
+5. Stability is replaced with policy-owned strategy stability.
+6. Positional/XPath-style and weak-semantic candidates are rejected.
+7. Proposal remains bound to exact target bytes and evidence.
+8. Any live autonomous commit must fit the Python/pytest mutation contract.
+
+---
 
 ## `generate-test`
-
-Path:
 
 ```text
 .claude/skills/generate-test/SKILL.md
 ```
 
-Test generation begins with the expected behavior and observed repository coverage—not with a request to produce code immediately.
+Generation begins with expected behavior and **observed repository coverage**—not an instruction to immediately write code.
 
-The provenance chain is:
-
-```text
-requirement/change
-→ bounded coverage search
-→ observed coverage evidence
-→ same-run test plan
-→ guarded test creation
-→ deterministic quality/execution/regression validation
+```mermaid
+flowchart LR
+    A[Requirement / change] --> B[Bounded coverage search]
+    B --> C[Observed coverage evidence]
+    C --> D[Deterministic candidate gaps]
+    D --> E[Model-interpreted same-run plan]
+    E --> F[Guarded creation]
+    F --> G[Quality + execution + regression validation]
 ```
 
-The Skill favors the lowest reliable test layer that proves the behavior and rejects assertion-free, plan-less, redundant, arbitrary-sleep, `.skip`/`.only`, timeout-inflated, or mock-only tests.
+A model may annotate a candidate as “already covered” only when same-run observed evidence supports that interpretation. Unsupported labels cannot shrink the deterministic candidate set.
 
-If expected behavior is unknown, generation blocks or escalates rather than inventing product intent.
+The Skill rejects plan-less, assertion-free, arbitrary-sleep, skip/xfail/focus, timeout-inflated, or otherwise intent-eroding tests.
+
+Unknown product intent remains unknown; it is not invented merely to produce a test.
+
+> [!NOTE]
+> Reusable generation/patch components can understand Python/JavaScript/TypeScript syntax. Live autonomous commit authority is intentionally narrower where the controlled execution proof is pytest-backed.
+
+---
 
 ## `prioritize-regression`
-
-Path:
 
 ```text
 .claude/skills/prioritize-regression/SKILL.md
@@ -95,62 +121,97 @@ Path:
 
 This Skill optimizes **risk-adjusted recall before execution reduction**.
 
-Inputs include changed files/modules/APIs, dependency/ownership signals, candidate tests, historical failures, runtime cost, and business/security/safety/regulatory criticality.
+Inputs may include:
 
-Mandatory coverage is independent of model preference. Low confidence, incomplete dependency mapping, conflicting evidence, or an incomplete candidate inventory causes the strategy to broaden.
+- changed components/APIs;
+- dependency/ownership signals;
+- candidate tests;
+- historical failure behavior;
+- runtime cost;
+- business/security/safety/regulatory criticality.
 
-A small selected suite is not success if it creates meaningful escaped-regression risk.
+Mandatory coverage is independent of model preference. Low confidence, incomplete dependency mapping, conflicting evidence, or incomplete candidate inventory broadens the strategy rather than authorizing omission.
+
+---
 
 ## `performance-test`
-
-Path:
 
 ```text
 .claude/skills/performance-test/SKILL.md
 ```
 
-This Skill guides bounded k6 use only when a target is explicitly non-production, the workload is bounded, the host is authorized, the script satisfies the injected-target restrictions, and thresholds are defined before execution.
+The Skill guides k6 only when:
 
-Non-local targets additionally require the trusted infrastructure-egress precondition. That precondition asserts an external control exists; it does not turn application code into a firewall.
+- the target is explicitly non-production;
+- the host is authorized;
+- workload/runtime are bounded;
+- the script uses injected target binding;
+- import/local-file/literal-host restrictions are satisfied;
+- thresholds are predefined; and
+- deployment-level egress containment is independently established.
 
-PASS/FAIL comes from real k6 measurements plus deterministic threshold assessment. Missing executable, target access, or egress evidence produces the corresponding non-PASS runtime outcome.
+The egress prerequisite applies to **every** k6 run, including localhost-declared targets, because arbitrary JavaScript can construct destinations dynamically.
 
-## Skills do not override the trust model
+PASS/FAIL comes from measured k6 evidence plus deterministic threshold assessment.
+
+---
+
+## Skills cannot widen authority
 
 No Skill can:
 
-- add a new runtime tool;
+- add a runtime tool;
 - enable Bash/Edit/Write/Web authority;
 - change policy or protected paths;
-- enable an external MCP provider;
+- enable a provider by itself;
 - approve an external write;
 - widen the network allowlist;
 - increase runtime budgets;
-- declare a model interpretation observed evidence;
+- convert model interpretation into observed fact;
 - convert incomplete validation into PASS;
+- weaken mutation path/rollback ownership;
 - change evaluation thresholds or holdout expectations.
 
-Those decisions live in trusted deterministic configuration/code and reviewed engineering changes.
+Those controls live in trusted deterministic code/configuration and reviewed engineering changes.
+
+---
 
 ## Target Skills and prompt injection
 
-A target repository may contain its own `CLAUDE.md`, `.claude/skills/`, or similar instruction-shaped content. The production runtime treats target content as untrusted data and does not accept those files as control-plane Skills.
+A target repository may contain `CLAUDE.md`, `.claude/skills/`, `.mcp.json`, or similar instruction-shaped content. The runtime treats those files as **target data**, not control-plane Skills.
 
-The Agent SDK is configured from the trusted framework root with an explicit Skill allowlist. This prevents a SUT from gaining authority simply by placing agent-looking configuration in its repository.
+The Agent SDK is rooted in the trusted framework project with an explicit Skill allowlist, so the SUT cannot acquire authority merely by shipping agent-looking configuration.
+
+---
 
 ## Skill maintenance standard
 
-A Skill change should be reviewed like an algorithm/procedure change, especially when it affects mutation, evidence sufficiency, escalation, or regression scope.
+A Skill change is an algorithm/procedure change when it affects evidence sufficiency, escalation, regression scope, or mutation guidance.
 
-When changing a Skill:
+A strong Skill change should:
 
-1. preserve deterministic authority boundaries;
-2. avoid duplicating rules already enforced more reliably in policy/tools;
-3. keep evidence requirements explicit;
-4. keep prohibited shortcuts explicit;
-5. add/update deterministic tests or adversarial evaluation when the behavioral contract changes;
-6. do not modify predefined safety thresholds merely because new Skill behavior performs poorly.
+- preserve deterministic authority boundaries;
+- avoid duplicating controls enforced more reliably in code;
+- keep evidence prerequisites explicit;
+- keep prohibited shortcuts explicit;
+- add deterministic/adversarial coverage when behavior changes;
+- preserve predefined hard-safety expectations.
 
-See [`ARCHITECTURE.md`](ARCHITECTURE.md), [`EVALUATION.md`](EVALUATION.md), [`SECURITY.md`](SECURITY.md), and [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md).
+> [!TIP]
+> The best Skill is not the one that sounds smartest. It is the one that makes the model's reasoning useful **without requiring the model to be trusted as the control plane**.
+
+---
+
+## Related documentation
+
+- [Architecture](ARCHITECTURE.md)
+- [Evaluation](EVALUATION.md)
+- [Runtime result contract](RESULT_CONTRACT.md)
+- [Security architecture](SECURITY.md)
+- [Threat model](THREAT_MODEL.md)
+
+---
+
+[← Documentation home](README.md) · [MCP policy →](MCP.md)
 
 Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).

@@ -1,25 +1,34 @@
 # Setup and Configuration
 
-> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
+> [!IMPORTANT]
+> Setup is part of the trust model. The **control plane**, **target workspace**, **artifact storage**, **credentials**, **provider sessions**, and **deployment infrastructure** should remain separate concerns rather than one ambient environment.
 
-This guide separates repository-contained use of the ƳƤ AI QA Automation Framework from credentialed and target-environment operation. Each mode keeps its evidence source explicit.
+**ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
-## 1. Choose the operating mode
+[Documentation home](README.md) · [Operations](OPERATIONS.md) · [Security](SECURITY.md) · [Verification boundaries](VERIFICATION_BOUNDARIES.md)
 
-| Mode | What it is for | Credentials required |
+---
+
+## Operating modes
+
+| Mode | Purpose | Credentials / infrastructure |
 |---|---|---|
-| Deterministic local tooling | CLI inspection, local demo, unit/integration/policy tests, primary evaluations, static security checks | None |
-| Holdout readiness gate | Separate H-series deterministic evaluation | None |
-| Live Claude agent | One bounded Claude Agent SDK session against an isolated target worktree | `ANTHROPIC_API_KEY` |
-| GitHub MCP | Optional read-only GitHub context through the vendor-official MCP server | GitHub token + Docker |
-| Atlassian MCP | Optional Jira/Confluence context through Atlassian Rovo MCP | Atlassian-supported authentication |
-| External browser/load/mobile targets | Target-specific application, load, and device validation | Target-specific environment/infrastructure |
+| **Deterministic local tooling** | CLI inspection, demo, repository tests/evaluations/security tooling | none |
+| **H-series holdout** | independent deterministic adversarial corpus | none |
+| **Live Claude agent** | bounded Agent SDK session against isolated target worktree | Anthropic credential |
+| **GitHub MCP** | optional vendor-official repository context | GitHub credential + Docker |
+| **Atlassian MCP** | optional Jira/Confluence context | Atlassian-supported auth/session |
+| **Browser / API / load / mobile** | target-specific validation | approved target environment/infrastructure |
 
-Repository-contained, credentialed-provider, and target-environment evidence are intentionally distinct.
+Each mode has its own evidence source. Local configuration does not stand in for provider or target observations.
 
-## 2. Install the repository
+---
 
-Python 3.11 or newer is required by the framework.
+## Install
+
+Python **3.11+** is required.
+
+### macOS / Linux
 
 ```bash
 python -m venv .venv
@@ -28,166 +37,297 @@ python -m pip install --upgrade pip
 python -m pip install -e '.[dev]'
 ```
 
-On Windows PowerShell, activate the virtual environment with the corresponding `.venv\Scripts\Activate.ps1` command.
+### Windows PowerShell
 
-The `dev` extra installs repository-contained quality, evaluation, browser-reference, and security tooling. System executables such as Docker, k6, and mobile runtimes are installed separately by the operating environment.
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e '.[dev]'
+```
 
-## 3. Inspect local capability without contacting external services
+The `dev` extra installs repository-contained Python tooling. Docker, k6, browser executables, Appium drivers, emulators, and devices remain runtime/deployment components.
+
+---
+
+## Inspect the local environment
 
 ```bash
 ai-qa doctor
 ```
 
-`doctor` reports locally observable packages, executables, browser runtime, Appium runtime visibility, and trusted-control-root markers. It does not treat a local package or variable as proof of remote authentication.
+`doctor` inspects locally observable packages, executables, trusted-root markers, browser/Appium visibility, and configuration posture. It does **not** translate package presence or a credential-shaped environment variable into provider availability.
 
-A deterministic demonstration that does not require Claude is available with:
+A credential-free deterministic demonstration is available with:
 
 ```bash
 ai-qa demo
 ```
 
-## 4. Environment configuration is explicit
+---
 
-`.env.example` is a **reference template**, not an automatically loaded runtime configuration file. `Settings` deliberately uses `env_file=None`; export variables in the shell/runner or inject them with an approved secret-management mechanism.
+## Configuration source
 
-Never commit a populated `.env`, API key, access token, customer credential, or production artifact.
+`.env.example` is reference documentation only. Runtime settings use `env_file=None`; the framework does not silently load a repository `.env` into trusted authority.
 
-### Core configuration
+Inject configuration through:
 
-| Variable | Default | Purpose / when needed |
+- the shell;
+- CI/runner secret storage;
+- container/orchestrator secret mechanisms; or
+- another approved secret manager.
+
+> [!CAUTION]
+> Never commit populated `.env` files, model/provider credentials, customer credentials, production data, or sensitive run artifacts.
+
+---
+
+## Core configuration
+
+| Variable | Default | Purpose |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | unset | Used for live Claude-backed execution through the Anthropic runtime/SDK environment |
-| `AI_QA_MODEL` | `claude-sonnet-5` | Claude model identifier used by the live agent |
-| `AI_QA_CONTROL_ROOT` | current working directory | Trusted ƳƤ framework repository root containing `CLAUDE.md` and `.claude/settings.json` |
-| `AI_QA_ARTIFACT_ROOT` | `<control-root>/artifacts` | Trusted location for state, evidence, journal, rollback snapshots, and run artifacts |
-| `AI_QA_BASE_REF` | unset | Optional trusted Git baseline such as `origin/main`; resolved to immutable baseline/merge-base SHAs during bootstrap |
-| `AI_QA_REGULATED_MODE` | `false` | Enables additional hash-chained audit records and regulated artifact classification |
+| `ANTHROPIC_API_KEY` | unset | live Claude Agent SDK authentication |
+| `AI_QA_MODEL` | `claude-sonnet-5` | live agent model identifier |
+| `AI_QA_CONTROL_ROOT` | current working directory | trusted framework root containing `CLAUDE.md` + `.claude/settings.json` |
+| `AI_QA_ARTIFACT_ROOT` | `<control-root>/artifacts` | trusted state/evidence/journal/rollback/artifact root |
+| `AI_QA_BASE_REF` | unset | explicit Git comparison baseline, e.g. `origin/main` |
+| `AI_QA_REGULATED_MODE` | `false` | additional audit chaining / retention classification |
 
-### Runtime safety configuration
+### Safety configuration
 
-| Variable | Default | Meaning |
+| Variable | Default | Security meaning |
 |---|---|---|
-| `AI_QA_ALLOW_EXTERNAL_NETWORK` | `false` | Keeps non-local external target access disabled unless explicitly enabled |
-| `AI_QA_ALLOWED_NETWORK_HOSTS` | `["127.0.0.1","localhost"]` | Explicit host allowlist used by network-capable QA adapters |
-| `AI_QA_ALLOW_TEST_WRITES` | `false` | Enables policy-eligible autonomous writes only inside approved test directories |
-| `AI_QA_ALLOW_MUTATING_API_METHODS` | `false` | Enables policy-eligible mutating API methods; read methods remain the default |
-| `AI_QA_K6_EXTERNAL_EGRESS_ENFORCED` | `false` | Trusted assertion used with application controls before non-local k6 execution |
+| `AI_QA_ALLOW_EXTERNAL_NETWORK` | `false` | non-local target access disabled until explicitly enabled |
+| `AI_QA_ALLOWED_NETWORK_HOSTS` | `["127.0.0.1","localhost"]` | canonical exact host/IP allowlist |
+| `AI_QA_ALLOW_TEST_WRITES` | `false` | enables only policy-eligible live autonomous Python test writes |
+| `AI_QA_ALLOW_MUTATING_API_METHODS` | `false` | enables policy-eligible API mutation; read-only remains default |
+| `AI_QA_K6_EXTERNAL_EGRESS_ENFORCED` | `false` | asserts deployment-level egress containment for k6; required for every k6 run |
 
-### Independent execution budgets
+---
+
+## Network allowlist syntax
+
+`AI_QA_ALLOWED_NETWORK_HOSTS` is a JSON list of **hostnames or IP literals**—never URLs.
+
+```bash
+export AI_QA_ALLOWED_NETWORK_HOSTS='["localhost","127.0.0.1","qa.example.test","::1"]'
+```
+
+Rejected examples include:
+
+```text
+*
+*.example.test
+https://qa.example.test
+qa.example.test:443
+user@qa.example.test
+qa.example.test/path
+fe80::1%eth0
+999.2.3.4
+```
+
+The parser also rejects URL/query/fragment ambiguity, malformed DNS labels, scoped IPv6 zone identifiers, and malformed dotted IPv4-looking values.
+
+A target **URL** belongs to the individual API/browser/k6 operation. The trusted allowlist contains only the network identity policy may authorize.
+
+---
+
+## Independent execution budgets
 
 | Variable | Default | Bound |
 |---|---:|---|
 | `AI_QA_MAX_TURNS` | 12 | Agent SDK turns |
-| `AI_QA_MAX_TOOL_CALLS` | 30 | Total controlled tool attempts |
-| `AI_QA_MAX_NETWORK_CALLS` | 12 | Network-capable tool attempts |
-| `AI_QA_MAX_MUTATIONS` | 3 | Autonomous mutation attempts |
-| `AI_QA_MAX_REPEATED_ACTION` | 3 | Repetition of the same action/input pattern |
-| `AI_QA_TOOL_TIMEOUT_SECONDS` | 120 | Individual bounded test/tool execution |
-| `AI_QA_GLOBAL_TIMEOUT_SECONDS` | 600 | Overall wall-clock runtime |
+| `AI_QA_MAX_TOOL_CALLS` | 30 | controlled tool attempts |
+| `AI_QA_MAX_NETWORK_CALLS` | 12 | network-capable attempts |
+| `AI_QA_MAX_MUTATIONS` | 3 | autonomous mutation attempts |
+| `AI_QA_MAX_REPEATED_ACTION` | 3 | identical action/input repetition |
+| `AI_QA_TOOL_TIMEOUT_SECONDS` | 120 | bounded adapter execution |
+| `AI_QA_GLOBAL_TIMEOUT_SECONDS` | 600 | whole-run wall time |
 | `AI_QA_MAX_COST_USD` | 5.0 | Agent SDK model-cost ceiling |
 
-These limits are deliberately separate. Raising one dimension does not silently raise the others.
+These dimensions are intentionally independent. Increasing one does not widen another.
 
-## 5. Trusted control root and target worktree must be disjoint
+---
 
-The live agent rejects a target workspace that is the control root, contains the control root, or is contained by it. Runtime evidence/artifacts must also remain outside the target workspace.
+## Trust-root layout
 
-A typical layout is:
+Recommended layout:
 
 ```text
-/work/ai-qa-automation/        # trusted control plane
-/work/target-app-agent-run/    # isolated Git-backed SUT worktree
+/work/ai-qa-automation/          # trusted framework / control plane
+/work/ai-qa-artifacts/           # trusted evidence + process records
+/work/target-app-agent-run/      # isolated Git-backed SUT worktree
 ```
 
-Target `CLAUDE.md`, `.claude/`, `.mcp.json`, source comments, tests, logs, DOM, and API content are treated as untrusted evidence and never accepted as runtime authority.
+The live agent rejects overlapping control/target or artifact/target roots.
 
-## 6. Live Claude Agent SDK configuration
+Target `CLAUDE.md`, `.claude/`, `.mcp.json`, source comments, tests, logs, DOM, and API content remain untrusted evidence even when they resemble framework instructions.
+
+---
+
+## Live Claude Agent SDK session
 
 ```bash
 export ANTHROPIC_API_KEY='...'
 export AI_QA_CONTROL_ROOT='/work/ai-qa-automation'
+export AI_QA_ARTIFACT_ROOT='/work/ai-qa-artifacts'
+export AI_QA_BASE_REF='origin/main'
 
 ai-qa agent \
-  --control-root /work/ai-qa-automation \
+  --control-root "$AI_QA_CONTROL_ROOT" \
   --workspace /work/target-app-agent-run \
   'Investigate the failing checkout test. Do not modify tests unless evidence proves a test defect.'
 ```
 
-A successful model response is not a successful QA result. Verified success is derived from the applicable deterministic validation lineage; otherwise the runtime returns the corresponding non-PASS outcome.
+A successful model response does not directly become terminal `SUCCESS`; [`RESULT_CONTRACT.md`](RESULT_CONTRACT.md) governs runtime truth.
 
-## 7. Optional GitHub MCP
+---
 
-The framework configures the vendor-official `github/github-mcp-server` container and keeps it read-only at the server layer.
+## Optional GitHub MCP
 
-Prerequisites for the local integration shape:
+The framework uses the vendor-official GitHub MCP path and adds server-side read-only mode as defense in depth.
+
+Prerequisites:
 
 - Docker available to the control process;
-- `GITHUB_PERSONAL_ACCESS_TOKEN` supplied through the environment;
+- `GITHUB_PERSONAL_ACCESS_TOKEN` injected through the environment;
 - `AI_QA_ENABLE_GITHUB_MCP=true`;
-- a least-privilege token scoped only to the repositories/resources the intended read operations need.
+- least-privilege provider permissions appropriate to intended reads.
 
 ```bash
 export GITHUB_PERSONAL_ACCESS_TOKEN='...'
 export AI_QA_ENABLE_GITHUB_MCP=true
 ```
 
-The runtime records GitHub as `AVAILABLE` only after an observed successful MCP tool call. Authentication, authorization, rate limiting, transport failure, and invalid responses remain explicit health states.
+Provider configuration and action authority remain separate. `AVAILABLE` requires an observed successful provider interaction.
 
-The framework does not hard-code broad token scopes because the minimum permission set depends on the repositories and read operations an operator authorizes.
+---
 
-## 8. Optional Atlassian Rovo MCP
-
-Enable the vendor-official Atlassian endpoint with:
+## Optional Atlassian Rovo MCP
 
 ```bash
 export AI_QA_ENABLE_ATLASSIAN_MCP=true
 ```
 
-The runtime uses Atlassian's supported MCP authentication path rather than storing Atlassian credentials in this repository. Interactive OAuth is the normal operator path; non-interactive/service credential options remain organization-admin and deployment decisions.
+The framework uses Atlassian's supported MCP path and does not persist Atlassian credentials in repository configuration. Authentication/session establishment follows the approved Atlassian/organization mechanism.
 
-Jira/Confluence content remains untrusted evidence and cannot alter the control plane.
+Jira/Confluence content remains untrusted evidence.
 
-## 9. Repository-contained verification commands
+---
+
+## Target API / browser access
+
+A non-local target requires both:
+
+1. explicit external-network enablement; and
+2. the target hostname in the canonical allowlist.
+
+```bash
+export AI_QA_ALLOW_EXTERNAL_NETWORK=true
+export AI_QA_ALLOWED_NETWORK_HOSTS='["qa.checkout.example"]'
+```
+
+API mutation remains independently disabled unless `AI_QA_ALLOW_MUTATING_API_METHODS=true` is deliberately set.
+
+---
+
+## Autonomous test writes
+
+```bash
+export AI_QA_ALLOW_TEST_WRITES=true
+```
+
+That flag does **not** authorize arbitrary filesystem mutation. Live autonomous commit still requires:
+
+- an approved Python path under `tests/` or `generated_tests/`;
+- a Git-backed isolated workspace;
+- a matching workspace fingerprint;
+- non-traversing, non-symlink path ownership;
+- no unresolved transaction;
+- patch-safety PASS;
+- targeted pytest PASS bound to the exact changed path; and
+- full-regression PASS at the same revision.
+
+Reusable patch/generation components may understand other syntaxes without widening this live authority boundary.
+
+---
+
+## Controlled k6 execution
+
+Every k6 run requires deployment-level egress containment to be independently established:
+
+```bash
+export AI_QA_K6_EXTERNAL_EGRESS_ENFORCED=true
+```
+
+> [!WARNING]
+> This variable is a trusted prerequisite assertion. It does not create a firewall. The operating environment must actually enforce outbound network policy.
+
+The k6 target must additionally satisfy:
+
+- exact host allowlisting;
+- recognized non-production environment classification;
+- production-like hostname denial;
+- injected target binding;
+- script/import restrictions; and
+- predefined threshold assessment.
+
+The egress prerequisite applies to localhost targets too because JavaScript can construct destinations dynamically.
+
+---
+
+## Repository command surface
 
 ```bash
 make quality
 make test
 make eval
 make security
-```
-
-For convenience, the routine repository-contained set is:
-
-```bash
 make verify-local
-```
-
-The H-series is intentionally excluded from `verify-local` so routine development does not consume the holdout corpus:
-
-```bash
 make holdout
 ```
 
-## 10. GitHub Actions secrets and manual execution
+The H-series holdout is separate from the routine aggregate so its independent evaluation role remains clear.
 
-`.github/workflows/ci.yml` is intentionally `workflow_dispatch`-only. The live model job is opt-in and defaults off.
+---
 
-`ANTHROPIC_API_KEY` is used as a GitHub repository secret only when `run_model=true`. Deterministic quality, evaluation, security, and browser-reference jobs do not need that secret.
+## GitHub Actions configuration
 
-Do not place API keys directly in workflow YAML, repository variables intended for non-secret data, committed `.env` files, test fixtures, logs, or artifacts.
+`.github/workflows/ci.yml` is operator-dispatched through `workflow_dispatch`.
 
-## 11. Environment-owned evidence
+Its optional live-model path consumes the GitHub `ANTHROPIC_API_KEY` secret only when deliberately selected. Deterministic repository jobs do not require that provider secret.
 
-The following evidence is produced by the corresponding operating environment rather than inferred from repository configuration:
+Never place credentials directly in workflow YAML, non-secret repository variables, committed fixtures, logs, or artifacts.
 
-- Anthropic request/response behavior;
-- authenticated GitHub MCP behavior;
-- authenticated Atlassian Rovo MCP behavior;
-- Playwright against an external application;
-- k6 against an approved workload with infrastructure egress enforcement;
-- Appium against an application plus device/emulator/device cloud;
-- organization secret management, identity, retention, compliance, container isolation, and network policy.
+---
 
-See [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md) and [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) for the evidence model.
+## Environment-owned evidence
+
+The operating environment owns observations such as:
+
+- live Anthropic provider behavior;
+- authenticated GitHub/Atlassian behavior;
+- external application browser/API behavior;
+- approved k6 workload behavior and egress enforcement;
+- Appium app/device/emulator/cloud behavior;
+- process/container isolation;
+- firewall/proxy policy;
+- organization identity, secret management, retention, and compliance controls.
+
+See [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md) and [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md).
+
+---
+
+## Related documentation
+
+- [Architecture](ARCHITECTURE.md)
+- [Operations](OPERATIONS.md)
+- [Security architecture](SECURITY.md)
+- [Runtime result contract](RESULT_CONTRACT.md)
+- [Troubleshooting](TROUBLESHOOTING.md)
+
+---
+
+[← Documentation home](README.md) · [Operations →](OPERATIONS.md)
 
 Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).

@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from ai_qa_automation.config import Settings
+from ai_qa_automation.config import Settings, canonicalize_network_host
 
 
 def test_runtime_budget_settings_are_independently_configurable(
@@ -34,6 +34,46 @@ def test_safe_capability_defaults_are_fail_closed(tmp_path: Path) -> None:
     assert settings.enable_github_mcp is False
     assert settings.enable_atlassian_mcp is False
     assert settings.allowed_network_hosts == ["127.0.0.1", "localhost"]
+
+
+def test_network_hosts_are_canonicalized_and_deduplicated(tmp_path: Path) -> None:
+    settings = Settings(
+        control_root=tmp_path,
+        allowed_network_hosts=[" QA.Example.Test. ", "qa.example.test", "[::1]", "127.0.0.1"],
+    )
+    assert settings.allowed_network_hosts == ["qa.example.test", "::1", "127.0.0.1"]
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "",
+        "*",
+        "*.example.test",
+        "https://example.test",
+        "example.test:443",
+        "user@example.test",
+        "example.test/path",
+        "example.test?x=1",
+        "example.test#fragment",
+        "bad_label.example.test",
+        "-bad.example.test",
+        "fe80::1%eth0",
+        "[fe80::1%eth0]",
+        "[127.0.0.1]",
+        "[example.test]",
+        "999.999.999.999",
+    ],
+)
+def test_network_allowlist_rejects_ambiguous_or_non_host_entries(
+    tmp_path: Path, host: str
+) -> None:
+    with pytest.raises(ValidationError):
+        Settings(control_root=tmp_path, allowed_network_hosts=[host])
+
+
+def test_network_host_canonicalizer_supports_idna() -> None:
+    assert canonicalize_network_host("BÜCHER.example") == "xn--bcher-kva.example"
 
 
 def test_artifact_root_defaults_to_trusted_control_root(tmp_path: Path) -> None:

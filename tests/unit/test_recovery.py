@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from ai_qa_automation.models import (
     AgentRunState,
     TerminalStatus,
@@ -29,6 +31,40 @@ def base_state(workspace: Path, **updates: object) -> AgentRunState:
     return state.model_copy(update=updates)
 
 
+def closed_revision_validations(path: str = "tests/test_x.py") -> list[ValidationResult]:
+    return [
+        ValidationResult(
+            name="test_patch_safety",
+            gate_id=f"test_patch_safety:{path}",
+            revision=1,
+            status=ValidationStatus.PASS,
+            summary="safe",
+            details={"path": path, "scope": "static_patch_safety"},
+        ),
+        ValidationResult(
+            name="pytest",
+            gate_id="targeted",
+            revision=1,
+            status=ValidationStatus.PASS,
+            summary="targeted pass",
+            details={
+                "scope": "targeted",
+                "args": [path],
+                "mutation_target": path,
+                "mutation_target_bound": True,
+            },
+        ),
+        ValidationResult(
+            name="pytest",
+            gate_id="regression",
+            revision=1,
+            status=ValidationStatus.PASS,
+            summary="regression pass",
+            details={"scope": "regression", "args": []},
+        ),
+    ]
+
+
 def test_revision_zero_is_safe_to_start_new_session_from_persisted_state(tmp_path: Path) -> None:
     run_dir = tmp_path / "run-1"
     workspace = tmp_path / "sut"
@@ -46,38 +82,19 @@ def test_revision_zero_is_safe_to_start_new_session_from_persisted_state(tmp_pat
     assert "does not replay or continue" in result["note"]
 
 
-def test_changed_revision_requires_patch_targeted_and_regression_passes(tmp_path: Path) -> None:
+def test_changed_revision_requires_exact_bound_targeted_and_regression_passes(
+    tmp_path: Path,
+) -> None:
     run_dir = tmp_path / "run-1"
     workspace = tmp_path / "sut"
     workspace.mkdir()
-    validations = [
-        ValidationResult(
-            name="test_patch_safety",
-            gate_id="patch",
-            revision=1,
-            status=ValidationStatus.PASS,
-            summary="safe",
-        ),
-        ValidationResult(
-            name="pytest",
-            gate_id="targeted",
-            revision=1,
-            status=ValidationStatus.PASS,
-            summary="targeted pass",
-            details={"scope": "targeted"},
-        ),
-        ValidationResult(
-            name="pytest",
-            gate_id="regression",
-            revision=1,
-            status=ValidationStatus.PASS,
-            summary="regression pass",
-            details={"scope": "regression"},
-        ),
-    ]
     save_state(
         run_dir,
-        base_state(workspace, change_revision=1, validation_results=validations),
+        base_state(
+            workspace,
+            change_revision=1,
+            validation_results=closed_revision_validations(),
+        ),
     )
     RunJournal(run_dir / "journal.jsonl").append("validation_closed")
 
@@ -88,35 +105,45 @@ def test_changed_revision_requires_patch_targeted_and_regression_passes(tmp_path
     assert result["resume_policy"] == "safe-to-start-a-new-agent-session-from-persisted-evidence"
 
 
+def test_unbound_targeted_validation_is_not_recovery_closed(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-1"
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+    validations = closed_revision_validations()
+    validations[1] = validations[1].model_copy(
+        update={
+            "details": {
+                "scope": "targeted",
+                "args": ["tests/test_other.py"],
+                "mutation_target": "tests/test_x.py",
+                "mutation_target_bound": False,
+            }
+        }
+    )
+    save_state(
+        run_dir,
+        base_state(workspace, change_revision=1, validation_results=validations),
+    )
+    RunJournal(run_dir / "journal.jsonl").append("validation_incomplete")
+
+    result = inspect_recovery(run_dir)
+
+    assert result["recoverable"] is True
+    assert result["revision_closed"] is False
+    assert result["resume_policy"] == "manual-review-required-before-new-session"
+
+
 def test_pending_mutation_forces_manual_review_even_when_gates_pass(tmp_path: Path) -> None:
     run_dir = tmp_path / "run-1"
     workspace = tmp_path / "sut"
     workspace.mkdir()
-    validations = [
-        ValidationResult(
-            name="test_patch_safety",
-            revision=1,
-            status=ValidationStatus.PASS,
-            summary="safe",
-        ),
-        ValidationResult(
-            name="pytest",
-            revision=1,
-            status=ValidationStatus.PASS,
-            summary="targeted pass",
-            details={"scope": "targeted"},
-        ),
-        ValidationResult(
-            name="pytest",
-            revision=1,
-            status=ValidationStatus.PASS,
-            summary="regression pass",
-            details={"scope": "regression"},
-        ),
-    ]
     save_state(
         run_dir,
-        base_state(workspace, change_revision=1, validation_results=validations),
+        base_state(
+            workspace,
+            change_revision=1,
+            validation_results=closed_revision_validations(),
+        ),
     )
     RunJournal(run_dir / "journal.jsonl").append("mutation_prepared")
     (run_dir / "runtime.json").write_text(
@@ -149,3 +176,21 @@ def test_corrupt_journal_is_not_recoverable(tmp_path: Path) -> None:
 
     assert result["recoverable"] is False
     assert result["reason"].startswith("journal could not be verified:")
+
+
+def test_recovery_rejects_symlinked_state_control_file(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-1"
+    run_dir.mkdir()
+    outside = tmp_path / "outside-state.json"
+    outside.write_text("{}", encoding="utf-8")
+    state_path = run_dir / "state.json"
+    try:
+        state_path.symlink_to(outside)
+    except OSError as exc:  # pragma: no cover - platform/filesystem capability
+        pytest.skip(f"symlink creation unavailable: {exc}")
+
+    result = inspect_recovery(run_dir)
+
+    assert result["recoverable"] is False
+    assert "state.json" in result["reason"]
+    assert "symlink" in result["reason"]

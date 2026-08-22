@@ -9,7 +9,11 @@ from uuid import uuid4
 from ..evidence import EvidenceStore
 from ..models import EvidenceItem, EvidenceKind, LocatorCandidate, SanitizationStatus
 from ..redaction import redact_text
-from .locators import LocatorSpec, parse_locator_expression
+from .locators import (
+    LocatorSpec,
+    deterministic_locator_semantic_score,
+    parse_locator_expression,
+)
 
 
 class BrowserProbeExecutionError(RuntimeError):
@@ -108,7 +112,9 @@ class BrowserProbe:
                 async def guard_websocket(websocket: Any) -> None:
                     websocket_url = websocket.url
                     if self._url_allowed(websocket_url):
-                        await websocket.connect()
+                        # connect_to_server is the stable WebSocketRoute API available
+                        # throughout the framework's supported Playwright range.
+                        websocket.connect_to_server()
                     else:
                         failed_requests.append(
                             f"BLOCKED WEBSOCKET {redact_text(websocket_url)}"
@@ -243,11 +249,11 @@ class BrowserProbe:
         original_locator: str,
         candidates: list[LocatorCandidate],
     ) -> tuple[list[LocatorCandidate], str]:
-        """Deterministically measure candidate uniqueness in the live DOM.
+        """Measure uniqueness and deterministic semantic overlap in the live DOM.
 
-        Candidate semantic scores may originate from model reasoning, but match
-        counts and supported locator syntax are computed here and cannot be
-        supplied as authoritative input by the model.
+        Model-supplied uniqueness and semantic confidence are never authoritative:
+        match counts are observed with Playwright and semantic overlap is recomputed
+        from the supported literal locator contracts.
         """
         if len(candidates) > 20:
             raise ValueError("at most 20 locator candidates may be verified per call")
@@ -278,11 +284,13 @@ class BrowserProbe:
                     spec = parse_locator_expression(candidate.locator)
                     rejected = candidate.rejected_reason
                     count = 0
+                    semantic_match = 0.0
                     if spec is None:
                         rejected = rejected or "unsupported/non-literal locator expression"
                     elif candidate.strategy != spec.strategy:
                         rejected = rejected or "declared locator strategy does not match expression"
                     else:
+                        semantic_match = deterministic_locator_semantic_score(original_spec, spec)
                         try:
                             count = int(await self._page_locator(page, spec).count())
                         except Exception as exc:
@@ -291,6 +299,7 @@ class BrowserProbe:
                         candidate.model_copy(
                             update={
                                 "uniqueness_count": count,
+                                "semantic_match": semantic_match,
                                 "rejected_reason": rejected,
                             }
                         )
@@ -352,6 +361,7 @@ class BrowserProbe:
                 "locator": item.locator,
                 "strategy": item.strategy,
                 "uniqueness_count": item.uniqueness_count,
+                "semantic_match": item.semantic_match,
                 "rejected_reason": item.rejected_reason,
             }
             for item in verified
@@ -362,7 +372,7 @@ class BrowserProbe:
                 kind=EvidenceKind.SOURCE_OBSERVATION,
                 source="playwright_locator_verification",
                 source_identifier=safe_url,
-                summary="Playwright measured locator candidate uniqueness",
+                summary="Playwright measured locator uniqueness and deterministic semantic overlap",
                 structured_data={
                     "original_locator": original_locator,
                     "original_strategy": original_spec.strategy,

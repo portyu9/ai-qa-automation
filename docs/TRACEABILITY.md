@@ -1,30 +1,32 @@
 # Traceability and Run Attestation
 
-> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
+> [!IMPORTANT]
+> Traceability answers two different questions: **which evidence/validations support the QA outcome?** and **are the persisted records internally intact?** Those questions are related, but never interchangeable.
 
-The ƳƤ AI QA Automation Framework persists enough structured information to inspect **why** a run reached a conclusion without relying on chat history or treating model prose as the audit record.
+**ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
-Traceability is designed around a simple question:
+[Documentation home](README.md) · [Result contract](RESULT_CONTRACT.md) · [Runtime control](RUNTIME_CONTROL.md) · [Verification boundaries](VERIFICATION_BOUNDARIES.md)
 
-> **Which observed evidence and deterministic validations support this run outcome, and can the persisted records be checked for internal integrity?**
+---
 
-## Persisted lineage
+## Why traceability exists
+
+The framework persists enough structured information to reconstruct **why** a run reached a conclusion without depending on chat history or treating model prose as the audit record.
 
 ```mermaid
 flowchart LR
-    R[Run / AgentRunState]
+    R[AgentRunState]
     E[Observed evidence]
-    A[Artifacts + content hashes]
-    H[Model hypotheses / interpretations]
-    V[Deterministic validation gates]
-    J[Runtime journal events]
-    T[Structured terminal report]
+    A[Registered artifacts + hashes]
+    H[Model hypotheses]
+    V[Validation gates]
+    J[Runtime journal]
+    T[Terminal report]
     I[Unsigned integrity attestation]
 
     R --> E
     R --> H
     R --> V
-    R --> J
     E --> A
     E --> H
     E --> V
@@ -32,17 +34,48 @@ flowchart LR
     V --> T
     R --> T
     J --> T
-
     R --> I
-    E --> I
     A --> I
     J --> I
-
-    classDef observed stroke-width:2px;
-    class E,A,V,J observed;
 ```
 
-The important boundary is semantic, not visual: a hypothesis can reference evidence, but it does not become observed evidence merely because the model stated it confidently.
+A hypothesis may reference observed evidence. It does not become an observed fact because the model repeats it or assigns high confidence.
+
+---
+
+## Evidence identity and confinement
+
+`EvidenceStore` protects the record structurally:
+
+- run roots remain beneath trusted artifact storage;
+- absolute/traversal/symlink run paths are rejected;
+- artifact paths remain under the run root;
+- symlink artifact escapes are rejected;
+- evidence IDs are immutable;
+- artifact IDs/paths are immutable;
+- reopened manifests reject duplicate identities;
+- supported text persistence paths are sanitized;
+- binary screenshots remain explicitly `RAW`.
+
+In regulated verification, a registered artifact that has been replaced by a symlink is rejected even if the symlink resolves to bytes with the expected hash. Ownership and bytes are distinct integrity properties.
+
+---
+
+## Evidence manifest
+
+`evidence-manifest.json` records run-scoped evidence/artifact metadata such as:
+
+- source and source identifier;
+- evidence nature;
+- sanitization treatment;
+- content hash;
+- artifact reference;
+- originating tool;
+- retention classification where applicable.
+
+The distinction between `OBSERVED_FACT` and `MODEL_INTERPRETATION` remains visible in persisted state.
+
+---
 
 ## Lineage graph
 
@@ -51,72 +84,158 @@ ai-qa lineage artifacts/run-<id>
 ai-qa lineage artifacts/run-<id> --format dot
 ```
 
-The graph can connect:
+Lineage can connect:
 
-- the run/state root;
-- observed evidence;
+- run/state root;
+- evidence records;
 - registered artifacts;
 - hypotheses/interpretations;
 - validation gates and their evidence references;
-- bounded runtime-journal events.
+- bounded runtime journal events.
 
-Validation-to-evidence references are checked while the graph is built. If a validation names evidence that cannot be found in the run manifest, the lineage builder surfaces that gap rather than silently drawing a complete-looking graph.
+Validation references are checked during graph construction. Missing referenced evidence is surfaced instead of being rendered as a falsely complete lineage.
 
-The DOT export is intended for Graphviz, debugging, review, or downstream visualization. Exporting a graph does not mutate the run or change its terminal outcome.
+DOT export is observational; it does not mutate the run or change terminal truth.
 
-## Evidence and artifact integrity
+---
 
-Artifacts are registered with content hashes and run-scoped metadata. Run directories are confined beneath the trusted artifact root; artifact paths are confined beneath the run root; duplicate evidence IDs/artifact paths do not overwrite an existing record. Text evidence that may reach the model is sanitized according to the evidence path; binary artifacts such as screenshots remain explicitly `RAW` and are not falsely described as sanitized text.
+## Operational journal
 
-`journal.jsonl` uses sequence numbers plus previous/current record hashes to make record reordering, removal, or modification detectable during verification. Hash chaining improves tamper evidence; it does not create an external identity or trusted timestamp by itself.
+`journal.jsonl` uses:
 
-## Content-addressed attestation
+- monotonic event sequence;
+- previous-record hash linkage;
+- current-record SHA-256;
+- bounded event count;
+- append-oriented semantics;
+- explicit rejection of symlink journal-file ownership.
+
+Verification can detect record modification/reordering/removal under the implemented model.
+
+> [!NOTE]
+> Hash chaining is tamper evidence within the persisted record model. It is not an external signature or trusted timestamp.
+
+---
+
+## Optional regulated audit chain
+
+With regulated mode enabled, evidence/artifact registration can add a separate hash-chained audit record and regulated retention classification.
+
+Regulated-mode reopening additionally verifies registered artifact bytes and ownership against the manifest.
+
+This is engineering traceability; it does not certify a regulatory regime by itself.
+
+---
+
+## Content-addressed run attestation
 
 ```bash
 ai-qa attest artifacts/run-<id>
 ```
 
-The attestation inspects persisted subjects including:
+The attestation is deliberately **unsigned** and does not alter the QA outcome.
+
+### Core persisted subjects
+
+The attestation inspects subjects such as:
 
 - `state.json`;
 - `evidence-manifest.json`;
 - `runtime.json`;
-- `journal.jsonl` when present.
+- `journal.jsonl`.
 
-It hashes those subjects, verifies the operational journal when possible, records target/configuration/model/SDK provenance available in state, and reports whether a mutation is still pending.
+### `integrity_verified` requirements
 
-The resulting `attestation_digest` is deliberately **unsigned**. It makes the inspected statement content-addressable, but the repository does not present a SHA-256 digest as:
+The integrity flag requires all applicable checks to succeed:
 
-- an organizational signature;
-- proof of actor identity;
-- a compliance certification;
-- a trusted timestamp; or
-- evidence that tests passed.
+1. core persisted subjects are owned regular files rather than symlink substitutions;
+2. the operational journal verifies;
+3. no mutation transaction remains pending;
+4. the manifest can be interpreted structurally; and
+5. every registered artifact exists as an owned regular file whose bytes match its recorded SHA-256.
 
-A deployment that requires trusted identity can wrap the attestation in an external signing mechanism, but that trust anchor is outside this repository.
+The attestation also carries available target/model/SDK/policy/tool-schema/configuration provenance and a content-addressed digest of the attestation core.
 
-## Why terminal outcome remains separate
+### Explicit non-claims
 
-Traceability answers “what records support this conclusion?” It does not override the validation rules that produce the conclusion.
+It is **not** presented as:
 
-A perfectly intact journal can describe a failed or `NOT_VERIFIED` run. Likewise, a complete lineage graph can show that required validation evidence is missing. Integrity and correctness are related controls, not interchangeable claims.
+- organization/actor signature;
+- identity proof;
+- compliance certificate;
+- notarization;
+- trusted timestamp;
+- provider-authentication proof;
+- target-environment proof;
+- test PASS.
+
+A deployment requiring non-repudiation can wrap the content in an approved external signing/timestamping mechanism.
+
+---
+
+## Revision and validation lineage
+
+Traceability preserves gate identity and `change_revision` so reviewers can distinguish:
+
+- baseline evidence;
+- historical failed gates;
+- newer mutation revisions;
+- patch-safety validation;
+- targeted pytest;
+- full-regression pytest;
+- terminal outcome derived from active lineage.
+
+For live autonomous mutation, subject binding is explicit: the current patch-safety record identifies the changed path, and the targeted pytest record must show that same path was selected. An unrelated targeted test cannot close the revision.
+
+See [`RESULT_CONTRACT.md`](RESULT_CONTRACT.md).
+
+---
+
+## State separation
+
+| Record | Question answered |
+|---|---|
+| `state.json` | What QA evidence, hypotheses, validations, revision, provenance, and terminal outcome exist? |
+| `runtime.json` | What process-control state exists: lease, fingerprint, budgets, circuits, pending mutation, journal head? |
+| `journal.jsonl` | What bounded runtime events occurred, and in what hash-linked order? |
+| `evidence-manifest.json` | Which evidence/artifact identities and hashes belong to the run? |
+
+A process checkpoint does not become a QA conclusion by proximity.
+
+---
 
 ## Review workflow
 
-A reviewer investigating a persisted run can use this order:
+For a persisted run:
 
 1. inspect `state.json` for objective, revision, provenance, validation lineage, and terminal outcome;
-2. inspect `evidence-manifest.json` for referenced observations/artifacts and hashes;
-3. verify `journal.jsonl` ordering/hash continuity and runtime events;
-4. inspect `runtime.json` for budgets, circuits, lease identity, fingerprint, and pending mutation state;
-5. export `ai-qa lineage` to identify missing or weak evidence relationships;
-6. emit `ai-qa attest` to produce an unsigned integrity summary;
-7. compare the resulting evidence with the framework's verification rules rather than inferring PASS from record completeness.
+2. inspect `evidence-manifest.json` for evidence/artifact identities, sources, and hashes;
+3. verify `journal.jsonl` linkage and ownership;
+4. inspect `runtime.json` for fingerprint, budgets, circuits, and pending mutation;
+5. use `ai-qa lineage` to find weak or missing evidence relationships;
+6. use `ai-qa attest` for the content-integrity summary;
+7. interpret all of it under [`RESULT_CONTRACT.md`](RESULT_CONTRACT.md), not from record completeness alone.
 
-## Verification boundary
+---
 
-Lineage and attestation belong to the framework's evidence-integrity layer. They support inspection and provenance while leaving pass/fail authority with deterministic validation.
+## Integrity versus correctness
 
-See [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) and [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md).
+A perfectly intact journal can document a failed or `NOT_VERIFIED` run. A complete lineage graph can reveal missing required evidence. A matching artifact hash can preserve the wrong behavior perfectly.
+
+> **Integrity supports trustworthy review; deterministic validation still owns correctness.**
+
+---
+
+## Related documentation
+
+- [Runtime result contract](RESULT_CONTRACT.md)
+- [Runtime control and recovery](RUNTIME_CONTROL.md)
+- [Verification boundaries](VERIFICATION_BOUNDARIES.md)
+- [Security architecture](SECURITY.md)
+- [Production readiness](PRODUCTION_READINESS.md)
+
+---
+
+[← MCP policy](MCP.md) · [Documentation home](README.md)
 
 Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
