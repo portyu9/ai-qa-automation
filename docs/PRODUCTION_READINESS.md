@@ -24,11 +24,11 @@ These terms are intentionally narrower than words such as “ready,” “works,
 
 **Current production-release status: `NOT_VERIFIED`.**
 
-The feature branch is a production-shaped engineering portfolio/reference implementation. A pre-execution static architecture/documentation review has been performed and material static inconsistencies found during that review have been corrected, including independent runtime network/mutation budgets, configuration-reference completeness, local/security command parity, explicit setup guidance, and clearer integration/readiness boundaries.
+The current development line is a production-shaped agentic quality engineering system. A pre-execution static architecture, code/configuration, documentation, and contract-completeness review has been performed, and material inconsistencies discovered during that review were corrected.
 
-That static review is **not** a substitute for current-head Ruff/Mypy/pytest/evaluation/security/browser execution. Those gates remain `NOT_VERIFIED` until deliberately run.
+That static review is **not** a substitute for current-head Ruff, Mypy, pytest, evaluation, security, browser, or model execution. Those gates remain `NOT_VERIFIED` until deliberately run and inspected.
 
-The checked-in GitHub Actions workflow remains manual-only and must not be dispatched automatically during the current bootstrap constraint.
+The checked-in GitHub Actions workflow remains manual-only. Its existence is implementation evidence only.
 
 ## Architecture and trust model
 
@@ -187,7 +187,7 @@ Until an authorized run completes and its evidence is inspected, current-head CI
 
 ## Documentation/readiness controls
 
-The repository now separates:
+The repository separates:
 
 - [`SETUP.md`](SETUP.md) — exact credentials/configuration by mode;
 - [`OPERATIONS.md`](OPERATIONS.md) — staged execution ladder;
@@ -195,9 +195,9 @@ The repository now separates:
 - [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md) — transaction/recovery mechanics;
 - [`EVALUATION.md`](EVALUATION.md) — primary/holdout governance;
 - [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md) — repository versus environment evidence;
-- [`SHOWCASE.md`](SHOWCASE.md) — defensible portfolio/interview narrative.
+- [`TECHNICAL_WALKTHROUGH.md`](TECHNICAL_WALKTHROUGH.md) — end-to-end code-path review.
 
-Documentation is treated as part of the safety boundary: it must not teach an operator or reviewer to interpret unexecuted capability as PASS.
+Documentation is part of the safety boundary: it must not teach an operator or reviewer to interpret unexecuted capability as PASS.
 
 ## License
 
@@ -207,7 +207,7 @@ The repository is licensed under the MIT License. See root `LICENSE`:
 
 ## Definition of done for a true production release
 
-A future deployment may be called production-ready only after all applicable **current-head** gates have actual evidence, including:
+A deployment may be called production-ready only after all applicable **current-head** gates have actual evidence, including:
 
 1. quality/static/type checks;
 2. deterministic unit/integration/policy/security tests;
