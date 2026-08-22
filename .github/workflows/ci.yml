@@ -1,10 +1,7 @@
 name: Manual CI — ƳƤ AI QA Automation Framework
 
-# Final repository code/config step after hardening + branding audit.
 # Designed and engineered by Ƴunior Ƥortal (ƳƤ).
-# Remains operator-dispatched only; workflow definition is not execution evidence.
-# Do not add push/pull_request/schedule triggers until repository secrets,
-# branch policy, and desired execution cost have been reviewed.
+# Operator-dispatched only. Automatic triggers require deliberate repository policy review.
 on:
   workflow_dispatch:
     inputs:
