@@ -1,8 +1,8 @@
 # Claude Skills
 
-> **YP AI QA Automation Framework** · Designed and engineered by **Yunior Portal**
+> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
-The YP AI QA Automation Framework uses five focused Claude Skills to load specialized QA procedures only when the objective needs them. Skills are **reasoning/playbook context**, not permission grants: deterministic runtime policy, hooks, controlled tools, evidence requirements, execution budgets, and validation remain authoritative regardless of what a Skill says.
+The ƳƤ AI QA Automation Framework uses five focused Claude Skills to load specialized QA procedures only when the objective needs them. Skills are **reasoning/playbook context**, not permission grants: deterministic runtime policy, hooks, controlled tools, evidence requirements, execution budgets, and validation remain authoritative regardless of what a Skill says.
 
 The live Agent SDK configuration explicitly allowlists these five framework Skills rather than exposing an open-ended catalog.
 
@@ -156,3 +156,5 @@ When changing a Skill:
 Source presence is not current-head execution evidence. Skill behavior remains `NOT_VERIFIED` on the current head until the applicable deterministic/model-backed gates are intentionally executed.
 
 See [`ARCHITECTURE.md`](ARCHITECTURE.md), [`EVALUATION.md`](EVALUATION.md), [`SECURITY.md`](SECURITY.md), and [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md).
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
