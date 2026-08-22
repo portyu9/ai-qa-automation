@@ -75,6 +75,32 @@ def test_unknown_persisted_fields_are_rejected(tmp_path: Path) -> None:
         StateStore(path).load()
 
 
+def test_state_store_rejects_symlinked_state_file(tmp_path: Path) -> None:
+    outside = tmp_path / "outside.json"
+    outside.write_text("{}", encoding="utf-8")
+    state_path = tmp_path / "state.json"
+    try:
+        state_path.symlink_to(outside)
+    except OSError as exc:  # pragma: no cover - platform/filesystem capability
+        pytest.skip(f"symlink creation unavailable: {exc}")
+
+    with pytest.raises(ValueError, match="symlink"):
+        StateStore(state_path)
+
+
+def test_state_store_rejects_symlinked_state_directory(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    linked = tmp_path / "linked"
+    try:
+        linked.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:  # pragma: no cover - platform/filesystem capability
+        pytest.skip(f"symlink creation unavailable: {exc}")
+
+    with pytest.raises(ValueError, match="state directory"):
+        StateStore(linked / "state.json")
+
+
 def test_failed_atomic_replace_preserves_last_known_good_state_and_cleans_temp(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
