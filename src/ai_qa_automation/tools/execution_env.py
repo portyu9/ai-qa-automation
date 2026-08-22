@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import threading
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ _SAFE_INHERITED_ENV = {
 }
 _DEFAULT_MAX_OUTPUT_BYTES = 2_000_000
 _READ_CHUNK_BYTES = 64 * 1024
+_DRAIN_JOIN_SECONDS = 2.0
 
 
 @dataclass(frozen=True)
@@ -61,11 +63,45 @@ class _TailBuffer:
 
 
 def _drain_stream(stream: BinaryIO, buffer: _TailBuffer) -> None:
-    while True:
-        chunk = stream.read(_READ_CHUNK_BYTES)
-        if not chunk:
+    try:
+        while True:
+            chunk = stream.read(_READ_CHUNK_BYTES)
+            if not chunk:
+                return
+            buffer.append(chunk)
+    except (OSError, ValueError):
+        # The controlling thread may close a pipe after bounded join expiry to
+        # prevent a descendant that inherited the descriptor from hanging the run.
+        return
+
+
+def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
+    """Best-effort bounded termination of the validator process tree."""
+    if os.name != "nt":
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
             return
-        buffer.append(chunk)
+        except OSError:
+            if process.poll() is None:
+                process.kill()
+        return
+
+    # CREATE_NEW_PROCESS_GROUP below gives Windows taskkill a stable tree root.
+    # taskkill is part of supported Windows installations and is used only for
+    # cleanup of the child tree created by this adapter.
+    try:
+        subprocess.run(  # noqa: S603 - fixed executable/arguments, no shell
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        if process.poll() is None:
+            process.kill()
 
 
 def run_bounded_subprocess(
@@ -76,7 +112,12 @@ def run_bounded_subprocess(
     timeout_seconds: int | float,
     max_output_bytes: int = _DEFAULT_MAX_OUTPUT_BYTES,
 ) -> BoundedSubprocessResult:
-    """Run a subprocess while draining stdout/stderr into bounded in-memory tails."""
+    """Run a subprocess while draining stdout/stderr into bounded in-memory tails.
+
+    The child receives a dedicated process group/session. At completion the adapter
+    also terminates any descendants that outlived the direct child, because target
+    test/load code must not leave background processes running after validation.
+    """
     if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)):
         raise ValueError("timeout_seconds must be numeric")
     if timeout_seconds <= 0:
@@ -88,6 +129,12 @@ def run_bounded_subprocess(
     if not command:
         raise ValueError("subprocess command must not be empty")
 
+    popen_kwargs: dict[str, object] = {}
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_kwargs["start_new_session"] = True
+
     process = subprocess.Popen(
         [str(item) for item in command],
         cwd=cwd,
@@ -95,9 +142,10 @@ def run_bounded_subprocess(
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        **popen_kwargs,
     )
     if process.stdout is None or process.stderr is None:  # pragma: no cover - Popen contract
-        process.kill()
+        _terminate_process_tree(process)
         process.wait()
         raise RuntimeError("subprocess pipes were not created")
 
@@ -123,13 +171,33 @@ def run_bounded_subprocess(
         process.wait(timeout=float(timeout_seconds))
     except subprocess.TimeoutExpired:
         timed_out = True
-        process.kill()
+        _terminate_process_tree(process)
         process.wait()
+    else:
+        # The direct validator process exited. Kill any background descendants in
+        # its dedicated group before waiting for pipe EOF; otherwise an inherited
+        # stdout/stderr descriptor could keep the drain threads blocked forever.
+        _terminate_process_tree(process)
     finally:
-        stdout_thread.join()
-        stderr_thread.join()
-        process.stdout.close()
-        process.stderr.close()
+        stdout_thread.join(timeout=_DRAIN_JOIN_SECONDS)
+        stderr_thread.join(timeout=_DRAIN_JOIN_SECONDS)
+        drains_stuck = stdout_thread.is_alive() or stderr_thread.is_alive()
+        if drains_stuck:
+            try:
+                process.stdout.close()
+            except OSError:
+                pass
+            try:
+                process.stderr.close()
+            except OSError:
+                pass
+            stdout_thread.join(timeout=_DRAIN_JOIN_SECONDS)
+            stderr_thread.join(timeout=_DRAIN_JOIN_SECONDS)
+        else:
+            process.stdout.close()
+            process.stderr.close()
+        if stdout_thread.is_alive() or stderr_thread.is_alive():
+            raise RuntimeError("subprocess output drains did not terminate after process-tree cleanup")
 
     return BoundedSubprocessResult(
         returncode=int(process.returncode),
