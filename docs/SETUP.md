@@ -1,6 +1,8 @@
 # Setup and Configuration
 
-This guide separates **repository-contained use** from capabilities that require credentials or external infrastructure. The distinction is intentional: installing or configuring a capability is not evidence that it works in a particular environment.
+> **YP AI QA Automation Framework** · Designed and engineered by **Yunior Portal**
+
+This guide separates **repository-contained use** of the YP AI QA Automation Framework from capabilities that require credentials or external infrastructure. The distinction is intentional: installing or configuring a capability is not evidence that it works in a particular environment.
 
 ## 1. Choose the operating mode
 
@@ -17,7 +19,7 @@ Nothing in the credential-free modes should be described as proof that a credent
 
 ## 2. Install the repository
 
-Python 3.11 or newer is required by this project.
+Python 3.11 or newer is required by the framework.
 
 ```bash
 python -m venv .venv
@@ -56,7 +58,7 @@ Never commit a populated `.env`, API key, access token, customer credential, or 
 |---|---|---|
 | `ANTHROPIC_API_KEY` | unset | Required only for live Claude-backed execution. Consumed by the Anthropic runtime/SDK environment. |
 | `AI_QA_MODEL` | `claude-sonnet-5` | Claude model identifier used by the live agent. |
-| `AI_QA_CONTROL_ROOT` | current working directory | Trusted AI-QA repository root containing `CLAUDE.md` and `.claude/settings.json`. |
+| `AI_QA_CONTROL_ROOT` | current working directory | Trusted YP framework repository root containing `CLAUDE.md` and `.claude/settings.json`. |
 | `AI_QA_ARTIFACT_ROOT` | `<control-root>/artifacts` | Trusted location for state, evidence, journal, rollback snapshots, and run artifacts. |
 | `AI_QA_BASE_REF` | unset | Optional trusted Git baseline such as `origin/main`; resolved to immutable baseline/merge-base SHAs during bootstrap. |
 | `AI_QA_REGULATED_MODE` | `false` | Enables additional hash-chained audit records and regulated artifact classification; does not claim compliance certification. |
@@ -117,7 +119,7 @@ A successful model response is not a successful QA result. The runtime can retur
 
 ## 7. Optional GitHub MCP
 
-This project configures the vendor-official `github/github-mcp-server` container and keeps it read-only at the server layer.
+The framework configures the vendor-official `github/github-mcp-server` container and keeps it read-only at the server layer.
 
 Prerequisites for the current local integration shape:
 
@@ -133,7 +135,7 @@ export AI_QA_ENABLE_GITHUB_MCP=true
 
 Do not infer MCP availability from configuration. The runtime records GitHub as `AVAILABLE` only after an observed successful MCP tool call. Authentication, authorization, rate limiting, transport failure, and invalid responses remain explicit health states.
 
-The project does not hard-code broad token scopes because the minimum permission set depends on the repositories and read operations an operator actually authorizes.
+The framework does not hard-code broad token scopes because the minimum permission set depends on the repositories and read operations an operator actually authorizes.
 
 ## 8. Optional Atlassian Rovo MCP
 
