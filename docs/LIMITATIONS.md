@@ -1,10 +1,12 @@
 # Limitations and Non-Claims
 
-This document is intentionally explicit about what the project **does not prove**. The platform's evidence-first design applies to its own documentation: implemented code, configuration, tests, and workflows are not represented as successful execution unless matching evidence exists.
+> **YP AI QA Automation Framework** · Designed and engineered by **Yunior Portal**
 
-## Current project boundary
+This document is intentionally explicit about what the YP AI QA Automation Framework **does not prove**. The framework's evidence-first design applies to its own documentation: implemented code, configuration, tests, and workflows are not represented as successful execution unless matching evidence exists.
 
-AI QA Automation is a production-shaped agentic quality engineering system. The current repository head is **not production-release verified** until the applicable deterministic, security, browser, model, integration, and environment gates are actually executed and inspected.
+## Current framework boundary
+
+The YP AI QA Automation Framework is a production-shaped agentic quality engineering system. The current repository head is **not production-release verified** until the applicable deterministic, security, browser, model, integration, and environment gates are actually executed and inspected.
 
 Historical successful checks are useful prior evidence, not a release certificate for later commits.
 
@@ -14,7 +16,7 @@ Historical successful checks are useful prior evidence, not a release certificat
 - No prompt, model version, or evaluation corpus can guarantee that a probabilistic model will never make a reasoning mistake.
 - The architecture therefore limits what a model mistake can authorize and requires deterministic evidence for verified outcomes.
 - Model confidence is not observed system truth.
-- The project does not claim that all possible prompts, repositories, applications, or adversarial inputs have been evaluated.
+- The framework does not claim that all possible prompts, repositories, applications, or adversarial inputs have been evaluated.
 - Model upgrades can alter behavior; version/provenance should be recorded and applicable evaluations rerun before promoting a new model state.
 
 ## External MCP limitations
@@ -22,13 +24,13 @@ Historical successful checks are useful prior evidence, not a release certificat
 - GitHub and Atlassian integrations are configured only through approved vendor-official paths and remain disabled by default.
 - Configuration does not prove authentication, authorization, provider availability, or tool behavior in a specific account.
 - Authenticated GitHub/Atlassian MCP behavior is environment-required until exercised.
-- The repository intentionally does not inherit arbitrary target/user/community MCP configuration into the live runtime.
+- The runtime intentionally does not inherit arbitrary target/user/community MCP configuration into the live runtime.
 - A vendor-official server can evolve its tool surface; server identity is not blanket permission for every current or future tool.
 - Remote GitHub/Jira/Confluence content remains untrusted evidence and can still contain malicious prompt-injection-shaped text.
 
 ### TestRail and other systems
 
-TestRail is currently `NOT_CONFIGURED` as an external integration in this repository. The project does not install a community MCP server merely to claim TestRail support. A future integration should use an organization-approved first-party/vendor-official MCP if one satisfies the trust requirements, or a narrow adapter to an approved official API with equivalent authorization/evidence controls.
+TestRail is currently `NOT_CONFIGURED` as an external integration in this repository. The framework does not install a community MCP server merely to claim TestRail support. A future integration should use an organization-approved first-party/vendor-official MCP if one satisfies the trust requirements, or a narrow adapter to an approved official API with equivalent authorization/evidence controls.
 
 The same rule applies to other services without an approved integration path.
 
@@ -67,11 +69,11 @@ CODEOWNERS information is review context, not runtime authorization. Repository 
 - Static path/component/reference signals can miss runtime/dynamic dependencies.
 - Truncated scans, low confidence, incomplete dependency information, or unsupported ecosystems must broaden regression rather than justify aggressive omission.
 - Mandatory security/safety/regulatory/smoke coverage is protected independently of impact score.
-- The project does not claim optimal runtime reduction for every repository.
+- The framework does not claim optimal runtime reduction for every repository.
 
 ## Test-generation limitations
 
-- The platform can detect and plan around bounded observed repository coverage; it cannot know undocumented product intent automatically.
+- The framework can detect and plan around bounded observed repository coverage; it cannot know undocumented product intent automatically.
 - Generated tests require an authoritative expected behavior. Unknown requirements should remain blocked/uncertain rather than be invented.
 - Meaningful-assertion checks prevent common weak tests but cannot mathematically prove that every assertion captures the most valuable business risk.
 - The repository prioritizes supported Python/JavaScript/TypeScript test-generation paths rather than claiming universal language/framework generation.
@@ -81,14 +83,14 @@ CODEOWNERS information is review context, not runtime authorization. Repository 
 - Autonomous healing is intentionally narrow and primarily locator-oriented.
 - There is no generic existing-test rewrite capability in the live agent runtime.
 - A unique locator can still be semantically wrong, which is why observed uniqueness is necessary but not sufficient; semantic evidence and intent preservation remain required.
-- The platform refuses ambiguous repair rather than maximizing heal rate.
+- The framework refuses ambiguous repair rather than maximizing heal rate.
 - A product behavior change that invalidates the old test intent should not be disguised as an automation heal.
 
 ## pytest / test-execution limitations
 
 - pytest support is concrete but cannot make arbitrary third-party suites deterministic.
 - Flaky dependencies, external services, clocks, data, or test isolation can still produce unstable results.
-- Same-revision contradictory PASS/FAIL evidence is deliberately exposed as `NOT_VERIFIED`; the platform does not claim to automatically solve every source of flakiness.
+- Same-revision contradictory PASS/FAIL evidence is deliberately exposed as `NOT_VERIFIED`; the framework does not claim to automatically solve every source of flakiness.
 - Target-specific setup such as databases, containers, service emulators, certificates, or credentials remains the target project's responsibility unless explicitly integrated.
 
 ## Performance / k6 limitations
@@ -97,7 +99,7 @@ CODEOWNERS information is review context, not runtime authorization. Repository 
 - A non-local run requires a trusted assertion that infrastructure-level egress controls exist; the repository itself does not create or certify that firewall/network boundary.
 - Static script checks reduce known escape paths but do not constitute a general JavaScript security sandbox.
 - Real load capacity, scaling limits, cloud quotas, production-like data shape, and distributed load-generator behavior require environment-specific testing.
-- Thresholds must be defined before observing results; the repository cannot determine business SLOs automatically.
+- Thresholds must be defined before observing results; the framework cannot determine business SLOs automatically.
 
 ## Mobile / Appium limitations
 
@@ -148,6 +150,7 @@ Compliance requires organization-specific policies, controls, legal interpretati
 - It does **not** replay or reconstruct hidden Claude conversational state after a crash/context loss.
 - Recovery begins a new model session from persisted evidence when safe.
 - Automatic stale mutation rollback intentionally stops when newer human/out-of-band workspace changes make ownership ambiguous.
+- Autonomous mutation paths reject symlink components rather than treating an alias as equivalent ownership of its resolved target.
 
 ## Docker/container limitations
 
@@ -168,7 +171,7 @@ Those require actual build/scanning/deployment evidence.
 
 ## CI/CD limitations
 
-- `.github/workflows/ci.yml` is intentionally manual-only during the current bootstrap stage.
+- `.github/workflows/ci.yml` is intentionally manual-only during the current controlled verification stage.
 - A workflow file in Git is not a passing workflow run.
 - Current-head quality, tests, primary evaluation, holdout, security, browser, and model gates remain `NOT_VERIFIED` until intentionally executed.
 - The live-model gate requires a repository secret only when opted in.
