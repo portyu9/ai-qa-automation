@@ -141,7 +141,7 @@ A target **URL** belongs to the individual API/browser/k6 operation. The trusted
 | `AI_QA_MAX_NETWORK_CALLS` | 12 | network-capable attempts |
 | `AI_QA_MAX_MUTATIONS` | 3 | autonomous mutation attempts |
 | `AI_QA_MAX_REPEATED_ACTION` | 3 | identical action/input repetition |
-| `AI_QA_MAX_SDK_RETRIES` | 2 | transient pre-activity Agent SDK retries; 2 means at most 3 startup attempts |
+| `AI_QA_MAX_SDK_RETRIES` | 2 | transient Agent SDK session-start retries before provider query submission; 2 means at most 3 startup attempts |
 | `AI_QA_SDK_RETRY_BACKOFF_SECONDS` | 1.0 | deterministic initial retry delay |
 | `AI_QA_SDK_RETRY_MAX_BACKOFF_SECONDS` | 4.0 | exponential-backoff cap |
 | `AI_QA_TOOL_TIMEOUT_SECONDS` | 120 | bounded adapter execution |
@@ -150,12 +150,12 @@ A target **URL** belongs to the individual API/browser/k6 operation. The trusted
 
 These dimensions are intentionally independent. Increasing one does not widen another.
 
-Transient SDK recovery is deliberately narrower than a generic replay mechanism. A new Agent SDK transport/session may be attempted only when the failed attempt is classified as transient **and** no SDK response message, controlled tool call, file modification, or pending mutation transaction exists. Authentication, authorization, configuration, schema, and local executable errors are not retried. Once observable agent/tool activity occurs, the framework preserves that run history and fails closed rather than risk duplicating a side effect.
+Transient SDK recovery is deliberately narrower than a generic replay mechanism. A fresh Agent SDK session may be attempted only when session startup itself fails transiently **before provider query submission begins**. Authentication, authorization, configuration, schema, and local executable errors are not retried even when transport-wrapped. Once provider query submission starts, replay is refused even if no response message or controlled tool call is observed, because provider-side work, cost, or other effects can no longer be proven absent.
 
-All retry attempts remain inside the original `AI_QA_GLOBAL_TIMEOUT_SECONDS`, workspace lease, evidence store, journal, policy, and framework budgets. Retry count is persisted in canonical run state and retry scheduling is journaled using only coarse error type/category metadata.
+All retry attempts remain inside the original `AI_QA_GLOBAL_TIMEOUT_SECONDS`, workspace lease, evidence store, journal, policy, and framework budgets. Retry count is persisted in canonical run state and retry scheduling is journaled using only coarse error type/category metadata. Retries do not reset tool, network, mutation, time, or provenance budgets.
 
 > [!NOTE]
-> The Agent SDK/provider may incur work before an exception becomes observable to the application. The framework therefore keeps retries bounded and pre-activity only; provider-reported token/cost data remains authoritative when supplied rather than being guessed.
+> Provider-reported token/cost data remains authoritative when supplied rather than being guessed. The startup-only retry boundary prevents the framework from replaying a query merely because provider work or cost was not yet observable locally.
 
 ---
 
