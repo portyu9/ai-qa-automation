@@ -6,7 +6,7 @@ The ƳƤ AI QA Automation Framework is designed around a simple release principl
 
 > **A model can reason about quality, but deterministic controls and observed evidence govern quality decisions.**
 
-This document describes the framework's production-readiness architecture and the controls that support safe operation. It is not a project-progress tracker.
+This document describes the framework's production-readiness architecture and the controls that support safe operation.
 
 ## Readiness model
 
