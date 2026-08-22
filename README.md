@@ -1,6 +1,6 @@
 # AI QA Automation — Evidence-First Agentic Quality Engineering
 
-I built this project around one non-negotiable rule:
+AI QA Automation is built around one non-negotiable rule:
 
 > **Model reasoning is not test evidence.**
 
@@ -10,13 +10,13 @@ Claude can interpret failures, form hypotheses, assess change risk, select contr
 Claude reasons. Controlled tools execute. Deterministic systems decide whether gates passed.
 ```
 
-AI QA Automation is a production-shaped engineering reference/portfolio platform for agentic quality engineering. Its distinguishing feature is not simply that it can use an LLM—it is that the architecture is designed to keep probabilistic reasoning useful **without making the model the source of truth**.
+The system is designed for agentic quality engineering where probabilistic reasoning is useful, but authority, evidence, mutation safety, and final verification remain explicit and independently enforceable.
 
 ## Current status
 
 | Area | Current state |
 |---|---|
-| Architecture / implementation | Production-shaped; pre-execution static architecture, code/config, documentation, and contract-completeness audit completed |
+| Architecture / implementation | Production-shaped; pre-execution static architecture, code/configuration, documentation, and contract-completeness audit completed |
 | Ruff / Mypy / full pytest | `NOT_VERIFIED` on the current head until deliberately executed |
 | Primary 34-scenario evaluation | `NOT_VERIFIED` on the current head until deliberately executed |
 | H-series holdout evaluation | `NOT_VERIFIED` on the current head until deliberately executed |
@@ -24,20 +24,20 @@ AI QA Automation is a production-shaped engineering reference/portfolio platform
 | GitHub Actions | Implemented and **manual-only** (`workflow_dispatch`); workflow presence is not an execution result |
 | Live Claude Agent SDK | Implemented; credentialed provider execution is `ENVIRONMENT_REQUIRED` / `NOT_VERIFIED` |
 | GitHub / Atlassian MCP | Vendor-official integrations configured but disabled by default; authenticated behavior is `ENVIRONMENT_REQUIRED` |
-| Real external browser/load/mobile/infrastructure controls | Environment-dependent and never implied verified by source presence |
+| External browser/load/mobile/infrastructure controls | Environment-dependent and never implied verified by source presence |
 
-The authoritative readiness vocabulary and matrix live in [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md).
+The authoritative readiness vocabulary and release matrix live in [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md).
 
 ## Why this architecture is different
 
-Many AI test agents optimize for “make the test pass.” That can be unsafe when the agent is also allowed to reinterpret failures, rewrite tests, trust hostile application content, or declare its own work successful.
+Many AI test agents optimize for “make the test pass.” That can be unsafe when the agent can also reinterpret failures, rewrite tests, trust hostile application content, or declare its own work successful.
 
-This platform instead optimizes for **defensible evidence, bounded authority, and visible uncertainty**:
+AI QA Automation instead optimizes for **defensible evidence, bounded authority, and visible uncertainty**:
 
 - a failed test is not automatically a product defect;
 - model interpretation is distinct from observed evidence;
 - missing or contradictory evidence remains unresolved rather than becoming an optimistic verdict;
-- the agent receives narrow QA tools rather than general shell/edit/web authority;
+- the agent receives narrow QA tools instead of general shell/edit/web authority;
 - target source, tests, DOM, logs, API responses, `CLAUDE.md`, `.claude/`, and `.mcp.json` are untrusted data;
 - autonomous test mutations are fingerprint-safe, transactional, rollback-capable, and revision-gated;
 - self-healing cannot simply skip tests, weaken assertions, add sleeps, inflate timeouts, or suppress failures;
@@ -89,13 +89,11 @@ flowchart LR
     Q <--> SUT
 ```
 
-The README intentionally contains only the overview diagram. Three deeper diagrams explain mechanisms that are materially easier to understand visually:
+The README keeps one system-level diagram. Three deeper diagrams are used only where a mechanism benefits materially from a visual model:
 
 - **execution / verification sequence** — [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md);
 - **transactional mutation / crash-recovery state machine** — [`docs/RUNTIME_CONTROL.md`](docs/RUNTIME_CONTROL.md);
 - **persisted evidence / validation lineage** — [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md).
-
-Adding diagrams beyond those would mostly duplicate prose rather than improve architectural comprehension.
 
 ### Trust boundaries
 
@@ -103,7 +101,7 @@ Adding diagrams beyond those would mostly duplicate prose rather than improve ar
 |---|---|---|
 | Control plane | Trusted | runtime package, policy, `CLAUDE.md`, Skills, hooks, tool schemas, evaluation thresholds |
 | Target/SUT plane | Untrusted data | source, tests, DOM, logs, target `.mcp.json`, target `CLAUDE.md`, target `.claude/` |
-| Integration plane | Explicitly approved provider; returned content still untrusted | GitHub official MCP, Atlassian Rovo MCP |
+| Integration plane | Explicitly approved provider; returned content remains untrusted | GitHub official MCP, Atlassian Rovo MCP |
 | Deployment infrastructure | Must be verified independently | OS/container isolation, egress, identity, secrets, retention, real targets/devices |
 
 ## Live Agent SDK runtime
@@ -160,7 +158,7 @@ See [`docs/CHANGE_INTELLIGENCE.md`](docs/CHANGE_INTELLIGENCE.md).
 
 The classifier distinguishes outcomes including application defect, test automation defect, locator/UI-contract change, test-data failure, timing/flakiness, environment failure, external dependency failure, authentication failure, configuration failure, performance regression, and insufficient evidence.
 
-A missing UI element therefore does not automatically trigger selector repair. If the page's API is returning HTTP 500 and the expected UI never rendered, the platform preserves that network/application evidence rather than “healing” the test first.
+A missing UI element therefore does not automatically trigger selector repair. If the page's API is returning HTTP 500 and the expected UI never rendered, the system preserves that network/application evidence rather than “healing” the test first.
 
 ## Safe self-healing
 
@@ -183,7 +181,7 @@ The patch path rejects common shortcuts such as:
 - tautological assertions;
 - broad exception suppression.
 
-An approved mutation remains pending until the new revision closes patch-safety, targeted pytest, and full-regression validation. Failed or unverified work rolls back. If the process crashes and a developer subsequently changes the workspace, stale recovery refuses to overwrite the newer human work.
+An approved mutation remains pending until the new revision closes patch-safety, targeted pytest, and full-regression validation. Failed or unverified work rolls back. If the process crashes and a developer subsequently changes the workspace, stale recovery refuses to overwrite newer human work.
 
 See [`docs/RUNTIME_CONTROL.md`](docs/RUNTIME_CONTROL.md).
 
@@ -268,7 +266,7 @@ The repository contains:
 - browser-marked tests isolated from default pytest;
 - model-marked tests isolated behind credentials.
 
-Routine repository commands are:
+Routine repository commands:
 
 ```bash
 make quality
@@ -290,9 +288,9 @@ Hard-safety scenarios use a predefined zero-known-failure threshold. A failing i
 
 See [`docs/EVALUATION.md`](docs/EVALUATION.md).
 
-## Complete deterministic reference SUT
+## Deterministic reference SUT
 
-`examples/reference_sut/` is a deliberately small FastAPI target with the controlled scenarios required by the build contract:
+`examples/reference_sut/` is a deliberately small FastAPI target with controlled scenarios required by the build contract:
 
 | Mode | Purpose |
 |---|---|
@@ -352,7 +350,7 @@ For every environment variable, credential boundary, and operating mode, see [`d
 ├── .env.example             # reference only; not automatically loaded
 ├── .claude/                 # trusted settings, hooks, five Skills
 ├── .mcp.json                # trusted developer MCP configuration
-├── .github/workflows/       # manual-only CI during bootstrap
+├── .github/workflows/       # manual-only CI
 ├── src/ai_qa_automation/
 │   ├── agent.py             # Agent SDK orchestration + terminal truth rules
 │   ├── models.py            # state/evidence/result contracts
@@ -375,32 +373,33 @@ For every environment variable, credential boundary, and operating mode, see [`d
 | How does authority and evidence flow? | [`ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
 | How do the five Claude Skills fit the control model? | [`SKILLS.md`](docs/SKILLS.md) |
 | How do I configure it safely? | [`SETUP.md`](docs/SETUP.md) |
-| How should gates and live operation be staged? | [`OPERATIONS.md`](docs/OPERATIONS.md) |
-| How do mutation/recovery safeguards work? | [`RUNTIME_CONTROL.md`](docs/RUNTIME_CONTROL.md) |
-| How are changes, tests, owners, and contracts mapped? | [`CHANGE_INTELLIGENCE.md`](docs/CHANGE_INTELLIGENCE.md) |
-| How are primary/holdout evaluations governed? | [`EVALUATION.md`](docs/EVALUATION.md) |
-| What is the security architecture and threat model? | [`SECURITY.md`](docs/SECURITY.md) / [`THREAT_MODEL.md`](docs/THREAT_MODEL.md) |
+| How should gates and runs be operated? | [`OPERATIONS.md`](docs/OPERATIONS.md) |
+| How do transactional mutation and recovery work? | [`RUNTIME_CONTROL.md`](docs/RUNTIME_CONTROL.md) |
+| How is change impact determined? | [`CHANGE_INTELLIGENCE.md`](docs/CHANGE_INTELLIGENCE.md) |
+| How are primary and holdout evaluations governed? | [`EVALUATION.md`](docs/EVALUATION.md) |
+| What is the security architecture? | [`SECURITY.md`](docs/SECURITY.md), [`THREAT_MODEL.md`](docs/THREAT_MODEL.md) |
 | What is repository-contained vs. environment-dependent? | [`VERIFICATION_BOUNDARIES.md`](docs/VERIFICATION_BOUNDARIES.md) |
 | What are the explicit non-claims and limits? | [`LIMITATIONS.md`](docs/LIMITATIONS.md) |
 | How do I diagnose failures without weakening safety? | [`TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) |
 | What is the authoritative readiness status? | [`PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md) |
 | How is evidence lineage/attestation represented? | [`TRACEABILITY.md`](docs/TRACEABILITY.md) |
-| How should I present the project technically? | [`SHOWCASE.md`](docs/SHOWCASE.md) |
-| Where is the full code-path tour? | [`TECHNICAL_WALKTHROUGH.md`](docs/TECHNICAL_WALKTHROUGH.md) |
+| Where is the end-to-end code-path review? | [`TECHNICAL_WALKTHROUGH.md`](docs/TECHNICAL_WALKTHROUGH.md) |
 
 ## GitHub Actions
 
-`.github/workflows/ci.yml` is intentionally **manual-only** (`workflow_dispatch`) during the current bootstrap stage. It has no `push`, `pull_request`, or scheduled trigger.
+`.github/workflows/ci.yml` is intentionally **manual-only** (`workflow_dispatch`). It has no `push`, `pull_request`, or scheduled trigger.
 
-It defines quality, primary evaluation, security, browser-reference, optional holdout, and optional live-model jobs. The model and holdout jobs are opt-in. `ANTHROPIC_API_KEY` is needed only when the model job is deliberately selected.
+Its jobs define:
+
+- quality checks across Python 3.11 and 3.13;
+- deterministic pytest + coverage artifacts;
+- the fixed 34-scenario evaluator;
+- optional H-series holdout evaluation;
+- optional security gates;
+- optional Playwright reference-SUT integration;
+- optional credentialed Claude Agent SDK smoke validation.
 
 A workflow definition is not execution evidence. Current-head gates remain `NOT_VERIFIED` until an authorized run is actually inspected.
-
-## Portfolio walkthrough
-
-[`docs/SHOWCASE.md`](docs/SHOWCASE.md) provides a five-minute and fifteen-minute technical narrative focused on the project's central engineering differentiator:
-
-> **The model is useful, but it is not the source of truth.**
 
 ## License
 
