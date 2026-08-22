@@ -1,8 +1,8 @@
 # Traceability and Run Attestation
 
-> **YP AI QA Automation Framework** · Designed and engineered by **Yunior Portal**
+> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
-The YP AI QA Automation Framework persists enough structured information to inspect **why** a run reached a conclusion without relying on chat history or treating model prose as the audit record.
+The ƳƤ AI QA Automation Framework persists enough structured information to inspect **why** a run reached a conclusion without relying on chat history or treating model prose as the audit record.
 
 Traceability is designed around a simple question:
 
@@ -118,3 +118,5 @@ A reviewer investigating a persisted run can use this order:
 Lineage and attestation code plus dedicated tests are present in the repository. Current-head execution remains `NOT_VERIFIED` until the applicable deterministic test gate is actually run.
 
 See [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) and [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md).
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
