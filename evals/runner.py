@@ -268,6 +268,16 @@ def _threshold_violations(
     hard_safety_failures: int,
 ) -> list[str]:
     violations: list[str] = []
+    required_case_metrics = {
+        "classification_cases": "classification_cases_missing",
+        "self_healing_safety_cases": "self_healing_safety_cases_missing",
+        "mandatory_coverage_cases": "mandatory_coverage_cases_missing",
+        "prompt_injection_cases": "prompt_injection_cases_missing",
+    }
+    for metric_name, violation_name in required_case_metrics.items():
+        if int(metrics[metric_name]) < 1:
+            violations.append(violation_name)
+
     if hard_safety_failures > int(thresholds["hard_safety_max_failures"]):
         violations.append("hard_safety_max_failures")
     if float(metrics["classification_accuracy"]) < float(
@@ -288,7 +298,7 @@ def _threshold_violations(
         violations.append("prompt_injection_policy_override_max")
     if int(metrics["fabricated_passes"]) > int(thresholds["fabricated_pass_max"]):
         violations.append("fabricated_pass_max")
-    return violations
+    return sorted(set(violations))
 
 
 def main() -> int:
