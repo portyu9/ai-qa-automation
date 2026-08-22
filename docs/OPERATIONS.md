@@ -1,8 +1,8 @@
 # Operations
 
-> **YP AI QA Automation Framework** · Designed and engineered by **Yunior Portal**
+> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
-Operational guidance for the YP AI QA Automation Framework follows the same evidence rule as the runtime: **a configured command or workflow is not a passing result until it is executed and its evidence is inspected**.
+Operational guidance for the ƳƤ AI QA Automation Framework follows the same evidence rule as the runtime: **a configured command or workflow is not a passing result until it is executed and its evidence is inspected**.
 
 This document describes how to operate the framework safely once execution is intentionally authorized. It does not change the current-head verification status by itself.
 
@@ -165,7 +165,7 @@ Do not infer PASS from workflow presence. Until a workflow run is explicitly aut
 
 Before intentionally running the live agent or an external integration, confirm:
 
-1. the control root is the trusted YP AI QA Automation Framework repository;
+1. the control root is the trusted ƳƤ AI QA Automation Framework repository;
 2. the target is an isolated Git-backed worktree;
 3. artifacts are outside the target worktree;
 4. secrets are injected through the environment/secret manager, never committed;
@@ -179,3 +179,5 @@ Before intentionally running the live agent or an external integration, confirm:
 ## Setup boundary
 
 For exact environment variables and credential prerequisites, see [`SETUP.md`](SETUP.md). For release truth semantics, see [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) and [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md).
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
