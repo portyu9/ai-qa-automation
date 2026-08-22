@@ -13,6 +13,8 @@ from ..evidence import EvidenceStore
 from ..models import EvidenceItem, EvidenceKind
 from ..redaction import redact_text, sanitize
 
+_MAX_API_RESPONSE_BYTES = 5_000_000
+
 
 class ApiProbeTransportError(RuntimeError):
     """Transport failure that retains the evidence record created for the attempt."""
@@ -43,16 +45,31 @@ class ApiProbe:
         max_response_bytes: int = 100_000,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
-            raise ValueError("timeout_seconds must be a positive finite value")
-        if max_response_bytes < 1:
-            raise ValueError("max_response_bytes must be at least 1")
+        if (
+            isinstance(timeout_seconds, bool)
+            or not isinstance(timeout_seconds, (int, float))
+            or not math.isfinite(timeout_seconds)
+            or timeout_seconds <= 0
+        ):
+            raise ValueError("timeout_seconds must be a positive finite number")
+        if (
+            isinstance(max_response_bytes, bool)
+            or not isinstance(max_response_bytes, int)
+            or not 1 <= max_response_bytes <= _MAX_API_RESPONSE_BYTES
+        ):
+            raise ValueError(
+                f"max_response_bytes must be an integer between 1 and {_MAX_API_RESPONSE_BYTES}"
+            )
         self.evidence = evidence
-        self.allow_hosts = {host.lower() for host in (allow_hosts or set())}
-        self.allowed_methods = {
-            method.upper() for method in (allowed_methods or {"GET", "HEAD", "OPTIONS"})
+        self.allow_hosts = {
+            str(host).strip().lower() for host in (allow_hosts or set()) if str(host).strip()
         }
-        self.timeout_seconds = timeout_seconds
+        self.allowed_methods = {
+            str(method).strip().upper()
+            for method in (allowed_methods or {"GET", "HEAD", "OPTIONS"})
+            if str(method).strip()
+        }
+        self.timeout_seconds = float(timeout_seconds)
         self.max_response_bytes = max_response_bytes
         self.transport = transport
 
