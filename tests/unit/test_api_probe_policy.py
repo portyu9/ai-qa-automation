@@ -1,3 +1,5 @@
+import math
+
 import pytest
 
 from ai_qa_automation.evidence import EvidenceStore
@@ -26,6 +28,14 @@ async def test_api_probe_rejects_non_http_scheme(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_api_probe_caller_cannot_enable_redirect_following(tmp_path):
+    probe = ApiProbe(EvidenceStore(tmp_path, "run-redirect"), allow_hosts={"example.com"})
+
+    with pytest.raises(PermissionError, match="redirects are disabled"):
+        await probe.request("GET", "https://example.com", follow_redirects=True)
+
+
+@pytest.mark.asyncio
 async def test_api_probe_bounds_response_body_and_marks_truncation(tmp_path):
     import httpx
 
@@ -41,6 +51,19 @@ async def test_api_probe_bounds_response_body_and_marks_truncation(tmp_path):
     result = await probe.request("GET", "https://example.com/large")
     assert result.body == "x" * 16
     assert result.truncated is True
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"timeout_seconds": 0},
+        {"timeout_seconds": math.inf},
+        {"max_response_bytes": 0},
+    ],
+)
+def test_api_probe_rejects_invalid_resource_bounds(tmp_path, kwargs):
+    with pytest.raises(ValueError):
+        ApiProbe(EvidenceStore(tmp_path, "run-invalid-bounds"), **kwargs)
 
 
 @pytest.mark.asyncio
