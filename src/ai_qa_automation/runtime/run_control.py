@@ -232,9 +232,26 @@ class RuntimeControl:
         return target
 
 
+def _owned_atomic_target(path: Path) -> Path:
+    """Resolve an owned parent without ever following a symlink at the write target."""
+    requested = path.expanduser()
+    if requested.is_symlink():
+        raise RuntimeError("atomic write target is a symlink and has ambiguous ownership")
+    raw_parent = requested.parent
+    if raw_parent.is_symlink():
+        raise RuntimeError("atomic write parent is a symlink and has ambiguous ownership")
+    raw_parent.mkdir(parents=True, exist_ok=True)
+    if raw_parent.is_symlink():
+        raise RuntimeError("atomic write parent became a symlink")
+    parent = raw_parent.resolve()
+    target = parent / requested.name
+    if target.is_symlink():
+        raise RuntimeError("atomic write target is a symlink and has ambiguous ownership")
+    return target
+
+
 def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    path = path.expanduser().resolve()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path = _owned_atomic_target(path)
     fd, raw = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     temp = Path(raw)
     try:
@@ -248,8 +265,7 @@ def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _atomic_write_bytes(path: Path, data: bytes) -> None:
-    path = path.expanduser().resolve()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path = _owned_atomic_target(path)
     fd, raw = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     temp = Path(raw)
     try:
