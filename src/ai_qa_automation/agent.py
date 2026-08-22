@@ -451,6 +451,17 @@ def determine_terminal_outcome(
             + ", ".join(incomplete)
             + ".",
         )
+    if current_revision == 0:
+        objective_bound = [
+            item
+            for item in active
+            if item.status == ValidationStatus.PASS and item.details.get("objective_bound") is True
+        ]
+        if not objective_bound:
+            return (
+                TerminalStatus.NOT_VERIFIED,
+                "All current deterministic gates passed, but none was deterministically bound to the run objective; unrelated green checks cannot certify success.",
+            )
     if current_revision > 0:
         current_revision_results = [item for item in active if item.revision == current_revision]
         if not current_revision_results:
