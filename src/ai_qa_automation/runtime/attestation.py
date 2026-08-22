@@ -13,6 +13,8 @@ _MAX_MANIFEST_BYTES = 16_000_000
 _MAX_RUNTIME_BYTES = 2_000_000
 _MAX_JOURNAL_BYTES = 64_000_000
 _MAX_ARTIFACT_BYTES = 32_000_000
+_MAX_ARTIFACT_COUNT = 5_000
+_MAX_TOTAL_ARTIFACT_BYTES = 256_000_000
 
 
 def build_run_attestation(run_dir: Path) -> dict[str, Any]:
@@ -187,7 +189,10 @@ def _verify_manifest_artifacts(root: Path, manifest: dict[str, Any]) -> dict[str
     artifacts = manifest.get("artifacts")
     if not isinstance(artifacts, list):
         return {"valid": False, "checked": 0, "reason": "manifest artifacts must be a list"}
+    if len(artifacts) > _MAX_ARTIFACT_COUNT:
+        return {"valid": False, "checked": 0, "reason": "manifest artifact count exceeds attestation bound"}
     checked = 0
+    total_bytes = 0
     for raw in artifacts:
         if not isinstance(raw, dict):
             return {"valid": False, "checked": checked, "reason": "artifact record is invalid"}
@@ -209,11 +214,19 @@ def _verify_manifest_artifacts(root: Path, manifest: dict[str, Any]) -> dict[str
                 "checked": checked,
                 "reason": f"registered artifact is missing: {relative_path}",
             }
-        if path.stat().st_size > _MAX_ARTIFACT_BYTES:
+        size = path.stat().st_size
+        if size > _MAX_ARTIFACT_BYTES:
             return {
                 "valid": False,
                 "checked": checked,
                 "reason": f"registered artifact exceeds attestation size bound: {relative_path}",
+            }
+        total_bytes += size
+        if total_bytes > _MAX_TOTAL_ARTIFACT_BYTES:
+            return {
+                "valid": False,
+                "checked": checked,
+                "reason": "registered artifacts exceed cumulative attestation byte bound",
             }
         actual_hash = _file_sha256(path)
         if expected_hash != f"sha256:{actual_hash}":
@@ -223,7 +236,7 @@ def _verify_manifest_artifacts(root: Path, manifest: dict[str, Any]) -> dict[str
                 "reason": f"registered artifact hash mismatch: {relative_path}",
             }
         checked += 1
-    return {"valid": True, "checked": checked}
+    return {"valid": True, "checked": checked, "total_bytes": total_bytes}
 
 
 def _load_object(path: Path, *, max_bytes: int) -> dict[str, Any]:
