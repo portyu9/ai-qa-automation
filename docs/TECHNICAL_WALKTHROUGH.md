@@ -1,6 +1,8 @@
 # Technical Walkthrough
 
-This walkthrough follows the system from **authorized objective → observed evidence → bounded reasoning/action → deterministic validation → persisted result**. It is written for a technical reviewer who wants to understand where authority lives, not only what features exist.
+> **YP AI QA Automation Framework** · Designed and engineered by **Yunior Portal**
+
+This walkthrough follows the YP AI QA Automation Framework from **authorized objective → observed evidence → bounded reasoning/action → deterministic validation → persisted result**. It is written for a technical reviewer who wants to understand where authority lives, not only what features exist.
 
 ## 1. Start with the result contract
 
@@ -47,7 +49,7 @@ This is an important architectural inversion: the model is not asked to be the s
 
 ## 4. Follow evidence into canonical state
 
-`EvidenceStore` sanitizes structured text evidence, hashes artifacts, maintains the run manifest, and optionally emits a hash-chained audit log. `StateStore` persists canonical QA decision state independently from conversation history.
+`EvidenceStore` sanitizes structured text evidence, hashes artifacts, maintains the run manifest, and optionally emits a hash-chained audit log. It also confines run directories/artifacts beneath the trusted artifact root and rejects duplicate evidence/artifact identifiers rather than silently replacing prior evidence. `StateStore` persists canonical QA decision state independently from conversation history using atomic replacement.
 
 ```bash
 ai-qa demo
@@ -75,8 +77,8 @@ Key properties include:
 - API mutation control;
 - browser host/subrequest/WebSocket allowlisting;
 - restricted test writes;
-- production-load denial;
-- external MCP read/write/destructive policy.
+- production-load denial including contradictory production-like target hostnames;
+- external MCP read/write/destructive policy with conservative mixed-action parsing.
 
 The design prefers a small capability that can be proven safe over a broad capability that depends on the model remembering instructions.
 
@@ -100,6 +102,8 @@ Related files live under `src/ai_qa_automation/intelligence/` and the correspond
 
 Playwright measures original/candidate locators in the same DOM. The proposal is bound to that evidence, current failure classification, target test path, and expected file hash. The live runtime does not expose a generic existing-test rewrite tool.
 
+Mutation ownership is deliberately stricter than path resolution alone: absolute/traversal paths and symlink components are rejected, rollback snapshots are confined and hash-verified, and another mutation cannot begin while the current transaction remains unresolved.
+
 Then read [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md). Its state diagram shows why even an authorized mutation remains pending until the new revision closes. Failed/unverified changes roll back; post-crash human edits are protected from automatic overwrite.
 
 ## 8. Inspect coverage-aware test generation
@@ -112,7 +116,7 @@ The provenance chain is:
 observed coverage → interpreted gap/plan → guarded creation → deterministic validation
 ```
 
-Generated Python/JavaScript/TypeScript tests are checked for meaningful assertions and common unsafe shortcuts. Comments or strings that merely contain assertion-like text do not count as meaningful assertion coverage.
+Generated Python/JavaScript/TypeScript tests are checked for meaningful assertions and common unsafe shortcuts. Comments or strings that merely contain assertion-like text do not count as meaningful assertion coverage. Python quality review recognizes direct and fluent assertion APIs without counting unrelated helper assertions as proof that a test function is observable.
 
 ## 9. Inspect change intelligence and regression safety
 
@@ -145,12 +149,13 @@ Important points:
 - external MCP is disabled by default;
 - provider identity is explicitly allowlisted;
 - server approval does not auto-approve every tool;
+- mixed action names cannot inherit read authority merely from their first verb;
 - writes require approval and fail closed unattended;
 - destructive actions are denied;
 - successful remote output is sanitized and persisted as untrusted evidence;
 - configuration alone does not set an integration to `AVAILABLE`.
 
-## 12. Inspect the agent's own evaluation architecture
+## 12. Inspect the agent's evaluation architecture
 
 Routine repository checks and the primary corpus are separate from the intentional holdout gate:
 
