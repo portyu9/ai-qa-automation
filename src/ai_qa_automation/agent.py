@@ -121,23 +121,15 @@ async def run_agent(objective: str, workspace: Path, settings: Settings | None =
     try:
         state.phase = "RECOVERY_CHECK"
         pre_recovery_snapshot = RepositoryInspector(workspace).snapshot()
-        if lease.previous_metadata and not pre_recovery_snapshot.fingerprint_complete:
-            stale_recovery = {
-                "status": "BLOCKED",
-                "reason": (
-                    "workspace fingerprint is incomplete; automatic stale rollback cannot prove "
-                    "ownership of every changed subject: "
-                    + ", ".join(pre_recovery_snapshot.fingerprint_incomplete_reasons)
-                ),
-            }
-        else:
-            stale_recovery = recover_stale_mutation(
-                artifact_root=artifact_root,
-                workspace=workspace,
-                previous_lease=lease.previous_metadata,
-                current_workspace_fingerprint=pre_recovery_snapshot.fingerprint,
-                recovering_run_id=state.run_id,
-            )
+        stale_recovery = recover_stale_mutation(
+            artifact_root=artifact_root,
+            workspace=workspace,
+            previous_lease=lease.previous_metadata,
+            current_workspace_fingerprint=pre_recovery_snapshot.fingerprint,
+            current_workspace_fingerprint_complete=pre_recovery_snapshot.fingerprint_complete,
+            current_workspace_fingerprint_reasons=pre_recovery_snapshot.fingerprint_incomplete_reasons,
+            recovering_run_id=state.run_id,
+        )
         if stale_recovery.get("status") == "BLOCKED":
             state.terminal_status = TerminalStatus.BLOCKED
             state.terminal_reason = str(
