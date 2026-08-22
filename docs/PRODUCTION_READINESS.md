@@ -1,8 +1,8 @@
 # Production Readiness Matrix
 
-> **YP AI QA Automation Framework** · Designed and engineered by **Yunior Portal**
+> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
-This document is the authoritative truth table for the YP AI QA Automation Framework build contract.
+This document is the authoritative truth table for the ƳƤ AI QA Automation Framework build contract.
 
 The framework is intentionally **production-shaped**: it contains real runtime boundaries, deterministic validation, security policy, recovery controls, evaluation architecture, and operational documentation. It must not be represented as production-ready merely because those controls exist in source.
 
@@ -212,9 +212,9 @@ Documentation is part of the safety boundary: it must not teach an operator or r
 
 ## License
 
-The YP AI QA Automation Framework is licensed under the MIT License. See root `LICENSE`:
+The ƳƤ AI QA Automation Framework is licensed under the MIT License. See root `LICENSE`:
 
-`Copyright (c) 2026 Yunior Portal`
+`Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ)`
 
 ## Definition of done for a true production release
 
@@ -233,3 +233,5 @@ A deployment may be called production-ready only after all applicable **current-
 11. final red-team review of material authority/evidence changes.
 
 Any intentionally excluded capability must remain explicitly `NOT_VERIFIED`, `NOT_CONFIGURED`, or `ENVIRONMENT_REQUIRED` rather than being implied by nearby green gates.
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
