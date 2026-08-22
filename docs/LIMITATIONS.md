@@ -1,199 +1,276 @@
 # Design Boundaries and Non-Claims
 
-> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
+> [!IMPORTANT]
+> A strong control system should be explicit about the boundary of every claim. These are **architectural boundaries**, not project-progress notes.
 
-A production-quality control system should be explicit about the boundary of every claim. The ƳƤ AI QA Automation Framework therefore documents where its deterministic authority ends and where provider-, target-, domain-, or deployment-specific evidence begins.
+**ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
-These are **architectural boundaries**, not development-progress notes.
+[Documentation home](README.md) · [Verification boundaries](VERIFICATION_BOUNDARIES.md) · [Production readiness](PRODUCTION_READINESS.md) · [Security](SECURITY.md)
 
-## Claude / model boundary
+---
 
-- No prompt or model can guarantee perfect reasoning.
+## Boundary philosophy
+
+The framework deliberately distinguishes:
+
+```text
+implemented control
+≠ observed runtime behavior
+≠ provider behavior
+≠ target behavior
+≠ deployment assurance
+≠ compliance certification
+```
+
+The sections below describe what each control **does not claim** beyond its owned evidence boundary.
+
+---
+
+## Model and runtime truth
+
+### Claude / model
+
+- No prompt or model guarantees perfect reasoning.
 - Model confidence is not observed system truth.
-- Repetition or confidence does not convert interpretation into evidence.
+- Repetition does not convert interpretation into evidence.
+- Model/SDK provenance matters because upgrades can alter probabilistic behavior.
 - Deterministic policy, ownership, evidence, and validation remain authoritative.
-- Model/SDK provenance matters because upgrades can change probabilistic behavior.
 
-## Runtime-result boundary
+### Runtime result
 
-The runtime semantics in [`RESULT_CONTRACT.md`](RESULT_CONTRACT.md) are deliberately conservative.
+[`RESULT_CONTRACT.md`](RESULT_CONTRACT.md) is deliberately conservative:
 
-- `SUCCESS` applies to deterministic closure, not persuasive model output.
-- `NOT_VERIFIED` is not equivalent to failure; it preserves unresolved truth.
-- same-revision contradictory evidence is surfaced rather than averaged away;
-- historical PASS does not automatically certify a newer change revision;
-- integrity metadata never overrides a test result.
+- `SUCCESS` means deterministic closure, not persuasive output;
+- `NOT_VERIFIED` preserves unresolved truth rather than pretending failure or success;
+- same-revision contradiction is surfaced;
+- historical PASS cannot certify newer bytes;
+- targeted mutation validation must refer to the exact changed path;
+- integrity metadata never overrides validation.
 
-## External integration boundary
+---
 
-- GitHub and Atlassian access is limited to approved vendor-official integration paths.
-- Provider identity does not grant blanket permission to every tool.
-- Remote GitHub/Jira/Confluence content remains untrusted evidence.
-- Authentication, authorization, provider behavior, rate limits, and availability belong to the connected provider/account context.
-- A provider's future tool-surface changes still pass through local action authorization.
+## External providers
 
-## Network-configuration boundary
+- GitHub/Atlassian access uses approved vendor-official paths only.
+- Provider identity does not grant blanket tool permission.
+- Provider content remains untrusted evidence.
+- Authentication, authorization, rate limits, availability, and organization permissions belong to the provider/account context.
+- Future provider tool-surface changes still pass local deterministic authorization.
 
-- The trusted allowlist accepts canonical hostnames/IP literals, not URLs or wildcard policy expressions.
-- Host allowlisting controls application-layer destinations; it is not a firewall.
-- DNS resolution, routing, proxy policy, TLS trust, and network segmentation remain deployment concerns.
-- A host being allowlisted does not imply the endpoint is safe for every operation or dataset.
+---
 
-## Browser boundary
+## Network and browser
 
-- Playwright observations are scoped to the browser context and target under test.
-- Browser navigation/subrequest/WebSocket controls are application-layer safeguards rather than an OS/container network sandbox.
-- Service-worker blocking improves routed visibility but is not a replacement for infrastructure egress controls.
-- DOM/accessibility evidence can be dynamic or incomplete.
-- Locator uniqueness is an observation, not semantic correctness.
-- Cross-browser, responsive, accessibility, localization, visual, and device coverage remains target-strategy dependent.
+### Network configuration
 
-## API boundary
+- The trusted allowlist accepts canonical hostnames/IP literals, not wildcard policies or URLs.
+- Host allowlisting is an application-layer control, not a firewall.
+- DNS, routing, TLS trust, proxies, segmentation, and egress policy remain deployment concerns.
+- An allowlisted host is not automatically safe for every action or dataset.
 
-- The built-in API adapter provides bounded HTTP request/evidence/schema behavior.
-- Read-only methods are the safe default; mutating methods require explicit enablement.
-- Host/method authorization does not establish business authorization for a particular endpoint.
-- JSON Schema/OpenAPI validation complements rather than replaces business-semantic validation.
-- Target authentication, test data, tenancy, state isolation, and cleanup remain target-specific concerns.
+### Browser / Playwright
 
-## OpenAPI contract-drift boundary
+- Observations are scoped to the configured browser context and target.
+- Routed HTTP(S)/WebSocket controls are not an OS/container network sandbox.
+- Service-worker blocking improves visibility but does not replace infrastructure egress controls.
+- DOM/accessibility state can be dynamic or incomplete.
+- Locator uniqueness is not semantic correctness.
+- Cross-browser, responsive, accessibility, localization, visual, and device strategy remain target-specific.
 
-The contract analyzer is conservative and bounded. It detects supported structural compatibility changes such as removed paths/operations, newly required inputs, successful-response removal, schema/type changes, required-property additions/removals, and enum narrowing.
+---
 
-`NON_BREAKING` means no breaking/risky condition was found under the implemented structural rules. It is not a proof that every client remains compatible.
+## API and contracts
 
-`NOT_ANALYZED` remains visible uncertainty and must not be interpreted as compatibility.
+### API
 
-## CODEOWNERS boundary
+- The adapter provides bounded HTTP/evidence/schema mechanics, not business authorization.
+- Read-only methods are default; mutating methods require explicit enablement.
+- Host/method permission does not establish that a user/test identity is authorized for an endpoint.
+- JSON Schema/OpenAPI validation complements—not replaces—business-semantic validation.
+- Target auth, tenancy, data setup/isolation, and cleanup remain target responsibilities.
 
-The runtime supports a bounded CODEOWNERS grammar with deterministic precedence/last-match behavior. Unsupported patterns are surfaced rather than approximated.
+### OpenAPI drift
 
-CODEOWNERS data is routing/review context, not runtime authorization.
+The analyzer is structural and conservative.
 
-## Test-impact and regression boundary
+- `NON_BREAKING` means no supported breaking/risky rule fired; it is not proof every client remains compatible.
+- `NOT_ANALYZED` is visible uncertainty, not compatibility.
+- Consumer-specific semantics may require additional contract/application testing.
 
-- Test-impact mapping is advisory rather than a complete program-dependency proof.
-- Static path/component/reference signals can miss runtime/dynamic coupling.
+### CODEOWNERS
+
+- Supported grammar is intentionally bounded.
+- Unsupported syntax is surfaced rather than guessed.
+- Ownership is review/routing context, not runtime authorization.
+
+---
+
+## Test impact, generation, and classification
+
+### Test impact / regression
+
+- Mapping is advisory, not a complete program-dependency proof.
+- Static path/reference signals can miss runtime coupling.
 - Low confidence, incomplete dependency information, or truncation broadens regression.
-- Mandatory security, safety, regulatory, and smoke coverage is protected independently of impact score.
-- The framework does not claim mathematically optimal regression minimization.
+- Mandatory security/safety/regulatory/smoke coverage is protected independently.
+- The framework does not claim mathematically optimal test minimization.
 
-## Failure-classification boundary
+### Failure classification
 
-- Deterministic heuristics classify observed evidence, not every possible real-world root cause.
-- `INSUFFICIENT_EVIDENCE` is expected when observations do not discriminate safely.
-- Locator-contract classification requires semantic evidence rather than any arbitrary unique candidate.
-- Domain-specific application semantics can require additional target evidence beyond generic framework signals.
+- Deterministic heuristics cover observed signals, not every possible real-world root cause.
+- `INSUFFICIENT_EVIDENCE` is expected when observations cannot discriminate safely.
+- Locator classification requires semantic relationship, not an arbitrary unique element.
+- Domain-specific behavior can require additional target evidence.
 
-## Test-generation boundary
+### Test generation
 
 - Generated tests require authoritative expected behavior.
-- The framework does not invent undocumented product intent merely to produce a test.
-- Meaningful-assertion checks reject common weak patterns but do not prove the assertion expresses the most valuable business invariant.
-- Supported generation paths prioritize Python, JavaScript, and TypeScript test ecosystems.
-- Domain fixtures, data factories, service virtualization, and environment setup remain target-specific unless integrated deliberately.
+- Undocumented product intent is not invented to create a test.
+- Meaningful-assertion checks reject common weak patterns but do not prove the assertion captures the best business invariant.
+- Deterministic candidate gaps cannot be suppressed solely by unsupported model “already covered” labels.
+- Reusable generation/patch components understand Python/JavaScript/TypeScript, but live autonomous commit authority is narrower where controlled proof is pytest-backed.
+- Fixtures, factories, service virtualization, and environment setup remain target-specific unless deliberately integrated.
 
-## Self-healing boundary
+---
 
-- Autonomous healing is intentionally narrow and locator-oriented.
-- There is no generic existing-test rewrite capability in the live agent runtime.
-- Locator uniqueness is necessary but not sufficient.
-- Deterministic semantic matching is intentionally conservative and can reject a legitimate repair for human review rather than over-authorize a risky one.
-- Policy-owned stability scores are heuristics for locator durability, not guarantees that a product contract will never change.
-- A real product-behavior change must not be disguised as an automation repair.
+## Self-healing and mutation
 
-## Test-execution boundary
+### Self-healing
 
-- pytest execution cannot make arbitrary third-party dependencies deterministic.
-- Contradictory PASS/FAIL evidence at the same revision is surfaced rather than hidden.
-- External clocks, queues, networks, datasets, databases, caches, and services can still introduce nondeterminism.
-- Target-specific containers, emulators, certificates, credentials, test users, and cleanup remain explicit environment responsibilities.
+- Autonomous healing is intentionally locator-oriented.
+- There is no generic existing-test rewrite capability in the live runtime.
+- Uniqueness is necessary but not sufficient.
+- Conservative semantic matching can reject a legitimate repair for review rather than over-authorize a risky one.
+- Policy stability scores are heuristics, not guarantees of permanent product contracts.
+- Real product behavior changes must not be disguised as automation repair.
 
-## Performance boundary
+### Live autonomous mutation
 
-- k6 execution is restricted to bounded, explicitly non-production targets.
-- Static script/import controls reduce known escape paths but are not a general JavaScript sandbox.
-- Non-local execution requires an explicit infrastructure-egress prerequisite.
-- The prerequisite records trusted deployment intent; it does not prove a firewall is correctly configured.
-- Business SLOs, workload models, data shape, scaling topology, cloud quotas, and distributed load generation remain environment/domain concerns.
+- Write enablement does not authorize arbitrary files.
+- Live autonomous commit is restricted to approved Python test paths because deterministic closure is pytest-backed.
+- A targeted PASS for another file or a `-k`-only run cannot certify the pending path.
+- OS-backed lease/fingerprint/path checks reduce concurrency risk but do not replace surrounding process/filesystem isolation.
 
-## Mobile boundary
+### Recovery
 
-Appium integration is represented through controlled runtime/capability inspection and target-specific mobile execution configuration. Device, emulator, simulator, cloud, application-build, provisioning, certificate, and platform-capability choices belong to the deployment/test environment.
+- Canonical state/evidence persists independently from model conversation history.
+- Recovery does not reconstruct hidden model reasoning.
+- Automatic stale rollback refuses ambiguous fingerprints/path ownership.
+- Symlink aliases and tampered rollback state block automatic restoration.
+- If integrity cannot be guaranteed, the correct response is explicit blocking/infrastructure failure—not best-effort overwrite.
 
-## Security boundary
+---
 
-- Deterministic policy, path ownership, host controls, redaction, transactional mutation, and adversarial tests reduce risk but do not imply absence of unknown vulnerabilities.
-- Application-level restrictions do not replace process/container isolation, firewall/proxy policy, identity, secret management, or DLP controls.
-- Raw screenshots and other binary artifacts may contain sensitive data and require appropriate storage/access/retention controls.
-- Redaction is defense in depth, not permission to place secrets/private production data into an unapproved environment.
-- Secret-shaped `.env` paths are protected from runtime reads, while `.env.example` remains reference documentation; other project-specific secret locations still require target governance.
+## Test execution and performance
 
-## Evidence-integrity boundary
+### pytest / target execution
 
-- SHA-256 artifact hashes and hash-chained journals provide tamper-evidence properties inside the persisted record set.
-- They are not actor identity, notarization, trusted timestamps, or digital signatures.
-- The unsigned attestation is content-integrity metadata and does not alter a QA result.
+- Controlled pytest cannot make arbitrary third-party dependencies deterministic.
+- External clocks, queues, networks, databases, caches, datasets, and services can still introduce nondeterminism.
+- Target containers, certificates, test users, credentials, and cleanup remain environment responsibilities.
+- Contradictory same-revision evidence remains visible rather than averaged away.
+
+### k6
+
+- k6 is restricted to explicitly non-production authorized targets.
+- Static script/import analysis reduces known escape paths but is **not** a JavaScript sandbox.
+- Deployment-level egress containment is required for **every** k6 run, including localhost-declared targets.
+- `AI_QA_K6_EXTERNAL_EGRESS_ENFORCED=true` asserts the prerequisite; it does not prove a firewall is configured correctly.
+- Business SLOs, workload models, data shape, topology, quotas, and distributed load infrastructure remain domain/deployment concerns.
+
+### Mobile / Appium
+
+The framework exposes controlled runtime/capability inspection boundaries. Devices, emulators, simulators, cloud sessions, builds, provisioning, certificates, and platform capabilities belong to the mobile test environment.
+
+---
+
+## Security and secrets
+
+- Deterministic policy, path ownership, host controls, redaction, transactions, and adversarial tests reduce risk; they do not prove absence of unknown vulnerabilities.
+- Application-layer controls do not replace process/container isolation, firewall/proxy policy, identity, secret management, or DLP.
+- Raw screenshots/binary artifacts may contain sensitive data and require deployment storage/access/retention controls.
+- Redaction is defense in depth, not permission to introduce secrets/private production data into an unapproved environment.
+- Secret-shaped `.env` paths are protected while `.env.example` remains reference documentation; target-specific secret locations still require governance.
+
+---
+
+## Evidence integrity and attestation
+
+- SHA-256 hashes and hash-chained journals provide internal tamper-evidence properties.
+- Symlink-resistant ownership checks distinguish “matching bytes” from “owned persisted object.”
+- The unsigned attestation can verify core subject ownership, journal validity, no pending mutation, and registered artifact hashes.
+- It is not actor identity, notarization, a trusted timestamp, digital signature, compliance proof, or test PASS.
 - A perfectly intact record can faithfully describe a failed or unresolved run.
 
-## Regulated-mode boundary
+---
 
-`AI_QA_REGULATED_MODE=true` adds engineering traceability and retention labeling. It does not certify HIPAA, PCI DSS, SOC 2, ISO 27001, FDA, SOX, GDPR, or another assurance regime.
+## Regulated mode and observability
 
-Compliance depends on organization-specific policies, legal interpretation, infrastructure, access controls, retention/deletion, validation, and audit evidence.
+### Regulated mode
 
-## Observability boundary
+`AI_QA_REGULATED_MODE=true` adds engineering traceability/retention labeling. It does not certify HIPAA, PCI DSS, SOC 2, ISO 27001, FDA, SOX, GDPR, or another assurance regime.
 
-- Structured events, metrics models, correlation/run IDs, artifacts, and OpenTelemetry-compatible code paths are observability surfaces.
-- Logs/metrics complement rather than replace underlying evidence and validation lineage.
-- Token/cost values are recorded when supplied by the provider rather than estimated as observed fact.
-- A telemetry backend/exporter/storage policy is a deployment choice.
+Compliance depends on organization-specific policy, infrastructure, legal interpretation, controls, and evidence.
 
-## Recovery boundary
+### Observability
 
-- Canonical state/evidence is persisted independently from model conversation history.
-- Recovery begins from persisted evidence; it does not reconstruct hidden model reasoning.
-- Automatic stale rollback preserves newer human work by refusing ambiguous fingerprints or path ownership.
-- Recovery rejects symlink aliases and verifies rollback bytes before restoration.
-- If integrity cannot be guaranteed, the correct result is an explicit blocker/infrastructure failure—not best-effort overwrite.
+- Structured events, metrics models, run IDs, artifacts, and OpenTelemetry-compatible paths are observability surfaces.
+- Telemetry complements but does not replace source evidence and validation lineage.
+- Token/cost values are recorded when supplied by the provider rather than invented as observation.
+- Backend/exporter/storage choices belong to deployment.
 
-## Container and infrastructure boundary
+---
 
-The included Dockerfile defines a non-root control-plane image shape. Deployment policy determines additional controls such as:
+## Container, CI/CD, and reference SUT
 
-- read-only filesystems;
-- seccomp/AppArmor/SELinux;
-- Kubernetes security context;
-- network policy;
-- secret injection;
-- persistent artifact storage;
-- image signing/provenance;
-- resource quotas and runtime monitoring.
+### Container / infrastructure
 
-## CI/CD boundary
+The included Dockerfile defines a non-root control-plane image shape. Deployment decides additional controls such as read-only filesystems, seccomp/AppArmor/SELinux, Kubernetes policy, network policy, secret injection, image signing, quotas, persistent storage, and runtime monitoring.
 
-`.github/workflows/ci.yml` is operator-dispatched and separates quality, deterministic evaluation, holdout, security, browser-reference, and optional model jobs.
+### CI/CD
 
-Workflow logic does not replace repository/organization policy for branch protection, trusted runners, secret exposure, artifact retention, dependency provenance, or untrusted-fork execution.
+The operator-dispatched workflow separates deterministic quality/evaluation/security/reference-browser and optional model paths. Workflow logic does not replace branch protection, trusted-runner policy, fork isolation, secret governance, artifact retention, or dependency provenance.
 
-## Reference-SUT boundary
+### Reference SUT
 
-The reference FastAPI application is deliberately small and deterministic. It exists to make selected evidence/failure paths reproducible. It is not a claim of coverage across every web architecture, authentication pattern, data system, distributed failure, or production traffic shape.
+The FastAPI reference application is intentionally small and deterministic. It makes selected evidence/failure paths reproducible; it is not coverage of every web architecture, auth pattern, data system, distributed failure, or traffic shape.
 
-## Context and retrieval boundary
+---
 
-The architecture favors targeted retrieval and bounded summaries over sending entire repositories, logs, or traces to the model.
+## Context / retrieval / configuration
 
-Additional RAG/vector infrastructure should be introduced only when it has a justified quality/trust benefit; avoiding it by default is a scope and trust decision, not a claim that retrieval platforms are never useful.
+### Context and retrieval
 
-## Configuration boundary
+The architecture prefers targeted retrieval and bounded summaries over sending entire repositories/logs/traces to the model. Additional RAG/vector infrastructure should be introduced when justified by a concrete quality/trust benefit; omitting it by default is a scope/trust choice, not a claim such systems are never useful.
 
-- `.env.example` is documentation only; runtime settings do not auto-load repository `.env` files.
-- Secret/configuration presence does not imply validity.
-- `AI_QA_BASE_REF` is explicit when merge-base analysis is required.
-- Raising budgets or enabling write/network authority is a deliberate configuration decision, not evidence that every resulting action is safe.
-- Configuration fingerprints capture runtime input identity; they do not prove configuration correctness.
+### Configuration
 
-See [`README.md`](README.md), [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md), [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md), [`SETUP.md`](SETUP.md), and [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md).
+- `.env.example` is documentation only; repository `.env` is not auto-loaded.
+- Presence does not imply validity.
+- `AI_QA_BASE_REF` is explicit for merge-base analysis.
+- Enabling write/network authority is a deliberate policy change, not evidence every subsequent action is safe.
+- Configuration fingerprints capture identity of inputs, not correctness of configuration.
+
+---
+
+## The non-claim rule
+
+> **Do not turn a strong implementation into a stronger claim than the evidence supports.**
+
+That discipline is part of the framework's quality model, not an apology for it.
+
+---
+
+## Related documentation
+
+- [Verification boundaries](VERIFICATION_BOUNDARIES.md)
+- [Production readiness](PRODUCTION_READINESS.md)
+- [Security architecture](SECURITY.md)
+- [Setup](SETUP.md)
+- [Troubleshooting](TROUBLESHOOTING.md)
+
+---
+
+[← Verification boundaries](VERIFICATION_BOUNDARIES.md) · [Documentation home](README.md)
 
 Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
