@@ -286,7 +286,7 @@ class AgentRunState(BaseModel):
     objective: str
     agent_version: str = "0.1.0"
     model_id: str = "not-invoked"
-    sdk_version: str = "0.2.143"
+    sdk_version: str = "NOT_VERIFIED"
     policy_version: str = "2"
     tool_schema_version: str = "2"
     configuration_version: str = "NOT_CAPTURED"
