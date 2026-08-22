@@ -83,23 +83,24 @@ def _spawn_process(
     env: Mapping[str, str],
 ) -> subprocess.Popen[bytes]:
     argv = [str(item) for item in command]
-    common = {
-        "cwd": cwd,
-        "env": dict(env),
-        "stdin": subprocess.DEVNULL,
-        "stdout": subprocess.PIPE,
-        "stderr": subprocess.PIPE,
-    }
     if os.name == "nt":
         return subprocess.Popen(
             argv,
+            cwd=cwd,
+            env=dict(env),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             creationflags=_WINDOWS_NEW_PROCESS_GROUP,
-            **common,
         )
     return subprocess.Popen(
         argv,
+        cwd=cwd,
+        env=dict(env),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         start_new_session=True,
-        **common,
     )
 
 
