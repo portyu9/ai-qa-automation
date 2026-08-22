@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import math
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
 from functools import lru_cache
 from typing import Any, Iterator
@@ -48,55 +48,83 @@ def configure_logging(level: int = logging.INFO) -> None:
 
 
 def emit_event(logger: logging.Logger, event: str, **fields: Any) -> None:
-    payload = {
-        "timestamp": datetime.now(UTC).isoformat(),
-        "event": event,
-        **sanitize(fields),
-    }
-    logger.info(json.dumps(payload, sort_keys=True, default=str))
+    # Logging/rendering is observational only; handler, exporter, or hostile
+    # object rendering failure must not alter deterministic runtime truth.
+    with suppress(Exception):
+        payload = {
+            "timestamp": datetime.now(UTC).isoformat(),
+            "event": event,
+            **sanitize(fields),
+        }
+        logger.info(json.dumps(payload, sort_keys=True, default=str))
     if event == "agent_run_finished":
-        record_run_metrics(
-            terminal_status=str(fields.get("terminal_status") or "NOT_VERIFIED"),
-            duration_seconds=fields.get("duration_seconds"),
-            tool_calls=fields.get("tool_calls"),
-        )
+        # Defense in depth if a custom telemetry implementation violates the
+        # fail-soft contract internally.
+        with suppress(Exception):
+            record_run_metrics(
+                terminal_status=str(fields.get("terminal_status") or "NOT_VERIFIED"),
+                duration_seconds=fields.get("duration_seconds"),
+                tool_calls=fields.get("tool_calls"),
+            )
 
 
 def get_tracer(name: str = _INSTRUMENTATION_SCOPE) -> Any:
     try:
         from opentelemetry import trace
-    except ImportError:
+
+        return trace.get_tracer(name)
+    except Exception:
+        # Provider/bootstrap failures are observational failures, not QA failures.
         return None
-    return trace.get_tracer(name)
 
 
 @contextmanager
 def trace_span(name: str) -> Iterator[Any | None]:
-    """Use OpenTelemetry tracing when installed without making it a runtime requirement."""
-    tracer = get_tracer()
+    """Use OpenTelemetry without allowing tracing failure to alter runtime truth."""
+    try:
+        tracer = get_tracer()
+    except Exception:
+        tracer = None
     if tracer is None:
         yield None
         return
-    with tracer.start_as_current_span(name) as span:
+    try:
+        span_context = tracer.start_as_current_span(name)
+        span = span_context.__enter__()
+    except Exception:
+        yield None
+        return
+
+    try:
         yield span
+    except BaseException as body_error:
+        with suppress(Exception):
+            span_context.__exit__(type(body_error), body_error, body_error.__traceback__)
+        # Telemetry may never suppress or replace the application/runtime exception.
+        raise
+    else:
+        # Span/exporter shutdown failure is observational only.
+        with suppress(Exception):
+            span_context.__exit__(None, None, None)
 
 
 def get_meter(name: str = _INSTRUMENTATION_SCOPE) -> Any:
-    """Return the global OpenTelemetry meter when the optional API is installed."""
+    """Return the global OpenTelemetry meter when the optional API is usable."""
     try:
         from opentelemetry import metrics
-    except ImportError:
+
+        return metrics.get_meter(name)
+    except Exception:
         return None
-    return metrics.get_meter(name)
 
 
 @lru_cache(maxsize=1)
 def _metric_instruments() -> dict[str, Any] | None:
     """Create reusable instruments once; exporter/provider configuration stays deployment-owned."""
-    meter = get_meter()
-    if meter is None:
-        return None
     try:
+        meter = get_meter()
+        if meter is None:
+            return None
         return {
             "runs": meter.create_counter(
                 "ai_qa.agent.runs",
@@ -135,6 +163,14 @@ def _metric_instruments() -> dict[str, Any] | None:
         return None
 
 
+def _instruments_or_none() -> dict[str, Any] | None:
+    """Defensively isolate public metric helpers from provider/bootstrap failures."""
+    try:
+        return _metric_instruments()
+    except Exception:
+        return None
+
+
 def _finite_non_negative(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
@@ -144,13 +180,20 @@ def _finite_non_negative(value: object) -> float | None:
     return number
 
 
+def _safe_text(value: object, *, default: str) -> str:
+    try:
+        return str(value)
+    except Exception:
+        return default
+
+
 def _safe_terminal_outcome(value: str | None) -> str:
-    normalized = str(value or "NOT_VERIFIED").upper()
+    normalized = _safe_text(value or "NOT_VERIFIED", default="NOT_VERIFIED").upper()
     return normalized if normalized in _TERMINAL_OUTCOMES else "NOT_VERIFIED"
 
 
 def _tool_surface(tool_name: str) -> str:
-    name = str(tool_name)
+    name = _safe_text(tool_name, default="")
     if name.startswith("mcp__qa__"):
         return "internal_qa"
     if name.startswith("mcp__github__"):
@@ -181,7 +224,7 @@ def record_run_metrics(
     tool_calls: object = None,
 ) -> None:
     """Record one terminal run without high-cardinality identifiers or sensitive attributes."""
-    instruments = _metric_instruments()
+    instruments = _instruments_or_none()
     if instruments is None:
         return
     outcome = _safe_terminal_outcome(terminal_status)
@@ -199,8 +242,8 @@ def record_run_metrics(
 
 def record_tool_event(tool_name: str, outcome: str) -> None:
     """Record coarse tool-surface lifecycle telemetry without arguments, paths, or payloads."""
-    instruments = _metric_instruments()
-    normalized_outcome = str(outcome).lower()
+    instruments = _instruments_or_none()
+    normalized_outcome = _safe_text(outcome, default="").lower()
     if instruments is None or normalized_outcome not in _TOOL_OUTCOMES:
         return
     _safe_add(
@@ -212,10 +255,10 @@ def record_tool_event(tool_name: str, outcome: str) -> None:
 
 def record_policy_denial(category: str) -> None:
     """Record a bounded denial category; raw policy reasons stay in sanitized logs/journals."""
-    instruments = _metric_instruments()
+    instruments = _instruments_or_none()
     if instruments is None:
         return
-    normalized = str(category).lower()
+    normalized = _safe_text(category, default="other").lower()
     if normalized not in _POLICY_CATEGORIES:
         normalized = "other"
     _safe_add(instruments["policy_denials"], 1, {"policy.category": normalized})
@@ -223,11 +266,11 @@ def record_policy_denial(category: str) -> None:
 
 def record_mcp_outcome(provider: str, outcome: str) -> None:
     """Record normalized outcomes only for the two approved external provider families."""
-    instruments = _metric_instruments()
+    instruments = _instruments_or_none()
     if instruments is None:
         return
-    normalized_provider = str(provider).lower()
-    normalized_outcome = str(outcome).upper()
+    normalized_provider = _safe_text(provider, default="other").lower()
+    normalized_outcome = _safe_text(outcome, default="FAILED").upper()
     if normalized_provider not in _MCP_PROVIDERS:
         normalized_provider = "other"
     if normalized_outcome not in _MCP_OUTCOMES:
