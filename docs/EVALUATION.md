@@ -1,6 +1,8 @@
 # Evaluation Strategy
 
-AI QA Automation is evaluated as a **software control system**, not only by whether a model produces convincing prose or a generated test becomes green.
+> **YP AI QA Automation Framework** · Designed and engineered by **Yunior Portal**
+
+The YP AI QA Automation Framework is evaluated as a **software control system**, not only by whether a model produces convincing prose or a generated test becomes green.
 
 The evaluation strategy targets the failure modes that matter for an autonomous QA system: false defect attribution, unsafe self-healing, meaningless generated tests, regression under-selection, prompt injection, authority expansion, fabricated external evidence, unbounded execution, and false PASS.
 
@@ -97,7 +99,7 @@ The same zero-known-failure principle applies to hard-safety holdout cases.
 
 ## Important deterministic assertions
 
-The repository's tests/evaluations are designed to assert behaviors including:
+The framework's tests/evaluations are designed to assert behaviors including:
 
 - model completion alone cannot produce verified success;
 - a retry at the same change revision cannot hide contradictory PASS/FAIL evidence;
@@ -148,7 +150,7 @@ The state/reporting model supports quality metrics such as:
 - execution duration and tool/network/mutation counts;
 - model token/cost information when actually observed.
 
-Raw numbers need a defined dataset and execution record before they should be quoted. The repository therefore does not invent benchmark percentages from unexecuted cases.
+Raw numbers need a defined dataset and execution record before they should be quoted. The framework therefore does not invent benchmark percentages from unexecuted cases.
 
 ## Interpretation standard
 
