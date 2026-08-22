@@ -2,13 +2,10 @@
 
 > **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
-## Architectural thesis
+The framework treats an LLM as a **bounded reasoning component inside a quality-engineering control system**, not as the authority that decides whether software is correct.
 
-The ƳƤ AI QA Automation Framework treats an LLM as a **bounded reasoning component inside a quality-engineering control system**, not as the authority that decides whether software is correct.
-
-> **Model reasoning is not test evidence.**
-
-Claude may interpret observations, form hypotheses, rank risk, and choose among approved actions. Controlled tools perform bounded observations and side effects. Deterministic policy, validation, integrity checks, and revision lineage decide what the framework can prove.
+> [!IMPORTANT]
+> **Model reasoning is not test evidence.** Claude may interpret observations, form hypotheses, rank risk, and choose among approved actions. Controlled tools perform bounded observations and side effects. Deterministic policy, validation, integrity checks, and revision lineage decide what the framework can prove.
 
 ## Authority hierarchy
 
@@ -21,30 +18,32 @@ CONTROLLED OBSERVATION / EXECUTION
         ↓
 PERSISTED EVIDENCE + PROVENANCE
         ↓
-DETERMINISTIC VALIDATION LINEAGE
+DETERMINISTIC SUBJECT-BOUND VALIDATION
         ↓
 MODEL INTERPRETATION / NEXT ACTION
         ↓
 STRUCTURED TERMINAL REPORT
 ```
 
-The hierarchy is deliberately asymmetric: lower layers can constrain model behavior; model reasoning cannot override lower-layer truth.
+The hierarchy is deliberately asymmetric: lower layers constrain model behavior; model reasoning cannot override lower-layer truth.
 
 ## Design invariants
 
 | Invariant | Architectural consequence |
 |---|---|
-| Model prose cannot prove PASS | Terminal success requires deterministic validation closure |
+| Model prose cannot prove PASS | terminal success requires deterministic validation closure |
 | Target content is untrusted | SUT source/tests/DOM/logs/API responses and target agent config cannot redefine policy |
-| Authority is narrower than capability | Runtime exposes purpose-built QA tools rather than general shell/edit/web authority |
-| Configuration is not provider evidence | External availability is derived from observed provider interaction |
-| Writes are higher risk than reads | Autonomous writes are explicit, path-confined, transactional, and revision-gated |
-| Model confidence cannot authorize mutation | Self-healing uniqueness, semantic eligibility, stability, and patch safety are independently constrained |
-| Uncertainty remains visible | Missing, contradictory, stale, or blocked evidence produces explicit non-PASS outcomes |
-| Runtime truth is revision-aware | Older evidence cannot silently certify newer bytes |
-| Recovery obeys live ownership rules | Stale rollback requires the same confinement, non-symlink ownership, hash, and fingerprint guarantees |
-| Resource use is independently bounded | Turns, tools, network, mutations, repetition, time, and model cost have distinct controls |
-| Integrity is not correctness | Hashes/journals/attestations preserve provenance but never override validation |
+| Authority is narrower than capability | runtime exposes purpose-built QA tools rather than general shell/edit/web authority |
+| Configuration is not provider evidence | external availability is derived from observed provider interaction |
+| Writes are higher risk than reads | autonomous writes are explicit, path-confined, transactional, and revision-gated |
+| Validation must prove the changed subject | targeted pytest must explicitly select the exact pending mutation path |
+| Model confidence cannot authorize mutation | locator uniqueness, semantic eligibility, stability, and patch safety are independently constrained |
+| Uncertainty remains visible | missing, contradictory, stale, or blocked evidence produces explicit non-PASS outcomes |
+| Runtime truth is revision-aware | older evidence cannot silently certify newer bytes |
+| Recovery obeys live ownership rules | stale rollback requires the same confinement, non-symlink ownership, hash, and fingerprint guarantees |
+| Resource use is independently bounded | turns, tools, network, mutations, repetition, time, and model cost have distinct controls |
+| Static script checks are not a sandbox | every k6 execution requires independently enforced infrastructure egress |
+| Integrity is not correctness | hashes/journals/attestations preserve provenance but never override validation |
 
 ## System view
 
@@ -93,7 +92,7 @@ sequenceDiagram
     participant V as Deterministic validation
 
     O->>R: Submit bounded objective
-    R->>R: Validate trust roots + acquire workspace lease
+    R->>R: Validate trust roots + acquire owned workspace lease
     R->>R: Recover stale mutation only if ownership is provable
     R->>R: Fingerprint workspace + build change intelligence
     R->>E: Persist bootstrap evidence
@@ -115,7 +114,7 @@ sequenceDiagram
     end
 
     C-->>R: Agent SDK result
-    R->>V: Evaluate active gate lineage + current revision
+    R->>V: Evaluate active gate lineage + current revision + bound subject
     V-->>R: Deterministic terminal outcome
     R-->>O: Structured report + evidence references + provenance
 ```
@@ -141,7 +140,7 @@ The Agent SDK working/configuration root is set explicitly to this trusted frame
 
 ### Untrusted target plane
 
-The target repository/worktree is data even when it contains instruction-shaped files. Source, tests, comments, `CLAUDE.md`, `.claude/`, `.mcp.json`, DOM, logs, screenshots, API responses, fixtures, and dependency metadata can contribute evidence but cannot acquire control-plane authority.
+The target repository/worktree is data even when it contains instruction-shaped files. Source, tests, comments, `CLAUDE.md`, `.claude/`, `.mcp.json`, DOM, logs, screenshots, API responses, fixtures, workload scripts, and dependency metadata can contribute evidence but cannot acquire control-plane authority.
 
 The control root, artifact root, and target workspace remain disjoint trust domains.
 
@@ -166,6 +165,8 @@ The Agent SDK path uses:
 
 The internal server exposes 18 narrow capabilities spanning repository inspection, pytest, API/browser evidence, classification, bounded source reads, coverage search/planning, regression prioritization, test review/creation, locator verification/healing, schema validation, CI analysis, Appium inspection, and k6 assessment.
 
+Live autonomous mutation is intentionally restricted to Python tests because deterministic mutation closure is pytest-backed. Reusable patch utilities may understand Python/JavaScript/TypeScript artifacts, but non-Python live writes are not authorized merely because the library can parse them.
+
 There is no generic existing-test rewrite tool in the live agent surface.
 
 ## Deterministic bootstrap before model execution
@@ -189,34 +190,15 @@ Only a bounded summary is placed in model context. The underlying evidence remai
 
 ### Canonical QA decision state
 
-`AgentRunState` records evidence relevant to the QA conclusion:
-
-- objective and run/session identity;
-- model/SDK/configuration provenance;
-- target SHA and change revision;
-- observations and hypotheses;
-- evidence references;
-- failure classification;
-- validation lineage;
-- modified files;
-- provider outcomes;
-- token/cost/duration data;
-- terminal outcome.
+`AgentRunState` records objective/run identity, model/SDK/configuration provenance, target SHA, change revision, observations, hypotheses, evidence references, failure classification, validation lineage, modified-file history, provider outcomes, token/cost/duration data, and terminal outcome.
 
 ### Process-control state
 
-`runtime.json` holds operational safety state:
-
-- workspace fingerprint;
-- lease identity;
-- budget counters;
-- tool circuits;
-- pending mutation metadata;
-- journal head.
+`runtime.json` records workspace fingerprint, lease identity, budget counters, tool circuits, pending mutation metadata, and journal head.
 
 Keeping these states separate prevents recovery mechanics from becoming QA conclusions and prevents conversational state from becoming the only copy of critical runtime truth.
 
-## Evidence semantics
+## Evidence semantics and ownership
 
 `EvidenceItem` separates `OBSERVED_FACT` from `MODEL_INTERPRETATION`.
 
@@ -224,41 +206,54 @@ Keeping these states separate prevents recovery mechanics from becoming QA concl
 
 - run-root confinement;
 - duplicate-ID/path immutability;
-- sanitization of supported model-facing/text persistence paths;
+- model-facing text sanitization where applicable;
 - artifact hashing;
-- manifests;
+- evidence manifests;
 - optional regulated audit chaining;
-- explicit `RAW` treatment for binary artifacts.
+- explicit `RAW` treatment for binary artifacts;
+- non-symlink ownership checks for evidence control files and registered artifact paths.
 
-Evidence integrity and evidence meaning are separate concerns.
+The operational journal applies the same ownership philosophy: a journal path that is or becomes a symlink is rejected rather than followed.
+
+Evidence integrity and evidence meaning remain separate concerns.
 
 ## Runtime result semantics
 
 The complete contract lives in [`RESULT_CONTRACT.md`](RESULT_CONTRACT.md).
 
-Important architectural properties:
+Key properties:
 
 - Agent SDK subtype `success` is necessary but not sufficient for terminal `SUCCESS`;
 - active deterministic FAIL remains failure;
 - non-PASS validation outcomes are never promoted by model judgment;
-- same-gate PASS/FAIL at the same revision is treated as contradictory evidence;
+- same-gate PASS/FAIL at the same revision is contradictory evidence;
 - newer evidence supersedes older gate evidence only through gate identity + revision lineage;
-- changed tests require patch-safety, targeted pytest, and full-regression PASS at the current revision.
+- changed tests require exact-path patch safety, exact-path-bound targeted pytest, and full-regression PASS at the current revision;
+- recovery inspection uses the same subject-bound closure rule.
 
 ## Safe self-healing authority
 
 Self-healing separates **proposal intelligence** from **mutation authority**.
 
-The model may propose candidates. Playwright measures candidate uniqueness in the live DOM. The deterministic self-healing engine then overwrites model-provided semantic/stability confidence with policy-owned values:
+The model may propose candidates. Playwright measures candidate uniqueness in the live DOM. Deterministic code then constrains eligibility:
 
 - supported locator syntax is parsed without executing locator code;
-- semantic tokens are derived from the original and candidate locator contracts;
-- low semantic overlap is rejected for autonomous repair;
+- semantic tokens are derived from original and candidate locator contracts;
+- low semantic overlap is rejected;
 - strategy stability is fixed by policy;
+- model-provided semantic/stability scores are overwritten before authorization;
 - positional/XPath-style candidates are rejected;
-- exact target file hash binds the proposal to the analyzed bytes.
+- exact target file hash binds proposal to analyzed bytes.
 
-This means “unique and model-confident” is still insufficient for autonomous mutation.
+“Unique and model-confident” remains insufficient for autonomous mutation.
+
+## Coverage-aware generation authority
+
+Coverage search creates observed repository evidence. Test planning is interpretation derived from that evidence.
+
+Model-supplied “already covered” labels are intentionally advisory: they cannot suppress deterministic candidate scenarios by themselves. Before implementation, a candidate is reconciled with same-run observed coverage so the framework avoids both unsafe omission and unnecessary duplication.
+
+Live generated-file mutation is Python/pytest-backed and remains subject to the same transaction closure as self-healing.
 
 ## Workspace and mutation safety
 
@@ -269,18 +264,20 @@ Before mutation:
 - target must be Git-backed;
 - fingerprint must still match;
 - path must remain inside the workspace;
-- absolute/traversal/symlink ambiguity is rejected;
+- absolute/traversal/symlink ambiguity is rejected by both orchestration and the safe patch library;
 - no prior mutation transaction may remain unresolved.
 
-Mutation then becomes a rollback-backed transaction. Existing bytes are snapshotted under trusted artifact storage and hash-bound. The candidate revision must close deterministic validation before the backup is discarded.
+Lease files, rollback directories, rollback backups, evidence files, and recovery journals are also checked for owned non-symlink paths where the framework controls those files.
 
-Crash recovery reuses the same ownership philosophy: previous run directory, pending target path, runtime metadata, rollback path, fingerprint, and backup hash must all remain trustworthy. Ambiguity blocks automatic restoration.
+Mutation becomes a rollback-backed transaction. Existing bytes are snapshotted under trusted artifact storage and hash-bound. The candidate revision must close deterministic validation before the backup is discarded.
+
+Crash recovery reuses the same ownership philosophy: previous run directory, journal, target path, runtime metadata, rollback directory/backup, fingerprint, and backup hash must remain trustworthy. Ambiguity blocks automatic restoration.
 
 See [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md).
 
 ## Network, API, browser, and performance boundaries
 
-Trusted network configuration is host-only. Hostnames/IP literals are canonicalized; wildcard, URL-shaped, port-bearing, path-bearing, and malformed entries are rejected before runtime use.
+Trusted network configuration is host-only. Hostnames/IP literals are canonicalized; wildcard, URL-shaped, port-bearing, scoped, path-bearing, and malformed entries are rejected before runtime use.
 
 API/browser access then applies the explicit allowlist:
 
@@ -289,11 +286,12 @@ API/browser access then applies the explicit allowlist:
 - ambient proxy inheritance is avoided;
 - browser navigation/subresources/WebSockets pass through host policy;
 - service workers are blocked in the evidence context;
-- browser final navigation is rechecked.
+- final browser navigation is rechecked.
 
-k6 additionally requires explicit non-production classification, target binding, controlled import/script analysis, and an infrastructure-egress prerequisite for non-local targets.
+k6 additionally requires explicit non-production classification, injected target binding, controlled import/script analysis, **and independently enforced infrastructure egress for every execution, including localhost**. Static JavaScript inspection is not represented as a network sandbox.
 
-These are application-layer controls and do not pretend to replace an operating-system/container/network sandbox.
+> [!NOTE]
+> Application-level target/host rules and an egress-precondition flag are not themselves a firewall. The deployment owns the actual isolation mechanism.
 
 ## External MCP authorization
 
@@ -305,9 +303,17 @@ External tool names are tokenized conservatively:
 destructive token > write token > read token
 ```
 
-This prevents names such as a read-prefixed create/delete action from inheriting read authority merely because the first verb sounds safe. Unknown operations require approval and therefore fail closed during unattended execution.
+This prevents read-prefixed create/delete actions from inheriting read authority. Unknown operations require approval and therefore fail closed during unattended execution. Numeric business identifiers are not normalized as HTTP/provider status codes without contextual transport semantics.
 
 See [`MCP.md`](MCP.md).
+
+## Traceability and attestation
+
+`ai-qa attest` is deliberately unsigned. `integrity_verified=true` requires owned core persisted subjects, a valid runtime journal chain, no pending mutation, and a matching SHA-256 for every artifact registered in the evidence manifest.
+
+That verifies internal persisted-record integrity only. It does not establish actor identity, notarization, compliance, a trusted timestamp, or test success.
+
+See [`TRACEABILITY.md`](TRACEABILITY.md).
 
 ## Evaluation as architecture
 
@@ -319,8 +325,15 @@ See [`EVALUATION.md`](EVALUATION.md).
 
 ## Deployment boundaries
 
-Source-level controls, credentialed providers, external applications/devices, load targets, process isolation, network enforcement, identity, secret management, and retention each have their own evidence owner. The framework keeps those boundaries explicit rather than allowing one green layer to stand in for another.
+Source-level controls, credentialed providers, external applications/devices, workload targets, process isolation, network enforcement, identity, secret management, and retention each have their own evidence owner. The framework keeps those boundaries explicit rather than allowing one green layer to stand in for another.
 
-See [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md), [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md), and [`README.md`](README.md).
+> [!TIP]
+> Read [`RESULT_CONTRACT.md`](RESULT_CONTRACT.md) immediately after this document; it is the authoritative bridge between architecture and terminal truth.
+
+---
+
+Related: [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) · [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md) · [`TECHNICAL_WALKTHROUGH.md`](TECHNICAL_WALKTHROUGH.md)
+
+[← Documentation home](README.md)
 
 Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
