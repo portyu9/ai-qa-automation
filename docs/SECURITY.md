@@ -1,6 +1,8 @@
 # Security Architecture
 
-Security controls are enforced in deterministic code in addition to model instructions. The design assumes the model can be confused by adversarial content and therefore does not make prompt compliance the primary security boundary.
+> **YP AI QA Automation Framework** · Designed and engineered by **Yunior Portal**
+
+Security controls in the YP AI QA Automation Framework are enforced in deterministic code in addition to model instructions. The design assumes the model can be confused by adversarial content and therefore does not make prompt compliance the primary security boundary.
 
 ## Security principles
 
@@ -13,7 +15,7 @@ Security controls are enforced in deterministic code in addition to model instru
 
 ## Fail-closed runtime authority
 
-The live runtime exposes the project-owned QA tool inventory rather than general mutation/network tools. Unknown tools are denied. Unapproved MCP namespaces are denied. Approval-required actions fail closed during unattended execution.
+The live runtime exposes the framework-owned QA tool inventory rather than general mutation/network tools. Unknown tools are denied. Unapproved MCP namespaces are denied. Approval-required actions fail closed during unattended execution.
 
 Agent SDK configuration additionally restricts generic Bash/Edit/Write/Web surfaces and uses project-only settings with a fixed Skill allowlist.
 
@@ -29,9 +31,10 @@ For autonomous mutations, path authorization is only the first control. The runt
 - an exclusive workspace lease;
 - a current fingerprint matching the inspected baseline;
 - explicit test-write enablement;
-- no unresolved previous mutation transaction.
+- no unresolved previous mutation transaction;
+- unambiguous mutation-path ownership with no absolute path, traversal, or symlink component.
 
-Out-of-band changes block mutation. This prevents an agent from silently writing against a workspace whose contents changed after analysis.
+Out-of-band changes block mutation. This prevents an agent from silently writing against a workspace whose contents changed after analysis or redirecting a write through a symlink alias.
 
 ## Transactional patch integrity
 
@@ -42,11 +45,18 @@ Safe patching combines:
 - syntax/test-quality validation;
 - unsafe-diff pattern checks;
 - trusted rollback snapshots outside the SUT;
+- rollback snapshot path confinement and hash verification;
 - post-change patch-safety + targeted pytest + full-regression requirements.
 
 Guardrails block common “make it green” shortcuts such as skips/xfails, arbitrary sleeps, focused-only tests, indiscriminate timeout inflation, assertion removal/weakening, tautologies, and broad exception suppression.
 
-A failed/unverified transaction rolls back. Crash recovery restores a stale mutation only when the persisted fingerprint proves no newer human/out-of-band change would be overwritten.
+A failed/unverified transaction rolls back only when rollback integrity is established. Crash recovery restores a stale mutation only when the persisted fingerprint proves no newer human/out-of-band change would be overwritten.
+
+## Evidence and artifact confinement
+
+Run-scoped evidence directories are resolved under the trusted artifact root. Empty/root-aliasing, absolute, and traversal-style run identifiers that would escape or collapse that boundary are rejected. Artifact paths are resolved under the run root, duplicate evidence IDs and artifact paths are immutable, and symlink-based artifact escapes are rejected.
+
+These controls reduce cross-run and filesystem-boundary ambiguity; they do not substitute for deployment-level access controls or storage policy.
 
 ## API and browser network boundaries
 
@@ -58,7 +68,7 @@ Network-capable actions consume an independent runtime budget in addition to the
 
 ## Performance-test safety
 
-Production load testing is denied by policy. k6 targets must pass the runtime network allowlist and be explicitly classified as non-production.
+Production load testing is denied by policy. k6 targets must pass the runtime network allowlist and be explicitly classified as non-production. The policy also rejects production-like DNS labels such as `prod`/`production` forms even when caller-supplied environment metadata claims staging or QA.
 
 The runner requires scripts to bind to the injected approved target and applies bounded static restrictions including rejection of:
 
@@ -74,6 +84,8 @@ Non-local k6 additionally requires the trusted `AI_QA_K6_EXTERNAL_EGRESS_ENFORCE
 ## MCP security
 
 External MCP must match an approved vendor identity and be explicitly enabled. GitHub MCP is additionally configured read-only at the server layer. Runtime policy independently separates recognized read operations, approval-required writes, destructive actions, and unknown actions.
+
+External action names are normalized across snake/camel naming and evaluated conservatively: destructive verbs dominate write verbs, which dominate recognized reads. Resource-noun collisions such as `pull request` are handled explicitly so legitimate reads are not mislabeled while mixed names such as read-plus-create/delete cannot smuggle higher authority behind a read prefix.
 
 Target/user/plugin MCP configuration is not inherited into the live runtime. Remote MCP content is sanitized and persisted as untrusted evidence; it cannot redefine policy, hooks, Skills, thresholds, or terminal-status rules.
 
