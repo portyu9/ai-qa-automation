@@ -1,9 +1,7 @@
-name: Manual CI — AI QA Automation
+name: Manual CI — ƳƤ AI QA Automation Framework
 
-# Final repository code/config step after merge-readiness audit; remains operator-dispatched only.
-# Intentionally manual-only during the controlled verification stage.
-# Do not add push/pull_request/schedule triggers until repository secrets,
-# branch policy, and desired execution cost have been reviewed.
+# Designed and engineered by Ƴunior Ƥortal (ƳƤ).
+# Operator-dispatched only. Automatic triggers require deliberate repository policy review.
 on:
   workflow_dispatch:
     inputs:

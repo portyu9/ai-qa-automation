@@ -5,10 +5,10 @@ build-backend = "hatchling.build"
 [project]
 name = "ai-qa-automation"
 version = "0.1.0"
-description = "Agentic AI quality engineering platform with deterministic evidence and policy controls"
+description = "ƳƤ AI QA Automation Framework — agentic quality engineering with deterministic evidence and policy controls"
 readme = "README.md"
 requires-python = ">=3.11"
-authors = [{name = "Yunior Portal"}]
+authors = [{name = "Ƴunior Ƥortal"}]
 license = {file = "LICENSE"}
 dependencies = [
   "anyio>=4.8,<5",

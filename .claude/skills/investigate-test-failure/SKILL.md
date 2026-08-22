@@ -4,6 +4,8 @@ description: Evidence-driven automated-test failure investigation and classifica
 ---
 # Investigate Test Failure
 
+> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
+
 ## Use when
 A test failed and the cause is unknown or contested.
 
@@ -45,3 +47,5 @@ SUCCESS only after deterministic validation; otherwise FAILURE, BLOCKED, POLICY_
 
 ## Output
 Classification, confidence, concise rationale, competing hypotheses, evidence IDs, validations, and limitations.
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../../../LICENSE`](../../../LICENSE).

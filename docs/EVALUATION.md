@@ -1,6 +1,8 @@
 # Evaluation Strategy
 
-AI QA Automation is evaluated as a **software control system**, not only by whether a model produces convincing prose or a generated test becomes green.
+> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
+
+The ƳƤ AI QA Automation Framework is evaluated as a **software control system**, not only by whether a model produces convincing prose or a generated test becomes green.
 
 The evaluation strategy targets the failure modes that matter for an autonomous QA system: false defect attribution, unsafe self-healing, meaningless generated tests, regression under-selection, prompt injection, authority expansion, fabricated external evidence, unbounded execution, and false PASS.
 
@@ -9,14 +11,14 @@ The evaluation strategy targets the failure modes that matter for an autonomous 
 | Layer | Purpose | Typical authority |
 |---|---|---|
 | Unit tests | Schemas, policy, redaction, intelligence logic, budgets, recovery, change intelligence, traceability | Deterministic |
-| Integration tests | Evidence/state/report flow, manifests, audit chaining, reference-SUT behavior, SDK contracts | Deterministic; some marked environment-dependent |
+| Integration tests | Evidence/state/report flow, manifests, audit chaining, reference-SUT behavior, SDK contracts | Deterministic; some environment-dependent |
 | Security/policy tests | Governance protection, prompt-injection-shaped data, destructive actions, path/tool/network boundaries | Deterministic |
 | Primary scenario evaluator | Fixed 34 functional/adversarial scenarios under `evals/scenarios/` | Deterministic benchmark |
-| Holdout evaluator | Separate H-series under `evals/holdout/` | Intentional readiness benchmark |
-| Browser-marked tests | Real browser behavior, isolated from the default pytest marker set | Browser runtime required |
-| Model-marked tests | Live Claude Agent SDK behavior, isolated behind explicit credentials | Environment required |
+| Holdout evaluator | Separate H-series under `evals/holdout/` | Independent readiness benchmark |
+| Browser-marked tests | Real browser behavior, isolated from the default pytest marker set | Browser runtime |
+| Model-marked tests | Live Claude Agent SDK behavior, isolated behind explicit credentials | Credentialed provider runtime |
 
-The architecture deliberately separates repository-contained determinism from live-model/integration checks so a missing credential cannot accidentally turn into a passing simulation of that integration.
+The architecture deliberately separates repository-contained determinism from provider and target-environment checks so one evidence class cannot masquerade as another.
 
 ## Routine primary evaluation
 
@@ -53,7 +55,7 @@ They cover classes including:
 
 ## Holdout discipline
 
-The H-series corpus is physically separate under `evals/holdout/` and executed only by:
+The H-series corpus is physically separate under `evals/holdout/` and executed by:
 
 ```bash
 python evals/holdout_runner.py
@@ -67,9 +69,9 @@ Holdout scenarios set:
 "holdout": true
 ```
 
-The holdout directory is intentionally excluded from `make verify-local`. Routine implementation/tuning work should not repeatedly execute the holdout set and then optimize directly against its exact fixtures.
+The holdout directory is intentionally excluded from `make verify-local` so routine implementation work does not optimize directly against its exact fixtures.
 
-The initial H-series includes variants around:
+The H-series includes variants around:
 
 - competing evidence signals;
 - model-interpretation isolation from observed facts;
@@ -78,14 +80,14 @@ The initial H-series includes variants around:
 - security-critical regression preservation;
 - very-low-confidence regression broadening.
 
-A holdout failure is a readiness signal. The acceptable response is to investigate the underlying behavior and add a general control/regression test. The unacceptable responses are to:
+A holdout failure is a signal to investigate the underlying behavior and add a general control or regression test. Do not:
 
-- relabel the failing holdout as primary solely to remove the holdout failure;
+- relabel a failing holdout solely to remove the failure;
 - change the expected result to match broken behavior;
 - relax hard-safety thresholds after seeing the failure;
 - special-case the exact fixture while leaving the general weakness intact.
 
-If a holdout scenario must eventually be retired or promoted into the primary corpus because it is no longer secret from the development loop, replace its independent coverage with a genuinely new holdout case rather than shrinking the readiness surface.
+If a holdout scenario is promoted into the primary corpus, replace its independent coverage with a genuinely new holdout case rather than shrinking the independent evaluation surface.
 
 ## Fixed thresholds
 
@@ -97,7 +99,7 @@ The same zero-known-failure principle applies to hard-safety holdout cases.
 
 ## Important deterministic assertions
 
-The repository's tests/evaluations are designed to assert behaviors including:
+The framework's tests and evaluations are designed to assert behaviors including:
 
 - model completion alone cannot produce verified success;
 - a retry at the same change revision cannot hide contradictory PASS/FAIL evidence;
@@ -125,15 +127,7 @@ The repository's tests/evaluations are designed to assert behaviors including:
 
 ## What an evaluation result means
 
-A deterministic evaluator answers whether the current implementation behaved as expected for its predefined scenarios. It does **not** prove:
-
-- that Claude will behave correctly for every prompt;
-- that authenticated GitHub/Atlassian MCP works in a particular account;
-- that a real browser/device/application behaves like the reference fixtures;
-- that infrastructure sandboxing/egress is correctly deployed;
-- that a security control is complete against unknown future attacks.
-
-Those require separate evidence.
+A deterministic evaluator answers whether the implementation behaved as expected for its predefined scenarios. It does not generalize beyond the evidence boundary of that run: provider accounts, real applications, device fleets, infrastructure controls, and unknown future attacks each require their own evidence source.
 
 ## Metrics that matter
 
@@ -148,7 +142,7 @@ The state/reporting model supports quality metrics such as:
 - execution duration and tool/network/mutation counts;
 - model token/cost information when actually observed.
 
-Raw numbers need a defined dataset and execution record before they should be quoted. The repository therefore does not invent benchmark percentages from unexecuted cases.
+Benchmark percentages should be quoted only from a defined dataset and corresponding execution record.
 
 ## Interpretation standard
 
@@ -163,6 +157,6 @@ The number of generated tests or repairs that become green is not sufficient evi
 - hidden flakiness;
 - unbounded execution.
 
-Anything not actually executed remains `NOT_VERIFIED`, including the current-head primary and holdout suites until their deliberate execution occurs.
-
 See [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md), [`OPERATIONS.md`](OPERATIONS.md), and [`TECHNICAL_WALKTHROUGH.md`](TECHNICAL_WALKTHROUGH.md).
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).

@@ -18,7 +18,18 @@ class EvidenceStore:
     def __init__(self, root: Path, run_id: str, *, regulated_mode: bool = False) -> None:
         self.run_id = run_id
         self.regulated_mode = regulated_mode
-        self.run_root = (root / run_id).resolve()
+        artifact_root = root.expanduser().resolve()
+        requested_run = Path(run_id)
+        if requested_run.is_absolute() or not requested_run.parts or ".." in requested_run.parts:
+            raise ValueError("evidence run_id escapes artifact root")
+        cursor = artifact_root
+        for part in requested_run.parts:
+            cursor = cursor / part
+            if cursor.is_symlink():
+                raise ValueError("evidence run_id contains a symlink and has ambiguous ownership")
+        self.run_root = (artifact_root / requested_run).resolve()
+        if self.run_root == artifact_root or artifact_root not in self.run_root.parents:
+            raise ValueError("evidence run_id escapes artifact root")
         self.run_root.mkdir(parents=True, exist_ok=True)
         self._items: dict[str, EvidenceItem] = {}
         self._artifacts: dict[str, ArtifactRecord] = {}
@@ -62,8 +73,16 @@ class EvidenceStore:
         sanitization_status: SanitizationStatus = SanitizationStatus.RAW,
         retention_classification: str | None = None,
     ) -> tuple[str, str]:
-        destination = (self.run_root / relative_path).resolve()
-        if self.run_root not in destination.parents and destination != self.run_root:
+        requested = Path(relative_path)
+        if requested.is_absolute() or not requested.parts or ".." in requested.parts:
+            raise ValueError("artifact path must be a non-traversing relative path under run root")
+        cursor = self.run_root
+        for part in requested.parts:
+            cursor = cursor / part
+            if cursor.is_symlink():
+                raise ValueError("artifact path contains a symlink and has ambiguous ownership")
+        destination = (self.run_root / requested).resolve()
+        if self.run_root not in destination.parents:
             raise ValueError("artifact path escapes run root")
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.exists():
@@ -130,7 +149,9 @@ class EvidenceStore:
             "payload": sanitize(payload),
             "previous_hash": self._audit_previous_hash,
         }
-        canonical = json.dumps(core, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+        canonical = json.dumps(
+            core, sort_keys=True, separators=(",", ":"), default=str
+        ).encode("utf-8")
         event_hash = self.hash_bytes(canonical)
         record = {**core, "event_hash": event_hash}
         with (self.run_root / "audit-log.jsonl").open("a", encoding="utf-8") as stream:
@@ -138,7 +159,6 @@ class EvidenceStore:
             stream.flush()
             os.fsync(stream.fileno())
         self._audit_previous_hash = event_hash
-
 
     def _restore_manifest(self) -> None:
         path = self.run_root / "evidence-manifest.json"
@@ -151,16 +171,16 @@ class EvidenceStore:
             manifest_regulated = bool(data.get("regulated_mode", False))
             if manifest_regulated != self.regulated_mode:
                 raise ValueError("evidence manifest regulated_mode mismatch")
-            self._items = {
-                item.id: item
-                for item in (EvidenceItem.model_validate(raw) for raw in data.get("evidence", []))
-            }
-            self._artifacts = {
-                item.artifact_id: item
-                for item in (
-                    ArtifactRecord.model_validate(raw) for raw in data.get("artifacts", [])
-                )
-            }
+            evidence_records = [EvidenceItem.model_validate(raw) for raw in data.get("evidence", [])]
+            artifact_records = [ArtifactRecord.model_validate(raw) for raw in data.get("artifacts", [])]
+            if len({item.id for item in evidence_records}) != len(evidence_records):
+                raise ValueError("evidence manifest contains duplicate evidence ids")
+            if len({item.artifact_id for item in artifact_records}) != len(artifact_records):
+                raise ValueError("evidence manifest contains duplicate artifact ids")
+            if len({item.path for item in artifact_records}) != len(artifact_records):
+                raise ValueError("evidence manifest contains duplicate artifact paths")
+            self._items = {item.id: item for item in evidence_records}
+            self._artifacts = {item.artifact_id: item for item in artifact_records}
         except (json.JSONDecodeError, TypeError, KeyError) as exc:
             raise ValueError("evidence manifest could not be restored") from exc
 
@@ -206,7 +226,9 @@ class EvidenceStore:
                 raise ValueError(f"regulated evidence integrity check failed: {evidence_id}")
         for artifact_id, item in self._artifacts.items():
             if artifact_hashes[artifact_id] != item.content_hash:
-                raise ValueError(f"regulated artifact registry integrity check failed: {artifact_id}")
+                raise ValueError(
+                    f"regulated artifact registry integrity check failed: {artifact_id}"
+                )
 
     def verify_audit_chain(self) -> bool:
         """Verify sequence, previous-hash linkage, and each regulated audit event hash."""
@@ -241,7 +263,9 @@ class EvidenceStore:
             return
         if not self.verify_audit_chain():
             raise ValueError("regulated audit log integrity check failed")
-        lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        lines = [
+            line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
+        ]
         if not lines:
             return
         last = json.loads(lines[-1])
@@ -263,7 +287,9 @@ class EvidenceStore:
                 "path": audit_path.name,
                 "events": self._audit_sequence,
                 "last_event_hash": self._audit_previous_hash,
-                "content_hash": self.hash_bytes(audit_path.read_bytes()) if audit_path.exists() else None,
+                "content_hash": self.hash_bytes(audit_path.read_bytes())
+                if audit_path.exists()
+                else None,
             }
         rendered = json.dumps(data, indent=2, sort_keys=True)
         handle, raw_temp = tempfile.mkstemp(

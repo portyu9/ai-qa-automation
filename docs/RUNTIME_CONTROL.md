@@ -1,14 +1,16 @@
 # Runtime Control and Recovery
 
-Runtime safety is treated as a deterministic subsystem, not as a prompt convention. The model-facing QA state and the process-control state are deliberately separate so a conversational or model failure cannot erase workspace ownership, pending-mutation, budget, or journal facts.
+> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
+
+Runtime safety in the ƳƤ AI QA Automation Framework is treated as a deterministic subsystem, not as a prompt convention. The model-facing QA state and the process-control state are deliberately separate so a conversational or model failure cannot erase workspace ownership, pending-mutation, budget, or journal facts.
 
 ## Workspace ownership
 
 A live run acquires an OS advisory lock whose lock file lives under the trusted artifact root, not inside the target repository. Two cooperating agent processes cannot hold the same target-workspace lease at the same time. The operating system releases the lock if the owning process exits.
 
-The lease is necessary but not sufficient. Autonomous writes additionally require a Git-backed isolated worktree whose fingerprint still matches the baseline captured by the runtime. The fingerprint combines `HEAD`, porcelain status, and content hashes for dirty/untracked files. Before a mutation, the universal tool hook recomputes it; any mismatch is treated as concurrent/out-of-band drift and blocks the write.
+The lease is necessary but not sufficient. Autonomous writes additionally require a Git-backed isolated worktree whose fingerprint still matches the baseline captured by the runtime. The fingerprint combines `HEAD`, porcelain worktree output, and content hashes for dirty/untracked files. Before a mutation, the universal tool hook recomputes it; any mismatch is treated as concurrent/out-of-band drift and blocks the write.
 
-This is an optimistic-concurrency invariant around the SUT:
+Mutation path ownership is also explicit: absolute paths, `..` traversal, workspace escapes, and symlink components are rejected before a transaction is prepared. The runtime does not treat a symlink alias as equivalent ownership of its resolved target.
 
 > **No autonomous mutation proceeds unless the runtime can prove it is still acting on the workspace state it inspected.**
 
@@ -18,11 +20,11 @@ This is an optimistic-concurrency invariant around the SUT:
 stateDiagram-v2
     [*] --> Baseline: lease acquired + fingerprint captured
 
-    Baseline --> Blocked: workspace drift / non-Git target / write policy denial
+    Baseline --> Blocked: workspace drift / non-Git target / write policy denial / ambiguous path ownership
     Baseline --> Pending: approved mutation + trusted rollback snapshot
 
     Pending --> PatchSafe: patch-safety PASS
-    Pending --> Rollback: mutation tool failure / run ends unverified
+    Pending --> Rollback: mutation tool failure / run ends without closure
 
     PatchSafe --> Targeted: targeted pytest PASS
     PatchSafe --> Rollback: patch-safety FAIL / incomplete
@@ -33,7 +35,7 @@ stateDiagram-v2
     Regression --> Committed: current revision closed
     Regression --> Rollback: regression FAIL / incomplete
 
-    Rollback --> Baseline: previous bytes restored or unverified new file removed
+    Rollback --> Baseline: previous bytes restored or uncommitted new file removed
     Rollback --> IntegrityFailure: rollback cannot be guaranteed
 
     Pending --> Crashed: process exits before in-process cleanup
@@ -55,7 +57,9 @@ The state machine is intentionally asymmetric: preserving newer human work is mo
 
 ## Mutation transactions
 
-Only one autonomous mutation can be pending at a time. Before an authorized write, the runtime stores a bounded byte-for-byte rollback snapshot outside the SUT. A newly created file is tracked so it can be removed rather than “restored” if the new revision never becomes verified.
+Only one autonomous mutation can be pending at a time. Before an authorized write, the runtime stores a bounded byte-for-byte rollback snapshot outside the SUT. A newly created file is tracked so it can be removed rather than “restored” if the new revision does not close validation.
+
+Rollback snapshots are integrity-checked before restoration and their persisted paths must remain under the trusted rollback directory. A missing, tampered, or escaped backup does not trigger a best-effort overwrite; the transaction remains unresolved and the integrity failure is surfaced.
 
 The transaction remains pending until the current change revision has all of the following:
 
@@ -63,15 +67,15 @@ The transaction remains pending until the current change revision has all of the
 - targeted pytest PASS; and
 - full-regression pytest PASS.
 
-A tool failure, failed validation, blocked execution, or run that terminates without verified closure restores the previous content. Rollback failure is escalated to an infrastructure failure because workspace integrity can no longer be guaranteed.
+A tool failure, failed validation, blocked execution, or run that terminates without deterministic closure restores the previous content. Rollback failure is escalated to an infrastructure failure because workspace integrity can no longer be guaranteed.
 
 Successful model completion is irrelevant to transaction commit unless the deterministic revision closure is also satisfied.
 
 ## Crash-aware stale recovery
 
-A process can terminate before its in-process `finally` cleanup executes. To handle that case, the next workspace owner reads the previous lease metadata and pending mutation checkpoint before replacing them.
+A process can terminate before its in-process `finally` cleanup executes. The next workspace owner reads the previous lease metadata and pending mutation checkpoint before replacing them.
 
-Automatic stale recovery is allowed only when the current target fingerprint exactly matches the fingerprint persisted by the crashed run. If it matches, the runtime can restore the trusted snapshot (or remove the unverified new file) before new bootstrap begins.
+Automatic stale recovery is allowed only when the current target fingerprint exactly matches the fingerprint persisted by the crashed run. If it matches, the runtime can restore the trusted snapshot or remove the uncommitted new file before new bootstrap begins.
 
 If a developer, IDE, formatter, Git operation, or any other process changed the workspace after the crash, automatic rollback is refused. The new content is preserved and the run reports a manual-review blocker instead of guessing which version should win.
 
@@ -92,9 +96,9 @@ A budget is charged before the relevant tool action executes. Exhaustion is a de
 
 ## Per-tool failure circuits
 
-Each tool also has a consecutive-failure circuit. Repeated failures open that tool's circuit so the agent cannot spend its remaining budget retrying one broken path indefinitely. A later successful call resets that tool's failure state.
+Each tool has a consecutive-failure circuit. Repeated failures open that tool's circuit so the agent cannot spend its remaining budget retrying one broken path indefinitely. A later successful call resets that tool's failure state.
 
-This is different from a global failure: a broken external integration can become unavailable without erasing unrelated local evidence or granting the model broader authority to compensate.
+A broken external integration can therefore become unavailable without erasing unrelated local evidence or granting the model broader authority to compensate.
 
 ## Bootstrap intelligence
 
@@ -130,7 +134,7 @@ ai-qa recover artifacts/run-<id>
 
 Recovery inspection verifies persisted state and the journal chain, reports whether the last change revision closed, detects pending mutation metadata, and determines whether a **new** agent session may safely start from persisted evidence.
 
-It does **not** claim to replay, resume, or reconstruct the hidden state of a previous Claude conversation.
+It does not replay, resume, or reconstruct the hidden state of a previous Claude conversation.
 
 ## Failure semantics
 
@@ -140,6 +144,7 @@ Runtime safeguards prefer explicit interruption over ambiguous continuation:
 |---|---|
 | Another process owns the target lease | `BLOCKED` |
 | Workspace drift before autonomous mutation | `BLOCKED` |
+| Mutation path uses traversal/symlink ambiguity | `BLOCKED` |
 | Budget exhausted | bounded budget terminal state |
 | Tool circuit open | tool action denied |
 | Pending mutation cannot close validation | rollback before terminal report |
@@ -151,6 +156,8 @@ These outcomes are deliberately not converted into product defects or successful
 
 ## Verification boundary
 
-The implementation defines these controls and dedicated tests exist for the newest budget, lease, transaction, journal, and stale-recovery paths. That source/test presence is not a current-head PASS claim until the applicable tests are executed.
+These controls are part of the runtime contract and are exercised through dedicated budget, lease, transaction, journal, path-ownership, rollback-integrity, and stale-recovery tests.
 
 See [`OPERATIONS.md`](OPERATIONS.md), [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md), and [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md).
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).

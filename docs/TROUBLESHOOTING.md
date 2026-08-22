@@ -1,5 +1,8 @@
 # Troubleshooting
 
+**ƳƤ AI QA Automation Framework**  
+**Designed and engineered by Ƴunior Ƥortal (ƳƤ)**
+
 Troubleshooting follows the same rule as test execution: **diagnose the failing layer before changing controls**. Do not weaken policy, widen network access, increase timeouts, disable validation, or rewrite a test merely because a command did not succeed.
 
 A useful first distinction is:
@@ -24,7 +27,7 @@ ai-qa doctor
 
 `doctor` performs **local inspection only**. It may report that a credential variable is present, but it never prints, hashes, partially reveals, or validates the credential value and does not contact Anthropic, GitHub, or Atlassian.
 
-Useful statuses include:
+Useful doctor results include:
 
 - `PASS` — a locally inspectable prerequisite was observed;
 - `NOT_VERIFIED` — a local package/runtime prerequisite was not established;
@@ -72,7 +75,7 @@ It also requires the control root, artifact root, and target workspace to remain
 
 If the runtime reports an invalid control root:
 
-1. confirm `--control-root` points to this AI-QA repository, not the SUT;
+1. confirm `--control-root` points to this ƳƤ framework repository, not the SUT;
 2. confirm the trusted markers exist;
 3. confirm the SUT is a separate clone/worktree;
 4. confirm `AI_QA_ARTIFACT_ROOT`, if set, is outside the SUT.
@@ -165,7 +168,7 @@ Check:
 - the URL is the intended non-production endpoint;
 - mutating methods are genuinely required and explicitly enabled if appropriate;
 - authentication is provided through the approved target-specific mechanism;
-- status/schema evidence points to application behavior rather than network/configuration failure.
+- response-code/schema evidence points to application behavior rather than network/configuration failure.
 
 Never enable mutating methods globally merely to bypass one denied request.
 
@@ -231,8 +234,8 @@ If live execution fails:
 2. distinguish authentication/authorization from network/provider errors;
 3. confirm the configured model identifier is supported by the installed SDK/provider;
 4. inspect runtime budget/cost/timeout termination separately from provider failure;
-5. preserve the exact exception class/status and run provenance;
-6. if provider outage is plausible and internet access is available, check Anthropic's official status/documentation before implementing an architectural workaround.
+5. preserve the exact exception class/provider result and run provenance;
+6. if provider outage is plausible and internet access is available, check Anthropic's official service-health page and documentation before implementing an architectural workaround.
 
 Do not expose the key in debug logs or issue reports.
 
@@ -240,7 +243,7 @@ Do not expose the key in debug logs or issue reports.
 
 When a remote provider appears unavailable, temporary outage handling should not permanently widen architecture.
 
-Where internet access exists, check the provider's official status source and current first-party documentation. Preserve valid local evidence and normalize the unavailable dependency explicitly. Do not fabricate remote evidence and do not switch to an unapproved integration merely to keep the workflow moving.
+Where internet access exists, check the provider's official service-health source and current first-party documentation. Preserve valid local evidence and normalize the unavailable dependency explicitly. Do not fabricate remote evidence and do not switch to an unapproved integration merely to keep the workflow moving.
 
 ## 15. Corrupt state or journal
 
@@ -274,7 +277,7 @@ Do not broadly disable secret scanning to remove noise.
 Prefer small, targeted evidence:
 
 - exact command/action and objective;
-- terminal/runtime status;
+- terminal/runtime outcome;
 - sanitized exception class/message;
 - run ID;
 - relevant evidence/validation IDs;
@@ -291,3 +294,5 @@ Do not paste entire repositories, huge traces, raw credentials, or private custo
 If the only proposed “fix” requires weakening a deterministic safety invariant, stop and classify the blocker instead. Safety controls should change only through reviewed engineering work with corresponding deterministic regression coverage.
 
 See [`SETUP.md`](SETUP.md), [`OPERATIONS.md`](OPERATIONS.md), [`SECURITY.md`](SECURITY.md), [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md), and [`LIMITATIONS.md`](LIMITATIONS.md).
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).

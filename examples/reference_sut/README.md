@@ -1,5 +1,7 @@
 # Reference SUT
 
+> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
+
 This is a deliberately small FastAPI application used by deterministic integration tests and local agent scenarios. It exists to make specific evidence/failure paths reproducible without coupling the production architecture to one real application.
 
 Controlled modes include:
@@ -13,3 +15,5 @@ Controlled modes include:
 - `prompt-injection` — DOM content contains malicious instruction-shaped text that must remain untrusted evidence.
 
 The application is **test data for the agent architecture**, not part of the trusted control plane. A control demonstrated here still requires target-specific evidence before it can be claimed for an external application.
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../../LICENSE`](../../LICENSE).

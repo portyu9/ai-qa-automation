@@ -4,6 +4,8 @@ description: Controlled k6 performance assessment with production-load and egres
 ---
 # Performance Test
 
+> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
+
 ## Use when
 A bounded non-production workload and deterministic latency/error/request-rate thresholds are defined.
 
@@ -26,7 +28,7 @@ The target is explicitly classified as non-production; policy authorizes it; k6 
 7. Execute k6 with a restricted child environment, disabled usage reporting, an execution timeout, and runtime artifacts outside the SUT workspace.
 8. Capture p50/p90/p95/p99, request rate, and error rate.
 9. Compare observed metrics with thresholds defined before execution.
-10. Register normalized performance evidence and validation status.
+10. Register normalized performance evidence and validation outcome.
 
 ## Evidence requirements
 Target/environment, policy authorization, script identity, measured metrics, predefined thresholds, breached thresholds, and resulting validation/evidence IDs.
@@ -47,4 +49,6 @@ Unknown environment classification, unavailable runtime, missing external-egress
 PASS/FAIL only from measured deterministic thresholds; otherwise `BLOCKED`/`NOT_VERIFIED`.
 
 ## Output
-Status, target/environment, metrics, breached thresholds, evidence IDs, and explicitly observed limitations.
+Outcome, target/environment, metrics, breached thresholds, evidence IDs, and explicitly observed limitations.
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../../../LICENSE`](../../../LICENSE).

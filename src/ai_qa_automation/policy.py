@@ -96,10 +96,14 @@ class PolicyEngine:
             r")",
             re.M,
         ),
-        "broad_exception_suppression": re.compile(r"^\+.*except\s+(?:Exception|BaseException)\s*:\s*(?:pass)?", re.M),
+        "broad_exception_suppression": re.compile(
+            r"^\+.*except\s+(?:Exception|BaseException)\s*:\s*(?:pass)?", re.M
+        ),
     }
 
-    def __init__(self, control_root: Path, target_workspace: Path, allow_test_writes: bool = False) -> None:
+    def __init__(
+        self, control_root: Path, target_workspace: Path, allow_test_writes: bool = False
+    ) -> None:
         self.control_root = control_root.expanduser().resolve()
         self.target_workspace = target_workspace.expanduser().resolve()
         self.allow_test_writes = allow_test_writes
@@ -177,16 +181,33 @@ class PolicyEngine:
             risk=RiskLevel.HIGH,
         )
 
+    @staticmethod
+    def _external_action_tokens(tool_name: str) -> tuple[str, tuple[str, ...]]:
+        """Normalize snake/camel/mixed MCP action names into conservative verb tokens."""
+        raw_action = tool_name.rsplit("__", 1)[-1]
+        snake_action = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", raw_action).lower()
+        tokens = tuple(token for token in re.split(r"[^a-z0-9]+", snake_action) if token)
+        return snake_action, tokens
+
+    @staticmethod
+    def _semantic_action_tokens(tokens: tuple[str, ...]) -> tuple[str, ...]:
+        """Remove known resource-noun collisions without weakening actual action verbs."""
+        semantic: list[str] = []
+        for index, token in enumerate(tokens):
+            # In GitHub tool names, "pull request" is a resource noun. The token
+            # "request" must therefore not turn get_pull_request/pull_request_read
+            # into a write. A leading request_* action remains a write verb.
+            if token == "request" and index > 0 and tokens[index - 1] == "pull":
+                continue
+            semantic.append(token)
+        return tuple(semantic)
 
     def _authorize_external_mcp_tool(self, tool_name: str) -> PolicyDecision:
         """Apply least privilege to approved-server tools; server approval is not blanket tool approval."""
-        action = tool_name.rsplit("__", 1)[-1].lower()
-        # Official MCPs do not share one naming convention: GitHub commonly uses
-        # snake_case while Atlassian uses camelCase (for example getJiraIssue).
-        # Prefix classification is deliberate and conservative; an unrecognized
-        # action still falls through to REQUIRE_APPROVAL.
-        destructive_verbs = ("merge", "delete", "remove", "force", "admin", "transfer")
-        write_verbs = (
+        action, tokens = self._external_action_tokens(tool_name)
+        semantic_tokens = self._semantic_action_tokens(tokens)
+        destructive_verbs = {"merge", "delete", "remove", "force", "admin", "transfer"}
+        write_verbs = {
             "create",
             "update",
             "edit",
@@ -208,24 +229,27 @@ class PolicyEngine:
             "enable",
             "disable",
             "transition",
-        )
-        read_verbs = ("get", "list", "search", "read", "view", "fetch", "download", "lookup")
-        known_read_actions = {"atlassianuserinfo"}
-        if action.startswith(destructive_verbs):
+        }
+        read_verbs = {"get", "list", "search", "read", "view", "fetch", "download", "lookup"}
+        known_read_actions = {"atlassian_user_info"}
+
+        # A mixed name such as getOrCreateIssue must never inherit read authority
+        # from its first verb. High-impact tokens dominate, then write tokens, then read.
+        if any(token in destructive_verbs for token in semantic_tokens):
             return PolicyDecision(
                 decision=ToolDecision.DENY,
                 reason="Destructive/high-impact external MCP operation is denied by default.",
                 rule_id="MCP-TOOL-003",
                 risk=RiskLevel.CRITICAL,
             )
-        if action.startswith(write_verbs):
+        if any(token in write_verbs for token in semantic_tokens):
             return PolicyDecision(
                 decision=ToolDecision.REQUIRE_APPROVAL,
                 reason="External MCP write requires explicit approval and scoped authorization.",
                 rule_id="MCP-TOOL-002",
                 risk=RiskLevel.HIGH,
             )
-        if action.startswith(read_verbs) or action.endswith("_read") or action in known_read_actions:
+        if any(token in read_verbs for token in semantic_tokens) or action in known_read_actions:
             return PolicyDecision(
                 decision=ToolDecision.ALLOW,
                 reason="Read-only external MCP operation allowed by tool-level policy.",
@@ -283,15 +307,21 @@ class PolicyEngine:
         )
 
     def validate_patch(self, diff: str) -> list[str]:
-        violations = [name for name, pattern in self._UNSAFE_PATCH_PATTERNS.items() if pattern.search(diff)]
+        violations = [
+            name for name, pattern in self._UNSAFE_PATCH_PATTERNS.items() if pattern.search(diff)
+        ]
         assertion_signal = re.compile(
             r"(?:\bassert\b|\bexpect\s*\(|\bpytest\.raises\s*\(|\.assert[A-Z_a-z0-9]*\s*\()"
         )
         removed_asserts = sum(
-            1 for line in diff.splitlines() if line.startswith("-") and assertion_signal.search(line[1:])
+            1
+            for line in diff.splitlines()
+            if line.startswith("-") and assertion_signal.search(line[1:])
         )
         added_asserts = sum(
-            1 for line in diff.splitlines() if line.startswith("+") and assertion_signal.search(line[1:])
+            1
+            for line in diff.splitlines()
+            if line.startswith("+") and assertion_signal.search(line[1:])
         )
         if removed_asserts > added_asserts:
             violations.append("assertion_removal")
@@ -312,7 +342,6 @@ class PolicyEngine:
             rule_id="MCP-ALLOW",
             risk=RiskLevel.MEDIUM,
         )
-
 
     def authorize_api_method(self, method: str, *, allow_mutating: bool = False) -> PolicyDecision:
         normalized = method.upper().strip()
@@ -348,7 +377,7 @@ class PolicyEngine:
 
     def authorize_performance_target(self, target_url: str, *, environment: str) -> PolicyDecision:
         parsed = urlparse(target_url)
-        host = (parsed.hostname or "").lower()
+        host = (parsed.hostname or "").lower().rstrip(".")
         if parsed.scheme not in {"http", "https"} or not host:
             return PolicyDecision(
                 decision=ToolDecision.DENY,
@@ -357,14 +386,30 @@ class PolicyEngine:
                 risk=RiskLevel.CRITICAL,
             )
         normalized_environment = environment.lower().strip()
-        if normalized_environment == "production" or host.startswith("prod.") or ".prod." in host:
+        host_labels = tuple(label for label in host.split(".") if label)
+        production_like_host = any(
+            label in {"prod", "production"}
+            or label.startswith("prod-")
+            or label.startswith("production-")
+            for label in host_labels
+        )
+        if normalized_environment in {"prod", "production"} or production_like_host:
             return PolicyDecision(
                 decision=ToolDecision.DENY,
                 reason="Production load testing is denied by default.",
                 rule_id="PERF-001",
                 risk=RiskLevel.CRITICAL,
             )
-        allowed_environments = {"local", "dev", "development", "test", "qa", "staging", "preprod", "pre-production"}
+        allowed_environments = {
+            "local",
+            "dev",
+            "development",
+            "test",
+            "qa",
+            "staging",
+            "preprod",
+            "pre-production",
+        }
         if normalized_environment not in allowed_environments:
             return PolicyDecision(
                 decision=ToolDecision.REQUIRE_APPROVAL,
@@ -381,4 +426,7 @@ class PolicyEngine:
 
     @classmethod
     def _is_protected(cls, relative: str) -> bool:
-        return any(relative == item or relative.startswith(f"{item}/") for item in cls._PROTECTED_RELATIVE_PATHS)
+        return any(
+            relative == item or relative.startswith(f"{item}/")
+            for item in cls._PROTECTED_RELATIVE_PATHS
+        )

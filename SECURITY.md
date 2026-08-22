@@ -1,10 +1,11 @@
 # Security Policy
 
-## Project security posture
+**ƳƤ AI QA Automation Framework**  
+**Designed and engineered by Ƴunior Ƥortal (ƳƤ)**
 
-AI QA Automation is a production-shaped agentic quality engineering system. It is **not** operated here as a production SaaS service, and the presence of a security control in source is not represented as proof that a deployment environment satisfies that control.
+## Security posture
 
-The runtime is designed around least privilege, trusted-control-plane / untrusted-SUT separation, secret redaction, vendor-official MCP allowlisting, path confinement, bounded execution, transactional test mutation, deterministic policy hooks, and explicit non-PASS states such as `NOT_VERIFIED` and `BLOCKED`.
+The ƳƤ AI QA Automation Framework is designed around least privilege, trusted-control-plane / untrusted-SUT separation, secret redaction, vendor-official MCP allowlisting, path confinement, bounded execution, transactional test mutation, deterministic policy hooks, and explicit non-PASS runtime outcomes when evidence or authorization is insufficient.
 
 For the implementation-level security architecture, see:
 
@@ -12,10 +13,6 @@ For the implementation-level security architecture, see:
 - [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md)
 - [`docs/VERIFICATION_BOUNDARIES.md`](docs/VERIFICATION_BOUNDARIES.md)
 - [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md)
-
-## Supported code line
-
-Security fixes are intended for the current repository development line. This project is pre-1.0 and does not promise security maintenance for historical commits, forks, copied snippets, or deployments whose surrounding infrastructure is outside this repository.
 
 ## Reporting a vulnerability
 
@@ -34,17 +31,17 @@ A useful report should include, where safe:
 - minimal reproduction conditions;
 - expected versus observed policy behavior;
 - security impact;
-- whether the issue requires credentials, external infrastructure, or a specific deployment assumption;
+- relevant deployment assumptions;
 - a proposed deterministic regression test or adversarial scenario, if known.
 
 ## Credential and artifact hygiene
 
-This repository contains no intended secrets. Never commit real credentials or private customer/production artifacts. `.env.example` is a reference template only; the runtime deliberately does not auto-load committed `.env` configuration.
+Never commit real credentials or private customer/production artifacts. `.env.example` is a reference template only; the runtime deliberately does not auto-load committed `.env` configuration.
 
 If a credential is accidentally exposed, treat it as compromised and rotate/revoke it at the provider. Removing it from a later commit is not sufficient because Git history, caches, forks, logs, or artifacts may already contain the value.
 
 ## Security-fix standard
 
-A material security weakness should be addressed with the narrowest deterministic control that closes the behavior, plus an appropriate regression test/evaluation. Do not “fix” a security gate by weakening expected outcomes, broadening tool authority, or converting missing evidence into PASS.
+A material security weakness should be addressed with the narrowest deterministic control that closes the behavior, plus an appropriate regression test or adversarial evaluation. Do not “fix” a security gate by weakening expected outcomes, broadening tool authority, or converting missing evidence into PASS.
 
-Any affected current-head execution gate remains `NOT_VERIFIED` until it is deliberately rerun and its result inspected.
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`LICENSE`](LICENSE).

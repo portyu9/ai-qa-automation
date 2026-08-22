@@ -4,6 +4,8 @@ description: Risk-based regression selection with mandatory-coverage fail-safes.
 ---
 # Prioritize Regression
 
+> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
+
 ## Use when
 Use when a change has an identifiable regression candidate set and execution reduction is useful without sacrificing risk-adjusted recall.
 
@@ -44,3 +46,5 @@ Return a selection when safeguards are satisfied; otherwise broaden to a safer r
 
 ## Output
 Selected/omitted tests, rationale by test, confidence, reduction ratio, and `broadened_due_to_uncertainty` state.
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../../../LICENSE`](../../../LICENSE).

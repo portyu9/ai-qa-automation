@@ -1,6 +1,8 @@
 # Security Architecture
 
-Security controls are enforced in deterministic code in addition to model instructions. The design assumes the model can be confused by adversarial content and therefore does not make prompt compliance the primary security boundary.
+> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
+
+Security controls in the ƳƤ AI QA Automation Framework are enforced in deterministic code in addition to model instructions. The design assumes the model can be confused by adversarial content and therefore does not make prompt compliance the primary security boundary.
 
 ## Security principles
 
@@ -13,7 +15,7 @@ Security controls are enforced in deterministic code in addition to model instru
 
 ## Fail-closed runtime authority
 
-The live runtime exposes the project-owned QA tool inventory rather than general mutation/network tools. Unknown tools are denied. Unapproved MCP namespaces are denied. Approval-required actions fail closed during unattended execution.
+The live runtime exposes the framework-owned QA tool inventory rather than general mutation/network tools. Unknown tools are denied. Unapproved MCP namespaces are denied. Approval-required actions fail closed during unattended execution.
 
 Agent SDK configuration additionally restricts generic Bash/Edit/Write/Web surfaces and uses project-only settings with a fixed Skill allowlist.
 
@@ -29,9 +31,10 @@ For autonomous mutations, path authorization is only the first control. The runt
 - an exclusive workspace lease;
 - a current fingerprint matching the inspected baseline;
 - explicit test-write enablement;
-- no unresolved previous mutation transaction.
+- no unresolved previous mutation transaction;
+- unambiguous mutation-path ownership with no absolute path, traversal, or symlink component.
 
-Out-of-band changes block mutation. This prevents an agent from silently writing against a workspace whose contents changed after analysis.
+Out-of-band changes block mutation. This prevents an agent from silently writing against a workspace whose contents changed after analysis or redirecting a write through a symlink alias.
 
 ## Transactional patch integrity
 
@@ -42,11 +45,18 @@ Safe patching combines:
 - syntax/test-quality validation;
 - unsafe-diff pattern checks;
 - trusted rollback snapshots outside the SUT;
+- rollback snapshot path confinement and hash verification;
 - post-change patch-safety + targeted pytest + full-regression requirements.
 
 Guardrails block common “make it green” shortcuts such as skips/xfails, arbitrary sleeps, focused-only tests, indiscriminate timeout inflation, assertion removal/weakening, tautologies, and broad exception suppression.
 
-A failed/unverified transaction rolls back. Crash recovery restores a stale mutation only when the persisted fingerprint proves no newer human/out-of-band change would be overwritten.
+A transaction without deterministic closure rolls back only when rollback integrity is established. Crash recovery restores a stale mutation only when the persisted fingerprint proves no newer human/out-of-band change would be overwritten.
+
+## Evidence and artifact confinement
+
+Run-scoped evidence directories are resolved under the trusted artifact root. Empty/root-aliasing, absolute, and traversal-style run identifiers that would escape or collapse that boundary are rejected. Artifact paths are resolved under the run root, duplicate evidence IDs and artifact paths are immutable, and symlink-based artifact escapes are rejected.
+
+These controls reduce cross-run and filesystem-boundary ambiguity; they do not substitute for deployment-level access controls or storage policy.
 
 ## API and browser network boundaries
 
@@ -58,7 +68,7 @@ Network-capable actions consume an independent runtime budget in addition to the
 
 ## Performance-test safety
 
-Production load testing is denied by policy. k6 targets must pass the runtime network allowlist and be explicitly classified as non-production.
+Production load testing is denied by policy. k6 targets must pass the runtime network allowlist and be explicitly classified as non-production. The policy also rejects production-like DNS labels such as `prod`/`production` forms even when caller-supplied environment metadata claims staging or QA.
 
 The runner requires scripts to bind to the injected approved target and applies bounded static restrictions including rejection of:
 
@@ -69,15 +79,17 @@ The runner requires scripts to bind to the injected approved target and applies 
 
 Usage reporting is disabled and runtime summary files remain outside the SUT.
 
-Non-local k6 additionally requires the trusted `AI_QA_K6_EXTERNAL_EGRESS_ENFORCED=true` precondition. That flag is not a firewall: it is an explicit assertion that the deployment has separately established infrastructure-level egress enforcement. The infrastructure itself still requires independent verification.
+Non-local k6 additionally requires the trusted `AI_QA_K6_EXTERNAL_EGRESS_ENFORCED=true` precondition. That flag is an explicit assertion that the deployment has separately established infrastructure-level egress enforcement; it is not itself a firewall.
 
 ## MCP security
 
 External MCP must match an approved vendor identity and be explicitly enabled. GitHub MCP is additionally configured read-only at the server layer. Runtime policy independently separates recognized read operations, approval-required writes, destructive actions, and unknown actions.
 
-Target/user/plugin MCP configuration is not inherited into the live runtime. Remote MCP content is sanitized and persisted as untrusted evidence; it cannot redefine policy, hooks, Skills, thresholds, or terminal-status rules.
+External action names are normalized across snake/camel naming and evaluated conservatively: destructive verbs dominate write verbs, which dominate recognized reads. Resource-noun collisions such as `pull request` are handled explicitly so legitimate reads are not mislabeled while mixed names such as read-plus-create/delete cannot smuggle higher authority behind a read prefix.
 
-An integration is not marked `AVAILABLE` merely because configuration exists. Availability requires an observed successful call.
+Target/user/plugin MCP configuration is not inherited into the live runtime. Remote MCP content is sanitized and persisted as untrusted evidence; it cannot redefine policy, hooks, Skills, thresholds, or terminal-outcome rules.
+
+An integration is marked `AVAILABLE` only after an observed successful call.
 
 See [`MCP.md`](MCP.md).
 
@@ -85,7 +97,7 @@ See [`MCP.md`](MCP.md).
 
 Evidence is sanitized recursively along model-facing/text persistence paths. Pytest output is redacted before it is returned or stored as sanitized text evidence. Runtime pytest/k6/git subprocesses use credential-minimal environments and do not inherit the control process `PYTHONPATH`.
 
-Raw binary artifacts such as screenshots are labeled `RAW` rather than falsely marked sanitized. Their access and retention therefore remain an operational/deployment responsibility.
+Raw binary artifacts such as screenshots are labeled `RAW` rather than falsely marked sanitized. Their access and retention remain an operational/deployment responsibility.
 
 `.env.example` contains names/defaults only. Runtime settings deliberately do not auto-load a repository `.env` file. Real credentials must be injected through the environment or an approved secret-management mechanism and must never be committed.
 
@@ -104,7 +116,7 @@ A governance change is expected to receive explicit human review rather than aut
 
 ## Supply-chain and dependency posture
 
-The repository defines static dependency auditing through `pip-audit`, compatibility checking through `pip check`, Bandit source analysis, and repository secret scanning. These gates are execution-defined but are not represented as current-head PASS until deliberately run.
+The repository defines dependency compatibility checking, Bandit source analysis, dependency vulnerability auditing, and secret scanning as deterministic security gates.
 
 Dependencies and external MCP versions should be updated deliberately: verify official provenance/version, review behavior/tool-surface changes, update deterministic tests/policy if authority changes, and rerun the applicable gates before promoting the new state.
 
@@ -125,4 +137,6 @@ Follow the root [`SECURITY.md`](../SECURITY.md). Never include real credentials,
 
 ## Verification boundary
 
-Security architecture in source is an implementation claim. Current-head Bandit/dependency/secret scans, live credential handling, authenticated MCP behavior, infrastructure isolation, and organization security controls require actual execution/environment evidence before they can be represented as verified.
+Security claims are scoped to their evidence source: source-level controls, deterministic gates, credentialed providers, and deployment infrastructure are evaluated within their respective trust boundaries.
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).

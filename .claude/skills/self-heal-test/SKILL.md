@@ -4,6 +4,8 @@ description: Guarded semantic locator maintenance that preserves business intent
 ---
 # Self-Heal Test
 
+> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
+
 ## Use when
 Observed browser evidence shows the expected product behavior still exists but a test locator is stale.
 
@@ -49,4 +51,6 @@ High/ambiguous risk, non-unique candidate, semantic mismatch, unclear original i
 Return an allowed/denied proposal. An applied repair remains incomplete until the current revision is deterministically closed.
 
 ## Output
-Allowed/denied, risk, bound old/new locator, verification/proposal/patch evidence IDs, rationale, change revision, and deterministic validation status when executed.
+Allowed/denied, risk, bound old/new locator, verification/proposal/patch evidence IDs, rationale, change revision, and deterministic validation outcome when executed.
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../../../LICENSE`](../../../LICENSE).

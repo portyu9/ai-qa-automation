@@ -1,6 +1,8 @@
 # Traceability and Run Attestation
 
-The platform persists enough structured information to inspect **why** a run reached a conclusion without relying on chat history or treating model prose as the audit record.
+> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
+
+The ƳƤ AI QA Automation Framework persists enough structured information to inspect **why** a run reached a conclusion without relying on chat history or treating model prose as the audit record.
 
 Traceability is designed around a simple question:
 
@@ -60,11 +62,11 @@ The graph can connect:
 
 Validation-to-evidence references are checked while the graph is built. If a validation names evidence that cannot be found in the run manifest, the lineage builder surfaces that gap rather than silently drawing a complete-looking graph.
 
-The DOT export is intended for Graphviz, debugging, review, or downstream visualization. Exporting a graph does not mutate the run or change its terminal status.
+The DOT export is intended for Graphviz, debugging, review, or downstream visualization. Exporting a graph does not mutate the run or change its terminal outcome.
 
 ## Evidence and artifact integrity
 
-Artifacts are registered with content hashes and run-scoped metadata. Text evidence that may reach the model is sanitized according to the evidence path; binary artifacts such as screenshots remain explicitly `RAW` and are not falsely described as sanitized text.
+Artifacts are registered with content hashes and run-scoped metadata. Run directories are confined beneath the trusted artifact root; artifact paths are confined beneath the run root; duplicate evidence IDs/artifact paths do not overwrite an existing record. Text evidence that may reach the model is sanitized according to the evidence path; binary artifacts such as screenshots remain explicitly `RAW` and are not falsely described as sanitized text.
 
 `journal.jsonl` uses sequence numbers plus previous/current record hashes to make record reordering, removal, or modification detectable during verification. Hash chaining improves tamper evidence; it does not create an external identity or trusted timestamp by itself.
 
@@ -93,7 +95,7 @@ The resulting `attestation_digest` is deliberately **unsigned**. It makes the in
 
 A deployment that requires trusted identity can wrap the attestation in an external signing mechanism, but that trust anchor is outside this repository.
 
-## Why terminal status remains separate
+## Why terminal outcome remains separate
 
 Traceability answers “what records support this conclusion?” It does not override the validation rules that produce the conclusion.
 
@@ -103,16 +105,18 @@ A perfectly intact journal can describe a failed or `NOT_VERIFIED` run. Likewise
 
 A reviewer investigating a persisted run can use this order:
 
-1. inspect `state.json` for objective, revision, provenance, validation lineage, and terminal status;
+1. inspect `state.json` for objective, revision, provenance, validation lineage, and terminal outcome;
 2. inspect `evidence-manifest.json` for referenced observations/artifacts and hashes;
 3. verify `journal.jsonl` ordering/hash continuity and runtime events;
 4. inspect `runtime.json` for budgets, circuits, lease identity, fingerprint, and pending mutation state;
 5. export `ai-qa lineage` to identify missing or weak evidence relationships;
 6. emit `ai-qa attest` to produce an unsigned integrity summary;
-7. compare the resulting evidence with the readiness truth model rather than inferring PASS from record completeness.
+7. compare the resulting evidence with the framework's verification rules rather than inferring PASS from record completeness.
 
 ## Verification boundary
 
-Lineage and attestation code plus dedicated tests are present in the repository. Current-head execution remains `NOT_VERIFIED` until the applicable deterministic test gate is actually run.
+Lineage and attestation belong to the framework's evidence-integrity layer. They support inspection and provenance while leaving pass/fail authority with deterministic validation.
 
 See [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) and [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md).
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).

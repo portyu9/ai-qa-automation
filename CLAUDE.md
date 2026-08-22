@@ -1,6 +1,8 @@
-# AI QA Automation — Engineering Rules
+# ƳƤ AI QA Automation Framework — Engineering Rules
 
-This repository implements an evidence-first AI quality engineering agent. The model can reason, interpret, and propose; deterministic tools, policy, observed evidence, and validators decide what is verified.
+**Designed and engineered by Ƴunior Ƥortal (ƳƤ)**
+
+This repository implements the evidence-first ƳƤ AI QA Automation Framework. The model can reason, interpret, and propose; deterministic tools, policy, observed evidence, and validators decide what is verified.
 
 ## Invariants
 
@@ -38,3 +40,5 @@ This repository implements an evidence-first AI quality engineering agent. The m
 `make verify-local` intentionally excludes the holdout corpus. Run holdout only at an intentional readiness checkpoint.
 
 Before describing a current revision as verified, run the complete relevant gate and inspect its evidence. Never bypass a failing deterministic gate with model judgment.
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`LICENSE`](LICENSE).
