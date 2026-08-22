@@ -4,6 +4,8 @@ description: Coverage-aware AI-assisted test design and implementation.
 ---
 # Generate Test
 
+> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
+
 ## Use when
 A requirement, defect, API contract, or source change has a meaningful automated-coverage gap.
 
@@ -48,3 +50,5 @@ Complete when the gap is covered and deterministically validated, or explicitly 
 
 ## Output
 Coverage-search evidence ID, coverage gap, plan evidence ID, selected layer/rationale, scenarios, implementation evidence, execution result, revision, and validation status.
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../../../LICENSE`](../../../LICENSE).
