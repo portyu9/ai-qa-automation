@@ -1,6 +1,8 @@
 # Change Intelligence
 
-The runtime can reason about a pull-request or feature-branch delta without making the common mistake of treating a clean worktree as “no change.”
+> **YP AI QA Automation Framework** · Designed and engineered by **Yunior Portal**
+
+The YP AI QA Automation Framework can reason about a pull-request or feature-branch delta without making the common mistake of treating a clean worktree as “no change.”
 
 Change intelligence is deterministic bootstrap evidence. Claude can interpret its implications, but it cannot redefine the baseline, invent ownership, or convert an unanalyzed contract into a compatible one.
 
@@ -114,6 +116,6 @@ This preserves three important facts:
 
 The analyzers are intentionally bounded by file counts, sizes, supported grammar, and available Git history. When a boundary prevents analysis, the result should say so (`NOT_ANALYZED`, low confidence, truncation, or explicit resolution error) rather than returning an optimistic default.
 
-That behavior aligns with the repository-wide truth rule: **unknown is not PASS**.
+That behavior aligns with the framework-wide truth rule: **unknown is not PASS**.
 
 See [`ARCHITECTURE.md`](ARCHITECTURE.md), [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md), and [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md).
