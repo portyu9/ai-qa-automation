@@ -1,158 +1,204 @@
 # Technical Walkthrough
 
-> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
+> [!IMPORTANT]
+> This is the reviewer-oriented implementation path: **trusted objective → deterministic observation → bounded reasoning/action → revision-aware validation → persisted runtime outcome**.
 
-This walkthrough is the reviewer-oriented path through the implementation. It follows the framework from **trusted objective → deterministic observation → bounded reasoning/action → revision-aware validation → persisted runtime outcome** and highlights the exact points where authority changes hands.
+**ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
-## 1. Begin with runtime truth
+[Documentation home](README.md) · [Architecture](ARCHITECTURE.md) · [Security](SECURITY.md) · [Result contract](RESULT_CONTRACT.md)
 
-Start with:
+---
+
+## Reviewer map
+
+```mermaid
+flowchart LR
+    A[1. Runtime truth] --> B[2. Trust roots]
+    B --> C[3. Config parsing]
+    C --> D[4. Bootstrap evidence]
+    D --> E[5. State + evidence]
+    E --> F[6. Tool authority]
+    F --> G[7. Classification / healing / generation]
+    G --> H[8. Mutation + recovery]
+    H --> I[9. Network + MCP]
+    I --> J[10. Evaluation + traceability]
+```
+
+If you only have 20 minutes, read sections **1, 2, 6, 8, 9, and 10**.
+
+---
+
+## 1. Start with runtime truth
+
+Read:
 
 - `src/ai_qa_automation/models.py`
 - `src/ai_qa_automation/agent.py`
 - `src/ai_qa_automation/reporting.py`
 - [`RESULT_CONTRACT.md`](RESULT_CONTRACT.md)
 
-`determine_terminal_outcome()` is the central anti-false-PASS rule. A model result subtype of `success` is not enough.
+`determine_terminal_outcome()` is the central anti-false-PASS rule.
 
-The validator preserves gate identity and change revision. Important consequences:
+Important consequences:
 
+- Agent SDK result subtype `success` is necessary but not sufficient;
 - active deterministic FAIL remains failure;
-- non-PASS validation outcomes remain non-PASS;
-- PASS and FAIL for the same gate/revision become contradictory evidence and resolve to `NOT_VERIFIED`;
-- an older failure is superseded only by the same gate identity at a newer revision;
-- a changed test cannot close without patch-safety, targeted pytest, and full-regression PASS at the current revision.
+- non-PASS validations remain non-PASS;
+- same-gate same-revision PASS/FAIL -> `NOT_VERIFIED`;
+- older evidence supersedes only through gate identity + newer revision;
+- changed live autonomous tests require patch-safety, **exact-path-bound targeted pytest**, and full regression at the current revision.
 
-This is the first code path to inspect when evaluating whether the framework can manufacture success.
+This is the first code path to inspect if you want to know whether the framework can manufacture success.
+
+---
 
 ## 2. Follow trust before functionality
 
 Read [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
-The control repository owns trusted runtime policy, Skills, hooks, tool definitions, and thresholds. The target is an untrusted evidence source even when it ships files that look like agent configuration.
+The control repository owns trusted runtime policy, Skills, hooks, tool definitions, thresholds, and provider registry. The target is an untrusted evidence source even when it ships agent-looking configuration.
 
 `validate_runtime_roots()` rejects overlapping control/target and artifact/target roots.
 
-That trust split means target:
+Therefore target:
 
-- `CLAUDE.md`;
-- `.claude/`;
-- `.mcp.json`;
-- comments;
-- test code;
-- DOM/log/API content
+```text
+CLAUDE.md
+.claude/
+.mcp.json
+source comments
+unit/e2e tests
+DOM / logs / API responses
+```
 
 cannot redefine framework authority.
 
+---
+
 ## 3. Inspect trusted configuration parsing
 
-Read `src/ai_qa_automation/config.py` before reviewing network-capable tools.
+Read `src/ai_qa_automation/config.py` before reviewing any network-capable adapter.
 
-The configuration boundary does more than type coercion. Trusted host entries are canonicalized and validated before runtime use:
+Trusted host configuration is canonicalized before runtime use:
 
-- DNS/IP identity only;
-- no wildcard entries;
+- hostname/IP only;
+- no wildcards;
 - no URLs;
 - no embedded ports;
-- no path/query/fragment/user-info syntax;
-- IDNA normalization;
-- deduplication;
-- independent execution-budget validation.
+- no path/query/fragment/user-info;
+- no scoped IPv6 zone identifiers;
+- no malformed dotted IPv4-looking values;
+- deterministic IDNA normalization/deduplication.
 
-This prevents API/browser/performance tools from interpreting malformed trusted configuration differently.
+Independent execution-budget validation happens at the same boundary.
 
-`.env` files are not auto-loaded by the settings model.
+Repository `.env` files are not auto-loaded as trusted settings.
+
+---
 
 ## 4. Follow deterministic bootstrap into evidence
 
-`runtime/bootstrap.py` captures repository state before Claude receives the objective:
+`runtime/bootstrap.py` observes repository state **before** Claude receives the bounded objective context.
 
-- Git SHA and worktree fingerprint;
-- explicit base-ref / merge-base provenance;
-- committed plus dirty/untracked changes;
+It can persist:
+
+- Git SHA + content-sensitive worktree fingerprint;
+- explicit base-ref + merge-base provenance;
+- committed + dirty + untracked changes;
 - risk domains;
 - repository/test topology;
-- dependency manifests/hashes;
+- dependency-manifest hashes;
 - CODEOWNERS routing;
 - explainable test-impact candidates;
-- OpenAPI/Swagger compatibility drift.
+- OpenAPI/Swagger drift.
 
-The observed data is persisted first. Only a bounded summary is then presented to the model as context.
+The facts are persisted first. A bounded summary is then labeled as observed data for the model.
 
-The architecture therefore asks Claude to reason **from** repository facts, not invent them.
+See [`CHANGE_INTELLIGENCE.md`](CHANGE_INTELLIGENCE.md).
 
-## 5. Follow evidence into canonical state
+---
 
-Inspect:
+## 5. Follow evidence into durable state
+
+Read:
 
 - `src/ai_qa_automation/evidence.py`
 - `src/ai_qa_automation/state.py`
-- `src/ai_qa_automation/models.py`
 - `src/ai_qa_automation/runtime/journal.py`
+- `src/ai_qa_automation/runtime/attestation.py`
 
-`EvidenceStore` confines run/artifact paths, enforces immutable evidence/artifact identities, sanitizes supported text evidence, hashes artifacts, writes manifests, and optionally appends regulated audit records.
+### Evidence store
 
-`StateStore` atomically persists canonical QA decision state. `journal.jsonl` provides append-only hash-chained runtime chronology.
+`EvidenceStore` provides:
 
-The deterministic demo:
+- confined run/artifact roots;
+- immutable evidence/artifact identities;
+- supported text sanitization;
+- explicit `RAW` binary treatment;
+- content hashes + manifests;
+- regulated audit chaining when enabled;
+- artifact ownership/hash verification in regulated reopen paths.
 
-```bash
-ai-qa demo
-```
+### Journal
 
-illustrates a core classification rule: application/network evidence must not be hidden by an eager test repair.
+`RunJournal` provides bounded append-only SHA-256 linkage and rejects symlink journal-file ownership.
 
-## 6. Inspect the controlled tool surface
+### Attestation
 
-`runtime/internal_tools.py` defines 18 narrow QA tools. `policy.py` and `runtime/runtime_hooks.py` independently govern authorization and process safety.
+The unsigned attestation checks owned persisted subjects, journal validity, no pending mutation, and registered artifact bytes before reporting `integrity_verified`.
 
-Inspect these boundaries:
+> [!NOTE]
+> Integrity remains separate from identity, signing, correctness, and test PASS.
 
-- explicit internal tool inventory;
-- unknown tools denied;
-- Bash/Edit/Write/Web-style generic authority denied;
-- path decisions before file access/mutation;
-- network decisions before target access;
-- budget/circuit enforcement before execution;
-- workspace drift checks before mutation;
-- mutation transaction preparation before the write;
-- canonical state checkpointing after meaningful evidence/state changes.
+---
 
-## 7. Inspect secret and governance path policy
+## 6. Inspect the controlled tool and policy surface
 
-`PolicyEngine._is_protected()` protects authority-bearing and secret-shaped paths.
+Read:
 
-In addition to governance paths, `.env` and `.env.*` files are protected even when nested. `.env.example` remains readable reference documentation.
+- `src/ai_qa_automation/runtime/internal_tools.py`
+- `src/ai_qa_automation/policy.py`
+- `src/ai_qa_automation/runtime/runtime_hooks.py`
 
-This rule reduces the chance that a target repository exposes secret material merely because a bounded source-reading tool is available.
+Review these boundaries:
 
-## 8. Inspect failure classification before healing
+- exactly 18 narrow internal QA tools;
+- unknown tools/namespaces denied;
+- generic Bash/Edit/Write/Web authority denied;
+- path/network/action policy before execution;
+- budget + circuit checks before action;
+- workspace fingerprint drift check before mutation;
+- rollback-backed transaction prepared before write;
+- external MCP output sanitized before model/evidence use;
+- provider failures normalized without fabricated evidence.
+
+The live Agent SDK configuration also uses `strict_mcp_config=True`, trusted project settings, and a fixed five-Skill allowlist.
+
+---
+
+## 7. Inspect failure classification before repair
 
 Read `src/ai_qa_automation/intelligence/failure_analysis.py`.
 
-The classifier is evidence-weighted and model-independent. It distinguishes application, automation, locator/UI-contract, data, timing, environment, dependency, authentication, configuration, performance, and insufficient-evidence outcomes.
+The classifier is evidence-weighted and model-independent across application, automation, locator/UI-contract, data, timing, environment, dependency, authentication, configuration, performance, and insufficient-evidence classes.
 
-The locator path is intentionally conservative. Playwright evidence supports `LOCATOR_UI_CONTRACT_CHANGE` only when:
+The locator path is conservative: a unique candidate is insufficient unless deterministic semantic relationship to the original locator is also established.
 
-- original locator is absent;
-- a candidate is uniquely observed;
-- candidate strategy is supported/stable;
-- same-page context evidence exists; and
-- the candidate preserves enough **deterministically computed semantic intent** from the original locator.
+That prevents “there is one button on the page” from becoming “this must be the right replacement.”
 
-A unique unrelated button is therefore not sufficient evidence of a locator-contract change.
+---
 
-## 9. Inspect self-healing authority
+## 8. Inspect self-healing authority
 
 Read together:
 
-- `src/ai_qa_automation/tools/locators.py`
-- `src/ai_qa_automation/tools/browser_evidence.py`
-- `src/ai_qa_automation/intelligence/self_healing.py`
-- `src/ai_qa_automation/tools/safe_patch.py`
+- `tools/locators.py`
+- `tools/browser_evidence.py`
+- `intelligence/self_healing.py`
+- `tools/safe_patch.py`
 - `.claude/skills/self-heal-test/SKILL.md`
 
-The workflow separates five things that should never be conflated:
+The workflow separates:
 
 1. model proposal;
 2. browser observation;
@@ -160,130 +206,182 @@ The workflow separates five things that should never be conflated:
 4. mutation authorization;
 5. post-change validation.
 
-Playwright measures candidate match counts in the same DOM and records deterministic semantic overlap in verification evidence. `SelfHealingEngine` independently reparses the locator contract, recomputes semantic overlap, overwrites model stability with policy-owned stability, rejects structural/positional selectors, and requires a conservative threshold before producing an allowed proposal.
-
-Therefore:
+Playwright measures uniqueness in the same DOM. Deterministic code reparses locator syntax, recomputes semantic overlap, overwrites model stability with policy-owned strategy stability, and rejects weak structural selectors.
 
 > **Unique + model confidence ≠ mutation authority.**
 
-The proposal remains bound to exact test path, original locator, verification evidence, and expected file hash. The only live repair path is locator-only replacement.
+The proposal stays bound to exact test path, original locator, verification evidence, and expected file hash.
 
-## 10. Inspect safe mutation and recovery as one subsystem
+---
 
-Read:
+## 9. Inspect generation provenance
 
-- `src/ai_qa_automation/runtime/run_control.py`
-- `src/ai_qa_automation/runtime/stale_recovery.py`
-- [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md)
-
-Live mutation rejects absolute/traversal/symlink path ambiguity and snapshots original bytes under trusted rollback storage.
-
-Crash recovery intentionally enforces the same ownership philosophy:
-
-- prior run directory confined beneath artifact root;
-- non-symlink runtime metadata;
-- exact workspace identity;
-- exact persisted/current fingerprint match;
-- non-symlink pending target path;
-- rollback directory confinement;
-- non-symlink backup path;
-- original SHA-256 verification.
-
-A recovery path that is less strict than the live mutation path would be a security bypass; this implementation avoids that asymmetry.
-
-## 11. Inspect coverage-aware test generation
-
-The generation toolchain is provenance-bound:
+Generation is intentionally provenance-bound:
 
 ```text
 search_test_coverage
-→ observed coverage evidence
-→ plan_tests
-→ same-run TEST_PLAN evidence
-→ create_test_file
-→ deterministic test-quality + patch-safety
+→ observed repository evidence
+→ deterministic candidate gaps
+→ plan_tests (MODEL_INTERPRETATION)
+→ guarded create_test_file
+→ deterministic quality + patch safety
 → targeted execution
 → regression closure
 ```
 
-Generated Python/JavaScript/TypeScript tests are rejected for missing meaningful assertions and common quality shortcuts. Python review does not count assertions inside unused nested scopes; JS/TS review does not count assertion-looking text in comments/strings.
+The crucial asymmetry: a model may annotate a scenario as “already covered,” but unsupported labels cannot suppress deterministic candidates.
 
-## 12. Inspect change intelligence and regression safety
+Generated tests must contain meaningful assertions; comments/strings that merely look assertion-like do not satisfy observability checks.
+
+Reusable generation/patch components understand Python/JavaScript/TypeScript. **Live autonomous commit authority is narrower:** controlled closure is currently pytest-backed, so autonomous writes are restricted to approved Python test paths.
+
+---
+
+## 10. Inspect mutation and recovery as one security subsystem
+
+Read:
+
+- `runtime/run_control.py`
+- `runtime/stale_recovery.py`
+- `runtime/recovery.py`
+- `runtime/workspace_lease.py`
+- [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md)
+
+### Live mutation
+
+Requires:
+
+- Git-backed isolated target;
+- exclusive OS lease;
+- matching content-sensitive fingerprint;
+- approved non-symlink path;
+- one open transaction at a time;
+- trusted rollback snapshot.
+
+### Commit closure
+
+The path subject must match across:
+
+```text
+pending mutation path
+= patch-safety path
+= targeted pytest selected path
+```
+
+Full regression must also pass at the same revision.
+
+### Recovery
+
+Stale recovery applies the same ownership philosophy:
+
+- prior run confined beneath trusted artifact root;
+- runtime/journal/rollback ownership is non-symlink;
+- exact workspace identity;
+- exact persisted/current fingerprint match;
+- pending target path confined and non-symlink;
+- backup bytes match original SHA-256.
+
+`runtime/recovery.py` uses the same exact-path closure standard, so recovery inspection cannot be weaker than terminal truth.
+
+### Lease hardening
+
+Workspace lease storage rejects symlink substitution; no-follow opening is used where supported.
+
+---
+
+## 11. Inspect regression and change intelligence
 
 Read [`CHANGE_INTELLIGENCE.md`](CHANGE_INTELLIGENCE.md).
 
-The important design point is merge-base awareness. A feature branch can be clean and still carry committed risk. With explicit `AI_QA_BASE_REF`, the runtime analyzes the committed delta plus dirty/untracked changes.
+Important properties:
 
-CODEOWNERS and test-impact output are review/prioritization evidence, never runtime authorization.
+- clean feature branch still carries committed merge-base risk;
+- explicit `AI_QA_BASE_REF` supplies the trusted baseline;
+- CODEOWNERS/test impact are advisory evidence, never action authority;
+- unsupported ownership grammar remains visible;
+- low confidence/truncation broadens regression;
+- mandatory/security/safety/regulatory coverage is protected independently.
 
-Low confidence or incomplete mapping broadens regression instead of proving omission safe.
+---
 
-## 13. Inspect network adapters
+## 12. Inspect network adapters
 
-### API
+### API — `tools/api_testing.py`
 
-`tools/api_testing.py` enforces:
+Enforces:
 
-- host authorization;
+- exact host authorization;
 - method authorization;
 - no ambient proxy inheritance;
 - no automatic redirect following;
 - bounded response capture;
 - sanitized evidence.
 
-### Browser
+### Browser — `tools/browser_evidence.py`
 
-`tools/browser_evidence.py` enforces:
+Enforces:
 
 - host policy for navigation/subresources/WebSockets;
 - service-worker blocking in the evidence context;
 - final navigation recheck;
-- raw screenshot artifact labeling;
+- `RAW` screenshot artifact semantics;
 - same-DOM locator evidence.
 
-The WebSocket path uses Playwright's routed server-connection API compatible with the framework's supported Playwright range.
+### k6 — `tools/performance.py`
 
-### k6
+Enforces:
 
-`tools/performance.py` and policy enforce:
-
-- non-production target classification;
+- explicit non-production classification;
 - production-like hostname denial;
 - injected target binding;
-- supported import/module restrictions;
+- controlled import/module surface;
 - no local `open()`;
-- no unrelated literal network host;
-- external-egress prerequisite for non-local targets;
-- measured threshold assessment.
+- no unrelated literal host;
+- bounded runtime;
+- **deployment egress prerequisite for every k6 run**.
 
-## 14. Inspect runtime control independently from QA state
+Static JavaScript inspection is explicitly treated as defense in depth, not a network sandbox.
 
-`state.json` is QA decision state. `runtime.json` is process-control state. `journal.jsonl` is operational chronology.
+---
 
-This separation prevents:
-
-- lease ownership from becoming test evidence;
-- a model conversation from being the only recovery record;
-- process metadata from being interpreted as a QA conclusion.
-
-## 15. Inspect external MCP authorization
+## 13. Inspect external MCP authorization
 
 Read [`MCP.md`](MCP.md).
 
-External provider trust has two gates:
+External trust has two gates:
 
 1. provider identity/configuration;
 2. action-level authorization.
 
-Mixed names are tokenized conservatively so destructive semantics dominate writes, and writes dominate recognized reads. A read-looking prefix cannot smuggle a create/delete action.
+Mixed action names are tokenized conservatively:
 
-Provider failures are normalized without fabricating remote evidence. Business IDs that resemble HTTP codes are not treated as transport/auth results unless the surrounding text is status-shaped.
+```text
+destructive > write > recognized read
+```
 
-## 16. Inspect evaluation as software engineering
+A safe-looking prefix cannot smuggle a create/delete action. Provider failures are normalized, and arbitrary business IDs that resemble HTTP codes are not treated as transport status without status-shaped context.
+
+---
+
+## 14. Inspect process state separately from QA state
+
+```text
+state.json              → QA decision/evidence state
+runtime.json            → process-control state
+evidence-manifest.json  → evidence/artifact registry
+journal.jsonl           → runtime chronology
+rollback/               → pending transaction recovery bytes
+```
+
+This separation prevents lease ownership, recovery metadata, or conversational state from becoming QA evidence by proximity.
+
+---
+
+## 15. Inspect evaluation as software engineering
 
 Read [`EVALUATION.md`](EVALUATION.md).
 
-The evaluation design separates:
+The design separates:
 
 - unit/integration/policy/security tests;
 - fixed 34-scenario primary corpus;
@@ -291,20 +389,24 @@ The evaluation design separates:
 - browser-marked tests;
 - credentialed model tests.
 
-The important governance property is that hard-safety expectations are defined independently of the implementation result. A failing implementation is not “fixed” by weakening the benchmark after the fact.
+Hard-safety expectations are independent from implementation output. A failing implementation is not “fixed” by weakening the benchmark.
 
-## 17. Inspect traceability without confusing it with correctness
+---
+
+## 16. Inspect traceability without confusing it with correctness
 
 ```bash
 ai-qa lineage artifacts/run-<id>
 ai-qa attest artifacts/run-<id>
 ```
 
-[`TRACEABILITY.md`](TRACEABILITY.md) explains evidence/artifact/hypothesis/validation/runtime relationships.
+[`TRACEABILITY.md`](TRACEABILITY.md) shows evidence/artifact/hypothesis/validation/runtime relationships.
 
-The attestation is deliberately unsigned. Hash integrity can establish persisted-record properties; it cannot certify identity, compliance, or a test outcome.
+The attestation is deliberately unsigned and verifies persisted artifact bytes; it still does not certify identity, compliance, provider behavior, or test PASS.
 
-## 18. Finish with the evidence/deployment boundary
+---
+
+## 17. Finish with the evidence/deployment boundary
 
 Read:
 
@@ -314,10 +416,23 @@ Read:
 - [`SETUP.md`](SETUP.md)
 - [`OPERATIONS.md`](OPERATIONS.md)
 
-The intended conclusion is simple but strict:
+The intended conclusion is strict:
 
 > **Every claim is bound to its evidence source, and model reasoning never outranks deterministic authority, ownership, or validation.**
 
-Return to the documentation [`README.md`](README.md).
+---
+
+## Suggested interview review path
+
+| Time | Read |
+|---:|---|
+| 5 min | root `README.md` + [`RESULT_CONTRACT.md`](RESULT_CONTRACT.md) |
+| 10 min | [`ARCHITECTURE.md`](ARCHITECTURE.md) + sections 6/10 above |
+| 15 min | [`SECURITY.md`](SECURITY.md) + [`THREAT_MODEL.md`](THREAT_MODEL.md) |
+| 20+ min | [`EVALUATION.md`](EVALUATION.md) + [`TRACEABILITY.md`](TRACEABILITY.md) + code paths above |
+
+---
+
+[← Documentation home](README.md) · [Architecture](ARCHITECTURE.md)
 
 Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
