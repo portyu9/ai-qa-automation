@@ -20,7 +20,7 @@ This separation is the foundation for failure analysis, self-healing, test gener
 | Target content is untrusted | SUT source, tests, DOM, logs, API responses, target `CLAUDE.md`, `.claude/`, and `.mcp.json` cannot redefine control-plane policy. |
 | Authority is narrower than capability | The runtime exposes an explicit QA tool inventory instead of general shell/edit/web authority. |
 | Writes are higher risk than reads | Test writes are disabled by default, path-confined when enabled, transactionally backed up, and validated at a new revision. |
-| Uncertainty must remain visible | Missing, conflicting, stale, or unexecuted evidence resolves to explicit non-PASS states rather than optimistic inference. |
+| Uncertainty must remain visible | Missing, conflicting, stale, or unresolved evidence resolves to explicit non-PASS outcomes rather than optimistic inference. |
 | External systems are not implicitly trusted | Approved vendor integration identifies a transport/provider; returned content remains untrusted evidence. |
 | Runtime state must survive beyond chat | Canonical state, evidence, runtime checkpoints, and journal records are persisted independently of model conversation history. |
 | Resource use is bounded independently | Turns, tool calls, network calls, mutations, repeated actions, time, and model cost have distinct limits. |
@@ -74,8 +74,6 @@ sequenceDiagram
 The sequence intentionally gives the model no shortcut around policy, evidence, or validation. Even a successful Claude result is only an input to terminal-outcome evaluation.
 
 ## Lifecycle
-
-At a high level:
 
 ```text
 OBJECTIVE
@@ -160,7 +158,7 @@ This makes repository facts **inputs to reasoning**, not claims Claude is expect
 
 ## Canonical decision state versus process-control state
 
-`AgentRunState` is the canonical QA decision state stored outside conversation history. It records objective, model/SDK/config provenance, target SHA, change revision, hypotheses, evidence references, classifications, validation lineage, MCP status, modified files, cost, duration, and terminal state.
+`AgentRunState` is the canonical QA decision state stored outside conversation history. It records objective, model/SDK/config provenance, target SHA, change revision, hypotheses, evidence references, classifications, validation lineage, MCP availability, modified files, cost, duration, and terminal outcome.
 
 Process-level safety is stored separately in `runtime.json`, including workspace fingerprint, lease identity, execution-budget counters, tool circuits, pending mutation metadata, and journal head.
 
@@ -172,7 +170,7 @@ The separation prevents process-recovery mechanics from being confused with QA c
 
 In regulated mode, additional hash-chained audit records provide integrity/ordering evidence. That mechanism is deliberately described as an engineering traceability control, not a compliance certification.
 
-## Deterministic terminal status
+## Deterministic terminal outcome
 
 A model result subtype of `success` is insufficient by itself.
 
@@ -190,7 +188,7 @@ Another autonomous mutation is blocked while a previous mutation transaction rem
 
 A live run acquires an exclusive OS-backed lease for its target worktree. The runtime also captures a Git/worktree fingerprint and checks it before an autonomous mutation. Out-of-band drift blocks the write.
 
-Approved test mutations are transactional: the previous bytes are snapshotted in the trusted artifact area, the mutation remains pending while validation runs, and an unverified/failed run rolls back. Crash recovery refuses to overwrite newer human/out-of-band work when the persisted fingerprint no longer matches.
+Approved test mutations are transactional: the previous bytes are snapshotted in the trusted artifact area, the mutation remains pending while validation runs, and runs without deterministic revision closure roll back. Crash recovery refuses to overwrite newer human/out-of-band work when the persisted fingerprint no longer matches.
 
 See [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md) for the mutation/recovery state machine.
 
@@ -206,20 +204,20 @@ k6 execution additionally requires:
 - rejection of remote modules, `k6/x/*` extensions, local-file reads, and unrelated external hosts;
 - a trusted infrastructure-egress precondition for non-local targets.
 
-Application-level checks are not described as an operating-system or network sandbox. High-assurance egress/isolation remains an environment boundary.
+Application-level checks are not described as an operating-system or network sandbox. High-assurance egress/isolation remains a deployment boundary.
 
 ## External MCP
 
 GitHub and Atlassian integrations are explicit and disabled by default. The runtime does not inherit target, user, plugin, or unrelated local MCP configuration.
 
-Services without an approved first-party/vendor-official MCP remain `NOT_CONFIGURED` or require a narrow supported vendor API adapter rather than an unofficial community substitute.
+Providers without an approved first-party/vendor-official path require a narrow supported vendor adapter rather than an unofficial community substitute.
 
 See [`MCP.md`](MCP.md) and [`SETUP.md`](SETUP.md).
 
-## What this architecture does not claim
+## Deployment boundaries
 
-Source structure is evidence that a control is implemented; it is not current-head execution evidence. Live model, authenticated MCP, external browser/device, approved load, infrastructure sandbox/egress, and organization security controls require their own environment-specific verification.
+Source-level controls, credentialed providers, external applications/devices, approved load targets, infrastructure isolation/egress, and organization security controls each have their own evidence source. The framework keeps those trust boundaries explicit rather than conflating them.
 
-The authoritative status language is maintained in [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) and [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md).
+See [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) and [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md).
 
 Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
