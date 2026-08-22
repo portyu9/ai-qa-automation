@@ -19,7 +19,15 @@ class EvidenceStore:
         self.run_id = run_id
         self.regulated_mode = regulated_mode
         artifact_root = root.expanduser().resolve()
-        self.run_root = (artifact_root / run_id).resolve()
+        requested_run = Path(run_id)
+        if requested_run.is_absolute() or not requested_run.parts or ".." in requested_run.parts:
+            raise ValueError("evidence run_id escapes artifact root")
+        cursor = artifact_root
+        for part in requested_run.parts:
+            cursor = cursor / part
+            if cursor.is_symlink():
+                raise ValueError("evidence run_id contains a symlink and has ambiguous ownership")
+        self.run_root = (artifact_root / requested_run).resolve()
         if self.run_root == artifact_root or artifact_root not in self.run_root.parents:
             raise ValueError("evidence run_id escapes artifact root")
         self.run_root.mkdir(parents=True, exist_ok=True)
@@ -65,8 +73,16 @@ class EvidenceStore:
         sanitization_status: SanitizationStatus = SanitizationStatus.RAW,
         retention_classification: str | None = None,
     ) -> tuple[str, str]:
-        destination = (self.run_root / relative_path).resolve()
-        if self.run_root not in destination.parents and destination != self.run_root:
+        requested = Path(relative_path)
+        if requested.is_absolute() or not requested.parts or ".." in requested.parts:
+            raise ValueError("artifact path must be a non-traversing relative path under run root")
+        cursor = self.run_root
+        for part in requested.parts:
+            cursor = cursor / part
+            if cursor.is_symlink():
+                raise ValueError("artifact path contains a symlink and has ambiguous ownership")
+        destination = (self.run_root / requested).resolve()
+        if self.run_root not in destination.parents:
             raise ValueError("artifact path escapes run root")
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.exists():
@@ -155,16 +171,16 @@ class EvidenceStore:
             manifest_regulated = bool(data.get("regulated_mode", False))
             if manifest_regulated != self.regulated_mode:
                 raise ValueError("evidence manifest regulated_mode mismatch")
-            self._items = {
-                item.id: item
-                for item in (EvidenceItem.model_validate(raw) for raw in data.get("evidence", []))
-            }
-            self._artifacts = {
-                item.artifact_id: item
-                for item in (
-                    ArtifactRecord.model_validate(raw) for raw in data.get("artifacts", [])
-                )
-            }
+            evidence_records = [EvidenceItem.model_validate(raw) for raw in data.get("evidence", [])]
+            artifact_records = [ArtifactRecord.model_validate(raw) for raw in data.get("artifacts", [])]
+            if len({item.id for item in evidence_records}) != len(evidence_records):
+                raise ValueError("evidence manifest contains duplicate evidence ids")
+            if len({item.artifact_id for item in artifact_records}) != len(artifact_records):
+                raise ValueError("evidence manifest contains duplicate artifact ids")
+            if len({item.path for item in artifact_records}) != len(artifact_records):
+                raise ValueError("evidence manifest contains duplicate artifact paths")
+            self._items = {item.id: item for item in evidence_records}
+            self._artifacts = {item.artifact_id: item for item in artifact_records}
         except (json.JSONDecodeError, TypeError, KeyError) as exc:
             raise ValueError("evidence manifest could not be restored") from exc
 
