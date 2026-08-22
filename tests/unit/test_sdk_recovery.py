@@ -77,6 +77,13 @@ def test_retry_is_allowed_only_for_transient_session_start_failure() -> None:
     assert provider_started.retry is False
     assert provider_started.category == "provider_request_started"
 
+    exhausted_after_provider_start = _decision(
+        ConnectionError("connection reset"),
+        state=_state(retry_count=2),
+        provider_request_started=True,
+    )
+    assert exhausted_after_provider_start.category == "provider_request_started"
+
     assert (
         _decision(ConnectionError("connection reset"), state=_state(iteration=1)).category
         == "message_observed"
