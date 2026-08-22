@@ -6,6 +6,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import Any
 
 PROTECTED = (
     "CLAUDE.md",
@@ -50,10 +51,12 @@ def deny(reason: str) -> None:
     )
 
 
-def main() -> int:
-    payload = json.load(sys.stdin)
+def _evaluate(payload: dict[str, Any]) -> int:
     tool = str(payload.get("tool_name", ""))
     args = payload.get("tool_input") or {}
+    if not isinstance(args, dict):
+        raise TypeError("tool_input must be an object")
+
     command = str(args.get("command", ""))
     if tool == "Bash" and any(pattern.search(command) for pattern in DESTRUCTIVE):
         deny("SEC-GIT-001: destructive Git/filesystem command denied")
@@ -70,6 +73,23 @@ def main() -> int:
             deny("SEC-GOV-001: governance file change requires reviewed engineering process")
             return 0
     return 0
+
+
+def main() -> int:
+    try:
+        payload = json.load(sys.stdin)
+        if not isinstance(payload, dict):
+            raise TypeError("hook payload must be an object")
+        return _evaluate(payload)
+    except Exception as exc:
+        # Claude Code treats ordinary non-zero hook exits as non-blocking. Policy
+        # enforcement must therefore use exit 2 on parser/internal failures. Never
+        # echo raw input or exception text because it may contain tool secrets.
+        print(
+            f"SEC-HOOK-001: policy guard failed closed ({type(exc).__name__})",
+            file=sys.stderr,
+        )
+        return 2
 
 
 if __name__ == "__main__":

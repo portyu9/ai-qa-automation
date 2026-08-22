@@ -36,6 +36,16 @@ def stale_runtime_payload(
     }
 
 
+def recover(artifact_root: Path, workspace: Path, *, fingerprint: str = "fp") -> dict[str, object]:
+    return recover_stale_mutation(
+        artifact_root=artifact_root,
+        workspace=workspace,
+        previous_lease={"run_id": "run-old"},
+        current_workspace_fingerprint=fingerprint,
+        recovering_run_id="run-new",
+    )
+
+
 def test_stale_existing_file_mutation_is_restored_when_fingerprint_matches(tmp_path: Path) -> None:
     artifact_root = tmp_path / "artifacts"
     workspace = tmp_path / "sut"
@@ -61,13 +71,7 @@ def test_stale_existing_file_mutation_is_restored_when_fingerprint_matches(tmp_p
         ),
     )
 
-    result = recover_stale_mutation(
-        artifact_root=artifact_root,
-        workspace=workspace,
-        previous_lease={"run_id": "run-old"},
-        current_workspace_fingerprint="fp-after-mutation",
-        recovering_run_id="run-new",
-    )
+    result = recover(artifact_root, workspace, fingerprint="fp-after-mutation")
 
     assert result == {
         "status": "RECOVERED",
@@ -107,16 +111,10 @@ def test_operator_edit_after_crash_blocks_automatic_rollback(tmp_path: Path) -> 
         ),
     )
 
-    result = recover_stale_mutation(
-        artifact_root=artifact_root,
-        workspace=workspace,
-        previous_lease={"run_id": "run-old"},
-        current_workspace_fingerprint="new-human-fingerprint",
-        recovering_run_id="run-new",
-    )
+    result = recover(artifact_root, workspace, fingerprint="new-human-fingerprint")
 
     assert result["status"] == "BLOCKED"
-    assert "overwriting newer work" in result["reason"]
+    assert "overwriting newer work" in str(result["reason"])
     assert target.read_text(encoding="utf-8") == "human edit\n"
     assert backup.exists()
 
@@ -139,13 +137,7 @@ def test_stale_unverified_new_file_is_removed(tmp_path: Path) -> None:
         ),
     )
 
-    result = recover_stale_mutation(
-        artifact_root=artifact_root,
-        workspace=workspace,
-        previous_lease={"run_id": "run-old"},
-        current_workspace_fingerprint="fp",
-        recovering_run_id="run-new",
-    )
+    result = recover(artifact_root, workspace)
 
     assert result["status"] == "RECOVERED"
     assert not target.exists()
@@ -181,16 +173,10 @@ def test_stale_recovery_rejects_symlinked_target_alias(tmp_path: Path) -> None:
         ),
     )
 
-    result = recover_stale_mutation(
-        artifact_root=artifact_root,
-        workspace=workspace,
-        previous_lease={"run_id": "run-old"},
-        current_workspace_fingerprint="fp",
-        recovering_run_id="run-new",
-    )
+    result = recover(artifact_root, workspace)
 
     assert result["status"] == "BLOCKED"
-    assert "symlink" in result["reason"]
+    assert "symlink" in str(result["reason"])
     assert target.read_text(encoding="utf-8") == "mutated\n"
     assert backup.exists()
 
@@ -225,16 +211,10 @@ def test_stale_recovery_rejects_symlinked_rollback_backup(tmp_path: Path) -> Non
         ),
     )
 
-    result = recover_stale_mutation(
-        artifact_root=artifact_root,
-        workspace=workspace,
-        previous_lease={"run_id": "run-old"},
-        current_workspace_fingerprint="fp",
-        recovering_run_id="run-new",
-    )
+    result = recover(artifact_root, workspace)
 
     assert result["status"] == "BLOCKED"
-    assert "symlink" in result["reason"]
+    assert "symlink" in str(result["reason"])
     assert target.read_text(encoding="utf-8") == "mutated\n"
     assert actual_backup.exists()
 
@@ -270,16 +250,10 @@ def test_stale_recovery_rejects_symlinked_rollback_directory(tmp_path: Path) -> 
         ),
     )
 
-    result = recover_stale_mutation(
-        artifact_root=artifact_root,
-        workspace=workspace,
-        previous_lease={"run_id": "run-old"},
-        current_workspace_fingerprint="fp",
-        recovering_run_id="run-new",
-    )
+    result = recover(artifact_root, workspace)
 
     assert result["status"] == "BLOCKED"
-    assert "rollback directory" in result["reason"]
+    assert "rollback directory" in str(result["reason"])
     assert target.read_text(encoding="utf-8") == "mutated\n"
     assert backup.exists()
 
@@ -309,16 +283,10 @@ def test_stale_recovery_rejects_symlinked_journal_before_mutation(tmp_path: Path
     except OSError as exc:  # pragma: no cover - platform/filesystem capability
         pytest.skip(f"symlink creation unavailable: {exc}")
 
-    result = recover_stale_mutation(
-        artifact_root=artifact_root,
-        workspace=workspace,
-        previous_lease={"run_id": "run-old"},
-        current_workspace_fingerprint="fp",
-        recovering_run_id="run-new",
-    )
+    result = recover(artifact_root, workspace)
 
     assert result["status"] == "BLOCKED"
-    assert "run journal" in result["reason"]
+    assert "run journal" in str(result["reason"])
     assert target.exists()
     assert outside_journal.read_text(encoding="utf-8") == "do not touch\n"
 
@@ -332,7 +300,84 @@ def test_previous_run_id_traversal_is_blocked(tmp_path: Path) -> None:
         recovering_run_id="run-new",
     )
     assert result["status"] == "BLOCKED"
-    assert "escapes trusted root" in result["reason"]
+    assert "escapes trusted root" in str(result["reason"])
+
+
+def test_oversized_runtime_metadata_is_blocked_before_json_ingestion(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+    runtime = artifact_root / "run-old" / "runtime.json"
+    runtime.parent.mkdir(parents=True)
+    runtime.write_bytes(b"{" + (b" " * 2_000_001) + b"}")
+
+    result = recover(artifact_root, workspace)
+
+    assert result["status"] == "BLOCKED"
+    assert "ingestion limit" in str(result["reason"])
+
+
+def test_non_object_runtime_metadata_is_blocked(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+    runtime = artifact_root / "run-old" / "runtime.json"
+    runtime.parent.mkdir(parents=True)
+    runtime.write_text("[]", encoding="utf-8")
+
+    result = recover(artifact_root, workspace)
+
+    assert result["status"] == "BLOCKED"
+    assert "root must be an object" in str(result["reason"])
+
+
+def test_invalid_pending_metadata_is_blocked_not_treated_as_noop(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+    write_runtime(
+        artifact_root / "run-old" / "runtime.json",
+        {
+            "workspace": str(workspace.resolve()),
+            "workspace_fingerprint": "fp",
+            "pending_mutation": "tests/test_x.py",
+        },
+    )
+
+    result = recover(artifact_root, workspace)
+
+    assert result["status"] == "BLOCKED"
+    assert "pending mutation metadata is invalid" in str(result["reason"])
+
+
+def test_oversized_rollback_backup_is_blocked_before_read(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+    target = workspace / "tests" / "test_checkout.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("mutated\n", encoding="utf-8")
+    prior_run = artifact_root / "run-old"
+    backup = prior_run / "rollback" / "checkout.bin"
+    backup.parent.mkdir(parents=True)
+    backup.write_bytes(b"x" * 2_000_001)
+    write_runtime(
+        prior_run / "runtime.json",
+        stale_runtime_payload(
+            workspace,
+            relative_path="tests/test_checkout.py",
+            existed=True,
+            backup_path=str(backup.resolve()),
+            original_sha256=hashlib.sha256(b"original").hexdigest(),
+        ),
+    )
+
+    result = recover(artifact_root, workspace)
+
+    assert result["status"] == "BLOCKED"
+    assert "2 MB" in str(result["reason"])
+    assert target.read_text(encoding="utf-8") == "mutated\n"
+    assert backup.exists()
 
 
 def test_no_previous_lease_is_noop(tmp_path: Path) -> None:

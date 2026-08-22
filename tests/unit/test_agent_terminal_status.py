@@ -17,6 +17,7 @@ def vr(
     scope: str | None = None,
     mutation_path: str = "tests/test_x.py",
     mutation_target_bound: bool = True,
+    objective_bound: bool = False,
 ) -> ValidationResult:
     details: dict[str, object] = {}
     if name == "test_patch_safety" and revision > 0:
@@ -33,6 +34,8 @@ def vr(
         )
     if scope == "regression":
         details["args"] = []
+    if objective_bound:
+        details["objective_bound"] = True
     return ValidationResult(
         name=name,
         gate_id=gate_id,
@@ -43,10 +46,22 @@ def vr(
     )
 
 
-def test_success_requires_nonempty_all_pass_validation_set() -> None:
-    status, _ = determine_terminal_outcome("success", [vr("pytest", ValidationStatus.PASS)])
+def test_read_only_success_requires_objective_bound_deterministic_validation() -> None:
+    status, reason = determine_terminal_outcome(
+        "success",
+        [vr("pytest", ValidationStatus.PASS)],
+    )
+    assert status is TerminalStatus.NOT_VERIFIED
+    assert "deterministically bound" in reason.lower()
+
+    status, _ = determine_terminal_outcome(
+        "success",
+        [vr("pytest", ValidationStatus.PASS, objective_bound=True)],
+    )
     assert status is TerminalStatus.SUCCESS
 
+
+def test_success_requires_nonempty_validation_set() -> None:
     status, reason = determine_terminal_outcome("success", [])
     assert status is TerminalStatus.NOT_VERIFIED
     assert "no deterministic validation" in reason.lower()

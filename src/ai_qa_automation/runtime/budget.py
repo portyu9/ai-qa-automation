@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import threading
 import time
 from dataclasses import dataclass
@@ -41,14 +42,19 @@ class ExecutionBudget:
             "max_network_calls": max_network_calls,
             "max_mutations": max_mutations,
         }.items():
-            if value < 1:
-                raise ValueError(f"{name} must be at least 1")
-        if max_wall_seconds <= 0:
-            raise ValueError("max_wall_seconds must be positive")
+            if type(value) is not int or value < 1:
+                raise ValueError(f"{name} must be a positive integer")
+        if (
+            isinstance(max_wall_seconds, bool)
+            or not isinstance(max_wall_seconds, (int, float))
+            or not math.isfinite(max_wall_seconds)
+            or max_wall_seconds <= 0
+        ):
+            raise ValueError("max_wall_seconds must be a positive finite number")
         self.max_tool_calls = max_tool_calls
         self.max_network_calls = max_network_calls
         self.max_mutations = max_mutations
-        self.max_wall_seconds = max_wall_seconds
+        self.max_wall_seconds = float(max_wall_seconds)
         self._started = time.monotonic()
         self._tool_calls = 0
         self._network_calls = 0

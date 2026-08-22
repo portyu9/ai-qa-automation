@@ -8,6 +8,8 @@ from ..models import ValidationStatus
 from ..state import StateStore
 from .journal import RunJournal
 
+_MAX_RUNTIME_METADATA_BYTES = 2_000_000
+
 
 def _revision_closed(state: Any) -> bool:
     if state.change_revision == 0:
@@ -58,28 +60,31 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
     ):
         if path.is_symlink():
             return {"recoverable": False, "reason": f"{label} has ambiguous symlink ownership"}
-    if not state_path.is_file():
-        return {"recoverable": False, "reason": "state.json is missing"}
+        if not path.is_file():
+            return {"recoverable": False, "reason": f"{label} is missing"}
+
     try:
         state = StateStore(state_path).load()
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         return {"recoverable": False, "reason": f"state could not be loaded: {type(exc).__name__}"}
     try:
         journal_status = RunJournal(journal_path, regulated_mode=False).verify()
-    except (OSError, json.JSONDecodeError, RuntimeError, ValueError) as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError, RuntimeError, ValueError) as exc:
         return {"recoverable": False, "reason": f"journal could not be verified: {type(exc).__name__}"}
     if not journal_status["valid"]:
         return {"recoverable": False, "reason": "journal hash chain is invalid"}
 
+    try:
+        if runtime_path.stat().st_size > _MAX_RUNTIME_METADATA_BYTES:
+            return {"recoverable": False, "reason": "runtime.json exceeds restore size bound"}
+        raw_runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {"recoverable": False, "reason": "runtime.json is invalid"}
+    if not isinstance(raw_runtime, dict):
+        return {"recoverable": False, "reason": "runtime.json root must be an object"}
+    runtime_metadata: dict[str, Any] = raw_runtime
+
     revision_closed = _revision_closed(state)
-    runtime_metadata: dict[str, Any] = {}
-    if runtime_path.is_file():
-        try:
-            raw_runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return {"recoverable": False, "reason": "runtime.json is invalid"}
-        if isinstance(raw_runtime, dict):
-            runtime_metadata = raw_runtime
     pending_mutation = runtime_metadata.get("pending_mutation")
     if pending_mutation:
         revision_closed = False

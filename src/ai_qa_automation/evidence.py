@@ -6,10 +6,19 @@ import os
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from .models import ArtifactRecord, EvidenceItem, SanitizationStatus
 from .redaction import sanitize
+
+_MAX_EVIDENCE_MANIFEST_BYTES = 16_000_000
+_MAX_EVIDENCE_AUDIT_LINE_BYTES = 1_000_000
+_MAX_EVIDENCE_AUDIT_BYTES = 64_000_000
+_MAX_EVIDENCE_COUNT = 10_000
+_MAX_ARTIFACT_BYTES = 32_000_000
+_MAX_ARTIFACT_COUNT = 5_000
+_MAX_TOTAL_ARTIFACT_BYTES = 256_000_000
+_MANIFEST_AUDIT_RESERVE_BYTES = 1_024
 
 
 class EvidenceStore:
@@ -47,6 +56,14 @@ class EvidenceStore:
     def hash_bytes(content: bytes) -> str:
         return f"sha256:{hashlib.sha256(content).hexdigest()}"
 
+    @staticmethod
+    def hash_file(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return f"sha256:{digest.hexdigest()}"
+
     def _assert_control_file_owned(self, name: str) -> Path:
         path = self.run_root / name
         if path.is_symlink():
@@ -69,6 +86,20 @@ class EvidenceStore:
             raise ValueError("artifact path escapes run root")
         return destination
 
+    def _registered_artifact_bytes(self) -> int:
+        total = 0
+        for record in self._artifacts.values():
+            path = self._owned_artifact_path(record.path)
+            if not path.is_file():
+                raise ValueError(f"registered artifact is unavailable: {record.path}")
+            size = path.stat().st_size
+            if size > _MAX_ARTIFACT_BYTES:
+                raise ValueError(f"registered artifact exceeds persistence limit: {record.path}")
+            total += size
+            if total > _MAX_TOTAL_ARTIFACT_BYTES:
+                raise ValueError("registered artifacts exceed cumulative persistence limit")
+        return total
+
     def add(self, item: EvidenceItem) -> EvidenceItem:
         if item.run_id != self.run_id:
             raise ValueError("evidence run_id does not match store")
@@ -76,16 +107,33 @@ class EvidenceStore:
         safe_item = EvidenceItem.model_validate(safe_payload)
         if safe_item.id in self._items:
             raise ValueError(f"evidence id is immutable and already registered: {safe_item.id}")
+        if len(self._items) >= _MAX_EVIDENCE_COUNT:
+            raise ValueError("evidence registry exceeds persistence count limit")
+
+        audit_sequence_before = self._audit_sequence
         self._items[safe_item.id] = safe_item
-        self._append_audit_event(
-            "evidence_registered",
-            {
-                "evidence_id": safe_item.id,
-                "kind": safe_item.kind.value,
-                "content_hash": self.hash_bytes(safe_item.model_dump_json().encode("utf-8")),
-            },
-        )
-        self._flush_manifest()
+        try:
+            self._assert_manifest_capacity(
+                reserve_bytes=_MANIFEST_AUDIT_RESERVE_BYTES if self.regulated_mode else 0
+            )
+            self._append_audit_event(
+                "evidence_registered",
+                {
+                    "evidence_id": safe_item.id,
+                    "kind": safe_item.kind.value,
+                    "content_hash": self.hash_bytes(safe_item.model_dump_json().encode("utf-8")),
+                },
+            )
+            self._flush_manifest()
+        except Exception:
+            # If no audit record was durably appended, the staged in-memory item is
+            # not authoritative and can be removed safely. If the audit advanced but
+            # manifest persistence failed, retain the item so live state still agrees
+            # with the append-only audit record; reopening will fail closed until the
+            # manifest is repaired/reconciled rather than pretending the event vanished.
+            if self._audit_sequence == audit_sequence_before:
+                self._items.pop(safe_item.id, None)
+            raise
         return safe_item
 
     def register_artifact(
@@ -97,6 +145,14 @@ class EvidenceStore:
         sanitization_status: SanitizationStatus = SanitizationStatus.RAW,
         retention_classification: str | None = None,
     ) -> tuple[str, str]:
+        if not isinstance(content, bytes):
+            raise TypeError("artifact content must be bytes")
+        if len(content) > _MAX_ARTIFACT_BYTES:
+            raise ValueError(f"artifact exceeds {_MAX_ARTIFACT_BYTES} byte persistence limit")
+        if len(self._artifacts) >= _MAX_ARTIFACT_COUNT:
+            raise ValueError("artifact registry exceeds persistence count limit")
+        if self._registered_artifact_bytes() + len(content) > _MAX_TOTAL_ARTIFACT_BYTES:
+            raise ValueError("artifact registry exceeds cumulative persistence byte limit")
         destination = self._owned_artifact_path(relative_path)
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.exists():
@@ -118,6 +174,7 @@ class EvidenceStore:
                 ) from None
         finally:
             temp.unlink(missing_ok=True)
+
         digest = self.hash_bytes(content)
         record = ArtifactRecord(
             type=destination.suffix.lstrip(".") or "binary",
@@ -131,18 +188,28 @@ class EvidenceStore:
                 else ("regulated" if self.regulated_mode else "standard")
             ),
         )
+        audit_sequence_before = self._audit_sequence
         self._artifacts[record.artifact_id] = record
-        self._append_audit_event(
-            "artifact_registered",
-            {
-                "artifact_id": record.artifact_id,
-                "path": record.path,
-                "content_hash": record.content_hash,
-                "sanitization_status": record.sanitization_status.value,
-                "retention_classification": record.retention_classification,
-            },
-        )
-        self._flush_manifest()
+        try:
+            self._assert_manifest_capacity(
+                reserve_bytes=_MANIFEST_AUDIT_RESERVE_BYTES if self.regulated_mode else 0
+            )
+            self._append_audit_event(
+                "artifact_registered",
+                {
+                    "artifact_id": record.artifact_id,
+                    "path": record.path,
+                    "content_hash": record.content_hash,
+                    "sanitization_status": record.sanitization_status.value,
+                    "retention_classification": record.retention_classification,
+                },
+            )
+            self._flush_manifest()
+        except Exception:
+            if self._audit_sequence == audit_sequence_before:
+                self._artifacts.pop(record.artifact_id, None)
+                destination.unlink(missing_ok=True)
+            raise
         return record.path, digest
 
     def get(self, evidence_id: str) -> EvidenceItem:
@@ -155,10 +222,10 @@ class EvidenceStore:
         if not self.regulated_mode:
             return
         path = self._assert_control_file_owned("audit-log.jsonl")
-        self._audit_sequence += 1
+        next_sequence = self._audit_sequence + 1
         timestamp = datetime.now(UTC).isoformat()
         core = {
-            "sequence": self._audit_sequence,
+            "sequence": next_sequence,
             "timestamp": timestamp,
             "event_type": event_type,
             "payload": sanitize(payload),
@@ -169,10 +236,18 @@ class EvidenceStore:
         ).encode("utf-8")
         event_hash = self.hash_bytes(canonical)
         record = {**core, "event_hash": event_hash}
+        rendered = json.dumps(record, sort_keys=True, default=str) + "\n"
+        rendered_bytes = rendered.encode("utf-8")
+        if len(rendered_bytes) > _MAX_EVIDENCE_AUDIT_LINE_BYTES:
+            raise ValueError("regulated audit event exceeds line-size bound")
+        existing_size = path.stat().st_size if path.exists() else 0
+        if existing_size + len(rendered_bytes) > _MAX_EVIDENCE_AUDIT_BYTES:
+            raise ValueError("regulated audit log exceeds persistence size bound")
         with path.open("a", encoding="utf-8") as stream:
-            stream.write(json.dumps(record, sort_keys=True, default=str) + "\n")
+            stream.write(rendered)
             stream.flush()
             os.fsync(stream.fileno())
+        self._audit_sequence = next_sequence
         self._audit_previous_hash = event_hash
 
     def _restore_manifest(self) -> None:
@@ -180,14 +255,26 @@ class EvidenceStore:
         if not path.exists():
             return
         try:
+            if path.stat().st_size > _MAX_EVIDENCE_MANIFEST_BYTES:
+                raise ValueError("evidence manifest exceeds restore size bound")
             data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("evidence manifest root must be an object")
             if data.get("run_id") != self.run_id:
                 raise ValueError("evidence manifest run_id mismatch")
             manifest_regulated = bool(data.get("regulated_mode", False))
             if manifest_regulated != self.regulated_mode:
                 raise ValueError("evidence manifest regulated_mode mismatch")
-            evidence_records = [EvidenceItem.model_validate(raw) for raw in data.get("evidence", [])]
-            artifact_records = [ArtifactRecord.model_validate(raw) for raw in data.get("artifacts", [])]
+            raw_evidence = data.get("evidence", [])
+            raw_artifacts = data.get("artifacts", [])
+            if not isinstance(raw_evidence, list) or not isinstance(raw_artifacts, list):
+                raise ValueError("evidence manifest registries must be lists")
+            if len(raw_evidence) > _MAX_EVIDENCE_COUNT:
+                raise ValueError("evidence manifest exceeds evidence count limit")
+            if len(raw_artifacts) > _MAX_ARTIFACT_COUNT:
+                raise ValueError("evidence manifest exceeds artifact count limit")
+            evidence_records = [EvidenceItem.model_validate(raw) for raw in raw_evidence]
+            artifact_records = [ArtifactRecord.model_validate(raw) for raw in raw_artifacts]
             if len({item.id for item in evidence_records}) != len(evidence_records):
                 raise ValueError("evidence manifest contains duplicate evidence ids")
             if len({item.artifact_id for item in artifact_records}) != len(artifact_records):
@@ -199,7 +286,30 @@ class EvidenceStore:
         except (json.JSONDecodeError, TypeError, KeyError) as exc:
             raise ValueError("evidence manifest could not be restored") from exc
 
+    def _iter_audit_records(self) -> Iterator[dict[str, Any]]:
+        path = self._assert_control_file_owned("audit-log.jsonl")
+        if not path.exists():
+            return
+        if path.stat().st_size > _MAX_EVIDENCE_AUDIT_BYTES:
+            raise ValueError("regulated audit log exceeds restore size bound")
+        with path.open("rb") as stream:
+            while True:
+                raw_line = stream.readline(_MAX_EVIDENCE_AUDIT_LINE_BYTES + 1)
+                if not raw_line:
+                    break
+                if len(raw_line) > _MAX_EVIDENCE_AUDIT_LINE_BYTES:
+                    raise ValueError("regulated audit event exceeds line-size bound")
+                if not raw_line.strip():
+                    continue
+                record = json.loads(raw_line.decode("utf-8"))
+                if not isinstance(record, dict):
+                    raise ValueError("regulated audit event must be a JSON object")
+                yield record
+
     def _verify_artifact_hashes(self) -> None:
+        if len(self._artifacts) > _MAX_ARTIFACT_COUNT:
+            raise ValueError("regulated artifact registry exceeds count limit")
+        total_bytes = 0
         for record in self._artifacts.values():
             try:
                 path = self._owned_artifact_path(record.path)
@@ -207,7 +317,13 @@ class EvidenceStore:
                 raise ValueError(f"regulated artifact ownership check failed: {record.path}") from exc
             if not path.is_file():
                 raise ValueError(f"regulated artifact is missing or escaped run root: {record.path}")
-            if self.hash_bytes(path.read_bytes()) != record.content_hash:
+            size = path.stat().st_size
+            if size > _MAX_ARTIFACT_BYTES:
+                raise ValueError(f"regulated artifact exceeds persistence limit: {record.path}")
+            total_bytes += size
+            if total_bytes > _MAX_TOTAL_ARTIFACT_BYTES:
+                raise ValueError("regulated artifacts exceed cumulative persistence limit")
+            if self.hash_file(path) != record.content_hash:
                 raise ValueError(f"regulated artifact integrity check failed: {record.path}")
 
     def _verify_registry_against_audit(self) -> None:
@@ -219,10 +335,7 @@ class EvidenceStore:
 
         evidence_hashes: dict[str, str] = {}
         artifact_hashes: dict[str, str] = {}
-        for raw_line in path.read_text(encoding="utf-8").splitlines():
-            if not raw_line.strip():
-                continue
-            record = json.loads(raw_line)
+        for record in self._iter_audit_records():
             payload = record.get("payload") or {}
             if record.get("event_type") == "evidence_registered":
                 evidence_hashes[str(payload.get("evidence_id"))] = str(
@@ -256,23 +369,23 @@ class EvidenceStore:
 
         expected_previous = "GENESIS"
         expected_sequence = 1
-        for raw_line in path.read_text(encoding="utf-8").splitlines():
-            if not raw_line.strip():
-                continue
-            record = json.loads(raw_line)
-            if int(record.get("sequence", -1)) != expected_sequence:
-                return False
-            if record.get("previous_hash") != expected_previous:
-                return False
-            core = {key: value for key, value in record.items() if key != "event_hash"}
-            canonical = json.dumps(
-                core, sort_keys=True, separators=(",", ":"), default=str
-            ).encode("utf-8")
-            calculated = self.hash_bytes(canonical)
-            if record.get("event_hash") != calculated:
-                return False
-            expected_previous = calculated
-            expected_sequence += 1
+        try:
+            for record in self._iter_audit_records():
+                if int(record.get("sequence", -1)) != expected_sequence:
+                    return False
+                if record.get("previous_hash") != expected_previous:
+                    return False
+                core = {key: value for key, value in record.items() if key != "event_hash"}
+                canonical = json.dumps(
+                    core, sort_keys=True, separators=(",", ":"), default=str
+                ).encode("utf-8")
+                calculated = self.hash_bytes(canonical)
+                if record.get("event_hash") != calculated:
+                    return False
+                expected_previous = calculated
+                expected_sequence += 1
+        except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+            return False
         return True
 
     def _restore_audit_tail(self) -> None:
@@ -281,17 +394,15 @@ class EvidenceStore:
             return
         if not self.verify_audit_chain():
             raise ValueError("regulated audit log integrity check failed")
-        lines = [
-            line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
-        ]
-        if not lines:
+        last: dict[str, Any] | None = None
+        for record in self._iter_audit_records():
+            last = record
+        if last is None:
             return
-        last = json.loads(lines[-1])
         self._audit_sequence = int(last["sequence"])
         self._audit_previous_hash = str(last["event_hash"])
 
-    def _flush_manifest(self) -> None:
-        path = self._assert_control_file_owned("evidence-manifest.json")
+    def _manifest_data(self) -> dict[str, Any]:
         data: dict[str, Any] = {
             "run_id": self.run_id,
             "regulated_mode": self.regulated_mode,
@@ -301,15 +412,29 @@ class EvidenceStore:
         }
         if self.regulated_mode:
             audit_path = self._assert_control_file_owned("audit-log.jsonl")
+            if audit_path.exists() and audit_path.stat().st_size > _MAX_EVIDENCE_AUDIT_BYTES:
+                raise ValueError("regulated audit log exceeds persistence size bound")
             data["audit_log"] = {
                 "path": audit_path.name,
                 "events": self._audit_sequence,
                 "last_event_hash": self._audit_previous_hash,
-                "content_hash": self.hash_bytes(audit_path.read_bytes())
-                if audit_path.exists()
-                else None,
+                "content_hash": self.hash_file(audit_path) if audit_path.exists() else None,
             }
-        rendered = json.dumps(data, indent=2, sort_keys=True)
+        return data
+
+    def _render_manifest(self) -> str:
+        return json.dumps(self._manifest_data(), indent=2, sort_keys=True)
+
+    def _assert_manifest_capacity(self, *, reserve_bytes: int = 0) -> None:
+        rendered_bytes = len(self._render_manifest().encode("utf-8"))
+        if rendered_bytes + reserve_bytes > _MAX_EVIDENCE_MANIFEST_BYTES:
+            raise ValueError("evidence manifest exceeds persistence size bound")
+
+    def _flush_manifest(self) -> None:
+        path = self._assert_control_file_owned("evidence-manifest.json")
+        rendered = self._render_manifest()
+        if len(rendered.encode("utf-8")) > _MAX_EVIDENCE_MANIFEST_BYTES:
+            raise ValueError("evidence manifest exceeds persistence size bound")
         handle, raw_temp = tempfile.mkstemp(
             dir=self.run_root, prefix=".evidence-manifest.", suffix=".tmp", text=True
         )

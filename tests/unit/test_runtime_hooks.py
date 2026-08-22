@@ -143,6 +143,33 @@ def test_external_mcp_success_is_sanitized_and_registered_as_observed_evidence(
     assert secret not in str(item.structured_data)
 
 
+def test_external_mcp_error_shaped_result_is_not_promoted_to_available_or_evidence(
+    tmp_path: Path,
+) -> None:
+    state = AgentRunState(objective="read issue", workspace=str(tmp_path))
+    evidence = EvidenceStore(tmp_path / "artifacts", state.run_id)
+
+    result = posttool_policy_output(
+        {
+            "tool_name": "mcp__github__get_issue",
+            "tool_input": {},
+            "tool_response": {
+                "is_error": True,
+                "error": "HTTP 429 rate limit exceeded",
+            },
+        },
+        state=state,
+        evidence=evidence,
+    )
+
+    assert state.mcp_status["github"] is MCPStatus.RATE_LIMITED
+    assert state.evidence_ids == []
+    assert state.external_evidence == []
+    hook = result["hookSpecificOutput"]
+    assert hook["updatedToolOutput"]["is_error"] is True
+    assert "no successful remote evidence was registered" in hook["additionalContext"]
+
+
 def test_external_mcp_failure_normalizes_health_without_fabricating_evidence(
     tmp_path: Path,
 ) -> None:

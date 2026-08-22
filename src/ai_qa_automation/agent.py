@@ -126,6 +126,8 @@ async def run_agent(objective: str, workspace: Path, settings: Settings | None =
             workspace=workspace,
             previous_lease=lease.previous_metadata,
             current_workspace_fingerprint=pre_recovery_snapshot.fingerprint,
+            current_workspace_fingerprint_complete=pre_recovery_snapshot.fingerprint_complete,
+            current_workspace_fingerprint_reasons=pre_recovery_snapshot.fingerprint_incomplete_reasons,
             recovering_run_id=state.run_id,
         )
         if stale_recovery.get("status") == "BLOCKED":
@@ -140,7 +142,7 @@ async def run_agent(objective: str, workspace: Path, settings: Settings | None =
                 state,
                 agent_result="",
                 limitations=[
-                    "A prior crashed run left a mutation transaction whose workspace fingerprint no longer matches; automatic rollback was intentionally refused."
+                    "A prior crashed run left a mutation transaction whose workspace ownership could not be proven safely; automatic rollback was intentionally refused."
                 ],
             )
         if stale_recovery.get("status") == "RECOVERED":
@@ -164,9 +166,6 @@ async def run_agent(objective: str, workspace: Path, settings: Settings | None =
             control=control,
         )
         policy = PolicyEngine(cfg.control_root, workspace, allow_test_writes=cfg.allow_test_writes)
-        # Bind the deployment egress assertion to the same policy object used by
-        # the lower-level k6 runner so every workload path enforces it, including localhost.
-        setattr(policy, "k6_external_egress_enforced", cfg.k6_external_egress_enforced)
         runner = TestRunner(workspace, evidence, timeout_seconds=cfg.tool_timeout_seconds)
         services = RuntimeServices(
             workspace=workspace,
@@ -276,18 +275,24 @@ async def run_agent(objective: str, workspace: Path, settings: Settings | None =
                 )
         finally:
             if control.pending_mutation is not None:
+                pending = control.pending_mutation
                 try:
                     if state.terminal_status == TerminalStatus.SUCCESS:
-                        control.commit_pending_mutation()
-                    else:
-                        rolled_back = control.rollback_pending_mutation(
-                            reason="run ended without verified success"
+                        state.terminal_status = TerminalStatus.NOT_VERIFIED
+                        state.terminal_reason = (
+                            "Terminal evaluation encountered an unresolved mutation transaction; "
+                            "verified commit authority exists only in PostToolUse closure."
                         )
-                        if rolled_back:
+                    rolled_back = control.rollback_pending_mutation(
+                        reason="run ended with an unresolved mutation transaction"
+                    )
+                    if rolled_back:
+                        revision_before = pending.change_revision_before
+                        if revision_before is None or state.change_revision > revision_before:
                             _remove_latest_modified_path(state, rolled_back)
-                            state.observations.append(
-                                f"Unverified mutation rolled back before terminal report: {rolled_back}"
-                            )
+                        state.observations.append(
+                            f"Unresolved mutation rolled back before terminal report: {rolled_back}"
+                        )
                     control.set_workspace_fingerprint(
                         RepositoryInspector(workspace).snapshot().fingerprint
                     )
@@ -446,6 +451,17 @@ def determine_terminal_outcome(
             + ", ".join(incomplete)
             + ".",
         )
+    if current_revision == 0:
+        objective_bound = [
+            item
+            for item in active
+            if item.status == ValidationStatus.PASS and item.details.get("objective_bound") is True
+        ]
+        if not objective_bound:
+            return (
+                TerminalStatus.NOT_VERIFIED,
+                "Agent completed with passing deterministic checks, but no trusted validation was explicitly bound to the requested objective.",
+            )
     if current_revision > 0:
         current_revision_results = [item for item in active if item.revision == current_revision]
         if not current_revision_results:

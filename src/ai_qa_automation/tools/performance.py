@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import re
 import shutil
-import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -12,7 +11,7 @@ from uuid import uuid4
 
 from ..models import PerformanceMetrics, ToolDecision
 from ..policy import PolicyEngine
-from .execution_env import restricted_subprocess_env
+from .execution_env import restricted_subprocess_env, run_bounded_subprocess
 
 _URL_LITERAL = re.compile(r"https?://[^'\"`\s)]+", re.I)
 _IMPORT_SPECIFIER = re.compile(
@@ -20,22 +19,39 @@ _IMPORT_SPECIFIER = re.compile(
 )
 _MAX_K6_MODULE_BYTES = 1_000_000
 _MAX_K6_MODULES = 64
+_MAX_K6_SUMMARY_BYTES = 1_000_000
 
 
 class K6Runner:
     """Runs a target-bound k6 script only behind an infrastructure-egress prerequisite."""
 
-    def __init__(self, workspace: Path, policy: PolicyEngine, timeout_seconds: int = 180) -> None:
+    def __init__(
+        self,
+        workspace: Path,
+        policy: PolicyEngine,
+        timeout_seconds: int = 180,
+        *,
+        external_egress_enforced: bool = False,
+    ) -> None:
+        if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int):
+            raise ValueError("k6 timeout_seconds must be an integer")
+        if timeout_seconds < 1:
+            raise ValueError("k6 timeout_seconds must be positive")
+        if not isinstance(external_egress_enforced, bool):
+            raise ValueError("external_egress_enforced must be a boolean")
         self.workspace = workspace.resolve()
         self.policy = policy
         self.timeout_seconds = timeout_seconds
+        self.external_egress_enforced = external_egress_enforced
 
     def _validate_script(self, script: Path, target_url: str) -> Path:
         resolved = (script if script.is_absolute() else self.workspace / script).resolve()
         if self.workspace not in resolved.parents or resolved.suffix != ".js" or not resolved.is_file():
             raise PermissionError("k6 script must be an existing .js file inside the target workspace")
         target_host = (urlparse(target_url).hostname or "").lower()
-        allowed_literal_hosts = {target_host, "localhost", "127.0.0.1", "::1"}
+        if not target_host:
+            raise PermissionError("k6 target URL must contain an explicit host")
+        allowed_literal_hosts = {target_host}
         visited: set[Path] = set()
         root_uses_injected_target = False
 
@@ -56,6 +72,8 @@ class K6Runner:
                 raise PermissionError(f"k6 module exceeds {_MAX_K6_MODULE_BYTES} byte limit")
             visited.add(module_path)
             source = module_path.read_text(encoding="utf-8")
+            if len(source.encode("utf-8")) > _MAX_K6_MODULE_BYTES:
+                raise PermissionError(f"k6 module exceeds {_MAX_K6_MODULE_BYTES} byte limit")
             if re.search(r"\bopen\s*\(", source):
                 raise PermissionError("k6 scripts may not read local files through open()")
             if root and ("__ENV.BASE_URL" in source or "__ENV.TARGET_URL" in source):
@@ -93,8 +111,50 @@ class K6Runner:
             raise PermissionError("k6 script must consume an injected BASE_URL or TARGET_URL")
         return resolved
 
+    @staticmethod
+    def _metric_values(data: dict[str, Any], metric: str) -> dict[str, Any]:
+        metrics = data.get("metrics")
+        if not isinstance(metrics, dict):
+            raise RuntimeError("k6 summary is missing the metrics object")
+        raw_metric = metrics.get(metric)
+        if not isinstance(raw_metric, dict):
+            raise RuntimeError(f"k6 summary is missing required metric: {metric}")
+        values = raw_metric.get("values")
+        if not isinstance(values, dict):
+            raise RuntimeError(f"k6 metric lacks a values object: {metric}")
+        return values
+
+    @staticmethod
+    def _required_number(values: dict[str, Any], key: str, *, metric: str) -> float:
+        if key not in values:
+            raise RuntimeError(f"k6 metric {metric} is missing required value: {key}")
+        raw = values[key]
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            raise RuntimeError(f"k6 metric {metric}.{key} is not numeric")
+        return float(raw)
+
+    @classmethod
+    def _parse_metrics(cls, data: dict[str, Any]) -> PerformanceMetrics:
+        duration = cls._metric_values(data, "http_req_duration")
+        requests = cls._metric_values(data, "http_reqs")
+        failures = cls._metric_values(data, "http_req_failed")
+        if "p(99)" in duration:
+            p99 = cls._required_number(duration, "p(99)", metric="http_req_duration")
+        elif "max" in duration:
+            p99 = cls._required_number(duration, "max", metric="http_req_duration")
+        else:
+            raise RuntimeError("k6 metric http_req_duration is missing p(99) and max")
+        return PerformanceMetrics(
+            p50_ms=cls._required_number(duration, "med", metric="http_req_duration"),
+            p90_ms=cls._required_number(duration, "p(90)", metric="http_req_duration"),
+            p95_ms=cls._required_number(duration, "p(95)", metric="http_req_duration"),
+            p99_ms=p99,
+            request_rate=cls._required_number(requests, "rate", metric="http_reqs"),
+            error_rate=cls._required_number(failures, "rate", metric="http_req_failed"),
+        )
+
     def run(self, script: Path, *, target_url: str, environment: str) -> PerformanceMetrics:
-        if not bool(getattr(self.policy, "k6_external_egress_enforced", False)):
+        if not self.external_egress_enforced:
             raise PermissionError(
                 "k6 execution requires trusted infrastructure-level egress enforcement; "
                 "static JavaScript inspection is not a network sandbox"
@@ -129,27 +189,24 @@ class K6Runner:
                     "K6_NO_USAGE_REPORT": "true",
                 },
             )
-            result = subprocess.run(
+            result = run_bounded_subprocess(
                 command,
                 cwd=self.workspace,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout_seconds,
-                check=False,
                 env=env,
+                timeout_seconds=self.timeout_seconds,
             )
+            if result.timed_out:
+                raise RuntimeError(f"k6 exceeded {self.timeout_seconds}s execution budget")
             if result.returncode != 0:
                 raise RuntimeError(result.stderr[-3000:] or "k6 failed")
             if not summary_path.is_file():
                 raise RuntimeError("k6 completed without producing the required summary artifact")
+            if summary_path.stat().st_size > _MAX_K6_SUMMARY_BYTES:
+                raise RuntimeError(
+                    f"k6 summary exceeds {_MAX_K6_SUMMARY_BYTES} byte ingestion limit"
+                )
             data = json.loads(summary_path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise RuntimeError("k6 summary root must be a JSON object")
 
-        duration = data["metrics"]["http_req_duration"]["values"]
-        return PerformanceMetrics(
-            p50_ms=float(duration.get("med", 0)),
-            p90_ms=float(duration.get("p(90)", 0)),
-            p95_ms=float(duration.get("p(95)", 0)),
-            p99_ms=float(duration.get("p(99)", duration.get("max", 0))),
-            request_rate=float(data["metrics"]["http_reqs"]["values"].get("rate", 0)),
-            error_rate=float(data["metrics"]["http_req_failed"]["values"].get("rate", 0)),
-        )
+        return self._parse_metrics(data)

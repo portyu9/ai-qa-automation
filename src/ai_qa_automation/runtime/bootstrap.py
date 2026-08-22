@@ -37,30 +37,117 @@ _DEPENDENCY_MANIFESTS = {
     "go.mod",
     "go.sum",
 }
+_MAX_DEPENDENCY_MANIFEST_BYTES = 8_000_000
 
 
-def _dependency_inventory(workspace: Path, *, max_files: int = 100) -> list[dict[str, Any]]:
+def _dependency_inventory(
+    workspace: Path,
+    *,
+    max_files: int = 100,
+    max_scan_files: int = 20_000,
+    max_file_bytes: int = _MAX_DEPENDENCY_MANIFEST_BYTES,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Hash dependency manifests with deterministic, bounded filesystem work."""
+    for name, value in {
+        "max_files": max_files,
+        "max_scan_files": max_scan_files,
+        "max_file_bytes": max_file_bytes,
+    }.items():
+        if type(value) is not int or value < 1:
+            raise ValueError(f"{name} must be a positive integer")
     rows: list[dict[str, Any]] = []
     ignored = {".git", ".venv", "venv", "node_modules", "dist", "build", ".tox"}
-    for path in sorted(workspace.rglob("*")):
-        if len(rows) >= max_files:
+    scanned = 0
+    truncated = False
+    stop_scan = False
+
+    for dirpath, dirnames, filenames in os.walk(workspace, topdown=True, followlinks=False):
+        dirnames[:] = sorted(name for name in dirnames if name not in ignored)
+        current_dir = Path(dirpath)
+        for filename in sorted(filenames):
+            if scanned >= max_scan_files or len(rows) >= max_files:
+                truncated = True
+                stop_scan = True
+                break
+            scanned += 1
+            if filename not in _DEPENDENCY_MANIFESTS:
+                continue
+            path = current_dir / filename
+            try:
+                relative = path.relative_to(workspace)
+            except ValueError:
+                continue
+            if path.is_symlink() or not path.is_file():
+                truncated = True
+                rows.append(
+                    {
+                        "path": relative.as_posix(),
+                        "size": None,
+                        "sha256": None,
+                        "hashed": False,
+                        "reason": "ambiguous-or-non-file",
+                    }
+                )
+                continue
+            try:
+                size = path.stat().st_size
+            except OSError:
+                truncated = True
+                rows.append(
+                    {
+                        "path": relative.as_posix(),
+                        "size": None,
+                        "sha256": None,
+                        "hashed": False,
+                        "reason": "unreadable",
+                    }
+                )
+                continue
+            if size > max_file_bytes:
+                truncated = True
+                rows.append(
+                    {
+                        "path": relative.as_posix(),
+                        "size": size,
+                        "sha256": None,
+                        "hashed": False,
+                        "reason": f"file-size-limit:{max_file_bytes}",
+                    }
+                )
+                continue
+            digest = hashlib.sha256()
+            read_size = 0
+            try:
+                with path.open("rb") as stream:
+                    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                        read_size += len(chunk)
+                        if read_size > max_file_bytes:
+                            raise ValueError("dependency manifest grew beyond analysis size limit")
+                        digest.update(chunk)
+            except (OSError, ValueError):
+                truncated = True
+                rows.append(
+                    {
+                        "path": relative.as_posix(),
+                        "size": size,
+                        "sha256": None,
+                        "hashed": False,
+                        "reason": "read-failed-or-grew-during-hash",
+                    }
+                )
+                continue
+            rows.append(
+                {
+                    "path": relative.as_posix(),
+                    "size": read_size,
+                    "sha256": digest.hexdigest(),
+                    "hashed": True,
+                    "reason": None,
+                }
+            )
+        if stop_scan:
             break
-        if path.is_symlink() or not path.is_file() or path.name not in _DEPENDENCY_MANIFESTS:
-            continue
-        relative = path.relative_to(workspace)
-        if any(part in ignored for part in relative.parts):
-            continue
-        digest = hashlib.sha256()
-        size = 0
-        try:
-            with path.open("rb") as stream:
-                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                    size += len(chunk)
-                    digest.update(chunk)
-        except OSError:
-            continue
-        rows.append({"path": relative.as_posix(), "size": size, "sha256": digest.hexdigest()})
-    return rows
+    return rows, truncated
 
 
 def bootstrap_runtime_context(
@@ -120,15 +207,21 @@ def bootstrap_runtime_context(
         )
     )
 
-    dependencies = _dependency_inventory(workspace)
+    dependencies, dependency_inventory_truncated = _dependency_inventory(workspace)
     dependency_item = evidence.add(
         EvidenceItem(
             run_id=state.run_id,
             kind=EvidenceKind.SOURCE_OBSERVATION,
             nature=EvidenceNature.OBSERVED_FACT,
             source="runtime_bootstrap_dependency_inventory",
-            summary=f"Observed {len(dependencies)} dependency manifest(s)",
-            structured_data={"manifests": dependencies},
+            summary=(
+                f"Observed {len(dependencies)} dependency manifest(s)"
+                + (" with bounded/incomplete hashing" if dependency_inventory_truncated else "")
+            ),
+            structured_data={
+                "manifests": dependencies,
+                "truncated": dependency_inventory_truncated,
+            },
         )
     )
 
@@ -178,7 +271,14 @@ def bootstrap_runtime_context(
         )
     )
 
-    items = (impact_item, profile_item, dependency_item, test_impact_item, ownership_item, contract_item)
+    items = (
+        impact_item,
+        profile_item,
+        dependency_item,
+        test_impact_item,
+        ownership_item,
+        contract_item,
+    )
     for item in items:
         if item.id not in state.evidence_ids:
             state.evidence_ids.append(item.id)
@@ -196,6 +296,7 @@ def bootstrap_runtime_context(
         changed_file_count=len(changed_files),
         change_risk=impact.risk.value,
         dependency_manifest_count=len(dependencies),
+        dependency_inventory_truncated=dependency_inventory_truncated,
         test_impact_candidate_count=len(test_impact.candidates),
         test_impact_confidence=test_impact.confidence,
         codeowners_source=ownership.source_path,
@@ -215,6 +316,8 @@ def bootstrap_runtime_context(
             "dirty": bool(snapshot.status),
             "worktree_changed_files": list(snapshot.changed_files[:100]),
             "workspace_fingerprint": snapshot.fingerprint,
+            "fingerprint_complete": snapshot.fingerprint_complete,
+            "fingerprint_incomplete_reasons": list(snapshot.fingerprint_incomplete_reasons),
         },
         "baseline_change_set": change_set.as_dict() if change_set else None,
         "baseline_resolution_error": baseline_error,
@@ -223,7 +326,8 @@ def bootstrap_runtime_context(
         "ownership": ownership.as_dict(),
         "contract_drift": contract_reports[:25],
         "repository_profile": profile.as_dict(),
-        "dependency_manifests": [row["path"] for row in dependencies],
+        "dependency_manifests": dependencies,
+        "dependency_inventory_truncated": dependency_inventory_truncated,
         "evidence_ids": [item.id for item in items],
     }
     rendered = json.dumps(context, sort_keys=True, default=str)
@@ -251,7 +355,9 @@ def _contract_drift_reports(
         except ValueError:
             continue
         try:
-            baseline = inspector.read_file_at(change_set.merge_base_sha, relative, max_bytes=max_bytes)
+            baseline = inspector.read_file_at(
+                change_set.merge_base_sha, relative, max_bytes=max_bytes
+            )
         except FileNotFoundError:
             if current_path.is_file() and not current_path.is_symlink():
                 reports.append(
@@ -331,7 +437,9 @@ def _contract_drift_reports(
                 }
             )
             continue
-        reports.append(analyzer.analyze(path=relative, baseline=baseline, current=current).as_dict())
+        reports.append(
+            analyzer.analyze(path=relative, baseline=baseline, current=current).as_dict()
+        )
     if len(candidates) > max_files:
         reports.append(
             {
@@ -350,5 +458,7 @@ def _looks_like_openapi_contract(relative: str) -> bool:
     lower = relative.casefold().replace("\\", "/")
     suffix = Path(lower).suffix
     return suffix in {".json", ".yaml", ".yml"} and (
-        "openapi" in lower or "swagger" in lower or lower.endswith(("/oas.json", "/oas.yaml", "/oas.yml"))
+        "openapi" in lower
+        or "swagger" in lower
+        or lower.endswith(("/oas.json", "/oas.yaml", "/oas.yml"))
     )

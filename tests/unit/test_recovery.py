@@ -20,6 +20,14 @@ def save_state(run_dir: Path, state: AgentRunState) -> None:
     StateStore(run_dir / "state.json").save(state)
 
 
+def save_runtime(run_dir: Path, pending_mutation: object | None = None) -> None:
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "runtime.json").write_text(
+        json.dumps({"pending_mutation": pending_mutation}),
+        encoding="utf-8",
+    )
+
+
 def base_state(workspace: Path, **updates: object) -> AgentRunState:
     state = AgentRunState(
         run_id="run-1",
@@ -71,6 +79,7 @@ def test_revision_zero_is_safe_to_start_new_session_from_persisted_state(tmp_pat
     workspace.mkdir()
     save_state(run_dir, base_state(workspace))
     RunJournal(run_dir / "journal.jsonl").append("run_started")
+    save_runtime(run_dir)
 
     result = inspect_recovery(run_dir)
 
@@ -97,6 +106,7 @@ def test_changed_revision_requires_exact_bound_targeted_and_regression_passes(
         ),
     )
     RunJournal(run_dir / "journal.jsonl").append("validation_closed")
+    save_runtime(run_dir)
 
     result = inspect_recovery(run_dir)
 
@@ -125,6 +135,7 @@ def test_unbound_targeted_validation_is_not_recovery_closed(tmp_path: Path) -> N
         base_state(workspace, change_revision=1, validation_results=validations),
     )
     RunJournal(run_dir / "journal.jsonl").append("validation_incomplete")
+    save_runtime(run_dir)
 
     result = inspect_recovery(run_dir)
 
@@ -146,10 +157,7 @@ def test_pending_mutation_forces_manual_review_even_when_gates_pass(tmp_path: Pa
         ),
     )
     RunJournal(run_dir / "journal.jsonl").append("mutation_prepared")
-    (run_dir / "runtime.json").write_text(
-        json.dumps({"pending_mutation": {"relative_path": "tests/test_x.py"}}),
-        encoding="utf-8",
-    )
+    save_runtime(run_dir, {"relative_path": "tests/test_x.py"})
 
     result = inspect_recovery(run_dir)
 
@@ -164,6 +172,57 @@ def test_missing_state_is_not_recoverable(tmp_path: Path) -> None:
     assert result == {"recoverable": False, "reason": "state.json is missing"}
 
 
+def test_missing_runtime_is_not_recoverable(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-1"
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+    save_state(run_dir, base_state(workspace))
+    RunJournal(run_dir / "journal.jsonl").append("run_started")
+
+    result = inspect_recovery(run_dir)
+
+    assert result == {"recoverable": False, "reason": "runtime.json is missing"}
+
+
+def test_missing_journal_is_not_recoverable(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-1"
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+    save_state(run_dir, base_state(workspace))
+    save_runtime(run_dir)
+
+    result = inspect_recovery(run_dir)
+
+    assert result == {"recoverable": False, "reason": "journal.jsonl is missing"}
+
+
+def test_non_object_runtime_is_not_recoverable(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-1"
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+    save_state(run_dir, base_state(workspace))
+    RunJournal(run_dir / "journal.jsonl").append("run_started")
+    (run_dir / "runtime.json").write_text("[]", encoding="utf-8")
+
+    result = inspect_recovery(run_dir)
+
+    assert result == {"recoverable": False, "reason": "runtime.json root must be an object"}
+
+
+def test_oversized_runtime_metadata_is_rejected_before_parse(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-1"
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+    save_state(run_dir, base_state(workspace))
+    RunJournal(run_dir / "journal.jsonl").append("run_started")
+    runtime_path = run_dir / "runtime.json"
+    runtime_path.write_bytes(b"{" + (b"x" * 2_000_001) + b"}")
+
+    result = inspect_recovery(run_dir)
+
+    assert result == {"recoverable": False, "reason": "runtime.json exceeds restore size bound"}
+
+
 def test_corrupt_journal_is_not_recoverable(tmp_path: Path) -> None:
     run_dir = tmp_path / "run-1"
     workspace = tmp_path / "sut"
@@ -171,6 +230,7 @@ def test_corrupt_journal_is_not_recoverable(tmp_path: Path) -> None:
     save_state(run_dir, base_state(workspace))
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "journal.jsonl").write_text('{"seq": 1, "record_hash": "bad"}\n', encoding="utf-8")
+    save_runtime(run_dir)
 
     result = inspect_recovery(run_dir)
 

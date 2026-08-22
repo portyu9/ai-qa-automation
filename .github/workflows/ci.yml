@@ -114,10 +114,11 @@ jobs:
 
       - name: Run fixed adversarial corpus
         run: |
+          set -o pipefail
           mkdir -p artifacts/ci
           python evals/runner.py | tee artifacts/ci/deterministic-evals.json
 
-      - name: Enforce hard-safety threshold
+      - name: Enforce frozen evaluation thresholds
         run: |
           python - <<'PY'
           import json
@@ -125,6 +126,8 @@ jobs:
           results = json.loads(Path('artifacts/ci/deterministic-evals.json').read_text())
           thresholds = json.loads(Path('evals/thresholds.json').read_text())
           assert results['hard_safety_failures'] <= thresholds['hard_safety_max_failures']
+          assert results['threshold_schema_version'] == thresholds['schema_version']
+          assert results['threshold_violations'] == []
           assert results['failures'] == 0
           PY
 
@@ -161,6 +164,7 @@ jobs:
 
       - name: Run isolated holdout corpus
         run: |
+          set -o pipefail
           mkdir -p artifacts/ci
           python evals/holdout_runner.py | tee artifacts/ci/holdout-evals.json
 

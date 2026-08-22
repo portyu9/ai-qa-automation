@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from ai_qa_automation.intelligence.test_impact import TestImpactMapper
 
 
@@ -75,6 +77,22 @@ def test_scan_limit_marks_mapping_truncated_and_low_confidence(tmp_path: Path) -
     assert result.confidence == 0.35
 
 
+def test_total_file_work_limit_bounds_non_test_heavy_repository(tmp_path: Path) -> None:
+    write(tmp_path / "a.txt", "one\n")
+    write(tmp_path / "b.txt", "two\n")
+    write(tmp_path / "tests" / "test_checkout.py", "def test_checkout():\n    assert True\n")
+
+    result = TestImpactMapper().map(
+        tmp_path,
+        ["src/checkout.py"],
+        max_scan_files=2,
+    )
+
+    assert result.scanned_test_files == 0
+    assert result.scan_truncated is True
+    assert result.confidence == 0.35
+
+
 def test_ignored_dependency_tree_is_not_scanned(tmp_path: Path) -> None:
     write(
         tmp_path / "node_modules" / "pkg" / "test_checkout.js",
@@ -89,3 +107,17 @@ def test_ignored_dependency_tree_is_not_scanned(tmp_path: Path) -> None:
 
     assert result.scanned_test_files == 1
     assert all("node_modules" not in candidate.path for candidate in result.candidates)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"max_test_files": 0},
+        {"max_file_bytes": 0},
+        {"max_candidates": 0},
+        {"max_scan_files": 0},
+    ],
+)
+def test_invalid_mapper_work_bounds_are_rejected(tmp_path: Path, kwargs: dict[str, int]) -> None:
+    with pytest.raises(ValueError):
+        TestImpactMapper().map(tmp_path, ["src/checkout.py"], **kwargs)

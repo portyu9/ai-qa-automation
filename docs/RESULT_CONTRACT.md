@@ -33,15 +33,15 @@ Model reasoning can influence **what to investigate next**. It cannot redefine p
 
 | Outcome | Meaning |
 |---|---|
-| `SUCCESS` | Agent execution completed successfully and every active deterministic gate required by the current revision closed. |
-| `FAILURE` | A current deterministic validation failed, the Agent SDK returned a non-success subtype, or another definitive execution failure occurred. |
+| `SUCCESS` | Agent execution completed successfully and every active deterministic gate required by the current revision or objective closed. |
+| `FAILURE` | A current deterministic validation actually failed, the Agent SDK returned a non-success subtype, or another definitive execution failure occurred. |
 | `BLOCKED` | A deterministic safety/integrity prerequisite prevented safe continuation. |
 | `INSUFFICIENT_EVIDENCE` | Available evidence cannot support a reliable causal conclusion. |
 | `POLICY_DENIED` | The requested action is outside authorized runtime policy. |
 | `INFRASTRUCTURE_FAILURE` | Runtime integrity cannot be guaranteed, including rollback-integrity failure. |
 | `CANCELLED` | Execution ended before deterministic completion because cancellation was requested. |
 | `BUDGET_EXCEEDED` | An independent execution budget was exhausted. |
-| `NOT_VERIFIED` | Evidence is absent, incomplete, stale, contradictory, or insufficient to prove success. |
+| `NOT_VERIFIED` | Evidence is absent, incomplete, stale, contradictory, unbound to the objective, or validator execution was inconclusive. |
 
 `NOT_VERIFIED` is deliberately different from `FAILURE`: it means the framework refuses to invent certainty where the validation record does not justify it.
 
@@ -50,13 +50,29 @@ Model reasoning can influence **what to investigate next**. It cannot redefine p
 | Outcome | Meaning |
 |---|---|
 | `PASS` | The gate executed for its bound subject/scope/revision and satisfied its deterministic condition. |
-| `FAIL` | The gate executed and failed its deterministic condition. |
+| `FAIL` | The gate executed and its deterministic condition actually failed. |
 | `NOT_EXECUTED` | No execution record exists for the relevant decision. |
 | `NOT_OBSERVED` | A required observation was not captured. |
-| `NOT_VERIFIED` | Evidence exists but does not close the gate. |
+| `NOT_VERIFIED` | Evidence exists but does not close the gate, including validator/infrastructure outcomes that did not produce a trustworthy assertion result. |
 | `BLOCKED` | Policy, environment, integrity, or another prerequisite prevented safe execution. |
 
-None of the non-PASS outcomes is promoted by model judgment.
+None of the non-PASS outcomes is promoted by model judgment. Infrastructure/tool uncertainty is not relabeled as product failure merely because a validator process returned nonzero.
+
+### Objective binding for unchanged runs
+
+When `change_revision == 0`, a set of unrelated green checks does not prove that the requested objective succeeded. Terminal `SUCCESS` requires at least one trusted deterministic PASS carrying explicit objective-binding provenance. If no such gate exists, the correct terminal state is `NOT_VERIFIED` even when all executed checks are green.
+
+This prevents a model from selecting an easy but irrelevant validation merely to satisfy a mechanical “some gate passed” condition.
+
+### Pytest exit semantics
+
+Pytest is interpreted according to whether it produced a trustworthy test assertion outcome:
+
+- exit `0` → validation `PASS`, subject to workspace-integrity and binding rules;
+- exit `1` → validation `FAIL` because tests actually failed;
+- timeout, interruption, internal error, command-line usage error, no-tests-collected, workspace-integrity failure, and other abnormal exits → `NOT_VERIFIED`.
+
+The controlled pytest adapter also fingerprints the Git-backed target immediately before and after execution. A zero pytest exit cannot remain PASS if target tests changed the repository, changed Git `HEAD`, or made the workspace fingerprint incomplete. Subprocess output is continuously drained into bounded tails, and validator descendants are cleanup-scoped so target code cannot certify itself while leaving background execution attached to the run.
 
 ---
 
@@ -107,6 +123,12 @@ A permitted write is not immediately trusted. Any path that fails to establish d
 
 Crash recovery applies the same ownership standard: exact workspace fingerprint, confined non-symlink paths, owned rollback directory/backup, and verified original bytes are required before stale restoration can touch the target.
 
+## Performance-validator truth
+
+A k6 workload can produce PASS/FAIL only after the controlled runner successfully parses every required measurement used by the configured thresholds. Missing or malformed summary metrics, a missing k6 runtime, timeout, process failure, malformed summary JSON, or another runner/infrastructure failure resolves to `NOT_VERIFIED`; it is not a synthetic performance regression.
+
+A measured threshold breach is `FAIL`. A successfully measured run satisfying every configured threshold is `PASS`. Every k6 invocation additionally requires a non-production target policy decision and an independently enforced infrastructure-level egress prerequisite.
+
 ## Recovery truth
 
 `ai-qa recover` uses the same closure rule as terminal execution. A persisted changed revision is considered closed only when:
@@ -115,6 +137,8 @@ Crash recovery applies the same ownership standard: exact workspace fingerprint,
 - targeted pytest is explicitly bound to that target;
 - full regression passed; and
 - no pending mutation remains.
+
+Persisted state/runtime metadata, journal records, registered artifacts, and attestation/recovery ingestion are byte-bounded before parsing or hashing. Oversized/corrupted persisted material therefore cannot be treated as successful recovery evidence simply because it exists.
 
 Recovery does not reconstruct a previous hidden model conversation. It evaluates persisted state and determines whether a **new** session can safely start from that evidence.
 
@@ -164,7 +188,7 @@ Run integrity and QA correctness are separate dimensions.
 - owned core persisted subjects;
 - runtime journal hash-chain integrity;
 - absence of a pending mutation; and
-- SHA-256 integrity for every artifact registered in the evidence manifest.
+- SHA-256 integrity for every bounded artifact registered in the evidence manifest.
 
 That integrity result does **not** override terminal truth.
 
@@ -187,7 +211,7 @@ The structured report carries the identifiers needed to reason about its conclus
 
 ## Core invariant
 
-> **Unknown is not PASS. Model completion is not PASS. Configuration is not PASS. Historical evidence is not current-revision PASS. Integrity is not PASS. Only deterministic closure can produce verified success.**
+> **Unknown is not PASS. Validator uncertainty is not FAIL. Model completion is not PASS. An unrelated green gate is not objective success. Configuration is not PASS. Historical evidence is not current-revision PASS. Integrity is not PASS. Only deterministic closure can produce verified success.**
 
 ---
 

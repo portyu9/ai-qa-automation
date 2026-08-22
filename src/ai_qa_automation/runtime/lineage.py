@@ -5,6 +5,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .journal import RunJournal
+
+_MAX_LINEAGE_CONTROL_BYTES = 10_000_000
+_MAX_LINEAGE_JOURNAL_LINE_BYTES = 1_000_000
+_MAX_LINEAGE_JOURNAL_EVENTS = 10_000
+
 
 @dataclass(frozen=True)
 class LineageNode:
@@ -58,9 +64,22 @@ class RunLineageGraph:
 
 def build_run_lineage(run_dir: Path, *, max_journal_events: int = 500) -> RunLineageGraph:
     """Build a bounded evidence/validation/artifact/operation lineage graph from persisted records."""
-    root = run_dir.expanduser().resolve()
-    state = _load_object(root / "state.json", required=True)
-    manifest = _load_object(root / "evidence-manifest.json", required=False)
+    if (
+        type(max_journal_events) is not int
+        or not 1 <= max_journal_events <= _MAX_LINEAGE_JOURNAL_EVENTS
+    ):
+        raise ValueError(
+            f"max_journal_events must be an integer between 1 and {_MAX_LINEAGE_JOURNAL_EVENTS}"
+        )
+    requested_root = run_dir.expanduser()
+    if requested_root.is_symlink():
+        raise ValueError("run directory is a symlink and has ambiguous ownership")
+    root = requested_root.resolve()
+    state_path = _owned_subject(root, "state.json")
+    manifest_path = _owned_subject(root, "evidence-manifest.json")
+    journal_path = _owned_subject(root, "journal.jsonl")
+    state = _load_object(state_path, required=True)
+    manifest = _load_object(manifest_path, required=False)
     run_id = str(state.get("run_id") or root.name)
     nodes: dict[str, LineageNode] = {}
     edges: set[tuple[str, str, str]] = set()
@@ -217,42 +236,74 @@ def build_run_lineage(run_dir: Path, *, max_journal_events: int = 500) -> RunLin
                         if eid in evidence_ids:
                             edges.add((f"evidence:{eid}", node_id, relation))
 
-    journal_path = root / "journal.jsonl"
     if journal_path.is_file():
-        count = 0
         try:
-            for line in journal_path.read_text(encoding="utf-8").splitlines():
-                if not line.strip():
-                    continue
-                if count >= max_journal_events:
-                    warnings.append(f"journal graph truncated at {max_journal_events} events")
-                    break
-                raw = json.loads(line)
-                if not isinstance(raw, dict):
-                    continue
-                sequence = raw.get("seq") if raw.get("seq") is not None else raw.get("sequence")
-                if sequence is None:
-                    sequence = count + 1
-                event_name = str(raw.get("event") or raw.get("event_type") or "event")
-                node_id = f"event:{sequence}"
-                nodes[node_id] = LineageNode(
-                    node_id,
-                    "runtime_event",
-                    event_name,
-                    {
-                        "sequence": sequence,
-                        "timestamp": raw.get("timestamp"),
-                        "record_hash": raw.get("record_hash") or raw.get("event_hash"),
-                    },
-                )
-                edges.add((run_node, node_id, "RUNTIME_EVENT"))
-                count += 1
-        except (OSError, json.JSONDecodeError) as exc:
-            warnings.append(f"journal could not be graphed: {type(exc).__name__}")
+            journal_status = RunJournal(journal_path, regulated_mode=False).verify()
+        except (OSError, json.JSONDecodeError, RuntimeError, ValueError) as exc:
+            warnings.append(f"journal could not be verified for lineage: {type(exc).__name__}")
+        else:
+            if not journal_status.get("valid"):
+                warnings.append("journal hash chain is invalid; runtime events were not graphed")
+            else:
+                count = 0
+                try:
+                    with journal_path.open("rb") as stream:
+                        while True:
+                            raw_line = stream.readline(_MAX_LINEAGE_JOURNAL_LINE_BYTES + 1)
+                            if not raw_line:
+                                break
+                            if len(raw_line) > _MAX_LINEAGE_JOURNAL_LINE_BYTES:
+                                warnings.append("journal event exceeds lineage line-size bound")
+                                break
+                            if not raw_line.strip():
+                                continue
+                            if count >= max_journal_events:
+                                warnings.append(
+                                    f"journal graph truncated at {max_journal_events} events"
+                                )
+                                break
+                            raw = json.loads(raw_line.decode("utf-8"))
+                            if not isinstance(raw, dict):
+                                continue
+                            sequence = (
+                                raw.get("seq")
+                                if raw.get("seq") is not None
+                                else raw.get("sequence")
+                            )
+                            if sequence is None:
+                                sequence = count + 1
+                            event_name = str(raw.get("event") or raw.get("event_type") or "event")
+                            node_id = f"event:{sequence}"
+                            nodes[node_id] = LineageNode(
+                                node_id,
+                                "runtime_event",
+                                event_name,
+                                {
+                                    "sequence": sequence,
+                                    "timestamp": raw.get("timestamp"),
+                                    "record_hash": raw.get("record_hash") or raw.get("event_hash"),
+                                },
+                            )
+                            edges.add((run_node, node_id, "RUNTIME_EVENT"))
+                            count += 1
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    warnings.append(f"journal could not be graphed: {type(exc).__name__}")
 
     ordered_nodes = tuple(nodes[key] for key in sorted(nodes))
     ordered_edges = tuple(LineageEdge(*item) for item in sorted(edges))
-    return RunLineageGraph(run_id=run_id, nodes=ordered_nodes, edges=ordered_edges, warnings=tuple(sorted(set(warnings))))
+    return RunLineageGraph(
+        run_id=run_id,
+        nodes=ordered_nodes,
+        edges=ordered_edges,
+        warnings=tuple(sorted(set(warnings))),
+    )
+
+
+def _owned_subject(root: Path, name: str) -> Path:
+    path = root / name
+    if path.is_symlink():
+        raise ValueError(f"{name} is a symlink and has ambiguous ownership")
+    return path
 
 
 def _load_object(path: Path, *, required: bool) -> dict[str, Any]:
@@ -260,6 +311,8 @@ def _load_object(path: Path, *, required: bool) -> dict[str, Any]:
         if required:
             raise FileNotFoundError(path.name)
         return {}
+    if path.stat().st_size > _MAX_LINEAGE_CONTROL_BYTES:
+        raise ValueError(f"{path.name} exceeds lineage control-file size bound")
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
         raise ValueError(f"{path.name} root must be an object")
