@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,7 +10,12 @@ from ai_qa_automation.evidence import EvidenceStore
 from ai_qa_automation.tools.test_execution import TestRunner
 
 
-def snapshot(*, fingerprint: str, git_sha: str | None = "a" * 40, complete: bool = True):
+def snapshot(
+    *,
+    fingerprint: str,
+    git_sha: str | None = "a" * 40,
+    complete: bool = True,
+) -> SimpleNamespace:
     return SimpleNamespace(
         fingerprint=fingerprint,
         git_sha=git_sha,
@@ -31,7 +36,7 @@ def install_fake_execution(
         def __init__(self, _workspace: Path) -> None:
             pass
 
-        def snapshot(self):
+        def snapshot(self) -> object:
             return next(sequence)
 
     monkeypatch.setattr(execution_module, "RepositoryInspector", FakeInspector)
@@ -114,9 +119,10 @@ def test_pytest_zero_exit_is_downgraded_when_fingerprint_is_incomplete(
 
 @pytest.mark.parametrize("timeout", [0, -1, True, 1.5])
 def test_pytest_runner_rejects_invalid_timeout_bound(tmp_path: Path, timeout: object) -> None:
+    run_id = f"run-timeout-{str(timeout).replace('.', '-')}"
     with pytest.raises(ValueError, match="timeout_seconds"):
         TestRunner(
             tmp_path,
-            EvidenceStore(tmp_path / "artifacts", f"run-timeout-{str(timeout).replace('.', '-') }"),
+            EvidenceStore(tmp_path / "artifacts", run_id),
             timeout_seconds=timeout,  # type: ignore[arg-type]
         )
