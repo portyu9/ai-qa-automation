@@ -18,7 +18,10 @@ class EvidenceStore:
     def __init__(self, root: Path, run_id: str, *, regulated_mode: bool = False) -> None:
         self.run_id = run_id
         self.regulated_mode = regulated_mode
-        self.run_root = (root / run_id).resolve()
+        artifact_root = root.expanduser().resolve()
+        self.run_root = (artifact_root / run_id).resolve()
+        if self.run_root == artifact_root or artifact_root not in self.run_root.parents:
+            raise ValueError("evidence run_id escapes artifact root")
         self.run_root.mkdir(parents=True, exist_ok=True)
         self._items: dict[str, EvidenceItem] = {}
         self._artifacts: dict[str, ArtifactRecord] = {}
@@ -130,7 +133,9 @@ class EvidenceStore:
             "payload": sanitize(payload),
             "previous_hash": self._audit_previous_hash,
         }
-        canonical = json.dumps(core, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+        canonical = json.dumps(
+            core, sort_keys=True, separators=(",", ":"), default=str
+        ).encode("utf-8")
         event_hash = self.hash_bytes(canonical)
         record = {**core, "event_hash": event_hash}
         with (self.run_root / "audit-log.jsonl").open("a", encoding="utf-8") as stream:
@@ -138,7 +143,6 @@ class EvidenceStore:
             stream.flush()
             os.fsync(stream.fileno())
         self._audit_previous_hash = event_hash
-
 
     def _restore_manifest(self) -> None:
         path = self.run_root / "evidence-manifest.json"
@@ -206,7 +210,9 @@ class EvidenceStore:
                 raise ValueError(f"regulated evidence integrity check failed: {evidence_id}")
         for artifact_id, item in self._artifacts.items():
             if artifact_hashes[artifact_id] != item.content_hash:
-                raise ValueError(f"regulated artifact registry integrity check failed: {artifact_id}")
+                raise ValueError(
+                    f"regulated artifact registry integrity check failed: {artifact_id}"
+                )
 
     def verify_audit_chain(self) -> bool:
         """Verify sequence, previous-hash linkage, and each regulated audit event hash."""
@@ -241,7 +247,9 @@ class EvidenceStore:
             return
         if not self.verify_audit_chain():
             raise ValueError("regulated audit log integrity check failed")
-        lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        lines = [
+            line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
+        ]
         if not lines:
             return
         last = json.loads(lines[-1])
@@ -263,7 +271,9 @@ class EvidenceStore:
                 "path": audit_path.name,
                 "events": self._audit_sequence,
                 "last_event_hash": self._audit_previous_hash,
-                "content_hash": self.hash_bytes(audit_path.read_bytes()) if audit_path.exists() else None,
+                "content_hash": self.hash_bytes(audit_path.read_bytes())
+                if audit_path.exists()
+                else None,
             }
         rendered = json.dumps(data, indent=2, sort_keys=True)
         handle, raw_temp = tempfile.mkstemp(
