@@ -278,18 +278,21 @@ async def run_agent(objective: str, workspace: Path, settings: Settings | None =
                 pending = control.pending_mutation
                 try:
                     if state.terminal_status == TerminalStatus.SUCCESS:
-                        control.commit_pending_mutation()
-                    else:
-                        rolled_back = control.rollback_pending_mutation(
-                            reason="run ended without verified success"
+                        state.terminal_status = TerminalStatus.NOT_VERIFIED
+                        state.terminal_reason = (
+                            "Terminal evaluation encountered an unresolved mutation transaction; "
+                            "verified commit authority exists only in PostToolUse closure."
                         )
-                        if rolled_back:
-                            revision_before = pending.change_revision_before
-                            if revision_before is None or state.change_revision > revision_before:
-                                _remove_latest_modified_path(state, rolled_back)
-                            state.observations.append(
-                                f"Unverified mutation rolled back before terminal report: {rolled_back}"
-                            )
+                    rolled_back = control.rollback_pending_mutation(
+                        reason="run ended with an unresolved mutation transaction"
+                    )
+                    if rolled_back:
+                        revision_before = pending.change_revision_before
+                        if revision_before is None or state.change_revision > revision_before:
+                            _remove_latest_modified_path(state, rolled_back)
+                        state.observations.append(
+                            f"Unresolved mutation rolled back before terminal report: {rolled_back}"
+                        )
                     control.set_workspace_fingerprint(
                         RepositoryInspector(workspace).snapshot().fingerprint
                     )
