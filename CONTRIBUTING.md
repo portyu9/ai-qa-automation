@@ -22,13 +22,13 @@ Or run the same routine set with:
 make verify-local
 ```
 
-The H-series holdout corpus is **not** part of the everyday contribution loop. It exists to preserve an independent readiness signal and should be run only at an intentional checkpoint:
+The H-series holdout corpus is separate from the everyday contribution loop so it preserves an independent readiness signal:
 
 ```bash
 make holdout
 ```
 
-A command existing in this repository is not evidence that it passed on a given commit; record actual execution results before describing current-head gates as verified.
+Describe verification from recorded execution evidence rather than from the presence of a command, test file, or workflow definition.
 
 ## Non-negotiable test-integrity rules
 
@@ -63,15 +63,14 @@ A governance change should explain why authority is not being widened accidental
 
 ## Documentation standard
 
-Documentation must distinguish:
+Documentation should bind claims to the source of evidence:
 
-- **implemented** source/configuration;
-- **observed/verified** execution evidence;
-- **not verified** current-head behavior;
-- **environment-required** capabilities;
-- **not configured** optional integrations.
+- source/configuration describes implemented control structure;
+- deterministic runs describe repository behavior for exercised paths;
+- provider interaction describes credentialed integration behavior;
+- target/deployment observation describes environment-specific behavior.
 
-Avoid wording that implies a live model, MCP, browser/device, load, sandbox, or production deployment was verified solely because supporting code exists.
+Avoid wording that lets one evidence class stand in for another.
 
 Start with [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/SETUP.md`](docs/SETUP.md), [`docs/EVALUATION.md`](docs/EVALUATION.md), and [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md).
 
