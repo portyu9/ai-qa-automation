@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import re
 import shutil
-import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -12,7 +11,7 @@ from uuid import uuid4
 
 from ..models import PerformanceMetrics, ToolDecision
 from ..policy import PolicyEngine
-from .execution_env import restricted_subprocess_env
+from .execution_env import restricted_subprocess_env, run_bounded_subprocess
 
 _URL_LITERAL = re.compile(r"https?://[^'\"`\s)]+", re.I)
 _IMPORT_SPECIFIER = re.compile(
@@ -190,20 +189,14 @@ class K6Runner:
                     "K6_NO_USAGE_REPORT": "true",
                 },
             )
-            try:
-                result = subprocess.run(
-                    command,
-                    cwd=self.workspace,
-                    capture_output=True,
-                    text=True,
-                    timeout=self.timeout_seconds,
-                    check=False,
-                    env=env,
-                )
-            except subprocess.TimeoutExpired as exc:
-                raise RuntimeError(
-                    f"k6 exceeded {self.timeout_seconds}s execution budget"
-                ) from exc
+            result = run_bounded_subprocess(
+                command,
+                cwd=self.workspace,
+                env=env,
+                timeout_seconds=self.timeout_seconds,
+            )
+            if result.timed_out:
+                raise RuntimeError(f"k6 exceeded {self.timeout_seconds}s execution budget")
             if result.returncode != 0:
                 raise RuntimeError(result.stderr[-3000:] or "k6 failed")
             if not summary_path.is_file():
