@@ -122,7 +122,7 @@ def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
     # taskkill is part of supported Windows installations and is used only for
     # cleanup of the child tree created by this adapter.
     try:
-        subprocess.run(  # noqa: S603 - fixed executable/arguments, no shell
+        cleanup = subprocess.run(  # noqa: S603 - fixed executable/arguments, no shell
             ["taskkill", "/PID", str(process.pid), "/T", "/F"],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -131,8 +131,9 @@ def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
-        if process.poll() is None:
-            process.kill()
+        cleanup = None
+    if (cleanup is None or cleanup.returncode != 0) and process.poll() is None:
+        process.kill()
 
 
 def run_bounded_subprocess(
@@ -223,8 +224,10 @@ def run_bounded_subprocess(
         if stdout_thread.is_alive() or stderr_thread.is_alive():
             raise RuntimeError("subprocess output drains did not terminate after process-tree cleanup")
 
+    if process.returncode is None:  # pragma: no cover - wait() contract
+        raise RuntimeError("subprocess ended without a return code")
     return BoundedSubprocessResult(
-        returncode=int(process.returncode),
+        returncode=process.returncode,
         stdout=stdout_buffer.text(),
         stderr=stderr_buffer.text(),
         stdout_truncated=stdout_buffer.truncated,
