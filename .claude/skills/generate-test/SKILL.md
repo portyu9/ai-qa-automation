@@ -49,6 +49,6 @@ Unclear requirement, unknown authoritative behavior, unsafe setup, conflicting c
 Complete when the gap is covered and deterministically validated, or explicitly `BLOCKED`/`NOT_VERIFIED` with the missing evidence identified.
 
 ## Output
-Coverage-search evidence ID, coverage gap, plan evidence ID, selected layer/rationale, scenarios, implementation evidence, execution result, revision, and validation status.
+Coverage-search evidence ID, coverage gap, plan evidence ID, selected layer/rationale, scenarios, implementation evidence, execution result, revision, and validation outcome.
 
 Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../../../LICENSE`](../../../LICENSE).
