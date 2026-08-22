@@ -58,6 +58,11 @@ def test_network_hosts_are_canonicalized_and_deduplicated(tmp_path: Path) -> Non
         "example.test#fragment",
         "bad_label.example.test",
         "-bad.example.test",
+        "fe80::1%eth0",
+        "[fe80::1%eth0]",
+        "[127.0.0.1]",
+        "[example.test]",
+        "999.999.999.999",
     ],
 )
 def test_network_allowlist_rejects_ambiguous_or_non_host_entries(
