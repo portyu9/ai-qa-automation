@@ -7,33 +7,17 @@ The **ƳƤ AI QA Automation Framework** is built around one non-negotiable rule:
 
 > **Model reasoning is not test evidence.**
 
-Claude can interpret failures, form hypotheses, assess change risk, select controlled actions, propose repairs, and design tests. It does **not** get to declare software correct because its reasoning sounds plausible. Controlled tools collect facts and perform bounded operations; deterministic policy and validation decide what is verified.
+Claude can interpret failures, form hypotheses, assess change risk, select controlled actions, propose repairs, and design tests. Controlled tools collect facts and perform bounded operations; deterministic policy and validation decide what is verified.
 
 ```text
 Claude reasons. Controlled tools execute. Deterministic systems decide whether gates passed.
 ```
 
-The framework is designed for agentic quality engineering where probabilistic reasoning is useful, but authority, evidence, mutation safety, and final verification remain explicit and independently enforceable.
-
-## Current status
-
-| Area | Current state |
-|---|---|
-| Architecture / implementation | Production-shaped; pre-execution static architecture, code/configuration, documentation, and contract-completeness audit completed |
-| Ruff / Mypy / full pytest | `NOT_VERIFIED` on the current head until deliberately executed |
-| Primary 34-scenario evaluation | `NOT_VERIFIED` on the current head until deliberately executed |
-| H-series holdout evaluation | `NOT_VERIFIED` on the current head until deliberately executed |
-| Static security gates | `NOT_VERIFIED` on the current head until deliberately executed |
-| GitHub Actions | Implemented and **manual-only** (`workflow_dispatch`); workflow presence is not an execution result |
-| Live Claude Agent SDK | Implemented; credentialed provider execution is `ENVIRONMENT_REQUIRED` / `NOT_VERIFIED` |
-| GitHub / Atlassian MCP | Vendor-official integrations configured but disabled by default; authenticated behavior is `ENVIRONMENT_REQUIRED` |
-| External browser/load/mobile/infrastructure controls | Environment-dependent and never implied verified by source presence |
-
-The authoritative readiness vocabulary and release matrix live in [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md).
+The framework is designed for agentic quality engineering where probabilistic reasoning is useful, while authority, evidence, mutation safety, and final verification remain explicit and independently enforceable.
 
 ## Why this architecture is different
 
-Many AI test agents optimize for “make the test pass.” That can be unsafe when the agent can also reinterpret failures, rewrite tests, trust hostile application content, or declare its own work successful.
+Many AI test agents optimize for “make the test pass.” That can be unsafe when the same agent can reinterpret failures, rewrite tests, trust hostile application content, or declare its own work successful.
 
 The ƳƤ AI QA Automation Framework instead optimizes for **defensible evidence, bounded authority, and visible uncertainty**:
 
@@ -43,12 +27,11 @@ The ƳƤ AI QA Automation Framework instead optimizes for **defensible evidence,
 - the agent receives narrow QA tools instead of general shell/edit/web authority;
 - target source, tests, DOM, logs, API responses, `CLAUDE.md`, `.claude/`, and `.mcp.json` are untrusted data;
 - autonomous test mutations are fingerprint-safe, transactional, rollback-capable, and revision-gated;
-- self-healing cannot simply skip tests, weaken assertions, add sleeps, inflate timeouts, or suppress failures;
+- self-healing cannot skip tests, weaken assertions, add arbitrary sleeps, inflate timeouts, or suppress failures merely to get green;
 - coverage-aware generation requires observed repository evidence and same-run planning provenance;
-- low-confidence test impact **broadens** regression instead of justifying omission;
-- external MCP configuration does not equal provider availability;
-- interrupted runs persist canonical evidence/state outside conversation history;
-- current-head readiness is never inferred from historical green results.
+- low-confidence test impact broadens regression instead of justifying omission;
+- external integrations remain subject to deterministic authorization and evidence rules;
+- interrupted runs persist canonical evidence and process-control data outside conversation history.
 
 ## Architecture
 
@@ -92,11 +75,11 @@ flowchart LR
     Q <--> SUT
 ```
 
-The README keeps one system-level diagram. Three deeper diagrams are used only where a mechanism benefits materially from a visual model:
+Deeper mechanism diagrams live in:
 
-- **execution / verification sequence** — [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md);
-- **transactional mutation / crash-recovery state machine** — [`docs/RUNTIME_CONTROL.md`](docs/RUNTIME_CONTROL.md);
-- **persisted evidence / validation lineage** — [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md).
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — execution and verification sequence;
+- [`docs/RUNTIME_CONTROL.md`](docs/RUNTIME_CONTROL.md) — transactional mutation and crash recovery;
+- [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md) — persisted evidence and validation lineage.
 
 ### Trust boundaries
 
@@ -105,7 +88,7 @@ The README keeps one system-level diagram. Three deeper diagrams are used only w
 | Control plane | Trusted | runtime package, policy, `CLAUDE.md`, Skills, hooks, tool schemas, evaluation thresholds |
 | Target/SUT plane | Untrusted data | source, tests, DOM, logs, target `.mcp.json`, target `CLAUDE.md`, target `.claude/` |
 | Integration plane | Explicitly approved provider; returned content remains untrusted | GitHub official MCP, Atlassian Rovo MCP |
-| Deployment infrastructure | Must be verified independently | OS/container isolation, egress, identity, secrets, retention, real targets/devices |
+| Deployment infrastructure | Independently controlled | OS/container isolation, egress, identity, secrets, retention, real targets/devices |
 
 ## Live Agent SDK runtime
 
@@ -173,7 +156,7 @@ Candidate quality favors:
 stable test id > accessible role/name > stable semantic attribute > fragile structural selector
 ```
 
-Playwright measures the original and candidate locators in the same DOM. A repair proposal is bound to observed evidence, the current deterministic failure classification, the exact test path, and the expected file hash.
+Playwright measures the original and candidate locators in the same DOM. A repair proposal is bound to observed evidence, the deterministic failure classification, the exact test path, and the expected file hash.
 
 The patch path rejects common shortcuts such as:
 
@@ -184,7 +167,7 @@ The patch path rejects common shortcuts such as:
 - tautological assertions;
 - broad exception suppression.
 
-An approved mutation remains pending until the new revision closes patch-safety, targeted pytest, and full-regression validation. Failed or unverified work rolls back. If the process crashes and a developer subsequently changes the workspace, stale recovery refuses to overwrite newer human work.
+Approved mutations remain transactional until deterministic patch-safety, targeted-test, and regression validation closes the new revision. Crash recovery protects newer human changes from stale automated rollback.
 
 See [`docs/RUNTIME_CONTROL.md`](docs/RUNTIME_CONTROL.md).
 
@@ -205,15 +188,15 @@ Generated Python/JavaScript/TypeScript tests are checked for meaningful assertio
 
 **API** probes are host-allowlisted and read-only by default (`GET`, `HEAD`, `OPTIONS`). Mutating methods require separate explicit enablement.
 
-**Playwright** validates initial navigation, HTTP(S) subresources, and WebSockets against the configured host allowlist. Service workers are disabled in the evidence context. Binary screenshots remain `RAW` hashed artifacts rather than being falsely described as sanitized text.
+**Playwright** validates initial navigation, HTTP(S) subresources, and WebSockets against the configured host allowlist. Service workers are disabled in the evidence context. Binary screenshots remain `RAW` hashed artifacts rather than being represented as sanitized text.
 
-**k6** requires an explicitly non-production target, injected target binding, bounded script analysis, predefined thresholds, and—when non-local—an explicit trusted prerequisite that infrastructure-level egress enforcement exists. The repository does not pretend an application flag creates a firewall.
+**k6** requires an explicitly non-production target, injected target binding, bounded script analysis, and predefined thresholds. Non-local execution additionally requires an explicit infrastructure-egress prerequisite.
 
-**Appium** currently provides runtime/capability inspection; real application/device execution remains environment-required rather than being overstated as complete mobile validation.
+**Appium** is represented through controlled runtime/capability inspection and deployment-specific mobile execution boundaries.
 
 ## Evidence, state, recovery, and traceability
 
-`AgentRunState` is canonical QA decision state and records objective, model/SDK/config provenance, target SHA, change revision, evidence references, hypotheses, classifications, validation lineage, modified files, MCP status, cost, duration, and terminal status.
+`AgentRunState` is canonical QA decision state and records objective, model/SDK/config provenance, target SHA, change revision, evidence references, hypotheses, classifications, validation lineage, modified files, MCP availability, cost, duration, and terminal outcome.
 
 Process-control data lives separately in `runtime.json`, including workspace fingerprint, lease identity, budgets, tool circuits, pending mutation metadata, and journal head.
 
@@ -223,7 +206,7 @@ Each run stores evidence under:
 artifacts/<run_id>/
 ```
 
-with an `evidence-manifest.json` and content hashes. `journal.jsonl` is append-only and hash-chained. Regulated mode adds additional engineering traceability records/classification; it is **not a compliance certification**.
+with an `evidence-manifest.json` and content hashes. `journal.jsonl` is append-only and hash-chained. Regulated mode adds additional engineering traceability records/classification without treating engineering metadata as a compliance certification.
 
 Useful inspection commands:
 
@@ -235,7 +218,7 @@ ai-qa attest artifacts/run-<id>
 ai-qa contract-diff --baseline old-openapi.yaml --current new-openapi.yaml
 ```
 
-The attestation is deliberately unsigned. Content integrity is not a trusted digital signature and does not change a test result.
+The attestation is deliberately unsigned. Content integrity is distinct from identity, certification, and test results.
 
 See [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md).
 
@@ -247,11 +230,8 @@ External MCP is restricted to explicitly enabled vendor-official integrations.
 |---|---|---|
 | GitHub | `github/github-mcp-server` `v1.0.5`, container read-only mode | disabled |
 | Jira / Confluence | Atlassian Rovo MCP `/v1/mcp/authv2` endpoint | disabled |
-| Other systems | approved vendor path or `NOT_CONFIGURED` | not configured |
 
-Server identity is only the first gate. Runtime policy separately classifies read, write, destructive, and unknown actions. Configuration alone never changes an integration to `AVAILABLE`; availability requires an observed successful call.
-
-TestRail is intentionally `NOT_CONFIGURED` rather than being connected through an unapproved community MCP.
+Server identity is only the first gate. Runtime policy separately classifies read, write, destructive, and unknown actions. Remote content is persisted as untrusted evidence and cannot redefine control-plane policy.
 
 See [`docs/MCP.md`](docs/MCP.md) and [`docs/SETUP.md`](docs/SETUP.md).
 
@@ -267,7 +247,7 @@ The repository contains:
 - a fixed **34-scenario primary adversarial corpus**;
 - a physically separate **H-series holdout corpus**;
 - browser-marked tests isolated from default pytest;
-- model-marked tests isolated behind credentials.
+- model-marked tests isolated behind explicit credentials.
 
 Routine repository commands:
 
@@ -276,40 +256,38 @@ make quality
 make test
 make eval
 make security
-
-# aggregate routine repository-contained gate
 make verify-local
 ```
 
-The H-series is deliberately excluded from `verify-local` so routine development does not repeatedly tune against the holdout. At an intentional readiness checkpoint:
+The H-series is deliberately separated from the routine development loop:
 
 ```bash
 make holdout
 ```
 
-Hard-safety scenarios use a predefined zero-known-failure threshold. A failing implementation is not repaired by weakening the benchmark after seeing its result.
+Hard-safety scenarios use predefined zero-known-failure thresholds. A failing implementation is not repaired by weakening the benchmark after seeing its result.
 
 See [`docs/EVALUATION.md`](docs/EVALUATION.md).
 
 ## Deterministic reference SUT
 
-`examples/reference_sut/` is a deliberately small FastAPI target with controlled scenarios required by the build contract:
+`examples/reference_sut/` is a deliberately small FastAPI target with controlled scenarios:
 
 | Mode | Purpose |
 |---|---|
 | `pass` | normal checkout behavior |
 | `app-defect` | controlled business/application defect |
-| `outdated-locator` | historical test id changes while the stable accessible control and business behavior remain intact |
+| `outdated-locator` | locator contract changes while business behavior remains intact |
 | `api-failure` | controlled HTTP 500 |
 | `timing` | bounded deterministic delay |
-| `invalid-data` | out-of-contract request data produces real validation failure |
+| `invalid-data` | out-of-contract request data produces validation failure |
 | `prompt-injection` | malicious instruction-shaped DOM content remains untrusted evidence |
 
-The reference application is test data, not part of the trusted control plane, and does not prove behavior against an external application.
+The reference application is test data, not part of the trusted control plane.
 
 ## Setup
 
-### Credential-free inspection and deterministic demo
+### Credential-free local tooling
 
 ```bash
 python -m venv .venv
@@ -321,13 +299,9 @@ ai-qa doctor
 ai-qa demo
 ```
 
-`.env.example` is a **reference template only**. Runtime settings deliberately do not auto-load a repository `.env` file.
-
-`ai-qa doctor` inspects local capability and configuration posture without contacting external providers. It can report that a credential variable is present, but it never reveals or validates the secret and therefore reports that state as configured-but-not-verified.
+`.env.example` is a reference template only. Runtime settings deliberately do not auto-load a repository `.env` file.
 
 ### Live Claude path
-
-Only when live model execution is intentionally desired:
 
 ```bash
 export ANTHROPIC_API_KEY='...'
@@ -340,7 +314,7 @@ ai-qa agent \
 
 The trusted control root, artifact root, and target workspace must satisfy the runtime isolation rules. Model completion is never translated directly into PASS.
 
-For every environment variable, credential boundary, and operating mode, see [`docs/SETUP.md`](docs/SETUP.md).
+For environment variables, credential boundaries, and operating modes, see [`docs/SETUP.md`](docs/SETUP.md).
 
 ## Repository map
 
@@ -350,21 +324,21 @@ For every environment variable, credential boundary, and operating mode, see [`d
 ├── LICENSE
 ├── SECURITY.md
 ├── CONTRIBUTING.md
-├── .env.example             # reference only; not automatically loaded
-├── .claude/                 # trusted settings, hooks, five Skills
-├── .mcp.json                # trusted developer MCP configuration
-├── .github/workflows/       # manual-only CI
+├── .env.example
+├── .claude/
+├── .mcp.json
+├── .github/workflows/
 ├── src/ai_qa_automation/
-│   ├── agent.py             # Agent SDK orchestration + terminal truth rules
-│   ├── models.py            # state/evidence/result contracts
-│   ├── policy.py            # deterministic authorization
-│   ├── runtime/             # tools, leases, budgets, journal, hooks, recovery
-│   ├── intelligence/        # failure/healing/generation/change/topology analysis
-│   ├── tools/               # execution and evidence adapters
-│   └── integrations/        # approved MCP configuration/health mapping
-├── tests/                   # unit/integration/policy/security/evaluation tests
-├── evals/                   # 34 primary scenarios + separate H-series holdout
-├── examples/reference_sut/  # seven controlled deterministic scenarios
+│   ├── agent.py
+│   ├── models.py
+│   ├── policy.py
+│   ├── runtime/
+│   ├── intelligence/
+│   ├── tools/
+│   └── integrations/
+├── tests/
+├── evals/
+├── examples/reference_sut/
 ├── performance/
 └── docs/
 ```
@@ -381,28 +355,14 @@ For every environment variable, credential boundary, and operating mode, see [`d
 | How is change impact determined? | [`CHANGE_INTELLIGENCE.md`](docs/CHANGE_INTELLIGENCE.md) |
 | How are primary and holdout evaluations governed? | [`EVALUATION.md`](docs/EVALUATION.md) |
 | What is the security architecture? | [`SECURITY.md`](docs/SECURITY.md), [`THREAT_MODEL.md`](docs/THREAT_MODEL.md) |
-| What is repository-contained vs. environment-dependent? | [`VERIFICATION_BOUNDARIES.md`](docs/VERIFICATION_BOUNDARIES.md) |
-| What are the explicit non-claims and limits? | [`LIMITATIONS.md`](docs/LIMITATIONS.md) |
-| How do I diagnose failures without weakening safety? | [`TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) |
-| What is the authoritative readiness status? | [`PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md) |
+| What are the verification boundaries? | [`VERIFICATION_BOUNDARIES.md`](docs/VERIFICATION_BOUNDARIES.md) |
+| How is production readiness designed? | [`PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md) |
 | How is evidence lineage/attestation represented? | [`TRACEABILITY.md`](docs/TRACEABILITY.md) |
 | Where is the end-to-end code-path review? | [`TECHNICAL_WALKTHROUGH.md`](docs/TECHNICAL_WALKTHROUGH.md) |
 
 ## GitHub Actions
 
-`.github/workflows/ci.yml` is intentionally **manual-only** (`workflow_dispatch`). It has no `push`, `pull_request`, or scheduled trigger.
-
-Its jobs define:
-
-- quality checks across Python 3.11 and 3.13;
-- deterministic pytest + coverage artifacts;
-- the fixed 34-scenario evaluator;
-- optional H-series holdout evaluation;
-- optional security gates;
-- optional Playwright reference-SUT integration;
-- optional credentialed Claude Agent SDK smoke validation.
-
-A workflow definition is not execution evidence. Current-head gates remain `NOT_VERIFIED` until an authorized run is actually inspected.
+`.github/workflows/ci.yml` is intentionally **manual-only** (`workflow_dispatch`). It defines quality, deterministic pytest, primary evaluation, optional holdout, security, browser-reference, and optional credentialed model jobs under explicit operator control.
 
 ## License
 
