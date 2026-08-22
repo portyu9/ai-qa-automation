@@ -1,6 +1,9 @@
 # Contributing
 
-AI QA Automation treats deterministic safety gates as higher authority than model judgment. Contributions should preserve that hierarchy.
+**ƳƤ AI QA Automation Framework**  
+**Designed and engineered by Ƴunior Ƥortal (ƳƤ)**
+
+The ƳƤ AI QA Automation Framework treats deterministic safety gates as higher authority than model judgment. Contributions should preserve that hierarchy.
 
 ## Local contribution gates
 
@@ -75,3 +78,5 @@ Start with [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/SETUP.md`](doc
 ## Security reports
 
 Do not put real credentials, private customer data, production artifacts, or sensitive exploit material in a public contribution. Follow the root [`SECURITY.md`](SECURITY.md) disclosure guidance.
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`LICENSE`](LICENSE).
