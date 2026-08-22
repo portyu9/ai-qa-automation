@@ -10,6 +10,9 @@ from ..models import (
     FailureClassificationResult,
     Hypothesis,
 )
+from ..tools.locators import deterministic_locator_semantic_score, parse_locator_expression
+
+_MIN_LOCATOR_SEMANTIC_SCORE = 0.75
 
 
 class FailureAnalyzer:
@@ -49,36 +52,58 @@ class FailureAnalyzer:
 
             if item.kind in {EvidenceKind.DOM_SNAPSHOT, EvidenceKind.ACCESSIBILITY_SNAPSHOT}:
                 if data.get("expected_control_present") and data.get("locator_failed"):
-                    add(FailureClass.LOCATOR_UI_CONTRACT_CHANGE, 8, "expected semantic control exists but locator failed")
+                    add(
+                        FailureClass.LOCATOR_UI_CONTRACT_CHANGE,
+                        8,
+                        "expected semantic control exists but locator failed",
+                    )
                 if data.get("expected_control_absent") and data.get("business_state_expected"):
                     add(FailureClass.APPLICATION_DEFECT, 5, "expected control/behavior is absent")
 
-            if item.kind == EvidenceKind.SOURCE_OBSERVATION and item.source == "playwright_locator_verification":
+            if (
+                item.kind == EvidenceKind.SOURCE_OBSERVATION
+                and item.source == "playwright_locator_verification"
+            ):
                 original_count = int(data.get("original_count", -1))
-                stable_unique = [
-                    row
-                    for row in data.get("candidates", [])
-                    if isinstance(row, dict)
-                    and int(row.get("uniqueness_count", 0) or 0) == 1
-                    and not row.get("rejected_reason")
-                    and row.get("strategy")
-                    in {"test_id", "role_name", "label", "placeholder", "exact_text"}
-                ]
+                original_spec = parse_locator_expression(str(data.get("original_locator") or ""))
+                stable_semantic_unique = []
+                if original_spec is not None:
+                    for row in data.get("candidates", []):
+                        if not isinstance(row, dict):
+                            continue
+                        strategy = str(row.get("strategy") or "")
+                        candidate_spec = parse_locator_expression(str(row.get("locator") or ""))
+                        if (
+                            int(row.get("uniqueness_count", 0) or 0) != 1
+                            or row.get("rejected_reason")
+                            or strategy
+                            not in {"test_id", "role_name", "label", "placeholder", "exact_text"}
+                            or candidate_spec is None
+                            or candidate_spec.strategy != strategy
+                        ):
+                            continue
+                        semantic_score = deterministic_locator_semantic_score(
+                            original_spec,
+                            candidate_spec,
+                        )
+                        if semantic_score >= _MIN_LOCATOR_SEMANTIC_SCORE:
+                            stable_semantic_unique.append(row)
                 same_page_context = any(
                     other.id != item.id
                     and other.source_identifier == item.source_identifier
-                    and other.kind in {
+                    and other.kind
+                    in {
                         EvidenceKind.SCREENSHOT,
                         EvidenceKind.ACCESSIBILITY_SNAPSHOT,
                         EvidenceKind.DOM_SNAPSHOT,
                     }
                     for other in observed
                 )
-                if original_count == 0 and stable_unique and same_page_context:
+                if original_count == 0 and stable_semantic_unique and same_page_context:
                     add(
                         FailureClass.LOCATOR_UI_CONTRACT_CHANGE,
                         8,
-                        "Playwright observed original locator missing while a stable semantic candidate was unique in the same evidenced page state",
+                        "Playwright observed the original locator missing while a unique stable candidate preserved deterministic semantic intent in the same evidenced page state",
                     )
 
             if item.kind == EvidenceKind.EXCEPTION:
@@ -148,8 +173,28 @@ class FailureAnalyzer:
     @staticmethod
     def _default_hypotheses(ids: list[str]) -> list[Hypothesis]:
         return [
-            Hypothesis(id="H1", statement="APPLICATION_DEFECT", confidence=0.25, supporting_evidence_ids=ids),
-            Hypothesis(id="H2", statement="TEST_AUTOMATION_DEFECT", confidence=0.25, supporting_evidence_ids=ids),
-            Hypothesis(id="H3", statement="ENVIRONMENT_FAILURE", confidence=0.25, supporting_evidence_ids=ids),
-            Hypothesis(id="H4", statement="TEST_DATA_FAILURE", confidence=0.25, supporting_evidence_ids=ids),
+            Hypothesis(
+                id="H1",
+                statement="APPLICATION_DEFECT",
+                confidence=0.25,
+                supporting_evidence_ids=ids,
+            ),
+            Hypothesis(
+                id="H2",
+                statement="TEST_AUTOMATION_DEFECT",
+                confidence=0.25,
+                supporting_evidence_ids=ids,
+            ),
+            Hypothesis(
+                id="H3",
+                statement="ENVIRONMENT_FAILURE",
+                confidence=0.25,
+                supporting_evidence_ids=ids,
+            ),
+            Hypothesis(
+                id="H4",
+                statement="TEST_DATA_FAILURE",
+                confidence=0.25,
+                supporting_evidence_ids=ids,
+            ),
         ]
