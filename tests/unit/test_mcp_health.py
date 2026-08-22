@@ -15,8 +15,12 @@ from ai_qa_automation.models import MCPStatus
         ({"status_code": 403}, MCPStatus.UNAUTHORIZED),
         ({"error": PermissionError("denied")}, MCPStatus.UNAUTHORIZED),
         ({"message": "remote returned forbidden"}, MCPStatus.UNAUTHORIZED),
+        ({"message": "HTTP 403"}, MCPStatus.UNAUTHORIZED),
+        ({"message": "status code: 401"}, MCPStatus.UNAUTHORIZED),
         ({"status_code": 429}, MCPStatus.RATE_LIMITED),
         ({"message": "rate limit exceeded"}, MCPStatus.RATE_LIMITED),
+        ({"message": "HTTP status 429"}, MCPStatus.RATE_LIMITED),
+        ({"message": "too many requests"}, MCPStatus.RATE_LIMITED),
         ({"status_code": 503}, MCPStatus.UNAVAILABLE),
         ({"error": TimeoutError("late")}, MCPStatus.UNAVAILABLE),
         ({"error": ConnectionError("reset")}, MCPStatus.UNAVAILABLE),
@@ -43,9 +47,9 @@ def test_decode_failures_are_invalid_response() -> None:
 
 def test_security_relevant_status_precedence_is_deterministic() -> None:
     # Authentication/authorization failures dominate ambiguous text; a response that
-    # says both "403" and "rate limit" must not be softened into a retryable status.
+    # says both forbidden and rate-limited must not be softened into a retryable status.
     assert (
-        normalize_mcp_failure(status_code=403, message="403 rate limit")
+        normalize_mcp_failure(status_code=403, message="HTTP 403 rate limit")
         is MCPStatus.UNAUTHORIZED
     )
 
@@ -55,3 +59,9 @@ def test_security_relevant_status_precedence_is_deterministic() -> None:
         normalize_mcp_failure(status_code=429, error=TypeError("malformed"))
         is MCPStatus.RATE_LIMITED
     )
+
+
+def test_arbitrary_business_ids_that_look_like_http_codes_do_not_change_health_class() -> None:
+    assert normalize_mcp_failure(message="issue 403 failed lookup") is MCPStatus.FAILED
+    assert normalize_mcp_failure(message="ticket 429 was not found") is MCPStatus.FAILED
+    assert normalize_mcp_failure(message="record 401 is malformed") is MCPStatus.FAILED
