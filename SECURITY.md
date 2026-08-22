@@ -2,7 +2,7 @@
 
 ## Project security posture
 
-AI QA Automation is a public, production-shaped engineering portfolio/reference implementation. It is **not** operated here as a production SaaS service and the presence of a security control in source is not represented as proof that a deployment environment satisfies that control.
+AI QA Automation is a production-shaped agentic quality engineering system. It is **not** operated here as a production SaaS service, and the presence of a security control in source is not represented as proof that a deployment environment satisfies that control.
 
 The runtime is designed around least privilege, trusted-control-plane / untrusted-SUT separation, secret redaction, vendor-official MCP allowlisting, path confinement, bounded execution, transactional test mutation, deterministic policy hooks, and explicit non-PASS states such as `NOT_VERIFIED` and `BLOCKED`.
 
