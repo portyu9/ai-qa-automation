@@ -98,7 +98,9 @@ def test_new_file_mutation_rollback_removes_unverified_file(tmp_path: Path) -> N
     assert control.pending_mutation is None
 
 
-def test_committed_mutation_discards_rollback_snapshot_and_keeps_change(tmp_path: Path) -> None:
+def test_committed_mutation_discards_verified_rollback_snapshot_and_keeps_change(
+    tmp_path: Path,
+) -> None:
     control = make_control(tmp_path)
     target = control.workspace / "tests" / "test_checkout.py"
     target.parent.mkdir(parents=True)
@@ -115,6 +117,43 @@ def test_committed_mutation_discards_rollback_snapshot_and_keeps_change(tmp_path
     assert target.read_text(encoding="utf-8") == "validated change\n"
     assert not backup.exists()
     assert control.pending_mutation is None
+
+
+def test_tampered_rollback_backup_blocks_commit_and_preserves_pending_transaction(
+    tmp_path: Path,
+) -> None:
+    control = make_control(tmp_path)
+    target = control.workspace / "tests" / "test_checkout.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("before\n", encoding="utf-8")
+    control.prepare_mutation("tests/test_checkout.py")
+    assert control.pending_mutation is not None
+    backup = Path(str(control.pending_mutation.backup_path))
+    target.write_text("candidate\n", encoding="utf-8")
+    backup.write_text("tampered\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="integrity"):
+        control.commit_pending_mutation()
+
+    assert target.read_text(encoding="utf-8") == "candidate\n"
+    assert control.pending_mutation is not None
+
+
+def test_missing_rollback_backup_blocks_commit(tmp_path: Path) -> None:
+    control = make_control(tmp_path)
+    target = control.workspace / "tests" / "test_checkout.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("before\n", encoding="utf-8")
+    control.prepare_mutation("tests/test_checkout.py")
+    assert control.pending_mutation is not None
+    Path(str(control.pending_mutation.backup_path)).unlink()
+    target.write_text("candidate\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="missing or not a regular file"):
+        control.commit_pending_mutation()
+
+    assert target.read_text(encoding="utf-8") == "candidate\n"
+    assert control.pending_mutation is not None
 
 
 def test_second_or_escaping_mutation_is_denied(tmp_path: Path) -> None:
@@ -219,7 +258,7 @@ def test_missing_rollback_backup_blocks_restore(tmp_path: Path) -> None:
     backup.unlink()
     target.write_text("after\n", encoding="utf-8")
 
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(RuntimeError, match="missing or not a regular file"):
         control.rollback_pending_mutation(reason="validation failed")
 
     assert target.read_text(encoding="utf-8") == "after\n"
@@ -246,6 +285,29 @@ def test_rollback_backup_path_is_confined_to_runtime_rollback_directory(tmp_path
 
     with pytest.raises(RuntimeError, match="escaped rollback directory"):
         control.rollback_pending_mutation(reason="tampered runtime metadata")
+
+
+def test_symlinked_rollback_backup_is_rejected(tmp_path: Path) -> None:
+    control = make_control(tmp_path)
+    target = control.workspace / "tests" / "test_checkout.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("before\n", encoding="utf-8")
+    control.prepare_mutation("tests/test_checkout.py")
+    assert control.pending_mutation is not None
+    original = control.pending_mutation
+    original_backup = Path(str(original.backup_path))
+    alternate = original_backup.parent / "alternate.bin"
+    alternate.write_bytes(original_backup.read_bytes())
+    original_backup.unlink()
+    try:
+        original_backup.symlink_to(alternate)
+    except OSError as exc:  # pragma: no cover - platform/filesystem capability
+        pytest.skip(f"symlink creation unavailable: {exc}")
+
+    with pytest.raises(RuntimeError, match="symlink"):
+        control.rollback_pending_mutation(reason="tampered rollback alias")
+
+    assert control.pending_mutation is not None
 
 
 def test_snapshot_redacts_pending_details_by_default(tmp_path: Path) -> None:
