@@ -286,3 +286,30 @@ def test_metric_label_rendering_failure_falls_back_to_bounded_values(monkeypatch
     assert instruments["mcp_outcomes"].calls == [
         (1, {"mcp.provider": "other", "mcp.outcome": "FAILED"})
     ]
+
+
+def test_metric_helpers_remain_fail_soft_for_hostile_protocols_and_malformed_instruments(
+    monkeypatch: Any,
+) -> None:
+    class _BadProtocol:
+        def __bool__(self) -> bool:
+            raise RuntimeError("untrusted truthiness failed")
+
+        def __str__(self) -> str:
+            raise RuntimeError("untrusted rendering failed")
+
+    class _BadFloat(float):
+        def __float__(self) -> float:
+            raise RuntimeError("untrusted numeric conversion failed")
+
+    bad: Any = _BadProtocol()
+    monkeypatch.setattr(telemetry, "_metric_instruments", lambda: {})
+
+    telemetry.record_run_metrics(
+        terminal_status=bad,
+        duration_seconds=_BadFloat(1.0),
+        tool_calls=_BadFloat(1.0),
+    )
+    telemetry.record_tool_event(bad, "succeeded")
+    telemetry.record_policy_denial(bad)
+    telemetry.record_mcp_outcome(bad, bad)
