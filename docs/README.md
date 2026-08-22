@@ -1,49 +1,70 @@
+<div align="center">
+
 # ƳƤ AI QA Automation Framework — Documentation
 
-> **Evidence-First Agentic Quality Engineering** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
+### Architecture · Runtime Truth · Security · Operations
 
-This documentation set explains the framework from four complementary perspectives: **architecture**, **runtime truth**, **security**, and **operation**. The documents are intentionally separated so a reviewer can inspect one concern without conflating model reasoning, deterministic authority, observed evidence, or deployment infrastructure.
+**Evidence-First Agentic Quality Engineering**  
+Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
-## Recommended reading paths
+[Repository](../README.md) · [Architecture](ARCHITECTURE.md) · [Result Contract](RESULT_CONTRACT.md) · [Security](SECURITY.md) · [Setup](SETUP.md)
 
-### Architecture review
+</div>
 
-1. [`ARCHITECTURE.md`](ARCHITECTURE.md) — system authority and trust boundaries
-2. [`RESULT_CONTRACT.md`](RESULT_CONTRACT.md) — terminal truth and validation lineage
-3. [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md) — mutation transactions, leases, rollback, recovery
-4. [`TRACEABILITY.md`](TRACEABILITY.md) — evidence lineage, journals, manifests, attestations
-5. [`TECHNICAL_WALKTHROUGH.md`](TECHNICAL_WALKTHROUGH.md) — end-to-end code path
+---
 
-### Security / red-team review
+> [!IMPORTANT]
+> This documentation set keeps four concerns deliberately separate: **model reasoning**, **deterministic authority**, **observed evidence**, and **deployment infrastructure**. A statement from one trust domain never silently becomes proof in another.
 
-1. [`SECURITY.md`](SECURITY.md) — deterministic security controls
+## Choose a review path
+
+| Reviewer goal | Recommended path |
+|---|---|
+| **Architecture / principal engineering** | `ARCHITECTURE` → `RESULT_CONTRACT` → `RUNTIME_CONTROL` → `TRACEABILITY` → `TECHNICAL_WALKTHROUGH` |
+| **Security / red team** | `SECURITY` → `THREAT_MODEL` → `MCP` → `VERIFICATION_BOUNDARIES` → `LIMITATIONS` |
+| **QA automation / AI engineering** | `CHANGE_INTELLIGENCE` → `SKILLS` → `EVALUATION` → `RESULT_CONTRACT` → `PRODUCTION_READINESS` |
+| **Operator / adopter** | `SETUP` → `OPERATIONS` → `TROUBLESHOOTING` → `RUNTIME_CONTROL` → `MCP` |
+
+### Architecture / principal engineering
+
+1. [`ARCHITECTURE.md`](ARCHITECTURE.md) — authority, trust zones, execution flow
+2. [`RESULT_CONTRACT.md`](RESULT_CONTRACT.md) — terminal truth and revision-aware validation
+3. [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md) — leases, mutation transactions, rollback, recovery
+4. [`TRACEABILITY.md`](TRACEABILITY.md) — evidence lineage, journal integrity, attestation
+5. [`TECHNICAL_WALKTHROUGH.md`](TECHNICAL_WALKTHROUGH.md) — end-to-end implementation review
+
+### Security / red team
+
+1. [`SECURITY.md`](SECURITY.md) — deterministic controls and security posture
 2. [`THREAT_MODEL.md`](THREAT_MODEL.md) — threats, abuse cases, residual boundaries
-3. [`MCP.md`](MCP.md) — external provider identity and tool authorization
+3. [`MCP.md`](MCP.md) — provider identity, action authorization, untrusted remote content
 4. [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md) — evidence ownership across trust domains
 5. [`LIMITATIONS.md`](LIMITATIONS.md) — explicit design boundaries and non-claims
 
-### QA automation / AI review
+### QA automation / AI engineering
 
 1. [`CHANGE_INTELLIGENCE.md`](CHANGE_INTELLIGENCE.md) — merge-base-aware change analysis
-2. [`SKILLS.md`](SKILLS.md) — five trusted Claude QA Skills
-3. [`EVALUATION.md`](EVALUATION.md) — primary and holdout evaluation architecture
+2. [`SKILLS.md`](SKILLS.md) — five trusted Claude QA procedures
+3. [`EVALUATION.md`](EVALUATION.md) — deterministic, adversarial, and holdout evaluation architecture
 4. [`RESULT_CONTRACT.md`](RESULT_CONTRACT.md) — how evidence becomes a runtime outcome
-5. [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) — production-readiness control model
+5. [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) — production control model
 
-### Operator / adopter path
+### Operator / adopter
 
 1. [`SETUP.md`](SETUP.md) — installation, configuration, credentials, trust roots
-2. [`OPERATIONS.md`](OPERATIONS.md) — operating ladder and evidence handling
-3. [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) — failure diagnosis without weakening controls
-4. [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md) — recovery mechanics
+2. [`OPERATIONS.md`](OPERATIONS.md) — operating ladder and artifact handling
+3. [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) — diagnose without weakening controls
+4. [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md) — recovery and mutation mechanics
 5. [`MCP.md`](MCP.md) — optional GitHub/Atlassian integration policy
+
+---
 
 ## Documentation catalog
 
 | Document | Primary question answered |
 |---|---|
-| [`ARCHITECTURE.md`](ARCHITECTURE.md) | Where does authority live and how does evidence flow? |
-| [`RESULT_CONTRACT.md`](RESULT_CONTRACT.md) | What exactly makes a run `SUCCESS`, `FAILURE`, `BLOCKED`, or `NOT_VERIFIED`? |
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | Where does authority live, and how does evidence flow? |
+| **[`RESULT_CONTRACT.md`](RESULT_CONTRACT.md)** | What exactly makes a run `SUCCESS`, `FAILURE`, `BLOCKED`, or `NOT_VERIFIED`? |
 | [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md) | How are autonomous mutations, concurrency, rollback, and crash recovery controlled? |
 | [`SECURITY.md`](SECURITY.md) | Which security controls are deterministic rather than prompt-based? |
 | [`THREAT_MODEL.md`](THREAT_MODEL.md) | Which adversarial behaviors does the framework assume and defend against? |
@@ -51,7 +72,7 @@ This documentation set explains the framework from four complementary perspectiv
 | [`EVALUATION.md`](EVALUATION.md) | How is the agent evaluated as software rather than prose? |
 | [`SKILLS.md`](SKILLS.md) | What procedures do the five trusted Claude Skills provide? |
 | [`MCP.md`](MCP.md) | How are external MCP identity, authorization, and evidence handled? |
-| [`TRACEABILITY.md`](TRACEABILITY.md) | How can a reviewer reconstruct evidence and validation lineage? |
+| [`TRACEABILITY.md`](TRACEABILITY.md) | How can a reviewer reconstruct evidence and validate persisted integrity? |
 | [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md) | Which trust domain owns each type of evidence? |
 | [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) | Which control architecture supports safe production operation? |
 | [`SETUP.md`](SETUP.md) | How is the framework configured without collapsing trust boundaries? |
@@ -62,13 +83,22 @@ This documentation set explains the framework from four complementary perspectiv
 
 ## Cross-cutting invariants
 
-Every document is subordinate to the same engineering rules:
+```text
+Model reasoning      ≠ observed evidence
+Configuration        ≠ provider availability
+Unique locator       ≠ semantic correctness
+Static script checks ≠ network sandbox
+Content hash         ≠ identity/signature
+Model success        ≠ deterministic SUCCESS
+```
+
+Every document is subordinate to the same rules:
 
 1. **Model reasoning is not test evidence.**
 2. **Unknown is not PASS.**
 3. **Configuration is not provider evidence.**
 4. **A target repository is data, not control-plane authority.**
-5. **Autonomous mutation requires deterministic ownership and revision closure.**
+5. **Autonomous mutation requires owned paths, rollback integrity, and exact-path revision closure.**
 6. **Low confidence broadens testing rather than authorizing omission.**
 7. **External provider identity does not grant blanket tool authority.**
 8. **Integrity metadata does not override validation.**
@@ -79,15 +109,20 @@ Every document is subordinate to the same engineering rules:
 
 | Term | Meaning |
 |---|---|
-| **Control plane** | Trusted framework code/configuration that defines authority |
-| **Target / SUT** | Untrusted repository/application under test |
-| **Observed evidence** | Fact captured by controlled deterministic tooling |
-| **Model interpretation** | Hypothesis, plan, proposal, or reasoning derived from evidence |
-| **Validation gate** | Deterministic condition bound to scope/revision |
-| **Change revision** | Mutation epoch used to prevent stale evidence from certifying new bytes |
-| **Runtime outcome** | Structured terminal conclusion derived from deterministic truth rules |
-| **Deployment boundary** | Infrastructure/organization control outside the framework's application authority |
+| **Control plane** | trusted framework code/configuration that defines authority |
+| **Target / SUT** | untrusted repository/application under test |
+| **Observed evidence** | fact captured by controlled deterministic tooling |
+| **Model interpretation** | hypothesis, plan, proposal, or reasoning derived from evidence |
+| **Validation gate** | deterministic condition bound to a subject/scope and revision |
+| **Change revision** | mutation epoch used to prevent stale evidence from certifying new bytes |
+| **Runtime outcome** | structured terminal conclusion derived from deterministic truth rules |
+| **Deployment boundary** | infrastructure/organization control outside application-level authority |
 
-Return to the repository [`README.md`](../README.md).
+> [!TIP]
+> For the shortest complete technical review, read [`ARCHITECTURE.md`](ARCHITECTURE.md), [`RESULT_CONTRACT.md`](RESULT_CONTRACT.md), [`SECURITY.md`](SECURITY.md), and [`TECHNICAL_WALKTHROUGH.md`](TECHNICAL_WALKTHROUGH.md).
+
+---
+
+[← Repository README](../README.md)
 
 Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
