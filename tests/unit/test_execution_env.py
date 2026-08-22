@@ -49,6 +49,16 @@ def test_resolve_executable_rejects_ambiguous_or_missing_commands(tmp_path: Path
         resolve_executable("python", env={})
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX execute bits are not portable to Windows")
+def test_resolve_executable_rejects_absolute_non_executable_file(tmp_path: Path) -> None:
+    candidate = tmp_path / "not-executable"
+    candidate.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    candidate.chmod(0o600)
+
+    with pytest.raises(PermissionError, match="not executable"):
+        resolve_executable(str(candidate), env=os.environ)
+
+
 @pytest.mark.parametrize(
     ("timeout", "max_output"),
     [
