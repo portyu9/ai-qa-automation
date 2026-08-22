@@ -7,6 +7,9 @@ on:
   push:
     branches:
       - validation/source-gates-0ae95258
+  pull_request:
+    branches:
+      - validation/source-gates-0ae95258
 
 permissions:
   contents: read
