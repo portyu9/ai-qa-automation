@@ -15,6 +15,9 @@ from .locators import (
     parse_locator_expression,
 )
 
+_MAX_BROWSER_EVENTS = 200
+_MAX_ACCESSIBILITY_CHARS = 12_000
+
 
 class BrowserProbeExecutionError(RuntimeError):
     """Browser execution failure that retains the evidence record for the attempt."""
@@ -37,6 +40,13 @@ class BrowserEvidenceResult:
     network_evidence_id: str | None = None
 
 
+def _append_bounded(items: list[Any], value: Any, *, limit: int = _MAX_BROWSER_EVENTS) -> None:
+    """Keep only the most recent browser events without unbounded callback growth."""
+    if len(items) >= limit:
+        del items[: max(1, limit // 4)]
+    items.append(value)
+
+
 class BrowserProbe:
     """Optional Playwright evidence collector with per-request host authorization."""
 
@@ -47,8 +57,10 @@ class BrowserProbe:
         allow_hosts: set[str],
         timeout_ms: int = 15_000,
     ) -> None:
+        if isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int) or not 1 <= timeout_ms <= 120_000:
+            raise ValueError("browser timeout_ms must be an integer between 1 and 120000")
         self.evidence = evidence
-        self.allow_hosts = {host.lower() for host in allow_hosts}
+        self.allow_hosts = {str(host).strip().lower() for host in allow_hosts if str(host).strip()}
         self.timeout_ms = timeout_ms
 
     def _url_allowed(self, url: str) -> bool:
@@ -108,18 +120,20 @@ class BrowserProbe:
                     if self._url_allowed(request_url):
                         await route.continue_()
                     else:
-                        failed_requests.append(f"BLOCKED {redact_text(request_url)}")
+                        _append_bounded(
+                            failed_requests,
+                            f"BLOCKED {redact_text(request_url)}",
+                        )
                         await route.abort("blockedbyclient")
 
                 async def guard_websocket(websocket: Any) -> None:
                     websocket_url = websocket.url
                     if self._url_allowed(websocket_url):
-                        # connect_to_server is the stable WebSocketRoute API available
-                        # throughout the framework's supported Playwright range.
                         websocket.connect_to_server()
                     else:
-                        failed_requests.append(
-                            f"BLOCKED WEBSOCKET {redact_text(websocket_url)}"
+                        _append_bounded(
+                            failed_requests,
+                            f"BLOCKED WEBSOCKET {redact_text(websocket_url)}",
                         )
                         await websocket.close(code=1008, reason="Blocked by network policy")
 
@@ -129,15 +143,19 @@ class BrowserProbe:
                 if console_errors is not None:
                     page.on(
                         "console",
-                        lambda msg: console_errors.append(redact_text(msg.text))
+                        lambda msg: _append_bounded(console_errors, redact_text(msg.text))
                         if msg.type == "error"
                         else None,
                     )
-                page.on("requestfailed", lambda req: failed_requests.append(redact_text(req.url)))
+                page.on(
+                    "requestfailed",
+                    lambda req: _append_bounded(failed_requests, redact_text(req.url)),
+                )
                 page.on(
                     "response",
-                    lambda response: http_errors.append(
-                        {"status_code": response.status, "url": redact_text(response.url)}
+                    lambda response: _append_bounded(
+                        http_errors,
+                        {"status_code": response.status, "url": redact_text(response.url)},
                     )
                     if response.status >= 400
                     else None,
@@ -169,9 +187,12 @@ class BrowserProbe:
                     )
                 title = redact_text(await page.title())
                 accessibility_snapshot = redact_text(
-                    (await page.locator("body").aria_snapshot())[:12000]
+                    (await page.locator("body").aria_snapshot())[:_MAX_ACCESSIBILITY_CHARS]
                 )
-                png = await page.screenshot(full_page=True)
+                # A viewport screenshot is intentionally bounded. full_page=True can
+                # allocate arbitrarily tall images on hostile/noisy pages before the
+                # artifact store can enforce persistence limits.
+                png = await page.screenshot(full_page=False)
             except Exception as exc:
                 item = self.evidence.add(
                     EvidenceItem(
@@ -201,7 +222,7 @@ class BrowserProbe:
                 kind=EvidenceKind.SCREENSHOT,
                 source="playwright",
                 source_identifier=safe_url,
-                summary="Browser screenshot captured",
+                summary="Browser viewport screenshot captured",
                 artifact_reference=screenshot_path,
                 content_hash=digest,
                 sanitization_status=SanitizationStatus.RAW,
@@ -237,9 +258,9 @@ class BrowserProbe:
             url=safe_url,
             title=title,
             accessibility_snapshot=accessibility_snapshot,
-            console_errors=console_errors,
-            failed_requests=failed_requests,
-            http_errors=http_errors,
+            console_errors=list(console_errors),
+            failed_requests=list(failed_requests),
+            http_errors=list(http_errors),
             screenshot_evidence_id=screenshot_item.id,
             dom_evidence_id=dom_item.id,
             network_evidence_id=network_item.id if network_item else None,
@@ -307,9 +328,9 @@ class BrowserProbe:
                         )
                     )
                 context_snapshot = redact_text(
-                    (await page.locator("body").aria_snapshot())[:12000]
+                    (await page.locator("body").aria_snapshot())[:_MAX_ACCESSIBILITY_CHARS]
                 )
-                context_png = await page.screenshot(full_page=True)
+                context_png = await page.screenshot(full_page=False)
         except BrowserProbeExecutionError:
             raise
         except Exception as exc:
@@ -342,7 +363,7 @@ class BrowserProbe:
                 kind=EvidenceKind.SCREENSHOT,
                 source="playwright_locator_verification",
                 source_identifier=safe_url,
-                summary="Same-DOM screenshot captured for locator verification",
+                summary="Same-DOM viewport screenshot captured for locator verification",
                 artifact_reference=context_path,
                 content_hash=context_digest,
                 sanitization_status=SanitizationStatus.RAW,
