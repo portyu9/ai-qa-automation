@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from ai_qa_automation.models import AgentRunState, TerminalStatus
 from ai_qa_automation.policy import PolicyEngine
 from ai_qa_automation.runtime.budget import ExecutionBudget
@@ -50,8 +52,8 @@ def test_fingerprint_marks_changed_symlink_incomplete(tmp_path: Path) -> None:
     link.parent.mkdir()
     try:
         link.symlink_to(target)
-    except OSError:
-        return
+    except OSError as exc:
+        pytest.skip(f"symlink creation is unavailable: {type(exc).__name__}")
 
     inspector = RepositoryInspector(tmp_path)
     _fingerprint, complete, reasons = inspector._fingerprint(
