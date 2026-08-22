@@ -246,8 +246,13 @@ async def run_agent(objective: str, workspace: Path, settings: Settings | None =
             with trace_span("ai_qa_automation.agent_run"):
                 async with asyncio.timeout(cfg.global_timeout_seconds):
                     while True:
+                        provider_request_started = False
                         try:
                             async with ClaudeSDKClient(options=options) as client:
+                                # Entering the SDK session itself is replay-safe. Once query
+                                # submission starts, provider work/cost may have begun even if
+                                # no response message reaches this process, so replay is denied.
+                                provider_request_started = True
                                 await client.query(bounded_prompt)
                                 async for message in client.receive_response():
                                     state.iteration += 1
@@ -269,6 +274,7 @@ async def run_agent(objective: str, workspace: Path, settings: Settings | None =
                                 state=state,
                                 retry_limit=cfg.max_sdk_retries,
                                 pending_mutation=control.pending_mutation is not None,
+                                provider_request_started=provider_request_started,
                             )
                             if not decision.retry:
                                 raise
@@ -279,8 +285,8 @@ async def run_agent(objective: str, workspace: Path, settings: Settings | None =
                                 max_seconds=cfg.sdk_retry_max_backoff_seconds,
                             )
                             state.observations.append(
-                                "Transient Agent SDK failure occurred before observable agent/tool "
-                                f"activity; scheduling bounded retry {state.retry_count}/{cfg.max_sdk_retries}."
+                                "Transient Agent SDK session-start failure occurred before provider "
+                                f"query submission; scheduling bounded retry {state.retry_count}/{cfg.max_sdk_retries}."
                             )
                             journal.try_append(
                                 "sdk_retry_scheduled",
@@ -301,7 +307,11 @@ async def run_agent(objective: str, workspace: Path, settings: Settings | None =
             state.terminal_reason = "Global execution-time budget exhausted"
         except Exception as exc:
             state.terminal_status, state.terminal_reason = sdk_exception_outcome(exc)
-            if sdk_exception_is_transient(exc) and state.retry_count >= cfg.max_sdk_retries:
+            if (
+                sdk_exception_is_transient(exc)
+                and state.retry_count > 0
+                and state.retry_count >= cfg.max_sdk_retries
+            ):
                 state.terminal_reason = (
                     "Transient Agent SDK execution failure persisted after bounded recovery attempts: "
                     f"{type(exc).__name__}"
