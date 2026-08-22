@@ -77,3 +77,25 @@ def test_journal_rejects_oversized_restore_line_before_json_parse(tmp_path: Path
 
     with pytest.raises(RuntimeError, match="hash-chain verification"):
         RunJournal(path)
+
+
+def test_journal_marks_malformed_json_invalid_and_refuses_reopen(tmp_path: Path) -> None:
+    path = tmp_path / "malformed.jsonl"
+    path.write_bytes(b'{"seq":1,"event":"broken"\n')
+
+    probe = RunJournal(tmp_path / "clean.jsonl")
+    probe.path = path
+    assert probe.verify() == {"valid": False, "events": 0, "head_hash": None}
+    with pytest.raises(RuntimeError, match="hash-chain verification"):
+        RunJournal(path)
+
+
+def test_journal_marks_invalid_utf8_invalid_and_refuses_reopen(tmp_path: Path) -> None:
+    path = tmp_path / "invalid-utf8.jsonl"
+    path.write_bytes(b"\xff\xfe\n")
+
+    probe = RunJournal(tmp_path / "clean.jsonl")
+    probe.path = path
+    assert probe.verify() == {"valid": False, "events": 0, "head_hash": None}
+    with pytest.raises(RuntimeError, match="hash-chain verification"):
+        RunJournal(path)
