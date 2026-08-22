@@ -27,7 +27,7 @@ ai-qa doctor
 
 `doctor` performs **local inspection only**. It may report that a credential variable is present, but it never prints, hashes, partially reveals, or validates the credential value and does not contact Anthropic, GitHub, or Atlassian.
 
-Useful statuses include:
+Useful doctor results include:
 
 - `PASS` — a locally inspectable prerequisite was observed;
 - `NOT_VERIFIED` — a local package/runtime prerequisite was not established;
@@ -168,7 +168,7 @@ Check:
 - the URL is the intended non-production endpoint;
 - mutating methods are genuinely required and explicitly enabled if appropriate;
 - authentication is provided through the approved target-specific mechanism;
-- status/schema evidence points to application behavior rather than network/configuration failure.
+- response-code/schema evidence points to application behavior rather than network/configuration failure.
 
 Never enable mutating methods globally merely to bypass one denied request.
 
@@ -234,8 +234,8 @@ If live execution fails:
 2. distinguish authentication/authorization from network/provider errors;
 3. confirm the configured model identifier is supported by the installed SDK/provider;
 4. inspect runtime budget/cost/timeout termination separately from provider failure;
-5. preserve the exact exception class/status and run provenance;
-6. if provider outage is plausible and internet access is available, check Anthropic's official status/documentation before implementing an architectural workaround.
+5. preserve the exact exception class/provider result and run provenance;
+6. if provider outage is plausible and internet access is available, check Anthropic's official service-health page and documentation before implementing an architectural workaround.
 
 Do not expose the key in debug logs or issue reports.
 
@@ -243,7 +243,7 @@ Do not expose the key in debug logs or issue reports.
 
 When a remote provider appears unavailable, temporary outage handling should not permanently widen architecture.
 
-Where internet access exists, check the provider's official status source and current first-party documentation. Preserve valid local evidence and normalize the unavailable dependency explicitly. Do not fabricate remote evidence and do not switch to an unapproved integration merely to keep the workflow moving.
+Where internet access exists, check the provider's official service-health source and current first-party documentation. Preserve valid local evidence and normalize the unavailable dependency explicitly. Do not fabricate remote evidence and do not switch to an unapproved integration merely to keep the workflow moving.
 
 ## 15. Corrupt state or journal
 
@@ -277,7 +277,7 @@ Do not broadly disable secret scanning to remove noise.
 Prefer small, targeted evidence:
 
 - exact command/action and objective;
-- terminal/runtime status;
+- terminal/runtime outcome;
 - sanitized exception class/message;
 - run ID;
 - relevant evidence/validation IDs;
