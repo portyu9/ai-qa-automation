@@ -196,7 +196,7 @@ def _safe_terminal_outcome(value: object) -> str:
     return normalized if normalized in _TERMINAL_OUTCOMES else "NOT_VERIFIED"
 
 
-def _tool_surface(tool_name: str) -> str:
+def _tool_surface(tool_name: object) -> str:
     name = _safe_text(tool_name, default="")
     if name.startswith("mcp__qa__"):
         return "internal_qa"
