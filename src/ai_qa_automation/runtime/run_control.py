@@ -124,7 +124,7 @@ class RuntimeControl:
                 original_sha256=original_hash,
                 change_revision_before=change_revision_before,
             )
-        except Exception as exc:
+        except Exception:
             self.pending_mutation = None
             if pending_persisted:
                 try:
@@ -142,7 +142,7 @@ class RuntimeControl:
                     backup_path.unlink(missing_ok=True)
                 except OSError:
                     pass
-            raise exc
+            raise
 
     def commit_pending_mutation(self) -> str | None:
         pending = self.pending_mutation
