@@ -9,6 +9,7 @@ from .journal import RunJournal
 
 _MAX_LINEAGE_CONTROL_BYTES = 10_000_000
 _MAX_LINEAGE_JOURNAL_LINE_BYTES = 1_000_000
+_MAX_LINEAGE_JOURNAL_EVENTS = 10_000
 
 
 @dataclass(frozen=True)
@@ -63,8 +64,13 @@ class RunLineageGraph:
 
 def build_run_lineage(run_dir: Path, *, max_journal_events: int = 500) -> RunLineageGraph:
     """Build a bounded evidence/validation/artifact/operation lineage graph from persisted records."""
-    if max_journal_events < 1:
-        raise ValueError("max_journal_events must be at least 1")
+    if (
+        type(max_journal_events) is not int
+        or not 1 <= max_journal_events <= _MAX_LINEAGE_JOURNAL_EVENTS
+    ):
+        raise ValueError(
+            f"max_journal_events must be an integer between 1 and {_MAX_LINEAGE_JOURNAL_EVENTS}"
+        )
     requested_root = run_dir.expanduser()
     if requested_root.is_symlink():
         raise ValueError("run directory is a symlink and has ambiguous ownership")
