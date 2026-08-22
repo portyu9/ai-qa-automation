@@ -55,15 +55,20 @@ class RepositoryInspector:
     """Read-only Git/repository inspection with deterministic workspace fingerprints."""
 
     def __init__(self, workspace: Path, timeout_seconds: int = 20) -> None:
+        if timeout_seconds < 1:
+            raise ValueError("repository inspection timeout_seconds must be positive")
         self.workspace = workspace.expanduser().resolve()
         self.timeout_seconds = timeout_seconds
 
     def snapshot(self) -> RepositorySnapshot:
-        sha = self._git("rev-parse", "HEAD", allow_failure=True)
-        branch = self._git("branch", "--show-current", allow_failure=True)
-        status = self._git(
-            "status", "--porcelain=v1", "--untracked-files=all", allow_failure=True
-        ) or ""
+        try:
+            sha = self._git("rev-parse", "HEAD", allow_failure=True)
+            branch = self._git("branch", "--show-current", allow_failure=True)
+            status = self._git(
+                "status", "--porcelain=v1", "--untracked-files=all", allow_failure=True
+            ) or ""
+        except RuntimeError:
+            return self._incomplete_snapshot("git-inspection-timeout")
         changed = self._changed_paths(status)
         fingerprint, complete, incomplete_reasons = self._fingerprint(sha, status, changed)
         return RepositorySnapshot(
@@ -75,6 +80,24 @@ class RepositoryInspector:
             fingerprint=fingerprint,
             fingerprint_complete=complete,
             fingerprint_incomplete_reasons=incomplete_reasons,
+        )
+
+    def _incomplete_snapshot(self, reason: str) -> RepositorySnapshot:
+        payload = {
+            "workspace": str(self.workspace),
+            "fingerprint_complete": False,
+            "fingerprint_incomplete_reasons": [reason],
+        }
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return RepositorySnapshot(
+            workspace=str(self.workspace),
+            git_sha=None,
+            branch=None,
+            status="!! GIT_INSPECTION_INCOMPLETE",
+            changed_files=(),
+            fingerprint=f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}",
+            fingerprint_complete=False,
+            fingerprint_incomplete_reasons=(reason,),
         )
 
     def change_set(self, base_ref: str) -> RepositoryChangeSet:
@@ -104,7 +127,10 @@ class RepositoryInspector:
             "--",
         ) or ""
         committed = tuple(sorted({line for line in raw_committed.splitlines() if line.strip()}))
-        worktree = self.snapshot().changed_files
+        worktree_snapshot = self.snapshot()
+        if not worktree_snapshot.fingerprint_complete:
+            raise RuntimeError("worktree status inspection is incomplete")
+        worktree = worktree_snapshot.changed_files
         changed = tuple(sorted(set(committed) | set(worktree)))
         return RepositoryChangeSet(
             requested_base_ref=safe_ref,
@@ -244,15 +270,20 @@ class RepositoryInspector:
             env = restricted_subprocess_env(
                 home=Path(temp_home), extra={"GIT_CONFIG_NOSYSTEM": "1"}
             )
-            result = subprocess.run(
-                ["git", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", *args],
-                cwd=self.workspace,
-                text=True,
-                capture_output=True,
-                timeout=self.timeout_seconds,
-                check=False,
-                env=env,
-            )
+            try:
+                result = subprocess.run(
+                    ["git", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", *args],
+                    cwd=self.workspace,
+                    text=True,
+                    capture_output=True,
+                    timeout=self.timeout_seconds,
+                    check=False,
+                    env=env,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError(
+                    f"git command exceeded {self.timeout_seconds}s inspection budget"
+                ) from exc
         if result.returncode != 0:
             if allow_failure:
                 return None
@@ -264,15 +295,20 @@ class RepositoryInspector:
             env = restricted_subprocess_env(
                 home=Path(temp_home), extra={"GIT_CONFIG_NOSYSTEM": "1"}
             )
-            result = subprocess.run(
-                ["git", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", *args],
-                cwd=self.workspace,
-                text=False,
-                capture_output=True,
-                timeout=self.timeout_seconds,
-                check=False,
-                env=env,
-            )
+            try:
+                result = subprocess.run(
+                    ["git", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", *args],
+                    cwd=self.workspace,
+                    text=False,
+                    capture_output=True,
+                    timeout=self.timeout_seconds,
+                    check=False,
+                    env=env,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError(
+                    f"git command exceeded {self.timeout_seconds}s inspection budget"
+                ) from exc
         if result.returncode != 0:
             if allow_failure:
                 return None
