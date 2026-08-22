@@ -17,6 +17,7 @@ from ai_qa_automation.tools.locators import (
         ("get_by_label('Email Address')", "label"),
         ("get_by_placeholder('Search users')", "placeholder"),
         ("get_by_text('Continue', exact=True)", "exact_text"),
+        ("get_by_text('Continue')", "text"),
         ("locator('[data-action=save]')", "semantic_css"),
         ("page.getByRole('button', { name: 'Save Profile', exact: true })", "role_name"),
     ],
@@ -38,6 +39,15 @@ def test_supported_literal_locator_contracts_parse(expression: str, strategy: st
 )
 def test_dynamic_or_multiline_locator_contracts_are_rejected(expression: str) -> None:
     assert parse_locator_expression(expression) is None
+
+
+def test_plain_text_and_exact_text_keep_distinct_execution_semantics() -> None:
+    fuzzy = parse_locator_expression("get_by_text('Continue')")
+    exact = parse_locator_expression("get_by_text('Continue', exact=True)")
+
+    assert fuzzy is not None and exact is not None
+    assert fuzzy.strategy == "text"
+    assert exact.strategy == "exact_text"
 
 
 def test_semantic_tokens_normalize_test_id_and_accessible_name() -> None:
