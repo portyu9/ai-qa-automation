@@ -7,6 +7,7 @@ import pytest
 
 import ai_qa_automation.tools.test_execution as execution_module
 from ai_qa_automation.evidence import EvidenceStore
+from ai_qa_automation.tools.execution_env import BoundedSubprocessResult
 from ai_qa_automation.tools.test_execution import TestRunner
 
 
@@ -29,6 +30,7 @@ def install_fake_execution(
     snapshots: list[object],
     *,
     returncode: int = 0,
+    timed_out: bool = False,
 ) -> None:
     sequence = iter(snapshots)
 
@@ -41,12 +43,15 @@ def install_fake_execution(
 
     monkeypatch.setattr(execution_module, "RepositoryInspector", FakeInspector)
     monkeypatch.setattr(
-        execution_module.subprocess,
-        "run",
-        lambda *args, **kwargs: SimpleNamespace(
+        execution_module,
+        "run_bounded_subprocess",
+        lambda *args, **kwargs: BoundedSubprocessResult(
             returncode=returncode,
             stdout="1 passed",
             stderr="",
+            stdout_truncated=False,
+            stderr_truncated=False,
+            timed_out=timed_out,
         ),
     )
 
@@ -115,6 +120,23 @@ def test_pytest_zero_exit_is_downgraded_when_fingerprint_is_incomplete(
 
     assert result.exit_code == 125
     assert "workspace fingerprint is incomplete" in result.stderr
+
+
+def test_pytest_timeout_maps_to_controlled_timeout_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install_fake_execution(
+        monkeypatch,
+        [snapshot(fingerprint="fp"), snapshot(fingerprint="fp")],
+        returncode=-9,
+        timed_out=True,
+    )
+    runner = TestRunner(tmp_path, EvidenceStore(tmp_path / "artifacts", "run-timeout"))
+
+    result = runner.run_pytest([])
+
+    assert result.exit_code == 124
+    assert "execution budget" in result.stderr
 
 
 @pytest.mark.parametrize("timeout", [0, -1, True, 1.5])
