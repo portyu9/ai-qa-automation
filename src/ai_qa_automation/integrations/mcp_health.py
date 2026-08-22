@@ -46,7 +46,13 @@ def normalize_mcp_failure(
         return MCPStatus.UNAVAILABLE
     if isinstance(error, (TimeoutError, ConnectionError)) or any(
         token in rendered
-        for token in ("timeout", "timed out", "connection refused", "connection reset", "unavailable")
+        for token in (
+            "timeout",
+            "timed out",
+            "connection refused",
+            "connection reset",
+            "unavailable",
+        )
     ):
         return MCPStatus.UNAVAILABLE
     if isinstance(error, (json.JSONDecodeError, UnicodeDecodeError, TypeError)):

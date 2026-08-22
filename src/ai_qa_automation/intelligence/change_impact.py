@@ -37,8 +37,23 @@ class ChangeImpactAnalyzer:
     }
     _HIGH = {
         "api_contract": ("openapi", "swagger", "graphql", "proto", "api/", "routes", "contract"),
-        "infrastructure": ("terraform", "k8s", "kubernetes", "helm", "docker", "deployment", "infra/"),
-        "dependencies": ("requirements", "pyproject", "package.json", "lock", "pom.xml", "build.gradle"),
+        "infrastructure": (
+            "terraform",
+            "k8s",
+            "kubernetes",
+            "helm",
+            "docker",
+            "deployment",
+            "infra/",
+        ),
+        "dependencies": (
+            "requirements",
+            "pyproject",
+            "package.json",
+            "lock",
+            "pom.xml",
+            "build.gradle",
+        ),
     }
     _MEDIUM = {
         "ui": ("frontend", "ui/", "components", "pages", "templates", ".tsx", ".jsx", ".vue"),
@@ -46,7 +61,11 @@ class ChangeImpactAnalyzer:
     }
 
     def assess(self, changed_files: list[str] | tuple[str, ...]) -> ChangeImpactAssessment:
-        normalized = tuple(sorted({PurePosixPath(str(path)).as_posix() for path in changed_files if str(path).strip()}))
+        normalized = tuple(
+            sorted(
+                {PurePosixPath(str(path)).as_posix() for path in changed_files if str(path).strip()}
+            )
+        )
         if not normalized:
             return ChangeImpactAssessment(
                 risk=RiskLevel.LOW,
@@ -55,7 +74,9 @@ class ChangeImpactAnalyzer:
                 recommended_layers=(TestLayer.UNIT,),
                 recommended_tags=("smoke",),
                 confidence=0.4,
-                rationale=("No changed files were observed; selection should remain conservative.",),
+                rationale=(
+                    "No changed files were observed; selection should remain conservative.",
+                ),
             )
 
         areas: set[str] = set()
@@ -124,9 +145,17 @@ class ChangeImpactAnalyzer:
 
         confidence = min(0.98, 0.62 + min(len(normalized), 12) * 0.02 + len(areas) * 0.04)
         if not rationale:
-            rationale.append("No high-risk path heuristic matched; retain baseline smoke and unit coverage.")
+            rationale.append(
+                "No high-risk path heuristic matched; retain baseline smoke and unit coverage."
+            )
 
-        order = {TestLayer.UNIT: 0, TestLayer.COMPONENT: 1, TestLayer.API: 2, TestLayer.INTEGRATION: 3, TestLayer.UI: 4}
+        order = {
+            TestLayer.UNIT: 0,
+            TestLayer.COMPONENT: 1,
+            TestLayer.API: 2,
+            TestLayer.INTEGRATION: 3,
+            TestLayer.UI: 4,
+        }
         return ChangeImpactAssessment(
             risk=risk,
             changed_files=normalized,

@@ -124,8 +124,7 @@ class RunJournal:
             canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
             record_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
             rendered = (
-                json.dumps({**body, "record_hash": record_hash}, sort_keys=True, default=str)
-                + "\n"
+                json.dumps({**body, "record_hash": record_hash}, sort_keys=True, default=str) + "\n"
             )
             if len(rendered.encode("utf-8")) > _MAX_JOURNAL_LINE_BYTES:
                 raise ValueError("run-journal event exceeds line-size bound")
@@ -175,9 +174,7 @@ class RunJournal:
                     if record.get("seq") != expected_seq:
                         return {"valid": False, "events": count, "head_hash": previous}
                     body = {key: value for key, value in record.items() if key != "record_hash"}
-                    canonical = json.dumps(
-                        body, sort_keys=True, separators=(",", ":"), default=str
-                    )
+                    canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
                 except (UnicodeDecodeError, ValueError, TypeError, RecursionError):
                     return {"valid": False, "events": count, "head_hash": previous}
                 actual = hashlib.sha256(canonical.encode("utf-8")).hexdigest()

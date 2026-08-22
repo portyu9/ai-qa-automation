@@ -69,9 +69,10 @@ class RepositoryInspector:
         try:
             sha = self._git("rev-parse", "HEAD", allow_failure=True)
             branch = self._git("branch", "--show-current", allow_failure=True)
-            status = self._git(
-                "status", "--porcelain=v1", "--untracked-files=all", allow_failure=True
-            ) or ""
+            status = (
+                self._git("status", "--porcelain=v1", "--untracked-files=all", allow_failure=True)
+                or ""
+            )
         except RuntimeError as exc:
             message = str(exc).casefold()
             reason = (
@@ -129,14 +130,17 @@ class RepositoryInspector:
         if merge_base is None:
             raise RuntimeError(f"baseline ref has no merge base with HEAD: {safe_ref}")
 
-        raw_committed = self._git(
-            "diff",
-            "--name-only",
-            "--diff-filter=ACDMRTUXB",
-            merge_base,
-            head,
-            "--",
-        ) or ""
+        raw_committed = (
+            self._git(
+                "diff",
+                "--name-only",
+                "--diff-filter=ACDMRTUXB",
+                merge_base,
+                head,
+                "--",
+            )
+            or ""
+        )
         committed = tuple(sorted({line for line in raw_committed.splitlines() if line.strip()}))
         worktree_snapshot = self.snapshot()
         if not worktree_snapshot.fingerprint_complete:
@@ -153,7 +157,9 @@ class RepositoryInspector:
             changed_files=changed,
         )
 
-    def read_file_at(self, commit_sha: str, relative_path: str, *, max_bytes: int = 2_000_000) -> bytes:
+    def read_file_at(
+        self, commit_sha: str, relative_path: str, *, max_bytes: int = 2_000_000
+    ) -> bytes:
         """Read one bounded tracked file from an immutable commit without checkout."""
         if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 1:
             raise ValueError("max_bytes must be a positive integer")
@@ -174,7 +180,9 @@ class RepositoryInspector:
         if result is None:
             raise FileNotFoundError(path)
         if len(result) > max_bytes:
-            raise RuntimeError("Git returned more baseline bytes than the preflight object size allowed")
+            raise RuntimeError(
+                "Git returned more baseline bytes than the preflight object size allowed"
+            )
         return result
 
     def diff(self, *paths: str) -> str:
@@ -186,7 +194,9 @@ class RepositoryInspector:
     def _validate_ref(base_ref: str) -> str:
         value = base_ref.strip()
         if not _SAFE_REF.fullmatch(value) or value.startswith("-") or ".." in value:
-            raise ValueError("baseline ref contains unsupported characters or revision-range syntax")
+            raise ValueError(
+                "baseline ref contains unsupported characters or revision-range syntax"
+            )
         return value
 
     @staticmethod

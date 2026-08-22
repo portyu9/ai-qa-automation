@@ -71,12 +71,12 @@ def _assert_executable_file(path: Path, *, env: Mapping[str, str]) -> None:
     if os.name == "nt":
         raw_pathext = env.get("PATHEXT") or _WINDOWS_DEFAULT_PATHEXT
         allowed_suffixes = {
-            suffix.casefold()
-            for suffix in raw_pathext.split(os.pathsep)
-            if suffix.strip()
+            suffix.casefold() for suffix in raw_pathext.split(os.pathsep) if suffix.strip()
         }
         if path.suffix.casefold() not in allowed_suffixes:
-            raise PermissionError(f"subprocess executable has an unsupported Windows suffix: {path}")
+            raise PermissionError(
+                f"subprocess executable has an unsupported Windows suffix: {path}"
+            )
         return
     if not os.access(path, os.X_OK):
         raise PermissionError(f"subprocess executable is not executable: {path}")
@@ -102,17 +102,23 @@ def resolve_executable(executable: str, *, env: Mapping[str, str]) -> str:
             raise FileNotFoundError(f"subprocess executable was not found: {raw}") from exc
     else:
         if candidate.parent != Path("."):
-            raise ValueError("relative subprocess executable paths with directory components are forbidden")
+            raise ValueError(
+                "relative subprocess executable paths with directory components are forbidden"
+            )
         search_path = env.get("PATH")
         if not search_path:
             raise FileNotFoundError(f"subprocess executable cannot be resolved without PATH: {raw}")
         discovered = shutil.which(raw, path=search_path)
         if discovered is None:
-            raise FileNotFoundError(f"subprocess executable was not found on the controlled PATH: {raw}")
+            raise FileNotFoundError(
+                f"subprocess executable was not found on the controlled PATH: {raw}"
+            )
         try:
             resolved = Path(discovered).resolve(strict=True)
         except OSError as exc:
-            raise FileNotFoundError(f"resolved subprocess executable no longer exists: {raw}") from exc
+            raise FileNotFoundError(
+                f"resolved subprocess executable no longer exists: {raw}"
+            ) from exc
 
     if not resolved.is_file():
         raise FileNotFoundError(f"subprocess executable is not a regular file: {resolved}")
@@ -224,9 +230,7 @@ def run_bounded_subprocess(
         or not isinstance(max_output_bytes, int)
         or not 1 <= max_output_bytes <= _MAX_OUTPUT_BYTES
     ):
-        raise ValueError(
-            f"max_output_bytes must be an integer between 1 and {_MAX_OUTPUT_BYTES}"
-        )
+        raise ValueError(f"max_output_bytes must be an integer between 1 and {_MAX_OUTPUT_BYTES}")
     if not command:
         raise ValueError("subprocess command must not be empty")
 
@@ -284,7 +288,9 @@ def run_bounded_subprocess(
             process.stdout.close()
             process.stderr.close()
         if stdout_thread.is_alive() or stderr_thread.is_alive():
-            raise RuntimeError("subprocess output drains did not terminate after process-tree cleanup")
+            raise RuntimeError(
+                "subprocess output drains did not terminate after process-tree cleanup"
+            )
 
     if process.returncode is None:  # pragma: no cover - wait() contract
         raise RuntimeError("subprocess ended without a return code")

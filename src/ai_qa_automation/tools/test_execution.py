@@ -47,7 +47,9 @@ class TestRunner:
     _WORKSPACE_INTEGRITY_EXIT_CODE = 125
     _TIMEOUT_EXIT_CODE = 124
 
-    def __init__(self, workspace: Path, evidence: EvidenceStore, timeout_seconds: int = 120) -> None:
+    def __init__(
+        self, workspace: Path, evidence: EvidenceStore, timeout_seconds: int = 120
+    ) -> None:
         if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int):
             raise ValueError("pytest timeout_seconds must be an integer")
         if timeout_seconds < 1:
@@ -88,9 +90,7 @@ class TestRunner:
             )
         duration = time.monotonic() - start
         timed_out = process_result.timed_out
-        exit_code = (
-            self._TIMEOUT_EXIT_CODE if timed_out else process_result.returncode
-        )
+        exit_code = self._TIMEOUT_EXIT_CODE if timed_out else process_result.returncode
         raw_stdout = process_result.stdout
         raw_stderr = process_result.stderr
         if timed_out:
@@ -236,7 +236,9 @@ class TestRunner:
                 index += 2
                 continue
             if arg.startswith("-"):
-                raise PermissionError(f"pytest option is outside the approved argument surface: {arg}")
+                raise PermissionError(
+                    f"pytest option is outside the approved argument surface: {arg}"
+                )
             self._validate_selector(arg)
             safe.append(arg)
             index += 1

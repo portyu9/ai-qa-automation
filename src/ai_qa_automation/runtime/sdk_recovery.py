@@ -96,7 +96,9 @@ def retry_decision(
     provider_request_started: bool,
 ) -> SDKRetryDecision:
     if not sdk_exception_is_transient(exc):
-        return SDKRetryDecision(False, "non_transient", "SDK failure is not classified as transient")
+        return SDKRetryDecision(
+            False, "non_transient", "SDK failure is not classified as transient"
+        )
     if provider_request_started:
         return SDKRetryDecision(
             False,

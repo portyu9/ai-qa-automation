@@ -57,7 +57,11 @@ class BrowserProbe:
         allow_hosts: set[str],
         timeout_ms: int = 15_000,
     ) -> None:
-        if isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int) or not 1 <= timeout_ms <= 120_000:
+        if (
+            isinstance(timeout_ms, bool)
+            or not isinstance(timeout_ms, int)
+            or not 1 <= timeout_ms <= 120_000
+        ):
             raise ValueError("browser timeout_ms must be an integer between 1 and 120000")
         self.evidence = evidence
         self.allow_hosts = {str(host).strip().lower() for host in allow_hosts if str(host).strip()}
@@ -104,7 +108,9 @@ class BrowserProbe:
 
         async with async_playwright() as playwright:
             try:
-                browser = await playwright.chromium.launch(headless=True, args=["--no-proxy-server"])
+                browser = await playwright.chromium.launch(
+                    headless=True, args=["--no-proxy-server"]
+                )
             except Exception as exc:
                 if "Executable doesn't exist" in str(exc):
                     raise RuntimeError(
@@ -143,9 +149,11 @@ class BrowserProbe:
                 if console_errors is not None:
                     page.on(
                         "console",
-                        lambda msg: _append_bounded(console_errors, redact_text(msg.text))
-                        if msg.type == "error"
-                        else None,
+                        lambda msg: (
+                            _append_bounded(console_errors, redact_text(msg.text))
+                            if msg.type == "error"
+                            else None
+                        ),
                     )
                 page.on(
                     "requestfailed",
@@ -153,12 +161,14 @@ class BrowserProbe:
                 )
                 page.on(
                     "response",
-                    lambda response: _append_bounded(
-                        http_errors,
-                        {"status_code": response.status, "url": redact_text(response.url)},
-                    )
-                    if response.status >= 400
-                    else None,
+                    lambda response: (
+                        _append_bounded(
+                            http_errors,
+                            {"status_code": response.status, "url": redact_text(response.url)},
+                        )
+                        if response.status >= 400
+                        else None
+                    ),
                 )
                 yield page
             finally:
@@ -285,7 +295,9 @@ class BrowserProbe:
 
         original_spec = parse_locator_expression(original_locator)
         if original_spec is None:
-            raise ValueError("original locator is not a supported literal Playwright locator expression")
+            raise ValueError(
+                "original locator is not a supported literal Playwright locator expression"
+            )
         failed_requests: list[str] = []
         http_errors: list[dict[str, Any]] = []
         verified: list[LocatorCandidate] = []
@@ -317,7 +329,9 @@ class BrowserProbe:
                         try:
                             count = int(await self._page_locator(page, spec).count())
                         except Exception as exc:
-                            rejected = rejected or f"locator evaluation failed: {type(exc).__name__}"
+                            rejected = (
+                                rejected or f"locator evaluation failed: {type(exc).__name__}"
+                            )
                     verified.append(
                         candidate.model_copy(
                             update={

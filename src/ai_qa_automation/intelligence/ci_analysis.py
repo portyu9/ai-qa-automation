@@ -28,20 +28,16 @@ def analyze_ci_failure(*, exit_code: int, log_tail: str) -> CIFailureSignal:
     if exit_code == 0:
         return CIFailureSignal("PASS", 1.0, "CI command exited successfully.")
 
-    if (
-        any(token in text for token in ("bad credentials", "authentication failed", "unauthorized", "forbidden"))
-        or any(_mentions_http_status(text, code) for code in (401, 403))
-    ):
+    if any(
+        token in text
+        for token in ("bad credentials", "authentication failed", "unauthorized", "forbidden")
+    ) or any(_mentions_http_status(text, code) for code in (401, 403)):
         return CIFailureSignal(
             "AUTHENTICATION_FAILURE",
             0.85,
             "Observed authentication/authorization markers in CI output.",
         )
-    if (
-        "rate limit" in text
-        or "too many requests" in text
-        or _mentions_http_status(text, 429)
-    ):
+    if "rate limit" in text or "too many requests" in text or _mentions_http_status(text, 429):
         return CIFailureSignal("RATE_LIMIT", 0.85, "Observed rate-limit markers in CI output.")
 
     patterns = [
@@ -51,17 +47,29 @@ def analyze_ci_failure(*, exit_code: int, log_tail: str) -> CIFailureSignal:
         ),
         (
             "CONFIGURATION_FAILURE",
-            ("configuration error", "invalid config", "missing environment variable", "not found in path"),
+            (
+                "configuration error",
+                "invalid config",
+                "missing environment variable",
+                "not found in path",
+            ),
         ),
         (
             "DEPENDENCY_FAILURE",
-            ("could not resolve", "dependency conflict", "no matching distribution", "package not found"),
+            (
+                "could not resolve",
+                "dependency conflict",
+                "no matching distribution",
+                "package not found",
+            ),
         ),
         ("TEST_FAILURE", ("failed", "assertionerror", "test failures")),
     ]
     for category, needles in patterns:
         if any(needle in text for needle in needles):
-            return CIFailureSignal(category, 0.85, f"Observed log markers consistent with {category}.")
+            return CIFailureSignal(
+                category, 0.85, f"Observed log markers consistent with {category}."
+            )
     return CIFailureSignal(
         "UNKNOWN",
         0.4,

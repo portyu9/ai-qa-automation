@@ -34,7 +34,9 @@ def test_journal_detects_tampering_and_refuses_corrupt_reopen(tmp_path: Path) ->
 
     records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
     records[0]["payload"]["evidence_id"] = "tampered"
-    path.write_text("\n".join(json.dumps(item, sort_keys=True) for item in records) + "\n", encoding="utf-8")
+    path.write_text(
+        "\n".join(json.dumps(item, sort_keys=True) for item in records) + "\n", encoding="utf-8"
+    )
 
     assert journal.verify()["valid"] is False
     with pytest.raises(RuntimeError, match="hash-chain verification"):

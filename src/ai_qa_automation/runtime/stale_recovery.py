@@ -125,7 +125,10 @@ def recover_stale_mutation(
     except ValueError as exc:
         return {"status": "BLOCKED", "reason": str(exc)}
     if str(metadata.get("workspace") or "") != str(workspace):
-        return {"status": "BLOCKED", "reason": "prior runtime workspace does not match lease workspace"}
+        return {
+            "status": "BLOCKED",
+            "reason": "prior runtime workspace does not match lease workspace",
+        }
     pending = metadata.get("pending_mutation")
     if pending in (None, {}, False):
         return {"status": "NONE", "previous_run_id": previous_run_id}
@@ -182,7 +185,10 @@ def recover_stale_mutation(
         except OSError:
             return {"status": "BLOCKED", "reason": "prior rollback backup is unavailable"}
         if hashlib.sha256(data).hexdigest() != original_sha:
-            return {"status": "BLOCKED", "reason": "prior rollback backup failed integrity verification"}
+            return {
+                "status": "BLOCKED",
+                "reason": "prior rollback backup failed integrity verification",
+            }
         _atomic_write_bytes(target, data)
         backup.unlink()
     else:

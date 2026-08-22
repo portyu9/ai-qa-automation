@@ -82,7 +82,9 @@ class ApiProbe:
         if not self.allow_hosts or host not in self.allow_hosts:
             raise PermissionError(f"network host is not allowlisted: {host or '<missing>'}")
         if normalized_method not in self.allowed_methods:
-            raise PermissionError(f"HTTP method is not allowlisted: {normalized_method or '<missing>'}")
+            raise PermissionError(
+                f"HTTP method is not allowlisted: {normalized_method or '<missing>'}"
+            )
         if kwargs.get("follow_redirects") not in (None, False):
             raise PermissionError("API probe redirects are disabled by adapter policy")
         kwargs.pop("follow_redirects", None)

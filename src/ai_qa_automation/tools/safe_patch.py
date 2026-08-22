@@ -63,7 +63,9 @@ class SafeTestPatcher:
                 continue
             cursor = cursor / part
             if cursor.is_symlink():
-                raise PermissionError("mutation path contains a symlink and has ambiguous ownership")
+                raise PermissionError(
+                    "mutation path contains a symlink and has ambiguous ownership"
+                )
 
         destination = (self.workspace / path).resolve()
         try:
@@ -236,7 +238,9 @@ class SafeTestPatcher:
                     + ", ".join(f"{item.code}@{item.line}" for item in blockers)
                 )
         elif not self._has_non_python_assertion(content):
-            raise PermissionError("generated JavaScript/TypeScript test has no observable assertion")
+            raise PermissionError(
+                "generated JavaScript/TypeScript test has no observable assertion"
+            )
         synthetic_diff = "".join(f"+{line}" for line in content.splitlines(keepends=True))
         violations = self.policy.validate_patch(synthetic_diff)
         if violations:

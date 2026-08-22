@@ -46,7 +46,9 @@ from .tools.repository import RepositoryInspector
 from .tools.test_execution import TestRunner
 
 
-async def run_agent(objective: str, workspace: Path, settings: Settings | None = None) -> dict[str, Any]:
+async def run_agent(
+    objective: str, workspace: Path, settings: Settings | None = None
+) -> dict[str, Any]:
     """Run one bounded agent session against an exclusively leased target workspace."""
     cfg = settings or Settings()
     workspace = workspace.expanduser().resolve()
@@ -351,12 +353,9 @@ async def run_agent(objective: str, workspace: Path, settings: Settings | None =
                 except (OSError, RuntimeError) as rollback_exc:
                     state.terminal_status = TerminalStatus.INFRASTRUCTURE_FAILURE
                     state.terminal_reason = (
-                        "Rollback integrity could not be guaranteed: "
-                        f"{type(rollback_exc).__name__}"
+                        f"Rollback integrity could not be guaranteed: {type(rollback_exc).__name__}"
                     )
-                    journal.try_append(
-                        "rollback_failed", error_type=type(rollback_exc).__name__
-                    )
+                    journal.try_append("rollback_failed", error_type=type(rollback_exc).__name__)
             state.phase = "TERMINAL"
             state.duration = time.monotonic() - started
             journal.try_append(
@@ -429,19 +428,29 @@ def validate_runtime_roots(
         raise ValueError(
             "control_root is not a trusted agent project root; missing: " + ", ".join(missing)
         )
-    if control_root == workspace or control_root in workspace.parents or workspace in control_root.parents:
+    if (
+        control_root == workspace
+        or control_root in workspace.parents
+        or workspace in control_root.parents
+    ):
         raise ValueError(
             "control_root and target workspace must be disjoint; use an isolated SUT clone/worktree"
         )
     if artifact_root is not None:
         artifacts = artifact_root.expanduser().resolve()
-        if artifacts == workspace or artifacts in workspace.parents or workspace in artifacts.parents:
+        if (
+            artifacts == workspace
+            or artifacts in workspace.parents
+            or workspace in artifacts.parents
+        ):
             raise ValueError(
                 "artifact_root and target workspace must be disjoint so evidence/state cannot modify the SUT"
             )
 
 
-def run_agent_sync(objective: str, workspace: Path, settings: Settings | None = None) -> dict[str, Any]:
+def run_agent_sync(
+    objective: str, workspace: Path, settings: Settings | None = None
+) -> dict[str, Any]:
     return asyncio.run(run_agent(objective, workspace, settings))
 
 
@@ -495,7 +504,9 @@ def determine_terminal_outcome(
     if failed:
         names = ", ".join(sorted({item.gate_id or item.name for item in failed}))
         return TerminalStatus.FAILURE, f"Current deterministic validation failed: {names}."
-    incomplete = sorted({item.status.value for item in active if item.status != ValidationStatus.PASS})
+    incomplete = sorted(
+        {item.status.value for item in active if item.status != ValidationStatus.PASS}
+    )
     if incomplete:
         return (
             TerminalStatus.NOT_VERIFIED,
@@ -559,9 +570,7 @@ def determine_terminal_outcome(
             and item.details.get("mutation_target_bound") is True
             and item.details.get("mutation_target") == mutation_path
         ]
-        regression = [
-            item for item in current_pytest if item.details.get("scope") == "regression"
-        ]
+        regression = [item for item in current_pytest if item.details.get("scope") == "regression"]
         if not targeted or not regression:
             return (
                 TerminalStatus.NOT_VERIFIED,
@@ -583,4 +592,7 @@ def sdk_exception_outcome(exc: BaseException) -> tuple[TerminalStatus, str]:
         return TerminalStatus.BUDGET_EXCEEDED, str(exc)
     if isinstance(exc, WorkspaceBusyError):
         return TerminalStatus.BLOCKED, str(exc)
-    return TerminalStatus.INFRASTRUCTURE_FAILURE, f"Agent SDK execution failed: {type(exc).__name__}"
+    return (
+        TerminalStatus.INFRASTRUCTURE_FAILURE,
+        f"Agent SDK execution failed: {type(exc).__name__}",
+    )

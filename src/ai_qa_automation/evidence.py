@@ -67,7 +67,9 @@ class EvidenceStore:
     def _assert_control_file_owned(self, name: str) -> Path:
         path = self.run_root / name
         if path.is_symlink():
-            raise ValueError(f"evidence control file is a symlink and has ambiguous ownership: {name}")
+            raise ValueError(
+                f"evidence control file is a symlink and has ambiguous ownership: {name}"
+            )
         return path
 
     def _owned_artifact_path(self, relative_path: str) -> Path:
@@ -231,9 +233,9 @@ class EvidenceStore:
             "payload": sanitize(payload),
             "previous_hash": self._audit_previous_hash,
         }
-        canonical = json.dumps(
-            core, sort_keys=True, separators=(",", ":"), default=str
-        ).encode("utf-8")
+        canonical = json.dumps(core, sort_keys=True, separators=(",", ":"), default=str).encode(
+            "utf-8"
+        )
         event_hash = self.hash_bytes(canonical)
         record = {**core, "event_hash": event_hash}
         rendered = json.dumps(record, sort_keys=True, default=str) + "\n"
@@ -314,9 +316,13 @@ class EvidenceStore:
             try:
                 path = self._owned_artifact_path(record.path)
             except ValueError as exc:
-                raise ValueError(f"regulated artifact ownership check failed: {record.path}") from exc
+                raise ValueError(
+                    f"regulated artifact ownership check failed: {record.path}"
+                ) from exc
             if not path.is_file():
-                raise ValueError(f"regulated artifact is missing or escaped run root: {record.path}")
+                raise ValueError(
+                    f"regulated artifact is missing or escaped run root: {record.path}"
+                )
             size = path.stat().st_size
             if size > _MAX_ARTIFACT_BYTES:
                 raise ValueError(f"regulated artifact exceeds persistence limit: {record.path}")
@@ -338,13 +344,9 @@ class EvidenceStore:
         for record in self._iter_audit_records():
             payload = record.get("payload") or {}
             if record.get("event_type") == "evidence_registered":
-                evidence_hashes[str(payload.get("evidence_id"))] = str(
-                    payload.get("content_hash")
-                )
+                evidence_hashes[str(payload.get("evidence_id"))] = str(payload.get("content_hash"))
             elif record.get("event_type") == "artifact_registered":
-                artifact_hashes[str(payload.get("artifact_id"))] = str(
-                    payload.get("content_hash")
-                )
+                artifact_hashes[str(payload.get("artifact_id"))] = str(payload.get("content_hash"))
 
         if set(evidence_hashes) != set(self._items):
             raise ValueError("regulated evidence registry does not match audit log")

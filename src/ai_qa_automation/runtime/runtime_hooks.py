@@ -116,8 +116,7 @@ def _pytest_validation_targets_path(validation: Any, expected_path: str) -> bool
         return False
     expected = _normalize_selector_path(expected_path)
     return any(
-        not str(raw).startswith("-")
-        and _normalize_selector_path(str(raw)) == expected
+        not str(raw).startswith("-") and _normalize_selector_path(str(raw)) == expected
         for raw in args
     )
 
@@ -253,9 +252,7 @@ def pretool_policy_output(
         if not current_snapshot.fingerprint_complete:
             reasons = ", ".join(current_snapshot.fingerprint_incomplete_reasons)
             state.terminal_status = TerminalStatus.BLOCKED
-            state.terminal_reason = (
-                "Mutation blocked because the workspace fingerprint cannot bind every changed subject"
-            )
+            state.terminal_reason = "Mutation blocked because the workspace fingerprint cannot bind every changed subject"
             control.journal.append(
                 "workspace_fingerprint_incomplete",
                 reasons=list(current_snapshot.fingerprint_incomplete_reasons),
@@ -275,7 +272,9 @@ def pretool_policy_output(
         expected = control.expected_workspace_fingerprint
         if expected is None:
             state.terminal_status = TerminalStatus.BLOCKED
-            state.terminal_reason = "Mutation blocked because no workspace fingerprint baseline exists"
+            state.terminal_reason = (
+                "Mutation blocked because no workspace fingerprint baseline exists"
+            )
             control.journal.append("workspace_drift_blocked", expected=None, actual=current)
             _checkpoint(state, state_store, control)
             return {
@@ -287,10 +286,10 @@ def pretool_policy_output(
             }
         if current != expected:
             state.terminal_status = TerminalStatus.BLOCKED
-            state.terminal_reason = "Target workspace changed outside the agent after its baseline was captured"
-            control.journal.append(
-                "workspace_drift_blocked", expected=expected, actual=current
+            state.terminal_reason = (
+                "Target workspace changed outside the agent after its baseline was captured"
             )
+            control.journal.append("workspace_drift_blocked", expected=expected, actual=current)
             _checkpoint(state, state_store, control)
             return {
                 "hookSpecificOutput": {
@@ -500,7 +499,9 @@ def posttool_failure_output(
         status = normalize_mcp_failure(message=error)
         if state is not None:
             state.mcp_status[provider] = status
-        context = f"External MCP failure normalized as {status.value}; no remote evidence was fabricated."
+        context = (
+            f"External MCP failure normalized as {status.value}; no remote evidence was fabricated."
+        )
     if control is not None:
         if tool_name in _MUTATION_TOOLS:
             pending = control.pending_mutation

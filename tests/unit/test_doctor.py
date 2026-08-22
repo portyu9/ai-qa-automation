@@ -23,7 +23,9 @@ def test_doctor_requires_trusted_control_markers(tmp_path: Path) -> None:
     assert report["control_root"]["status"] == "PASS"
 
 
-def test_doctor_reports_secret_presence_without_revealing_secret(monkeypatch, tmp_path: Path) -> None:
+def test_doctor_reports_secret_presence_without_revealing_secret(
+    monkeypatch, tmp_path: Path
+) -> None:
     secret = "test-only-secret-that-must-never-appear"
     monkeypatch.setenv("ANTHROPIC_API_KEY", secret)
 
@@ -33,7 +35,9 @@ def test_doctor_reports_secret_presence_without_revealing_secret(monkeypatch, tm
     assert secret not in json.dumps(report)
 
 
-def test_doctor_distinguishes_disabled_and_incomplete_github_mcp(monkeypatch, tmp_path: Path) -> None:
+def test_doctor_distinguishes_disabled_and_incomplete_github_mcp(
+    monkeypatch, tmp_path: Path
+) -> None:
     disabled = Settings(control_root=tmp_path, enable_github_mcp=False)
     assert environment_report(tmp_path, disabled)["github_mcp"]["status"] == "DISABLED"
 

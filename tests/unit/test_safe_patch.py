@@ -114,10 +114,7 @@ def test_locator_replacement_accepts_only_supported_literal_locator_expressions(
 ) -> None:
     patcher = make_patcher(tmp_path)
     file = tmp_path / "tests" / "test_ui.py"
-    original = (
-        "def test_button(page):\n"
-        "    assert page.get_by_test_id('old').is_visible()\n"
-    )
+    original = "def test_button(page):\n    assert page.get_by_test_id('old').is_visible()\n"
     file.write_text(original, encoding="utf-8")
     digest = patcher.sha256_text(original)
 

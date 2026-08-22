@@ -66,7 +66,9 @@ def test_coverage_search_fails_closed_when_scan_budget_is_exhausted(tmp_path: Pa
     (tmp_path / "a.txt").write_text("irrelevant\n", encoding="utf-8")
     tests = tmp_path / "tests"
     tests.mkdir()
-    (tests / "test_checkout.py").write_text("def test_checkout():\n    assert True\n", encoding="utf-8")
+    (tests / "test_checkout.py").write_text(
+        "def test_checkout():\n    assert True\n", encoding="utf-8"
+    )
 
     with pytest.raises(ValueError, match="bounded scan limit"):
         _coverage_search(

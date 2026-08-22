@@ -64,7 +64,9 @@ def attest_command(
 
 @app.command("contract-diff")
 def contract_diff_command(
-    baseline: Path = typer.Option(..., "--baseline", exists=True, dir_okay=False, resolve_path=True),
+    baseline: Path = typer.Option(
+        ..., "--baseline", exists=True, dir_okay=False, resolve_path=True
+    ),
     current: Path = typer.Option(..., "--current", exists=True, dir_okay=False, resolve_path=True),
 ) -> None:
     """Deterministically report conservative OpenAPI/Swagger compatibility drift."""

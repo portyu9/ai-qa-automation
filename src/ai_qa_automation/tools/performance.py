@@ -14,9 +14,7 @@ from ..policy import PolicyEngine
 from .execution_env import restricted_subprocess_env, run_bounded_subprocess
 
 _URL_LITERAL = re.compile(r"https?://[^'\"`\s)]+", re.I)
-_IMPORT_SPECIFIER = re.compile(
-    r"(?:from\s+|import\s*\(\s*|import\s+)([\'\"])([^\'\"]+)\1"
-)
+_IMPORT_SPECIFIER = re.compile(r"(?:from\s+|import\s*\(\s*|import\s+)([\'\"])([^\'\"]+)\1")
 _MAX_K6_MODULE_BYTES = 1_000_000
 _MAX_K6_MODULES = 64
 _MAX_K6_SUMMARY_BYTES = 1_000_000
@@ -46,8 +44,14 @@ class K6Runner:
 
     def _validate_script(self, script: Path, target_url: str) -> Path:
         resolved = (script if script.is_absolute() else self.workspace / script).resolve()
-        if self.workspace not in resolved.parents or resolved.suffix != ".js" or not resolved.is_file():
-            raise PermissionError("k6 script must be an existing .js file inside the target workspace")
+        if (
+            self.workspace not in resolved.parents
+            or resolved.suffix != ".js"
+            or not resolved.is_file()
+        ):
+            raise PermissionError(
+                "k6 script must be an existing .js file inside the target workspace"
+            )
         target_host = (urlparse(target_url).hostname or "").lower()
         if not target_host:
             raise PermissionError("k6 target URL must contain an explicit host")
@@ -65,7 +69,9 @@ class K6Runner:
                 or module_path.suffix != ".js"
                 or not module_path.is_file()
             ):
-                raise PermissionError("k6 local imports must resolve to .js files inside the target workspace")
+                raise PermissionError(
+                    "k6 local imports must resolve to .js files inside the target workspace"
+                )
             if len(visited) >= _MAX_K6_MODULES:
                 raise PermissionError(f"k6 import graph exceeds {_MAX_K6_MODULES} local modules")
             if module_path.stat().st_size > _MAX_K6_MODULE_BYTES:
@@ -93,7 +99,9 @@ class K6Runner:
                         imported = imported.with_suffix(".js")
                     inspect_module(imported)
                 elif specifier.startswith("k6/x/"):
-                    raise PermissionError("k6 extension modules are not allowed in the controlled runner")
+                    raise PermissionError(
+                        "k6 extension modules are not allowed in the controlled runner"
+                    )
                 elif specifier != "k6" and specifier not in {
                     "k6/http",
                     "k6/metrics",

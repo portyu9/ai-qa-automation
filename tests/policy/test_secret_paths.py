@@ -26,9 +26,7 @@ def policy(tmp_path: Path) -> PolicyEngine:
         "services/api/.env.local",
     ],
 )
-def test_secret_shaped_environment_files_are_protected(
-    tmp_path: Path, relative_path: str
-) -> None:
+def test_secret_shaped_environment_files_are_protected(tmp_path: Path, relative_path: str) -> None:
     decision = policy(tmp_path).authorize_path(Path(relative_path), write=False)
     assert decision.decision is ToolDecision.DENY
     assert decision.rule_id == "GOV-001"

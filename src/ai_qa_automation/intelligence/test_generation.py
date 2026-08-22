@@ -88,8 +88,7 @@ class TestGenerationPlanner:
     @staticmethod
     def _select_layer(text: str) -> TestLayer:
         if any(
-            token in text
-            for token in ("endpoint", "api", "http", "openapi", "status code", "json")
+            token in text for token in ("endpoint", "api", "http", "openapi", "status code", "json")
         ):
             return TestLayer.API
         if any(token in text for token in ("button", "page", "browser", "modal", "screen", "ui")):

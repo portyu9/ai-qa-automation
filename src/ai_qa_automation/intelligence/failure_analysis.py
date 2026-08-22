@@ -44,7 +44,9 @@ class FailureAnalyzer:
                     add(FailureClass.AUTHENTICATION_FAILURE, 7, f"HTTP {status} observed")
                 elif status >= 500:
                     if data.get("external_dependency"):
-                        add(FailureClass.EXTERNAL_DEPENDENCY_FAILURE, 7, f"dependency HTTP {status}")
+                        add(
+                            FailureClass.EXTERNAL_DEPENDENCY_FAILURE, 7, f"dependency HTTP {status}"
+                        )
                     else:
                         add(FailureClass.APPLICATION_DEFECT, 6, f"application HTTP {status}")
                 elif status == 422 or data.get("invalid_test_data"):
@@ -117,7 +119,11 @@ class FailureAnalyzer:
 
             if item.kind == EvidenceKind.NETWORK_ERROR:
                 if data.get("external_dependency"):
-                    add(FailureClass.EXTERNAL_DEPENDENCY_FAILURE, 6, "external network dependency failed")
+                    add(
+                        FailureClass.EXTERNAL_DEPENDENCY_FAILURE,
+                        6,
+                        "external network dependency failed",
+                    )
                 elif data.get("environment_unreachable"):
                     add(FailureClass.ENVIRONMENT_FAILURE, 6, "target environment unreachable")
 

@@ -74,9 +74,7 @@ def test_network_hosts_are_canonicalized_and_deduplicated(tmp_path: Path) -> Non
         "999.999.999.999",
     ],
 )
-def test_network_allowlist_rejects_ambiguous_or_non_host_entries(
-    tmp_path: Path, host: str
-) -> None:
+def test_network_allowlist_rejects_ambiguous_or_non_host_entries(tmp_path: Path, host: str) -> None:
     with pytest.raises(ValidationError):
         Settings(control_root=tmp_path, allowed_network_hosts=[host])
 
@@ -92,7 +90,9 @@ def test_artifact_root_defaults_to_trusted_control_root(tmp_path: Path) -> None:
     assert settings.artifact_root == (tmp_path / "artifacts").resolve()
 
 
-def test_explicit_roots_are_expanded_and_resolved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_explicit_roots_are_expanded_and_resolved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))

@@ -3,7 +3,9 @@ from __future__ import annotations
 from .models import AgentRunState, FinalAgentReport, TerminalStatus
 
 
-def build_final_report(state: AgentRunState, *, limitations: list[str] | None = None) -> FinalAgentReport:
+def build_final_report(
+    state: AgentRunState, *, limitations: list[str] | None = None
+) -> FinalAgentReport:
     status = state.terminal_status or TerminalStatus.NOT_VERIFIED
     return FinalAgentReport(
         run_id=state.run_id,

@@ -283,9 +283,7 @@ def bootstrap_runtime_context(
         if item.id not in state.evidence_ids:
             state.evidence_ids.append(item.id)
 
-    breaking_contracts = sum(
-        1 for item in contract_reports if item.get("severity") == "BREAKING"
-    )
+    breaking_contracts = sum(1 for item in contract_reports if item.get("severity") == "BREAKING")
     control.journal.append(
         "runtime_bootstrap",
         workspace_fingerprint=snapshot.fingerprint,

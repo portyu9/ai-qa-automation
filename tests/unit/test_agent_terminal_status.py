@@ -213,7 +213,13 @@ def test_changed_revision_requires_patch_safety_even_when_pytest_is_green() -> N
     status, reason = determine_terminal_outcome(
         "success",
         [
-            vr("pytest", ValidationStatus.PASS, gate_id="pytest:target", revision=1, scope="targeted"),
+            vr(
+                "pytest",
+                ValidationStatus.PASS,
+                gate_id="pytest:target",
+                revision=1,
+                scope="targeted",
+            ),
             vr(
                 "pytest",
                 ValidationStatus.PASS,

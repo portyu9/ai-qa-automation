@@ -105,7 +105,7 @@ def test_locator_verification_overwrites_model_supplied_uniqueness(tmp_path, mon
 
     class FakeBody:
         async def aria_snapshot(self):
-            return "- button \"Save\""
+            return '- button "Save"'
 
     class FakePage:
         url = "https://example.test/page"
@@ -151,7 +151,10 @@ def test_locator_verification_overwrites_model_supplied_uniqueness(tmp_path, mon
     assert verification.source == "playwright_locator_verification"
     context_ids = verification.structured_data["context_evidence_ids"]
     assert len(context_ids) == 2
-    assert {evidence.get(eid).kind.value for eid in context_ids} == {"screenshot", "accessibility_snapshot"}
+    assert {evidence.get(eid).kind.value for eid in context_ids} == {
+        "screenshot",
+        "accessibility_snapshot",
+    }
 
 
 def test_locator_verification_failure_creates_evidence(tmp_path, monkeypatch) -> None:
