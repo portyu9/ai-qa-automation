@@ -1,5 +1,8 @@
 # Troubleshooting
 
+**ƳƤ AI QA Automation Framework**  
+**Designed and engineered by Ƴunior Ƥortal (ƳƤ)**
+
 Troubleshooting follows the same rule as test execution: **diagnose the failing layer before changing controls**. Do not weaken policy, widen network access, increase timeouts, disable validation, or rewrite a test merely because a command did not succeed.
 
 A useful first distinction is:
@@ -72,7 +75,7 @@ It also requires the control root, artifact root, and target workspace to remain
 
 If the runtime reports an invalid control root:
 
-1. confirm `--control-root` points to this AI-QA repository, not the SUT;
+1. confirm `--control-root` points to this ƳƤ framework repository, not the SUT;
 2. confirm the trusted markers exist;
 3. confirm the SUT is a separate clone/worktree;
 4. confirm `AI_QA_ARTIFACT_ROOT`, if set, is outside the SUT.
@@ -291,3 +294,5 @@ Do not paste entire repositories, huge traces, raw credentials, or private custo
 If the only proposed “fix” requires weakening a deterministic safety invariant, stop and classify the blocker instead. Safety controls should change only through reviewed engineering work with corresponding deterministic regression coverage.
 
 See [`SETUP.md`](SETUP.md), [`OPERATIONS.md`](OPERATIONS.md), [`SECURITY.md`](SECURITY.md), [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md), and [`LIMITATIONS.md`](LIMITATIONS.md).
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
