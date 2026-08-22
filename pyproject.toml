@@ -5,11 +5,30 @@ build-backend = "hatchling.build"
 [project]
 name = "ai-qa-automation"
 version = "0.1.0"
-description = "ƳƤ AI QA Automation Framework — agentic quality engineering with deterministic evidence and policy controls"
+description = "ƳƤ AI QA Automation Framework — evidence-first agentic quality engineering with deterministic safety, validation, and traceability"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{name = "Ƴunior Ƥortal"}]
 license = {file = "LICENSE"}
+keywords = [
+  "ai",
+  "agentic-testing",
+  "quality-engineering",
+  "qa-automation",
+  "software-testing",
+  "claude",
+  "pytest",
+  "playwright",
+]
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Topic :: Software Development :: Quality Assurance",
+  "Topic :: Software Development :: Testing",
+  "Typing :: Typed",
+]
 dependencies = [
   "anyio>=4.8,<5",
   "claude-agent-sdk==0.2.143",
@@ -19,6 +38,12 @@ dependencies = [
   "pyyaml>=6.0.3,<7",
   "typer>=0.15,<1",
 ]
+
+[project.urls]
+Homepage = "https://github.com/portyu9/ai-qa-automation"
+Repository = "https://github.com/portyu9/ai-qa-automation"
+Documentation = "https://github.com/portyu9/ai-qa-automation/tree/main/docs"
+Issues = "https://github.com/portyu9/ai-qa-automation/issues"
 
 [project.optional-dependencies]
 browser = ["playwright>=1.51,<2"]
