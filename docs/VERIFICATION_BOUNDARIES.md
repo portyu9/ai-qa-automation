@@ -15,12 +15,28 @@ The framework separates five evidence domains:
 
 ```mermaid
 flowchart LR
-    R[Repository-contained controls] --> L[Local runtime observations]
-    L --> P[Credentialed provider evidence]
-    L --> T[Target-environment evidence]
+    accTitle: Evidence ownership domains and independent deployment constraints
+    accDescr: Repository-contained controls can produce local runtime observations. Local runtime observations can support credentialed provider and target-environment evidence. Deployment infrastructure independently constrains local execution and target interaction; one evidence domain cannot substitute for another.
+
+    R[Repository-contained controls] -->|execute| L[Local runtime observations]
+    L -->|authorized interaction| P[Credentialed provider evidence]
+    L -->|target observation| T[Target-environment evidence]
     D[Deployment infrastructure evidence] -. independently constrains .-> L
     D -. independently constrains .-> T
+
+    classDef repository fill:#ddf4ff,stroke:#0969da,color:#24292f,stroke-width:2px
+    classDef runtime fill:#dafbe1,stroke:#1a7f37,color:#24292f,stroke-width:2px
+    classDef external fill:#fff8c5,stroke:#9a6700,color:#24292f,stroke-width:2px
+    classDef deployment fill:#fbefff,stroke:#8250df,color:#24292f,stroke-width:2px,stroke-dasharray:5 3
+
+    class R repository
+    class L runtime
+    class P,T external
+    class D deployment
+    linkStyle default stroke:#57606a,stroke-width:1.5px
 ```
+
+**Evidence key:** blue = repository-owned contract · green = observed local execution · amber = provider/target-owned observation · purple dashed = independent deployment enforcement. Ownership labels remain explicit so color is supplementary.
 
 | Evidence class | Primary owner | Examples |
 |---|---|---|
