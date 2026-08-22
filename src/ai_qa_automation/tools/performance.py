@@ -23,7 +23,7 @@ _MAX_K6_MODULES = 64
 
 
 class K6Runner:
-    """Runs a target-bound k6 script after deterministic non-production checks."""
+    """Runs a target-bound k6 script only behind an infrastructure-egress prerequisite."""
 
     def __init__(self, workspace: Path, policy: PolicyEngine, timeout_seconds: int = 180) -> None:
         self.workspace = workspace.resolve()
@@ -94,6 +94,11 @@ class K6Runner:
         return resolved
 
     def run(self, script: Path, *, target_url: str, environment: str) -> PerformanceMetrics:
+        if not bool(getattr(self.policy, "k6_external_egress_enforced", False)):
+            raise PermissionError(
+                "k6 execution requires trusted infrastructure-level egress enforcement; "
+                "static JavaScript inspection is not a network sandbox"
+            )
         decision = self.policy.authorize_performance_target(target_url, environment=environment)
         if decision.decision != ToolDecision.ALLOW:
             raise PermissionError(decision.reason)
