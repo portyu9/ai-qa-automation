@@ -1,61 +1,64 @@
 # Operations
 
-> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
+> [!IMPORTANT]
+> **Configured capability defines what can be attempted. Observed evidence and deterministic validation define what the runtime can claim.**
 
-Operating the ƳƤ AI QA Automation Framework follows the same invariant as its code:
+**ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
-> **Configured capability defines what can be attempted; observed evidence and deterministic validation define the runtime outcome.**
+[Documentation home](README.md) · [Setup](SETUP.md) · [Runtime control](RUNTIME_CONTROL.md) · [Troubleshooting](TROUBLESHOOTING.md)
+
+---
 
 ## Operating ladder
 
-Use the narrowest operating mode that answers the engineering question. More environment-dependent execution should add evidence, not blur boundaries.
+Use the narrowest operating mode that answers the engineering question. More environment-dependent execution should add evidence—not blur boundaries.
 
 | Layer | Purpose | External dependency |
 |---|---|---|
-| Capability inspection | inspect local packages/executables/trust roots | none |
-| Deterministic demo | exercise evidence/classification flow | none |
-| Repository gates | quality, tests, primary evaluator, security tooling | none |
-| Independent holdout | execute H-series adversarial corpus | none |
-| Reference browser | Playwright against deterministic local SUT | browser runtime |
-| Live model | bounded Claude Agent SDK session | Anthropic credential/provider |
-| External systems | GitHub/Atlassian or real target browser/API/load/mobile | provider/target infrastructure |
+| **Capability inspection** | inspect local packages/executables/trust roots | none |
+| **Deterministic demo** | exercise evidence/classification flow | none |
+| **Repository gates** | quality, tests, primary evaluator, security tooling | none |
+| **Independent holdout** | H-series adversarial corpus | none |
+| **Reference browser** | Playwright against deterministic local SUT | browser runtime |
+| **Live model** | bounded Claude Agent SDK session | Anthropic provider/credential |
+| **External systems** | GitHub/Atlassian or real browser/API/load/mobile targets | provider/target infrastructure |
 
-Each layer keeps its own evidence source. A result from one trust domain does not silently prove another.
+---
 
-## Capability inspection
+## Local inspection and demo
 
 ```bash
 ai-qa doctor
-```
-
-`doctor` reports locally observable capabilities and configuration posture without treating local package/credential-variable presence as remote authentication evidence.
-
-## Deterministic demonstration
-
-```bash
 ai-qa demo
 ```
 
-The demo exercises the evidence-first classification flow without a live model/provider.
+`doctor` reports locally observable capability/configuration posture without treating local package or credential-variable presence as remote provider evidence.
+
+`demo` exercises the deterministic evidence-first flow without a live model/provider.
+
+---
 
 ## Repository command surface
 
 ```bash
-make quality   # compile + Ruff format/lint + Mypy
-make test      # deterministic default pytest set
-make eval      # fixed 34-scenario primary evaluator
-make security  # pip check + Bandit + pip-audit + secret scan
-make verify-local
-make holdout
+make quality       # compile + Ruff format/lint + Mypy
+make test          # deterministic default pytest set
+make eval          # fixed 34-scenario primary evaluator
+make security      # dependency/static/secret security tooling
+make verify-local  # routine local deterministic aggregate
+make holdout       # independent H-series evaluator
 ```
 
-`make verify-local` combines the routine repository-contained gates and intentionally excludes the H-series holdout so ordinary development does not optimize against its exact fixtures.
+The holdout remains separate from the routine aggregate so normal implementation work does not directly tune against its exact fixtures.
 
-Hard-safety expectations are not relaxed merely because a case fails.
+> [!NOTE]
+> These commands define the operating surface. A command's existence is not a claim about a different revision/environment where it has not been executed.
 
-## Run records
+---
 
-Each live run uses a confined record root:
+## Run record anatomy
+
+Each live run uses a confined root:
 
 ```text
 artifacts/<run_id>/
@@ -64,52 +67,66 @@ artifacts/<run_id>/
 | Record | Purpose |
 |---|---|
 | `state.json` | canonical QA decision/evidence state |
-| `evidence-manifest.json` | evidence/artifact metadata, identities, hashes, provenance |
 | `runtime.json` | lease, fingerprint, budgets, circuits, pending mutation, journal head |
+| `evidence-manifest.json` | evidence/artifact identities, hashes, provenance |
 | `journal.jsonl` | append-only hash-chained lifecycle/tool chronology |
-| `rollback/` | temporary trusted mutation snapshots |
-| `audit-log.jsonl` | additional regulated-mode evidence/artifact registration chain |
+| `rollback/` | temporary trusted mutation snapshots while a transaction is open |
+| `audit-log.jsonl` | regulated-mode evidence/artifact registration chain |
 
-`AI_QA_REGULATED_MODE=true` adds engineering traceability/retention classification; organization retention and compliance policy remain deployment responsibilities.
+`AI_QA_REGULATED_MODE=true` adds engineering traceability/retention classification. Organization policy still owns legal/compliance retention and access controls.
 
-## Live agent workspace discipline
+---
 
-The control root, artifact root, and target worktree are distinct trust domains.
+## Live workspace discipline
 
 A live run requires:
 
 - trusted framework markers in the control root;
 - isolated Git-backed target worktree;
 - artifact storage outside the target;
-- exclusive OS-backed target lease;
+- exclusive OS-backed workspace lease;
 - content-sensitive workspace fingerprint;
 - explicit runtime policy for any write/network authority.
 
 Target agent-looking files remain untrusted data.
 
-## Autonomous mutation operations
-
-Autonomous test mutation is deliberately exceptional.
-
-Before a write:
-
-1. write capability must be explicitly enabled;
-2. path must be inside an approved test-code directory;
-3. path must be relative, non-traversing, and non-symlink-owned;
-4. target must be Git-backed;
-5. workspace fingerprint must still match analyzed state;
-6. no previous mutation transaction may remain unresolved.
-
-The runtime snapshots prior bytes outside the SUT and keeps the transaction open until the current revision closes:
+### Trust-domain shape
 
 ```text
-patch-safety PASS
-+ targeted pytest PASS
-+ full-regression pytest PASS
-= mutation commit eligibility
+trusted framework   ─┐
+trusted artifacts    ├─ must not overlap the SUT
+isolated SUT         ─┘
 ```
 
+---
+
+## Autonomous mutation operations
+
+Autonomous mutation is exceptional and transaction-backed.
+
+Before a write, the runtime requires:
+
+1. explicit write enablement;
+2. a policy-approved **Python** path under `tests/` or `generated_tests/`;
+3. relative, non-traversing, non-symlink ownership;
+4. a Git-backed isolated target;
+5. a fingerprint still matching analyzed state;
+6. no unresolved prior mutation transaction.
+
+Commit eligibility is intentionally subject-bound:
+
+```text
+patch-safety PASS for changed path
++ targeted pytest PASS selecting that exact path
++ full-regression pytest PASS
+= current revision may commit
+```
+
+A `-k`-only run or targeted test of a different file is diagnostic evidence, not mutation closure.
+
 Model completion does not commit a mutation.
+
+---
 
 ## Crash recovery
 
@@ -117,97 +134,112 @@ Model completion does not commit a mutation.
 ai-qa recover artifacts/run-<id>
 ```
 
-Recovery inspection verifies persisted state/journal integrity and mutation/revision metadata.
+Recovery inspection evaluates persisted state/journal ownership plus current mutation/revision closure.
 
-Automatic stale rollback occurs only when recovery can establish:
+Automatic stale rollback requires:
 
 - trusted prior run ownership;
 - exact target workspace identity;
 - exact post-mutation fingerprint match;
-- non-traversing/non-symlink pending target path;
-- confined/non-symlink rollback path;
+- non-traversing, non-symlink pending target path;
+- owned non-symlink rollback directory/path;
 - original rollback-byte hash integrity.
 
-If a developer or another process changed the workspace after the crash, the newer work is preserved and automatic restoration stops.
+If a human or another process changed the workspace after the crash, newer work is preserved and automatic restoration stops.
 
-Recovery starts a **new** model session from persisted evidence when safe; it does not reconstruct hidden Claude conversation state.
+Recovery inspection uses the same exact-path targeted-validation standard as terminal truth. It starts a **new** model session from persisted evidence when appropriate; it does not reconstruct hidden Claude conversation state.
 
-See [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md).
+---
 
 ## Result interpretation
 
-Use [`RESULT_CONTRACT.md`](RESULT_CONTRACT.md) for terminal truth.
+Use [`RESULT_CONTRACT.md`](RESULT_CONTRACT.md) as the canonical outcome contract.
 
 Operationally important rules:
 
 - model `success` is not terminal `SUCCESS` by itself;
-- `NOT_EXECUTED`, `NOT_OBSERVED`, `NOT_VERIFIED`, and `BLOCKED` validation states do not become PASS;
+- `NOT_EXECUTED`, `NOT_OBSERVED`, `NOT_VERIFIED`, and `BLOCKED` validations are never promoted to PASS;
 - same-gate contradictory PASS/FAIL at one revision remains unresolved;
 - newer evidence supersedes older evidence through gate identity + revision lineage;
-- provider-health outcomes are separate from the QA terminal outcome.
+- provider-health outcomes are independent from QA terminal truth;
+- integrity verification is independent from test correctness.
+
+---
 
 ## Change baseline
 
-For feature-branch/PR reasoning, supply an explicit trusted baseline:
+For feature-branch/PR reasoning:
 
 ```bash
 export AI_QA_BASE_REF=origin/main
 ```
 
-Bootstrap validates and resolves immutable base/merge-base SHAs before collecting committed plus dirty/untracked changes, risk domains, CODEOWNERS, test-impact candidates, and changed API-contract drift.
+Bootstrap validates the configured baseline and merge base before collecting:
 
-Do not infer the baseline from target instructions.
+- committed changes;
+- dirty/untracked changes;
+- risk domains;
+- CODEOWNERS context;
+- test-impact candidates;
+- changed API-contract drift.
+
+A clean worktree is not interpreted as “no feature-branch change.”
+
+---
 
 ## Network operations
 
 External network access is disabled by default.
-
-Trusted network configuration uses canonical hostnames/IP literals only. It rejects wildcard/URL/port/path-shaped allowlist entries before runtime use.
-
-For a non-local target:
 
 ```bash
 export AI_QA_ALLOW_EXTERNAL_NETWORK=true
 export AI_QA_ALLOWED_NETWORK_HOSTS='["qa.example.test"]'
 ```
 
-API mutation remains independently disabled unless explicitly enabled.
+Trusted network configuration uses exact canonical hostnames/IPs only. API mutation remains independently disabled unless explicitly enabled.
 
-Network-capable operations consume their own budget. Browser HTTP(S)/WebSocket traffic and API/k6 targets remain subject to the approved host boundary.
+Network-capable operations consume a dedicated network budget in addition to total tool budget.
+
+---
 
 ## Performance operations
 
-Before k6 execution, confirm:
+Before **any** k6 execution, establish all of the following:
 
-- target is explicitly non-production;
-- target host is allowlisted;
-- workload/script uses injected target binding;
-- thresholds are predefined;
-- script does not use forbidden remote modules/extensions/local files/unrelated hosts;
-- non-local egress enforcement is established independently.
-
-For non-local execution:
+- explicit non-production target classification;
+- allowlisted target host;
+- injected target binding;
+- predefined thresholds;
+- script/import restrictions satisfied;
+- deployment-level egress containment independently established.
 
 ```bash
 export AI_QA_K6_EXTERNAL_EGRESS_ENFORCED=true
 ```
 
-This records an infrastructure prerequisite; it does not create network enforcement.
+> [!WARNING]
+> The flag records the prerequisite; it does not enforce the network. The deployment must supply the firewall/proxy/container/network policy.
+
+The prerequisite applies to localhost too because arbitrary JavaScript can construct destinations dynamically.
+
+---
 
 ## External MCP operations
 
 GitHub and Atlassian providers are disabled by default.
 
-When enabled:
+When deliberately enabled:
 
-- use vendor-official integration paths;
+- use vendor-official paths;
 - inject credentials/session through approved mechanisms;
 - keep permissions least privilege;
-- remember server identity does not grant tool authority;
+- remember provider identity does not grant action authority;
 - treat returned content as untrusted evidence;
-- do not bypass an outage with an unapproved community integration.
+- do not bypass an outage with an unapproved fallback provider.
 
-GitHub receives server-side read-only defense in depth. Local action policy still independently evaluates external tool semantics.
+GitHub receives server-side read-only defense in depth; local deterministic policy still evaluates every external action name.
+
+---
 
 ## Traceability and inspection
 
@@ -218,46 +250,75 @@ ai-qa attest artifacts/run-<id>
 ai-qa contract-diff --baseline old-openapi.yaml --current new-openapi.yaml
 ```
 
-The attestation is content-addressed and unsigned. It supports integrity review without changing the QA outcome.
+The unsigned attestation verifies persisted integrity properties—including registered artifact bytes—without changing terminal QA truth.
+
+See [`TRACEABILITY.md`](TRACEABILITY.md).
+
+---
 
 ## GitHub Actions
 
 `.github/workflows/ci.yml` is operator-dispatched with `workflow_dispatch`.
 
-The workflow separates:
+The workflow defines separable paths for:
 
-- quality/type checks across supported Python versions;
+- quality/type checks;
 - deterministic pytest;
 - primary adversarial evaluation;
-- optional H-series holdout;
-- optional security gates;
-- optional Playwright reference-SUT execution;
+- H-series holdout;
+- security tooling;
+- Playwright reference-SUT behavior; and
 - optional credentialed Agent SDK smoke execution.
 
 The model path consumes `ANTHROPIC_API_KEY` only when selected.
 
+---
+
 ## Pre-execution checklist
 
-Before a live agent/provider/target run, verify:
+Before a live provider/target run:
 
-1. trusted control root is correct;
-2. target is an isolated Git-backed worktree;
-3. artifact storage is outside the target;
-4. secrets come from an approved environment/secret manager;
-5. network allowlist contains only intended target hosts;
-6. write/API-mutation authority is disabled unless genuinely required;
-7. execution budgets fit the objective;
-8. k6 target is non-production and infrastructure egress is independently constrained;
-9. external provider permissions are least privilege;
-10. evidence/artifacts fit approved data-access and retention rules.
+- [ ] trusted control root is correct;
+- [ ] target is an isolated Git-backed worktree;
+- [ ] artifact root is outside the target;
+- [ ] credentials come from an approved environment/secret manager;
+- [ ] host allowlist contains only intended targets;
+- [ ] write/API-mutation authority is disabled unless required;
+- [ ] execution budgets match the objective;
+- [ ] any k6 run has actual deployment egress containment;
+- [ ] external provider permissions are least privilege;
+- [ ] evidence/artifacts fit approved data-access and retention policy.
+
+---
+
+## Failure operating rule
+
+When a run is blocked or fails, do **not** make the system greener by bypassing the control that exposed the problem.
+
+Prefer this order:
+
+```text
+classify the failure
+→ identify the evidence owner
+→ repair the environment/configuration/code at that layer
+→ rerun the same deterministic gate
+```
+
+See [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) for symptom-oriented guidance.
+
+---
 
 ## Related documentation
 
-- [`README.md`](README.md) — documentation landing page
-- [`SETUP.md`](SETUP.md) — exact configuration contracts
-- [`RESULT_CONTRACT.md`](RESULT_CONTRACT.md) — runtime truth
-- [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md) — mutation/recovery state machine
-- [`SECURITY.md`](SECURITY.md) — security controls
-- [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md) — evidence ownership
+- [Setup](SETUP.md)
+- [Runtime control and recovery](RUNTIME_CONTROL.md)
+- [Runtime result contract](RESULT_CONTRACT.md)
+- [Security architecture](SECURITY.md)
+- [Verification boundaries](VERIFICATION_BOUNDARIES.md)
+- [Troubleshooting](TROUBLESHOOTING.md)
+
+---
+
+[← Setup](SETUP.md) · [Troubleshooting →](TROUBLESHOOTING.md)
 
 Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
