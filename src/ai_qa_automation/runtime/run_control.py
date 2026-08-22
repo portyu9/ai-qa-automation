@@ -67,7 +67,12 @@ class RuntimeControl:
             )
         target = self._target(relative_path)
         rollback_root = self.metadata_path.parent / "rollback"
+        if rollback_root.is_symlink():
+            raise MutationPendingError(
+                "rollback directory is a symlink and has ambiguous ownership"
+            )
         rollback_root.mkdir(parents=True, exist_ok=True)
+        rollback_root = rollback_root.resolve()
         existed = target.exists()
         backup_path: Path | None = None
         original_hash: str | None = None
@@ -130,7 +135,10 @@ class RuntimeControl:
         if not pending.backup_path or not pending.original_sha256:
             raise RuntimeError("pending rollback backup metadata is incomplete")
 
-        rollback_root = (self.metadata_path.parent / "rollback").expanduser().resolve()
+        raw_rollback_root = (self.metadata_path.parent / "rollback").expanduser()
+        if raw_rollback_root.is_symlink():
+            raise RuntimeError("rollback directory is a symlink and has ambiguous ownership")
+        rollback_root = raw_rollback_root.resolve()
         raw_backup = Path(pending.backup_path).expanduser()
         absolute_backup = raw_backup if raw_backup.is_absolute() else raw_backup.absolute()
         try:
