@@ -34,8 +34,14 @@ class K6Runner:
         *,
         external_egress_enforced: bool | None = None,
     ) -> None:
+        if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int):
+            raise ValueError("k6 timeout_seconds must be an integer")
         if timeout_seconds < 1:
             raise ValueError("k6 timeout_seconds must be positive")
+        if external_egress_enforced is not None and not isinstance(
+            external_egress_enforced, bool
+        ):
+            raise ValueError("external_egress_enforced must be a boolean when supplied")
         self.workspace = workspace.resolve()
         self.policy = policy
         self.timeout_seconds = timeout_seconds
@@ -50,7 +56,9 @@ class K6Runner:
         if self.workspace not in resolved.parents or resolved.suffix != ".js" or not resolved.is_file():
             raise PermissionError("k6 script must be an existing .js file inside the target workspace")
         target_host = (urlparse(target_url).hostname or "").lower()
-        allowed_literal_hosts = {target_host, "localhost", "127.0.0.1", "::1"}
+        if not target_host:
+            raise PermissionError("k6 target URL must contain an explicit host")
+        allowed_literal_hosts = {target_host}
         visited: set[Path] = set()
         root_uses_injected_target = False
 
@@ -71,6 +79,8 @@ class K6Runner:
                 raise PermissionError(f"k6 module exceeds {_MAX_K6_MODULE_BYTES} byte limit")
             visited.add(module_path)
             source = module_path.read_text(encoding="utf-8")
+            if len(source.encode("utf-8")) > _MAX_K6_MODULE_BYTES:
+                raise PermissionError(f"k6 module exceeds {_MAX_K6_MODULE_BYTES} byte limit")
             if re.search(r"\bopen\s*\(", source):
                 raise PermissionError("k6 scripts may not read local files through open()")
             if root and ("__ENV.BASE_URL" in source or "__ENV.TARGET_URL" in source):
@@ -167,6 +177,8 @@ class K6Runner:
                     f"k6 summary exceeds {_MAX_K6_SUMMARY_BYTES} byte ingestion limit"
                 )
             data = json.loads(summary_path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise RuntimeError("k6 summary root must be a JSON object")
 
         duration = data["metrics"]["http_req_duration"]["values"]
         return PerformanceMetrics(
