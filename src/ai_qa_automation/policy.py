@@ -189,9 +189,23 @@ class PolicyEngine:
         tokens = tuple(token for token in re.split(r"[^a-z0-9]+", snake_action) if token)
         return snake_action, tokens
 
+    @staticmethod
+    def _semantic_action_tokens(tokens: tuple[str, ...]) -> tuple[str, ...]:
+        """Remove known resource-noun collisions without weakening actual action verbs."""
+        semantic: list[str] = []
+        for index, token in enumerate(tokens):
+            # In GitHub tool names, "pull request" is a resource noun. The token
+            # "request" must therefore not turn get_pull_request/pull_request_read
+            # into a write. A leading request_* action remains a write verb.
+            if token == "request" and index > 0 and tokens[index - 1] == "pull":
+                continue
+            semantic.append(token)
+        return tuple(semantic)
+
     def _authorize_external_mcp_tool(self, tool_name: str) -> PolicyDecision:
         """Apply least privilege to approved-server tools; server approval is not blanket tool approval."""
         action, tokens = self._external_action_tokens(tool_name)
+        semantic_tokens = self._semantic_action_tokens(tokens)
         destructive_verbs = {"merge", "delete", "remove", "force", "admin", "transfer"}
         write_verbs = {
             "create",
@@ -221,21 +235,21 @@ class PolicyEngine:
 
         # A mixed name such as getOrCreateIssue must never inherit read authority
         # from its first verb. High-impact tokens dominate, then write tokens, then read.
-        if any(token in destructive_verbs for token in tokens):
+        if any(token in destructive_verbs for token in semantic_tokens):
             return PolicyDecision(
                 decision=ToolDecision.DENY,
                 reason="Destructive/high-impact external MCP operation is denied by default.",
                 rule_id="MCP-TOOL-003",
                 risk=RiskLevel.CRITICAL,
             )
-        if any(token in write_verbs for token in tokens):
+        if any(token in write_verbs for token in semantic_tokens):
             return PolicyDecision(
                 decision=ToolDecision.REQUIRE_APPROVAL,
                 reason="External MCP write requires explicit approval and scoped authorization.",
                 rule_id="MCP-TOOL-002",
                 risk=RiskLevel.HIGH,
             )
-        if any(token in read_verbs for token in tokens) or action in known_read_actions:
+        if any(token in read_verbs for token in semantic_tokens) or action in known_read_actions:
             return PolicyDecision(
                 decision=ToolDecision.ALLOW,
                 reason="Read-only external MCP operation allowed by tool-level policy.",
