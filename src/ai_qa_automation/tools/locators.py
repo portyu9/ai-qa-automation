@@ -32,8 +32,12 @@ _SIMPLE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "exact_text",
         re.compile(
-            rf"^(?:page\.)?(?:get_by_text|getByText)\(\s*{_QUOTED}(?:\s*,\s*(?:exact\s*=\s*True|\{{\s*exact\s*:\s*true\s*\}}))?\s*\)$"
+            rf"^(?:page\.)?(?:get_by_text|getByText)\(\s*{_QUOTED}\s*,\s*(?:exact\s*=\s*True|\{{\s*exact\s*:\s*true\s*\}})\s*\)$"
         ),
+    ),
+    (
+        "text",
+        re.compile(rf"^(?:page\.)?(?:get_by_text|getByText)\(\s*{_QUOTED}\s*\)$"),
     ),
     (
         "semantic_css",
