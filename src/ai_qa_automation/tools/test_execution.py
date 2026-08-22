@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import subprocess
 import tempfile
 import time
 from dataclasses import dataclass
@@ -11,7 +10,7 @@ from ..evidence import EvidenceStore
 from ..models import EvidenceItem, EvidenceKind, EvidenceNature
 from ..redaction import redact_text
 from .artifacts import text_artifact
-from .execution_env import restricted_subprocess_env
+from .execution_env import restricted_subprocess_env, run_bounded_subprocess
 from .repository import RepositoryInspector
 
 
@@ -46,6 +45,7 @@ class TestRunner:
     _SAFE_VALUE_OPTIONS = {"-k", "-m", "--maxfail", "--tb"}
     _SAFE_VALUE_PREFIXES = ("--maxfail=", "--tb=")
     _WORKSPACE_INTEGRITY_EXIT_CODE = 125
+    _TIMEOUT_EXIT_CODE = 124
 
     def __init__(self, workspace: Path, evidence: EvidenceStore, timeout_seconds: int = 120) -> None:
         if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int):
@@ -72,7 +72,6 @@ class TestRunner:
 
         before = RepositoryInspector(self.workspace).snapshot()
         start = time.monotonic()
-        timed_out = False
         with tempfile.TemporaryDirectory(prefix="aiqa-pytest-home-") as temp_home:
             env = restricted_subprocess_env(
                 home=Path(temp_home),
@@ -81,30 +80,21 @@ class TestRunner:
                     "PYTHONDONTWRITEBYTECODE": "1",
                 },
             )
-            try:
-                result = subprocess.run(
-                    command,
-                    cwd=self.workspace,
-                    text=True,
-                    capture_output=True,
-                    timeout=self.timeout_seconds,
-                    check=False,
-                    env=env,
-                )
-                exit_code = result.returncode
-                raw_stdout = result.stdout
-                raw_stderr = result.stderr
-            except subprocess.TimeoutExpired as exc:
-                timed_out = True
-                exit_code = 124
-                raw_stdout = exc.stdout or ""
-                raw_stderr = exc.stderr or ""
-                if isinstance(raw_stdout, bytes):
-                    raw_stdout = raw_stdout.decode("utf-8", errors="replace")
-                if isinstance(raw_stderr, bytes):
-                    raw_stderr = raw_stderr.decode("utf-8", errors="replace")
-                raw_stderr += f"\npytest exceeded {self.timeout_seconds}s execution budget"
+            process_result = run_bounded_subprocess(
+                command,
+                cwd=self.workspace,
+                env=env,
+                timeout_seconds=self.timeout_seconds,
+            )
         duration = time.monotonic() - start
+        timed_out = process_result.timed_out
+        exit_code = (
+            self._TIMEOUT_EXIT_CODE if timed_out else process_result.returncode
+        )
+        raw_stdout = process_result.stdout
+        raw_stderr = process_result.stderr
+        if timed_out:
+            raw_stderr += f"\npytest exceeded {self.timeout_seconds}s execution budget"
 
         after = RepositoryInspector(self.workspace).snapshot()
         integrity_reason = self._workspace_integrity_failure(before, after)
@@ -141,6 +131,8 @@ class TestRunner:
                     "exit_code": exit_code,
                     "duration_seconds": duration,
                     "timeout": timed_out,
+                    "stdout_truncated": process_result.stdout_truncated,
+                    "stderr_truncated": process_result.stderr_truncated,
                     "workspace_integrity_verified": integrity_reason is None,
                     "workspace_integrity_reason": integrity_reason,
                     "workspace_fingerprint_before": before.fingerprint,
@@ -162,13 +154,20 @@ class TestRunner:
                         else (
                             "pytest changed or could not completely fingerprint the target workspace"
                             if integrity_reason
-                            else "pytest execution failed"
+                            else (
+                                "pytest tests failed"
+                                if exit_code == 1
+                                else "pytest execution did not produce a valid test result"
+                            )
                         )
                     ),
                     structured_data={
+                        "exit_code": exit_code,
                         "stderr": safe_stderr[-4000:],
                         "stdout": safe_stdout[-4000:],
                         "timeout": timed_out,
+                        "stdout_truncated": process_result.stdout_truncated,
+                        "stderr_truncated": process_result.stderr_truncated,
                         "workspace_integrity_verified": integrity_reason is None,
                         "workspace_integrity_reason": integrity_reason,
                     },
