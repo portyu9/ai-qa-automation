@@ -6,10 +6,10 @@
 
 **Designed and engineered by Ƴunior Ƥortal (ƳƤ)**
 
-![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
-![MIT License](https://img.shields.io/badge/License-MIT-2ea44f)
-![Claude Agent SDK](https://img.shields.io/badge/Claude%20Agent%20SDK-0.2.143-6B4FBB)
-![Evidence First](https://img.shields.io/badge/Architecture-Evidence--First-111827)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white&style=flat-square)](pyproject.toml)
+[![MIT License](https://img.shields.io/badge/License-MIT-2ea44f?style=flat-square)](LICENSE)
+[![Claude Agent SDK](https://img.shields.io/badge/Claude%20Agent%20SDK-0.2.143-6B4FBB?style=flat-square)](docs/SETUP.md)
+[![Evidence First](https://img.shields.io/badge/Architecture-Evidence--First-111827?style=flat-square)](docs/ARCHITECTURE.md)
 
 **A production-oriented AI quality engineering framework that gives an LLM room to reason without giving it authority to invent evidence, weaken tests, bypass policy, or certify its own work.**
 
@@ -22,7 +22,12 @@
 > [!IMPORTANT]
 > **Model reasoning is not test evidence.** Claude may interpret observations, form hypotheses, rank risk, and choose among authorized actions. Controlled tools collect facts and perform bounded operations. Deterministic policy and validation decide what is proven.
 
-## The engineering thesis
+**On this page:** [Engineering thesis](#engineering-thesis) · [Architecture](#architecture-at-a-glance) · [Quick start](#quick-start) · [Runtime truth](#runtime-result-contract) · [Safety boundaries](#safety-critical-boundaries) · [Evaluation](#evaluation-architecture) · [Documentation](#documentation-map)
+
+> [!TIP]
+> **Reviewing the engineering rather than installing it?** Start with the [Architecture](docs/ARCHITECTURE.md), then the [Runtime Result Contract](docs/RESULT_CONTRACT.md), [Security Architecture](docs/SECURITY.md), and [Technical Walkthrough](docs/TECHNICAL_WALKTHROUGH.md). The [documentation hub](docs/README.md) also provides role-specific review paths.
+
+## Engineering thesis
 
 ```text
 Claude reasons.
@@ -101,15 +106,63 @@ flowchart LR
 
 | Boundary | Trust posture | Examples |
 |---|---|---|
-| **Control plane** | Trusted authority | runtime package, policy, hooks, Skills, tool schemas, thresholds |
-| **Target/SUT** | Untrusted evidence source | source, tests, DOM, logs, API responses, target `CLAUDE.md`, `.claude/`, `.mcp.json` |
-| **External providers** | Approved transport/provider; returned content remains untrusted | GitHub MCP, Atlassian Rovo MCP |
-| **Deployment infrastructure** | Independent enforcement boundary | process/container isolation, egress, identity, secrets, retention, devices, real targets |
+| **Control plane** | trusted authority | runtime package, policy, hooks, Skills, tool schemas, thresholds |
+| **Target / SUT** | untrusted evidence source | source, tests, DOM, logs, API responses, target `CLAUDE.md`, `.claude/`, `.mcp.json` |
+| **External providers** | approved transport/provider; returned content remains untrusted | GitHub MCP, Atlassian Rovo MCP |
+| **Deployment infrastructure** | independent enforcement boundary | process/container isolation, egress, identity, secrets, retention, devices, real targets |
 
 > [!NOTE]
 > Application-layer controls are defense in depth. High-assurance process isolation, network egress, secret management, identity, and retention remain deployment-owned controls rather than claims manufactured by repository code.
 
-Deep dives: [`ARCHITECTURE.md`](docs/ARCHITECTURE.md) · [`RUNTIME_CONTROL.md`](docs/RUNTIME_CONTROL.md) · [`SECURITY.md`](docs/SECURITY.md) · [`THREAT_MODEL.md`](docs/THREAT_MODEL.md)
+Deep dives: [Architecture](docs/ARCHITECTURE.md) · [Runtime control](docs/RUNTIME_CONTROL.md) · [Security](docs/SECURITY.md) · [Threat model](docs/THREAT_MODEL.md)
+
+---
+
+## Quick start
+
+### Local deterministic tooling
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e '.[dev]'
+
+ai-qa doctor
+ai-qa demo
+```
+
+On Windows PowerShell, activate with `.venv\Scripts\Activate.ps1`.
+
+`.env.example` is a reference template only; runtime settings do not automatically load a repository `.env` file.
+
+### Live Claude Agent SDK session
+
+```bash
+export ANTHROPIC_API_KEY='...'
+export AI_QA_CONTROL_ROOT='/path/to/ai-qa-automation'
+export AI_QA_ARTIFACT_ROOT='/path/to/ai-qa-artifacts'
+export AI_QA_BASE_REF='origin/main'
+
+ai-qa agent \
+  --control-root "$AI_QA_CONTROL_ROOT" \
+  --workspace /path/to/isolated/sut-worktree \
+  'Investigate the failing checkout test. Do not modify tests unless evidence proves a test defect.'
+```
+
+The control root, artifact root, and target workspace are separate trust domains. Exact configuration and credential boundaries are documented in [Setup and Configuration](docs/SETUP.md).
+
+### Controlled k6 execution
+
+Because a JavaScript workload can construct destinations dynamically, k6 requires a separately enforced egress boundary:
+
+```bash
+export AI_QA_K6_EXTERNAL_EGRESS_ENFORCED=true
+```
+
+Set that assertion only when the runtime environment actually enforces the intended outbound-network policy. The flag documents an external prerequisite; it does not create a firewall.
+
+---
 
 ## Production control model
 
@@ -153,8 +206,6 @@ The framework exposes 18 purpose-built in-process tools:
 > The reusable patching library can validate Python/JavaScript/TypeScript test artifacts, but **live autonomous mutation is intentionally Python/pytest-backed**. The runtime does not claim deterministic commit closure for a language it cannot execute through its controlled validation adapter.
 
 There is intentionally **no generic existing-test rewrite tool** in the live agent surface.
-
----
 
 ## Evidence-first runtime lifecycle
 
@@ -201,31 +252,13 @@ Individual validations preserve values such as `NOT_EXECUTED` and `NOT_OBSERVED`
 > [!IMPORTANT]
 > A model result subtype of `success` is only an input to terminal evaluation. It is never sufficient to produce framework `SUCCESS` on its own.
 
-For complete semantics, revision supersession, provider outcomes, and mutation closure, see **[`docs/RESULT_CONTRACT.md`](docs/RESULT_CONTRACT.md)**.
+For complete semantics, revision supersession, provider outcomes, and mutation closure, see the authoritative [Runtime Result Contract](docs/RESULT_CONTRACT.md).
 
 ---
 
-## Deterministic change intelligence
+## AI-assisted QA with deterministic closure
 
-Before model reasoning, bootstrap can persist:
-
-- target Git `HEAD` and content-sensitive worktree fingerprint;
-- trusted base ref and immutable merge-base provenance;
-- committed plus dirty/untracked change union;
-- changed domains and recommended test layers;
-- repository/test/API/data/container/IaC/mobile/CI topology;
-- dependency-manifest paths, sizes, and hashes;
-- CODEOWNERS routing context;
-- explainable test-impact candidates;
-- conservative OpenAPI/Swagger compatibility drift.
-
-With `AI_QA_BASE_REF=origin/main`, a clean feature branch is still analyzed against its committed merge-base delta. A clean worktree is never confused with “no change.”
-
-Test-impact output is advisory. Low confidence, truncated scans, or incomplete dependency knowledge broaden regression rather than justify aggressive omission.
-
-See [`docs/CHANGE_INTELLIGENCE.md`](docs/CHANGE_INTELLIGENCE.md).
-
-## Evidence-driven failure investigation
+### Evidence-driven failure investigation
 
 The deterministic classifier distinguishes evidence patterns for application defects, test automation defects, locator/UI-contract changes, test-data failures, timing/flakiness, environment failures, external dependency failures, authentication/configuration failures, performance regressions, and insufficient evidence.
 
@@ -233,7 +266,7 @@ For locator-contract classification, “the old locator is missing and some othe
 
 A missing element therefore does not automatically trigger selector repair. If network/application evidence shows the expected UI state never rendered, the framework preserves that root-cause evidence instead of “healing” the test first.
 
-## Safe self-healing
+### Safe self-healing
 
 Self-healing is intentionally narrow: **semantic locator maintenance only**.
 
@@ -263,7 +296,7 @@ The authorization chain requires:
 
 Model-provided semantic/stability scores can inform reasoning, but they are overwritten before autonomous eligibility is decided.
 
-## Coverage-aware test generation
+### Coverage-aware test generation
 
 Generation is conservative and provenance-bound:
 
@@ -284,7 +317,29 @@ Generated tests are checked for meaningful assertions and common intent-eroding 
 
 ---
 
-## API, browser, performance, and mobile controls
+## Deterministic change intelligence
+
+Before model reasoning, bootstrap can persist:
+
+- target Git `HEAD` and content-sensitive worktree fingerprint;
+- trusted base ref and immutable merge-base provenance;
+- committed plus dirty/untracked change union;
+- changed domains and recommended test layers;
+- repository/test/API/data/container/IaC/mobile/CI topology;
+- dependency-manifest paths, sizes, and hashes;
+- CODEOWNERS routing context;
+- explainable test-impact candidates;
+- conservative OpenAPI/Swagger compatibility drift.
+
+With `AI_QA_BASE_REF=origin/main`, a clean feature branch is still analyzed against its committed merge-base delta. A clean worktree is never confused with “no change.”
+
+Test-impact output is advisory. Low confidence, truncated scans, or incomplete dependency knowledge broaden regression rather than justify aggressive omission.
+
+See [Change Intelligence](docs/CHANGE_INTELLIGENCE.md).
+
+---
+
+## Safety-critical boundaries
 
 ### API
 
@@ -320,9 +375,7 @@ Generated tests are checked for meaningful assertions and common intent-eroding 
 
 Appium is represented through controlled runtime/capability inspection, with device/emulator/cloud/application execution kept inside the target deployment's explicit mobile test boundary.
 
----
-
-## Transactional mutation and crash recovery
+### Transactional mutation and crash recovery
 
 Autonomous writes use optimistic concurrency plus owned rollback state:
 
@@ -338,7 +391,24 @@ Autonomous writes use optimistic concurrency plus owned rollback state:
 - stale recovery validates prior run, journal, target, rollback directory, backup, fingerprint, and ownership before touching the target;
 - newer human/out-of-band work wins over automated rollback when ownership is ambiguous.
 
-See [`docs/RUNTIME_CONTROL.md`](docs/RUNTIME_CONTROL.md).
+See [Runtime Control and Recovery](docs/RUNTIME_CONTROL.md).
+
+### Vendor-official MCP integrations
+
+External MCP is restricted to explicitly approved vendor integrations.
+
+| Integration | Trusted path | Runtime posture |
+|---|---|---|
+| GitHub | `github/github-mcp-server:v1.0.5` | disabled by default; server-side read-only defense in depth |
+| Jira / Confluence | Atlassian Rovo MCP `/v1/mcp/authv2` | disabled by default; action-level policy still applies |
+
+Server identity never grants blanket tool authority. External action names are normalized conservatively so destructive verbs dominate writes, writes dominate reads, and mixed names cannot smuggle higher authority behind a read prefix. Numeric business identifiers are not interpreted as HTTP/provider failure codes unless the surrounding evidence actually identifies them as such.
+
+Provider content remains untrusted evidence after retrieval, and configuration alone never becomes observed provider availability.
+
+See [MCP Integration Policy](docs/MCP.md).
+
+---
 
 ## Evidence, traceability, and attestation
 
@@ -376,24 +446,9 @@ ai-qa contract-diff --baseline old-openapi.yaml --current new-openapi.yaml
 > [!CAUTION]
 > The attestation is deliberately **unsigned**. Content integrity is not actor identity, notarization, compliance certification, a trusted timestamp, or evidence that tests passed.
 
-See [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md).
+See [Traceability and Run Attestation](docs/TRACEABILITY.md).
 
 ---
-
-## Vendor-official MCP integrations
-
-External MCP is restricted to explicitly approved vendor integrations.
-
-| Integration | Trusted path | Runtime posture |
-|---|---|---|
-| GitHub | `github/github-mcp-server:v1.0.5` | disabled by default; server-side read-only defense in depth |
-| Jira / Confluence | Atlassian Rovo MCP `/v1/mcp/authv2` | disabled by default; action-level policy still applies |
-
-Server identity never grants blanket tool authority. External action names are normalized conservatively so destructive verbs dominate writes, writes dominate reads, and mixed names cannot smuggle higher authority behind a read prefix. Numeric business identifiers are not interpreted as HTTP/provider failure codes unless the surrounding evidence actually identifies them as such.
-
-Provider content remains untrusted evidence after retrieval, and configuration alone never becomes observed provider availability.
-
-See [`docs/MCP.md`](docs/MCP.md).
 
 ## Evaluation architecture
 
@@ -419,7 +474,7 @@ make verify-local
 make holdout
 ```
 
-See [`docs/EVALUATION.md`](docs/EVALUATION.md).
+See [Evaluation Strategy](docs/EVALUATION.md).
 
 ## Deterministic reference SUT
 
@@ -438,50 +493,6 @@ See [`docs/EVALUATION.md`](docs/EVALUATION.md).
 The reference SUT is test data for the control architecture, never part of the trusted control plane.
 
 ---
-
-## Quick start
-
-### Local tooling
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e '.[dev]'
-
-ai-qa doctor
-ai-qa demo
-```
-
-On Windows PowerShell, activate with `.venv\Scripts\Activate.ps1`.
-
-`.env.example` is a reference template only; runtime settings do not automatically load a repository `.env` file.
-
-### Live Claude Agent SDK session
-
-```bash
-export ANTHROPIC_API_KEY='...'
-export AI_QA_CONTROL_ROOT='/path/to/ai-qa-automation'
-export AI_QA_ARTIFACT_ROOT='/path/to/ai-qa-artifacts'
-export AI_QA_BASE_REF='origin/main'
-
-ai-qa agent \
-  --control-root "$AI_QA_CONTROL_ROOT" \
-  --workspace /path/to/isolated/sut-worktree \
-  'Investigate the failing checkout test. Do not modify tests unless evidence proves a test defect.'
-```
-
-The control root, artifact root, and target workspace are separate trust domains. Exact configuration and credential boundaries are documented in [`docs/SETUP.md`](docs/SETUP.md).
-
-### Controlled k6 execution
-
-Because a JavaScript workload can construct destinations dynamically, k6 requires a separately enforced egress boundary:
-
-```bash
-export AI_QA_K6_EXTERNAL_EGRESS_ENFORCED=true
-```
-
-Set that assertion only when the runtime environment actually enforces the intended outbound-network policy. The flag documents an external prerequisite; it does not create a firewall.
 
 ## Operating modes
 
@@ -530,27 +541,27 @@ Set that assertion only when the runtime environment actually enforces the inten
 
 ## Documentation map
 
-Start with [`docs/README.md`](docs/README.md) for reviewer-specific reading paths.
+Start with the [documentation hub](docs/README.md) for reviewer-specific reading paths.
 
 | Topic | Document |
 |---|---|
-| Architectural authority, trust, and execution flow | [`ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
-| Runtime terminal/validation/provider semantics | **[`RESULT_CONTRACT.md`](docs/RESULT_CONTRACT.md)** |
-| Transactional mutation and crash recovery | [`RUNTIME_CONTROL.md`](docs/RUNTIME_CONTROL.md) |
-| Security architecture | [`SECURITY.md`](docs/SECURITY.md) |
-| Threat model and adversarial assumptions | [`THREAT_MODEL.md`](docs/THREAT_MODEL.md) |
-| Trusted setup and credentials | [`SETUP.md`](docs/SETUP.md) |
-| Operating the framework | [`OPERATIONS.md`](docs/OPERATIONS.md) |
-| Change intelligence and regression evidence | [`CHANGE_INTELLIGENCE.md`](docs/CHANGE_INTELLIGENCE.md) |
-| Evaluation and holdout governance | [`EVALUATION.md`](docs/EVALUATION.md) |
-| Claude Skill contracts | [`SKILLS.md`](docs/SKILLS.md) |
-| External MCP policy | [`MCP.md`](docs/MCP.md) |
-| Evidence lineage and attestations | [`TRACEABILITY.md`](docs/TRACEABILITY.md) |
-| Evidence/deployment trust boundaries | [`VERIFICATION_BOUNDARIES.md`](docs/VERIFICATION_BOUNDARIES.md) |
-| Production-readiness architecture | [`PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md) |
-| Design boundaries and non-claims | [`LIMITATIONS.md`](docs/LIMITATIONS.md) |
-| Failure diagnosis without weakening controls | [`TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) |
-| End-to-end technical review path | [`TECHNICAL_WALKTHROUGH.md`](docs/TECHNICAL_WALKTHROUGH.md) |
+| Architectural authority, trust, and execution flow | [Architecture](docs/ARCHITECTURE.md) |
+| Runtime terminal/validation/provider semantics | **[Runtime Result Contract](docs/RESULT_CONTRACT.md)** |
+| Transactional mutation and crash recovery | [Runtime Control](docs/RUNTIME_CONTROL.md) |
+| Security architecture | [Security](docs/SECURITY.md) |
+| Threat model and adversarial assumptions | [Threat Model](docs/THREAT_MODEL.md) |
+| Trusted setup and credentials | [Setup](docs/SETUP.md) |
+| Operating the framework | [Operations](docs/OPERATIONS.md) |
+| Change intelligence and regression evidence | [Change Intelligence](docs/CHANGE_INTELLIGENCE.md) |
+| Evaluation and holdout governance | [Evaluation](docs/EVALUATION.md) |
+| Claude Skill contracts | [Skills](docs/SKILLS.md) |
+| External MCP policy | [MCP](docs/MCP.md) |
+| Evidence lineage and attestations | [Traceability](docs/TRACEABILITY.md) |
+| Evidence/deployment trust boundaries | [Verification Boundaries](docs/VERIFICATION_BOUNDARIES.md) |
+| Production-readiness architecture | [Production Readiness](docs/PRODUCTION_READINESS.md) |
+| Design boundaries and non-claims | [Limitations](docs/LIMITATIONS.md) |
+| Failure diagnosis without weakening controls | [Troubleshooting](docs/TROUBLESHOOTING.md) |
+| End-to-end technical review path | [Technical Walkthrough](docs/TECHNICAL_WALKTHROUGH.md) |
 
 ## GitHub Actions
 
@@ -558,7 +569,7 @@ Start with [`docs/README.md`](docs/README.md) for reviewer-specific reading path
 
 ## Security and contributions
 
-Security reports should follow [`SECURITY.md`](SECURITY.md). Engineering changes should preserve the authority hierarchy and test-integrity rules in [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`CLAUDE.md`](CLAUDE.md).
+Security reports should follow [Security Policy](SECURITY.md). Engineering changes should preserve the authority hierarchy and test-integrity rules in [Contributing](CONTRIBUTING.md) and [Engineering Rules](CLAUDE.md).
 
 > **Add capability without silently adding authority. Add intelligence without weakening evidence. Add automation without weakening test intent.**
 
