@@ -44,7 +44,7 @@ Important consequences:
 - Agent SDK result subtype `success` is necessary but not sufficient;
 - active deterministic FAIL remains failure;
 - non-PASS validations remain non-PASS;
-- same-gate same-revision PASS/FAIL -> `NOT_VERIFIED`;
+- same-gate same-revision PASS/FAIL → `NOT_VERIFIED`;
 - older evidence supersedes only through gate identity + newer revision;
 - changed live autonomous tests require patch-safety, **exact-path-bound targeted pytest**, and full regression at the current revision.
 
@@ -422,7 +422,7 @@ The intended conclusion is strict:
 
 ---
 
-## Suggested interview review path
+## Suggested time-boxed review path
 
 | Time | Read |
 |---:|---|
