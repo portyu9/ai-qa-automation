@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import signal
 import subprocess
@@ -21,6 +22,7 @@ _SAFE_INHERITED_ENV = {
     "CI",
 }
 _DEFAULT_MAX_OUTPUT_BYTES = 2_000_000
+_MAX_OUTPUT_BYTES = 16_000_000
 _READ_CHUNK_BYTES = 64 * 1024
 _DRAIN_JOIN_SECONDS = 2.0
 _WINDOWS_NEW_PROCESS_GROUP = 0x00000200
@@ -144,17 +146,24 @@ def run_bounded_subprocess(
     """Run a subprocess while draining stdout/stderr into bounded in-memory tails.
 
     The child receives a dedicated process group/session. At completion the adapter
-    also terminates any descendants that outlived the direct child, because target
-    test/load code must not leave background processes running after validation.
+    attempts to terminate descendants that outlived the direct child, because target
+    test/load code must not keep background execution attached to validation.
     """
-    if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)):
-        raise ValueError("timeout_seconds must be numeric")
-    if timeout_seconds <= 0:
-        raise ValueError("timeout_seconds must be positive")
-    if isinstance(max_output_bytes, bool) or not isinstance(max_output_bytes, int):
-        raise ValueError("max_output_bytes must be an integer")
-    if max_output_bytes < 1:
-        raise ValueError("max_output_bytes must be positive")
+    if (
+        isinstance(timeout_seconds, bool)
+        or not isinstance(timeout_seconds, (int, float))
+        or not math.isfinite(timeout_seconds)
+        or timeout_seconds <= 0
+    ):
+        raise ValueError("timeout_seconds must be a positive finite number")
+    if (
+        isinstance(max_output_bytes, bool)
+        or not isinstance(max_output_bytes, int)
+        or not 1 <= max_output_bytes <= _MAX_OUTPUT_BYTES
+    ):
+        raise ValueError(
+            f"max_output_bytes must be an integer between 1 and {_MAX_OUTPUT_BYTES}"
+        )
     if not command:
         raise ValueError("subprocess command must not be empty")
 
@@ -189,9 +198,9 @@ def run_bounded_subprocess(
         _terminate_process_tree(process)
         process.wait()
     else:
-        # The direct validator process exited. Kill any background descendants in
-        # its dedicated group before waiting for pipe EOF; otherwise an inherited
-        # stdout/stderr descriptor could keep the drain threads blocked forever.
+        # The direct validator process exited. Clean up any background descendants
+        # before waiting for pipe EOF; otherwise an inherited descriptor can keep
+        # the drain threads blocked after the validator itself has finished.
         _terminate_process_tree(process)
     finally:
         stdout_thread.join(timeout=_DRAIN_JOIN_SECONDS)
