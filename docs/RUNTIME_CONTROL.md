@@ -1,12 +1,16 @@
 # Runtime Control and Recovery
 
-Runtime safety is treated as a deterministic subsystem, not as a prompt convention. The model-facing QA state and the process-control state are deliberately separate so a conversational or model failure cannot erase workspace ownership, pending-mutation, budget, or journal facts.
+> **YP AI QA Automation Framework** · Designed and engineered by **Yunior Portal**
+
+Runtime safety in the YP AI QA Automation Framework is treated as a deterministic subsystem, not as a prompt convention. The model-facing QA state and the process-control state are deliberately separate so a conversational or model failure cannot erase workspace ownership, pending-mutation, budget, or journal facts.
 
 ## Workspace ownership
 
 A live run acquires an OS advisory lock whose lock file lives under the trusted artifact root, not inside the target repository. Two cooperating agent processes cannot hold the same target-workspace lease at the same time. The operating system releases the lock if the owning process exits.
 
 The lease is necessary but not sufficient. Autonomous writes additionally require a Git-backed isolated worktree whose fingerprint still matches the baseline captured by the runtime. The fingerprint combines `HEAD`, porcelain status, and content hashes for dirty/untracked files. Before a mutation, the universal tool hook recomputes it; any mismatch is treated as concurrent/out-of-band drift and blocks the write.
+
+Mutation path ownership is also explicit: absolute paths, `..` traversal, workspace escapes, and symlink components are rejected before a transaction is prepared. The runtime does not treat a symlink alias as equivalent ownership of its resolved target.
 
 This is an optimistic-concurrency invariant around the SUT:
 
@@ -18,7 +22,7 @@ This is an optimistic-concurrency invariant around the SUT:
 stateDiagram-v2
     [*] --> Baseline: lease acquired + fingerprint captured
 
-    Baseline --> Blocked: workspace drift / non-Git target / write policy denial
+    Baseline --> Blocked: workspace drift / non-Git target / write policy denial / ambiguous path ownership
     Baseline --> Pending: approved mutation + trusted rollback snapshot
 
     Pending --> PatchSafe: patch-safety PASS
@@ -56,6 +60,8 @@ The state machine is intentionally asymmetric: preserving newer human work is mo
 ## Mutation transactions
 
 Only one autonomous mutation can be pending at a time. Before an authorized write, the runtime stores a bounded byte-for-byte rollback snapshot outside the SUT. A newly created file is tracked so it can be removed rather than “restored” if the new revision never becomes verified.
+
+Rollback snapshots are integrity-checked before restoration and their persisted paths must remain under the trusted rollback directory. A missing, tampered, or escaped backup does not trigger a best-effort overwrite; the transaction remains unresolved and the integrity failure is surfaced.
 
 The transaction remains pending until the current change revision has all of the following:
 
@@ -140,6 +146,7 @@ Runtime safeguards prefer explicit interruption over ambiguous continuation:
 |---|---|
 | Another process owns the target lease | `BLOCKED` |
 | Workspace drift before autonomous mutation | `BLOCKED` |
+| Mutation path uses traversal/symlink ambiguity | `BLOCKED` |
 | Budget exhausted | bounded budget terminal state |
 | Tool circuit open | tool action denied |
 | Pending mutation cannot close validation | rollback before terminal report |
@@ -151,6 +158,6 @@ These outcomes are deliberately not converted into product defects or successful
 
 ## Verification boundary
 
-The implementation defines these controls and dedicated tests exist for the newest budget, lease, transaction, journal, and stale-recovery paths. That source/test presence is not a current-head PASS claim until the applicable tests are executed.
+The implementation defines these controls and dedicated tests exist for budget, lease, transaction, journal, path ownership, rollback integrity, and stale-recovery paths. That source/test presence is not a current-head PASS claim until the applicable tests are executed.
 
 See [`OPERATIONS.md`](OPERATIONS.md), [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md), and [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md).
