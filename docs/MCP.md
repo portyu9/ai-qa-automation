@@ -1,6 +1,6 @@
 # MCP Integration Policy
 
-> **YP AI QA Automation Framework** · Designed and engineered by **Yunior Portal**
+> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
 External MCP is an **integration plane**, not an extension of runtime authority. A server can be vendor-official and still return untrusted content or expose tools the autonomous runtime must not use.
 
@@ -112,3 +112,5 @@ That restraint protects the trust boundary and keeps the integration surface aud
 Credential and enablement instructions are in [`SETUP.md`](SETUP.md). Authenticated GitHub/Atlassian runtime behavior remains `ENVIRONMENT_REQUIRED` / `NOT_VERIFIED` until an actual authorized session is exercised.
 
 See also [`SECURITY.md`](SECURITY.md), [`THREAT_MODEL.md`](THREAT_MODEL.md), and [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md).
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
