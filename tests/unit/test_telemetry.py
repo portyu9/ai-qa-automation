@@ -96,7 +96,7 @@ def test_tool_policy_and_mcp_metrics_use_bounded_labels(monkeypatch: Any) -> Non
     ]
 
 
-def test_structured_run_finish_event_records_metrics_without_sensitive_labels(
+def test_structured_run_finish_log_does_not_bypass_durable_journal_for_metrics(
     monkeypatch: Any, caplog: Any
 ) -> None:
     instruments = _fake_instruments()
@@ -115,9 +115,9 @@ def test_structured_run_finish_event_records_metrics_without_sensitive_labels(
 
     payload = json.loads(caplog.records[-1].message)
     assert payload["run_id"] == "run-secret-cardinality"
-    assert instruments["runs"].calls == [(1, {"terminal.status": "BLOCKED"})]
-    assert instruments["duration"].calls == [(1.25, {"terminal.status": "BLOCKED"})]
-    assert instruments["tool_calls"].calls == [(3.0, {"terminal.status": "BLOCKED"})]
+    assert instruments["runs"].calls == []
+    assert instruments["duration"].calls == []
+    assert instruments["tool_calls"].calls == []
 
 
 def test_journal_projects_metrics_only_after_durable_event_and_metrics_are_fail_soft(
@@ -140,11 +140,22 @@ def test_journal_projects_metrics_only_after_durable_event_and_metrics_are_fail_
         "record_mcp_outcome",
         lambda provider, outcome: observed.append((provider, outcome)),
     )
+    monkeypatch.setattr(
+        journal_module,
+        "record_run_metrics",
+        lambda **kwargs: observed.append(("run", str(kwargs["terminal_status"]))),
+    )
 
     journal = RunJournal(tmp_path / "journal.jsonl")
     first_hash = journal.append("tool_requested", tool_name="mcp__qa__run_pytest")
     journal.append("policy_denied", tool_name="mcp__qa__create_test_file", reason="blocked")
     journal.append("tool_completed", tool_name="mcp__github__get_issue", failed=False)
+    journal.append(
+        "agent_run_finished",
+        terminal_status="BLOCKED",
+        duration_seconds=1.25,
+        tool_calls=3,
+    )
 
     assert len(first_hash) == 64
     assert observed == [
@@ -153,6 +164,7 @@ def test_journal_projects_metrics_only_after_durable_event_and_metrics_are_fail_
         ("policy", "deterministic_policy"),
         ("mcp__github__get_issue", "succeeded"),
         ("github", "AVAILABLE"),
+        ("run", "BLOCKED"),
     ]
     assert journal.verify()["valid"] is True
 
@@ -162,7 +174,7 @@ def test_journal_projects_metrics_only_after_durable_event_and_metrics_are_fail_
     assert len(second_hash) == 64
     assert journal.verify() == {
         "valid": True,
-        "events": 4,
+        "events": 5,
         "head_hash": second_hash,
     }
 
@@ -230,12 +242,10 @@ def test_trace_exit_failure_never_masks_runtime_outcome(monkeypatch: Any) -> Non
             raise ValueError("runtime failure")
 
 
-def test_emit_event_is_fail_soft_for_logging_and_metric_provider_failure(monkeypatch: Any) -> None:
+def test_emit_event_is_fail_soft_for_logging_failure() -> None:
     class _ExplodingLogger:
         def info(self, _message: str) -> None:
             raise RuntimeError("logging handler unavailable")
-
-    monkeypatch.setattr(telemetry, "record_run_metrics", _raise_metrics_unavailable)
 
     telemetry.emit_event(
         _ExplodingLogger(),
@@ -313,3 +323,27 @@ def test_metric_helpers_remain_fail_soft_for_hostile_protocols_and_malformed_ins
     telemetry.record_tool_event(bad, "succeeded")
     telemetry.record_policy_denial(bad)
     telemetry.record_mcp_outcome(bad, bad)
+
+
+def test_run_metrics_are_not_projected_when_journal_persistence_is_denied(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    observed: list[str] = []
+    monkeypatch.setattr(
+        journal_module,
+        "record_run_metrics",
+        lambda **_kwargs: observed.append("run"),
+    )
+    journal = RunJournal(tmp_path / "budgeted.jsonl", max_events=1)
+    journal.append("first")
+
+    assert (
+        journal.try_append(
+            "agent_run_finished",
+            terminal_status="FAILURE",
+            duration_seconds=1.0,
+            tool_calls=0,
+        )
+        is False
+    )
+    assert observed == []
