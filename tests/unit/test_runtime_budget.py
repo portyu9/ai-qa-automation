@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from ai_qa_automation.runtime.budget import BudgetExceededError, ExecutionBudget
@@ -39,7 +41,6 @@ def test_budget_dimensions_are_independent_and_fail_closed() -> None:
     with pytest.raises(BudgetExceededError, match="mutation budget"):
         budget.charge_mutation()
 
-    # Exhausting one dimension must not silently consume another.
     budget.charge_network()
     assert budget.snapshot().network_calls == 2
     with pytest.raises(BudgetExceededError, match="network-call budget"):
@@ -58,6 +59,41 @@ def test_budget_dimensions_are_independent_and_fail_closed() -> None:
 def test_budget_rejects_non_positive_limits(field: str, value: int | float, message: str) -> None:
     with pytest.raises(ValueError, match=message):
         make_budget(**{field: value})
+
+
+@pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+def test_budget_rejects_non_finite_wall_time(value: float) -> None:
+    with pytest.raises(ValueError, match="max_wall_seconds"):
+        ExecutionBudget(
+            max_tool_calls=1,
+            max_network_calls=1,
+            max_mutations=1,
+            max_wall_seconds=value,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("max_tool_calls", True),
+        ("max_tool_calls", 1.5),
+        ("max_network_calls", False),
+        ("max_network_calls", 2.5),
+        ("max_mutations", True),
+        ("max_mutations", 1.1),
+    ],
+)
+def test_count_budgets_require_real_integers(field: str, value: object) -> None:
+    kwargs: dict[str, object] = {
+        "max_tool_calls": 1,
+        "max_network_calls": 1,
+        "max_mutations": 1,
+        "max_wall_seconds": 60.0,
+    }
+    kwargs[field] = value
+
+    with pytest.raises(ValueError, match=field):
+        ExecutionBudget(**kwargs)  # type: ignore[arg-type]
 
 
 def test_wall_clock_budget_is_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
