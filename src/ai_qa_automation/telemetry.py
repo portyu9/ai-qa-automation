@@ -174,7 +174,10 @@ def _instruments_or_none() -> dict[str, Any] | None:
 def _finite_non_negative(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    number = float(value)
+    try:
+        number = float(value)
+    except Exception:
+        return None
     if not math.isfinite(number) or number < 0:
         return None
     return number
@@ -187,8 +190,9 @@ def _safe_text(value: object, *, default: str) -> str:
         return default
 
 
-def _safe_terminal_outcome(value: str | None) -> str:
-    normalized = _safe_text(value or "NOT_VERIFIED", default="NOT_VERIFIED").upper()
+def _safe_terminal_outcome(value: object) -> str:
+    raw = "NOT_VERIFIED" if value is None else value
+    normalized = _safe_text(raw, default="NOT_VERIFIED").upper()
     return normalized if normalized in _TERMINAL_OUTCOMES else "NOT_VERIFIED"
 
 
@@ -219,64 +223,76 @@ def _safe_record(instrument: Any, value: int | float, attributes: dict[str, str]
 
 def record_run_metrics(
     *,
-    terminal_status: str | None,
+    terminal_status: object,
     duration_seconds: object = None,
     tool_calls: object = None,
 ) -> None:
     """Record one terminal run without high-cardinality identifiers or sensitive attributes."""
-    instruments = _instruments_or_none()
-    if instruments is None:
+    try:
+        instruments = _instruments_or_none()
+        if instruments is None:
+            return
+        outcome = _safe_terminal_outcome(terminal_status)
+        attributes = {"terminal.status": outcome}
+        _safe_add(instruments["runs"], 1, attributes)
+
+        for instrument_name, raw_value in {
+            "duration": duration_seconds,
+            "tool_calls": tool_calls,
+        }.items():
+            value = _finite_non_negative(raw_value)
+            if value is not None:
+                _safe_record(instruments[instrument_name], value, attributes)
+    except Exception:
         return
-    outcome = _safe_terminal_outcome(terminal_status)
-    attributes = {"terminal.status": outcome}
-    _safe_add(instruments["runs"], 1, attributes)
-
-    for instrument_name, raw_value in {
-        "duration": duration_seconds,
-        "tool_calls": tool_calls,
-    }.items():
-        value = _finite_non_negative(raw_value)
-        if value is not None:
-            _safe_record(instruments[instrument_name], value, attributes)
 
 
-def record_tool_event(tool_name: str, outcome: str) -> None:
+def record_tool_event(tool_name: object, outcome: object) -> None:
     """Record coarse tool-surface lifecycle telemetry without arguments, paths, or payloads."""
-    instruments = _instruments_or_none()
-    normalized_outcome = _safe_text(outcome, default="").lower()
-    if instruments is None or normalized_outcome not in _TOOL_OUTCOMES:
+    try:
+        instruments = _instruments_or_none()
+        normalized_outcome = _safe_text(outcome, default="").lower()
+        if instruments is None or normalized_outcome not in _TOOL_OUTCOMES:
+            return
+        _safe_add(
+            instruments["tool_events"],
+            1,
+            {"tool.surface": _tool_surface(tool_name), "tool.outcome": normalized_outcome},
+        )
+    except Exception:
         return
-    _safe_add(
-        instruments["tool_events"],
-        1,
-        {"tool.surface": _tool_surface(tool_name), "tool.outcome": normalized_outcome},
-    )
 
 
-def record_policy_denial(category: str) -> None:
+def record_policy_denial(category: object) -> None:
     """Record a bounded denial category; raw policy reasons stay in sanitized logs/journals."""
-    instruments = _instruments_or_none()
-    if instruments is None:
+    try:
+        instruments = _instruments_or_none()
+        if instruments is None:
+            return
+        normalized = _safe_text(category, default="other").lower()
+        if normalized not in _POLICY_CATEGORIES:
+            normalized = "other"
+        _safe_add(instruments["policy_denials"], 1, {"policy.category": normalized})
+    except Exception:
         return
-    normalized = _safe_text(category, default="other").lower()
-    if normalized not in _POLICY_CATEGORIES:
-        normalized = "other"
-    _safe_add(instruments["policy_denials"], 1, {"policy.category": normalized})
 
 
-def record_mcp_outcome(provider: str, outcome: str) -> None:
+def record_mcp_outcome(provider: object, outcome: object) -> None:
     """Record normalized outcomes only for the two approved external provider families."""
-    instruments = _instruments_or_none()
-    if instruments is None:
+    try:
+        instruments = _instruments_or_none()
+        if instruments is None:
+            return
+        normalized_provider = _safe_text(provider, default="other").lower()
+        normalized_outcome = _safe_text(outcome, default="FAILED").upper()
+        if normalized_provider not in _MCP_PROVIDERS:
+            normalized_provider = "other"
+        if normalized_outcome not in _MCP_OUTCOMES:
+            normalized_outcome = "FAILED"
+        _safe_add(
+            instruments["mcp_outcomes"],
+            1,
+            {"mcp.provider": normalized_provider, "mcp.outcome": normalized_outcome},
+        )
+    except Exception:
         return
-    normalized_provider = _safe_text(provider, default="other").lower()
-    normalized_outcome = _safe_text(outcome, default="FAILED").upper()
-    if normalized_provider not in _MCP_PROVIDERS:
-        normalized_provider = "other"
-    if normalized_outcome not in _MCP_OUTCOMES:
-        normalized_outcome = "FAILED"
-    _safe_add(
-        instruments["mcp_outcomes"],
-        1,
-        {"mcp.provider": normalized_provider, "mcp.outcome": normalized_outcome},
-    )
