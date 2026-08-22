@@ -4,7 +4,7 @@ This document is intentionally explicit about what the project **does not prove*
 
 ## Current project boundary
 
-AI QA Automation is a production-shaped engineering portfolio/reference implementation. The current repository head is **not production-release verified** until the applicable deterministic, security, browser, model, integration, and environment gates are actually executed and inspected.
+AI QA Automation is a production-shaped agentic quality engineering system. The current repository head is **not production-release verified** until the applicable deterministic, security, browser, model, integration, and environment gates are actually executed and inspected.
 
 Historical successful checks are useful prior evidence, not a release certificate for later commits.
 
