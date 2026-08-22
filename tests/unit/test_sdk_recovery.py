@@ -4,6 +4,7 @@ import pytest
 
 from ai_qa_automation.models import AgentRunState
 from ai_qa_automation.runtime.sdk_recovery import (
+    SDKRetryDecision,
     retry_decision,
     retry_delay_seconds,
     sdk_exception_is_transient,
@@ -15,6 +16,23 @@ def _state(**updates: object) -> AgentRunState:
     for key, value in updates.items():
         setattr(state, key, value)
     return state
+
+
+def _decision(
+    exc: BaseException,
+    *,
+    state: AgentRunState | None = None,
+    retry_limit: int = 2,
+    pending_mutation: bool = False,
+    provider_request_started: bool = False,
+) -> SDKRetryDecision:
+    return retry_decision(
+        exc,
+        state=state or _state(),
+        retry_limit=retry_limit,
+        pending_mutation=pending_mutation,
+        provider_request_started=provider_request_started,
+    )
 
 
 def test_transient_classifier_accepts_transport_rate_limit_and_wrapped_failures() -> None:
@@ -46,60 +64,53 @@ def test_transient_classifier_rejects_auth_configuration_and_schema_failures() -
     )
 
 
-def test_retry_is_allowed_only_before_any_observable_or_side_effecting_activity() -> None:
-    clean = retry_decision(
-        ConnectionError("connection refused"),
-        state=_state(),
-        retry_limit=2,
-        pending_mutation=False,
-    )
+def test_retry_is_allowed_only_for_transient_session_start_failure() -> None:
+    clean = _decision(ConnectionError("connection refused"))
     assert clean.retry is True
-    assert clean.category == "transient_pre_activity"
+    assert clean.category == "transient_session_start"
+
+    provider_started = _decision(
+        ConnectionError("connection reset"),
+        provider_request_started=True,
+    )
+    assert provider_started.retry is False
+    assert provider_started.category == "provider_request_started"
 
     assert (
-        retry_decision(
-            ConnectionError("connection reset"),
-            state=_state(iteration=1),
-            retry_limit=2,
-            pending_mutation=False,
-        ).category
+        _decision(ConnectionError("connection reset"), state=_state(iteration=1)).category
         == "message_observed"
     )
     assert (
-        retry_decision(
-            ConnectionError("connection reset"),
-            state=_state(tool_call_count=1),
-            retry_limit=2,
-            pending_mutation=False,
-        ).category
+        _decision(ConnectionError("connection reset"), state=_state(tool_call_count=1)).category
         == "tool_activity"
     )
     assert (
-        retry_decision(
+        _decision(
             ConnectionError("connection reset"),
             state=_state(files_modified=["tests/test_checkout.py"]),
-            retry_limit=2,
-            pending_mutation=False,
         ).category
         == "mutation_history"
     )
     assert (
-        retry_decision(
-            ConnectionError("connection reset"),
-            state=_state(),
-            retry_limit=2,
-            pending_mutation=True,
-        ).category
+        _decision(ConnectionError("connection reset"), pending_mutation=True).category
         == "pending_mutation"
     )
 
 
+def test_non_retryable_semantics_dominate_provider_activity_and_transport_type() -> None:
+    decision = _decision(
+        ConnectionError("401 unauthorized"),
+        provider_request_started=True,
+    )
+
+    assert decision.retry is False
+    assert decision.category == "non_transient"
+
+
 def test_retry_budget_and_backoff_are_bounded_and_deterministic() -> None:
-    exhausted = retry_decision(
+    exhausted = _decision(
         ConnectionError("connection reset"),
         state=_state(retry_count=2),
-        retry_limit=2,
-        pending_mutation=False,
     )
     assert exhausted.retry is False
     assert exhausted.category == "retry_budget"
