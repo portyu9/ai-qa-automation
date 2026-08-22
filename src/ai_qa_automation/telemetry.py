@@ -57,15 +57,6 @@ def emit_event(logger: logging.Logger, event: str, **fields: Any) -> None:
             **sanitize(fields),
         }
         logger.info(json.dumps(payload, sort_keys=True, default=str))
-    if event == "agent_run_finished":
-        # Defense in depth if a custom telemetry implementation violates the
-        # fail-soft contract internally.
-        with suppress(Exception):
-            record_run_metrics(
-                terminal_status=str(fields.get("terminal_status") or "NOT_VERIFIED"),
-                duration_seconds=fields.get("duration_seconds"),
-                tool_calls=fields.get("tool_calls"),
-            )
 
 
 def get_tracer(name: str = _INSTRUMENTATION_SCOPE) -> Any:
