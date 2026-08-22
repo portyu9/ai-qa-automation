@@ -12,20 +12,30 @@ class TestQualityFinding:
     line: int
 
 
+_ASSERTION_ROOTS = {"expect", "assert_that", "verify"}
+
+
 def _is_assertion_call(node: ast.Call) -> bool:
     func = node.func
     if isinstance(func, ast.Name):
-        return func.id in {"expect", "assert_that", "verify"}
+        return func.id in _ASSERTION_ROOTS
     if isinstance(func, ast.Attribute):
         if func.attr.startswith("assert"):
             return True
         if func.attr == "raises" and isinstance(func.value, ast.Name) and func.value.id == "pytest":
             return True
-        root = func.value
+        root: ast.expr | None = func.value
         while isinstance(root, (ast.Attribute, ast.Call)):
-            if isinstance(root, ast.Call) and isinstance(root.func, ast.Name) and root.func.id == "expect":
+            if (
+                isinstance(root, ast.Call)
+                and isinstance(root.func, ast.Name)
+                and root.func.id in _ASSERTION_ROOTS
+            ):
                 return True
-            root = root.func.value if isinstance(root, ast.Call) and isinstance(root.func, ast.Attribute) else getattr(root, "value", None)
+            if isinstance(root, ast.Call) and isinstance(root.func, ast.Attribute):
+                root = root.func.value
+            else:
+                root = getattr(root, "value", None)
     return False
 
 
@@ -56,10 +66,17 @@ def review_python_test_source(source: str) -> list[TestQualityFinding]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
             if node.func.attr == "sleep":
-                findings.append(TestQualityFinding("QA001", "HIGH", "Arbitrary sleep detected", node.lineno))
+                findings.append(
+                    TestQualityFinding("QA001", "HIGH", "Arbitrary sleep detected", node.lineno)
+                )
             if node.func.attr in {"skip", "xfail"}:
                 findings.append(
-                    TestQualityFinding("QA002", "HIGH", "Skip/xfail requires explicit justification", node.lineno)
+                    TestQualityFinding(
+                        "QA002",
+                        "HIGH",
+                        "Skip/xfail requires explicit justification",
+                        node.lineno,
+                    )
                 )
         if isinstance(node, ast.Try):
             for handler in node.handlers:
@@ -67,7 +84,9 @@ def review_python_test_source(source: str) -> list[TestQualityFinding]:
                     isinstance(handler.type, ast.Name)
                     and handler.type.id in {"Exception", "BaseException"}
                 )
-                if broad and (not handler.body or all(isinstance(stmt, ast.Pass) for stmt in handler.body)):
+                if broad and (
+                    not handler.body or all(isinstance(stmt, ast.Pass) for stmt in handler.body)
+                ):
                     findings.append(
                         TestQualityFinding(
                             "QA005",
@@ -78,7 +97,9 @@ def review_python_test_source(source: str) -> list[TestQualityFinding]:
                     )
         if isinstance(node, ast.Assert) and _is_tautological_assert(node.test):
             findings.append(
-                TestQualityFinding("QA004", "CRITICAL", "Tautological assertion detected", node.lineno)
+                TestQualityFinding(
+                    "QA004", "CRITICAL", "Tautological assertion detected", node.lineno
+                )
             )
 
     test_functions = [
@@ -90,6 +111,8 @@ def review_python_test_source(source: str) -> list[TestQualityFinding]:
     for function in test_functions:
         if not _has_observable_assertion(function):
             findings.append(
-                TestQualityFinding("QA003", "CRITICAL", "Test has no observable assertion", function.lineno)
+                TestQualityFinding(
+                    "QA003", "CRITICAL", "Test has no observable assertion", function.lineno
+                )
             )
     return findings
