@@ -58,8 +58,9 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
     ):
         if path.is_symlink():
             return {"recoverable": False, "reason": f"{label} has ambiguous symlink ownership"}
-    if not state_path.is_file():
-        return {"recoverable": False, "reason": "state.json is missing"}
+        if not path.is_file():
+            return {"recoverable": False, "reason": f"{label} is missing"}
+
     try:
         state = StateStore(state_path).load()
     except (OSError, json.JSONDecodeError, ValueError) as exc:
@@ -71,15 +72,15 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
     if not journal_status["valid"]:
         return {"recoverable": False, "reason": "journal hash chain is invalid"}
 
+    try:
+        raw_runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"recoverable": False, "reason": "runtime.json is invalid"}
+    if not isinstance(raw_runtime, dict):
+        return {"recoverable": False, "reason": "runtime.json root must be an object"}
+    runtime_metadata: dict[str, Any] = raw_runtime
+
     revision_closed = _revision_closed(state)
-    runtime_metadata: dict[str, Any] = {}
-    if runtime_path.is_file():
-        try:
-            raw_runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return {"recoverable": False, "reason": "runtime.json is invalid"}
-        if isinstance(raw_runtime, dict):
-            runtime_metadata = raw_runtime
     pending_mutation = runtime_metadata.get("pending_mutation")
     if pending_mutation:
         revision_closed = False
