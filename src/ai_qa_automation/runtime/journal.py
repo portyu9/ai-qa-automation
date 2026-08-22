@@ -157,13 +157,18 @@ class RunJournal:
                     continue
                 if count >= restore_limit:
                     return {"valid": False, "events": count, "head_hash": previous}
-                record = json.loads(raw.decode("utf-8"))
-                if not isinstance(record, dict):
+                try:
+                    record = json.loads(raw.decode("utf-8"))
+                    if not isinstance(record, dict):
+                        return {"valid": False, "events": count, "head_hash": previous}
+                    if record.get("seq") != expected_seq:
+                        return {"valid": False, "events": count, "head_hash": previous}
+                    body = {key: value for key, value in record.items() if key != "record_hash"}
+                    canonical = json.dumps(
+                        body, sort_keys=True, separators=(",", ":"), default=str
+                    )
+                except (UnicodeDecodeError, ValueError, TypeError, RecursionError):
                     return {"valid": False, "events": count, "head_hash": previous}
-                if record.get("seq") != expected_seq:
-                    return {"valid": False, "events": count, "head_hash": previous}
-                body = {key: value for key, value in record.items() if key != "record_hash"}
-                canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
                 actual = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
                 if record.get("prev_hash") != previous or record.get("record_hash") != actual:
                     return {"valid": False, "events": count, "head_hash": previous}
