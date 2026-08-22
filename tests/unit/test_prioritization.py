@@ -1,3 +1,5 @@
+import pytest
+
 from ai_qa_automation.intelligence.prioritization import RegressionPrioritizer
 from ai_qa_automation.models import RegressionCandidate
 
@@ -17,3 +19,13 @@ def test_low_dependency_confidence_broadens_regression() -> None:
     result = RegressionPrioritizer().select([item], dependency_confidence=0.4)
     assert result.broadened_due_to_uncertainty is True
     assert "shared-component" in result.selected
+
+
+def test_duplicate_test_ids_are_rejected_instead_of_split_across_decisions() -> None:
+    candidates = [
+        RegressionCandidate(test_id="security-authz", mandatory=True),
+        RegressionCandidate(test_id="security-authz", changed_component_overlap=0.0),
+    ]
+
+    with pytest.raises(ValueError, match="test_id values must be unique"):
+        RegressionPrioritizer().select(candidates, dependency_confidence=1.0)
