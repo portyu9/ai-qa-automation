@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -109,8 +110,6 @@ def _require_closed_revision_before_mutation(services: "RuntimeServices") -> str
     )
 
 
-
-
 def _is_test_code_path(path: Path) -> bool:
     if path.suffix.lower() not in {".py", ".js", ".ts", ".java", ".cs"}:
         return False
@@ -126,44 +125,72 @@ def _is_test_code_path(path: Path) -> bool:
 
 
 def _coverage_search(
-    workspace: Path, *, query: str, max_results: int = 100
+    workspace: Path,
+    *,
+    query: str,
+    max_results: int = 100,
+    max_scan_files: int = 5_000,
 ) -> list[dict[str, Any]]:
     if not 1 <= max_results <= 200:
         raise ValueError("max_results must be between 1 and 200")
+    if max_scan_files < 1:
+        raise ValueError("max_scan_files must be at least 1")
     if len(query) > 200:
         raise ValueError("coverage search query exceeds 200 characters")
     needle = query.casefold().strip()
-    ignored = {".git", ".venv", "venv", "node_modules", "dist", "build", ".tox", ".pytest_cache", "__pycache__"}
+    ignored = {
+        ".git",
+        ".venv",
+        "venv",
+        "node_modules",
+        "dist",
+        "build",
+        ".tox",
+        ".pytest_cache",
+        "__pycache__",
+    }
     rows: list[dict[str, Any]] = []
-    for path in sorted(workspace.rglob("*")):
-        if len(rows) >= max_results:
-            break
-        try:
-            relative = path.relative_to(workspace)
-        except ValueError:
-            continue
-        if any(part in ignored for part in relative.parts):
-            continue
-        if path.is_symlink() or not path.is_file() or not _is_test_code_path(relative):
-            continue
-        if path.stat().st_size > _MAX_MODEL_SOURCE_BYTES:
-            continue
-        if not needle:
-            rows.append({"path": relative.as_posix(), "matches": []})
-            continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeError):
-            continue
-        matches: list[str] = []
-        for line_no, line in enumerate(text.splitlines(), 1):
-            if needle in line.casefold():
-                matches.append(f"{line_no}: {redact_text(line[:240])}")
-                if len(matches) >= 3:
-                    break
-        if matches or needle in relative.as_posix().casefold():
-            rows.append({"path": relative.as_posix(), "matches": matches})
+    scanned = 0
+    for dirpath, dirnames, filenames in os.walk(workspace, topdown=True, followlinks=False):
+        dirnames[:] = sorted(name for name in dirnames if name not in ignored)
+        current_dir = Path(dirpath)
+        for filename in sorted(filenames):
+            if len(rows) >= max_results:
+                return rows
+            if scanned >= max_scan_files:
+                raise ValueError(
+                    "coverage search exceeded bounded scan limit before completing the query"
+                )
+            scanned += 1
+            path = current_dir / filename
+            try:
+                relative = path.relative_to(workspace)
+            except ValueError:
+                continue
+            if path.is_symlink() or not path.is_file() or not _is_test_code_path(relative):
+                continue
+            try:
+                if path.stat().st_size > _MAX_MODEL_SOURCE_BYTES:
+                    continue
+            except OSError:
+                continue
+            if not needle:
+                rows.append({"path": relative.as_posix(), "matches": []})
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                continue
+            matches: list[str] = []
+            for line_no, line in enumerate(text.splitlines(), 1):
+                if needle in line.casefold():
+                    matches.append(f"{line_no}: {redact_text(line[:240])}")
+                    if len(matches) >= 3:
+                        break
+            if matches or needle in relative.as_posix().casefold():
+                rows.append({"path": relative.as_posix(), "matches": matches})
     return rows
+
 
 def _record_patch_safety_validation(
     services: "RuntimeServices",
@@ -183,7 +210,6 @@ def _record_patch_safety_validation(
             details={"path": path, "scope": "static_patch_safety"},
         )
     )
-
 
 
 def _record_capability_validation(
@@ -967,16 +993,12 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
     async def run_k6(args: dict[str, Any]) -> dict[str, Any]:
         services.consume("run_k6", args)
         services.network_hosts(args["target_url"])
-        target_host = (urlparse(args["target_url"]).hostname or "").lower()
-        if (
-            target_host not in {"localhost", "127.0.0.1", "::1"}
-            and not services.k6_external_egress_enforced
-        ):
+        if not services.k6_external_egress_enforced:
             return {
                 "content": [
                     {
                         "type": "text",
-                        "text": "DENIED: external k6 execution requires trusted infrastructure-level egress enforcement",
+                        "text": "DENIED: k6 execution requires trusted infrastructure-level egress enforcement for every target, including localhost",
                     }
                 ],
                 "is_error": True,
