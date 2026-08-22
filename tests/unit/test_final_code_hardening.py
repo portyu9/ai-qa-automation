@@ -5,11 +5,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from ai_qa_automation.models import AgentRunState, TerminalStatus
+from ai_qa_automation.models import AgentRunState, TerminalStatus, ValidationStatus
 from ai_qa_automation.policy import PolicyEngine
 from ai_qa_automation.runtime.budget import ExecutionBudget
 from ai_qa_automation.runtime.journal import RunJournal
-from ai_qa_automation.runtime.run_control import PendingMutation, RuntimeControl
+from ai_qa_automation.runtime.run_control import (
+    PendingMutation,
+    RuntimeControl,
+    atomic_write_json,
+)
 from ai_qa_automation.runtime.runtime_hooks import (
     _reconcile_rolled_back_mutation,
     pretool_policy_output,
@@ -132,6 +136,10 @@ def test_rollback_reconciliation_removes_only_advanced_attempt(tmp_path: Path) -
     assert state.files_modified == ["tests/test_checkout.py", "tests/test_other.py"]
     assert state.change_revision == 2
     assert any("modified-file accounting was reconciled" in item for item in state.observations)
+    rollback_gate = state.validation_results[-1]
+    assert rollback_gate.gate_id == "mutation_transaction:tests/test_checkout.py"
+    assert rollback_gate.revision == 2
+    assert rollback_gate.status is ValidationStatus.NOT_VERIFIED
 
 
 def test_rollback_reconciliation_preserves_prior_commit_when_attempt_never_advanced(
@@ -151,3 +159,20 @@ def test_rollback_reconciliation_preserves_prior_commit_when_attempt_never_advan
 
     assert state.files_modified == ["tests/test_checkout.py"]
     assert state.observations == []
+    assert state.validation_results == []
+
+
+def test_runtime_atomic_write_rejects_symlink_target(tmp_path: Path) -> None:
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"owned": true}\n', encoding="utf-8")
+    runtime_path = tmp_path / "run" / "runtime.json"
+    runtime_path.parent.mkdir()
+    try:
+        runtime_path.symlink_to(outside)
+    except OSError as exc:
+        pytest.skip(f"symlink creation is unavailable: {type(exc).__name__}")
+
+    with pytest.raises(RuntimeError, match="atomic write target is a symlink"):
+        atomic_write_json(runtime_path, {"owned": False})
+
+    assert outside.read_text(encoding="utf-8") == '{"owned": true}\n'
