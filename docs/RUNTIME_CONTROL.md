@@ -82,6 +82,19 @@ Before a write, the runtime:
 
 New files are tracked as absent-before-mutation so rollback removes them rather than manufacturing previous content.
 
+### Transaction durability ordering
+
+`runtime.json` is the crash-recovery authority for whether a mutation is still pending. The runtime therefore orders transaction transitions conservatively:
+
+- **prepare:** rollback bytes are created, then pending metadata is durably persisted before the mutation tool may execute;
+- **commit:** rollback ownership/hash is verified, then pending metadata is durably cleared **before** the rollback snapshot is discarded;
+- **rollback:** original bytes are restored (or an unverified new file is removed), then pending metadata is durably cleared **before** rollback-snapshot cleanup;
+- if metadata persistence fails during commit, the transaction remains pending and rollback bytes are preserved;
+- if metadata persistence fails after rollback bytes have been restored, the transaction remains conservatively pending with its backup intact so recovery cannot infer a clean closure;
+- lifecycle journal augmentation occurs after an already-durable commit/rollback transition and cannot resurrect pending state or undo restored bytes.
+
+This ordering intentionally prefers an orphaned cleanup artifact over the unsafe opposite state: deleted rollback bytes while durable metadata still says a mutation is pending.
+
 ### Live-language closure boundary
 
 The reusable safe patcher can validate Python/JavaScript/TypeScript test artifacts. The **live autonomous write surface is narrower**: it authorizes Python test mutations only, because current deterministic commit closure is pytest-backed.
@@ -195,10 +208,10 @@ A later successful invocation resets the circuit. A broken provider/tool therefo
 | Record | Purpose | Ownership rule |
 |---|---|---|
 | `state.json` | canonical QA decision/evidence state | recovery/attestation reject ambiguous symlink ownership |
-| `runtime.json` | lease, fingerprint, budgets, circuits, mutation metadata, journal head | stale recovery requires owned metadata |
-| `journal.jsonl` | append-only hash-chained lifecycle/tool events | journal rejects pre-existing and post-init symlink substitution |
-| `evidence-manifest.json` | evidence/artifact identities and hashes | evidence store rejects symlink control-file substitution |
-| `rollback/` | temporary authoritative prior bytes | directory + backup ownership and hashes are revalidated |
+| `runtime.json` | lease, fingerprint, budgets, circuits, mutation metadata, journal head | stale recovery requires owned metadata; writes/restores are size-bounded |
+| `journal.jsonl` | append-only hash-chained lifecycle/tool events | journal rejects pre-existing and post-init symlink substitution and byte-bounds records |
+| `evidence-manifest.json` | evidence/artifact identities and hashes | evidence store rejects symlink control-file substitution and enforces bounded registries |
+| `rollback/` | temporary authoritative prior bytes | directory + backup ownership, size, and hashes are revalidated |
 | `.leases/*.lock` | cross-process workspace ownership | directory/file symlink ownership rejected |
 
 Keeping these concerns separate prevents process recovery metadata from becoming test evidence or a QA conclusion.
