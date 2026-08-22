@@ -33,9 +33,10 @@ from .runtime.run_control import (
 )
 from .runtime.runtime_hooks import build_hooks, build_permission_handler
 from .runtime.sdk_recovery import (
+    SDKRetryDecision,
     retry_decision,
     retry_delay_seconds,
-    sdk_exception_is_transient,
+    retry_failure_reason,
 )
 from .runtime.stale_recovery import recover_stale_mutation
 from .runtime.system_prompt import RUNTIME_SYSTEM_PROMPT
@@ -242,6 +243,7 @@ async def run_agent(objective: str, workspace: Path, settings: Settings | None =
         )
         final_text = ""
         result_subtype: str | None = None
+        last_retry_decision: SDKRetryDecision | None = None
         try:
             with trace_span("ai_qa_automation.agent_run"):
                 async with asyncio.timeout(cfg.global_timeout_seconds):
@@ -276,6 +278,7 @@ async def run_agent(objective: str, workspace: Path, settings: Settings | None =
                                 pending_mutation=control.pending_mutation is not None,
                                 provider_request_started=provider_request_started,
                             )
+                            last_retry_decision = decision
                             if not decision.retry:
                                 raise
                             state.retry_count += 1
@@ -307,15 +310,10 @@ async def run_agent(objective: str, workspace: Path, settings: Settings | None =
             state.terminal_reason = "Global execution-time budget exhausted"
         except Exception as exc:
             state.terminal_status, state.terminal_reason = sdk_exception_outcome(exc)
-            if (
-                sdk_exception_is_transient(exc)
-                and state.retry_count > 0
-                and state.retry_count >= cfg.max_sdk_retries
-            ):
-                state.terminal_reason = (
-                    "Transient Agent SDK execution failure persisted after bounded recovery attempts: "
-                    f"{type(exc).__name__}"
-                )
+            if last_retry_decision is not None:
+                retry_reason = retry_failure_reason(last_retry_decision, exc)
+                if retry_reason is not None:
+                    state.terminal_reason = retry_reason
         else:
             if state.terminal_status not in {
                 TerminalStatus.BUDGET_EXCEEDED,
