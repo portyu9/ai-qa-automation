@@ -100,8 +100,9 @@ class RuntimeControl:
         pending = self.pending_mutation
         if pending is None:
             return None
-        if pending.backup_path:
-            Path(pending.backup_path).unlink(missing_ok=True)
+        if pending.existed:
+            backup, _ = self._validated_rollback_backup(pending)
+            backup.unlink()
         self.pending_mutation = None
         self.journal.append("mutation_committed", path=pending.relative_path)
         self.persist()
@@ -113,26 +114,50 @@ class RuntimeControl:
             return None
         target = self._target(pending.relative_path)
         if pending.existed:
-            if not pending.backup_path:
-                raise RuntimeError("pending rollback backup is missing")
-            backup = Path(pending.backup_path).expanduser().resolve()
-            rollback_root = (self.metadata_path.parent / "rollback").resolve()
-            try:
-                backup.relative_to(rollback_root)
-            except ValueError as exc:
-                raise RuntimeError("pending rollback backup escaped rollback directory") from exc
-            data = backup.read_bytes()
-            if hashlib.sha256(data).hexdigest() != pending.original_sha256:
-                raise RuntimeError("pending rollback backup failed integrity verification")
+            backup, data = self._validated_rollback_backup(pending)
             target.parent.mkdir(parents=True, exist_ok=True)
             _atomic_write_bytes(target, data)
-            backup.unlink(missing_ok=True)
+            backup.unlink()
         else:
             target.unlink(missing_ok=True)
         self.pending_mutation = None
         self.journal.append("mutation_rolled_back", path=pending.relative_path, reason=reason)
         self.persist()
         return pending.relative_path
+
+    def _validated_rollback_backup(self, pending: PendingMutation) -> tuple[Path, bytes]:
+        """Validate rollback ownership and bytes before either restore or commit disposal."""
+        if not pending.backup_path or not pending.original_sha256:
+            raise RuntimeError("pending rollback backup metadata is incomplete")
+
+        rollback_root = (self.metadata_path.parent / "rollback").expanduser().resolve()
+        raw_backup = Path(pending.backup_path).expanduser()
+        absolute_backup = raw_backup if raw_backup.is_absolute() else raw_backup.absolute()
+        try:
+            relative = absolute_backup.relative_to(rollback_root)
+        except ValueError as exc:
+            raise RuntimeError("pending rollback backup escaped rollback directory") from exc
+        if relative == Path("."):
+            raise RuntimeError("pending rollback backup cannot be the rollback directory")
+
+        cursor = rollback_root
+        for part in relative.parts:
+            cursor = cursor / part
+            if cursor.is_symlink():
+                raise RuntimeError("pending rollback backup contains a symlink")
+
+        backup = absolute_backup.resolve()
+        try:
+            backup.relative_to(rollback_root)
+        except ValueError as exc:
+            raise RuntimeError("pending rollback backup escaped rollback directory") from exc
+        if not backup.is_file():
+            raise RuntimeError("pending rollback backup is missing or not a regular file")
+
+        data = backup.read_bytes()
+        if hashlib.sha256(data).hexdigest() != pending.original_sha256:
+            raise RuntimeError("pending rollback backup failed integrity verification")
+        return backup, data
 
     def set_workspace_fingerprint(self, fingerprint: str) -> None:
         self.expected_workspace_fingerprint = fingerprint
