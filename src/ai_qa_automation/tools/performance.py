@@ -32,24 +32,18 @@ class K6Runner:
         policy: PolicyEngine,
         timeout_seconds: int = 180,
         *,
-        external_egress_enforced: bool | None = None,
+        external_egress_enforced: bool = False,
     ) -> None:
         if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int):
             raise ValueError("k6 timeout_seconds must be an integer")
         if timeout_seconds < 1:
             raise ValueError("k6 timeout_seconds must be positive")
-        if external_egress_enforced is not None and not isinstance(
-            external_egress_enforced, bool
-        ):
-            raise ValueError("external_egress_enforced must be a boolean when supplied")
+        if not isinstance(external_egress_enforced, bool):
+            raise ValueError("external_egress_enforced must be a boolean")
         self.workspace = workspace.resolve()
         self.policy = policy
         self.timeout_seconds = timeout_seconds
-        self.external_egress_enforced = (
-            bool(getattr(policy, "k6_external_egress_enforced", False))
-            if external_egress_enforced is None
-            else external_egress_enforced
-        )
+        self.external_egress_enforced = external_egress_enforced
 
     def _validate_script(self, script: Path, target_url: str) -> Path:
         resolved = (script if script.is_absolute() else self.workspace / script).resolve()
