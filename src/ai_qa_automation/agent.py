@@ -32,6 +32,11 @@ from .runtime.run_control import (
     WorkspaceLease,
 )
 from .runtime.runtime_hooks import build_hooks, build_permission_handler
+from .runtime.sdk_recovery import (
+    retry_decision,
+    retry_delay_seconds,
+    sdk_exception_is_transient,
+)
 from .runtime.stale_recovery import recover_stale_mutation
 from .runtime.system_prompt import RUNTIME_SYSTEM_PROMPT
 from .state import StateStore
@@ -240,19 +245,53 @@ async def run_agent(objective: str, workspace: Path, settings: Settings | None =
         try:
             with trace_span("ai_qa_automation.agent_run"):
                 async with asyncio.timeout(cfg.global_timeout_seconds):
-                    async with ClaudeSDKClient(options=options) as client:
-                        await client.query(bounded_prompt)
-                        async for message in client.receive_response():
-                            state.iteration += 1
-                            budget.assert_wall_time()
-                            if isinstance(message, ResultMessage):
-                                final_text = str(message.result or "")
-                                result_subtype = str(message.subtype)
-                                state.cost = float(message.total_cost_usd or 0.0)
-                                usage = message.usage or {}
-                                state.token_usage = int(usage.get("input_tokens", 0)) + int(
-                                    usage.get("output_tokens", 0)
-                                )
+                    while True:
+                        try:
+                            async with ClaudeSDKClient(options=options) as client:
+                                await client.query(bounded_prompt)
+                                async for message in client.receive_response():
+                                    state.iteration += 1
+                                    budget.assert_wall_time()
+                                    if isinstance(message, ResultMessage):
+                                        final_text = str(message.result or "")
+                                        result_subtype = str(message.subtype)
+                                        state.cost = float(message.total_cost_usd or 0.0)
+                                        usage = message.usage or {}
+                                        state.token_usage = int(usage.get("input_tokens", 0)) + int(
+                                            usage.get("output_tokens", 0)
+                                        )
+                            break
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as exc:
+                            decision = retry_decision(
+                                exc,
+                                state=state,
+                                retry_limit=cfg.max_sdk_retries,
+                                pending_mutation=control.pending_mutation is not None,
+                            )
+                            if not decision.retry:
+                                raise
+                            state.retry_count += 1
+                            delay = retry_delay_seconds(
+                                state.retry_count,
+                                base_seconds=cfg.sdk_retry_backoff_seconds,
+                                max_seconds=cfg.sdk_retry_max_backoff_seconds,
+                            )
+                            state.observations.append(
+                                "Transient Agent SDK failure occurred before observable agent/tool "
+                                f"activity; scheduling bounded retry {state.retry_count}/{cfg.max_sdk_retries}."
+                            )
+                            journal.try_append(
+                                "sdk_retry_scheduled",
+                                retry_number=state.retry_count,
+                                retry_limit=cfg.max_sdk_retries,
+                                category=decision.category,
+                                error_type=type(exc).__name__,
+                                delay_seconds=delay,
+                            )
+                            _sync_operational_state(state, state_store, control)
+                            await asyncio.sleep(delay)
         except asyncio.CancelledError:
             state.terminal_status = TerminalStatus.CANCELLED
             state.terminal_reason = "Execution cancelled"
@@ -262,6 +301,11 @@ async def run_agent(objective: str, workspace: Path, settings: Settings | None =
             state.terminal_reason = "Global execution-time budget exhausted"
         except Exception as exc:
             state.terminal_status, state.terminal_reason = sdk_exception_outcome(exc)
+            if sdk_exception_is_transient(exc) and state.retry_count >= cfg.max_sdk_retries:
+                state.terminal_reason = (
+                    "Transient Agent SDK execution failure persisted after bounded recovery attempts: "
+                    f"{type(exc).__name__}"
+                )
         else:
             if state.terminal_status not in {
                 TerminalStatus.BUDGET_EXCEEDED,
