@@ -12,6 +12,7 @@ from .execution_env import restricted_subprocess_env
 
 _SAFE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@{}~^:+-]{0,255}$")
 _HEX_SHA = re.compile(r"^[0-9a-fA-F]{40,64}$")
+_MAX_FINGERPRINT_CHANGED_FILES = 1000
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,8 @@ class RepositorySnapshot:
     status: str
     changed_files: tuple[str, ...]
     fingerprint: str
+    fingerprint_complete: bool
+    fingerprint_incomplete_reasons: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -62,7 +65,7 @@ class RepositoryInspector:
             "status", "--porcelain=v1", "--untracked-files=all", allow_failure=True
         ) or ""
         changed = self._changed_paths(status)
-        fingerprint = self._fingerprint(sha, status, changed)
+        fingerprint, complete, incomplete_reasons = self._fingerprint(sha, status, changed)
         return RepositorySnapshot(
             workspace=str(self.workspace),
             git_sha=sha or None,
@@ -70,6 +73,8 @@ class RepositoryInspector:
             status=status,
             changed_files=changed,
             fingerprint=fingerprint,
+            fingerprint_complete=complete,
+            fingerprint_incomplete_reasons=incomplete_reasons,
         )
 
     def change_set(self, base_ref: str) -> RepositoryChangeSet:
@@ -172,24 +177,37 @@ class RepositoryInspector:
         git_sha: str | None,
         status: str,
         changed_files: tuple[str, ...],
-    ) -> str:
-        """Hash Git state plus current bytes for dirty/untracked files."""
+    ) -> tuple[str, bool, tuple[str, ...]]:
+        """Hash Git state plus current bytes and expose whether that proof is complete."""
         file_rows: list[dict[str, object]] = []
-        for relative in changed_files[:1000]:
-            candidate = (self.workspace / relative).resolve()
+        incomplete_reasons: set[str] = set()
+        if len(changed_files) > _MAX_FINGERPRINT_CHANGED_FILES:
+            incomplete_reasons.add("changed-file-limit-exceeded")
+        for line in status.splitlines():
+            if len(line) >= 4:
+                raw = line[3:].strip()
+                if raw.startswith('"') or ' -> "' in raw:
+                    incomplete_reasons.add("quoted-git-path-not-byte-bound")
+
+        for relative in changed_files[:_MAX_FINGERPRINT_CHANGED_FILES]:
+            raw_candidate = self.workspace / relative
+            if raw_candidate.is_symlink():
+                file_rows.append({"path": relative, "state": "symlink"})
+                incomplete_reasons.add("changed-symlink-not-byte-bound")
+                continue
+            candidate = raw_candidate.resolve()
             try:
                 candidate.relative_to(self.workspace)
             except ValueError:
                 file_rows.append({"path": relative, "state": "outside-workspace"})
-                continue
-            if candidate.is_symlink():
-                file_rows.append({"path": relative, "state": "symlink"})
+                incomplete_reasons.add("changed-path-outside-workspace")
                 continue
             if not candidate.exists():
                 file_rows.append({"path": relative, "state": "deleted"})
                 continue
             if not candidate.is_file():
                 file_rows.append({"path": relative, "state": "non-file"})
+                incomplete_reasons.add("changed-non-file-not-byte-bound")
                 continue
             digest = hashlib.sha256()
             size = 0
@@ -200,13 +218,26 @@ class RepositoryInspector:
                         digest.update(chunk)
             except OSError:
                 file_rows.append({"path": relative, "state": "unreadable"})
+                incomplete_reasons.add("changed-file-unreadable")
                 continue
             file_rows.append({"path": relative, "size": size, "sha256": digest.hexdigest()})
-        if len(changed_files) > 1000:
+        if len(changed_files) > _MAX_FINGERPRINT_CHANGED_FILES:
             file_rows.append({"state": "changed-file-overflow", "count": len(changed_files)})
-        payload = {"git_sha": git_sha, "status": status, "files": file_rows}
+
+        reasons = tuple(sorted(incomplete_reasons))
+        payload = {
+            "git_sha": git_sha,
+            "status": status,
+            "files": file_rows,
+            "fingerprint_complete": not reasons,
+            "fingerprint_incomplete_reasons": list(reasons),
+        }
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-        return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
+        return (
+            f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}",
+            not reasons,
+            reasons,
+        )
 
     def _git(self, *args: str, allow_failure: bool = False) -> str | None:
         with tempfile.TemporaryDirectory(prefix="aiqa-git-home-") as temp_home:
