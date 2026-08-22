@@ -20,15 +20,26 @@ _IMPORT_SPECIFIER = re.compile(
 )
 _MAX_K6_MODULE_BYTES = 1_000_000
 _MAX_K6_MODULES = 64
+_MAX_K6_SUMMARY_BYTES = 1_000_000
 
 
 class K6Runner:
     """Runs a target-bound k6 script only behind an infrastructure-egress prerequisite."""
 
-    def __init__(self, workspace: Path, policy: PolicyEngine, timeout_seconds: int = 180) -> None:
+    def __init__(
+        self,
+        workspace: Path,
+        policy: PolicyEngine,
+        timeout_seconds: int = 180,
+        *,
+        external_egress_enforced: bool = False,
+    ) -> None:
+        if timeout_seconds < 1:
+            raise ValueError("k6 timeout_seconds must be positive")
         self.workspace = workspace.resolve()
         self.policy = policy
         self.timeout_seconds = timeout_seconds
+        self.external_egress_enforced = external_egress_enforced
 
     def _validate_script(self, script: Path, target_url: str) -> Path:
         resolved = (script if script.is_absolute() else self.workspace / script).resolve()
@@ -94,7 +105,7 @@ class K6Runner:
         return resolved
 
     def run(self, script: Path, *, target_url: str, environment: str) -> PerformanceMetrics:
-        if not bool(getattr(self.policy, "k6_external_egress_enforced", False)):
+        if not self.external_egress_enforced:
             raise PermissionError(
                 "k6 execution requires trusted infrastructure-level egress enforcement; "
                 "static JavaScript inspection is not a network sandbox"
@@ -129,19 +140,28 @@ class K6Runner:
                     "K6_NO_USAGE_REPORT": "true",
                 },
             )
-            result = subprocess.run(
-                command,
-                cwd=self.workspace,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout_seconds,
-                check=False,
-                env=env,
-            )
+            try:
+                result = subprocess.run(
+                    command,
+                    cwd=self.workspace,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.timeout_seconds,
+                    check=False,
+                    env=env,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError(
+                    f"k6 exceeded {self.timeout_seconds}s execution budget"
+                ) from exc
             if result.returncode != 0:
                 raise RuntimeError(result.stderr[-3000:] or "k6 failed")
             if not summary_path.is_file():
                 raise RuntimeError("k6 completed without producing the required summary artifact")
+            if summary_path.stat().st_size > _MAX_K6_SUMMARY_BYTES:
+                raise RuntimeError(
+                    f"k6 summary exceeds {_MAX_K6_SUMMARY_BYTES} byte ingestion limit"
+                )
             data = json.loads(summary_path.read_text(encoding="utf-8"))
 
         duration = data["metrics"]["http_req_duration"]["values"]
