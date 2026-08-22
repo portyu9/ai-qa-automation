@@ -40,8 +40,6 @@ Path:
 
 The Skill is used when a test failed but the cause is uncertain or contested. Its procedure favors discriminating evidence over repeated retries and considers competing hypotheses such as product, automation, locator/UI-contract, data, timing, environment, dependency, authentication, configuration, and performance causes.
 
-Important boundary:
-
 > A test failure alone is not evidence of a product defect.
 
 The expected output cites evidence IDs and preserves unresolved ambiguity as insufficient evidence rather than forcing a classification.
@@ -60,7 +58,7 @@ The workflow requires the expected product behavior to still exist, Playwright-o
 
 The Skill prohibits model-declared uniqueness, arbitrary dynamic selectors, generic text replacement, assertion weakening/removal, skip/xfail, arbitrary sleeps, timeout inflation, and product-code mutation solely to make the test green.
 
-Even an applied locator change remains incomplete until the current revision has patch-safety, targeted pytest, and full-regression PASS evidence.
+An applied locator change remains transactional until the current revision has patch-safety, targeted pytest, and full-regression PASS evidence.
 
 ## `generate-test`
 
@@ -85,7 +83,7 @@ requirement/change
 
 The Skill favors the lowest reliable test layer that proves the behavior and rejects assertion-free, plan-less, redundant, arbitrary-sleep, `.skip`/`.only`, timeout-inflated, or mock-only tests.
 
-If expected behavior is unknown, generation should block/escalate rather than invent product intent.
+If expected behavior is unknown, generation blocks or escalates rather than inventing product intent.
 
 ## `prioritize-regression`
 
@@ -115,7 +113,7 @@ This Skill guides bounded k6 use only when a target is explicitly non-production
 
 Non-local targets additionally require the trusted infrastructure-egress precondition. That precondition asserts an external control exists; it does not turn application code into a firewall.
 
-PASS/FAIL comes from real k6 measurements plus deterministic threshold assessment. Missing executable, target access, or egress evidence remains blocked/not verified.
+PASS/FAIL comes from real k6 measurements plus deterministic threshold assessment. Missing executable, target access, or egress evidence produces the corresponding non-PASS runtime outcome.
 
 ## Skills do not override the trust model
 
@@ -152,8 +150,6 @@ When changing a Skill:
 4. keep prohibited shortcuts explicit;
 5. add/update deterministic tests or adversarial evaluation when the behavioral contract changes;
 6. do not modify predefined safety thresholds merely because new Skill behavior performs poorly.
-
-Source presence is not current-head execution evidence. Skill behavior remains `NOT_VERIFIED` on the current head until the applicable deterministic/model-backed gates are intentionally executed.
 
 See [`ARCHITECTURE.md`](ARCHITECTURE.md), [`EVALUATION.md`](EVALUATION.md), [`SECURITY.md`](SECURITY.md), and [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md).
 
