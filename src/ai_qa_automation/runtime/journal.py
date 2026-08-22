@@ -11,18 +11,26 @@ from typing import Any
 from ..redaction import sanitize
 from .budget import BudgetExceededError
 
+_MAX_JOURNAL_LINE_BYTES = 1_000_000
+_MAX_RESTORE_EVENTS = 100_000
+
 
 class RunJournal:
     """Append-only hash-chained JSONL lifecycle journal."""
 
     def __init__(self, path: Path, *, regulated_mode: bool = False, max_events: int = 5000) -> None:
-        if max_events < 1:
-            raise ValueError("max_events must be at least 1")
+        if isinstance(max_events, bool) or not isinstance(max_events, int) or max_events < 1:
+            raise ValueError("max_events must be a positive integer")
         requested = path.expanduser()
         if requested.is_symlink():
             raise ValueError("run journal path is a symlink and has ambiguous ownership")
-        self.path = requested.resolve()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        raw_parent = requested.parent
+        if raw_parent.is_symlink():
+            raise ValueError("run journal directory is a symlink and has ambiguous ownership")
+        raw_parent.mkdir(parents=True, exist_ok=True)
+        if raw_parent.is_symlink():
+            raise ValueError("run journal directory became a symlink")
+        self.path = raw_parent.resolve() / requested.name
         self.regulated_mode = regulated_mode
         self.max_events = max_events
         self._lock = threading.Lock()
@@ -37,6 +45,8 @@ class RunJournal:
         return self._head
 
     def _assert_owned_path(self) -> None:
+        if self.path.parent.is_symlink():
+            raise RuntimeError("run journal directory became a symlink and ownership is ambiguous")
         if self.path.is_symlink():
             raise RuntimeError("run journal path became a symlink and ownership is ambiguous")
 
@@ -54,11 +64,14 @@ class RunJournal:
             }
             canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
             record_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            rendered = (
+                json.dumps({**body, "record_hash": record_hash}, sort_keys=True, default=str)
+                + "\n"
+            )
+            if len(rendered.encode("utf-8")) > _MAX_JOURNAL_LINE_BYTES:
+                raise ValueError("run-journal event exceeds line-size bound")
             with self.path.open("a", encoding="utf-8") as stream:
-                stream.write(
-                    json.dumps({**body, "record_hash": record_hash}, sort_keys=True, default=str)
-                    + "\n"
-                )
+                stream.write(rendered)
                 stream.flush()
                 if self.regulated_mode:
                     os.fsync(stream.fileno())
@@ -80,15 +93,23 @@ class RunJournal:
         expected_seq = 1
         if not self.path.exists():
             return {"valid": True, "events": 0, "head_hash": None}
-        # Journal creation is bounded by max_events; recovery additionally rejects
-        # pathological line counts to avoid turning a corrupted artifact into a memory DoS.
-        with self.path.open("r", encoding="utf-8") as stream:
-            for raw in stream:
+        # Read byte-bounded lines so a corrupted or adversarial JSONL record cannot
+        # turn recovery/attestation into an unbounded-memory operation.
+        restore_limit = max(self.max_events, _MAX_RESTORE_EVENTS)
+        with self.path.open("rb") as stream:
+            while True:
+                raw = stream.readline(_MAX_JOURNAL_LINE_BYTES + 1)
+                if not raw:
+                    break
+                if len(raw) > _MAX_JOURNAL_LINE_BYTES:
+                    return {"valid": False, "events": count, "head_hash": previous}
                 if not raw.strip():
                     continue
-                if count >= max(self.max_events, 100_000):
+                if count >= restore_limit:
                     return {"valid": False, "events": count, "head_hash": previous}
-                record = json.loads(raw)
+                record = json.loads(raw.decode("utf-8"))
+                if not isinstance(record, dict):
+                    return {"valid": False, "events": count, "head_hash": previous}
                 if record.get("seq") != expected_seq:
                     return {"valid": False, "events": count, "head_hash": previous}
                 body = {key: value for key, value in record.items() if key != "record_hash"}
