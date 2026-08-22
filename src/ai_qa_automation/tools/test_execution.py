@@ -12,6 +12,7 @@ from ..models import EvidenceItem, EvidenceKind, EvidenceNature
 from ..redaction import redact_text
 from .artifacts import text_artifact
 from .execution_env import restricted_subprocess_env
+from .repository import RepositoryInspector
 
 
 @dataclass(frozen=True)
@@ -25,7 +26,13 @@ class TestExecutionResult:
 
 
 class TestRunner:
-    """Runs pytest through a bounded argument surface inside one target workspace."""
+    """Runs pytest through a bounded argument surface inside one target workspace.
+
+    A zero pytest exit code is retained only when the Git-backed workspace is
+    completely fingerprinted and unchanged across execution. Target tests are
+    executable repository code; they therefore cannot be allowed to modify the
+    repository and still certify their own result.
+    """
 
     _SAFE_FLAGS = {
         "-q",
@@ -38,8 +45,13 @@ class TestRunner:
     }
     _SAFE_VALUE_OPTIONS = {"-k", "-m", "--maxfail", "--tb"}
     _SAFE_VALUE_PREFIXES = ("--maxfail=", "--tb=")
+    _WORKSPACE_INTEGRITY_EXIT_CODE = 125
 
     def __init__(self, workspace: Path, evidence: EvidenceStore, timeout_seconds: int = 120) -> None:
+        if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int):
+            raise ValueError("pytest timeout_seconds must be an integer")
+        if timeout_seconds < 1:
+            raise ValueError("pytest timeout_seconds must be positive")
         self.workspace = workspace.expanduser().resolve()
         self.evidence = evidence
         self.timeout_seconds = timeout_seconds
@@ -58,12 +70,16 @@ class TestRunner:
             safe_args = self._validate_pytest_args(command[3:])
             command = [*command[:3], *safe_args]
 
+        before = RepositoryInspector(self.workspace).snapshot()
         start = time.monotonic()
         timed_out = False
         with tempfile.TemporaryDirectory(prefix="aiqa-pytest-home-") as temp_home:
             env = restricted_subprocess_env(
                 home=Path(temp_home),
-                extra={"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"},
+                extra={
+                    "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+                    "PYTHONDONTWRITEBYTECODE": "1",
+                },
             )
             try:
                 result = subprocess.run(
@@ -89,6 +105,14 @@ class TestRunner:
                     raw_stderr = raw_stderr.decode("utf-8", errors="replace")
                 raw_stderr += f"\npytest exceeded {self.timeout_seconds}s execution budget"
         duration = time.monotonic() - start
+
+        after = RepositoryInspector(self.workspace).snapshot()
+        integrity_reason = self._workspace_integrity_failure(before, after)
+        if integrity_reason:
+            raw_stderr += f"\nworkspace-integrity: {integrity_reason}"
+            if exit_code == 0:
+                exit_code = self._WORKSPACE_INTEGRITY_EXIT_CODE
+
         safe_stdout = redact_text(raw_stdout)
         safe_stderr = redact_text(raw_stderr)
         artifact_path, artifact_hash = text_artifact(
@@ -105,14 +129,22 @@ class TestRunner:
                 source="pytest",
                 source_identifier=" ".join(command),
                 summary=(
-                    f"pytest exceeded {self.timeout_seconds}s execution budget"
-                    if timed_out
-                    else f"pytest exited with code {exit_code}"
+                    f"pytest workspace-integrity gate failed: {integrity_reason}"
+                    if integrity_reason and not timed_out
+                    else (
+                        f"pytest exceeded {self.timeout_seconds}s execution budget"
+                        if timed_out
+                        else f"pytest exited with code {exit_code}"
+                    )
                 ),
                 structured_data={
                     "exit_code": exit_code,
                     "duration_seconds": duration,
                     "timeout": timed_out,
+                    "workspace_integrity_verified": integrity_reason is None,
+                    "workspace_integrity_reason": integrity_reason,
+                    "workspace_fingerprint_before": before.fingerprint,
+                    "workspace_fingerprint_after": after.fingerprint,
                 },
                 artifact_reference=artifact_path,
                 content_hash=artifact_hash,
@@ -124,11 +156,21 @@ class TestRunner:
                     run_id=self.evidence.run_id,
                     kind=EvidenceKind.EXCEPTION,
                     source="pytest",
-                    summary="pytest execution timed out" if timed_out else "pytest execution failed",
+                    summary=(
+                        "pytest execution timed out"
+                        if timed_out
+                        else (
+                            "pytest changed or could not completely fingerprint the target workspace"
+                            if integrity_reason
+                            else "pytest execution failed"
+                        )
+                    ),
                     structured_data={
                         "stderr": safe_stderr[-4000:],
                         "stdout": safe_stdout[-4000:],
                         "timeout": timed_out,
+                        "workspace_integrity_verified": integrity_reason is None,
+                        "workspace_integrity_reason": integrity_reason,
                     },
                     artifact_reference=artifact_path,
                     content_hash=artifact_hash,
@@ -145,6 +187,36 @@ class TestRunner:
             duration_seconds=duration,
             evidence_ids=ids,
         )
+
+    @staticmethod
+    def _workspace_integrity_failure(before: object, after: object) -> str | None:
+        before_sha = getattr(before, "git_sha", None)
+        after_sha = getattr(after, "git_sha", None)
+        if not before_sha or not after_sha:
+            return "pytest validation requires a Git-backed target workspace"
+        before_complete = bool(getattr(before, "fingerprint_complete", False))
+        after_complete = bool(getattr(after, "fingerprint_complete", False))
+        if not before_complete or not after_complete:
+            before_reasons = ",".join(
+                str(item) for item in getattr(before, "fingerprint_incomplete_reasons", ())
+            )
+            after_reasons = ",".join(
+                str(item) for item in getattr(after, "fingerprint_incomplete_reasons", ())
+            )
+            reasons = "; ".join(
+                item
+                for item in (
+                    f"before={before_reasons}" if before_reasons else "",
+                    f"after={after_reasons}" if after_reasons else "",
+                )
+                if item
+            )
+            return "workspace fingerprint is incomplete" + (f" ({reasons})" if reasons else "")
+        if before_sha != after_sha:
+            return "Git HEAD changed during pytest execution"
+        if getattr(before, "fingerprint", None) != getattr(after, "fingerprint", None):
+            return "target workspace changed during pytest execution"
+        return None
 
     def _validate_pytest_args(self, args: list[str]) -> list[str]:
         safe: list[str] = []
