@@ -197,20 +197,20 @@ class PolicyEngine:
         """Normalize snake/camel/mixed MCP action names into conservative verb tokens."""
         raw_action = tool_name.rsplit("__", 1)[-1]
         snake_action = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", raw_action).lower()
-        tokens = tuple(token for token in re.split(r"[^a-z0-9]+", snake_action) if token)
+        tokens = tuple(segment for segment in re.split(r"[^a-z0-9]+", snake_action) if segment)
         return snake_action, tokens
 
     @staticmethod
     def _semantic_action_tokens(tokens: tuple[str, ...]) -> tuple[str, ...]:
         """Remove known resource-noun collisions without weakening actual action verbs."""
         semantic: list[str] = []
-        for index, token in enumerate(tokens):
-            # In GitHub tool names, "pull request" is a resource noun. The token
+        for index, segment in enumerate(tokens):
+            # In GitHub tool names, "pull request" is a resource noun. The word
             # "request" must therefore not turn get_pull_request/pull_request_read
             # into a write. A leading request_* action remains a write verb.
-            if token == "request" and index > 0 and tokens[index - 1] == "pull":
+            if segment == "request" and index > 0 and tokens[index - 1] == "pull":
                 continue
-            semantic.append(token)
+            semantic.append(segment)
         return tuple(semantic)
 
     def _authorize_external_mcp_tool(self, tool_name: str) -> PolicyDecision:
