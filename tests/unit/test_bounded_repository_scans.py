@@ -29,6 +29,39 @@ def test_dependency_inventory_reports_scan_truncation(tmp_path: Path) -> None:
     assert truncated is True
 
 
+def test_dependency_inventory_refuses_to_hash_oversized_manifest(tmp_path: Path) -> None:
+    manifest = tmp_path / "package-lock.json"
+    manifest.write_bytes(b"x" * 17)
+
+    rows, truncated = _dependency_inventory(tmp_path, max_file_bytes=16)
+
+    assert truncated is True
+    assert rows == [
+        {
+            "path": "package-lock.json",
+            "size": 17,
+            "sha256": None,
+            "hashed": False,
+            "reason": "file-size-limit:16",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("name", "kwargs"),
+    [
+        ("max_files", {"max_files": True}),
+        ("max_scan_files", {"max_scan_files": 0}),
+        ("max_file_bytes", {"max_file_bytes": 1.5}),
+    ],
+)
+def test_dependency_inventory_rejects_invalid_bounds(
+    tmp_path: Path, name: str, kwargs: dict[str, object]
+) -> None:
+    with pytest.raises(ValueError, match=name):
+        _dependency_inventory(tmp_path, **kwargs)  # type: ignore[arg-type]
+
+
 def test_coverage_search_fails_closed_when_scan_budget_is_exhausted(tmp_path: Path) -> None:
     (tmp_path / "a.txt").write_text("irrelevant\n", encoding="utf-8")
     tests = tmp_path / "tests"
