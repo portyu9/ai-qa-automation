@@ -1,8 +1,11 @@
 # Security Policy
 
+**ƳƤ AI QA Automation Framework**  
+**Designed and engineered by Ƴunior Ƥortal (ƳƤ)**
+
 ## Project security posture
 
-AI QA Automation is a production-shaped agentic quality engineering system. It is **not** operated here as a production SaaS service, and the presence of a security control in source is not represented as proof that a deployment environment satisfies that control.
+The ƳƤ AI QA Automation Framework is a production-shaped agentic quality engineering system. It is **not** operated here as a production SaaS service, and the presence of a security control in source is not represented as proof that a deployment environment satisfies that control.
 
 The runtime is designed around least privilege, trusted-control-plane / untrusted-SUT separation, secret redaction, vendor-official MCP allowlisting, path confinement, bounded execution, transactional test mutation, deterministic policy hooks, and explicit non-PASS states such as `NOT_VERIFIED` and `BLOCKED`.
 
@@ -48,3 +51,5 @@ If a credential is accidentally exposed, treat it as compromised and rotate/revo
 A material security weakness should be addressed with the narrowest deterministic control that closes the behavior, plus an appropriate regression test/evaluation. Do not “fix” a security gate by weakening expected outcomes, broadening tool authority, or converting missing evidence into PASS.
 
 Any affected current-head execution gate remains `NOT_VERIFIED` until it is deliberately rerun and its result inspected.
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`LICENSE`](LICENSE).
