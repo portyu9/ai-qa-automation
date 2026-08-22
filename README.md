@@ -13,17 +13,16 @@
 
 **A production-oriented AI quality engineering framework that gives an LLM room to reason without giving it authority to invent evidence, weaken tests, bypass policy, or certify its own work.**
 
+[Documentation](docs/README.md) · [Architecture](docs/ARCHITECTURE.md) · [Result Contract](docs/RESULT_CONTRACT.md) · [Security](docs/SECURITY.md) · [Setup](docs/SETUP.md) · [Technical Walkthrough](docs/TECHNICAL_WALKTHROUGH.md)
+
 </div>
 
 ---
 
+> [!IMPORTANT]
+> **Model reasoning is not test evidence.** Claude may interpret observations, form hypotheses, rank risk, and choose among authorized actions. Controlled tools collect facts and perform bounded operations. Deterministic policy and validation decide what is proven.
+
 ## The engineering thesis
-
-The framework is built around one non-negotiable rule:
-
-> **Model reasoning is not test evidence.**
-
-Claude can investigate failures, form hypotheses, interpret change risk, select authorized tools, propose repairs, and design tests. Controlled systems independently own execution, evidence, authorization, mutation safety, validation, recovery, and the final runtime outcome.
 
 ```text
 Claude reasons.
@@ -32,26 +31,39 @@ Deterministic policy authorizes.
 Validation decides what is proven.
 ```
 
-This separation turns an LLM from an all-powerful test bot into a **bounded reasoning component inside a quality-engineering control system**.
+The ƳƤ AI QA Automation Framework treats an LLM as a **bounded reasoning component inside a quality-engineering control system**. The model is intentionally separated from the systems that own execution, evidence, authorization, mutation safety, recovery, and terminal truth.
 
-## What the framework is designed to prevent
+That distinction matters because agentic testing becomes unsafe when the same component can change evidence **and** decide that its own change succeeded.
 
-Agentic testing becomes dangerous when the same component can both change the evidence and judge whether its change succeeded. The ƳƤ AI QA Automation Framework is explicitly designed against that failure mode.
+### Four contracts govern the framework
 
-| Risk | Framework response |
+| Contract | Question it answers | Authority |
+|---|---|---|
+| **Authority** | What may the agent do? | deterministic policy, hooks, permissions, budgets |
+| **Evidence** | What was actually observed? | controlled tools, manifests, artifacts, hashes, provider responses |
+| **Mutation** | When may automated code changes persist? | path ownership, rollback transaction, exact-path validation closure |
+| **Outcome** | What may be called successful? | revision-aware deterministic validation lineage |
+
+## What the architecture is designed to prevent
+
+| Failure mode | Control response |
 |---|---|
 | False product-defect attribution | Evidence-weighted deterministic classification before test-side repair |
-| Model-declared success | Terminal truth is derived from deterministic validation lineage |
+| Model-declared success | Terminal truth comes from deterministic gate lineage, never persuasive prose |
 | Test weakening disguised as self-healing | Patch rules reject skip/xfail, assertion erosion, arbitrary sleeps, timeout inflation, tautologies, and broad suppression |
-| Wrong-element locator repair | Same-DOM Playwright measurement + deterministic locator semantics + transactional validation |
-| Meaningless generated tests | Coverage provenance + same-run plan binding + meaningful-assertion checks + execution closure |
-| Regression under-selection | Mandatory coverage preservation; uncertainty broadens rather than shrinks regression |
-| Prompt injection from target content | SUT/source/DOM/log/API/MCP content remains untrusted data |
-| Tool or integration privilege expansion | Explicit tool inventory, fail-closed hooks, server identity checks, and action-level authorization |
-| Concurrent or stale mutation | OS-backed workspace lease + content-sensitive fingerprint + revision-bound transactions |
-| Evidence tampering or cross-run contamination | Confined run roots, immutable evidence identities, hashes, manifests, and hash-chained journals |
-| Unbounded agent loops | Independent turn/tool/network/mutation/repetition/time/cost budgets and per-tool circuits |
-| Production load accident | Explicit non-production policy, production-like hostname denial, controlled k6 script rules, and infrastructure-egress prerequisite |
+| Wrong-element locator repair | Same-DOM Playwright measurement + deterministic semantic intent + transactional validation |
+| Meaningless generated tests | Coverage provenance + conservative planning + meaningful-assertion checks + execution closure |
+| Regression under-selection | Mandatory coverage is preserved; uncertainty broadens instead of shrinking regression |
+| Prompt injection from target or provider content | SUT/source/DOM/log/API/MCP content remains untrusted data |
+| Tool or integration privilege expansion | Explicit tool inventory, fail-closed hooks, vendor identity checks, action-level authorization |
+| Concurrent or stale mutation | OS-backed workspace lease + content-sensitive fingerprint + rollback-backed revision transaction |
+| Wrong-subject validation | Targeted pytest must explicitly select the exact pending mutation path |
+| Filesystem alias/tamper attacks | Non-symlink ownership checks cover mutation, rollback, evidence, journal, lease, recovery, and attestation paths |
+| Cross-run evidence contamination | Confined run roots, immutable evidence identities, manifests, hashes, and hash-chained journals |
+| Unbounded agent loops | Independent turn/tool/network/mutation/repetition/time/cost budgets + per-tool circuits |
+| Production load accident / k6 egress | Non-production target policy + script restrictions + mandatory infrastructure-level egress enforcement |
+
+---
 
 ## Architecture at a glance
 
@@ -94,27 +106,30 @@ flowchart LR
 | **External providers** | Approved transport/provider; returned content remains untrusted | GitHub MCP, Atlassian Rovo MCP |
 | **Deployment infrastructure** | Independent enforcement boundary | process/container isolation, egress, identity, secrets, retention, devices, real targets |
 
+> [!NOTE]
+> Application-layer controls are defense in depth. High-assurance process isolation, network egress, secret management, identity, and retention remain deployment-owned controls rather than claims manufactured by repository code.
+
 Deep dives: [`ARCHITECTURE.md`](docs/ARCHITECTURE.md) · [`RUNTIME_CONTROL.md`](docs/RUNTIME_CONTROL.md) · [`SECURITY.md`](docs/SECURITY.md) · [`THREAT_MODEL.md`](docs/THREAT_MODEL.md)
 
-## Production-grade control model
+## Production control model
 
-The live path uses the official Claude Agent SDK, pinned to `claude-agent-sdk==0.2.143`, with `claude-sonnet-5` as the default model identifier.
+The live path uses the Claude Agent SDK pinned to `claude-agent-sdk==0.2.143`, with `claude-sonnet-5` as the default model identifier.
 
 The runtime deliberately narrows authority:
 
-- generic built-in tools are not exposed as the working surface;
+- generic built-in tools are not the working surface;
 - Bash/Edit/Write/Web-style built-ins are explicitly denied;
 - exactly five trusted Claude Skills are allowlisted;
 - `strict_mcp_config=True` prevents ambient MCP inheritance;
 - every tool request passes deterministic authorization and runtime hooks;
 - approval-required operations fail closed during unattended execution;
 - tool, network, mutation, repetition, wall-time, per-tool-time, turn, and model-cost limits remain independent;
-- canonical QA state is persisted separately from conversational history;
+- canonical QA decision state is persisted separately from conversation history;
 - process-control state is persisted separately from QA decision state.
 
 ### Narrow internal QA surface
 
-The framework exposes 18 purpose-built in-process tools covering:
+The framework exposes 18 purpose-built in-process tools:
 
 | Domain | Controlled capability |
 |---|---|
@@ -127,20 +142,25 @@ The framework exposes 18 purpose-built in-process tools covering:
 | Test design | evidence-bound generation planning |
 | Regression | risk-based prioritization with mandatory coverage preservation |
 | Test quality | deterministic Python test-quality review |
-| Generation | guarded Python/JavaScript/TypeScript test creation |
-| Self-healing | same-DOM locator verification, proposal, and locator-only patching |
+| Generation | guarded live Python test creation; reusable patch utilities also understand JS/TS test artifacts |
+| Self-healing | same-DOM locator verification, proposal, and Python locator-only live mutation |
 | Contracts | JSON Schema validation |
 | CI | normalized CI-failure analysis |
 | Mobile | Appium runtime/capability inspection |
-| Performance | controlled k6 execution and threshold assessment |
+| Performance | controlled k6 execution and deterministic threshold assessment |
+
+> [!TIP]
+> The reusable patching library can validate Python/JavaScript/TypeScript test artifacts, but **live autonomous mutation is intentionally Python/pytest-backed**. The runtime does not claim deterministic commit closure for a language it cannot execute through its controlled validation adapter.
 
 There is intentionally **no generic existing-test rewrite tool** in the live agent surface.
+
+---
 
 ## Evidence-first runtime lifecycle
 
 ```mermaid
 flowchart TD
-    A[Acquire exclusive workspace lease] --> B[Recover only safely-owned stale mutation]
+    A[Acquire owned workspace lease] --> B[Recover only safely-owned stale mutation]
     B --> C[Capture Git/worktree fingerprint]
     C --> D[Build deterministic repository/change evidence]
     D --> E[Start bounded Agent SDK session]
@@ -152,37 +172,42 @@ flowchart TD
     J --> K{Mutation?}
     K -->|no| E
     K -->|yes| L[Open rollback-backed transaction]
-    L --> M[Patch-safety PASS]
-    M --> N[Targeted pytest PASS]
+    L --> M[Patch-safety PASS for exact path]
+    M --> N[Exact-path-bound targeted pytest PASS]
     N --> O[Full regression PASS]
     O --> P[Commit revision]
     P --> E
     E --> Q[Derive terminal outcome from validation lineage]
 ```
 
-The model never gets a shortcut around this lifecycle.
+A targeted run against an unrelated file is diagnostic evidence; it cannot certify the pending mutation.
 
 ## Runtime result contract
 
-The framework distinguishes terminal outcomes from validation outcomes and provider-health outcomes. Those values describe **live framework behavior**, not development-progress labels.
+The framework distinguishes **terminal outcomes**, **validation outcomes**, and **provider-health outcomes**. Those values describe live framework behavior—not repository-development progress labels.
 
-Key terminal outcomes include:
+| Terminal outcome | Meaning |
+|---|---|
+| `SUCCESS` | every active deterministic gate required by the revision is closed |
+| `FAILURE` | a definitive active execution or validation failure exists |
+| `BLOCKED` | a safety/integrity prerequisite prevented continuation |
+| `POLICY_DENIED` | requested authority is outside policy |
+| `INFRASTRUCTURE_FAILURE` | runtime integrity cannot be guaranteed |
+| `BUDGET_EXCEEDED` / `CANCELLED` | bounded execution terminated explicitly |
+| `NOT_VERIFIED` | evidence is absent, incomplete, stale, or contradictory, so success cannot be proven |
 
-- `SUCCESS` — deterministic closure exists for every active gate required by the revision;
-- `FAILURE` — a definitive active validation or execution failure exists;
-- `BLOCKED` — a safety/integrity prerequisite prevented continuation;
-- `POLICY_DENIED` — requested authority is outside policy;
-- `INFRASTRUCTURE_FAILURE` — runtime integrity cannot be guaranteed;
-- `BUDGET_EXCEEDED` / `CANCELLED` — bounded execution terminated explicitly;
-- `NOT_VERIFIED` — evidence is absent, incomplete, or contradictory, so success cannot be proven.
+Individual validations preserve values such as `NOT_EXECUTED` and `NOT_OBSERVED` rather than translating absence into green.
 
-Individual validations additionally preserve `NOT_EXECUTED` and `NOT_OBSERVED` rather than translating absence into green.
+> [!IMPORTANT]
+> A model result subtype of `success` is only an input to terminal evaluation. It is never sufficient to produce framework `SUCCESS` on its own.
 
-For the complete semantics, revision supersession rules, provider outcomes, and mutation closure contract, see **[`docs/RESULT_CONTRACT.md`](docs/RESULT_CONTRACT.md)**.
+For complete semantics, revision supersession, provider outcomes, and mutation closure, see **[`docs/RESULT_CONTRACT.md`](docs/RESULT_CONTRACT.md)**.
+
+---
 
 ## Deterministic change intelligence
 
-Before model reasoning, the bootstrap layer can persist:
+Before model reasoning, bootstrap can persist:
 
 - target Git `HEAD` and content-sensitive worktree fingerprint;
 - trusted base ref and immutable merge-base provenance;
@@ -196,32 +221,21 @@ Before model reasoning, the bootstrap layer can persist:
 
 With `AI_QA_BASE_REF=origin/main`, a clean feature branch is still analyzed against its committed merge-base delta. A clean worktree is never confused with “no change.”
 
-Test-impact output is advisory. Low confidence, truncated scans, or incomplete dependency knowledge broaden the regression recommendation.
+Test-impact output is advisory. Low confidence, truncated scans, or incomplete dependency knowledge broaden regression rather than justify aggressive omission.
 
 See [`docs/CHANGE_INTELLIGENCE.md`](docs/CHANGE_INTELLIGENCE.md).
 
 ## Evidence-driven failure investigation
 
-The deterministic classifier distinguishes evidence patterns for:
+The deterministic classifier distinguishes evidence patterns for application defects, test automation defects, locator/UI-contract changes, test-data failures, timing/flakiness, environment failures, external dependency failures, authentication/configuration failures, performance regressions, and insufficient evidence.
 
-- application defects;
-- test automation defects;
-- locator/UI-contract changes;
-- test-data failures;
-- timing/flakiness;
-- environment failures;
-- external dependency failures;
-- authentication/configuration failures;
-- performance regressions;
-- insufficient evidence.
+For locator-contract classification, “the old locator is missing and some other element is unique” is **not** enough. The replacement candidate must also preserve deterministic semantic intent from the original locator.
 
-A missing element therefore does **not** automatically trigger locator repair. If network evidence shows the application failed to render the expected state, the framework preserves the application/network failure instead of “fixing” the test first.
+A missing element therefore does not automatically trigger selector repair. If network/application evidence shows the expected UI state never rendered, the framework preserves that root-cause evidence instead of “healing” the test first.
 
 ## Safe self-healing
 
 Self-healing is intentionally narrow: **semantic locator maintenance only**.
-
-Candidate preference is conservative:
 
 ```text
 stable test id
@@ -239,36 +253,44 @@ The authorization chain requires:
 2. Playwright measurement of original and candidate locators in the same DOM;
 3. a unique candidate;
 4. supported literal locator syntax;
-5. **deterministic semantic-intent overlap** between the original and replacement locator;
+5. deterministic semantic-intent overlap between original and replacement;
 6. policy-owned stability scoring rather than model-supplied confidence;
-7. exact file-hash binding;
-8. locator-only mutation;
-9. patch-safety, targeted pytest, and full-regression closure.
+7. exact file-hash and proposal binding;
+8. Python locator-only live mutation;
+9. patch-safety PASS for the exact changed path;
+10. targeted pytest PASS explicitly selecting that path; and
+11. full-regression pytest PASS at the same change revision.
 
-A model can propose a candidate and assign confidence to it, but that confidence cannot authorize the mutation.
+Model-provided semantic/stability scores can inform reasoning, but they are overwritten before autonomous eligibility is decided.
 
 ## Coverage-aware test generation
 
-Generation is provenance-bound:
+Generation is conservative and provenance-bound:
 
 ```text
 observed repository coverage
-→ identified gap
-→ same-run test plan
-→ guarded test creation
-→ deterministic quality review
-→ targeted execution
-→ regression closure
+→ interpreted gap
+→ same-run plan
+→ conservative candidate scenarios
+→ evidence reconciliation
+→ guarded live Python test creation
+→ exact-path targeted execution
+→ full regression closure
 ```
 
-Generated tests are checked for meaningful assertions and common intent-eroding shortcuts. Assertion-looking text in comments or strings does not satisfy observability requirements. Unknown product behavior is not invented merely to create a passing test.
+Model-supplied “already covered” labels are advisory. They **cannot suppress deterministic candidate scenarios** by themselves. Before implementation, the candidate is reconciled against the same-run repository observation so the framework avoids both unsafe under-coverage and careless duplication.
+
+Generated tests are checked for meaningful assertions and common intent-eroding shortcuts. Assertion-looking text in comments or strings does not satisfy observability requirements. Unknown product behavior is not invented merely to create a test.
+
+---
 
 ## API, browser, performance, and mobile controls
 
 ### API
 
-- explicit trusted host allowlist;
-- host-only configuration is canonicalized and rejects wildcards/URL-shaped entries;
+- trusted host-only allowlist;
+- canonical DNS/IP normalization with duplicate removal;
+- wildcards, URL-shaped entries, ports, user-info, scoped IPv6, malformed dotted IPv4, paths, query strings, and fragments are rejected;
 - `GET`, `HEAD`, and `OPTIONS` are the default method surface;
 - mutating methods require separate explicit enablement;
 - redirects are disabled;
@@ -282,7 +304,7 @@ Generated tests are checked for meaningful assertions and common intent-eroding 
 - WebSockets are routed through the same host boundary;
 - service workers are disabled in the evidence context so routing remains observable;
 - final navigation is rechecked against the allowlist;
-- screenshots are retained as hashed `RAW` artifacts rather than mislabeled as sanitized text.
+- screenshots remain hashed `RAW` artifacts rather than being falsely represented as sanitized text.
 
 ### Performance / k6
 
@@ -290,32 +312,37 @@ Generated tests are checked for meaningful assertions and common intent-eroding 
 - the script must consume injected `BASE_URL` / `TARGET_URL`;
 - remote modules, `k6/x/*`, local `open()`, unrelated literal hosts, and unsupported imports are rejected;
 - runtime duration is bounded;
-- non-local execution requires an explicit infrastructure-egress prerequisite;
+- **every k6 execution requires independently enforced infrastructure-level egress**, including localhost targets;
+- static JavaScript inspection is explicitly not treated as a network sandbox;
 - PASS/FAIL comes from predefined thresholds and measured metrics.
 
 ### Mobile / Appium
 
-Appium is integrated through controlled runtime/capability inspection, with device/emulator/cloud/application execution kept inside the target deployment's explicit mobile test boundary.
+Appium is represented through controlled runtime/capability inspection, with device/emulator/cloud/application execution kept inside the target deployment's explicit mobile test boundary.
+
+---
 
 ## Transactional mutation and crash recovery
 
-Autonomous writes use optimistic concurrency plus rollback ownership:
+Autonomous writes use optimistic concurrency plus owned rollback state:
 
-- the target must be a Git-backed isolated worktree;
-- an exclusive OS-backed lease prevents cooperating runs from sharing mutation authority;
-- the workspace fingerprint must still match the analyzed baseline;
-- absolute, traversal, workspace-escape, and symlink mutation paths are rejected;
+- target must be a Git-backed isolated worktree;
+- an OS-backed workspace lease prevents cooperating runs from sharing mutation authority;
+- lease directory/file ownership is protected against symlink substitution;
+- workspace fingerprint must still match the analyzed baseline;
+- absolute, traversal, workspace-escape, and symlink mutation paths are rejected by both orchestration and the reusable safe patcher;
 - prior bytes are snapshotted outside the SUT;
-- rollback backups are path-confined and hash-verified;
-- a new mutation cannot begin while the prior revision is unresolved;
-- stale crash recovery requires an exact fingerprint match and the same non-symlink ownership rules;
+- rollback directory and backup ownership are revalidated before restore/commit;
+- rollback bytes are hash-verified;
+- a new mutation cannot begin while the previous revision is unresolved;
+- stale recovery validates prior run, journal, target, rollback directory, backup, fingerprint, and ownership before touching the target;
 - newer human/out-of-band work wins over automated rollback when ownership is ambiguous.
 
 See [`docs/RUNTIME_CONTROL.md`](docs/RUNTIME_CONTROL.md).
 
-## Evidence, traceability, and observability
+## Evidence, traceability, and attestation
 
-Every run has a durable evidence surface under:
+Each run has a durable evidence surface beneath:
 
 ```text
 artifacts/<run_id>/
@@ -327,14 +354,16 @@ The framework can persist:
 - separate `runtime.json` process-control state;
 - `evidence-manifest.json`;
 - content-addressed artifacts;
-- append-only `journal.jsonl` with hash chaining;
+- append-only `journal.jsonl` with SHA-256 hash chaining;
 - optional regulated traceability records;
 - evidence-to-validation lineage;
 - model/SDK/configuration/target provenance;
 - token/cost information when supplied by the provider;
-- unsigned content-integrity attestations.
+- unsigned run-integrity attestations.
 
-Inspection commands:
+Evidence control files, journal files, registered artifacts, rollback paths, and lease paths reject ambiguous symlink ownership where the framework owns the filesystem boundary.
+
+`ai-qa attest` verifies owned core persisted subjects, the runtime journal chain, pending-mutation state, and the SHA-256 of every artifact registered in the manifest before reporting `integrity_verified=true`.
 
 ```bash
 ai-qa recover artifacts/run-<id>
@@ -344,9 +373,12 @@ ai-qa attest artifacts/run-<id>
 ai-qa contract-diff --baseline old-openapi.yaml --current new-openapi.yaml
 ```
 
-Hashes and attestations prove integrity properties of the persisted record; they do not become identity signatures, compliance certificates, or test results.
+> [!CAUTION]
+> The attestation is deliberately **unsigned**. Content integrity is not actor identity, notarization, compliance certification, a trusted timestamp, or evidence that tests passed.
 
 See [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md).
+
+---
 
 ## Vendor-official MCP integrations
 
@@ -357,7 +389,9 @@ External MCP is restricted to explicitly approved vendor integrations.
 | GitHub | `github/github-mcp-server:v1.0.5` | disabled by default; server-side read-only defense in depth |
 | Jira / Confluence | Atlassian Rovo MCP `/v1/mcp/authv2` | disabled by default; action-level policy still applies |
 
-Server identity never grants blanket tool authority. External action names are normalized conservatively so destructive verbs dominate writes, writes dominate reads, and mixed names cannot smuggle higher authority behind a read prefix. Provider content remains untrusted evidence after retrieval.
+Server identity never grants blanket tool authority. External action names are normalized conservatively so destructive verbs dominate writes, writes dominate reads, and mixed names cannot smuggle higher authority behind a read prefix. Numeric business identifiers are not interpreted as HTTP/provider failure codes unless the surrounding evidence actually identifies them as such.
+
+Provider content remains untrusted evidence after retrieval, and configuration alone never becomes observed provider availability.
 
 See [`docs/MCP.md`](docs/MCP.md).
 
@@ -367,7 +401,7 @@ The framework is evaluated as software—not by whether its prose sounds convinc
 
 The repository defines:
 
-- unit tests for models, policy, redaction, evidence, state, budgets, recovery, and intelligence;
+- unit tests for models, policy, redaction, evidence, state, budgets, recovery, ownership, attestation, and intelligence;
 - deterministic integration tests for evidence/runtime flows;
 - dedicated policy and security tests;
 - a fixed **34-scenario primary adversarial corpus**;
@@ -375,8 +409,6 @@ The repository defines:
 - Playwright-marked tests separated from the default pytest path;
 - credentialed model tests separated behind explicit configuration;
 - predefined hard-safety thresholds that are not rewritten to accommodate a failing implementation.
-
-Repository commands:
 
 ```bash
 make quality
@@ -404,6 +436,8 @@ See [`docs/EVALUATION.md`](docs/EVALUATION.md).
 | `prompt-injection` | instruction-shaped DOM content remains untrusted evidence |
 
 The reference SUT is test data for the control architecture, never part of the trusted control plane.
+
+---
 
 ## Quick start
 
@@ -439,6 +473,16 @@ ai-qa agent \
 
 The control root, artifact root, and target workspace are separate trust domains. Exact configuration and credential boundaries are documented in [`docs/SETUP.md`](docs/SETUP.md).
 
+### Controlled k6 execution
+
+Because a JavaScript workload can construct destinations dynamically, k6 requires a separately enforced egress boundary:
+
+```bash
+export AI_QA_K6_EXTERNAL_EGRESS_ENFORCED=true
+```
+
+Set that assertion only when the runtime environment actually enforces the intended outbound-network policy. The flag documents an external prerequisite; it does not create a firewall.
+
 ## Operating modes
 
 | Mode | Purpose | Primary authority |
@@ -472,10 +516,10 @@ The control root, artifact root, and target workspace are separate trust domains
 │   ├── agent.py                    # Agent SDK orchestration + terminal truth
 │   ├── models.py                   # state/evidence/result contracts
 │   ├── policy.py                   # deterministic authorization
-│   ├── evidence.py                 # immutable evidence/artifact registry
+│   ├── evidence.py                 # evidence/artifact registry + ownership
 │   ├── intelligence/               # classification/healing/generation/change logic
 │   ├── integrations/               # approved external MCP adapters
-│   ├── runtime/                    # leases, budgets, hooks, recovery, lineage
+│   ├── runtime/                    # leases, budgets, hooks, recovery, lineage, attestation
 │   └── tools/                      # narrow execution/evidence adapters
 ├── tests/
 ├── evals/
@@ -484,7 +528,9 @@ The control root, artifact root, and target workspace are separate trust domains
 └── docs/
 ```
 
-## Documentation
+## Documentation map
+
+Start with [`docs/README.md`](docs/README.md) for reviewer-specific reading paths.
 
 | Topic | Document |
 |---|---|
@@ -513,8 +559,6 @@ The control root, artifact root, and target workspace are separate trust domains
 ## Security and contributions
 
 Security reports should follow [`SECURITY.md`](SECURITY.md). Engineering changes should preserve the authority hierarchy and test-integrity rules in [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`CLAUDE.md`](CLAUDE.md).
-
-The governing rule for every extension is:
 
 > **Add capability without silently adding authority. Add intelligence without weakening evidence. Add automation without weakening test intent.**
 
