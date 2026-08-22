@@ -20,10 +20,10 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
 | Reviewer goal | Recommended path |
 |---|---|
-| **Architecture / principal engineering** | `ARCHITECTURE` → `RESULT_CONTRACT` → `RUNTIME_CONTROL` → `TRACEABILITY` → `TECHNICAL_WALKTHROUGH` |
-| **Security / red team** | `SECURITY` → `THREAT_MODEL` → `MCP` → `VERIFICATION_BOUNDARIES` → `LIMITATIONS` |
-| **QA automation / AI engineering** | `CHANGE_INTELLIGENCE` → `SKILLS` → `EVALUATION` → `RESULT_CONTRACT` → `PRODUCTION_READINESS` |
-| **Operator / adopter** | `SETUP` → `OPERATIONS` → `TROUBLESHOOTING` → `RUNTIME_CONTROL` → `MCP` |
+| **Architecture / principal engineering** | [Architecture](ARCHITECTURE.md) → [Result Contract](RESULT_CONTRACT.md) → [Runtime Control](RUNTIME_CONTROL.md) → [Traceability](TRACEABILITY.md) → [Technical Walkthrough](TECHNICAL_WALKTHROUGH.md) |
+| **Security / red team** | [Security](SECURITY.md) → [Threat Model](THREAT_MODEL.md) → [MCP](MCP.md) → [Verification Boundaries](VERIFICATION_BOUNDARIES.md) → [Limitations](LIMITATIONS.md) |
+| **QA automation / AI engineering** | [Change Intelligence](CHANGE_INTELLIGENCE.md) → [Skills](SKILLS.md) → [Evaluation](EVALUATION.md) → [Result Contract](RESULT_CONTRACT.md) → [Production Readiness](PRODUCTION_READINESS.md) |
+| **Operator / adopter** | [Setup](SETUP.md) → [Operations](OPERATIONS.md) → [Troubleshooting](TROUBLESHOOTING.md) → [Runtime Control](RUNTIME_CONTROL.md) → [MCP](MCP.md) |
 
 ### Architecture / principal engineering
 
