@@ -1,8 +1,10 @@
 # Claude Skills
 
-The project uses five focused Claude Skills to load specialized QA procedures only when the objective needs them. Skills are **reasoning/playbook context**, not permission grants: deterministic runtime policy, hooks, controlled tools, evidence requirements, execution budgets, and validation remain authoritative regardless of what a Skill says.
+> **YP AI QA Automation Framework** · Designed and engineered by **Yunior Portal**
 
-The live Agent SDK configuration explicitly allowlists these five project Skills rather than exposing an open-ended catalog.
+The YP AI QA Automation Framework uses five focused Claude Skills to load specialized QA procedures only when the objective needs them. Skills are **reasoning/playbook context**, not permission grants: deterministic runtime policy, hooks, controlled tools, evidence requirements, execution budgets, and validation remain authoritative regardless of what a Skill says.
+
+The live Agent SDK configuration explicitly allowlists these five framework Skills rather than exposing an open-ended catalog.
 
 ## Skill inventory
 
@@ -136,7 +138,7 @@ Those decisions live in trusted deterministic configuration/code and reviewed en
 
 A target repository may contain its own `CLAUDE.md`, `.claude/skills/`, or similar instruction-shaped content. The production runtime treats target content as untrusted data and does not accept those files as control-plane Skills.
 
-The Agent SDK is configured from the trusted project root with an explicit Skill allowlist. This prevents a SUT from gaining authority simply by placing agent-looking configuration in its repository.
+The Agent SDK is configured from the trusted framework root with an explicit Skill allowlist. This prevents a SUT from gaining authority simply by placing agent-looking configuration in its repository.
 
 ## Skill maintenance standard
 
