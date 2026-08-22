@@ -63,7 +63,17 @@ class TestImpactMapper:
         max_test_files: int = 2000,
         max_file_bytes: int = 256_000,
         max_candidates: int = 150,
+        max_scan_files: int = 20_000,
     ) -> TestImpactAssessment:
+        if max_test_files < 1:
+            raise ValueError("max_test_files must be at least 1")
+        if max_file_bytes < 1:
+            raise ValueError("max_file_bytes must be at least 1")
+        if max_candidates < 1:
+            raise ValueError("max_candidates must be at least 1")
+        if max_scan_files < 1:
+            raise ValueError("max_scan_files must be at least 1")
+
         root = workspace.expanduser().resolve()
         normalized_changes = tuple(
             sorted(
@@ -86,7 +96,8 @@ class TestImpactMapper:
 
         change_features = {path: self._features(path) for path in normalized_changes}
         rows: list[TestImpactCandidate] = []
-        scanned = 0
+        scanned_tests = 0
+        scanned_files = 0
         truncated = False
 
         stop_scan = False
@@ -94,6 +105,11 @@ class TestImpactMapper:
             dirnames[:] = sorted(name for name in dirnames if name not in _IGNORED)
             current_dir = Path(dirpath)
             for filename in sorted(filenames):
+                if scanned_files >= max_scan_files:
+                    truncated = True
+                    stop_scan = True
+                    break
+                scanned_files += 1
                 path = current_dir / filename
                 try:
                     relative = path.relative_to(root)
@@ -101,11 +117,11 @@ class TestImpactMapper:
                     continue
                 if not self._is_test_file(relative):
                     continue
-                if scanned >= max_test_files:
+                if scanned_tests >= max_test_files:
                     truncated = True
                     stop_scan = True
                     break
-                scanned += 1
+                scanned_tests += 1
                 try:
                     if path.is_symlink() or not path.is_file() or path.stat().st_size > max_file_bytes:
                         continue
@@ -120,17 +136,17 @@ class TestImpactMapper:
 
         rows.sort(key=lambda item: (-item.score, item.path))
         selected = tuple(rows[:max_candidates])
-        if truncated or scanned == 0:
+        if truncated or scanned_tests == 0:
             confidence = 0.35
         elif not selected:
             confidence = 0.45
         else:
             top = selected[0].score
-            density = min(1.0, len(selected) / max(1, scanned))
+            density = min(1.0, len(selected) / max(1, scanned_tests))
             confidence = min(0.92, 0.5 + (top * 0.3) + (density * 0.12))
         return TestImpactAssessment(
             changed_files=normalized_changes,
-            scanned_test_files=scanned,
+            scanned_test_files=scanned_tests,
             candidates=selected,
             scan_truncated=truncated,
             confidence=round(confidence, 2),
