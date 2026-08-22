@@ -9,7 +9,12 @@ from pathlib import Path
 from typing import Any
 
 from ..redaction import sanitize
-from ..telemetry import record_mcp_outcome, record_policy_denial, record_tool_event
+from ..telemetry import (
+    record_mcp_outcome,
+    record_policy_denial,
+    record_run_metrics,
+    record_tool_event,
+)
 from .budget import BudgetExceededError
 
 _MAX_JOURNAL_LINE_BYTES = 1_000_000
@@ -20,7 +25,13 @@ def _record_event_metrics(event: str, payload: dict[str, Any]) -> None:
     """Project durable lifecycle truth into optional, low-cardinality telemetry."""
     try:
         tool_name = str(payload.get("tool_name") or "")
-        if event == "tool_requested" and tool_name:
+        if event == "agent_run_finished":
+            record_run_metrics(
+                terminal_status=payload.get("terminal_status"),
+                duration_seconds=payload.get("duration_seconds"),
+                tool_calls=payload.get("tool_calls"),
+            )
+        elif event == "tool_requested" and tool_name:
             record_tool_event(tool_name, "requested")
         elif event == "tool_completed" and tool_name:
             failed = bool(payload.get("failed"))
