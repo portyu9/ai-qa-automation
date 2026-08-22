@@ -1,8 +1,8 @@
 # Setup and Configuration
 
-> **YP AI QA Automation Framework** · Designed and engineered by **Yunior Portal**
+> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
-This guide separates **repository-contained use** of the YP AI QA Automation Framework from capabilities that require credentials or external infrastructure. The distinction is intentional: installing or configuring a capability is not evidence that it works in a particular environment.
+This guide separates **repository-contained use** of the ƳƤ AI QA Automation Framework from capabilities that require credentials or external infrastructure. The distinction is intentional: installing or configuring a capability is not evidence that it works in a particular environment.
 
 ## 1. Choose the operating mode
 
@@ -58,7 +58,7 @@ Never commit a populated `.env`, API key, access token, customer credential, or 
 |---|---|---|
 | `ANTHROPIC_API_KEY` | unset | Required only for live Claude-backed execution. Consumed by the Anthropic runtime/SDK environment. |
 | `AI_QA_MODEL` | `claude-sonnet-5` | Claude model identifier used by the live agent. |
-| `AI_QA_CONTROL_ROOT` | current working directory | Trusted YP framework repository root containing `CLAUDE.md` and `.claude/settings.json`. |
+| `AI_QA_CONTROL_ROOT` | current working directory | Trusted ƳƤ framework repository root containing `CLAUDE.md` and `.claude/settings.json`. |
 | `AI_QA_ARTIFACT_ROOT` | `<control-root>/artifacts` | Trusted location for state, evidence, journal, rollback snapshots, and run artifacts. |
 | `AI_QA_BASE_REF` | unset | Optional trusted Git baseline such as `origin/main`; resolved to immutable baseline/merge-base SHAs during bootstrap. |
 | `AI_QA_REGULATED_MODE` | `false` | Enables additional hash-chained audit records and regulated artifact classification; does not claim compliance certification. |
@@ -195,3 +195,5 @@ The following cannot be promoted to verified merely by completing setup document
 - organization secret management, identity, retention, compliance, container isolation, and network policy.
 
 See [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md) and [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) for the authoritative truth model.
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
