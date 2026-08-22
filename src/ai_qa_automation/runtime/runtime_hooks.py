@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
 from typing import Any
 
 from ..evidence import EvidenceStore
@@ -378,6 +377,12 @@ def posttool_policy_output(
                 )
                 rollback_snapshot = RepositoryInspector(control.workspace).snapshot()
                 control.set_workspace_fingerprint(rollback_snapshot.fingerprint)
+                control.open_circuits.update(_MUTATION_TOOLS)
+                control.journal.append(
+                    "mutation_authority_latched",
+                    reason="post-mutation fingerprint coverage was incomplete",
+                    tools=sorted(_MUTATION_TOOLS),
+                )
                 mutation_integrity_blocked = True
                 output["updatedToolOutput"] = {
                     "is_error": True,
@@ -388,7 +393,8 @@ def posttool_policy_output(
                 }
                 output["additionalContext"] = (
                     "The candidate mutation executed but was rolled back before validation because "
-                    "the resulting workspace could not be fingerprinted completely."
+                    "the resulting workspace could not be fingerprinted completely. Further "
+                    "autonomous mutation is disabled for this run."
                 )
 
     if tool_name.startswith(("mcp__github__", "mcp__atlassian__")):
