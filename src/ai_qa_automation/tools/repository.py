@@ -72,8 +72,14 @@ class RepositoryInspector:
             status = self._git(
                 "status", "--porcelain=v1", "--untracked-files=all", allow_failure=True
             ) or ""
-        except RuntimeError:
-            return self._incomplete_snapshot("git-inspection-incomplete")
+        except RuntimeError as exc:
+            message = str(exc).casefold()
+            reason = (
+                "git-inspection-timeout"
+                if "exceeded" in message and "budget" in message
+                else "git-inspection-incomplete"
+            )
+            return self._incomplete_snapshot(reason)
         changed = self._changed_paths(status)
         fingerprint, complete, incomplete_reasons = self._fingerprint(sha, status, changed)
         return RepositorySnapshot(
