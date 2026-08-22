@@ -62,6 +62,14 @@ def test_circuit_failures_are_isolated_per_tool(tmp_path: Path) -> None:
     assert "pytest" not in control.open_circuits
 
 
+@pytest.mark.parametrize("threshold", [0, -1, True])
+def test_circuit_failure_threshold_must_be_positive_integer(
+    tmp_path: Path, threshold: object
+) -> None:
+    with pytest.raises(ValueError, match="circuit_failure_threshold"):
+        make_control(tmp_path, threshold=threshold)  # type: ignore[arg-type]
+
+
 def test_existing_file_mutation_rolls_back_transactionally(tmp_path: Path) -> None:
     control = make_control(tmp_path)
     target = control.workspace / "tests" / "test_checkout.py"
@@ -213,11 +221,21 @@ def test_existing_directory_is_not_a_valid_mutation_target(tmp_path: Path) -> No
         control.prepare_mutation("tests/directory.py")
 
 
-def test_oversized_existing_file_is_refused_before_snapshot(tmp_path: Path) -> None:
+def test_oversized_existing_file_is_refused_before_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     control = make_control(tmp_path)
     target = control.workspace / "tests" / "large.py"
     target.parent.mkdir(parents=True)
     target.write_bytes(b"x" * 2_000_001)
+    original_read_bytes = Path.read_bytes
+
+    def guarded_read_bytes(path: Path) -> bytes:
+        if path == target:
+            raise AssertionError("oversized mutation target must not be read before size rejection")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", guarded_read_bytes)
 
     with pytest.raises(MutationPendingError, match="2 MB"):
         control.prepare_mutation("tests/large.py")
@@ -241,6 +259,24 @@ def test_tampered_rollback_backup_blocks_restore_and_preserves_pending_transacti
     backup.write_text("attacker-controlled\n", encoding="utf-8")
 
     with pytest.raises(RuntimeError, match="integrity"):
+        control.rollback_pending_mutation(reason="validation failed")
+
+    assert target.read_text(encoding="utf-8") == "after\n"
+    assert control.pending_mutation is not None
+
+
+def test_oversized_rollback_backup_is_rejected_before_restore(tmp_path: Path) -> None:
+    control = make_control(tmp_path)
+    target = control.workspace / "tests" / "test_checkout.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("before\n", encoding="utf-8")
+    control.prepare_mutation("tests/test_checkout.py")
+    assert control.pending_mutation is not None
+    backup = Path(str(control.pending_mutation.backup_path))
+    target.write_text("after\n", encoding="utf-8")
+    backup.write_bytes(b"x" * 2_000_001)
+
+    with pytest.raises(RuntimeError, match="2 MB"):
         control.rollback_pending_mutation(reason="validation failed")
 
     assert target.read_text(encoding="utf-8") == "after\n"
