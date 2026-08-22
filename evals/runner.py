@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -41,6 +42,17 @@ _FALSE_HEAL_EVALUATORS = {
 }
 _MANDATORY_COVERAGE_EVALUATORS = {"regression_broaden", "mandatory_regression"}
 _PROMPT_OVERRIDE_EVALUATORS = {"prompt_injection"}
+_THRESHOLD_SCHEMA_VERSION = 1
+_RATIO_THRESHOLD_KEYS = {
+    "classification_min_accuracy",
+    "self_healing_max_false_heal_rate",
+    "mandatory_coverage_preservation",
+}
+_COUNT_THRESHOLD_KEYS = {
+    "hard_safety_max_failures",
+    "prompt_injection_policy_override_max",
+    "fabricated_pass_max",
+}
 
 
 def _evidence(kind: EvidenceKind, **data: object) -> EvidenceItem:
@@ -261,12 +273,43 @@ def _metrics(rows: list[dict[str, Any]]) -> dict[str, float | int]:
     }
 
 
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"non-standard JSON numeric constant is forbidden in thresholds: {value}")
+
+
+def _validate_thresholds(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise ValueError("evaluation thresholds must be a JSON object")
+    if type(raw.get("schema_version")) is not int or raw["schema_version"] != _THRESHOLD_SCHEMA_VERSION:
+        raise ValueError(f"threshold schema_version must be {_THRESHOLD_SCHEMA_VERSION}")
+    if raw.get("defined_before_model_evaluation") is not True:
+        raise ValueError("thresholds must assert defined_before_model_evaluation=true")
+
+    normalized = dict(raw)
+    for key in sorted(_RATIO_THRESHOLD_KEYS):
+        value = raw.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"{key} must be a numeric ratio")
+        numeric = float(value)
+        if not math.isfinite(numeric) or not 0.0 <= numeric <= 1.0:
+            raise ValueError(f"{key} must be finite and between 0 and 1")
+        normalized[key] = numeric
+
+    for key in sorted(_COUNT_THRESHOLD_KEYS):
+        value = raw.get(key)
+        if type(value) is not int or value < 0:
+            raise ValueError(f"{key} must be a non-negative integer")
+        normalized[key] = value
+    return normalized
+
+
 def _threshold_violations(
     metrics: dict[str, float | int],
     thresholds: dict[str, Any],
     *,
     hard_safety_failures: int,
 ) -> list[str]:
+    thresholds = _validate_thresholds(thresholds)
     violations: list[str] = []
     required_case_metrics = {
         "classification_cases": "classification_cases_missing",
@@ -278,25 +321,23 @@ def _threshold_violations(
         if int(metrics[metric_name]) < 1:
             violations.append(violation_name)
 
-    if hard_safety_failures > int(thresholds["hard_safety_max_failures"]):
+    if hard_safety_failures > thresholds["hard_safety_max_failures"]:
         violations.append("hard_safety_max_failures")
-    if float(metrics["classification_accuracy"]) < float(
-        thresholds["classification_min_accuracy"]
-    ):
+    if float(metrics["classification_accuracy"]) < thresholds["classification_min_accuracy"]:
         violations.append("classification_min_accuracy")
-    if float(metrics["self_healing_false_heal_rate"]) > float(
-        thresholds["self_healing_max_false_heal_rate"]
-    ):
+    if float(metrics["self_healing_false_heal_rate"]) > thresholds[
+        "self_healing_max_false_heal_rate"
+    ]:
         violations.append("self_healing_max_false_heal_rate")
-    if float(metrics["mandatory_coverage_preservation"]) < float(
-        thresholds["mandatory_coverage_preservation"]
-    ):
+    if float(metrics["mandatory_coverage_preservation"]) < thresholds[
+        "mandatory_coverage_preservation"
+    ]:
         violations.append("mandatory_coverage_preservation")
-    if int(metrics["prompt_injection_policy_overrides"]) > int(
-        thresholds["prompt_injection_policy_override_max"]
-    ):
+    if int(metrics["prompt_injection_policy_overrides"]) > thresholds[
+        "prompt_injection_policy_override_max"
+    ]:
         violations.append("prompt_injection_policy_override_max")
-    if int(metrics["fabricated_passes"]) > int(thresholds["fabricated_pass_max"]):
+    if int(metrics["fabricated_passes"]) > thresholds["fabricated_pass_max"]:
         violations.append("fabricated_pass_max")
     return sorted(set(violations))
 
@@ -304,7 +345,12 @@ def _threshold_violations(
 def main() -> int:
     scenario_dir = ROOT / "evals" / "scenarios"
     threshold_path = ROOT / "evals" / "thresholds.json"
-    thresholds = json.loads(threshold_path.read_text(encoding="utf-8"))
+    thresholds = _validate_thresholds(
+        json.loads(
+            threshold_path.read_text(encoding="utf-8"),
+            parse_constant=_reject_json_constant,
+        )
+    )
     rows: list[dict[str, Any]] = []
     failures = 0
     hard_failures = 0
@@ -324,7 +370,7 @@ def main() -> int:
     )
     output = {
         "suite": "primary",
-        "threshold_schema_version": thresholds.get("schema_version"),
+        "threshold_schema_version": thresholds["schema_version"],
         "total": len(rows),
         "failures": failures,
         "hard_safety_failures": hard_failures,
