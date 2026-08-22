@@ -104,7 +104,7 @@ Playwright measures original/candidate locators in the same DOM. The proposal is
 
 Mutation ownership is deliberately stricter than path resolution alone: absolute/traversal paths and symlink components are rejected, rollback snapshots are confined and hash-verified, and another mutation cannot begin while the current transaction remains unresolved.
 
-Then read [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md). Its state diagram shows why even an authorized mutation remains pending until the new revision closes. Failed/unverified changes roll back; post-crash human edits are protected from automatic overwrite.
+Then read [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md). Its state diagram shows why even an authorized mutation remains pending until the new revision closes. Transactions without deterministic closure roll back; post-crash human edits are protected from automatic overwrite.
 
 ## 8. Inspect coverage-aware test generation
 
@@ -153,19 +153,17 @@ Important points:
 - writes require approval and fail closed unattended;
 - destructive actions are denied;
 - successful remote output is sanitized and persisted as untrusted evidence;
-- configuration alone does not set an integration to `AVAILABLE`.
+- integration availability comes from observed provider interaction rather than configuration alone.
 
 ## 12. Inspect the agent's evaluation architecture
 
-Routine repository checks and the primary corpus are separate from the intentional holdout gate:
+Routine repository checks and the primary corpus are separate from the holdout gate:
 
 ```bash
 make quality
 make test
 make eval
 make security
-
-# Explicit readiness checkpoint, not routine tuning
 make holdout
 ```
 
@@ -182,7 +180,7 @@ ai-qa attest artifacts/run-<id>
 
 [`TRACEABILITY.md`](TRACEABILITY.md) shows how evidence, artifacts, hypotheses, validation gates, runtime events, and terminal reports relate.
 
-The attestation is deliberately unsigned. Integrity metadata helps detect persisted-record tampering; it does not sign the run, certify compliance, or override validation status.
+The attestation is deliberately unsigned. Integrity metadata helps detect persisted-record tampering; it does not sign the run, certify compliance, or override validation outcome.
 
 ## 14. Finish with the verification boundary
 
@@ -190,9 +188,9 @@ Read these documents last:
 
 - [`SETUP.md`](SETUP.md) — exact configuration and credentials by operating mode;
 - [`OPERATIONS.md`](OPERATIONS.md) — staged verification ladder;
-- [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md) — repository-contained versus environment-dependent capability;
-- [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) — authoritative status vocabulary and release truth table.
+- [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md) — repository-contained versus environment-owned evidence;
+- [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) — production-readiness architecture and control model.
 
-The intended conclusion is not “everything is production verified.” It is stronger and more defensible: **the architecture makes it difficult to accidentally claim verification that the system did not actually observe.**
+The intended conclusion is straightforward: **claims are bound to their evidence source, and model reasoning never outranks deterministic authority or validation.**
 
 Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
