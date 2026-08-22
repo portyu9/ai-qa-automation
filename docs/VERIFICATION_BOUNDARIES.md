@@ -1,6 +1,8 @@
 # Verification Boundaries
 
-This document answers a narrow question: **what can this repository establish by itself, and what still requires evidence from an external runtime/environment?**
+> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
+
+This document answers a narrow question for the ƳƤ AI QA Automation Framework: **what can this repository establish by itself, and what still requires evidence from an external runtime/environment?**
 
 The distinction prevents a common engineering and production-readiness error: describing implemented integration code as though the external integration has actually been exercised.
 
@@ -117,3 +119,5 @@ When describing this system, use the narrowest accurate statement:
 - “not verified” when execution has not occurred or evidence is unavailable.
 
 See [`SETUP.md`](SETUP.md), [`OPERATIONS.md`](OPERATIONS.md), and the authoritative status matrix in [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md).
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
