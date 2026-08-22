@@ -59,7 +59,6 @@ def _stable_gate_id(prefix: str, payload: Any) -> str:
 
 def _pytest_scope(args: list[str]) -> str:
     """Classify pytest as full regression or filtered/targeted execution."""
-    options_with_value = {"-k", "-m", "--maxfail", "--tb"}
     selectors: list[str] = []
     filtered = False
     skip_next = False
@@ -85,20 +84,37 @@ def _pytest_scope(args: list[str]) -> str:
 
 
 def _change_revision_closed(state: AgentRunState) -> bool:
-    """Require each mutation revision to close before another mutation begins."""
+    """Require exact mutation-subject closure before another mutation begins."""
     if state.change_revision == 0:
         return True
     current = [item for item in state.validation_results if item.revision == state.change_revision]
     if not current or any(item.status != ValidationStatus.PASS for item in current):
         return False
-    patch_safe = any(item.name == "test_patch_safety" for item in current)
+    patch_paths = {
+        str(item.details.get("path") or "")
+        for item in current
+        if item.name == "test_patch_safety"
+        and item.status == ValidationStatus.PASS
+        and str(item.details.get("path") or "")
+    }
+    if len(patch_paths) != 1:
+        return False
+    mutation_path = next(iter(patch_paths))
     targeted = any(
-        item.name == "pytest" and item.details.get("scope") == "targeted" for item in current
+        item.name == "pytest"
+        and item.status == ValidationStatus.PASS
+        and item.details.get("scope") == "targeted"
+        and item.details.get("mutation_target_bound") is True
+        and item.details.get("mutation_target") == mutation_path
+        for item in current
     )
     regression = any(
-        item.name == "pytest" and item.details.get("scope") == "regression" for item in current
+        item.name == "pytest"
+        and item.status == ValidationStatus.PASS
+        and item.details.get("scope") == "regression"
+        for item in current
     )
-    return patch_safe and targeted and regression
+    return targeted and regression
 
 
 def _require_closed_revision_before_mutation(services: "RuntimeServices") -> str | None:
@@ -106,8 +122,16 @@ def _require_closed_revision_before_mutation(services: "RuntimeServices") -> str
         return None
     return (
         f"change revision {services.state.change_revision} is not closed; "
-        "run a passing targeted pytest gate and a passing full regression before another mutation"
+        "run an exact-path-bound targeted pytest gate and a passing full regression before another mutation"
     )
+
+
+def _pytest_validation_status(exit_code: int) -> ValidationStatus:
+    if exit_code == 0:
+        return ValidationStatus.PASS
+    if exit_code in {124, 125}:
+        return ValidationStatus.NOT_VERIFIED
+    return ValidationStatus.FAIL
 
 
 def _is_test_code_path(path: Path) -> bool:
@@ -243,6 +267,21 @@ class RuntimeServices:
     state_store: StateStore | None = None
     _fingerprints: dict[str, int] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        for name, value in {
+            "max_tool_calls": self.max_tool_calls,
+            "max_repeated_action": self.max_repeated_action,
+        }.items():
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"{name} must be a positive integer")
+        for name, value in {
+            "allow_external_network": self.allow_external_network,
+            "allow_mutating_api_methods": self.allow_mutating_api_methods,
+            "k6_external_egress_enforced": self.k6_external_egress_enforced,
+        }.items():
+            if not isinstance(value, bool):
+                raise ValueError(f"{name} must be a boolean")
+
     def consume(self, tool_name: str, tool_input: dict[str, Any]) -> None:
         if self.state.tool_call_count >= self.max_tool_calls:
             raise RuntimeError("tool-call budget exhausted")
@@ -289,7 +328,14 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
                 nature=EvidenceNature.OBSERVED_FACT,
                 source="repository",
                 summary="Observed target repository state",
-                structured_data={"git_sha": snapshot.git_sha, "branch": snapshot.branch, "dirty": bool(snapshot.status), "changed_files": list(snapshot.changed_files)},
+                structured_data={
+                    "git_sha": snapshot.git_sha,
+                    "branch": snapshot.branch,
+                    "dirty": bool(snapshot.status),
+                    "changed_files": list(snapshot.changed_files),
+                    "fingerprint_complete": snapshot.fingerprint_complete,
+                    "fingerprint_incomplete_reasons": list(snapshot.fingerprint_incomplete_reasons),
+                },
             )
         )
         services.state.evidence_ids.append(item.id)
@@ -303,13 +349,16 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
         pytest_args = [str(item) for item in (args.get("args") or [])]
         result = services.test_runner.run_pytest(pytest_args)
         services.state.tests_executed.append(" ".join(result.command))
-        services.state.evidence_ids.extend(eid for eid in result.evidence_ids if eid not in services.state.evidence_ids)
+        services.state.evidence_ids.extend(
+            eid for eid in result.evidence_ids if eid not in services.state.evidence_ids
+        )
+        status = _pytest_validation_status(result.exit_code)
         services.state.validation_results.append(
             ValidationResult(
                 name="pytest",
                 gate_id=_stable_gate_id("pytest", pytest_args),
                 revision=services.state.change_revision,
-                status=ValidationStatus.PASS if result.exit_code == 0 else ValidationStatus.FAIL,
+                status=status,
                 summary=f"pytest exited with {result.exit_code}",
                 evidence_ids=list(result.evidence_ids),
                 details={
@@ -320,8 +369,18 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
             )
         )
         services.checkpoint()
-        text = {"exit_code": result.exit_code, "duration_seconds": result.duration_seconds, "evidence_ids": result.evidence_ids, "stdout_tail": result.stdout[-3000:], "stderr_tail": result.stderr[-3000:]}
-        return {"content": [{"type": "text", "text": str(text)}], "is_error": result.exit_code != 0}
+        text = {
+            "exit_code": result.exit_code,
+            "validation_status": status.value,
+            "duration_seconds": result.duration_seconds,
+            "evidence_ids": result.evidence_ids,
+            "stdout_tail": result.stdout[-3000:],
+            "stderr_tail": result.stderr[-3000:],
+        }
+        return {
+            "content": [{"type": "text", "text": str(text)}],
+            "is_error": result.exit_code != 0,
+        }
 
     @tool("probe_api", "Make one policy-approved HTTP request and register sanitized response evidence.", {"method": str, "url": str})
     async def probe_api(args: dict[str, Any]) -> dict[str, Any]:
@@ -1003,7 +1062,11 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
                 ],
                 "is_error": True,
             }
-        runner = K6Runner(services.workspace, services.policy)
+        runner = K6Runner(
+            services.workspace,
+            services.policy,
+            external_egress_enforced=services.k6_external_egress_enforced,
+        )
         try:
             metrics = runner.run(
                 Path(args["script"]),
@@ -1017,24 +1080,35 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
                 min_request_rate=float(args["min_request_rate"]),
             )
         except PermissionError as exc:
-            return {"content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}], "is_error": True}
+            return {
+                "content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}],
+                "is_error": True,
+            }
         except (RuntimeError, OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
-            status = (
-                ValidationStatus.NOT_VERIFIED
-                if "not installed" in str(exc).lower()
-                else ValidationStatus.FAIL
-            )
+            status = ValidationStatus.NOT_VERIFIED
             services.state.validation_results.append(
                 ValidationResult(
                     name="k6",
-                    gate_id=_stable_gate_id("k6", {"script": args["script"], "target_url": args["target_url"], "environment": args["environment"]}),
+                    gate_id=_stable_gate_id(
+                        "k6",
+                        {
+                            "script": args["script"],
+                            "target_url": args["target_url"],
+                            "environment": args["environment"],
+                        },
+                    ),
                     revision=services.state.change_revision,
                     status=status,
                     summary=redact_text(str(exc)),
                 )
             )
             services.checkpoint()
-            return {"content": [{"type": "text", "text": f"{status.value}: {redact_text(str(exc))}"}], "is_error": True}
+            return {
+                "content": [
+                    {"type": "text", "text": f"{status.value}: {redact_text(str(exc))}"}
+                ],
+                "is_error": True,
+            }
         item = services.evidence.add(
             EvidenceItem(
                 run_id=services.state.run_id,
