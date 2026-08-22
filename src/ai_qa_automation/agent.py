@@ -164,6 +164,9 @@ async def run_agent(objective: str, workspace: Path, settings: Settings | None =
             control=control,
         )
         policy = PolicyEngine(cfg.control_root, workspace, allow_test_writes=cfg.allow_test_writes)
+        # Bind the deployment egress assertion to the same policy object used by
+        # the lower-level k6 runner so every workload path enforces it, including localhost.
+        setattr(policy, "k6_external_egress_enforced", cfg.k6_external_egress_enforced)
         runner = TestRunner(workspace, evidence, timeout_seconds=cfg.tool_timeout_seconds)
         services = RuntimeServices(
             workspace=workspace,
