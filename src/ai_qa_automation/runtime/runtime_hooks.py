@@ -344,16 +344,52 @@ def posttool_policy_output(
     tool_name = str(input_data.get("tool_name", ""))
     safe_input = sanitize(input_data.get("tool_input") or {})
     response = input_data.get("tool_response")
+    failed = _tool_response_failed(response)
+    mutation_integrity_blocked = False
     output: dict[str, Any] = {
         "hookEventName": "PostToolUse",
         "additionalContext": f"Policy audit recorded sanitized tool metadata: {safe_input}",
     }
 
-    if state is not None and control is not None and not _tool_response_failed(response):
-        if tool_name in _MUTATION_TOOLS or tool_name == "mcp__qa__inspect_repository":
+    if state is not None and control is not None and not failed:
+        if tool_name == "mcp__qa__inspect_repository":
             control.set_workspace_fingerprint(
                 RepositoryInspector(control.workspace).snapshot().fingerprint
             )
+        elif tool_name in _MUTATION_TOOLS:
+            candidate_snapshot = RepositoryInspector(control.workspace).snapshot()
+            if candidate_snapshot.fingerprint_complete:
+                control.set_workspace_fingerprint(candidate_snapshot.fingerprint)
+            else:
+                pending = control.pending_mutation
+                reasons = ", ".join(candidate_snapshot.fingerprint_incomplete_reasons)
+                rolled_back = control.rollback_pending_mutation(
+                    reason="post-mutation workspace fingerprint became incomplete"
+                )
+                _reconcile_rolled_back_mutation(state, pending, rolled_back)
+                state.terminal_status = TerminalStatus.BLOCKED
+                state.terminal_reason = (
+                    "Candidate mutation was rolled back because the post-mutation workspace "
+                    "fingerprint could not bind every changed subject"
+                )
+                control.journal.append(
+                    "post_mutation_fingerprint_incomplete",
+                    reasons=list(candidate_snapshot.fingerprint_incomplete_reasons),
+                )
+                rollback_snapshot = RepositoryInspector(control.workspace).snapshot()
+                control.set_workspace_fingerprint(rollback_snapshot.fingerprint)
+                mutation_integrity_blocked = True
+                output["updatedToolOutput"] = {
+                    "is_error": True,
+                    "error": (
+                        "Candidate mutation was rolled back because workspace fingerprint "
+                        f"coverage became incomplete ({reasons})."
+                    ),
+                }
+                output["additionalContext"] = (
+                    "The candidate mutation executed but was rolled back before validation because "
+                    "the resulting workspace could not be fingerprinted completely."
+                )
 
     if tool_name.startswith(("mcp__github__", "mcp__atlassian__")):
         safe_response = sanitize(response)
@@ -391,8 +427,7 @@ def posttool_policy_output(
                 state.external_evidence.append(item.id)
 
     if control is not None:
-        failed = _tool_response_failed(response)
-        if tool_name in _MUTATION_TOOLS and failed:
+        if tool_name in _MUTATION_TOOLS and failed and not mutation_integrity_blocked:
             pending = control.pending_mutation
             rolled_back = control.rollback_pending_mutation(reason="mutation tool reported failure")
             _reconcile_rolled_back_mutation(state, pending, rolled_back)
@@ -410,11 +445,12 @@ def posttool_policy_output(
                     control.set_workspace_fingerprint(
                         RepositoryInspector(control.workspace).snapshot().fingerprint
                     )
-        control.record_tool_result(tool_name, failed=failed)
+        effective_failed = failed or mutation_integrity_blocked
+        control.record_tool_result(tool_name, failed=effective_failed)
         control.journal.append(
             "tool_completed",
             tool_name=tool_name,
-            failed=failed,
+            failed=effective_failed,
         )
     _checkpoint(state, state_store, control)
     return {"hookSpecificOutput": output}
