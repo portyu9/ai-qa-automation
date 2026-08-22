@@ -33,14 +33,32 @@ A persuasive model response cannot substitute for a lower layer.
 
 ```mermaid
 flowchart TD
-    A[Bounded model reasoning] --> B[Deterministic authorization]
-    B --> C[Controlled observation / execution]
-    C --> D[Persisted evidence + provenance]
-    D --> E[Revision-aware deterministic validation]
-    E --> F[Structured runtime outcome]
+    accTitle: Production control stack separating advisory reasoning, deterministic authority, evidence, validation, and deployment enforcement
+    accDescr: Advisory model reasoning submits actions into deterministic authorization. Authorized controlled execution produces persisted evidence and provenance. Revision-aware deterministic validation derives the structured runtime outcome. Deployment infrastructure independently constrains authorization and controlled execution through isolation, egress, identity, secrets, target, and storage controls.
+
+    A[Bounded model reasoning] -->|proposes action| B[Deterministic authorization]
+    B -->|authorizes| C[Controlled observation / execution]
+    C -->|produces| D[Persisted evidence + provenance]
+    D -->|supports| E[Revision-aware deterministic validation]
+    E -->|derives| F[Structured runtime outcome]
     G[Deployment infrastructure] -. isolation / egress / identity / secrets .-> B
     G -. target + storage controls .-> C
+
+    classDef advisory fill:#fbefff,stroke:#8250df,color:#24292f,stroke-width:2px
+    classDef authority fill:#ddf4ff,stroke:#0969da,color:#24292f,stroke-width:2px
+    classDef evidence fill:#dafbe1,stroke:#1a7f37,color:#24292f,stroke-width:2px
+    classDef terminal fill:#dafbe1,stroke:#1a7f37,color:#24292f,stroke-width:3px
+    classDef deployment fill:#fff8c5,stroke:#9a6700,color:#24292f,stroke-width:2px,stroke-dasharray:5 3
+
+    class A advisory
+    class B,C authority
+    class D,E evidence
+    class F terminal
+    class G deployment
+    linkStyle default stroke:#57606a,stroke-width:1.5px
 ```
+
+**Control key:** purple = advisory reasoning · blue = deterministic authority/execution · green = evidence and validation · amber dashed = independently owned deployment enforcement. Labels preserve meaning without relying on color.
 
 ### 1. Agent orchestration
 
