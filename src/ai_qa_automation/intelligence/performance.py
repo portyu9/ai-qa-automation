@@ -19,11 +19,18 @@ class PerformanceAssessor:
             "max_error_rate": max_error_rate,
             "min_request_rate": min_request_rate,
         }
+        normalized: dict[str, float] = {}
         for name, value in thresholds.items():
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"{name} must be numeric")
             if not math.isfinite(value):
                 raise ValueError(f"{name} must be finite")
             if value < 0:
                 raise ValueError(f"{name} must be non-negative")
+            normalized[name] = float(value)
+        max_p95_ms = normalized["max_p95_ms"]
+        max_error_rate = normalized["max_error_rate"]
+        min_request_rate = normalized["min_request_rate"]
         if max_error_rate > 1:
             raise ValueError("max_error_rate must be between 0 and 1")
 
