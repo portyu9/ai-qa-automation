@@ -1,6 +1,8 @@
 # Traceability and Run Attestation
 
-The platform persists enough structured information to inspect **why** a run reached a conclusion without relying on chat history or treating model prose as the audit record.
+> **YP AI QA Automation Framework** · Designed and engineered by **Yunior Portal**
+
+The YP AI QA Automation Framework persists enough structured information to inspect **why** a run reached a conclusion without relying on chat history or treating model prose as the audit record.
 
 Traceability is designed around a simple question:
 
@@ -64,7 +66,7 @@ The DOT export is intended for Graphviz, debugging, review, or downstream visual
 
 ## Evidence and artifact integrity
 
-Artifacts are registered with content hashes and run-scoped metadata. Text evidence that may reach the model is sanitized according to the evidence path; binary artifacts such as screenshots remain explicitly `RAW` and are not falsely described as sanitized text.
+Artifacts are registered with content hashes and run-scoped metadata. Run directories are confined beneath the trusted artifact root; artifact paths are confined beneath the run root; duplicate evidence IDs/artifact paths do not overwrite an existing record. Text evidence that may reach the model is sanitized according to the evidence path; binary artifacts such as screenshots remain explicitly `RAW` and are not falsely described as sanitized text.
 
 `journal.jsonl` uses sequence numbers plus previous/current record hashes to make record reordering, removal, or modification detectable during verification. Hash chaining improves tamper evidence; it does not create an external identity or trusted timestamp by itself.
 
