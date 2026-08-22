@@ -48,3 +48,18 @@ def test_env_example_remains_readable_reference_documentation(
     decision = policy(tmp_path).authorize_path(Path(relative_path), write=False)
     assert decision.decision is ToolDecision.ALLOW
     assert decision.rule_id == "FS-ALLOW"
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        ".git/.env.example",
+        ".claude/.env.example",
+    ],
+)
+def test_protected_parent_directory_wins_over_env_example_exception(
+    tmp_path: Path, relative_path: str
+) -> None:
+    decision = policy(tmp_path).authorize_path(Path(relative_path), write=False)
+    assert decision.decision is ToolDecision.DENY
+    assert decision.rule_id == "GOV-001"
