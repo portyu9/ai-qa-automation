@@ -1,11 +1,15 @@
 # Runtime Result Contract
 
-> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
-
-The framework separates **what a model says** from **what the system can prove**. A fluent answer, confident diagnosis, green-looking retry, or successful Agent SDK result subtype never becomes a verified QA outcome by itself.
-
 > [!IMPORTANT]
 > **Runtime outcomes are derived from deterministic policy, observed evidence, subject-bound validation lineage, and integrity state.**
+
+**ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
+
+[Documentation home](README.md) · [Architecture](ARCHITECTURE.md) · [Runtime control](RUNTIME_CONTROL.md) · [Traceability](TRACEABILITY.md)
+
+---
+
+The framework separates **what a model says** from **what the system can prove**. A fluent answer, confident diagnosis, green-looking retry, or successful Agent SDK result subtype never becomes a verified QA outcome by itself.
 
 This document is the authoritative semantic contract for live terminal, validation, and provider outcomes.
 
