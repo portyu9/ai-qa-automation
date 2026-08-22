@@ -23,10 +23,12 @@ The authoritative expected behavior is identified; repository coverage can be se
 2. Run `search_test_coverage` against the target repository and retain its evidence ID.
 3. Interpret the observed coverage and identify the actual gap.
 4. Call `plan_tests` with that same-run coverage evidence; choose the lowest reliable layer that proves the behavior.
-5. Design relevant happy, negative, boundary, authorization, state, error, contract, and data scenarios without generating permutations for their own sake.
-6. Create a test only from the same-run plan evidence; test creation is not authorized from an ungrounded model proposal.
-7. Run deterministic syntax/quality checks, targeted execution, and relevant regression.
-8. Do not perform another mutation until the current change revision is closed.
+5. Treat interpreted “already covered” labels as advisory only. They may guide reasoning, but they cannot suppress the planner's deterministic candidate scenarios by themselves.
+6. Design relevant happy, negative, boundary, authorization, state, error, contract, and data scenarios without generating permutations for their own sake.
+7. Create a test only from the same-run plan evidence; test creation is not authorized from an ungrounded model proposal.
+8. Before implementation, reconcile the candidate scenario with the observed coverage evidence so redundant coverage is not introduced merely because the deterministic planner remained conservative.
+9. Run deterministic syntax/quality checks, targeted execution, and relevant regression.
+10. Do not perform another mutation until the current change revision is closed.
 
 Prefer unit/component/API/integration over UI when that layer proves the behavior reliably.
 
@@ -37,7 +39,7 @@ Requirement/change provenance, `repository_test_coverage_search` evidence, plan 
 Search bounded test coverage; inspect approved source/tests/contracts; create a grounded plan; create a policy-approved test file from that plan; execute bounded tests; run deterministic quality validation.
 
 ## Prohibited shortcuts
-Invented coverage claims, plan-less file creation, assertion-free tests, snapshot-everything tests, arbitrary sleeps, `.skip`/`.only`, timeout inflation, redundant E2E coverage, duplicated existing coverage, or tests that only prove mocks were called.
+Invented coverage claims, using model-declared existing coverage to suppress deterministic candidate scenarios, plan-less file creation, assertion-free tests, snapshot-everything tests, arbitrary sleeps, `.skip`/`.only`, timeout inflation, redundant E2E coverage, duplicated existing coverage, or tests that only prove mocks were called.
 
 ## Validation requirements
 Patch-safety PASS plus targeted deterministic execution and relevant full regression at the current revision, with meaningful assertion review.
