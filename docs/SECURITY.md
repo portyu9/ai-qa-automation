@@ -2,141 +2,214 @@
 
 > **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
-Security controls in the ƳƤ AI QA Automation Framework are enforced in deterministic code in addition to model instructions. The design assumes the model can be confused by adversarial content and therefore does not make prompt compliance the primary security boundary.
+Security in the ƳƤ AI QA Automation Framework is enforced in deterministic code in addition to model instructions. The design assumes probabilistic reasoning can be wrong and target/provider content can be adversarial; prompt compliance is therefore never the primary security boundary.
 
 ## Security principles
 
-1. **Fail closed** — unknown tools, unknown MCP namespaces, unsupported high-risk actions, path escape, stale workspace state, and missing approval do not receive optimistic permission.
-2. **Separate trust zones** — control-plane configuration is trusted; target and remote content is evidence, not authority.
-3. **Minimize authority** — the runtime exposes narrow QA actions rather than generic shell/edit/web capabilities.
-4. **Bind mutation to evidence and validation** — autonomous test changes are restricted, transactionally reversible, and cannot close without deterministic validation.
-5. **Keep uncertainty visible** — infrastructure failures, missing evidence, and conflicting validation cannot become synthetic PASS.
-6. **Do not confuse application controls with infrastructure isolation** — host/path/tool policy is defense in depth; OS/container/network enforcement remains deployment evidence.
+1. **Fail closed** — unknown tools, namespaces, actions, paths, environments, or ownership conditions do not receive optimistic permission.
+2. **Separate trust zones** — control-plane configuration is trusted; target and remote content are evidence, not authority.
+3. **Minimize authority** — narrow QA capabilities replace generic shell/edit/web power.
+4. **Keep model confidence advisory** — probabilistic scores can guide reasoning but cannot independently authorize mutation or certify evidence.
+5. **Bind mutation to ownership and validation** — writes are path-confined, revision-bound, transactionally recoverable, and deterministically closed.
+6. **Preserve uncertainty** — missing, conflicting, blocked, or insufficient evidence cannot become synthetic PASS.
+7. **Separate application controls from infrastructure controls** — host/path/tool rules are defense in depth; process/container/network enforcement belongs to deployment infrastructure.
 
 ## Fail-closed runtime authority
 
-The live runtime exposes the framework-owned QA tool inventory rather than general mutation/network tools. Unknown tools are denied. Unapproved MCP namespaces are denied. Approval-required actions fail closed during unattended execution.
+The live runtime exposes the framework-owned QA tool inventory rather than general mutation/network tools. Unknown tools and unapproved MCP namespaces are denied. Approval-required actions fail closed during unattended execution.
 
-Agent SDK configuration additionally restricts generic Bash/Edit/Write/Web surfaces and uses project-only settings with a fixed Skill allowlist.
+Agent SDK configuration additionally:
 
-A model instruction cannot grant itself new authority because authorization is performed by deterministic policy/hooks outside the model output.
+- uses trusted project settings;
+- allowlists five Skills;
+- enables strict MCP configuration;
+- denies Bash/Edit/Write/Web-style built-ins;
+- passes tool requests through deterministic permission handling and hooks.
+
+A prompt cannot grant itself authority because authorization is performed outside model output.
+
+## Trusted network configuration
+
+The network allowlist is validated at configuration load rather than interpreted loosely at point of use.
+
+Entries must be explicit hostnames or IP literals. The configuration layer canonicalizes DNS/IP values and rejects:
+
+- wildcard hosts;
+- URL-shaped entries;
+- embedded ports;
+- user-info, paths, query strings, or fragments;
+- malformed DNS labels;
+- empty allowlists.
+
+This prevents ambiguous trusted configuration from later being interpreted differently by API, browser, or performance adapters.
 
 ## Filesystem and workspace integrity
 
-`PolicyEngine.authorize_path` resolves candidate paths before policy checks, rejects target-workspace escape, protects governance/secret paths, and restricts optional writes to approved test directories.
+`PolicyEngine.authorize_path` resolves candidate paths, rejects workspace escape, protects governance/secret paths, and limits optional writes to approved test directories.
 
-For autonomous mutations, path authorization is only the first control. The runtime also requires:
+Autonomous mutation additionally requires:
 
 - an isolated Git-backed target worktree;
-- an exclusive workspace lease;
-- a current fingerprint matching the inspected baseline;
+- an exclusive OS-backed workspace lease;
+- a content-sensitive fingerprint matching the analyzed baseline;
 - explicit test-write enablement;
 - no unresolved previous mutation transaction;
-- unambiguous mutation-path ownership with no absolute path, traversal, or symlink component.
+- non-ambiguous path ownership: no absolute path, traversal, workspace escape, or symlink component.
 
-Out-of-band changes block mutation. This prevents an agent from silently writing against a workspace whose contents changed after analysis or redirecting a write through a symlink alias.
+Out-of-band changes block mutation rather than allowing the agent to write against stale analysis.
 
 ## Transactional patch integrity
 
 Safe patching combines:
 
-- optimistic-concurrency hashes;
+- optimistic-concurrency file hashes;
 - narrow mutation types;
 - syntax/test-quality validation;
-- unsafe-diff pattern checks;
+- unsafe-diff checks;
 - trusted rollback snapshots outside the SUT;
-- rollback snapshot path confinement and hash verification;
-- post-change patch-safety + targeted pytest + full-regression requirements.
+- rollback path confinement and hash verification;
+- current-revision patch-safety, targeted pytest, and full-regression requirements.
 
-Guardrails block common “make it green” shortcuts such as skips/xfails, arbitrary sleeps, focused-only tests, indiscriminate timeout inflation, assertion removal/weakening, tautologies, and broad exception suppression.
+Guardrails reject common “make it green” shortcuts such as skips/xfails, arbitrary sleeps, focused-only tests, indiscriminate timeout inflation, assertion erosion, tautologies, and broad exception suppression.
 
-A transaction without deterministic closure rolls back only when rollback integrity is established. Crash recovery restores a stale mutation only when the persisted fingerprint proves no newer human/out-of-band change would be overwritten.
+A transaction without deterministic closure rolls back only when rollback ownership and integrity are established.
+
+## Crash recovery uses the same ownership model
+
+Recovery is not a weaker alternate write path.
+
+Stale mutation recovery validates:
+
+- the prior run directory remains under the trusted artifact root;
+- prior runtime metadata is a regular non-symlink file;
+- the recorded workspace matches the lease workspace;
+- current fingerprint exactly matches the crashed mutation checkpoint;
+- pending target path is confined and contains no symlink component;
+- rollback backup remains inside the trusted rollback directory;
+- rollback path contains no symlink component;
+- backup bytes match the recorded SHA-256 digest.
+
+If newer human/out-of-band work exists or any ownership/integrity property is ambiguous, automatic rollback is blocked.
+
+## Deterministic self-healing authority
+
+A unique locator is not automatically a safe locator.
+
+The framework separates model proposal quality from autonomous authorization:
+
+1. Playwright observes original/candidate match counts in the same DOM.
+2. Supported locator expressions are reparsed by deterministic code.
+3. Semantic intent is recomputed from original/candidate locator contracts.
+4. Model-supplied semantic confidence is overwritten.
+5. Model-supplied stability is overwritten with policy-owned strategy stability.
+6. Positional/XPath-style and weak-semantic candidates are rejected.
+7. Proposal remains bound to exact file path/hash and observed evidence.
+8. Applied locator-only mutation must close current-revision deterministic validation.
+
+The same semantic rule also constrains locator-contract failure classification so an unrelated unique element cannot make the classifier overconfident.
 
 ## Evidence and artifact confinement
 
-Run-scoped evidence directories are resolved under the trusted artifact root. Empty/root-aliasing, absolute, and traversal-style run identifiers that would escape or collapse that boundary are rejected. Artifact paths are resolved under the run root, duplicate evidence IDs and artifact paths are immutable, and symlink-based artifact escapes are rejected.
+Run-scoped evidence directories are confined beneath the trusted artifact root. Empty/root-aliasing, absolute, traversal, and symlink-shaped run paths are rejected. Artifact paths remain beneath the run root, duplicate evidence IDs/artifact paths are immutable, and symlink-based artifact escapes are rejected.
 
-These controls reduce cross-run and filesystem-boundary ambiguity; they do not substitute for deployment-level access controls or storage policy.
+These controls reduce cross-run and filesystem-boundary ambiguity; deployment storage/access policy remains an independent responsibility.
 
 ## API and browser network boundaries
 
-API access is host-allowlisted and read-only by default. Mutating methods require separate explicit enablement. API requests avoid ambient proxy inheritance.
+API access is host-allowlisted and read-only by default. Mutating methods require separate explicit enablement. HTTP requests avoid ambient proxy inheritance and do not automatically follow redirects.
 
-Browser evidence collection checks initial navigation, HTTP(S) subresources, and WebSocket connections against the runtime allowlist. Service workers are disabled in the evidence context so they cannot silently extend the network surface.
+Browser evidence collection checks:
+
+- initial navigation;
+- HTTP(S) subresources;
+- WebSocket connections;
+- final navigation after page load.
+
+Service workers are disabled in the evidence context so they cannot silently extend the routed network surface. Allowed WebSockets use Playwright's supported routed-server connection path; disallowed sockets are closed by policy.
 
 Network-capable actions consume an independent runtime budget in addition to the total tool budget.
 
 ## Performance-test safety
 
-Production load testing is denied by policy. k6 targets must pass the runtime network allowlist and be explicitly classified as non-production. The policy also rejects production-like DNS labels such as `prod`/`production` forms even when caller-supplied environment metadata claims staging or QA.
+Production load testing is denied by policy. k6 targets must pass the host allowlist and be explicitly classified as non-production. Production-like DNS labels such as `prod` / `production` forms are denied even when caller-supplied environment metadata claims staging or QA.
 
-The runner requires scripts to bind to the injected approved target and applies bounded static restrictions including rejection of:
+The controlled runner requires target injection and rejects:
 
 - remote modules;
 - `k6/x/*` extensions;
 - local-file reads;
-- unrelated hard-coded external hosts.
+- unrelated literal external hosts;
+- unsupported imports.
 
-Usage reporting is disabled and runtime summary files remain outside the SUT.
+Usage reporting is disabled and runtime summary files live outside the SUT.
 
-Non-local k6 additionally requires the trusted `AI_QA_K6_EXTERNAL_EGRESS_ENFORCED=true` precondition. That flag is an explicit assertion that the deployment has separately established infrastructure-level egress enforcement; it is not itself a firewall.
+Non-local k6 additionally requires `AI_QA_K6_EXTERNAL_EGRESS_ENFORCED=true` as a trusted prerequisite asserting deployment-level egress enforcement. The flag is not itself a firewall.
 
 ## MCP security
 
-External MCP must match an approved vendor identity and be explicitly enabled. GitHub MCP is additionally configured read-only at the server layer. Runtime policy independently separates recognized read operations, approval-required writes, destructive actions, and unknown actions.
+External MCP must match an approved vendor identity and be explicitly enabled. GitHub MCP is additionally configured read-only at the server layer. Runtime policy independently separates read operations, approval-required writes, destructive actions, and unknown actions.
 
-External action names are normalized across snake/camel naming and evaluated conservatively: destructive verbs dominate write verbs, which dominate recognized reads. Resource-noun collisions such as `pull request` are handled explicitly so legitimate reads are not mislabeled while mixed names such as read-plus-create/delete cannot smuggle higher authority behind a read prefix.
+External action names are normalized across snake/camel/mixed conventions. Authorization precedence is conservative:
 
-Target/user/plugin MCP configuration is not inherited into the live runtime. Remote MCP content is sanitized and persisted as untrusted evidence; it cannot redefine policy, hooks, Skills, thresholds, or terminal-outcome rules.
+```text
+destructive token > write token > recognized read token
+```
 
-An integration is marked `AVAILABLE` only after an observed successful call.
+Resource-noun collisions such as `pull request` are handled explicitly while mixed names such as read-plus-create/delete cannot smuggle higher authority behind a safe-looking prefix.
+
+Target/user/plugin MCP configuration is not inherited. Remote MCP content is sanitized, persisted as untrusted evidence, and cannot redefine policy, hooks, Skills, thresholds, or terminal rules.
+
+An integration becomes `AVAILABLE` only after an observed successful provider interaction.
 
 See [`MCP.md`](MCP.md).
 
 ## Secrets and artifacts
 
-Evidence is sanitized recursively along model-facing/text persistence paths. Pytest output is redacted before it is returned or stored as sanitized text evidence. Runtime pytest/k6/git subprocesses use credential-minimal environments and do not inherit the control process `PYTHONPATH`.
+Evidence is recursively sanitized along supported model-facing/text persistence paths. Pytest output is redacted before it is returned or stored as sanitized text evidence. Runtime pytest/k6/git subprocesses use credential-minimal environments and do not inherit the control process `PYTHONPATH`.
 
-Raw binary artifacts such as screenshots are labeled `RAW` rather than falsely marked sanitized. Their access and retention remain an operational/deployment responsibility.
+Raw binary artifacts such as screenshots are labeled `RAW`; their access and retention remain deployment concerns.
 
-`.env.example` contains names/defaults only. Runtime settings deliberately do not auto-load a repository `.env` file. Real credentials must be injected through the environment or an approved secret-management mechanism and must never be committed.
+`.env.example` contains reference names/defaults only. Runtime settings do not auto-load a repository `.env` file. Real credentials must be injected through the operating environment or an approved secret-management mechanism and never committed.
 
 ## Governance protection
 
-The runtime protects policy/configuration assets that could redefine its authority or evidence standard, including:
+The runtime protects authority-bearing assets including:
 
 - `CLAUDE.md`;
 - `.claude/` settings/hooks/Skills;
 - `.mcp.json`;
-- core policy/runtime-hook paths;
+- policy/runtime-hook paths;
 - evaluation thresholds;
-- GitHub workflow paths through trusted development hooks.
+- secret-bearing environment files;
+- workflow/governance surfaces through trusted development controls.
 
-A governance change is expected to receive explicit human review rather than autonomous self-modification.
+Governance changes require reviewed engineering work rather than autonomous self-modification.
 
-## Supply-chain and dependency posture
+## Supply-chain posture
 
-The repository defines dependency compatibility checking, Bandit source analysis, dependency vulnerability auditing, and secret scanning as deterministic security gates.
+The repository defines deterministic gates for dependency compatibility, Bandit source analysis, dependency vulnerability auditing, and secret scanning.
 
-Dependencies and external MCP versions should be updated deliberately: verify official provenance/version, review behavior/tool-surface changes, update deterministic tests/policy if authority changes, and rerun the applicable gates before promoting the new state.
+Dependencies and external-provider versions should be updated deliberately: validate official provenance, review behavioral/tool-surface changes, update policy/tests if authority changes, and evaluate the resulting configuration under the applicable framework gates.
 
 ## Threat-model relationship
 
-[`THREAT_MODEL.md`](THREAT_MODEL.md) enumerates primary threats and residual boundaries. A material new threat should result in one or more of:
+[`THREAT_MODEL.md`](THREAT_MODEL.md) enumerates primary threats and residual deployment boundaries. A material threat should result in one or more of:
 
-- a narrower deterministic policy;
-- a safer tool contract;
+- narrower deterministic policy;
+- safer tool contract;
 - stronger evidence semantics;
-- a regression/security test;
-- an adversarial primary/holdout scenario;
-- an explicit environment boundary when the repository itself cannot enforce the control.
+- security/regression test;
+- adversarial evaluation case;
+- explicit deployment boundary when repository code cannot enforce the control.
 
 ## Reporting a security issue
 
-Follow the root [`SECURITY.md`](../SECURITY.md). Never include real credentials, private customer data, production artifacts, or sensitive exploit material in a public report.
+Follow root [`SECURITY.md`](../SECURITY.md). Never include real credentials, private customer data, production artifacts, or sensitive exploit material in a public report.
 
-## Verification boundary
+## Evidence ownership
 
-Security claims are scoped to their evidence source: source-level controls, deterministic gates, credentialed providers, and deployment infrastructure are evaluated within their respective trust boundaries.
+Security claims remain scoped to their evidence source: source-level controls, deterministic runtime observations, credentialed providers, and deployment infrastructure each have distinct trust owners.
+
+See [`README.md`](README.md), [`RESULT_CONTRACT.md`](RESULT_CONTRACT.md), [`THREAT_MODEL.md`](THREAT_MODEL.md), and [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md).
 
 Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
