@@ -13,6 +13,7 @@ from .redaction import sanitize
 
 _MAX_EVIDENCE_MANIFEST_BYTES = 16_000_000
 _MAX_EVIDENCE_AUDIT_LINE_BYTES = 1_000_000
+_MAX_ARTIFACT_BYTES = 32_000_000
 
 
 class EvidenceStore:
@@ -108,6 +109,10 @@ class EvidenceStore:
         sanitization_status: SanitizationStatus = SanitizationStatus.RAW,
         retention_classification: str | None = None,
     ) -> tuple[str, str]:
+        if not isinstance(content, bytes):
+            raise TypeError("artifact content must be bytes")
+        if len(content) > _MAX_ARTIFACT_BYTES:
+            raise ValueError(f"artifact exceeds {_MAX_ARTIFACT_BYTES} byte persistence limit")
         destination = self._owned_artifact_path(relative_path)
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.exists():
@@ -197,13 +202,19 @@ class EvidenceStore:
             if path.stat().st_size > _MAX_EVIDENCE_MANIFEST_BYTES:
                 raise ValueError("evidence manifest exceeds restore size bound")
             data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("evidence manifest root must be an object")
             if data.get("run_id") != self.run_id:
                 raise ValueError("evidence manifest run_id mismatch")
             manifest_regulated = bool(data.get("regulated_mode", False))
             if manifest_regulated != self.regulated_mode:
                 raise ValueError("evidence manifest regulated_mode mismatch")
-            evidence_records = [EvidenceItem.model_validate(raw) for raw in data.get("evidence", [])]
-            artifact_records = [ArtifactRecord.model_validate(raw) for raw in data.get("artifacts", [])]
+            raw_evidence = data.get("evidence", [])
+            raw_artifacts = data.get("artifacts", [])
+            if not isinstance(raw_evidence, list) or not isinstance(raw_artifacts, list):
+                raise ValueError("evidence manifest registries must be lists")
+            evidence_records = [EvidenceItem.model_validate(raw) for raw in raw_evidence]
+            artifact_records = [ArtifactRecord.model_validate(raw) for raw in raw_artifacts]
             if len({item.id for item in evidence_records}) != len(evidence_records):
                 raise ValueError("evidence manifest contains duplicate evidence ids")
             if len({item.artifact_id for item in artifact_records}) != len(artifact_records):
@@ -241,6 +252,8 @@ class EvidenceStore:
                 raise ValueError(f"regulated artifact ownership check failed: {record.path}") from exc
             if not path.is_file():
                 raise ValueError(f"regulated artifact is missing or escaped run root: {record.path}")
+            if path.stat().st_size > _MAX_ARTIFACT_BYTES:
+                raise ValueError(f"regulated artifact exceeds persistence limit: {record.path}")
             if self.hash_file(path) != record.content_hash:
                 raise ValueError(f"regulated artifact integrity check failed: {record.path}")
 
