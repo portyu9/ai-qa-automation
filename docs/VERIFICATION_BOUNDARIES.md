@@ -1,140 +1,214 @@
 # Verification Boundaries
 
-> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
+> [!IMPORTANT]
+> Verification is meaningful only when the **evidence source** and **trust owner** are explicit. Implementation presence, configuration presence, and neighboring green signals are not substitutes for evidence that belongs to another trust domain.
 
-Verification is meaningful only when the evidence source and trust owner are explicit. The ƳƤ AI QA Automation Framework therefore separates **repository-contained controls**, **local runtime observations**, **credentialed-provider evidence**, and **target/deployment evidence**.
+**ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
-This boundary prevents a common failure in AI/system documentation: allowing implementation presence, configuration presence, or a neighboring green signal to stand in for evidence that belongs to a different trust domain.
+[Documentation home](README.md) · [Production readiness](PRODUCTION_READINESS.md) · [Result contract](RESULT_CONTRACT.md) · [Traceability](TRACEABILITY.md)
 
-## Evidence classes
+---
 
-| Class | Evidence owner | Examples |
+## The evidence ownership model
+
+The framework separates five evidence domains:
+
+```mermaid
+flowchart LR
+    R[Repository-contained controls] --> L[Local runtime observations]
+    L --> P[Credentialed provider evidence]
+    L --> T[Target-environment evidence]
+    D[Deployment infrastructure evidence] -. independently constrains .-> L
+    D -. independently constrains .-> T
+```
+
+| Evidence class | Primary owner | Examples |
 |---|---|---|
-| Repository-contained | deterministic framework code/tests/evaluators | policy, state/evidence contracts, change intelligence, result logic |
-| Local runtime | local executable/runtime environment | Chromium, Docker, k6, Appium visibility |
-| Credentialed provider | authorized provider session | Claude, GitHub MCP, Atlassian MCP interaction |
-| Target environment | selected application/test environment | browser/API behavior, load target, app/device session |
-| Deployment infrastructure | organization/platform controls | process/container isolation, firewall, secrets, identity, retention |
+| **Repository-contained** | deterministic framework code/config/tests/evaluators | policy, result logic, state/evidence contracts, change intelligence |
+| **Local runtime** | executable/runtime environment | Python, Chromium, Docker, k6, Appium/runtime visibility |
+| **Credentialed provider** | authorized provider session | Claude, GitHub MCP, Atlassian MCP interactions |
+| **Target environment** | selected SUT/test environment | browser/API behavior, load metrics, app/device behavior |
+| **Deployment infrastructure** | organization/platform | process/container isolation, egress, identity, secrets, retention |
 
-A capability can span multiple classes. GitHub MCP authorization logic is repository-contained; Docker is a local runtime dependency; GitHub authentication and repository permissions are credentialed-provider evidence.
+A capability may span several classes. The framework keeps those contributions separate rather than declaring the whole capability “verified” from one layer alone.
 
-## Repository-contained control surfaces
+---
 
-The codebase defines deterministic control/evaluation surfaces for areas including:
+## Repository-contained controls
 
-- typed state, evidence, policy, validation, provider, and terminal-outcome contracts;
+The codebase defines deterministic contracts for areas including:
+
+- typed state, evidence, validation, provider, policy, and terminal outcomes;
 - terminal truth with gate identity + revision supersession;
-- failure classification;
+- exact-path binding between mutation, patch-safety, and targeted pytest evidence;
+- failure classification and insufficient-evidence handling;
 - deterministic locator parsing/semantic scoring;
-- same-DOM Playwright candidate verification;
-- self-healing authorization and locator-only mutation;
-- observed coverage search, plan-bound test generation, and test-quality review;
-- regression prioritization and uncertainty broadening;
-- canonical host/IP configuration validation;
+- same-DOM Playwright locator verification;
+- guarded self-healing authorization;
+- coverage search, conservative generation planning, and test-quality review;
+- regression prioritization with uncertainty broadening;
+- canonical hostname/IP validation;
 - path/tool/MCP/API/performance authorization;
-- secret-shaped `.env` path protection;
 - recursive redaction and credential-minimal subprocess environments;
-- evidence/artifact confinement, immutability, and content hashes;
-- atomic state and hash-chained runtime journal;
-- independent execution budgets and per-tool circuits;
-- workspace lease and fingerprint logic;
-- transactional mutation and rollback verification;
-- stale recovery with path/symlink/fingerprint/hash ownership checks;
-- merge-base change intelligence, CODEOWNERS, test impact, OpenAPI drift;
-- lineage graph and unsigned attestation semantics;
+- evidence/artifact confinement and immutability;
+- hash-chained journals and regulated audit records;
+- workspace lease, fingerprint, transaction, rollback, and stale recovery logic;
+- symlink-resistant ownership for mutation, rollback, evidence, journal, lease, recovery, and attestation subjects;
+- merge-base change intelligence, CODEOWNERS, test impact, and OpenAPI drift;
+- unsigned run-attestation logic with artifact-byte verification;
 - fixed primary and independent holdout evaluators;
 - deterministic reference-SUT behavior.
 
-These are framework contracts. [`RESULT_CONTRACT.md`](RESULT_CONTRACT.md) defines how runtime evidence and validation become terminal truth.
+These are **framework contracts**. Their existence does not by itself prove a particular runtime/provider/target execution occurred.
 
-## Local runtime dependencies
+---
 
-Some execution surfaces require local/system components even when no remote account is involved:
+## Local runtime evidence
 
+Some execution surfaces require locally observable components even when no remote account is involved:
+
+- Python/package environment;
 - Playwright browser executable;
 - Docker for the configured GitHub MCP container path;
 - k6 executable;
-- Appium/device tooling.
+- Appium/device tooling;
+- Git repository/worktree support.
 
-`ai-qa doctor` reports locally observable capability without treating package/executable presence as provider authentication evidence.
+`ai-qa doctor` reports what the current environment can actually observe. Package/executable presence does not become provider authentication evidence.
+
+---
 
 ## Credentialed provider evidence
 
-Credentialed evidence belongs to the provider interaction:
+Credentialed evidence belongs to an authorized interaction:
 
-- Claude Agent SDK request/response behavior with `ANTHROPIC_API_KEY`;
-- GitHub MCP behavior with an authorized GitHub credential and provider tool call;
-- Atlassian Rovo MCP behavior with an authorized authentication/session and provider call.
+- Claude Agent SDK behavior with model credentials;
+- GitHub MCP behavior with an authorized GitHub identity/token and provider call;
+- Atlassian Rovo MCP behavior with an authorized site/session and provider call.
 
-The framework records provider `AVAILABLE` only after an observed successful interaction. Local configuration does not manufacture availability.
+The framework records provider `AVAILABLE` only after an observed successful interaction. Local configuration does not manufacture availability, and a provider outcome does not become the QA terminal outcome.
 
-Provider outcomes remain separate from the QA terminal outcome.
+---
 
 ## Target-environment evidence
 
-Target-specific behavior includes:
+Target-specific evidence includes:
 
 - Playwright behavior against the selected application;
 - API authentication/data/business behavior;
 - k6 metrics against the approved workload;
-- Appium behavior against the selected app/device environment;
-- target-specific database/cache/queue/external dependency behavior;
+- Appium behavior against a selected app/device environment;
+- database/cache/queue/external-dependency behavior;
 - application authorization and data-classification rules.
 
-Reference fixtures help exercise framework mechanics but do not define arbitrary external application behavior.
+Reference fixtures prove framework mechanics for the fixture behavior they exercise. They do not define arbitrary external systems.
+
+---
 
 ## Deployment-infrastructure evidence
 
-The repository can impose prerequisites and refuse unsafe operations, but it does not pretend to own infrastructure outside its process boundary.
+Repository code can demand prerequisites and refuse unsafe operations, but it does not pretend to own infrastructure outside its process boundary.
 
-Deployment evidence covers properties such as:
+Deployment evidence includes:
 
 - process/container/VM isolation;
 - non-root/security context;
 - firewall/proxy/egress enforcement;
-- organization identity and secret-management lifecycle;
+- identity and secret lifecycle;
+- provider-side authentication/authorization;
 - artifact encryption/access/retention;
-- device/cloud security;
-- compliance and legal controls;
-- trusted runner/CI infrastructure.
+- trusted runner/CI infrastructure;
+- device/cloud security posture;
+- legal/compliance controls;
+- incident-response and availability controls.
 
-Application-layer allowlists and flags are defense in depth, not substitute evidence for these controls.
+> [!CAUTION]
+> `AI_QA_K6_EXTERNAL_EGRESS_ENFORCED=true` is a prerequisite assertion, not a firewall. The deployment must actually provide egress containment for every k6 execution.
 
-## Capability matrix
+---
+
+## Capability/evidence matrix
 
 | Capability | Framework-owned contract | Environment/provider-owned evidence |
 |---|---|---|
 | Claude reasoning loop | Agent SDK orchestration, policy, result semantics | credentialed provider interaction |
-| Terminal truth | gate/revision lineage and result derivation | actual validation observations for the run |
+| Terminal truth | gate/revision/path lineage and deterministic derivation | actual validation observations for the run |
+| Autonomous mutation | Python-path authority, lease/fingerprint, transaction/rollback, exact-path pytest closure | filesystem/process isolation around runtime |
 | GitHub MCP | official config, action policy, failure normalization | auth, permissions, provider responses |
 | Atlassian MCP | official endpoint config, action policy, failure normalization | auth/session, site permissions, provider responses |
 | Network policy | canonical host validation + adapter authorization | DNS/routing/firewall/proxy enforcement |
-| Playwright | navigation/subrequest/WebSocket policy, locator evidence contract | browser runtime + target app behavior |
-| API | host/method policy, bounded httpx/evidence path | target auth/data/service behavior |
-| k6 | target/environment/script/threshold policy | executable, approved target, infrastructure egress |
-| Appium | runtime/capability policy boundary | app/device/emulator/cloud session |
-| Secret safety | protected paths, redaction, subprocess env, scan definitions | organization secret store, rotation, access policy |
-| Mutation integrity | lease, fingerprint, path ownership, transaction/rollback logic | filesystem/process isolation surrounding runtime |
-| Traceability | manifests, hashes, journal, lineage, unsigned attestation | external signing/identity/timestamping when required |
+| Playwright | navigation/subresource/WebSocket policy + locator evidence contract | browser runtime + target app behavior |
+| API | host/method policy + bounded evidence capture | target auth/data/service behavior |
+| k6 | non-production/host/script/threshold policy + universal egress prerequisite | executable, approved target, actual infrastructure egress |
+| Appium | runtime/capability inspection boundary | app/device/emulator/cloud session |
+| Secret safety | protected paths, redaction, minimal subprocess env | organization secret manager, rotation, access policy |
+| Traceability | manifests, hashes, journal, lineage, artifact-verifying unsigned attestation | external signing/identity/timestamping when required |
+| Evaluation | fixed primary/holdout definitions and hard-safety scoring | execution results for a specific revision/environment |
 
-## Artifact boundary
+---
 
-Text evidence is sanitized along supported model-facing/text persistence paths. Binary screenshots remain `RAW` artifacts with hashes and require appropriate storage/access/retention controls.
+## Artifact and attestation boundary
 
-Hashing and hash chaining provide internal tamper-evidence properties. They do not create an external trusted signer, timestamp, identity, or correctness proof.
+Text evidence is sanitized/redacted on supported model-facing/text persistence paths. Binary screenshots and similar artifacts remain explicitly `RAW` and require deployment-level storage/access/retention controls.
 
-## Practical claim rule
+Hashing and hash chaining establish internal integrity properties. The unsigned attestation can additionally verify owned persisted subjects, journal linkage, pending-mutation state, and registered artifact bytes.
 
-Use the narrowest statement that matches the evidence owner:
+Those properties still do **not** create:
 
-- **implemented control** → established by source/configuration;
-- **deterministic behavior** → established by execution/evaluation for the exercised path;
-- **provider behavior** → established by authorized provider interaction;
-- **target behavior** → established by target-specific observation;
-- **deployment property** → established by infrastructure/organization evidence.
+- a trusted external signer;
+- an external timestamp authority;
+- identity attribution;
+- test correctness;
+- provider authentication;
+- environment assurance;
+- compliance certification.
 
-Do not move evidence across these boundaries merely because the architecture around it is well designed.
+---
 
-See [`README.md`](README.md), [`RESULT_CONTRACT.md`](RESULT_CONTRACT.md), [`SETUP.md`](SETUP.md), [`OPERATIONS.md`](OPERATIONS.md), and [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md).
+## Claim discipline
+
+Use the narrowest statement that matches the evidence owner.
+
+| Claim | Required evidence owner |
+|---|---|
+| “The control exists.” | repository source/configuration |
+| “The deterministic behavior occurred.” | execution/evaluation for the exercised path |
+| “The provider was available.” | authorized provider interaction |
+| “The target behaved this way.” | target-specific observation |
+| “The deployment enforces this boundary.” | infrastructure/organization evidence |
+| “These persisted bytes are intact.” | owned subject + hash/journal/artifact verification |
+| “This run succeeded.” | current deterministic validation closure under [`RESULT_CONTRACT.md`](RESULT_CONTRACT.md) |
+
+> [!TIP]
+> Strong architecture should make it easier to say **exactly what is known**, not easier to overclaim.
+
+---
+
+## Reviewer checklist
+
+When reviewing a claim, ask:
+
+1. **What object is being claimed about?**
+2. **Which trust domain owns the evidence?**
+3. **Was the evidence observed for this revision/environment/provider?**
+4. **Can a neighboring green signal be mistaken for this evidence?**
+5. **Does integrity prove only bytes, or is someone accidentally treating it as correctness/identity?**
+6. **Does configuration state merely permit an action, or prove it occurred?**
+7. **If deployment enforcement is required, is it actually external to the application flag?**
+
+---
+
+## Related documentation
+
+- [Production readiness](PRODUCTION_READINESS.md)
+- [Runtime result contract](RESULT_CONTRACT.md)
+- [Traceability](TRACEABILITY.md)
+- [Security architecture](SECURITY.md)
+- [Setup](SETUP.md)
+- [Operations](OPERATIONS.md)
+
+---
+
+[← Production readiness](PRODUCTION_READINESS.md) · [Documentation home](README.md)
 
 Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
