@@ -1,8 +1,10 @@
 # Operations
 
-Operational guidance follows the same evidence rule as the runtime: **a configured command or workflow is not a passing result until it is executed and its evidence is inspected**.
+> **YP AI QA Automation Framework** · Designed and engineered by **Yunior Portal**
 
-This document describes how to operate the repository safely once execution is intentionally authorized. It does not change the current-head verification status by itself.
+Operational guidance for the YP AI QA Automation Framework follows the same evidence rule as the runtime: **a configured command or workflow is not a passing result until it is executed and its evidence is inspected**.
+
+This document describes how to operate the framework safely once execution is intentionally authorized. It does not change the current-head verification status by itself.
 
 ## Verification ladder
 
@@ -97,6 +99,8 @@ A live run acquires an exclusive OS-backed lease for the target worktree. Autono
 - an approved test path;
 - no unresolved previous mutation transaction.
 
+Mutation paths are resolved under the target workspace and reject absolute paths, `..` traversal, and symlink components so autonomous ownership cannot be redirected through an ambiguous alias.
+
 Test mutations are transactional. The target file is snapshotted outside the SUT before a write. The rollback point is committed only after patch safety, targeted pytest, and full regression close the current change revision. Failed or unverified runs restore prior content. Crash recovery refuses to overwrite later human/out-of-band edits.
 
 See [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md).
@@ -136,7 +140,7 @@ The attestation is content-addressed but intentionally unsigned; it neither sign
 
 External network access is disabled by default. Allowed hosts are explicit configuration. API probes are read-only unless mutating methods are separately enabled, and API/browser adapters avoid ambient proxy inheritance.
 
-Network-capable tool calls consume their own execution budget rather than sharing only the total tool-call limit. Browser HTTP(S)/WebSocket traffic and k6 targets pass through runtime allowlists. Non-local k6 additionally requires `AI_QA_K6_EXTERNAL_EGRESS_ENFORCED=true` as an explicit trusted assertion that infrastructure-level egress controls exist.
+Network-capable tool calls consume their own execution budget rather than sharing only the total tool-call limit. Browser HTTP(S)/WebSocket traffic and k6 targets pass through runtime allowlists. Performance-target policy also rejects explicit production environments and production-like DNS labels even if a caller supplies a contradictory non-production label. Non-local k6 additionally requires `AI_QA_K6_EXTERNAL_EGRESS_ENFORCED=true` as an explicit trusted assertion that infrastructure-level egress controls exist.
 
 That flag is a prerequisite assertion, not proof that the infrastructure was actually configured correctly; deployment verification still requires environment evidence.
 
@@ -161,7 +165,7 @@ Do not infer PASS from workflow presence. Until a workflow run is explicitly aut
 
 Before intentionally running the live agent or an external integration, confirm:
 
-1. the control root is the trusted AI-QA repository;
+1. the control root is the trusted YP AI QA Automation Framework repository;
 2. the target is an isolated Git-backed worktree;
 3. artifacts are outside the target worktree;
 4. secrets are injected through the environment/secret manager, never committed;
