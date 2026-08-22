@@ -14,6 +14,7 @@ from .journal import RunJournal
 from .workspace_lease import WorkspaceBusyError, WorkspaceLease
 
 _MAX_ROLLBACK_BYTES = 2_000_000
+_MAX_RUNTIME_METADATA_BYTES = 2_000_000
 
 
 class CircuitOpenError(RuntimeError):
@@ -101,32 +102,78 @@ class RuntimeControl:
                 f"{hashlib.sha256(relative_path.encode()).hexdigest()[:24]}.bin"
             )
             _atomic_write_bytes(backup_path, data)
-        self.pending_mutation = PendingMutation(
+
+        pending = PendingMutation(
             relative_path=relative_path,
             existed=existed,
             backup_path=str(backup_path) if backup_path else None,
             original_sha256=original_hash,
             change_revision_before=change_revision_before,
         )
-        self.journal.append(
-            "mutation_prepared",
-            path=relative_path,
-            existed=existed,
-            original_sha256=original_hash,
-            change_revision_before=change_revision_before,
-        )
-        self.persist()
+        self.pending_mutation = pending
+        pending_persisted = False
+        try:
+            # Durable runtime metadata is the recovery authority. Persist the pending
+            # transaction before allowing the target mutation tool to execute.
+            self.persist()
+            pending_persisted = True
+            self.journal.append(
+                "mutation_prepared",
+                path=relative_path,
+                existed=existed,
+                original_sha256=original_hash,
+                change_revision_before=change_revision_before,
+            )
+        except Exception as exc:
+            self.pending_mutation = None
+            if pending_persisted:
+                try:
+                    self.persist()
+                except Exception as cleanup_exc:
+                    # The durable metadata may still describe a pending transaction.
+                    # Keep the live object aligned with that conservative state so a
+                    # later finalizer/recovery path cannot assume preparation vanished.
+                    self.pending_mutation = pending
+                    raise RuntimeError(
+                        "mutation preparation failed and pending metadata could not be cleared"
+                    ) from cleanup_exc
+            if backup_path is not None:
+                try:
+                    backup_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            raise exc
 
     def commit_pending_mutation(self) -> str | None:
         pending = self.pending_mutation
         if pending is None:
             return None
+        backup: Path | None = None
         if pending.existed:
             backup, _ = self._validated_rollback_backup(pending)
-            backup.unlink()
+
+        # Commit authority becomes durable by clearing pending metadata first. Only
+        # after that succeeds may the rollback snapshot be discarded. A crash after
+        # metadata persistence can at worst leave an orphan backup, never a committed
+        # target whose only rollback bytes were deleted while metadata still said pending.
         self.pending_mutation = None
-        self.journal.append("mutation_committed", path=pending.relative_path)
-        self.persist()
+        try:
+            self.persist()
+        except Exception:
+            self.pending_mutation = pending
+            raise
+
+        cleanup_failed = False
+        if backup is not None:
+            try:
+                backup.unlink()
+            except OSError:
+                cleanup_failed = True
+        self._journal_after_durable_transition(
+            "mutation_committed",
+            path=pending.relative_path,
+            rollback_cleanup_failed=cleanup_failed,
+        )
         return pending.relative_path
 
     def rollback_pending_mutation(self, *, reason: str) -> str | None:
@@ -134,17 +181,47 @@ class RuntimeControl:
         if pending is None:
             return None
         target = self._target(pending.relative_path)
+        backup: Path | None = None
         if pending.existed:
             backup, data = self._validated_rollback_backup(pending)
             target.parent.mkdir(parents=True, exist_ok=True)
             _atomic_write_bytes(target, data)
-            backup.unlink()
         else:
             target.unlink(missing_ok=True)
+
+        # The target bytes are now restored/removed. Persist closure before deleting
+        # the rollback snapshot. If metadata persistence fails, keep the transaction
+        # pending and the backup intact so recovery remains conservative.
         self.pending_mutation = None
-        self.journal.append("mutation_rolled_back", path=pending.relative_path, reason=reason)
-        self.persist()
+        try:
+            self.persist()
+        except Exception:
+            self.pending_mutation = pending
+            raise
+
+        cleanup_failed = False
+        if backup is not None:
+            try:
+                backup.unlink()
+            except OSError:
+                cleanup_failed = True
+        self._journal_after_durable_transition(
+            "mutation_rolled_back",
+            path=pending.relative_path,
+            reason=reason,
+            rollback_cleanup_failed=cleanup_failed,
+        )
         return pending.relative_path
+
+    def _journal_after_durable_transition(self, event: str, **payload: Any) -> None:
+        """Record lifecycle provenance without undoing an already-durable transition."""
+        try:
+            self.journal.append(event, **payload)
+        except (BudgetExceededError, OSError, RuntimeError, ValueError):
+            # Runtime metadata already owns the transaction truth at this point.
+            # A journal failure must not resurrect pending state or destroy restored
+            # bytes. The journal verifier will expose any persisted integrity issue.
+            return
 
     def _validated_rollback_backup(self, pending: PendingMutation) -> tuple[Path, bytes]:
         """Validate rollback ownership and bytes before either restore or commit disposal."""
@@ -262,11 +339,14 @@ def _owned_atomic_target(path: Path) -> Path:
 
 def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     path = _owned_atomic_target(path)
+    rendered = json.dumps(payload, indent=2, sort_keys=True, default=str)
+    if len(rendered.encode("utf-8")) > _MAX_RUNTIME_METADATA_BYTES:
+        raise ValueError("runtime metadata exceeds persistence size bound")
     fd, raw = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     temp = Path(raw)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            json.dump(payload, stream, indent=2, sort_keys=True, default=str)
+            stream.write(rendered)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temp, path)
