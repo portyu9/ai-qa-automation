@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 env:
-  SOURCE_SHA: b761a048b1ebc090b7dc6dda0ba413411d8e9713
+  SOURCE_SHA: 5c2fa71434d3b2ea6f3ae29ffea3f2d88c72ae63
   SOURCE_BRANCH: feature/observability-metrics-hardening
   PYTHONUNBUFFERED: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
@@ -54,7 +54,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ruff check --fix --select I001,UP037,UP035,UP012,RUF100,PTH201,RUF043 src evals examples tests
+          ruff check --fix --select I001,UP037,UP035,UP012,RUF100,PTH201 src evals examples tests
           ruff format src evals examples tests
 
       - name: Enforce mutation scope and inspect delta
