@@ -58,8 +58,16 @@ def recover_stale_mutation(
     previous_lease: dict[str, Any] | None,
     current_workspace_fingerprint: str,
     recovering_run_id: str,
+    current_workspace_fingerprint_complete: bool = True,
+    current_workspace_fingerprint_reasons: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    """Rollback a crashed mutation only when ownership and fingerprint still match."""
+    """Rollback a crashed mutation only when ownership and fingerprint still match.
+
+    Fingerprint completeness is relevant only after a real pending transaction is
+    discovered. A normal prior lease record with no pending mutation must not block
+    a new run merely because its current worktree is too complex to authorize an
+    autonomous write.
+    """
     if not previous_lease:
         return {"status": "NONE"}
     previous_run_id = str(previous_lease.get("run_id") or "")
@@ -94,6 +102,16 @@ def recover_stale_mutation(
     pending = metadata.get("pending_mutation")
     if not isinstance(pending, dict):
         return {"status": "NONE", "previous_run_id": previous_run_id}
+    if not current_workspace_fingerprint_complete:
+        reasons = ", ".join(current_workspace_fingerprint_reasons) or "unspecified"
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": previous_run_id,
+            "reason": (
+                "workspace fingerprint is incomplete; automatic stale rollback cannot prove "
+                f"ownership of every changed subject ({reasons})"
+            ),
+        }
     expected_fingerprint = str(metadata.get("workspace_fingerprint") or "")
     if not expected_fingerprint or expected_fingerprint != current_workspace_fingerprint:
         return {
