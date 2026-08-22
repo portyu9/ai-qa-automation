@@ -54,7 +54,7 @@ def test_github_enabled_without_token_is_not_configured_and_never_available(
 def test_github_configuration_is_read_only_and_does_not_claim_availability(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    token = "github_pat_unit_test_value_not_real_1234567890"
+    token = "unit-test-github-token-not-a-credential"
     monkeypatch.setenv("GITHUB_PERSONAL_ACCESS_TOKEN", token)
     settings = Settings(control_root=tmp_path, enable_github_mcp=True)
 
