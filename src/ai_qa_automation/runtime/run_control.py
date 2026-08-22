@@ -28,6 +28,7 @@ class PendingMutation:
     existed: bool
     backup_path: str | None
     original_sha256: str | None
+    change_revision_before: int | None = None
 
 
 @dataclass
@@ -60,7 +61,12 @@ class RuntimeControl:
             self.open_circuits.discard(tool_name)
         self.persist()
 
-    def prepare_mutation(self, relative_path: str) -> None:
+    def prepare_mutation(
+        self,
+        relative_path: str,
+        *,
+        change_revision_before: int | None = None,
+    ) -> None:
         if self.pending_mutation is not None:
             raise MutationPendingError(
                 f"a mutation is already pending validation: {self.pending_mutation.relative_path}"
@@ -92,12 +98,14 @@ class RuntimeControl:
             existed=existed,
             backup_path=str(backup_path) if backup_path else None,
             original_sha256=original_hash,
+            change_revision_before=change_revision_before,
         )
         self.journal.append(
             "mutation_prepared",
             path=relative_path,
             existed=existed,
             original_sha256=original_hash,
+            change_revision_before=change_revision_before,
         )
         self.persist()
 
@@ -183,6 +191,7 @@ class RuntimeControl:
                     "existed": self.pending_mutation.existed,
                     "backup_path": self.pending_mutation.backup_path,
                     "original_sha256": self.pending_mutation.original_sha256,
+                    "change_revision_before": self.pending_mutation.change_revision_before,
                 }
                 if include_pending_details
                 else self.pending_mutation.relative_path
