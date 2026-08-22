@@ -1,8 +1,10 @@
 # Architecture
 
+> **YP AI QA Automation Framework** · Designed and engineered by **Yunior Portal**
+
 ## Architectural thesis
 
-The platform treats an LLM as a **bounded reasoning component inside a quality-engineering control system**, not as the authority that decides whether software is correct.
+The YP AI QA Automation Framework treats an LLM as a **bounded reasoning component inside a quality-engineering control system**, not as the authority that decides whether software is correct.
 
 The governing invariant is:
 
