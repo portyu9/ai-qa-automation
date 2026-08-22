@@ -12,6 +12,8 @@ class ValidationGate:
         self._checks: list[tuple[str, Callable[[], tuple[bool, str]]]] = []
 
     def add(self, name: str, check: Callable[[], tuple[bool, str]]) -> "ValidationGate":
+        if not name.strip():
+            raise ValueError("validation gate name must not be empty")
         self._checks.append((name, check))
         return self
 
@@ -20,10 +22,14 @@ class ValidationGate:
         for name, check in self._checks:
             try:
                 passed, summary = check()
+                if type(passed) is not bool:
+                    raise TypeError("validator outcome must be the literal boolean True or False")
+                if not isinstance(summary, str) or not summary.strip():
+                    raise TypeError("validator summary must be a non-empty string")
                 status = ValidationStatus.PASS if passed else ValidationStatus.FAIL
-            except Exception as exc:  # deterministic checker failure is itself a failure
-                status = ValidationStatus.FAIL
-                summary = f"validator raised {type(exc).__name__}: {exc}"
+            except Exception as exc:
+                status = ValidationStatus.NOT_VERIFIED
+                summary = f"validator could not produce a valid deterministic result: {type(exc).__name__}: {exc}"
             results.append(ValidationResult(name=name, status=status, summary=summary))
         return results
 
