@@ -2,7 +2,7 @@
 
 This document answers a narrow question: **what can this repository establish by itself, and what still requires evidence from an external runtime/environment?**
 
-The distinction prevents a common portfolio and production-readiness error: describing implemented integration code as though the external integration has actually been exercised.
+The distinction prevents a common engineering and production-readiness error: describing implemented integration code as though the external integration has actually been exercised.
 
 ## Evidence classes
 
@@ -108,7 +108,7 @@ Historical successful execution can be recorded as `PREVIOUSLY_VERIFIED`, but it
 
 ## Practical operating rule
 
-When describing this project, use the narrowest accurate statement:
+When describing this system, use the narrowest accurate statement:
 
 - “implemented” when source/configuration exists;
 - “verified” only when matching execution evidence exists for the relevant code/environment;
