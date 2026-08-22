@@ -165,4 +165,4 @@ The number of generated tests or repairs that become green is not sufficient evi
 
 Anything not actually executed remains `NOT_VERIFIED`, including the current-head primary and holdout suites until their deliberate execution occurs.
 
-See [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md), [`OPERATIONS.md`](OPERATIONS.md), and [`SHOWCASE.md`](SHOWCASE.md).
+See [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md), [`OPERATIONS.md`](OPERATIONS.md), and [`TECHNICAL_WALKTHROUGH.md`](TECHNICAL_WALKTHROUGH.md).
