@@ -1,8 +1,8 @@
 # Runtime Control and Recovery
 
-> **YP AI QA Automation Framework** · Designed and engineered by **Yunior Portal**
+> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
-Runtime safety in the YP AI QA Automation Framework is treated as a deterministic subsystem, not as a prompt convention. The model-facing QA state and the process-control state are deliberately separate so a conversational or model failure cannot erase workspace ownership, pending-mutation, budget, or journal facts.
+Runtime safety in the ƳƤ AI QA Automation Framework is treated as a deterministic subsystem, not as a prompt convention. The model-facing QA state and the process-control state are deliberately separate so a conversational or model failure cannot erase workspace ownership, pending-mutation, budget, or journal facts.
 
 ## Workspace ownership
 
@@ -161,3 +161,5 @@ These outcomes are deliberately not converted into product defects or successful
 The implementation defines these controls and dedicated tests exist for budget, lease, transaction, journal, path ownership, rollback integrity, and stale-recovery paths. That source/test presence is not a current-head PASS claim until the applicable tests are executed.
 
 See [`OPERATIONS.md`](OPERATIONS.md), [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md), and [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md).
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
