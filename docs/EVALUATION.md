@@ -2,27 +2,27 @@
 
 > **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
-The ƳƤ AI QA Automation Framework is evaluated as a **software control system**, not only by whether a model produces convincing prose or a generated test becomes green.
+The ƳƤ AI QA Automation Framework is evaluated as a **software control system**, not by whether model prose sounds intelligent or a generated test becomes green.
 
-The evaluation strategy targets the failure modes that matter for an autonomous QA system: false defect attribution, unsafe self-healing, meaningless generated tests, regression under-selection, prompt injection, authority expansion, fabricated external evidence, unbounded execution, and false PASS.
+The evaluation architecture targets the failure modes that matter for agentic QA: false defect attribution, wrong self-healing, meaningless tests, regression under-selection, prompt injection, authority expansion, stale evidence, unsafe recovery, provider ambiguity, unbounded execution, and false PASS.
 
 ## Evaluation layers
 
-| Layer | Purpose | Typical authority |
+| Layer | Purpose | Authority |
 |---|---|---|
-| Unit tests | Schemas, policy, redaction, intelligence logic, budgets, recovery, change intelligence, traceability | Deterministic |
-| Integration tests | Evidence/state/report flow, manifests, audit chaining, reference-SUT behavior, SDK contracts | Deterministic; some environment-dependent |
-| Security/policy tests | Governance protection, prompt-injection-shaped data, destructive actions, path/tool/network boundaries | Deterministic |
-| Primary scenario evaluator | Fixed 34 functional/adversarial scenarios under `evals/scenarios/` | Deterministic benchmark |
-| Holdout evaluator | Separate H-series under `evals/holdout/` | Independent readiness benchmark |
-| Browser-marked tests | Real browser behavior, isolated from the default pytest marker set | Browser runtime |
-| Model-marked tests | Live Claude Agent SDK behavior, isolated behind explicit credentials | Credentialed provider runtime |
+| Unit tests | schemas, config, policy, redaction, intelligence, evidence, budgets, recovery, traceability | deterministic |
+| Integration tests | evidence/state/report flow, manifests, reference-SUT behavior, SDK/tool contracts | deterministic; some runtime-dependent |
+| Security/policy tests | governance, secrets, paths, tool/network/MCP/load/mutation boundaries | deterministic |
+| Primary evaluator | fixed 34 functional/adversarial scenarios | deterministic benchmark |
+| Holdout evaluator | physically separate H-series | independent deterministic benchmark |
+| Browser-marked tests | Playwright-backed browser behavior | browser runtime |
+| Model-marked tests | live Claude Agent SDK behavior | credentialed provider runtime |
 
-The architecture deliberately separates repository-contained determinism from provider and target-environment checks so one evidence class cannot masquerade as another.
+The layers remain separate so one evidence class cannot masquerade as another.
 
-## Routine primary evaluation
+## Primary adversarial corpus
 
-The fixed primary catalog contains exactly 34 scenarios and is executed by:
+The fixed primary catalog contains exactly 34 scenarios under `evals/scenarios/`:
 
 ```bash
 python evals/runner.py
@@ -36,26 +36,26 @@ Primary scenarios set:
 "holdout": false
 ```
 
-They cover classes including:
+They exercise classes including:
 
 - application versus automation defects;
-- locator/UI-contract changes and timing/flakiness;
-- authentication, data, environment, configuration, and dependency failures;
+- locator/UI-contract changes;
+- timing/flakiness;
+- authentication/data/environment/configuration/dependency failures;
 - unsafe healing attempts;
-- assertion weakening, arbitrary sleeps, timeout inflation, skipping/xfail, and broad suppression;
+- assertion weakening, sleeps, timeout inflation, skip/xfail, suppression;
 - malformed structured model output;
 - bounded-loop behavior;
-- Agent SDK transient-failure normalization;
-- GitHub/Atlassian MCP outage and authorization states;
-- prompt injection through GitHub, Jira, DOM, API, test data, and target configuration;
-- regression-selection false negatives and mandatory-test preservation;
+- provider failure normalization;
+- prompt injection through provider, DOM, API, test data, and target configuration;
+- regression false negatives and mandatory coverage preservation;
 - performance regression and production-load denial;
-- governance-file modification attempts;
-- target `CLAUDE.md` / `.mcp.json` control-plane injection.
+- governance modification attempts;
+- target agent/MCP configuration injection.
 
-## Holdout discipline
+## Independent H-series holdout
 
-The H-series corpus is physically separate under `evals/holdout/` and executed by:
+The H-series lives under `evals/holdout/` and uses its own runner:
 
 ```bash
 python evals/holdout_runner.py
@@ -69,84 +69,150 @@ Holdout scenarios set:
 "holdout": true
 ```
 
-The holdout directory is intentionally excluded from `make verify-local` so routine implementation work does not optimize directly against its exact fixtures.
+The directory is excluded from `make verify-local` so ordinary implementation work does not optimize directly against exact holdout fixtures.
 
 The H-series includes variants around:
 
 - competing evidence signals;
-- model-interpretation isolation from observed facts;
-- MCP rate limiting;
+- observed fact versus model interpretation;
+- provider rate limiting;
 - nested governance protection;
 - security-critical regression preservation;
-- very-low-confidence regression broadening.
+- uncertainty-driven regression broadening.
 
-A holdout failure is a signal to investigate the underlying behavior and add a general control or regression test. Do not:
+A holdout failure should produce a general engineering improvement. Do not:
 
-- relabel a failing holdout solely to remove the failure;
-- change the expected result to match broken behavior;
-- relax hard-safety thresholds after seeing the failure;
-- special-case the exact fixture while leaving the general weakness intact.
+- relabel a failing case merely to remove the holdout failure;
+- change an expected result to match broken behavior;
+- relax a hard-safety threshold after observing the failure;
+- special-case one fixture while leaving the general weakness intact.
 
-If a holdout scenario is promoted into the primary corpus, replace its independent coverage with a genuinely new holdout case rather than shrinking the independent evaluation surface.
+If a holdout case becomes ordinary tuning knowledge, preserve the independent surface by adding a genuinely new holdout variant.
 
-## Fixed thresholds
+## Fixed hard-safety thresholds
 
-`evals/thresholds.json` defines thresholds independently of an individual evaluation run. Hard-safety scenarios require zero known failures.
+`evals/thresholds.json` defines acceptance rules independently of an individual run. Hard-safety scenarios require zero known failures.
 
-Thresholds are governance inputs. A weak run is not repaired by changing the acceptance bar after observing the result.
+Thresholds are governance inputs. The implementation adapts to the safety bar; the safety bar is not moved to accommodate the implementation.
 
-The same zero-known-failure principle applies to hard-safety holdout cases.
+## Security-critical regression families
 
-## Important deterministic assertions
+In addition to scenario evaluation, deterministic tests cover specific invariants where a subtle code regression could widen authority.
 
-The framework's tests and evaluations are designed to assert behaviors including:
+### Terminal truth
 
 - model completion alone cannot produce verified success;
-- a retry at the same change revision cannot hide contradictory PASS/FAIL evidence;
-- only a newer approved revision can supersede an older gate result while preserving history;
-- unknown tools and unapproved MCP namespaces fail closed;
-- approval-required external writes fail closed unattended;
+- no-validation completion remains `NOT_VERIFIED`;
+- non-PASS validation outcomes cannot be promoted;
+- same-gate PASS/FAIL at one revision remains contradictory;
+- a different gate cannot erase a historical failure;
+- changed tests require current-revision patch-safety + targeted + regression closure.
+
+### Self-healing semantics
+
+- locator uniqueness is measured by Playwright rather than trusted from model input;
+- locator expressions must fit the supported literal grammar;
+- deterministic semantic tokens are derived from locator contracts;
+- a semantically related replacement receives a strong deterministic score;
+- a unique unrelated element does not inherit model semantic confidence;
+- model stability confidence is overwritten by policy-owned strategy stability;
+- unsupported/structural/positional locators are ineligible for autonomous repair.
+
+### Failure classification
+
+- application/network evidence cannot be hidden by an eager locator guess;
+- locator-contract classification requires same-page context plus a unique stable **semantically related** candidate;
+- a unique semantically unrelated candidate remains insufficient evidence.
+
+### Configuration and network policy
+
+- external network/write/API mutation defaults fail closed;
+- trusted host entries are canonicalized/deduplicated;
+- wildcard, URL, port, path, user-info, malformed DNS entries are rejected;
+- IDNA normalization is deterministic;
+- independent runtime budget bounds reject invalid values;
+- repository `.env` files are not auto-loaded as trusted settings.
+
+### Secret/governance paths
+
+- `.env`, `.env.*`, including nested copies, are protected from runtime reads;
+- `.env.example` remains readable reference documentation;
+- governance paths cannot be mutated autonomously;
+- absolute/traversal/symlink workspace escapes fail closed.
+
+### Mutation and recovery
+
+- one mutation transaction at a time;
+- rollback bytes are hash-bound;
+- missing/tampered/escaped/symlinked rollback backups block restoration/commit;
+- live mutation rejects symlink aliases;
+- stale recovery rejects symlinked target aliases and rollback aliases;
+- prior-run traversal is blocked;
+- newer human work prevents automatic stale rollback.
+
+### External MCP
+
+- unapproved provider identities fail closed;
+- read/write/destructive actions remain distinct;
+- mixed action names cannot smuggle write/destructive semantics behind reads;
+- business IDs resembling HTTP codes do not become auth/rate-limit outcomes without status context;
+- failed provider calls do not fabricate remote evidence.
+
+### Evidence integrity
+
+- run IDs/artifact paths cannot escape trusted storage;
+- symlink artifact paths are rejected;
+- duplicate evidence IDs/artifact paths cannot overwrite prior records;
+- malformed duplicate manifests fail closed;
+- regulated audit chains preserve record linkage.
+
+### Test quality
+
+- assertionless tests are rejected;
+- strings/comments containing assertion-like text do not count;
+- assertions inside unused nested scopes do not make an outer test observable;
+- fluent assertion APIs are recognized deliberately;
+- tautologies and broad suppression are surfaced;
+- generated files cannot overwrite existing tests or escape approved test directories.
+
+## Runtime adapter assertions
+
+The evaluation surface also encodes properties such as:
+
 - API mutations require explicit enablement;
-- browser navigation, subrequests, and WebSockets cannot escape the network allowlist;
-- locator uniqueness comes from Playwright observation, not model assertion;
-- generated-test creation requires same-run coverage-search and plan provenance;
-- k6 scripts must bind to the approved target and external runs require the infrastructure-egress precondition;
-- test patching cannot remove meaningful assertion coverage;
-- regulated evidence records maintain hash lineage;
-- operational journals detect tampering and preserve append-only hash linkage;
-- total tool, network, mutation, repetition, and wall-time budgets are bounded independently;
-- concurrent agent runs cannot silently share a target-workspace mutation lease;
-- interrupted mutation rollback occurs only when the persisted fingerprint proves newer human work will not be overwritten;
-- persisted lineage connects evidence, artifacts, hypotheses, validations, and runtime events;
-- run attestations remain unsigned integrity statements and never convert `NOT_VERIFIED` into PASS;
-- merge-base-aware change intelligence broadens regression for critical/high-risk changes;
-- CODEOWNERS unsupported grammar is reported rather than guessed;
-- OpenAPI drift distinguishes breaking/risky/additive classes conservatively;
-- low-confidence or truncated test-impact maps cannot justify aggressive omission;
-- MCP auth/outage/rate-limit/invalid-response states are normalized without invented remote evidence.
+- browser navigation/subrequests/WebSockets remain within host policy;
+- k6 scripts bind to approved target and reject forbidden imports/hosts/local reads;
+- total tool/network/mutation/repetition/time budgets remain independent;
+- concurrent runs cannot share a target mutation lease;
+- persisted lineage connects evidence/artifacts/hypotheses/validations/runtime events;
+- attestations remain unsigned integrity statements;
+- merge-base-aware change intelligence captures committed feature-branch risk;
+- CODEOWNERS unsupported grammar is surfaced rather than guessed;
+- OpenAPI drift classification remains conservative;
+- low-confidence/truncated test impact cannot justify aggressive omission.
 
 ## What an evaluation result means
 
-A deterministic evaluator answers whether the implementation behaved as expected for its predefined scenarios. It does not generalize beyond the evidence boundary of that run: provider accounts, real applications, device fleets, infrastructure controls, and unknown future attacks each require their own evidence source.
+A deterministic evaluator answers whether the implementation behaved as expected for its predefined cases and environment. It does not generalize beyond that evidence boundary to every provider account, real application, device fleet, infrastructure control, or unknown future attack.
 
 ## Metrics that matter
 
-The state/reporting model supports quality metrics such as:
+When measured against a defined dataset/run, useful quality metrics include:
 
 - failure-classification precision/recall;
 - false-positive product-defect rate;
 - self-healing semantic correctness and false-heal rate;
-- generated-test meaningful-assertion/acceptance quality;
-- regression-selection recall, reduction, and escaped-regression rate;
+- generated-test meaningful-assertion quality;
+- regression-selection recall/reduction/escaped-regression rate;
 - prompt-injection blocks and policy denials;
 - execution duration and tool/network/mutation counts;
-- model token/cost information when actually observed.
+- model token/cost information when supplied by the provider.
 
-Benchmark percentages should be quoted only from a defined dataset and corresponding execution record.
+Benchmark percentages should be quoted only with the dataset and execution record that produced them.
 
 ## Interpretation standard
 
-The number of generated tests or repairs that become green is not sufficient evidence of quality. The following are hard quality failures even when a suite appears green:
+A green-looking suite is not sufficient evidence of quality if it contains:
 
 - false healing;
 - weakened test intent;
@@ -155,8 +221,9 @@ The number of generated tests or repairs that become green is not sufficient evi
 - policy bypass;
 - threshold manipulation;
 - hidden flakiness;
+- unsafe rollback/recovery;
 - unbounded execution.
 
-See [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md), [`OPERATIONS.md`](OPERATIONS.md), and [`TECHNICAL_WALKTHROUGH.md`](TECHNICAL_WALKTHROUGH.md).
+See [`README.md`](README.md), [`RESULT_CONTRACT.md`](RESULT_CONTRACT.md), [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md), [`OPERATIONS.md`](OPERATIONS.md), and [`TECHNICAL_WALKTHROUGH.md`](TECHNICAL_WALKTHROUGH.md).
 
 Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
