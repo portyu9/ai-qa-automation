@@ -326,7 +326,7 @@ Before model reasoning, bootstrap can persist:
 - committed plus dirty/untracked change union;
 - changed domains and recommended test layers;
 - repository/test/API/data/container/IaC/mobile/CI topology;
-- dependency-manifest paths, sizes, and hashes;
+- dependency-manifest paths, sizes, and bounded hashes when safely readable;
 - CODEOWNERS routing context;
 - explainable test-impact candidates;
 - conservative OpenAPI/Swagger compatibility drift.
