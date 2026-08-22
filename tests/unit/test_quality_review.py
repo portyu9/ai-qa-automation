@@ -135,6 +135,37 @@ def test_fake():
     assert "QA003" in codes(source)
 
 
+def test_unused_nested_helper_assertion_does_not_make_outer_test_observable() -> None:
+    source = '''
+def test_fake():
+    def helper():
+        assert 2 + 2 == 4
+    value = 1
+'''
+    assert "QA003" in codes(source)
+
+
+def test_nested_class_assertion_does_not_make_outer_test_observable() -> None:
+    source = '''
+def test_fake():
+    class LocalVerifier:
+        def assert_behavior(self):
+            assert 2 + 2 == 4
+    value = 1
+'''
+    assert "QA003" in codes(source)
+
+
+def test_assertion_after_nested_helper_still_counts_for_outer_test() -> None:
+    source = '''
+def test_real():
+    def helper():
+        return 4
+    assert helper() == 4
+'''
+    assert "QA003" not in codes(source)
+
+
 def test_accepts_simple_asserting_test() -> None:
     assert review_python_test_source("def test_ok():\n    assert 2 + 2 == 4\n") == []
 
