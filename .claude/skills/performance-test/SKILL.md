@@ -4,6 +4,8 @@ description: Controlled k6 performance assessment with production-load and egres
 ---
 # Performance Test
 
+> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
+
 ## Use when
 A bounded non-production workload and deterministic latency/error/request-rate thresholds are defined.
 
@@ -48,3 +50,5 @@ PASS/FAIL only from measured deterministic thresholds; otherwise `BLOCKED`/`NOT_
 
 ## Output
 Status, target/environment, metrics, breached thresholds, evidence IDs, and explicitly observed limitations.
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../../../LICENSE`](../../../LICENSE).
