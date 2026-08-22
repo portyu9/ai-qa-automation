@@ -54,6 +54,12 @@ def emit_event(logger: logging.Logger, event: str, **fields: Any) -> None:
         **sanitize(fields),
     }
     logger.info(json.dumps(payload, sort_keys=True, default=str))
+    if event == "agent_run_finished":
+        record_run_metrics(
+            terminal_status=str(fields.get("terminal_status") or "NOT_VERIFIED"),
+            duration_seconds=fields.get("duration_seconds"),
+            tool_calls=fields.get("tool_calls"),
+        )
 
 
 def get_tracer(name: str = _INSTRUMENTATION_SCOPE) -> Any:
@@ -107,21 +113,6 @@ def _metric_instruments() -> dict[str, Any] | None:
                 unit="{call}",
                 description="Controlled tool calls recorded per completed agent run.",
             ),
-            "iterations": meter.create_histogram(
-                "ai_qa.agent.iterations",
-                unit="{iteration}",
-                description="Agent response iterations recorded per completed run.",
-            ),
-            "tokens": meter.create_histogram(
-                "ai_qa.agent.tokens",
-                unit="{token}",
-                description="Provider-reported input plus output tokens per completed run.",
-            ),
-            "cost": meter.create_histogram(
-                "ai_qa.agent.cost",
-                unit="USD",
-                description="Provider-reported model cost in USD per completed run.",
-            ),
             "tool_events": meter.create_counter(
                 "ai_qa.tool.events",
                 unit="1",
@@ -144,11 +135,10 @@ def _metric_instruments() -> dict[str, Any] | None:
         return None
 
 
-def _finite_non_negative(value: int | float) -> float | None:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
+def _finite_non_negative(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
+    number = float(value)
     if not math.isfinite(number) or number < 0:
         return None
     return number
@@ -187,13 +177,10 @@ def _safe_record(instrument: Any, value: int | float, attributes: dict[str, str]
 def record_run_metrics(
     *,
     terminal_status: str | None,
-    duration_seconds: float,
-    tool_calls: int,
-    iterations: int,
-    token_usage: int,
-    cost_usd: float,
+    duration_seconds: object = None,
+    tool_calls: object = None,
 ) -> None:
-    """Record one run without high-cardinality identifiers or sensitive attributes."""
+    """Record one terminal run without high-cardinality identifiers or sensitive attributes."""
     instruments = _metric_instruments()
     if instruments is None:
         return
@@ -201,14 +188,10 @@ def record_run_metrics(
     attributes = {"terminal.status": outcome}
     _safe_add(instruments["runs"], 1, attributes)
 
-    measurements = {
+    for instrument_name, raw_value in {
         "duration": duration_seconds,
         "tool_calls": tool_calls,
-        "iterations": iterations,
-        "tokens": token_usage,
-        "cost": cost_usd,
-    }
-    for instrument_name, raw_value in measurements.items():
+    }.items():
         value = _finite_non_negative(raw_value)
         if value is not None:
             _safe_record(instruments[instrument_name], value, attributes)
