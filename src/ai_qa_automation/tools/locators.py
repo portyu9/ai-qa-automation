@@ -51,6 +51,19 @@ _JS_ROLE = re.compile(
     r"name\s*:\s*(?P<nq>['\"])(?P<name>[^'\"\n]{1,500})(?P=nq)"
     r"(?:\s*,\s*exact\s*:\s*true)?\s*\}\s*\)$"
 )
+_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+_TOKEN = re.compile(r"[a-z0-9]+")
+_SEMANTIC_NOISE = {
+    "data",
+    "test",
+    "testid",
+    "id",
+    "css",
+    "locator",
+    "get",
+    "by",
+    "exact",
+}
 
 
 def parse_locator_expression(expression: str) -> LocatorSpec | None:
@@ -71,3 +84,35 @@ def parse_locator_expression(expression: str) -> LocatorSpec | None:
                 name=match.group("name"),
             )
     return None
+
+
+def locator_semantic_tokens(spec: LocatorSpec) -> frozenset[str]:
+    """Extract conservative lexical intent tokens from a supported locator."""
+
+    raw_parts = [part for part in (spec.value, spec.role, spec.name) if part]
+    rendered = " ".join(_CAMEL_BOUNDARY.sub(" ", part) for part in raw_parts).casefold()
+    return frozenset(token for token in _TOKEN.findall(rendered) if token not in _SEMANTIC_NOISE)
+
+
+def deterministic_locator_semantic_score(original: LocatorSpec, candidate: LocatorSpec) -> float:
+    """Score lexical intent overlap without trusting a model-supplied confidence value.
+
+    This score is intentionally conservative. A unique locator is not enough for
+    autonomous repair: the replacement must also retain recognizable semantic
+    intent from the original locator. Low-overlap changes remain available for
+    human review rather than being promoted automatically.
+    """
+
+    original_tokens = locator_semantic_tokens(original)
+    candidate_tokens = locator_semantic_tokens(candidate)
+    if not original_tokens or not candidate_tokens:
+        return 0.0
+    intersection = original_tokens & candidate_tokens
+    if not intersection:
+        return 0.0
+    containment = len(intersection) / min(len(original_tokens), len(candidate_tokens))
+    jaccard = len(intersection) / len(original_tokens | candidate_tokens)
+    score = (containment * 0.7) + (jaccard * 0.3)
+    if original.strategy == candidate.strategy:
+        score = min(1.0, score + 0.05)
+    return round(score, 4)
