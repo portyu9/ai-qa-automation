@@ -1,8 +1,10 @@
 # Production Readiness Matrix
 
-This document is the authoritative truth table for the build contract.
+> **YP AI QA Automation Framework** · Designed and engineered by **Yunior Portal**
 
-AI QA Automation is intentionally **production-shaped**: it contains real runtime boundaries, deterministic validation, security policy, recovery controls, evaluation architecture, and operational documentation. It must not be represented as production-ready merely because those controls exist in source.
+This document is the authoritative truth table for the YP AI QA Automation Framework build contract.
+
+The framework is intentionally **production-shaped**: it contains real runtime boundaries, deterministic validation, security policy, recovery controls, evaluation architecture, and operational documentation. It must not be represented as production-ready merely because those controls exist in source.
 
 > **Implementation is not execution evidence. A model response is not test evidence. A workflow definition is not a workflow result.**
 
@@ -24,9 +26,11 @@ These terms are intentionally narrower than words such as “ready,” “works,
 
 **Current production-release status: `NOT_VERIFIED`.**
 
-The current development line is a production-shaped agentic quality engineering system. A pre-execution static architecture, code/configuration, documentation, and contract-completeness review has been performed, and material inconsistencies discovered during that review were corrected.
+The current development line is a production-shaped agentic quality engineering system. Static architecture, code/configuration, documentation, and contract-completeness reviews have been performed, and material inconsistencies discovered during those reviews have been corrected.
 
-That static review is **not** a substitute for current-head Ruff, Mypy, pytest, evaluation, security, browser, or model execution. Those gates remain `NOT_VERIFIED` until deliberately run and inspected.
+The current hardening line additionally strengthens MCP action classification, production-target detection, evidence-root confinement, mutation-path ownership, assertion recognition, state/evidence integrity tests, runtime-hook composition tests, and configuration/security boundary tests.
+
+Those source and test improvements are **not** substitutes for current-head Ruff, Mypy, pytest, evaluation, security, browser, or model execution. Those gates remain `NOT_VERIFIED` until deliberately run and inspected.
 
 The checked-in GitHub Actions workflow remains manual-only. Its existence is implementation evidence only.
 
@@ -36,9 +40,9 @@ The checked-in GitHub Actions workflow remains manual-only. Its existence is imp
 |---|---|---|
 | Real Agent SDK loop | `src/ai_qa_automation/agent.py` uses the official Claude Agent SDK | `IMPLEMENTED`; live credentialed behavior `ENVIRONMENT_REQUIRED` / `NOT_VERIFIED` |
 | Probabilistic reasoning separated from deterministic authority | model reasoning + controlled tools + independent validation/result rules | `IMPLEMENTED` |
-| Canonical state outside conversation history | `AgentRunState`, `StateStore`, persisted `state.json` | `IMPLEMENTED` |
+| Canonical state outside conversation history | `AgentRunState`, `StateStore`, persisted `state.json` | `IMPLEMENTED`; expanded atomic-persistence tests present, current head `NOT_VERIFIED` |
 | Process-control state separated from QA state | `runtime.json`, journal, lease/budget/mutation metadata | `IMPLEMENTED` |
-| Evidence provenance | typed evidence, run-scoped manifest, hashed artifacts | `IMPLEMENTED` |
+| Evidence provenance | typed evidence, run-scoped manifest, hashed artifacts | `IMPLEMENTED`; run-root confinement/immutability tests present, current head `NOT_VERIFIED` |
 | Trusted control plane separated from SUT | disjoint control/artifact/target roots; project-only Agent SDK settings | `IMPLEMENTED`; deployment isolation `ENVIRONMENT_REQUIRED` |
 | Untrusted target instructions/config | target `CLAUDE.md`, `.claude/`, `.mcp.json`, DOM/log/API/source treated as data | `IMPLEMENTED` |
 | Bounded execution | independent turn/tool/network/mutation/repetition/time/cost limits + circuits | `IMPLEMENTED`; current-head execution `NOT_VERIFIED` |
@@ -49,14 +53,18 @@ The checked-in GitHub Actions workflow remains manual-only. Its existence is imp
 |---|---|---|
 | Explicit Agent SDK setting source | trusted project source only | `IMPLEMENTED` |
 | Restricted base tool surface | no generic runtime Bash/Edit/Write/Web authority; narrow QA tools | `IMPLEMENTED` |
-| Fail-closed authorization | policy callback + universal runtime hooks | `IMPLEMENTED` |
+| Fail-closed authorization | policy callback + universal runtime hooks | `IMPLEMENTED`; expanded cross-layer hook tests present, current head `NOT_VERIFIED` |
 | Strict MCP configuration | explicit trusted server registry/config | `IMPLEMENTED` |
+| MCP mixed-action classification | normalized camel/snake action tokens; destructive > write > read precedence; pull-request noun collision handled explicitly | `IMPLEMENTED`; adversarial policy tests present, current head `NOT_VERIFIED` |
 | Governance protection | policy/settings/hooks/threshold paths protected from autonomous mutation | `IMPLEMENTED` |
 | Workspace ownership | OS-backed lease outside target repository | `IMPLEMENTED`; dedicated tests present, current head `NOT_VERIFIED` |
 | Workspace drift protection | content-sensitive Git/worktree fingerprint before mutation | `IMPLEMENTED` |
-| Transactional mutation | trusted rollback snapshot until revision closure | `IMPLEMENTED`; dedicated tests present, current head `NOT_VERIFIED` |
+| Mutation-path ownership | absolute paths, traversal, workspace escapes, and symlink components rejected | `IMPLEMENTED`; dedicated adversarial tests present, current head `NOT_VERIFIED` |
+| Transactional mutation | trusted rollback snapshot until revision closure | `IMPLEMENTED`; expanded integrity/path tests present, current head `NOT_VERIFIED` |
 | Human-edit protection after crash | stale rollback only when persisted fingerprint still matches | `IMPLEMENTED`; dedicated tests present, current head `NOT_VERIFIED` |
+| Evidence-root confinement | run directories/artifacts must remain under trusted artifact root; duplicate evidence/artifact paths immutable | `IMPLEMENTED`; dedicated tests present, current head `NOT_VERIFIED` |
 | Restricted egress | application host/method/browser/k6 controls | `IMPLEMENTED` at application layer; infrastructure enforcement `ENVIRONMENT_REQUIRED` |
+| Production load fail-closed | production environment labels and production-like DNS labels are denied even when caller metadata conflicts | `IMPLEMENTED`; adversarial tests present, current head `NOT_VERIFIED` |
 
 ## Core QA automation
 
@@ -77,7 +85,7 @@ The checked-in GitHub Actions workflow remains manual-only. Its existence is imp
 | Failure classification | evidence-weighted taxonomy; interpretation alone cannot prove class | `IMPLEMENTED`; primary/holdout fixtures present; current-head execution `NOT_VERIFIED` |
 | Safe self-healing | browser-observed uniqueness, semantic ranking, hash/evidence binding, locator-only mutation | `IMPLEMENTED`; real browser repair path `ENVIRONMENT_REQUIRED` where external |
 | Test generation | observed coverage → evidence-bound plan → guarded creation | `IMPLEMENTED`; current-head deterministic gate `NOT_VERIFIED` |
-| Test-quality review | meaningful-assertion and unsafe-shortcut checks | `IMPLEMENTED` |
+| Test-quality review | AST-based meaningful-assertion and unsafe-shortcut checks, including fluent assertion roots | `IMPLEMENTED`; expanded tests present, current head `NOT_VERIFIED` |
 | Regression prioritization | mandatory/security/safety/regulatory preservation; low confidence broadens | `IMPLEMENTED` |
 | Prompt-injection resistance | target/remote content treated as untrusted data; policy outside model | `IMPLEMENTED`; adversarial scenarios present |
 
@@ -99,9 +107,9 @@ The checked-in GitHub Actions workflow remains manual-only. Its existence is imp
 | Capability | Implementation | Verification status |
 |---|---|---|
 | Concurrent-run isolation | OS-backed workspace lease | `IMPLEMENTED`; current-head suite `NOT_VERIFIED` |
-| Independent execution budgets | separate tool/network/mutation/repetition/wall/model dimensions | `IMPLEMENTED`; configuration/runtime tests present; current-head `NOT_VERIFIED` |
+| Independent execution budgets | separate tool/network/mutation/repetition/wall/model dimensions | `IMPLEMENTED`; expanded configuration/runtime tests present; current-head `NOT_VERIFIED` |
 | Tool circuit breaker | repeated tool failures open a scoped circuit without widening authority | `IMPLEMENTED`; dedicated tests present |
-| Transactional autonomous mutation | snapshot, pending transaction, validation closure, commit/rollback | `IMPLEMENTED`; dedicated tests present |
+| Transactional autonomous mutation | snapshot, pending transaction, validation closure, commit/rollback | `IMPLEMENTED`; expanded rollback-integrity tests present |
 | Crash recovery | stale mutation restoration only on exact fingerprint match | `IMPLEMENTED`; dedicated tests present |
 | Human change preservation | fingerprint mismatch blocks automatic stale rollback | `IMPLEMENTED`; dedicated tests present |
 | Recovery inspection | persisted state/journal/revision/mutation review without claiming chat replay | `IMPLEMENTED`; dedicated tests present |
@@ -130,8 +138,8 @@ The checked-in GitHub Actions workflow remains manual-only. Its existence is imp
 | Approved official MCP only | explicit GitHub/Atlassian provider policy | `IMPLEMENTED` |
 | GitHub official MCP | `github/github-mcp-server` `v1.0.5`, read-only container configuration | configuration `IMPLEMENTED`; authenticated runtime `ENVIRONMENT_REQUIRED` / `NOT_VERIFIED` |
 | Atlassian Rovo MCP | official `/v1/mcp/authv2` endpoint | configuration `IMPLEMENTED`; authenticated runtime `ENVIRONMENT_REQUIRED` / `NOT_VERIFIED` |
-| Tool-level least privilege | read/write/destructive/unknown external action handling | `IMPLEMENTED` |
-| Health normalization | not-configured/auth/rate-limit/unavailable/invalid/failed states | `IMPLEMENTED`; deterministic fixtures present |
+| Tool-level least privilege | read/write/destructive/unknown external action handling with mixed-action fail-closed precedence | `IMPLEMENTED`; expanded tests present, current head `NOT_VERIFIED` |
+| Health normalization | not-configured/auth/rate-limit/unavailable/invalid/failed states | `IMPLEMENTED`; expanded deterministic matrix present, current head `NOT_VERIFIED` |
 | Remote prompt injection | sanitized untrusted evidence; cannot redefine control plane | `IMPLEMENTED`; adversarial scenarios present |
 | Non-official fallback | unofficial community MCP not substituted automatically | `IMPLEMENTED` policy |
 
@@ -139,7 +147,7 @@ The checked-in GitHub Actions workflow remains manual-only. Its existence is imp
 
 | Gate | Current state |
 |---|---|
-| Unit/integration/policy/security tests | repository suite present, including newest runtime/change/traceability coverage |
+| Unit/integration/policy/security tests | repository suite present, including expanded policy/runtime/evidence/state/MCP/redaction/quality/terminal/configuration coverage |
 | Fixed primary corpus | exactly 34 primary scenarios under `evals/scenarios/` (`holdout: false`) |
 | Separate holdout corpus | H-series under `evals/holdout/` (`holdout: true`) |
 | Primary runner | `python evals/runner.py` / `make eval` |
@@ -165,21 +173,24 @@ The implementation should continue to answer these with deterministic controls/e
 - Can DOM/API/GitHub/Jira/target-source content override trusted policy?
 - Can target `CLAUDE.md`, `.claude/`, or `.mcp.json` alter runtime authority?
 - Can developer-local settings or unofficial MCP leak into live configuration?
+- Can a mixed MCP action name smuggle a write/destructive verb behind a read prefix?
 - Can an approved MCP receive excessive authority as its tool surface evolves?
 - Can secrets enter prompts, logs, subprocess environments, or artifacts?
+- Can evidence or artifact run identifiers escape the trusted artifact root?
+- Can symlink aliases redirect an autonomous mutation?
 - Can concurrent/crashed runs overwrite developer work?
 - Can retries hide flakiness or contradictory validation?
 - Can external outages become fabricated evidence?
 - Can the loop exceed turn/tool/network/mutation/time/cost bounds?
 - Can a model/SDK/MCP upgrade silently change behavior without provenance/review?
-- Can k6 reach production or escape approved network boundaries?
+- Can caller metadata disguise a production-like k6 target as staging?
 - Can an integrity hash be mistaken for a trusted signature or test PASS?
 
 A material weakness should produce a deterministic control, safer tool contract, test/evaluation, or explicit environment boundary before it is considered addressed.
 
 ## Manual CI release gate
 
-`.github/workflows/ci.yml` is intentionally `workflow_dispatch`-only during the current bootstrap constraint. It must not acquire `push`, `pull_request`, or scheduled triggers without deliberate operator review.
+`.github/workflows/ci.yml` is intentionally `workflow_dispatch`-only during the current controlled verification stage. It must not acquire `push`, `pull_request`, or scheduled triggers without deliberate operator review.
 
 The workflow defines quality, primary evaluation, optional holdout, security, browser-reference, and optional live-model jobs. Workflow definition does not constitute execution evidence.
 
@@ -201,7 +212,7 @@ Documentation is part of the safety boundary: it must not teach an operator or r
 
 ## License
 
-The repository is licensed under the MIT License. See root `LICENSE`:
+The YP AI QA Automation Framework is licensed under the MIT License. See root `LICENSE`:
 
 `Copyright (c) 2026 Yunior Portal`
 
