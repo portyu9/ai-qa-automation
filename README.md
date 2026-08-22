@@ -122,68 +122,110 @@ The banner summarizes the control contract. The graph below exposes the structur
 
 ```mermaid
 flowchart LR
-    O[Authorized objective] --> C[Claude Agent SDK]
+    accTitle: Evidence-first agentic QA trust and authority architecture
+    accDescr: An authorized objective reaches advisory Claude reasoning. Every action request passes through deterministic policy. Internal tools and explicitly approved provider actions produce evidence. Target and provider content remain untrusted. Subject-bound deterministic validation derives the structured terminal result.
 
-    subgraph CONTROL[Trusted control plane]
-      C --> P[Policy + permission handler + hooks]
-      C --> Q[18 least-privilege QA tools]
-      P --> Q
+    O[Authorized objective]
+    C[Claude Agent SDK]
+
+    subgraph CONTROL[Trusted deterministic control plane]
+      direction LR
+      P[Policy + permissions + hooks] --> Q[18 least-privilege QA tools]
       Q --> E[Evidence + artifact store]
-      E --> I[QA intelligence]
-      I --> V[Subject-bound deterministic validation]
+      E --> I[Deterministic QA intelligence]
+      I --> V[Subject-bound validation]
       V --> R[Structured runtime result]
     end
 
-    subgraph TARGET[Untrusted target plane]
-      S[SUT repository / application]
+    subgraph TARGET[Untrusted target / SUT]
+      S[Repository + application + test environment]
     end
 
-    subgraph PROVIDERS[Approved integration plane]
+    subgraph PROVIDERS[Approved providers · returned content untrusted]
+      direction TB
       G[GitHub official MCP]
       A[Atlassian Rovo MCP]
     end
 
+    O --> C
+    C -->|action request| P
+    P -->|authorize internal| Q
+    P -->|authorize provider| G
+    P -->|authorize provider| A
     Q <--> S
-    C --> G
-    C --> A
-    G --> E
-    A --> E
+    G -->|provider result| E
+    A -->|provider result| E
+
+    classDef neutral fill:#f6f8fa,stroke:#57606a,color:#24292f,stroke-width:1.5px
+    classDef advisory fill:#fbefff,stroke:#8250df,color:#24292f,stroke-width:2px
+    classDef authority fill:#ddf4ff,stroke:#0969da,color:#24292f,stroke-width:2px
+    classDef evidence fill:#dafbe1,stroke:#1a7f37,color:#24292f,stroke-width:2px
+    classDef untrusted fill:#ffebe9,stroke:#cf222e,color:#24292f,stroke-width:2px,stroke-dasharray:5 3
+    classDef terminal fill:#dafbe1,stroke:#1a7f37,color:#24292f,stroke-width:3px
+
+    class O neutral
+    class C advisory
+    class P,Q,I authority
+    class E,V evidence
+    class R terminal
+    class S,G,A untrusted
+
+    style CONTROL stroke:#0969da,stroke-width:2px,stroke-dasharray:6 4
+    style TARGET stroke:#cf222e,stroke-width:2px,stroke-dasharray:6 4
+    style PROVIDERS stroke:#cf222e,stroke-width:2px,stroke-dasharray:6 4
+    linkStyle default stroke:#57606a,stroke-width:1.5px
 ```
+
+**Diagram key:** purple = advisory reasoning · blue = deterministic authority · green = evidence/validation · red dashed = untrusted evidence source. Labels and boundaries carry the same meaning so color is never the only signal.
 
 <details>
 <summary><strong>Expand the runtime request → evidence → validation sequence</strong></summary>
 
 ```mermaid
 sequenceDiagram
+    accTitle: Bounded agent request, authorization, evidence, and terminal validation sequence
+    accDescr: The operator submits an objective to the trusted runtime. Claude proposes actions, deterministic policy authorizes or denies them, controlled tools observe the untrusted target or provider, evidence is persisted, and deterministic validation derives the terminal outcome.
     autonumber
+
     actor O as Operator
-    participant R as Trusted runtime
-    participant C as Claude
-    participant P as Policy + hooks
-    participant T as Narrow QA tool
-    participant U as Untrusted SUT/provider
-    participant E as Evidence store
-    participant V as Deterministic validator
+
+    box rgba(130,80,223,0.08) Advisory reasoning
+      participant C as Claude
+    end
+
+    box rgba(9,105,218,0.08) Trusted deterministic control plane
+      participant R as Trusted runtime
+      participant P as Policy + hooks
+      participant T as Narrow QA tool
+      participant E as Evidence store
+      participant V as Deterministic validator
+    end
+
+    box rgba(207,34,46,0.08) Untrusted evidence source
+      participant U as SUT / provider
+    end
 
     O->>R: Submit bounded objective
     R->>R: Validate trust roots, lease workspace, fingerprint revision
     R->>C: Provide objective + bounded observed context
-    C->>P: Request authorized action
+    C->>P: Request action
     P->>P: Check tool, path, network, budget, circuit, drift
+
     alt denied or approval unavailable
-        P-->>C: Deny / block
-        P->>E: Persist policy event
-    else authorized
+        P-->>C: DENY / BLOCKED
+        P->>E: Persist policy/runtime event
+    else explicitly authorized
         P->>T: Execute purpose-built capability
         T->>U: Observe or perform bounded side effect
         U-->>T: Raw result
         T->>E: Persist evidence + provenance
         T-->>C: Return bounded sanitized result
     end
+
     C-->>R: Agent result
     R->>V: Evaluate active subject/revision-bound gate lineage
     V-->>R: Deterministic terminal outcome
-    R-->>O: Structured result + evidence references
+    R-->>O: Structured result + evidence references + provenance
 ```
 
 </details>
@@ -299,6 +341,9 @@ There is intentionally **no generic existing-test rewrite tool** in the live age
 
 ```mermaid
 flowchart TD
+    accTitle: Evidence-first runtime lifecycle with transactional mutation closure
+    accDescr: The runtime acquires and validates workspace ownership, builds deterministic evidence, starts bounded advisory reasoning, authorizes every tool request, persists provenance, and requires exact-path patch safety, targeted pytest, and full regression before a mutated revision can persist.
+
     A[Acquire owned workspace lease] --> B[Recover only safely-owned stale mutation]
     B --> C[Capture Git/worktree fingerprint]
     C --> D[Build deterministic repository/change evidence]
@@ -308,7 +353,7 @@ flowchart TD
     G -->|deny| H[Record explicit non-PASS outcome]
     G -->|allow| I[Controlled tool executes]
     I --> J[Persist evidence + provenance]
-    J --> K{Mutation?}    
+    J --> K{Mutation?}
     K -->|no| E
     K -->|yes| L[Open rollback-backed transaction]
     L --> M[Patch-safety PASS for exact path]
@@ -317,6 +362,21 @@ flowchart TD
     O --> P[Durably commit revision]
     P --> E
     E --> Q[Derive terminal outcome from validation lineage]
+
+    classDef control fill:#ddf4ff,stroke:#0969da,color:#24292f,stroke-width:2px
+    classDef advisory fill:#fbefff,stroke:#8250df,color:#24292f,stroke-width:2px
+    classDef decision fill:#f6f8fa,stroke:#57606a,color:#24292f,stroke-width:2px
+    classDef denied fill:#ffebe9,stroke:#cf222e,color:#24292f,stroke-width:2px
+    classDef evidence fill:#dafbe1,stroke:#1a7f37,color:#24292f,stroke-width:2px
+    classDef terminal fill:#dafbe1,stroke:#1a7f37,color:#24292f,stroke-width:3px
+
+    class A,B,C,D,G,I,L control
+    class E advisory
+    class F,K decision
+    class H denied
+    class J,M,N,O,P evidence
+    class Q terminal
+    linkStyle default stroke:#57606a,stroke-width:1.5px
 ```
 
 A targeted run against an unrelated file is diagnostic evidence; it cannot certify the pending mutation.
@@ -332,6 +392,57 @@ For a changed revision to persist, the runtime requires all of the following at 
 5. durable transaction metadata that can be safely committed.
 
 Pending transaction metadata is persisted before the mutation tool may execute. Commit/rollback closure is persisted before rollback-backup cleanup. The design prefers an orphan cleanup artifact over the unsafe inverse: discarded rollback bytes while durable metadata still says the mutation is pending.
+
+<details>
+<summary><strong>Expand the transactional mutation + crash-recovery state machine</strong></summary>
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    accTitle: Transactional mutation and crash-recovery state machine
+    accDescr: A mutation starts only from an owned baseline. It must pass exact-path patch safety, exact-path-bound targeted pytest, and full regression before commit. Failure or incomplete proof rolls back. A crash can recover automatically only when workspace ownership, fingerprint, paths, and backup integrity remain provable; otherwise the runtime blocks for manual review.
+
+    [*] --> Baseline: owned lease + fingerprint
+
+    Baseline --> Pending: authorized mutation + owned rollback snapshot
+    Baseline --> Blocked: drift / policy denial / path ambiguity
+
+    Pending --> PatchSafe: exact-path patch-safety PASS
+    Pending --> Rollback: tool failure / terminal without closure
+
+    PatchSafe --> Targeted: exact-path-bound pytest PASS
+    PatchSafe --> Rollback: safety FAIL / incomplete
+
+    Targeted --> Regression: full-regression pytest PASS
+    Targeted --> Rollback: targeted FAIL / unbound / incomplete
+
+    Regression --> Committed: deterministic revision closure
+    Regression --> Rollback: regression FAIL / incomplete
+
+    Rollback --> Baseline: prior bytes restored / new file removed
+    Rollback --> IntegrityFailure: restore ownership/integrity uncertain
+
+    Pending --> Crashed: process exit
+    PatchSafe --> Crashed
+    Targeted --> Crashed
+    Regression --> Crashed
+
+    Crashed --> Recovered: fingerprint + ownership + backup verified
+    Recovered --> Baseline: stale mutation reverted
+    Crashed --> ManualReview: newer work / ownership ambiguity
+
+    classDef active fill:#ddf4ff,stroke:#0969da,color:#24292f,stroke-width:2px
+    classDef verified fill:#dafbe1,stroke:#1a7f37,color:#24292f,stroke-width:2px
+    classDef recovery fill:#fbefff,stroke:#8250df,color:#24292f,stroke-width:2px
+    classDef blocked fill:#ffebe9,stroke:#cf222e,color:#24292f,stroke-width:2px
+
+    class Baseline,Pending active
+    class PatchSafe,Targeted,Regression,Committed verified
+    class Rollback,Crashed,Recovered recovery
+    class Blocked,IntegrityFailure,ManualReview blocked
+```
+
+</details>
 
 See [Runtime Control and Recovery](docs/RUNTIME_CONTROL.md).
 
