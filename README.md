@@ -1,6 +1,9 @@
-# AI QA Automation — Evidence-First Agentic Quality Engineering
+# YP AI QA Automation Framework
 
-AI QA Automation is built around one non-negotiable rule:
+**Evidence-First Agentic Quality Engineering**  
+**Designed and engineered by Yunior Portal**
+
+The **YP AI QA Automation Framework** is built around one non-negotiable rule:
 
 > **Model reasoning is not test evidence.**
 
@@ -10,7 +13,7 @@ Claude can interpret failures, form hypotheses, assess change risk, select contr
 Claude reasons. Controlled tools execute. Deterministic systems decide whether gates passed.
 ```
 
-The system is designed for agentic quality engineering where probabilistic reasoning is useful, but authority, evidence, mutation safety, and final verification remain explicit and independently enforceable.
+The framework is designed for agentic quality engineering where probabilistic reasoning is useful, but authority, evidence, mutation safety, and final verification remain explicit and independently enforceable.
 
 ## Current status
 
@@ -32,7 +35,7 @@ The authoritative readiness vocabulary and release matrix live in [`docs/PRODUCT
 
 Many AI test agents optimize for “make the test pass.” That can be unsafe when the agent can also reinterpret failures, rewrite tests, trust hostile application content, or declare its own work successful.
 
-AI QA Automation instead optimizes for **defensible evidence, bounded authority, and visible uncertainty**:
+The YP AI QA Automation Framework instead optimizes for **defensible evidence, bounded authority, and visible uncertainty**:
 
 - a failed test is not automatically a product defect;
 - model interpretation is distinct from observed evidence;
@@ -130,7 +133,7 @@ The runtime uses:
 
 ### Narrow QA tool surface
 
-The project-owned in-process tools cover repository inspection, pytest, API probing, Playwright browser evidence, failure classification, bounded test reads, test-coverage discovery/planning, regression prioritization, test-quality review/creation, browser-proven locator verification/healing, JSON Schema validation, CI analysis, Appium runtime inspection, and controlled k6 assessment.
+The framework-owned in-process tools cover repository inspection, pytest, API probing, Playwright browser evidence, failure classification, bounded test reads, test-coverage discovery/planning, regression prioritization, test-quality review/creation, browser-proven locator verification/healing, JSON Schema validation, CI analysis, Appium runtime inspection, and controlled k6 assessment.
 
 There is deliberately **no generic existing-test rewrite tool** in the live runtime.
 
@@ -158,7 +161,7 @@ See [`docs/CHANGE_INTELLIGENCE.md`](docs/CHANGE_INTELLIGENCE.md).
 
 The classifier distinguishes outcomes including application defect, test automation defect, locator/UI-contract change, test-data failure, timing/flakiness, environment failure, external dependency failure, authentication failure, configuration failure, performance regression, and insufficient evidence.
 
-A missing UI element therefore does not automatically trigger selector repair. If the page's API is returning HTTP 500 and the expected UI never rendered, the system preserves that network/application evidence rather than “healing” the test first.
+A missing UI element therefore does not automatically trigger selector repair. If the page's API is returning HTTP 500 and the expected UI never rendered, the framework preserves that network/application evidence rather than “healing” the test first.
 
 ## Safe self-healing
 
@@ -403,6 +406,6 @@ A workflow definition is not execution evidence. Current-head gates remain `NOT_
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+The YP AI QA Automation Framework is licensed under the [MIT License](LICENSE).
 
 Copyright (c) 2026 Yunior Portal.
