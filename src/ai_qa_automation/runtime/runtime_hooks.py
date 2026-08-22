@@ -23,6 +23,7 @@ from .run_control import (
     BudgetExceededError,
     CircuitOpenError,
     MutationPendingError,
+    PendingMutation,
     RuntimeControl,
 )
 
@@ -54,6 +55,33 @@ def _checkpoint(
 
 def _tool_response_failed(response: Any) -> bool:
     return isinstance(response, dict) and bool(response.get("is_error"))
+
+
+def _reconcile_rolled_back_mutation(
+    state: AgentRunState | None,
+    pending: PendingMutation | None,
+    rolled_back_path: str | None,
+) -> None:
+    """Remove only modified-file accounting created by the rolled-back mutation attempt.
+
+    A later mutation of a path may fail before it records a new revision. In that
+    case an earlier committed occurrence of the same path must remain in history.
+    The pre-mutation revision stored in PendingMutation lets rollback distinguish
+    those cases without rewriting revision lineage.
+    """
+    if state is None or pending is None or not rolled_back_path:
+        return
+    revision_before = pending.change_revision_before
+    if revision_before is None or state.change_revision <= revision_before:
+        return
+    for index in range(len(state.files_modified) - 1, -1, -1):
+        if state.files_modified[index] == rolled_back_path:
+            state.files_modified.pop(index)
+            state.observations.append(
+                f"Rolled back mutation revision {state.change_revision} for {rolled_back_path}; "
+                "modified-file accounting was reconciled while revision history remained monotonic."
+            )
+            return
 
 
 def _normalize_selector_path(value: str) -> str:
@@ -196,7 +224,29 @@ def pretool_policy_output(
                     "permissionDecisionReason": "workspace-integrity: autonomous writes require a Git-backed isolated worktree",
                 }
             }
-        current = RepositoryInspector(control.workspace).snapshot().fingerprint
+        current_snapshot = RepositoryInspector(control.workspace).snapshot()
+        if not current_snapshot.fingerprint_complete:
+            reasons = ", ".join(current_snapshot.fingerprint_incomplete_reasons)
+            state.terminal_status = TerminalStatus.BLOCKED
+            state.terminal_reason = (
+                "Mutation blocked because the workspace fingerprint cannot bind every changed subject"
+            )
+            control.journal.append(
+                "workspace_fingerprint_incomplete",
+                reasons=list(current_snapshot.fingerprint_incomplete_reasons),
+            )
+            _checkpoint(state, state_store, control)
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": (
+                        "workspace-integrity: fingerprint coverage is incomplete; "
+                        f"restart from a simpler/fully readable worktree ({reasons})"
+                    ),
+                }
+            }
+        current = current_snapshot.fingerprint
         expected = control.expected_workspace_fingerprint
         if expected is None:
             state.terminal_status = TerminalStatus.BLOCKED
@@ -229,7 +279,10 @@ def pretool_policy_output(
     if decision.decision.value == "ALLOW":
         if tool_name in _MUTATION_TOOLS and control is not None:
             try:
-                control.prepare_mutation(str(tool_input.get("path") or ""))
+                control.prepare_mutation(
+                    str(tool_input.get("path") or ""),
+                    change_revision_before=(state.change_revision if state is not None else None),
+                )
             except MutationPendingError as exc:
                 control.journal.append("mutation_prepare_denied", tool_name=tool_name, reason=str(exc))
                 _checkpoint(state, state_store, control)
@@ -320,7 +373,9 @@ def posttool_policy_output(
     if control is not None:
         failed = _tool_response_failed(response)
         if tool_name in _MUTATION_TOOLS and failed:
-            control.rollback_pending_mutation(reason="mutation tool reported failure")
+            pending = control.pending_mutation
+            rolled_back = control.rollback_pending_mutation(reason="mutation tool reported failure")
+            _reconcile_rolled_back_mutation(state, pending, rolled_back)
             control.set_workspace_fingerprint(
                 RepositoryInspector(control.workspace).snapshot().fingerprint
             )
@@ -364,7 +419,11 @@ def posttool_failure_output(
         context = f"External MCP failure normalized as {status.value}; no remote evidence was fabricated."
     if control is not None:
         if tool_name in _MUTATION_TOOLS:
-            control.rollback_pending_mutation(reason="mutation tool raised an execution failure")
+            pending = control.pending_mutation
+            rolled_back = control.rollback_pending_mutation(
+                reason="mutation tool raised an execution failure"
+            )
+            _reconcile_rolled_back_mutation(state, pending, rolled_back)
             control.set_workspace_fingerprint(
                 RepositoryInspector(control.workspace).snapshot().fingerprint
             )
