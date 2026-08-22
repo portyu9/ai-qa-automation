@@ -1,8 +1,8 @@
 # Evaluation Strategy
 
-> **YP AI QA Automation Framework** · Designed and engineered by **Yunior Portal**
+> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
-The YP AI QA Automation Framework is evaluated as a **software control system**, not only by whether a model produces convincing prose or a generated test becomes green.
+The ƳƤ AI QA Automation Framework is evaluated as a **software control system**, not only by whether a model produces convincing prose or a generated test becomes green.
 
 The evaluation strategy targets the failure modes that matter for an autonomous QA system: false defect attribution, unsafe self-healing, meaningless generated tests, regression under-selection, prompt injection, authority expansion, fabricated external evidence, unbounded execution, and false PASS.
 
@@ -168,3 +168,5 @@ The number of generated tests or repairs that become green is not sufficient evi
 Anything not actually executed remains `NOT_VERIFIED`, including the current-head primary and holdout suites until their deliberate execution occurs.
 
 See [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md), [`OPERATIONS.md`](OPERATIONS.md), and [`TECHNICAL_WALKTHROUGH.md`](TECHNICAL_WALKTHROUGH.md).
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
