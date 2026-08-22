@@ -140,11 +140,15 @@ def test_lineage_rejects_symlinked_control_subject(tmp_path: Path) -> None:
         build_run_lineage(run_dir)
 
 
-def test_lineage_rejects_invalid_event_bound(tmp_path: Path) -> None:
+@pytest.mark.parametrize("bound", [0, -1, True, 1.5, 10_001])
+def test_lineage_rejects_invalid_event_bound(tmp_path: Path, bound: object) -> None:
     write_json(tmp_path / "run" / "state.json", {"run_id": "run"})
 
     with pytest.raises(ValueError, match="max_journal_events"):
-        build_run_lineage(tmp_path / "run", max_journal_events=0)
+        build_run_lineage(
+            tmp_path / "run",
+            max_journal_events=bound,  # type: ignore[arg-type]
+        )
 
 
 def test_lineage_requires_persisted_state(tmp_path: Path) -> None:
