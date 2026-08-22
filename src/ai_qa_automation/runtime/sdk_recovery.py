@@ -136,6 +136,21 @@ def retry_decision(
     )
 
 
+def retry_failure_reason(
+    decision: SDKRetryDecision,
+    exc: BaseException,
+) -> str | None:
+    """Render a truthful terminal retry explanation without exposing provider error text."""
+    if not sdk_exception_is_transient(exc) or decision.retry:
+        return None
+    if decision.category == "retry_budget":
+        return (
+            "Transient Agent SDK session-start failure was not retried because the bounded "
+            f"retry budget was exhausted: {type(exc).__name__}"
+        )
+    return "Transient Agent SDK execution failure was not retried: " + decision.reason
+
+
 def retry_delay_seconds(
     retry_number: int,
     *,
