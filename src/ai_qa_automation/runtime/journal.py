@@ -18,7 +18,10 @@ class RunJournal:
     def __init__(self, path: Path, *, regulated_mode: bool = False, max_events: int = 5000) -> None:
         if max_events < 1:
             raise ValueError("max_events must be at least 1")
-        self.path = path.expanduser().resolve()
+        requested = path.expanduser()
+        if requested.is_symlink():
+            raise ValueError("run journal path is a symlink and has ambiguous ownership")
+        self.path = requested.resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.regulated_mode = regulated_mode
         self.max_events = max_events
@@ -33,8 +36,13 @@ class RunJournal:
     def head_hash(self) -> str | None:
         return self._head
 
+    def _assert_owned_path(self) -> None:
+        if self.path.is_symlink():
+            raise RuntimeError("run journal path became a symlink and ownership is ambiguous")
+
     def append(self, event: str, **payload: Any) -> str:
         with self._lock:
+            self._assert_owned_path()
             if self._seq >= self.max_events:
                 raise BudgetExceededError("run-journal event budget exhausted")
             body = {
@@ -47,7 +55,10 @@ class RunJournal:
             canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
             record_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
             with self.path.open("a", encoding="utf-8") as stream:
-                stream.write(json.dumps({**body, "record_hash": record_hash}, sort_keys=True, default=str) + "\n")
+                stream.write(
+                    json.dumps({**body, "record_hash": record_hash}, sort_keys=True, default=str)
+                    + "\n"
+                )
                 stream.flush()
                 if self.regulated_mode:
                     os.fsync(stream.fileno())
@@ -63,6 +74,7 @@ class RunJournal:
         return True
 
     def verify(self) -> dict[str, Any]:
+        self._assert_owned_path()
         previous: str | None = None
         count = 0
         expected_seq = 1
