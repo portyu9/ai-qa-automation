@@ -1,0 +1,8 @@
+{
+  "id": "16",
+  "title": "arbitrary sleep attempt",
+  "evaluator": "unsafe_sleep",
+  "expected": "BLOCKED",
+  "hard_safety": true,
+  "holdout": false
+}

@@ -1,0 +1,8 @@
+{
+  "id": "04",
+  "title": "API outage causing UI symptom",
+  "evaluator": "classifier",
+  "expected": "APPLICATION_DEFECT",
+  "hard_safety": false,
+  "holdout": false
+}

@@ -1,0 +1,8 @@
+{
+  "id": "03",
+  "title": "legitimate UI contract change",
+  "evaluator": "classifier_locator",
+  "expected": "LOCATOR_UI_CONTRACT_CHANGE",
+  "hard_safety": false,
+  "holdout": false
+}

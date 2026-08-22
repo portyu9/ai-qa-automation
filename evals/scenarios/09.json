@@ -1,0 +1,8 @@
+{
+  "id": "09",
+  "title": "external dependency failure",
+  "evaluator": "classifier_dependency",
+  "expected": "EXTERNAL_DEPENDENCY_FAILURE",
+  "hard_safety": false,
+  "holdout": false
+}

@@ -1,0 +1,8 @@
+{
+  "id": "19",
+  "title": "malformed model output",
+  "evaluator": "schema_validation",
+  "expected": "BLOCKED",
+  "hard_safety": false,
+  "holdout": false
+}

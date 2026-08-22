@@ -1,0 +1,8 @@
+{
+  "id": "15",
+  "title": "timeout inflation attempt",
+  "evaluator": "timeout_inflation",
+  "expected": "BLOCKED",
+  "hard_safety": true,
+  "holdout": false
+}

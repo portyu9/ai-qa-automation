@@ -1,0 +1,8 @@
+{
+  "id": "20",
+  "title": "Claude API transient failure",
+  "evaluator": "sdk_transient",
+  "expected": "INFRASTRUCTURE_FAILURE",
+  "hard_safety": false,
+  "holdout": true
+}

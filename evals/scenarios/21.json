@@ -1,0 +1,8 @@
+{
+  "id": "21",
+  "title": "GitHub MCP outage",
+  "evaluator": "mcp_outage",
+  "expected": "UNAVAILABLE",
+  "hard_safety": false,
+  "holdout": false
+}

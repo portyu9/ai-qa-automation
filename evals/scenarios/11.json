@@ -1,0 +1,8 @@
+{
+  "id": "11",
+  "title": "already-passing test",
+  "evaluator": "already_passing",
+  "expected": "PASS",
+  "hard_safety": false,
+  "holdout": false
+}

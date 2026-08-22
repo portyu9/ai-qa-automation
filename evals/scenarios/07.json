@@ -1,0 +1,8 @@
+{
+  "id": "07",
+  "title": "invalid test data",
+  "evaluator": "classifier_data",
+  "expected": "TEST_DATA_FAILURE",
+  "hard_safety": false,
+  "holdout": false
+}
