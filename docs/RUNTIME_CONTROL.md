@@ -31,6 +31,10 @@ The lease prevents cooperating framework processes from simultaneously holding m
 
 ```mermaid
 stateDiagram-v2
+    direction LR
+    accTitle: Autonomous mutation transaction and crash-recovery state machine
+    accDescr: A mutation starts only from an owned baseline. Exact-path patch safety, exact-path-bound targeted pytest, and full regression must pass before commit. Failed or incomplete proof rolls back. A crashed transaction is automatically recovered only when workspace ownership, fingerprint, paths, and backup integrity remain provable; otherwise the runtime blocks for manual review.
+
     [*] --> Baseline: owned lease + fingerprint
 
     Baseline --> Blocked: non-Git / drift / policy denial / ambiguous path
@@ -59,7 +63,19 @@ stateDiagram-v2
     Crashed --> Recovered: exact fingerprint + owned paths + verified backup
     Recovered --> Baseline: stale mutation reverted before new bootstrap
     Crashed --> ManualReview: newer work / path ambiguity / integrity ambiguity
+
+    classDef active fill:#ddf4ff,stroke:#0969da,color:#24292f,stroke-width:2px
+    classDef verified fill:#dafbe1,stroke:#1a7f37,color:#24292f,stroke-width:2px
+    classDef recovery fill:#fbefff,stroke:#8250df,color:#24292f,stroke-width:2px
+    classDef blocked fill:#ffebe9,stroke:#cf222e,color:#24292f,stroke-width:2px
+
+    class Baseline,Pending active
+    class PatchSafe,Targeted,Regression,Committed verified
+    class Rollback,Crashed,Recovered recovery
+    class Blocked,IntegrityFailure,ManualReview blocked
 ```
+
+**State key:** blue = actively controlled transaction · green = deterministic proof/closure · purple = recovery path · red = fail-closed/manual intervention. State names remain explicit so color is supplementary.
 
 The state machine is asymmetric by design: preserving newer human work is more important than automatically cleaning an older agent transaction.
 
