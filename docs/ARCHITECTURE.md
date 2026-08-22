@@ -1,7 +1,7 @@
 # Architecture
 
 > [!IMPORTANT]
-> **Model reasoning is not test evidence.** Claude may interpret observations, form hypotheses, rank risk, and choose among approved actions. Controlled tools perform bounded observations and side effects. Deterministic policy, validation, integrity checks, and revision lineage decide what the framework can prove.
+> **Model reasoning is not test evidence and is not runtime authority.** Claude may interpret observations, form hypotheses, rank risk, and choose among approved actions. Controlled tools perform bounded observations and side effects. Deterministic policy, ownership, validation, integrity checks, and revision lineage decide what the framework may do and what it can prove.
 
 **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
@@ -9,27 +9,31 @@
 
 ---
 
-The framework treats an LLM as a **bounded reasoning component inside a quality-engineering control system**, not as the authority that decides whether software is correct.
+The framework treats an LLM as a **bounded planner and diagnostician inside a quality-engineering control system**, not as the test oracle, authorization engine, or system of record.
 
 ## Authority hierarchy
 
+The hierarchy below is a **trust and decision-rights hierarchy**, not a chronological request sequence:
+
 ```text
-TRUSTED CONFIGURATION + POLICY
-        ↓
-RUNTIME OWNERSHIP + BUDGETS + HOOKS
-        ↓
+TRUSTED CONFIGURATION + DETERMINISTIC POLICY
+        ↓ constrains
+RUNTIME OWNERSHIP + PERMISSIONS + BUDGETS + HOOKS
+        ↓ authorizes
 CONTROLLED OBSERVATION / EXECUTION
-        ↓
+        ↓ produces
 PERSISTED EVIDENCE + PROVENANCE
-        ↓
-DETERMINISTIC SUBJECT-BOUND VALIDATION
-        ↓
-MODEL INTERPRETATION / NEXT ACTION
-        ↓
-STRUCTURED TERMINAL REPORT
+        ↓ supports
+DETERMINISTIC SUBJECT / REVISION-BOUND VALIDATION
+        ↓ derives
+STRUCTURED TERMINAL TRUTH
+
+ADVISORY MODEL REASONING
+        ↳ proposes actions and interpretations inside the boundaries above
+        ↳ cannot override, manufacture, or promote lower-layer truth
 ```
 
-The hierarchy is deliberately asymmetric: lower layers constrain model behavior; model reasoning cannot override lower-layer truth.
+The architecture is deliberately asymmetric: **capability may be probabilistic; authority and proof are not delegated to model confidence**.
 
 ## Design invariants
 
@@ -53,15 +57,18 @@ The hierarchy is deliberately asymmetric: lower layers constrain model behavior;
 
 ```mermaid
 flowchart LR
-    O[Authorized objective] --> A[Claude Agent SDK]
+    accTitle: Evidence-first AI QA architecture with explicit authority and trust boundaries
+    accDescr: An authorized objective reaches advisory Claude reasoning. Action requests cross deterministic policy before internal tools or approved providers may execute. Internal tools observe the untrusted target. Provider and target content remain untrusted evidence. Evidence is persisted and deterministic subject-bound validation derives the structured runtime report.
 
-    subgraph TRUSTED[Trusted control plane]
-      A --> P[Policy + permission handler + hooks]
-      A --> T[18 narrow QA tools]
-      P --> T
+    O[Authorized objective]
+    A[Claude Agent SDK / advisory reasoning]
+
+    subgraph TRUSTED[Trusted deterministic control plane]
+      direction LR
+      P[Policy + permissions + hooks] --> T[18 least-privilege QA tools]
       T --> E[Evidence + artifact store]
-      E --> Q[QA intelligence]
-      Q --> V[Deterministic validation]
+      E --> Q[Deterministic QA intelligence]
+      Q --> V[Subject / revision-bound validation]
       V --> R[Structured runtime report]
     end
 
@@ -69,31 +76,68 @@ flowchart LR
       S[Repository + application + test environment]
     end
 
-    subgraph INTEGRATIONS[Approved integration plane]
+    subgraph INTEGRATIONS[Approved providers · returned content untrusted]
+      direction TB
       G[GitHub official MCP]
       J[Atlassian Rovo MCP]
     end
 
+    O --> A
+    A -->|action request| P
+    P -->|authorize internal| T
+    P -->|authorize provider| G
+    P -->|authorize provider| J
     T <--> S
-    A --> G
-    A --> J
-    G --> E
-    J --> E
+    G -->|provider result| E
+    J -->|provider result| E
+
+    classDef neutral fill:#f6f8fa,stroke:#57606a,color:#24292f,stroke-width:1.5px
+    classDef advisory fill:#fbefff,stroke:#8250df,color:#24292f,stroke-width:2px
+    classDef authority fill:#ddf4ff,stroke:#0969da,color:#24292f,stroke-width:2px
+    classDef evidence fill:#dafbe1,stroke:#1a7f37,color:#24292f,stroke-width:2px
+    classDef untrusted fill:#ffebe9,stroke:#cf222e,color:#24292f,stroke-width:2px,stroke-dasharray:5 3
+    classDef terminal fill:#dafbe1,stroke:#1a7f37,color:#24292f,stroke-width:3px
+
+    class O neutral
+    class A advisory
+    class P,T,Q authority
+    class E,V evidence
+    class R terminal
+    class S,G,J untrusted
+
+    style TRUSTED stroke:#0969da,stroke-width:2px,stroke-dasharray:6 4
+    style TARGET stroke:#cf222e,stroke-width:2px,stroke-dasharray:6 4
+    style INTEGRATIONS stroke:#cf222e,stroke-width:2px,stroke-dasharray:6 4
+    linkStyle default stroke:#57606a,stroke-width:1.5px
 ```
+
+**Diagram key:** purple = advisory reasoning · blue = deterministic authority · green = evidence/validation · red dashed = untrusted evidence source. Text and boundary labels repeat the meaning so color is never the only signal.
 
 ## Execution sequence
 
 ```mermaid
 sequenceDiagram
+    accTitle: Runtime execution sequence from bounded objective to deterministic terminal outcome
+    accDescr: The trusted runtime validates ownership and fingerprints the workspace before Claude receives bounded context. Claude proposes actions. Policy authorizes or denies each action. Narrow tools observe the untrusted SUT or approved provider, evidence is persisted, and deterministic validation derives terminal truth from current gate lineage and revision.
     autonumber
+
     actor O as Operator / objective
-    participant R as Trusted runtime
-    participant C as Claude Agent SDK
-    participant P as Policy + hooks
-    participant T as Narrow QA tool
-    participant S as Untrusted SUT / provider
-    participant E as Evidence + state
-    participant V as Deterministic validation
+
+    box rgba(130,80,223,0.08) Advisory reasoning
+      participant C as Claude Agent SDK
+    end
+
+    box rgba(9,105,218,0.08) Trusted deterministic control plane
+      participant R as Trusted runtime
+      participant P as Policy + hooks
+      participant T as Narrow QA tool
+      participant E as Evidence + state
+      participant V as Deterministic validation
+    end
+
+    box rgba(207,34,46,0.08) Untrusted evidence source
+      participant S as SUT / provider
+    end
 
     O->>R: Submit bounded objective
     R->>R: Validate trust roots + acquire owned workspace lease
@@ -108,9 +152,9 @@ sequenceDiagram
         alt Denied or approval unavailable
             P-->>C: DENY / BLOCKED
             P->>E: Persist policy/runtime event
-        else Allowed
-            P->>T: Execute narrow tool
-            T->>S: Observe or perform authorized action
+        else Explicitly authorized
+            P->>T: Execute narrow capability
+            T->>S: Observe or perform bounded side effect
             S-->>T: Raw result
             T->>E: Persist evidence/artifacts/provenance
             T-->>C: Bounded sanitized result
@@ -125,12 +169,12 @@ sequenceDiagram
 
 ## Trust zones
 
-### Trusted control plane
+### Trusted deterministic control plane
 
 The trusted control plane includes:
 
 - installed `ai_qa_automation` code;
-- runtime system prompt;
+- trusted runtime system policy;
 - root `CLAUDE.md`;
 - five approved project Skills;
 - `.claude/settings.json` and hooks;
@@ -140,7 +184,7 @@ The trusted control plane includes:
 - evaluation thresholds;
 - evidence/state/runtime persistence.
 
-The Agent SDK working/configuration root is set explicitly to this trusted framework repository.
+The Agent SDK working/configuration root is set explicitly to this trusted framework repository. **That trusted configuration source does not make model reasoning an authorization or proof authority.** The model remains an advisory reasoning component constrained by the deterministic control plane.
 
 ### Untrusted target plane
 
