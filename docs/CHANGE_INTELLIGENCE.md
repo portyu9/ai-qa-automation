@@ -1,8 +1,8 @@
 # Change Intelligence
 
-> **YP AI QA Automation Framework** · Designed and engineered by **Yunior Portal**
+> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
-The YP AI QA Automation Framework can reason about a pull-request or feature-branch delta without making the common mistake of treating a clean worktree as “no change.”
+The ƳƤ AI QA Automation Framework can reason about a pull-request or feature-branch delta without making the common mistake of treating a clean worktree as “no change.”
 
 Change intelligence is deterministic bootstrap evidence. Claude can interpret its implications, but it cannot redefine the baseline, invent ownership, or convert an unanalyzed contract into a compatible one.
 
@@ -119,3 +119,5 @@ The analyzers are intentionally bounded by file counts, sizes, supported grammar
 That behavior aligns with the framework-wide truth rule: **unknown is not PASS**.
 
 See [`ARCHITECTURE.md`](ARCHITECTURE.md), [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md), and [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md).
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
