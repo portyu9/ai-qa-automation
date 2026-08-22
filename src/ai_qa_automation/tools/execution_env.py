@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import os
+import shutil
 import signal
 import subprocess
 import threading
@@ -65,6 +66,43 @@ class _TailBuffer:
         return f"...[output truncated to last {self.limit} bytes]...\n{rendered}"
 
 
+def resolve_executable(executable: str, *, env: Mapping[str, str]) -> str:
+    """Resolve a subprocess executable to one existing absolute regular file.
+
+    Named executables are resolved through the explicitly supplied subprocess PATH,
+    then bound to the resulting absolute path before process creation. Relative paths
+    containing directory components are rejected so the working directory cannot
+    silently change executable identity.
+    """
+    raw = str(executable).strip()
+    if not raw or "\x00" in raw:
+        raise ValueError("subprocess executable must be a non-empty path or command name")
+
+    candidate = Path(raw)
+    if candidate.is_absolute():
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError as exc:
+            raise FileNotFoundError(f"subprocess executable was not found: {raw}") from exc
+    else:
+        if candidate.parent != Path("."):
+            raise ValueError("relative subprocess executable paths with directory components are forbidden")
+        search_path = env.get("PATH")
+        if not search_path:
+            raise FileNotFoundError(f"subprocess executable cannot be resolved without PATH: {raw}")
+        discovered = shutil.which(raw, path=search_path)
+        if discovered is None:
+            raise FileNotFoundError(f"subprocess executable was not found on the controlled PATH: {raw}")
+        try:
+            resolved = Path(discovered).resolve(strict=True)
+        except OSError as exc:
+            raise FileNotFoundError(f"resolved subprocess executable no longer exists: {raw}") from exc
+
+    if not resolved.is_file():
+        raise FileNotFoundError(f"subprocess executable is not a regular file: {resolved}")
+    return str(resolved)
+
+
 def _drain_stream(stream: BinaryIO, buffer: _TailBuffer) -> None:
     try:
         while True:
@@ -85,6 +123,7 @@ def _spawn_process(
     env: Mapping[str, str],
 ) -> subprocess.Popen[bytes]:
     argv = [str(item) for item in command]
+    argv[0] = resolve_executable(argv[0], env=env)
     if os.name == "nt":
         return subprocess.Popen(
             argv,
@@ -119,18 +158,19 @@ def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
         return
 
     # CREATE_NEW_PROCESS_GROUP above gives Windows taskkill a stable tree root.
-    # taskkill is part of supported Windows installations and is used only for
-    # cleanup of the child tree created by this adapter.
+    # Resolve taskkill to an absolute executable before invoking it so cleanup does
+    # not rely on partial-path process execution.
     try:
-        cleanup = subprocess.run(  # noqa: S603 - fixed executable/arguments, no shell
-            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+        taskkill = resolve_executable("taskkill", env=os.environ)
+        cleanup = subprocess.run(  # noqa: S603 - resolved executable/fixed arguments, no shell
+            [taskkill, "/PID", str(process.pid), "/T", "/F"],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=5,
             check=False,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, ValueError, subprocess.TimeoutExpired):
         cleanup = None
     if (cleanup is None or cleanup.returncode != 0) and process.poll() is None:
         process.kill()
