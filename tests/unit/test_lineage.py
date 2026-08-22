@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from ai_qa_automation.runtime.journal import RunJournal
 from ai_qa_automation.runtime.lineage import build_run_lineage
 
 
@@ -75,11 +76,7 @@ def test_lineage_connects_evidence_artifacts_hypotheses_and_validation(tmp_path:
             ],
         },
     )
-    (run_dir / "journal.jsonl").write_text(
-        json.dumps({"seq": 1, "event": "run_started", "timestamp": "2026-08-21T00:00:00Z"})
-        + "\n",
-        encoding="utf-8",
-    )
+    RunJournal(run_dir / "journal.jsonl").append("run_started")
 
     graph = build_run_lineage(run_dir)
     node_ids = {node.id for node in graph.nodes}
@@ -107,16 +104,47 @@ def test_lineage_connects_evidence_artifacts_hypotheses_and_validation(tmp_path:
 def test_lineage_bounds_journal_graph(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     write_json(run_dir / "state.json", {"run_id": "run", "objective": "bounded"})
-    (run_dir / "journal.jsonl").write_text(
-        "\n".join(json.dumps({"seq": index, "event": f"event-{index}"}) for index in range(1, 4))
-        + "\n",
-        encoding="utf-8",
-    )
+    journal = RunJournal(run_dir / "journal.jsonl")
+    for index in range(1, 4):
+        journal.append(f"event-{index}")
 
     graph = build_run_lineage(run_dir, max_journal_events=2)
 
     assert "journal graph truncated at 2 events" in graph.warnings
     assert {node.id for node in graph.nodes if node.kind == "runtime_event"} == {"event:1", "event:2"}
+
+
+def test_lineage_does_not_graph_invalid_journal_events(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    write_json(run_dir / "state.json", {"run_id": "run", "objective": "tamper"})
+    (run_dir / "journal.jsonl").write_text('{"seq": 1, "event": "forged"}\n', encoding="utf-8")
+
+    graph = build_run_lineage(run_dir)
+
+    assert not [node for node in graph.nodes if node.kind == "runtime_event"]
+    assert any("journal" in warning for warning in graph.warnings)
+
+
+def test_lineage_rejects_symlinked_control_subject(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    outside = tmp_path / "outside-state.json"
+    write_json(outside, {"run_id": "outside"})
+    state_path = run_dir / "state.json"
+    try:
+        state_path.symlink_to(outside)
+    except OSError as exc:  # pragma: no cover - platform/filesystem capability
+        pytest.skip(f"symlink creation unavailable: {exc}")
+
+    with pytest.raises(ValueError, match="symlink"):
+        build_run_lineage(run_dir)
+
+
+def test_lineage_rejects_invalid_event_bound(tmp_path: Path) -> None:
+    write_json(tmp_path / "run" / "state.json", {"run_id": "run"})
+
+    with pytest.raises(ValueError, match="max_journal_events"):
+        build_run_lineage(tmp_path / "run", max_journal_events=0)
 
 
 def test_lineage_requires_persisted_state(tmp_path: Path) -> None:
