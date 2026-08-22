@@ -239,6 +239,90 @@ def test_stale_recovery_rejects_symlinked_rollback_backup(tmp_path: Path) -> Non
     assert actual_backup.exists()
 
 
+def test_stale_recovery_rejects_symlinked_rollback_directory(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+    target = workspace / "tests" / "test_checkout.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("mutated\n", encoding="utf-8")
+
+    prior_run = artifact_root / "run-old"
+    prior_run.mkdir(parents=True)
+    outside_rollback = tmp_path / "outside-rollback"
+    outside_rollback.mkdir()
+    original = b"original\n"
+    backup = outside_rollback / "checkout.bin"
+    backup.write_bytes(original)
+    rollback_alias = prior_run / "rollback"
+    try:
+        rollback_alias.symlink_to(outside_rollback, target_is_directory=True)
+    except OSError as exc:  # pragma: no cover - platform/filesystem capability
+        pytest.skip(f"symlink creation unavailable: {exc}")
+    write_runtime(
+        prior_run / "runtime.json",
+        stale_runtime_payload(
+            workspace,
+            relative_path="tests/test_checkout.py",
+            existed=True,
+            backup_path=str(backup.resolve()),
+            original_sha256=hashlib.sha256(original).hexdigest(),
+        ),
+    )
+
+    result = recover_stale_mutation(
+        artifact_root=artifact_root,
+        workspace=workspace,
+        previous_lease={"run_id": "run-old"},
+        current_workspace_fingerprint="fp",
+        recovering_run_id="run-new",
+    )
+
+    assert result["status"] == "BLOCKED"
+    assert "rollback directory" in result["reason"]
+    assert target.read_text(encoding="utf-8") == "mutated\n"
+    assert backup.exists()
+
+
+def test_stale_recovery_rejects_symlinked_journal_before_mutation(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+    target = workspace / "tests" / "test_generated.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("generated but unverified\n", encoding="utf-8")
+
+    prior_run = artifact_root / "run-old"
+    write_runtime(
+        prior_run / "runtime.json",
+        stale_runtime_payload(
+            workspace,
+            relative_path="tests/test_generated.py",
+            existed=False,
+        ),
+    )
+    outside_journal = tmp_path / "outside-journal.jsonl"
+    outside_journal.write_text("do not touch\n", encoding="utf-8")
+    journal_alias = prior_run / "journal.jsonl"
+    try:
+        journal_alias.symlink_to(outside_journal)
+    except OSError as exc:  # pragma: no cover - platform/filesystem capability
+        pytest.skip(f"symlink creation unavailable: {exc}")
+
+    result = recover_stale_mutation(
+        artifact_root=artifact_root,
+        workspace=workspace,
+        previous_lease={"run_id": "run-old"},
+        current_workspace_fingerprint="fp",
+        recovering_run_id="run-new",
+    )
+
+    assert result["status"] == "BLOCKED"
+    assert "run journal" in result["reason"]
+    assert target.exists()
+    assert outside_journal.read_text(encoding="utf-8") == "do not touch\n"
+
+
 def test_previous_run_id_traversal_is_blocked(tmp_path: Path) -> None:
     result = recover_stale_mutation(
         artifact_root=tmp_path / "artifacts",
