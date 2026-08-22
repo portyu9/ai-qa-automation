@@ -23,6 +23,7 @@ _SAFE_INHERITED_ENV = {
 _DEFAULT_MAX_OUTPUT_BYTES = 2_000_000
 _READ_CHUNK_BYTES = 64 * 1024
 _DRAIN_JOIN_SECONDS = 2.0
+_WINDOWS_NEW_PROCESS_GROUP = 0x00000200
 
 
 @dataclass(frozen=True)
@@ -75,6 +76,33 @@ def _drain_stream(stream: BinaryIO, buffer: _TailBuffer) -> None:
         return
 
 
+def _spawn_process(
+    command: Sequence[str],
+    *,
+    cwd: Path,
+    env: Mapping[str, str],
+) -> subprocess.Popen[bytes]:
+    argv = [str(item) for item in command]
+    common = {
+        "cwd": cwd,
+        "env": dict(env),
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+    }
+    if os.name == "nt":
+        return subprocess.Popen(
+            argv,
+            creationflags=_WINDOWS_NEW_PROCESS_GROUP,
+            **common,
+        )
+    return subprocess.Popen(
+        argv,
+        start_new_session=True,
+        **common,
+    )
+
+
 def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
     """Best-effort bounded termination of the validator process tree."""
     if os.name != "nt":
@@ -87,7 +115,7 @@ def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
                 process.kill()
         return
 
-    # CREATE_NEW_PROCESS_GROUP below gives Windows taskkill a stable tree root.
+    # CREATE_NEW_PROCESS_GROUP above gives Windows taskkill a stable tree root.
     # taskkill is part of supported Windows installations and is used only for
     # cleanup of the child tree created by this adapter.
     try:
@@ -129,21 +157,7 @@ def run_bounded_subprocess(
     if not command:
         raise ValueError("subprocess command must not be empty")
 
-    popen_kwargs: dict[str, object] = {}
-    if os.name == "nt":
-        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-    else:
-        popen_kwargs["start_new_session"] = True
-
-    process = subprocess.Popen(
-        [str(item) for item in command],
-        cwd=cwd,
-        env=dict(env),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        **popen_kwargs,
-    )
+    process = _spawn_process(command, cwd=cwd, env=env)
     if process.stdout is None or process.stderr is None:  # pragma: no cover - Popen contract
         _terminate_process_tree(process)
         process.wait()
