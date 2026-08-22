@@ -209,6 +209,20 @@ def test_non_object_runtime_is_not_recoverable(tmp_path: Path) -> None:
     assert result == {"recoverable": False, "reason": "runtime.json root must be an object"}
 
 
+def test_oversized_runtime_metadata_is_rejected_before_parse(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-1"
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+    save_state(run_dir, base_state(workspace))
+    RunJournal(run_dir / "journal.jsonl").append("run_started")
+    runtime_path = run_dir / "runtime.json"
+    runtime_path.write_bytes(b"{" + (b"x" * 2_000_001) + b"}")
+
+    result = inspect_recovery(run_dir)
+
+    assert result == {"recoverable": False, "reason": "runtime.json exceeds restore size bound"}
+
+
 def test_corrupt_journal_is_not_recoverable(tmp_path: Path) -> None:
     run_dir = tmp_path / "run-1"
     workspace = tmp_path / "sut"
