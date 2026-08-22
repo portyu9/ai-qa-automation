@@ -1,8 +1,8 @@
 # Technical Walkthrough
 
-> **YP AI QA Automation Framework** · Designed and engineered by **Yunior Portal**
+> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
-This walkthrough follows the YP AI QA Automation Framework from **authorized objective → observed evidence → bounded reasoning/action → deterministic validation → persisted result**. It is written for a technical reviewer who wants to understand where authority lives, not only what features exist.
+This walkthrough follows the ƳƤ AI QA Automation Framework from **authorized objective → observed evidence → bounded reasoning/action → deterministic validation → persisted result**. It is written for a technical reviewer who wants to understand where authority lives, not only what features exist.
 
 ## 1. Start with the result contract
 
@@ -194,3 +194,5 @@ Read these documents last:
 - [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) — authoritative status vocabulary and release truth table.
 
 The intended conclusion is not “everything is production verified.” It is stronger and more defensible: **the architecture makes it difficult to accidentally claim verification that the system did not actually observe.**
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
