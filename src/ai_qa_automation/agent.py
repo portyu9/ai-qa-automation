@@ -166,9 +166,6 @@ async def run_agent(objective: str, workspace: Path, settings: Settings | None =
             control=control,
         )
         policy = PolicyEngine(cfg.control_root, workspace, allow_test_writes=cfg.allow_test_writes)
-        # Bind the deployment egress assertion to the same policy object used by
-        # the lower-level k6 runner so every workload path enforces it, including localhost.
-        setattr(policy, "k6_external_egress_enforced", cfg.k6_external_egress_enforced)
         runner = TestRunner(workspace, evidence, timeout_seconds=cfg.tool_timeout_seconds)
         services = RuntimeServices(
             workspace=workspace,
@@ -460,7 +457,7 @@ def determine_terminal_outcome(
         if not objective_bound:
             return (
                 TerminalStatus.NOT_VERIFIED,
-                "All current deterministic gates passed, but none was deterministically bound to the run objective; unrelated green checks cannot certify success.",
+                "Agent completed with passing deterministic checks, but no trusted validation was explicitly bound to the requested objective.",
             )
     if current_revision > 0:
         current_revision_results = [item for item in active if item.revision == current_revision]
