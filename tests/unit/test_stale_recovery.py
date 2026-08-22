@@ -4,12 +4,36 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 from ai_qa_automation.runtime.stale_recovery import recover_stale_mutation
 
 
 def write_runtime(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def stale_runtime_payload(
+    workspace: Path,
+    *,
+    relative_path: str,
+    existed: bool,
+    backup_path: str | None = None,
+    original_sha256: str | None = None,
+    fingerprint: str = "fp",
+) -> dict[str, object]:
+    return {
+        "workspace": str(workspace.resolve()),
+        "workspace_fingerprint": fingerprint,
+        "journal_event_count": 0,
+        "pending_mutation": {
+            "relative_path": relative_path,
+            "existed": existed,
+            "backup_path": backup_path,
+            "original_sha256": original_sha256,
+        },
+    }
 
 
 def test_stale_existing_file_mutation_is_restored_when_fingerprint_matches(tmp_path: Path) -> None:
@@ -27,17 +51,14 @@ def test_stale_existing_file_mutation_is_restored_when_fingerprint_matches(tmp_p
     backup.write_bytes(original)
     write_runtime(
         prior_run / "runtime.json",
-        {
-            "workspace": str(workspace.resolve()),
-            "workspace_fingerprint": "fp-after-mutation",
-            "journal_event_count": 0,
-            "pending_mutation": {
-                "relative_path": "tests/test_checkout.py",
-                "existed": True,
-                "backup_path": str(backup.resolve()),
-                "original_sha256": hashlib.sha256(original).hexdigest(),
-            },
-        },
+        stale_runtime_payload(
+            workspace,
+            relative_path="tests/test_checkout.py",
+            existed=True,
+            backup_path=str(backup.resolve()),
+            original_sha256=hashlib.sha256(original).hexdigest(),
+            fingerprint="fp-after-mutation",
+        ),
     )
 
     result = recover_stale_mutation(
@@ -76,16 +97,14 @@ def test_operator_edit_after_crash_blocks_automatic_rollback(tmp_path: Path) -> 
     backup.write_bytes(original)
     write_runtime(
         prior_run / "runtime.json",
-        {
-            "workspace": str(workspace.resolve()),
-            "workspace_fingerprint": "old-fingerprint",
-            "pending_mutation": {
-                "relative_path": "tests/test_checkout.py",
-                "existed": True,
-                "backup_path": str(backup.resolve()),
-                "original_sha256": hashlib.sha256(original).hexdigest(),
-            },
-        },
+        stale_runtime_payload(
+            workspace,
+            relative_path="tests/test_checkout.py",
+            existed=True,
+            backup_path=str(backup.resolve()),
+            original_sha256=hashlib.sha256(original).hexdigest(),
+            fingerprint="old-fingerprint",
+        ),
     )
 
     result = recover_stale_mutation(
@@ -113,16 +132,11 @@ def test_stale_unverified_new_file_is_removed(tmp_path: Path) -> None:
     prior_run = artifact_root / "run-old"
     write_runtime(
         prior_run / "runtime.json",
-        {
-            "workspace": str(workspace.resolve()),
-            "workspace_fingerprint": "fp",
-            "pending_mutation": {
-                "relative_path": "tests/test_generated.py",
-                "existed": False,
-                "backup_path": None,
-                "original_sha256": None,
-            },
-        },
+        stale_runtime_payload(
+            workspace,
+            relative_path="tests/test_generated.py",
+            existed=False,
+        ),
     )
 
     result = recover_stale_mutation(
@@ -135,6 +149,106 @@ def test_stale_unverified_new_file_is_removed(tmp_path: Path) -> None:
 
     assert result["status"] == "RECOVERED"
     assert not target.exists()
+
+
+def test_stale_recovery_rejects_symlinked_target_alias(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+    actual = workspace / "actual-tests"
+    actual.mkdir()
+    target = actual / "test_checkout.py"
+    target.write_text("mutated\n", encoding="utf-8")
+    alias = workspace / "tests"
+    try:
+        alias.symlink_to(actual, target_is_directory=True)
+    except OSError as exc:  # pragma: no cover - platform/filesystem capability
+        pytest.skip(f"symlink creation unavailable: {exc}")
+
+    prior_run = artifact_root / "run-old"
+    backup = prior_run / "rollback" / "checkout.bin"
+    backup.parent.mkdir(parents=True)
+    original = b"original\n"
+    backup.write_bytes(original)
+    write_runtime(
+        prior_run / "runtime.json",
+        stale_runtime_payload(
+            workspace,
+            relative_path="tests/test_checkout.py",
+            existed=True,
+            backup_path=str(backup.resolve()),
+            original_sha256=hashlib.sha256(original).hexdigest(),
+        ),
+    )
+
+    result = recover_stale_mutation(
+        artifact_root=artifact_root,
+        workspace=workspace,
+        previous_lease={"run_id": "run-old"},
+        current_workspace_fingerprint="fp",
+        recovering_run_id="run-new",
+    )
+
+    assert result["status"] == "BLOCKED"
+    assert "symlink" in result["reason"]
+    assert target.read_text(encoding="utf-8") == "mutated\n"
+    assert backup.exists()
+
+
+def test_stale_recovery_rejects_symlinked_rollback_backup(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+    target = workspace / "tests" / "test_checkout.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("mutated\n", encoding="utf-8")
+
+    prior_run = artifact_root / "run-old"
+    rollback = prior_run / "rollback"
+    rollback.mkdir(parents=True)
+    original = b"original\n"
+    actual_backup = rollback / "actual.bin"
+    actual_backup.write_bytes(original)
+    alias = rollback / "checkout.bin"
+    try:
+        alias.symlink_to(actual_backup)
+    except OSError as exc:  # pragma: no cover - platform/filesystem capability
+        pytest.skip(f"symlink creation unavailable: {exc}")
+    write_runtime(
+        prior_run / "runtime.json",
+        stale_runtime_payload(
+            workspace,
+            relative_path="tests/test_checkout.py",
+            existed=True,
+            backup_path=str(alias.absolute()),
+            original_sha256=hashlib.sha256(original).hexdigest(),
+        ),
+    )
+
+    result = recover_stale_mutation(
+        artifact_root=artifact_root,
+        workspace=workspace,
+        previous_lease={"run_id": "run-old"},
+        current_workspace_fingerprint="fp",
+        recovering_run_id="run-new",
+    )
+
+    assert result["status"] == "BLOCKED"
+    assert "symlink" in result["reason"]
+    assert target.read_text(encoding="utf-8") == "mutated\n"
+    assert actual_backup.exists()
+
+
+def test_previous_run_id_traversal_is_blocked(tmp_path: Path) -> None:
+    result = recover_stale_mutation(
+        artifact_root=tmp_path / "artifacts",
+        workspace=tmp_path / "sut",
+        previous_lease={"run_id": "../escape"},
+        current_workspace_fingerprint="fp",
+        recovering_run_id="run-new",
+    )
+    assert result["status"] == "BLOCKED"
+    assert "escapes trusted root" in result["reason"]
 
 
 def test_no_previous_lease_is_noop(tmp_path: Path) -> None:
