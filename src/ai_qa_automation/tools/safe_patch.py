@@ -38,12 +38,39 @@ class SafeTestPatcher:
     )
 
     def __init__(self, workspace: Path, policy: PolicyEngine) -> None:
-        self.workspace = workspace.resolve()
+        self.workspace = workspace.expanduser().resolve()
         self.policy = policy
 
     @staticmethod
     def sha256_text(text: str) -> str:
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def _resolve_owned_path(self, relative_path: str) -> tuple[Path, Path]:
+        """Resolve a mutation path without accepting traversal or symlink aliases.
+
+        RuntimeControl enforces the same ownership rule for live agent mutations.
+        Keeping the invariant here as well prevents direct library use from
+        weakening the filesystem boundary.
+        """
+
+        path = Path(relative_path)
+        if path.is_absolute() or not path.parts or ".." in path.parts:
+            raise PermissionError("mutation path must be a non-traversing relative workspace path")
+
+        cursor = self.workspace
+        for part in path.parts:
+            if part in {"", "."}:
+                continue
+            cursor = cursor / part
+            if cursor.is_symlink():
+                raise PermissionError("mutation path contains a symlink and has ambiguous ownership")
+
+        destination = (self.workspace / path).resolve()
+        try:
+            destination.relative_to(self.workspace)
+        except ValueError as exc:
+            raise PermissionError("mutation path escapes the target workspace") from exc
+        return path, destination
 
     def replace_once(
         self,
@@ -53,14 +80,15 @@ class SafeTestPatcher:
         old_text: str,
         new_text: str,
     ) -> PatchResult:
-        path = Path(relative_path)
+        path, destination = self._resolve_owned_path(relative_path)
         decision = self.policy.authorize_path(path, write=True)
         if decision.decision != ToolDecision.ALLOW:
             raise PermissionError(f"{decision.rule_id}: {decision.reason}")
 
-        destination = (self.workspace / path).resolve()
         if destination.suffix not in self._SUPPORTED_SUFFIXES:
-            raise PermissionError("safe test patching supports Python/JavaScript/TypeScript test files only")
+            raise PermissionError(
+                "safe test patching supports Python/JavaScript/TypeScript test files only"
+            )
         if not destination.is_file():
             raise FileNotFoundError(destination)
         if destination.stat().st_size > self._MAX_TEST_FILE_BYTES:
@@ -74,12 +102,13 @@ class SafeTestPatcher:
 
         updated = original.replace(old_text, new_text, 1)
         self._validate_python_quality(destination, original, updated)
+        normalized_relative = path.as_posix()
         diff = "".join(
             difflib.unified_diff(
                 original.splitlines(keepends=True),
                 updated.splitlines(keepends=True),
-                fromfile=f"a/{relative_path}",
-                tofile=f"b/{relative_path}",
+                fromfile=f"a/{normalized_relative}",
+                tofile=f"b/{normalized_relative}",
             )
         )
         violations = self.policy.validate_patch(diff)
@@ -88,7 +117,7 @@ class SafeTestPatcher:
 
         self._atomic_replace(destination, updated)
         return PatchResult(
-            path=relative_path,
+            path=normalized_relative,
             old_sha256=actual_sha,
             new_sha256=self.sha256_text(updated),
             diff=diff,
@@ -186,11 +215,10 @@ class SafeTestPatcher:
 
         if len(content.encode("utf-8")) > self._MAX_TEST_FILE_BYTES:
             raise ValueError(f"generated test exceeds {self._MAX_TEST_FILE_BYTES} byte limit")
-        path = Path(relative_path)
+        path, destination = self._resolve_owned_path(relative_path)
         decision = self.policy.authorize_path(path, write=True)
         if decision.decision != ToolDecision.ALLOW:
             raise PermissionError(f"{decision.rule_id}: {decision.reason}")
-        destination = (self.workspace / path).resolve()
         if destination.suffix not in self._SUPPORTED_SUFFIXES:
             raise PermissionError("generated tests support Python/JavaScript/TypeScript files only")
         if destination.exists():
@@ -217,7 +245,7 @@ class SafeTestPatcher:
         self._atomic_create(destination, content)
         digest = self.sha256_text(content)
         return PatchResult(
-            path=relative_path,
+            path=path.as_posix(),
             old_sha256="ABSENT",
             new_sha256=digest,
             diff=synthetic_diff,
