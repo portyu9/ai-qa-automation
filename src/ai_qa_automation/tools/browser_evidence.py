@@ -71,6 +71,8 @@ class BrowserProbe:
             return page.get_by_placeholder(spec.value, exact=True)
         if spec.strategy == "exact_text":
             return page.get_by_text(spec.value, exact=True)
+        if spec.strategy == "text":
+            return page.get_by_text(spec.value)
         if spec.strategy == "semantic_css":
             return page.locator(spec.value)
         raise ValueError(f"unsupported locator strategy: {spec.strategy}")
