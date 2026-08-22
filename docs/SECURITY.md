@@ -1,8 +1,8 @@
 # Security Architecture
 
-> **YP AI QA Automation Framework** · Designed and engineered by **Yunior Portal**
+> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
-Security controls in the YP AI QA Automation Framework are enforced in deterministic code in addition to model instructions. The design assumes the model can be confused by adversarial content and therefore does not make prompt compliance the primary security boundary.
+Security controls in the ƳƤ AI QA Automation Framework are enforced in deterministic code in addition to model instructions. The design assumes the model can be confused by adversarial content and therefore does not make prompt compliance the primary security boundary.
 
 ## Security principles
 
@@ -138,3 +138,5 @@ Follow the root [`SECURITY.md`](../SECURITY.md). Never include real credentials,
 ## Verification boundary
 
 Security architecture in source is an implementation claim. Current-head Bandit/dependency/secret scans, live credential handling, authenticated MCP behavior, infrastructure isolation, and organization security controls require actual execution/environment evidence before they can be represented as verified.
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
