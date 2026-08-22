@@ -33,6 +33,10 @@ class RegressionPrioritizer:
             raise ValueError("dependency_confidence must be a finite value between 0 and 1")
         if not math.isfinite(selection_threshold) or not 0.0 <= selection_threshold <= 1.0:
             raise ValueError("selection_threshold must be a finite value between 0 and 1")
+        ids = [candidate.test_id for candidate in candidates]
+        if len(ids) != len(set(ids)):
+            raise ValueError("regression candidate test_id values must be unique")
+
         broaden = dependency_confidence < 0.7
         if dependency_confidence < 0.5:
             threshold = 0.0  # very low confidence: select all candidates rather than risk an escape
