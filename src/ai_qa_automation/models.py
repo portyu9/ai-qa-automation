@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class FrozenModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
 
 class TerminalStatus(StrEnum):
@@ -279,7 +279,7 @@ class ArtifactRecord(FrozenModel):
 
 
 class AgentRunState(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     run_id: str = Field(default_factory=lambda: f"run-{uuid4().hex[:12]}")
     session_id: str = Field(default_factory=lambda: f"session-{uuid4().hex[:10]}")
