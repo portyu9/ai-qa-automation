@@ -27,6 +27,7 @@ _MAX_OUTPUT_BYTES = 16_000_000
 _READ_CHUNK_BYTES = 64 * 1024
 _DRAIN_JOIN_SECONDS = 2.0
 _WINDOWS_NEW_PROCESS_GROUP = 0x00000200
+_WINDOWS_DEFAULT_PATHEXT = ".COM;.EXE;.BAT;.CMD"
 
 
 @dataclass(frozen=True)
@@ -66,8 +67,23 @@ class _TailBuffer:
         return f"...[output truncated to last {self.limit} bytes]...\n{rendered}"
 
 
+def _assert_executable_file(path: Path, *, env: Mapping[str, str]) -> None:
+    if os.name == "nt":
+        raw_pathext = env.get("PATHEXT") or _WINDOWS_DEFAULT_PATHEXT
+        allowed_suffixes = {
+            suffix.casefold()
+            for suffix in raw_pathext.split(os.pathsep)
+            if suffix.strip()
+        }
+        if path.suffix.casefold() not in allowed_suffixes:
+            raise PermissionError(f"subprocess executable has an unsupported Windows suffix: {path}")
+        return
+    if not os.access(path, os.X_OK):
+        raise PermissionError(f"subprocess executable is not executable: {path}")
+
+
 def resolve_executable(executable: str, *, env: Mapping[str, str]) -> str:
-    """Resolve a subprocess executable to one existing absolute regular file.
+    """Resolve a subprocess executable to one existing absolute executable file.
 
     Named executables are resolved through the explicitly supplied subprocess PATH,
     then bound to the resulting absolute path before process creation. Relative paths
@@ -100,6 +116,7 @@ def resolve_executable(executable: str, *, env: Mapping[str, str]) -> str:
 
     if not resolved.is_file():
         raise FileNotFoundError(f"subprocess executable is not a regular file: {resolved}")
+    _assert_executable_file(resolved, env=env)
     return str(resolved)
 
 
@@ -145,7 +162,11 @@ def _spawn_process(
     )
 
 
-def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
+def _terminate_process_tree(
+    process: subprocess.Popen[bytes],
+    *,
+    env: Mapping[str, str],
+) -> None:
     """Best-effort bounded termination of the validator process tree."""
     if os.name != "nt":
         try:
@@ -159,9 +180,9 @@ def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
 
     # CREATE_NEW_PROCESS_GROUP above gives Windows taskkill a stable tree root.
     # Resolve taskkill to an absolute executable before invoking it so cleanup does
-    # not rely on partial-path process execution.
+    # not rely on partial-path process execution or a broader inherited environment.
     try:
-        taskkill = resolve_executable("taskkill", env=os.environ)
+        taskkill = resolve_executable("taskkill", env=env)
         cleanup = subprocess.run(  # noqa: S603 - resolved executable/fixed arguments, no shell
             [taskkill, "/PID", str(process.pid), "/T", "/F"],
             stdin=subprocess.DEVNULL,
@@ -169,6 +190,7 @@ def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
             stderr=subprocess.DEVNULL,
             timeout=5,
             check=False,
+            env=dict(env),
         )
     except (OSError, ValueError, subprocess.TimeoutExpired):
         cleanup = None
@@ -210,7 +232,7 @@ def run_bounded_subprocess(
 
     process = _spawn_process(command, cwd=cwd, env=env)
     if process.stdout is None or process.stderr is None:  # pragma: no cover - Popen contract
-        _terminate_process_tree(process)
+        _terminate_process_tree(process, env=env)
         process.wait()
         raise RuntimeError("subprocess pipes were not created")
 
@@ -236,13 +258,13 @@ def run_bounded_subprocess(
         process.wait(timeout=float(timeout_seconds))
     except subprocess.TimeoutExpired:
         timed_out = True
-        _terminate_process_tree(process)
+        _terminate_process_tree(process, env=env)
         process.wait()
     else:
         # The direct validator process exited. Clean up any background descendants
         # before waiting for pipe EOF; otherwise an inherited descriptor can keep
         # the drain threads blocked after the validator itself has finished.
-        _terminate_process_tree(process)
+        _terminate_process_tree(process, env=env)
     finally:
         stdout_thread.join(timeout=_DRAIN_JOIN_SECONDS)
         stderr_thread.join(timeout=_DRAIN_JOIN_SECONDS)
