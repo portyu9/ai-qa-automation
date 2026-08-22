@@ -139,7 +139,7 @@ def test_symlink_escape_cannot_be_used_as_mutation_path(tmp_path: Path) -> None:
     except OSError as exc:  # pragma: no cover - platform/filesystem capability
         pytest.skip(f"symlink creation unavailable: {exc}")
 
-    with pytest.raises(MutationPendingError, match="escapes"):
+    with pytest.raises(MutationPendingError, match="symlink"):
         control.prepare_mutation("tests/test_escape.py")
 
     assert control.pending_mutation is None
@@ -159,7 +159,7 @@ def test_existing_symlink_target_is_rejected_even_when_link_stays_inside_workspa
     except OSError as exc:  # pragma: no cover - platform/filesystem capability
         pytest.skip(f"symlink creation unavailable: {exc}")
 
-    with pytest.raises(MutationPendingError, match="regular file"):
+    with pytest.raises(MutationPendingError, match="symlink"):
         control.prepare_mutation("tests/linked.py")
 
     assert control.pending_mutation is None
