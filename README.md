@@ -6,8 +6,7 @@
 
 A production-oriented AI quality engineering control system that gives an LLM room to reason while keeping **authorization, evidence, mutation, and success under deterministic software authority**.
 
-> [!IMPORTANT]
-> **Reasoning is advisory. Evidence is observed. Authority is deterministic. Success is earned.**
+> **Core invariant — Reasoning is advisory. Evidence is observed. Authority is deterministic. Success is earned.**
 >
 > Claude may interpret observations, form hypotheses, rank risk, and choose among authorized actions. Controlled tools collect facts and execute bounded operations. Deterministic policy decides what is allowed. Deterministic validation decides what is proven.
 
@@ -34,8 +33,9 @@ A production-oriented AI quality engineering control system that gives an LLM ro
 
 **On this page:** [Engineering thesis](#engineering-thesis) · [Architecture](#architecture-at-a-glance) · [Quick start](#quick-start) · [Control model](#production-control-model) · [Runtime truth](#runtime-result-contract) · [Safety boundaries](#safety-critical-boundaries) · [Evaluation](#evaluation-architecture) · [Documentation](#documentation-map)
 
-> [!TIP]
-> **Reviewing the engineering rather than installing it?** Read [Architecture](docs/ARCHITECTURE.md) → [Runtime Result Contract](docs/RESULT_CONTRACT.md) → [Runtime Control](docs/RUNTIME_CONTROL.md) → [Security](docs/SECURITY.md) → [Technical Walkthrough](docs/TECHNICAL_WALKTHROUGH.md). The [documentation hub](docs/README.md) provides additional role-specific paths.
+> **Suggested review path**
+>
+> Read [Architecture](docs/ARCHITECTURE.md) → [Runtime Result Contract](docs/RESULT_CONTRACT.md) → [Runtime Control](docs/RUNTIME_CONTROL.md) → [Security](docs/SECURITY.md) → [Technical Walkthrough](docs/TECHNICAL_WALKTHROUGH.md). The [documentation hub](docs/README.md) provides additional role-specific paths.
 
 ---
 
@@ -61,7 +61,8 @@ That separation of powers is the central design decision. Agentic testing become
 | **Mutation** | When may automated code changes persist? | path ownership, rollback transaction, revision-bound validation closure |
 | **Outcome** | What may be called successful? | deterministic validation lineage and terminal evaluation |
 
-> [!NOTE]
+> **Design consequence**
+>
 > The architecture is intentionally asymmetric: **uncertainty reduces authority**. Missing evidence does not become green. Ambiguous ownership does not become permission. Incomplete validation does not become success.
 
 ### What the architecture is designed to prevent
@@ -126,7 +127,8 @@ flowchart LR
 | **External providers** | approved transport/provider; returned content remains untrusted | GitHub MCP, Atlassian Rovo MCP |
 | **Deployment infrastructure** | independent enforcement boundary | process/container isolation, egress, identity, secrets, retention, devices, real targets |
 
-> [!WARNING]
+> **Deployment boundary**
+>
 > Application-layer safeguards are defense in depth. Process isolation, network egress, secret management, provider identity, retention, devices, and real target environments remain deployment-owned controls.
 
 Deep dives: [Architecture](docs/ARCHITECTURE.md) · [Runtime Control](docs/RUNTIME_CONTROL.md) · [Security](docs/SECURITY.md) · [Threat Model](docs/THREAT_MODEL.md)
@@ -217,7 +219,8 @@ The framework exposes 18 purpose-built in-process tools:
 | Mobile | Appium runtime/capability inspection |
 | Performance | controlled k6 execution and deterministic threshold assessment |
 
-> [!NOTE]
+> **Authority boundary**
+>
 > **Library capability is not runtime authority.** Reusable patching components may validate Python/JavaScript/TypeScript test artifacts, while live autonomous mutation remains Python/pytest-backed because that is the language path with deterministic commit closure.
 
 There is intentionally **no generic existing-test rewrite tool** in the live agent surface.
@@ -282,7 +285,8 @@ The framework distinguishes **terminal outcomes**, **validation outcomes**, and 
 
 For pytest, exit `0` can support `PASS`, exit `1` represents an observed test failure, and timeout/interruption/usage/internal/no-tests/integrity failures remain `NOT_VERIFIED` rather than being mislabeled as SUT defects.
 
-> [!IMPORTANT]
+> **Terminal truth boundary**
+>
 > A model result subtype of `success` is only an input to terminal evaluation. It is never sufficient to produce framework `SUCCESS` on its own. An unrelated green check is also insufficient: trusted deterministic validation must be bound to the run objective and, for mutation, to the exact revision and subject.
 
 For revision supersession, provider-health semantics, conflicting evidence, and complete closure rules, see the authoritative [Runtime Result Contract](docs/RESULT_CONTRACT.md).
@@ -374,7 +378,8 @@ See [Change Intelligence](docs/CHANGE_INTELLIGENCE.md).
 | **External MCP** | explicit vendor integrations only; conservative action authorization; provider results sanitized; error-shaped results cannot become successful remote evidence |
 | **Persistence** | confined run roots; bounded state/runtime/manifest/journal/artifacts; immutable evidence identities; hash verification; symlink ownership rejection |
 
-> [!CAUTION]
+> **Load-test boundary**
+>
 > For k6, static JavaScript inspection is deliberately **not** treated as a network sandbox. The application requires independent infrastructure-level egress enforcement even for localhost targets.
 
 See [Security Architecture](docs/SECURITY.md), [Threat Model](docs/THREAT_MODEL.md), and [Verification Boundaries](docs/VERIFICATION_BOUNDARIES.md).
@@ -414,7 +419,8 @@ ai-qa attest artifacts/run-<id>
 ai-qa contract-diff --baseline old-openapi.yaml --current new-openapi.yaml
 ```
 
-> [!CAUTION]
+> **Attestation boundary**
+>
 > Content-addressed integrity proves byte relationships, not actor identity, notarization, compliance certification, a trusted timestamp, business correctness, or test success.[^integrity]
 
 See [Traceability and Run Attestation](docs/TRACEABILITY.md).
