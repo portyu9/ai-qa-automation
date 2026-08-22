@@ -93,11 +93,18 @@ def retry_decision(
     state: AgentRunState,
     retry_limit: int,
     pending_mutation: bool,
+    provider_request_started: bool,
 ) -> SDKRetryDecision:
     if state.retry_count >= retry_limit:
         return SDKRetryDecision(False, "retry_budget", "bounded SDK retry budget exhausted")
     if not sdk_exception_is_transient(exc):
         return SDKRetryDecision(False, "non_transient", "SDK failure is not classified as transient")
+    if provider_request_started:
+        return SDKRetryDecision(
+            False,
+            "provider_request_started",
+            "provider query submission already started; replay safety and provider-side cost cannot be proven",
+        )
     if state.iteration != 0:
         return SDKRetryDecision(
             False,
@@ -124,8 +131,8 @@ def retry_decision(
         )
     return SDKRetryDecision(
         True,
-        "transient_pre_activity",
-        "transient SDK failure occurred before any observable agent/tool activity",
+        "transient_session_start",
+        "transient SDK failure occurred before provider query submission or any agent/tool activity",
     )
 
 
