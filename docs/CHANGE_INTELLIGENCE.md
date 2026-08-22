@@ -8,7 +8,7 @@ Change intelligence is deterministic bootstrap evidence. Claude can interpret it
 
 ## Why merge-base awareness matters
 
-A feature branch can be perfectly clean and still contain substantial committed changes relative to `main`. Looking only at `git status` would miss that risk entirely.
+A feature branch can be perfectly clean and still contain substantial committed changes relative to `main`. Looking only at worktree cleanliness would miss that risk entirely.
 
 When an explicit trusted baseline is provided, the runtime models the effective delta as:
 
