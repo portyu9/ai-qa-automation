@@ -1,8 +1,8 @@
 # Threat Model
 
-> **YP AI QA Automation Framework** · Designed and engineered by **Yunior Portal**
+> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
-This threat model assumes the YP AI QA Automation Framework can encounter malicious or misleading content in the target repository, rendered application, test output, API responses, and external engineering systems. The design therefore treats **prompt injection and model error as expected threat inputs**, not exceptional events.
+This threat model assumes the ƳƤ AI QA Automation Framework can encounter malicious or misleading content in the target repository, rendered application, test output, API responses, and external engineering systems. The design therefore treats **prompt injection and model error as expected threat inputs**, not exceptional events.
 
 ## Security objective
 
@@ -108,3 +108,5 @@ Application-level allowlists and flags are defense in depth; they must not be do
 A material newly discovered threat should produce a concrete artifact: a narrower policy, safer tool contract, regression/security test, adversarial evaluation, or an explicit environment boundary. “Tell Claude not to do it” is insufficient when the behavior can be enforced deterministically.
 
 See [`SECURITY.md`](SECURITY.md), [`ARCHITECTURE.md`](ARCHITECTURE.md), and [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md).
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
