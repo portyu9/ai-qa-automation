@@ -95,8 +95,6 @@ def retry_decision(
     pending_mutation: bool,
     provider_request_started: bool,
 ) -> SDKRetryDecision:
-    if state.retry_count >= retry_limit:
-        return SDKRetryDecision(False, "retry_budget", "bounded SDK retry budget exhausted")
     if not sdk_exception_is_transient(exc):
         return SDKRetryDecision(False, "non_transient", "SDK failure is not classified as transient")
     if provider_request_started:
@@ -129,6 +127,8 @@ def retry_decision(
             "pending_mutation",
             "a mutation transaction is pending; replay is forbidden",
         )
+    if state.retry_count >= retry_limit:
+        return SDKRetryDecision(False, "retry_budget", "bounded SDK retry budget exhausted")
     return SDKRetryDecision(
         True,
         "transient_session_start",
