@@ -5,6 +5,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from ai_qa_automation import telemetry
 from ai_qa_automation.runtime import journal as journal_module
 from ai_qa_automation.runtime.journal import RunJournal
@@ -163,3 +165,124 @@ def test_journal_projects_metrics_only_after_durable_event_and_metrics_are_fail_
         "events": 4,
         "head_hash": second_hash,
     }
+
+
+class _ExplodingSpanContext:
+    def __enter__(self) -> object:
+        return object()
+
+    def __exit__(self, *_args: object) -> bool:
+        raise RuntimeError("trace exporter unavailable")
+
+
+class _ExplodingExitTracer:
+    def start_as_current_span(self, _name: str) -> _ExplodingSpanContext:
+        return _ExplodingSpanContext()
+
+
+class _ExplodingStartTracer:
+    def start_as_current_span(self, _name: str) -> object:
+        raise RuntimeError("trace provider unavailable")
+
+
+def test_provider_acquisition_failures_are_fail_soft(monkeypatch: Any) -> None:
+    from opentelemetry import metrics, trace
+
+    monkeypatch.setattr(trace, "get_tracer", _raise_metrics_unavailable)
+    monkeypatch.setattr(metrics, "get_meter", _raise_metrics_unavailable)
+    telemetry._metric_instruments.cache_clear()
+
+    assert telemetry.get_tracer() is None
+    assert telemetry.get_meter() is None
+    telemetry.record_run_metrics(terminal_status="SUCCESS", duration_seconds=1.0, tool_calls=1)
+    telemetry.record_tool_event("mcp__qa__run_pytest", "succeeded")
+    telemetry.record_policy_denial("runtime_budget")
+    telemetry.record_mcp_outcome("github", "AVAILABLE")
+
+    telemetry._metric_instruments.cache_clear()
+
+    monkeypatch.setattr(telemetry, "_metric_instruments", _raise_metrics_unavailable)
+    telemetry.record_run_metrics(terminal_status="SUCCESS", duration_seconds=1.0, tool_calls=1)
+    telemetry.record_tool_event("mcp__qa__run_pytest", "succeeded")
+    telemetry.record_policy_denial("runtime_budget")
+    telemetry.record_mcp_outcome("github", "AVAILABLE")
+
+
+def test_trace_start_failure_yields_no_span_without_blocking_runtime(monkeypatch: Any) -> None:
+    monkeypatch.setattr(telemetry, "get_tracer", lambda: _ExplodingStartTracer())
+
+    reached = False
+    with telemetry.trace_span("runtime") as span:
+        assert span is None
+        reached = True
+
+    assert reached is True
+
+
+def test_trace_exit_failure_never_masks_runtime_outcome(monkeypatch: Any) -> None:
+    monkeypatch.setattr(telemetry, "get_tracer", lambda: _ExplodingExitTracer())
+
+    with telemetry.trace_span("successful-runtime") as span:
+        assert span is not None
+
+    with pytest.raises(ValueError, match="runtime failure"):
+        with telemetry.trace_span("failed-runtime"):
+            raise ValueError("runtime failure")
+
+
+def test_emit_event_is_fail_soft_for_logging_and_metric_provider_failure(monkeypatch: Any) -> None:
+    class _ExplodingLogger:
+        def info(self, _message: str) -> None:
+            raise RuntimeError("logging handler unavailable")
+
+    monkeypatch.setattr(telemetry, "record_run_metrics", _raise_metrics_unavailable)
+
+    telemetry.emit_event(
+        _ExplodingLogger(),
+        "agent_run_finished",
+        run_id="run-sensitive-correlation",
+        terminal_status="FAILURE",
+        duration_seconds=1.0,
+        tool_calls=2,
+    )
+
+
+def test_trace_helper_failure_itself_is_fail_soft(monkeypatch: Any) -> None:
+    monkeypatch.setattr(telemetry, "get_tracer", _raise_metrics_unavailable)
+
+    with telemetry.trace_span("runtime") as span:
+        assert span is None
+
+
+def test_emit_event_is_fail_soft_for_hostile_field_rendering() -> None:
+    class _BadString:
+        def __str__(self) -> str:
+            raise RuntimeError("untrusted string rendering failed")
+
+    telemetry.emit_event(
+        logging.getLogger("telemetry-hostile-rendering"),
+        "event",
+        value=_BadString(),
+    )
+
+
+def test_metric_label_rendering_failure_falls_back_to_bounded_values(monkeypatch: Any) -> None:
+    class _BadString:
+        def __str__(self) -> str:
+            raise RuntimeError("untrusted metric label rendering failed")
+
+    instruments = _fake_instruments()
+    monkeypatch.setattr(telemetry, "_metric_instruments", lambda: instruments)
+    bad: Any = _BadString()
+
+    telemetry.record_run_metrics(terminal_status=bad)
+    telemetry.record_tool_event(bad, bad)
+    telemetry.record_policy_denial(bad)
+    telemetry.record_mcp_outcome(bad, bad)
+
+    assert instruments["runs"].calls == [(1, {"terminal.status": "NOT_VERIFIED"})]
+    assert instruments["tool_events"].calls == []
+    assert instruments["policy_denials"].calls == [(1, {"policy.category": "other"})]
+    assert instruments["mcp_outcomes"].calls == [
+        (1, {"mcp.provider": "other", "mcp.outcome": "FAILED"})
+    ]
