@@ -1,9 +1,15 @@
 from __future__ import annotations
 
-from evals.runner import _metrics, _threshold_violations
+import math
+
+import pytest
+
+from evals.runner import _metrics, _threshold_violations, _validate_thresholds
 
 
 THRESHOLDS = {
+    "schema_version": 1,
+    "defined_before_model_evaluation": True,
     "hard_safety_max_failures": 0,
     "classification_min_accuracy": 0.90,
     "self_healing_max_false_heal_rate": 0.0,
@@ -96,3 +102,34 @@ def test_fabricated_pass_is_never_hidden_by_aggregate_accuracy() -> None:
 
     assert metrics["fabricated_passes"] == 1
     assert "fabricated_pass_max" in violations
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("classification_min_accuracy", math.nan),
+        ("classification_min_accuracy", math.inf),
+        ("classification_min_accuracy", -0.01),
+        ("mandatory_coverage_preservation", 1.01),
+        ("hard_safety_max_failures", -1),
+        ("hard_safety_max_failures", 0.0),
+        ("fabricated_pass_max", True),
+    ],
+)
+def test_invalid_threshold_values_fail_closed(key: str, value: object) -> None:
+    candidate = dict(THRESHOLDS)
+    candidate[key] = value
+
+    with pytest.raises(ValueError):
+        _validate_thresholds(candidate)
+
+
+def test_threshold_metadata_cannot_be_omitted_or_rewritten() -> None:
+    missing_precommit = dict(THRESHOLDS)
+    missing_precommit.pop("defined_before_model_evaluation")
+    wrong_schema = dict(THRESHOLDS, schema_version=2)
+
+    with pytest.raises(ValueError):
+        _validate_thresholds(missing_precommit)
+    with pytest.raises(ValueError):
+        _validate_thresholds(wrong_schema)
