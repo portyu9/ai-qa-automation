@@ -8,7 +8,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from .execution_env import restricted_subprocess_env, run_bounded_subprocess
+from .execution_env import resolve_executable, restricted_subprocess_env, run_bounded_subprocess
 
 _SAFE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@{}~^:+-]{0,255}$")
 _HEX_SHA = re.compile(r"^[0-9a-fA-F]{40,64}$")
@@ -308,9 +308,17 @@ class RepositoryInspector:
             env = restricted_subprocess_env(
                 home=Path(temp_home), extra={"GIT_CONFIG_NOSYSTEM": "1"}
             )
+            git_executable = resolve_executable("git", env=env)
             try:
                 result = subprocess.run(
-                    ["git", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", *args],
+                    [
+                        git_executable,
+                        "-c",
+                        "core.fsmonitor=false",
+                        "-c",
+                        "core.untrackedCache=false",
+                        *args,
+                    ],
                     cwd=self.workspace,
                     text=False,
                     capture_output=True,
