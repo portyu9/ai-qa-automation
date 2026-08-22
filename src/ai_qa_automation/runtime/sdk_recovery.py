@@ -60,15 +60,15 @@ def _exception_leaves(exc: BaseException) -> Iterable[BaseException]:
 
 
 def _leaf_is_transient(exc: BaseException) -> bool:
-    if isinstance(exc, ConnectionError):
-        return True
-    if isinstance(exc, TimeoutError):
-        return True
-
     type_name = type(exc).__name__
     text = f"{type_name}: {exc}".casefold()
+
+    # Strong non-retryable semantics dominate wrapper/base transport types.
+    # Authentication/configuration/schema/local-process failures must fail closed.
     if any(marker in text for marker in _NON_RETRYABLE_MARKERS):
         return False
+    if isinstance(exc, ConnectionError | TimeoutError):
+        return True
     if type_name in _RETRYABLE_TYPE_NAMES:
         return True
     return any(marker in text for marker in _RETRYABLE_MARKERS)
@@ -138,4 +138,8 @@ def retry_delay_seconds(
     """Deterministic bounded exponential backoff; retry_number is 1-based."""
     if retry_number < 1:
         raise ValueError("retry_number must be >= 1")
+    if base_seconds <= 0 or max_seconds <= 0:
+        raise ValueError("retry backoff values must be positive")
+    if max_seconds < base_seconds:
+        raise ValueError("max_seconds must be greater than or equal to base_seconds")
     return min(float(max_seconds), float(base_seconds) * (2 ** (retry_number - 1)))
