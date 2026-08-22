@@ -48,3 +48,18 @@ def test_hook_blocks_release_and_security_governance_mutation() -> None:
         "pyproject.toml",
     ):
         _assert_governance_path_denied(path)
+
+
+def test_policy_guard_internal_parse_failure_uses_blocking_exit_code() -> None:
+    result = subprocess.run(
+        [sys.executable, str(HOOK)],
+        input="{malformed-json",
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert "SEC-HOOK-001" in result.stderr
+    assert "malformed-json" not in result.stderr
