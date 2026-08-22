@@ -1,12 +1,12 @@
 # Limitations and Non-Claims
 
-> **YP AI QA Automation Framework** · Designed and engineered by **Yunior Portal**
+> **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
-This document is intentionally explicit about what the YP AI QA Automation Framework **does not prove**. The framework's evidence-first design applies to its own documentation: implemented code, configuration, tests, and workflows are not represented as successful execution unless matching evidence exists.
+This document is intentionally explicit about what the ƳƤ AI QA Automation Framework **does not prove**. The framework's evidence-first design applies to its own documentation: implemented code, configuration, tests, and workflows are not represented as successful execution unless matching evidence exists.
 
 ## Current framework boundary
 
-The YP AI QA Automation Framework is a production-shaped agentic quality engineering system. The current repository head is **not production-release verified** until the applicable deterministic, security, browser, model, integration, and environment gates are actually executed and inspected.
+The ƳƤ AI QA Automation Framework is a production-shaped agentic quality engineering system. The current repository head is **not production-release verified** until the applicable deterministic, security, browser, model, integration, and environment gates are actually executed and inspected.
 
 Historical successful checks are useful prior evidence, not a release certificate for later commits.
 
@@ -204,3 +204,5 @@ At minimum, a real production deployment must provide current evidence for all a
 Anything excluded from that deployment should remain visibly `NOT_VERIFIED`, `NOT_CONFIGURED`, or `ENVIRONMENT_REQUIRED` rather than being implied by adjacent green checks.
 
 See [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md), [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md), [`SETUP.md`](SETUP.md), and [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md).
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
