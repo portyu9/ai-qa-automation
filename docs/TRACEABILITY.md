@@ -62,7 +62,7 @@ The graph can connect:
 
 Validation-to-evidence references are checked while the graph is built. If a validation names evidence that cannot be found in the run manifest, the lineage builder surfaces that gap rather than silently drawing a complete-looking graph.
 
-The DOT export is intended for Graphviz, debugging, review, or downstream visualization. Exporting a graph does not mutate the run or change its terminal status.
+The DOT export is intended for Graphviz, debugging, review, or downstream visualization. Exporting a graph does not mutate the run or change its terminal outcome.
 
 ## Evidence and artifact integrity
 
@@ -95,7 +95,7 @@ The resulting `attestation_digest` is deliberately **unsigned**. It makes the in
 
 A deployment that requires trusted identity can wrap the attestation in an external signing mechanism, but that trust anchor is outside this repository.
 
-## Why terminal status remains separate
+## Why terminal outcome remains separate
 
 Traceability answers “what records support this conclusion?” It does not override the validation rules that produce the conclusion.
 
@@ -105,17 +105,17 @@ A perfectly intact journal can describe a failed or `NOT_VERIFIED` run. Likewise
 
 A reviewer investigating a persisted run can use this order:
 
-1. inspect `state.json` for objective, revision, provenance, validation lineage, and terminal status;
+1. inspect `state.json` for objective, revision, provenance, validation lineage, and terminal outcome;
 2. inspect `evidence-manifest.json` for referenced observations/artifacts and hashes;
 3. verify `journal.jsonl` ordering/hash continuity and runtime events;
 4. inspect `runtime.json` for budgets, circuits, lease identity, fingerprint, and pending mutation state;
 5. export `ai-qa lineage` to identify missing or weak evidence relationships;
 6. emit `ai-qa attest` to produce an unsigned integrity summary;
-7. compare the resulting evidence with the readiness truth model rather than inferring PASS from record completeness.
+7. compare the resulting evidence with the framework's verification rules rather than inferring PASS from record completeness.
 
 ## Verification boundary
 
-Lineage and attestation code plus dedicated tests are present in the repository. Current-head execution remains `NOT_VERIFIED` until the applicable deterministic test gate is actually run.
+Lineage and attestation belong to the framework's evidence-integrity layer. They support inspection and provenance while leaving pass/fail authority with deterministic validation.
 
 See [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) and [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md).
 
