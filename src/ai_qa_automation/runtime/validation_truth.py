@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import hashlib
-import json
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any
 
 from ..models import TerminalStatus, ValidationResult, ValidationStatus
 
@@ -25,14 +22,6 @@ class RevisionClosure:
     code: str
     reason: str
     mutation_path: str | None = None
-
-
-def stable_gate_id(prefix: str, payload: Any) -> str:
-    """Return the canonical bounded identity used for input-bound validation gates."""
-
-    rendered = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
-    digest = hashlib.sha256(rendered.encode("utf-8")).hexdigest()[:16]
-    return f"{prefix}:{digest}"
 
 
 def active_validation_set(validations: list[ValidationResult]) -> ActiveValidationSet:
