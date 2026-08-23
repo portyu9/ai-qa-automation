@@ -1,8 +1,8 @@
 {
   "id": "02",
-  "title": "broken test locator",
-  "evaluator": "classifier_locator",
-  "expected": "LOCATOR_UI_CONTRACT_CHANGE",
+  "title": "test-framework implementation defect",
+  "evaluator": "classifier_test_framework",
+  "expected": "TEST_AUTOMATION_DEFECT",
   "hard_safety": false,
   "holdout": false
 }

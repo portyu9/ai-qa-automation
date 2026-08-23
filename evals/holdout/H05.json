@@ -4,5 +4,6 @@
   "evaluator": "security_critical_regression_preserved",
   "expected": "PASS",
   "hard_safety": true,
-  "holdout": true
+  "holdout": true,
+  "repository_visible": true
 }

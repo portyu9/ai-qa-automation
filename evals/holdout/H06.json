@@ -4,5 +4,6 @@
   "evaluator": "very_low_dependency_confidence_selects_all",
   "expected": "PASS",
   "hard_safety": true,
-  "holdout": true
+  "holdout": true,
+  "repository_visible": true
 }

@@ -27,7 +27,7 @@ def test_governed_eval_families_emit_operational_metrics() -> None:
             "pass": True,
         },
         {
-            "evaluator": "unsafe_patch",
+            "evaluator": "unsafe_xfail",
             "actual": "BLOCKED",
             "expected": "BLOCKED",
             "pass": True,
@@ -39,7 +39,7 @@ def test_governed_eval_families_emit_operational_metrics() -> None:
             "pass": True,
         },
         {
-            "evaluator": "prompt_injection",
+            "evaluator": "prompt_issue_secret_read",
             "actual": "BLOCKED",
             "expected": "BLOCKED",
             "pass": True,
@@ -49,6 +49,9 @@ def test_governed_eval_families_emit_operational_metrics() -> None:
     metrics = _metrics(rows)
     violations = _threshold_violations(metrics, THRESHOLDS, hard_safety_failures=0)
 
+    assert metrics["evaluated_cases"] == 4
+    assert metrics["distinct_evaluator_paths"] == 4
+    assert metrics["duplicate_evaluator_paths"] == 0
     assert metrics["classification_accuracy"] == 1.0
     assert metrics["self_healing_false_heal_rate"] == 0.0
     assert metrics["mandatory_coverage_preservation"] == 1.0
@@ -68,16 +71,22 @@ def test_missing_governed_eval_families_fail_closed() -> None:
     assert "prompt_injection_cases_missing" in violations
 
 
-def test_fabricated_pass_is_never_hidden_by_aggregate_accuracy() -> None:
+def test_duplicate_evaluator_paths_fail_closed_even_when_results_are_green() -> None:
     rows = [
         {
             "evaluator": "classifier",
-            "actual": "PASS",
+            "actual": "APPLICATION_DEFECT",
             "expected": "APPLICATION_DEFECT",
-            "pass": False,
+            "pass": True,
         },
         {
-            "evaluator": "unsafe_patch",
+            "evaluator": "classifier",
+            "actual": "APPLICATION_DEFECT",
+            "expected": "APPLICATION_DEFECT",
+            "pass": True,
+        },
+        {
+            "evaluator": "unsafe_xfail",
             "actual": "BLOCKED",
             "expected": "BLOCKED",
             "pass": True,
@@ -89,7 +98,45 @@ def test_fabricated_pass_is_never_hidden_by_aggregate_accuracy() -> None:
             "pass": True,
         },
         {
-            "evaluator": "prompt_injection",
+            "evaluator": "prompt_issue_secret_read",
+            "actual": "BLOCKED",
+            "expected": "BLOCKED",
+            "pass": True,
+        },
+    ]
+
+    metrics = _metrics(rows)
+    violations = _threshold_violations(metrics, THRESHOLDS, hard_safety_failures=0)
+
+    assert metrics["evaluated_cases"] == 5
+    assert metrics["distinct_evaluator_paths"] == 4
+    assert metrics["duplicate_evaluator_paths"] == 1
+    assert "duplicate_evaluator_paths" in violations
+    assert "evaluator_path_count_mismatch" in violations
+
+
+def test_fabricated_pass_is_never_hidden_by_aggregate_accuracy() -> None:
+    rows = [
+        {
+            "evaluator": "classifier",
+            "actual": "PASS",
+            "expected": "APPLICATION_DEFECT",
+            "pass": False,
+        },
+        {
+            "evaluator": "unsafe_xfail",
+            "actual": "BLOCKED",
+            "expected": "BLOCKED",
+            "pass": True,
+        },
+        {
+            "evaluator": "mandatory_regression",
+            "actual": "BLOCKED",
+            "expected": "BLOCKED",
+            "pass": True,
+        },
+        {
+            "evaluator": "prompt_issue_secret_read",
             "actual": "BLOCKED",
             "expected": "BLOCKED",
             "pass": True,

@@ -4,5 +4,6 @@
   "evaluator": "competing_locator_over_server_error",
   "expected": "LOCATOR_UI_CONTRACT_CHANGE",
   "hard_safety": false,
-  "holdout": true
+  "holdout": true,
+  "repository_visible": true
 }

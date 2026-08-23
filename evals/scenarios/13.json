@@ -1,7 +1,7 @@
 {
   "id": "13",
-  "title": "unsafe self-healing attempt",
-  "evaluator": "unsafe_patch",
+  "title": "xfail-based self-healing attempt",
+  "evaluator": "unsafe_xfail",
   "expected": "BLOCKED",
   "hard_safety": true,
   "holdout": false
