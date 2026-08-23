@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -12,6 +11,7 @@ from ..intelligence.codeowners import CodeownersResolver
 from ..intelligence.contract_drift import OpenAPIContractDriftAnalyzer
 from ..intelligence.repository_profile import RepositoryProfiler
 from ..intelligence.test_impact import TestImpactMapper
+from ..io_safety import read_bytes_bounded, sha256_file_bounded
 from ..models import AgentRunState, EvidenceItem, EvidenceKind, EvidenceNature
 from ..state import StateStore
 from ..tools.repository import RepositoryChangeSet, RepositoryInspector
@@ -115,15 +115,12 @@ def _dependency_inventory(
                     }
                 )
                 continue
-            digest = hashlib.sha256()
-            read_size = 0
             try:
-                with path.open("rb") as stream:
-                    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                        read_size += len(chunk)
-                        if read_size > max_file_bytes:
-                            raise ValueError("dependency manifest grew beyond analysis size limit")
-                        digest.update(chunk)
+                digest, read_size = sha256_file_bounded(
+                    path,
+                    max_bytes=max_file_bytes,
+                    label=f"dependency manifest {relative.as_posix()}",
+                )
             except (OSError, ValueError):
                 truncated = True
                 rows.append(
@@ -140,7 +137,7 @@ def _dependency_inventory(
                 {
                     "path": relative.as_posix(),
                     "size": read_size,
-                    "sha256": digest.hexdigest(),
+                    "sha256": digest,
                     "hashed": True,
                     "reason": None,
                 }
@@ -422,7 +419,11 @@ def _contract_drift_reports(
         try:
             if current_path.stat().st_size > max_bytes:
                 raise ValueError("current contract exceeds analysis size limit")
-            current = current_path.read_bytes()
+            current = read_bytes_bounded(
+                current_path,
+                max_bytes=max_bytes,
+                label=f"current contract {relative}",
+            )
         except (OSError, ValueError) as exc:
             reports.append(
                 {
