@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 from pydantic import ValidationError
 
-from ai_qa_automation.agent import _final_response, configuration_fingerprint, sdk_exception_outcome
+from ai_qa_automation.agent import (
+    _final_response,
+    _sync_operational_state,
+    configuration_fingerprint,
+    sdk_exception_outcome,
+)
 from ai_qa_automation.config import Settings
 from ai_qa_automation.models import (
     AgentRunState,
@@ -19,6 +25,7 @@ from ai_qa_automation.runtime.internal_tools import RuntimeServices, _change_rev
 from ai_qa_automation.runtime.journal import RunJournal
 from ai_qa_automation.runtime.run_control import RuntimeControl
 from ai_qa_automation.runtime.validation_truth import evaluate_revision_closure
+from ai_qa_automation.state import StateStore
 
 
 def _settings(tmp_path: Path, *, suffix: str) -> Settings:
@@ -76,6 +83,41 @@ def test_sdk_terminal_classification_is_explicit(
 
     assert status is expected
     assert type(exc).__name__ in reason
+
+
+def test_operational_state_persists_separately_from_qa_state(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    run_dir = tmp_path / "run"
+    state_path = run_dir / "state.json"
+    runtime_path = run_dir / "runtime.json"
+    state = AgentRunState(objective="state separation", workspace=str(workspace))
+    store = StateStore(state_path)
+    control = RuntimeControl(
+        workspace=workspace,
+        budget=ExecutionBudget(
+            max_tool_calls=4,
+            max_network_calls=2,
+            max_mutations=1,
+            max_wall_seconds=60,
+        ),
+        journal=RunJournal(run_dir / "journal.jsonl"),
+        metadata_path=runtime_path,
+        lease_id="lease",
+        max_repeated_action=2,
+    )
+    control.budget.charge_tool()
+
+    _sync_operational_state(state, store, control)
+
+    persisted_state = json.loads(state_path.read_text(encoding="utf-8"))
+    persisted_runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
+    assert "runtime_budget" not in persisted_state
+    assert "open_circuits" not in persisted_state
+    assert "pending_mutation" not in persisted_state
+    assert persisted_runtime["budget"]["tool_calls"] == 1
+    assert persisted_runtime["open_circuits"] == []
+    assert persisted_runtime["pending_mutation"] is None
 
 
 def _validation(
