@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
-from .run_control import RuntimeControl
+from .run_control import CircuitOpenError, RuntimeControl
 
 
-class RepeatedActionError(RuntimeError):
-    """Raised when one identical authorized request exceeds its bounded repetition budget."""
+class RepeatedActionError(CircuitOpenError):
+    """Raised when one identical request exceeds its bounded repetition budget."""
 
 
 @dataclass
@@ -40,7 +41,7 @@ class CoherentRuntimeControl(RuntimeControl):
             self.repeated_action_counts[key] = seen + 1
             self.persist()
 
-    def snapshot(self, *, include_pending_details: bool = False) -> dict[str, object]:
+    def snapshot(self, *, include_pending_details: bool = False) -> dict[str, Any]:
         with self._lock:
             payload = super().snapshot(include_pending_details=include_pending_details)
             payload["max_repeated_action"] = self.max_repeated_action
