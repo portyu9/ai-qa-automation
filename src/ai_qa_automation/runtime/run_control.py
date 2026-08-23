@@ -201,7 +201,12 @@ class RuntimeControl:
                 _atomic_write_bytes(target, data)
             else:
                 target.unlink(missing_ok=True)
-                fsync_directory(target.parent)
+                # A prepared new-file mutation may be cancelled before its parent
+                # directory or target is ever created. In that case no directory entry
+                # changed, so there is nothing to flush. If the parent exists, fsync it
+                # to durably persist removal of an actually-created target.
+                if target.parent.is_dir():
+                    fsync_directory(target.parent)
 
             # The target bytes are now restored/removed. Persist closure before deleting
             # the rollback snapshot. If metadata persistence fails, keep the transaction
