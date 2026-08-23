@@ -7,12 +7,13 @@ from pathlib import Path
 
 import pytest
 
+import ai_qa_automation.runtime.journal as journal_module
 import ai_qa_automation.runtime.stale_recovery as stale_recovery_module
 import ai_qa_automation.tools.repository as repository_module
 from ai_qa_automation.evidence import EvidenceStore
 from ai_qa_automation.io_safety import read_bytes_bounded, sha256_file_bounded
 from ai_qa_automation.models import AgentRunState, EvidenceItem, EvidenceKind, EvidenceNature
-from ai_qa_automation.runtime.budget import ExecutionBudget
+from ai_qa_automation.runtime.budget import BudgetExceededError, ExecutionBudget
 from ai_qa_automation.runtime.journal import RunJournal
 from ai_qa_automation.runtime.run_control import MutationPendingError, RuntimeControl
 from ai_qa_automation.runtime.stale_recovery import recover_stale_mutation
@@ -64,8 +65,9 @@ def test_state_store_concurrent_saves_leave_one_complete_valid_state(tmp_path: P
         list(pool.map(store.save, states))
 
     loaded = store.load()
-    assert loaded.run_id in {item.run_id for item in states}
-    assert loaded.objective in {item.objective for item in states}
+    assert (loaded.run_id, loaded.objective) in {
+        (item.run_id, item.objective) for item in states
+    }
     assert not list((tmp_path / "run").glob(".state.json.*.tmp"))
 
 
@@ -109,6 +111,22 @@ def test_run_journal_concurrent_append_remains_linear_and_verifiable(tmp_path: P
     assert journal.event_count == 100
 
 
+def test_run_journal_byte_budget_fails_closed_before_append(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(journal_module, "_MAX_JOURNAL_BYTES", 320)
+    journal = RunJournal(tmp_path / "journal.jsonl", max_events=20)
+    journal.append("event", payload="small")
+    before = (tmp_path / "journal.jsonl").read_bytes()
+
+    with pytest.raises(BudgetExceededError, match="byte budget"):
+        journal.append("event", payload="x" * 300)
+
+    assert (tmp_path / "journal.jsonl").read_bytes() == before
+    assert journal.verify()["valid"] is True
+
+
 def test_runtime_control_allows_only_one_concurrent_pending_mutation(tmp_path: Path) -> None:
     control = _runtime_control(tmp_path)
     paths = ["tests/test_a.py", "tests/test_b.py"]
@@ -146,6 +164,21 @@ def test_failed_lease_metadata_parse_releases_os_lock(tmp_path: Path) -> None:
     # Clearing the corrupt bytes is an operator repair. A second acquisition must
     # succeed immediately; otherwise the failed first acquisition leaked its lock.
     first.path.write_text("", encoding="utf-8")
+    second = WorkspaceLease(artifact_root, workspace, "run-b").acquire()
+    second.release()
+
+
+def test_invalid_utf8_lease_metadata_fails_closed_and_releases_lock(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+    first = WorkspaceLease(artifact_root, workspace, "run-a")
+    first.path.write_bytes(b"\xff\xfe\xfd")
+
+    with pytest.raises(OSError, match="valid UTF-8"):
+        first.acquire()
+
+    first.path.write_bytes(b"")
     second = WorkspaceLease(artifact_root, workspace, "run-b").acquire()
     second.release()
 
