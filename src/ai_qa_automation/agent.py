@@ -406,7 +406,9 @@ def validate_runtime_roots(
     ]
     missing = [str(path.relative_to(control)) for path in required if not path.is_file()]
     if missing:
-        raise ValueError("control_root is missing trusted runtime configuration: " + ", ".join(missing))
+        raise ValueError(
+            "control_root is missing trusted runtime configuration: " + ", ".join(missing)
+        )
 
 
 def _paths_overlap(left: Path, right: Path) -> bool:
