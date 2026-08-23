@@ -37,6 +37,12 @@ from .telemetry import emit_event, trace_span
 from .tools.repository import RepositoryInspector
 from .tools.test_execution import TestRunner
 
+_DEFAULT_LIMITATIONS = [
+    "A model response is not a test result; only deterministic validations can produce verified success.",
+    "External MCP capability remains NOT_VERIFIED unless authenticated and exercised in this environment.",
+    "Crash recovery verifies persisted state/journal integrity and starts a new model session; it does not replay a prior conversation.",
+]
+
 
 async def run_agent(
     objective: str,
@@ -361,11 +367,11 @@ async def run_agent(
                     )
                     journal.try_append("rollback_failed", error_type=type(rollback_exc).__name__)
             state.phase = "TERMINAL"
-            state.duration_seconds = max(0.0, time.monotonic() - started)
+            state.duration = max(0.0, time.monotonic() - started)
             journal.try_append(
                 "agent_run_finished",
                 terminal_status=state.terminal_status.value,
-                duration_seconds=state.duration_seconds,
+                duration_seconds=state.duration,
                 tool_calls=state.tool_call_count,
             )
             _sync_operational_state(state, state_store, control)
@@ -374,7 +380,7 @@ async def run_agent(
                 "agent_run_finished",
                 run_id=state.run_id,
                 terminal_status=state.terminal_status.value,
-                duration_seconds=round(state.duration_seconds, 3),
+                duration_seconds=round(state.duration, 3),
                 tool_calls=state.tool_call_count,
             )
     finally:
@@ -471,8 +477,12 @@ def _final_response(
     agent_result: str,
     limitations: list[str] | None = None,
 ) -> dict[str, Any]:
+    resolved_limitations = list(_DEFAULT_LIMITATIONS)
+    for limitation in limitations or []:
+        if limitation not in resolved_limitations:
+            resolved_limitations.append(limitation)
     return {
-        "report": build_final_report(state, limitations=limitations).model_dump(mode="json"),
+        "report": build_final_report(state, limitations=resolved_limitations).model_dump(mode="json"),
         "agent_result": agent_result,
         "provenance": {
             "run_id": state.run_id,
