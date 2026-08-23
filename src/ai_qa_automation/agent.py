@@ -17,13 +17,11 @@ from .policy import PolicyEngine
 from .reporting import build_final_report
 from .runtime.bootstrap import bootstrap_runtime_context
 from .runtime.budget import BudgetExceededError, ExecutionBudget
-from .runtime.coherent_control import CoherentRuntimeControl
-from .runtime.coherent_hooks import build_hooks
 from .runtime.internal_tools import build_internal_mcp_server
 from .runtime.journal import RunJournal
 from .runtime.live_services import LiveRuntimeServices
 from .runtime.run_control import RuntimeControl
-from .runtime.runtime_hooks import build_permission_handler
+from .runtime.runtime_hooks import build_hooks, build_permission_handler
 from .runtime.sdk_recovery import (
     SDKRetryDecision,
     retry_decision,
@@ -87,7 +85,7 @@ async def run_agent(
         max_events=max(1000, cfg.max_tool_calls * 50),
     )
     lease = WorkspaceLease(artifact_root, workspace, state.run_id)
-    control = CoherentRuntimeControl(
+    control = RuntimeControl(
         workspace=workspace,
         budget=budget,
         journal=journal,
