@@ -52,7 +52,7 @@ def open_regular_binary(path: Path, *, label: str) -> BinaryIO:
             # Platforms without O_NOFOLLOW still get a post-open ownership check.
             # Once this check passes, reads use the already-open descriptor rather
             # than resolving the path again.
-            current = os.stat(path, follow_symlinks=False)
+            current = path.stat(follow_symlinks=False)
             if stat.S_ISLNK(current.st_mode):
                 raise ValueError(f"{label} is a symlink and has ambiguous ownership")
             if (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino):
