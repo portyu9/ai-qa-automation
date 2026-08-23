@@ -151,9 +151,7 @@ def pretool_policy_output(
         if not current_snapshot.fingerprint_complete:
             reasons = ", ".join(current_snapshot.fingerprint_incomplete_reasons)
             state.terminal_status = TerminalStatus.BLOCKED
-            state.terminal_reason = (
-                "Mutation blocked because the workspace fingerprint cannot bind every changed subject"
-            )
+            state.terminal_reason = "Mutation blocked because the workspace fingerprint cannot bind every changed subject"
             control.journal.append(
                 "workspace_fingerprint_incomplete",
                 reasons=list(current_snapshot.fingerprint_incomplete_reasons),
@@ -173,7 +171,9 @@ def pretool_policy_output(
         expected = control.expected_workspace_fingerprint
         if expected is None:
             state.terminal_status = TerminalStatus.BLOCKED
-            state.terminal_reason = "Mutation blocked because no workspace fingerprint baseline exists"
+            state.terminal_reason = (
+                "Mutation blocked because no workspace fingerprint baseline exists"
+            )
             control.journal.append("workspace_drift_blocked", expected=None, actual=current)
             _checkpoint(state, state_store, control)
             return {
