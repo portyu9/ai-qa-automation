@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from ..io_safety import read_text_bounded, sha256_file_bounded
 from .journal import RunJournal
 
 _MAX_STATE_BYTES = 16_000_000
@@ -77,7 +78,7 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
         ),
         "journal.jsonl": (
             _file_digest(journal_path, max_bytes=_MAX_JOURNAL_BYTES)
-            if journal_path.is_file() and journal_path.stat().st_size <= _MAX_JOURNAL_BYTES
+            if journal_path.is_file()
             else None
         ),
     }
@@ -214,8 +215,13 @@ def _verify_manifest_artifacts(root: Path, manifest: dict[str, Any]) -> dict[str
                 "checked": checked,
                 "reason": f"registered artifact is missing: {relative_path}",
             }
-        size = path.stat().st_size
-        if size > _MAX_ARTIFACT_BYTES:
+        try:
+            actual_hash, size = sha256_file_bounded(
+                path,
+                max_bytes=_MAX_ARTIFACT_BYTES,
+                label=f"registered artifact {relative_path}",
+            )
+        except (OSError, ValueError):
             return {
                 "valid": False,
                 "checked": checked,
@@ -228,7 +234,6 @@ def _verify_manifest_artifacts(root: Path, manifest: dict[str, Any]) -> dict[str
                 "checked": checked,
                 "reason": "registered artifacts exceed cumulative attestation byte bound",
             }
-        actual_hash = _file_sha256(path)
         if expected_hash != f"sha256:{actual_hash}":
             return {
                 "valid": False,
@@ -240,27 +245,21 @@ def _verify_manifest_artifacts(root: Path, manifest: dict[str, Any]) -> dict[str
 
 
 def _load_object(path: Path, *, max_bytes: int) -> dict[str, Any]:
-    if path.stat().st_size > max_bytes:
-        raise ValueError(f"{path.name} exceeds attestation size bound")
-    value = json.loads(path.read_text(encoding="utf-8"))
+    value = json.loads(
+        read_text_bounded(path, max_bytes=max_bytes, label=f"attestation subject {path.name}")
+    )
     if not isinstance(value, dict):
         raise ValueError(f"{path.name} root must be an object")
     return value
 
 
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _file_digest(path: Path, *, max_bytes: int) -> dict[str, object]:
-    size = path.stat().st_size
-    if size > max_bytes:
-        raise ValueError(f"{path.name} exceeds attestation size bound")
-    return {"size": size, "sha256": _file_sha256(path)}
+    digest, size = sha256_file_bounded(
+        path,
+        max_bytes=max_bytes,
+        label=f"attestation subject {path.name}",
+    )
+    return {"size": size, "sha256": digest}
 
 
 def _hash_text(text: str) -> str:
