@@ -169,6 +169,8 @@ def _services(
         evidence=cast(Any, object()),
         policy=cast(Any, object()),
         test_runner=cast(Any, object()),
+        max_tool_calls=10,
+        max_repeated_action=3,
     )
 
 
