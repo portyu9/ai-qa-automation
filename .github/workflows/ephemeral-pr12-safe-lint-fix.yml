@@ -1,36 +1,37 @@
 name: Ephemeral PR 12 Safe Lint Fix
 
-# Temporary exact-source maintenance harness authorized by the repository owner.
-# Applies only selected Ruff safe fixes and validates before pushing.
+# Temporary PR-scoped maintenance harness authorized by the repository owner.
+# Uses the synchronized PR head as the immutable source for this run.
 on:
-  push:
+  pull_request:
     branches: [main]
-    paths:
-      - .github/workflows/ephemeral-pr12-safe-lint-fix.yml
+    types: [synchronize]
 
 permissions:
   contents: write
 
 env:
-  SOURCE_SHA: 872b3eae7fb47114ab1931a2b1c05eed80bb7ae9
   SOURCE_BRANCH: feature/observability-metrics-hardening
   PYTHONUNBUFFERED: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
 jobs:
   safe-fix:
+    if: github.event.pull_request.number == 12 && github.head_ref == 'feature/observability-metrics-hardening'
     name: Selected Ruff safe fixes with deterministic validation
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
     steps:
-      - name: Checkout exact source
+      - name: Checkout synchronized PR source
         uses: actions/checkout@v7
         with:
           ref: ${{ env.SOURCE_SHA }}
           fetch-depth: 1
           persist-credentials: true
 
-      - name: Verify immutable source and branch head
+      - name: Verify event source and live branch head
         shell: bash
         run: |
           set -euo pipefail
