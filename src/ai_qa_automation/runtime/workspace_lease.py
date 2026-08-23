@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 from uuid import uuid4
 
+from ..io_safety import fsync_directory
+
 
 class _MSVCRTLocking(Protocol):
     LK_NBLCK: int
@@ -41,7 +43,10 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
         lease_root = self.artifact_root / ".leases"
         if lease_root.is_symlink():
             raise OSError("workspace lease directory is a symlink and has ambiguous ownership")
+        lease_root_existed = lease_root.exists()
         lease_root.mkdir(parents=True, exist_ok=True)
+        if not lease_root_existed:
+            fsync_directory(self.artifact_root)
         self.path = lease_root / f"{key}.lock"
         if self.path.is_symlink():
             raise OSError("workspace lease file is a symlink and has ambiguous ownership")
@@ -84,6 +89,7 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
         return previous
 
     def acquire(self) -> WorkspaceLease:
+        file_existed = self.path.exists()
         stream = self._open_owned_stream()
         locked = False
         try:
@@ -111,6 +117,8 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             stream.write(rendered)
             stream.flush()
             os.fsync(stream.fileno())
+            if not file_existed:
+                fsync_directory(self.path.parent)
             self._stream = stream
             return self
         except Exception:
