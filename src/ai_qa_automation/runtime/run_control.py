@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from ..io_safety import read_bytes_bounded
+from ..io_safety import fsync_directory, read_bytes_bounded
 from .budget import BudgetExceededError, ExecutionBudget
 from .journal import RunJournal
 
@@ -201,6 +201,7 @@ class RuntimeControl:
                 _atomic_write_bytes(target, data)
             else:
                 target.unlink(missing_ok=True)
+                fsync_directory(target.parent)
 
             # The target bytes are now restored/removed. Persist closure before deleting
             # the rollback snapshot. If metadata persistence fails, keep the transaction
@@ -370,6 +371,7 @@ def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         temp.replace(path)
+        fsync_directory(path.parent)
     finally:
         temp.unlink(missing_ok=True)
 
@@ -384,5 +386,6 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         temp.replace(path)
+        fsync_directory(path.parent)
     finally:
         temp.unlink(missing_ok=True)
