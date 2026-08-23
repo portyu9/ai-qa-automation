@@ -8,7 +8,12 @@ from pydantic import ValidationError
 
 from ai_qa_automation.agent import _final_response, configuration_fingerprint, sdk_exception_outcome
 from ai_qa_automation.config import Settings
-from ai_qa_automation.models import AgentRunState, TerminalStatus, ValidationResult, ValidationStatus
+from ai_qa_automation.models import (
+    AgentRunState,
+    TerminalStatus,
+    ValidationResult,
+    ValidationStatus,
+)
 from ai_qa_automation.runtime.budget import ExecutionBudget
 from ai_qa_automation.runtime.internal_tools import RuntimeServices, _change_revision_closed
 from ai_qa_automation.runtime.journal import RunJournal
@@ -49,7 +54,9 @@ def test_final_response_always_carries_verification_boundaries(tmp_path: Path) -
     limitations = response["report"]["limitations"]
 
     assert any("model response is not a test result" in item.lower() for item in limitations)
-    assert any("external mcp capability remains not_verified" in item.lower() for item in limitations)
+    assert any(
+        "external mcp capability remains not_verified" in item.lower() for item in limitations
+    )
     assert any("does not replay a prior conversation" in item.lower() for item in limitations)
 
 
@@ -109,7 +116,9 @@ def _closed_checks(path: str = "tests/test_x.py") -> list[ValidationResult]:
     ]
 
 
-def _services(tmp_path: Path, checks: list[ValidationResult], *, revision: int = 1) -> RuntimeServices:
+def _services(
+    tmp_path: Path, checks: list[ValidationResult], *, revision: int = 1
+) -> RuntimeServices:
     state = AgentRunState(objective="closure", workspace=str(tmp_path), change_revision=revision)
     state.validation_results = checks
     return RuntimeServices(
