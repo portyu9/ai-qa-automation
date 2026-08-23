@@ -22,9 +22,12 @@ class StateStore:
         raw_parent = requested.parent
         if raw_parent.is_symlink():
             raise ValueError("state directory is a symlink and has ambiguous ownership")
+        parent_existed = raw_parent.exists()
         raw_parent.mkdir(parents=True, exist_ok=True)
         if raw_parent.is_symlink():
             raise ValueError("state directory became a symlink")
+        if not parent_existed:
+            fsync_directory(raw_parent.resolve().parent)
         self.path = raw_parent.resolve() / requested.name
         self._lock = threading.RLock()
         self._assert_owned()
