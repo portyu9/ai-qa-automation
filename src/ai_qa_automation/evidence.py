@@ -127,7 +127,9 @@ class EvidenceStore:
                     {
                         "evidence_id": safe_item.id,
                         "kind": safe_item.kind.value,
-                        "content_hash": self.hash_bytes(safe_item.model_dump_json().encode("utf-8")),
+                        "content_hash": self.hash_bytes(
+                            safe_item.model_dump_json().encode("utf-8")
+                        ),
                     },
                 )
                 self._flush_manifest()
@@ -163,7 +165,9 @@ class EvidenceStore:
             destination = self._owned_artifact_path(relative_path)
             destination.parent.mkdir(parents=True, exist_ok=True)
             if destination.exists():
-                raise FileExistsError(f"artifact path is immutable and already exists: {relative_path}")
+                raise FileExistsError(
+                    f"artifact path is immutable and already exists: {relative_path}"
+                )
             handle, raw_temp = tempfile.mkstemp(
                 dir=destination.parent, prefix=f".{destination.name}.", suffix=".artifact.tmp"
             )
