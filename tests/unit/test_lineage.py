@@ -142,20 +142,28 @@ def test_lineage_fails_closed_when_verified_journal_is_swapped_before_graphing(
     outside = tmp_path / "outside-journal.jsonl"
     outside.write_text('{"seq":1,"event":"forged"}\n', encoding="utf-8")
     real_verify = RunJournal.verify
+    verify_calls = 0
 
-    def verify_then_swap(self: RunJournal) -> dict[str, object]:
+    def verify_then_swap_on_lineage_check(self: RunJournal) -> dict[str, object]:
+        nonlocal verify_calls
+        verify_calls += 1
         result = real_verify(self)
-        self.path.unlink()
-        try:
-            self.path.symlink_to(outside)
-        except OSError as exc:  # pragma: no cover - platform/filesystem capability
-            pytest.skip(f"symlink creation unavailable: {exc}")
+        # RunJournal construction verifies once via _inspect_existing. Swap only
+        # after build_run_lineage performs its explicit second verification so the
+        # test exercises the final-component race immediately before graph-open.
+        if verify_calls == 2:
+            self.path.unlink()
+            try:
+                self.path.symlink_to(outside)
+            except OSError as exc:  # pragma: no cover - platform/filesystem capability
+                pytest.skip(f"symlink creation unavailable: {exc}")
         return result
 
-    monkeypatch.setattr(RunJournal, "verify", verify_then_swap)
+    monkeypatch.setattr(RunJournal, "verify", verify_then_swap_on_lineage_check)
 
     graph = build_run_lineage(run_dir)
 
+    assert verify_calls == 2
     assert not [node for node in graph.nodes if node.kind == "runtime_event"]
     assert "journal could not be graphed: ValueError" in graph.warnings
 
