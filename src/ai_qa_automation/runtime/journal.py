@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
+import stat
 from _thread import RLock
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from ..io_safety import fsync_directory
 from ..redaction import sanitize
 from ..telemetry import (
     record_mcp_outcome,
@@ -132,14 +135,37 @@ class RunJournal:
             rendered_bytes = rendered.encode("utf-8")
             if len(rendered_bytes) > _MAX_JOURNAL_LINE_BYTES:
                 raise ValueError("run-journal event exceeds line-size bound")
-            existing_size = self.path.stat().st_size if self.path.exists() else 0
-            if existing_size + len(rendered_bytes) > _MAX_JOURNAL_BYTES:
-                raise BudgetExceededError("run-journal byte budget exhausted")
-            with self.path.open("a", encoding="utf-8") as stream:
-                stream.write(rendered)
-                stream.flush()
-                if self.regulated_mode:
+
+            flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0)
+            nofollow = getattr(os, "O_NOFOLLOW", 0)
+            if nofollow:
+                flags |= nofollow
+            try:
+                fd = os.open(self.path, flags, 0o600)
+            except OSError as exc:
+                if nofollow and exc.errno == errno.ELOOP:
+                    raise RuntimeError(
+                        "run journal became a symlink during append and ownership is ambiguous"
+                    ) from exc
+                raise
+            try:
+                opened = os.fstat(fd)
+                if not stat.S_ISREG(opened.st_mode):
+                    raise RuntimeError("run journal must remain a regular file")
+                if opened.st_size + len(rendered_bytes) > _MAX_JOURNAL_BYTES:
+                    raise BudgetExceededError("run-journal byte budget exhausted")
+                with os.fdopen(fd, "a", encoding="utf-8") as stream:
+                    fd = -1
+                    stream.write(rendered)
+                    stream.flush()
+                    # Journal lineage is authority-bearing in every runtime mode.
+                    # Regulated mode may add policy, but durability is not optional.
                     os.fsync(stream.fileno())
+                if opened.st_size == 0:
+                    fsync_directory(self.path.parent)
+            finally:
+                if fd >= 0:
+                    os.close(fd)
             self._seq += 1
             self._head = record_hash
         if isinstance(safe_payload, dict):
