@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from ..io_safety import fsync_directory
+from ..io_safety import fsync_directory, open_regular_binary
 from ..redaction import sanitize
 from ..telemetry import (
     record_mcp_outcome,
@@ -191,7 +191,7 @@ class RunJournal:
             # Read byte-bounded lines so a corrupted or adversarial JSONL record cannot
             # turn recovery/attestation into an unbounded-memory or unbounded-I/O operation.
             restore_limit = max(self.max_events, _MAX_RESTORE_EVENTS)
-            with self.path.open("rb") as stream:
+            with open_regular_binary(self.path, label="run journal") as stream:
                 while True:
                     raw = stream.readline(_MAX_JOURNAL_LINE_BYTES + 1)
                     if not raw:
