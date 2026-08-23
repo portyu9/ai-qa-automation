@@ -23,6 +23,9 @@ def _load_msvcrt() -> _MSVCRTLocking:
     return cast(_MSVCRTLocking, importlib.import_module("msvcrt"))
 
 
+_MAX_LEASE_METADATA_BYTES = 64_000
+
+
 class WorkspaceBusyError(RuntimeError):
     """Raised when another agent process already holds the target-workspace lease."""
 
@@ -57,38 +60,61 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
         fd = os.open(self.path, flags, 0o600)
         return os.fdopen(fd, "r+", encoding="utf-8")
 
+    def _parse_previous_metadata(self, raw: str) -> dict[str, Any] | None:
+        normalized = raw.strip().strip("\0")
+        if not normalized:
+            return None
+        try:
+            previous = json.loads(normalized)
+        except json.JSONDecodeError as exc:
+            raise OSError("workspace lease metadata is corrupt; manual review is required") from exc
+        if not isinstance(previous, dict):
+            raise OSError("workspace lease metadata root must be an object")
+        previous_workspace = str(previous.get("workspace") or "")
+        previous_run_id = str(previous.get("run_id") or "")
+        previous_lease_id = str(previous.get("lease_id") or "")
+        if previous_workspace != str(self.workspace):
+            raise OSError("workspace lease metadata is bound to a different workspace")
+        if not previous_run_id or not previous_lease_id:
+            raise OSError("workspace lease metadata is incomplete; manual review is required")
+        return previous
+
     def acquire(self) -> WorkspaceLease:
         stream = self._open_owned_stream()
+        locked = False
         try:
             self._lock_stream(stream)
+            locked = True
+            stream.seek(0)
+            raw = stream.read(_MAX_LEASE_METADATA_BYTES + 1)
+            if len(raw.encode("utf-8")) > _MAX_LEASE_METADATA_BYTES:
+                raise OSError("workspace lease metadata exceeds bounded ingestion limit")
+            self.previous_metadata = self._parse_previous_metadata(raw)
+
+            metadata = {
+                "lease_id": self.lease_id,
+                "run_id": self.run_id,
+                "workspace": str(self.workspace),
+                "pid": os.getpid(),
+                "hostname": socket.gethostname(),
+                "acquired_at": datetime.now(UTC).isoformat(),
+            }
+            rendered = json.dumps(metadata, sort_keys=True)
+            if len(rendered.encode("utf-8")) > _MAX_LEASE_METADATA_BYTES:
+                raise OSError("workspace lease metadata exceeds persistence limit")
+            stream.seek(0)
+            stream.truncate(0)
+            stream.write(rendered)
+            stream.flush()
+            os.fsync(stream.fileno())
+            self._stream = stream
+            return self
         except Exception:
+            if locked:
+                with suppress(OSError):
+                    self._unlock_stream(stream)
             stream.close()
             raise
-        stream.seek(0)
-        raw = stream.read().strip().strip("\0")
-        if raw:
-            try:
-                previous = json.loads(raw)
-            except json.JSONDecodeError:
-                previous = None
-            self.previous_metadata = previous if isinstance(previous, dict) else None
-        else:
-            self.previous_metadata = None
-        metadata = {
-            "lease_id": self.lease_id,
-            "run_id": self.run_id,
-            "workspace": str(self.workspace),
-            "pid": os.getpid(),
-            "hostname": socket.gethostname(),
-            "acquired_at": datetime.now(UTC).isoformat(),
-        }
-        stream.seek(0)
-        stream.truncate(0)
-        stream.write(json.dumps(metadata, sort_keys=True))
-        stream.flush()
-        os.fsync(stream.fileno())
-        self._stream = stream
-        return self
 
     def release(self) -> None:
         if self._stream is None:
