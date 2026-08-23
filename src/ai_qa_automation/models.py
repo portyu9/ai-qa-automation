@@ -284,6 +284,7 @@ class AgentRunState(BaseModel):
     run_id: str = Field(default_factory=lambda: f"run-{uuid4().hex[:12]}")
     session_id: str = Field(default_factory=lambda: f"session-{uuid4().hex[:10]}")
     objective: str
+    objective_gate_id: str | None = Field(default=None, max_length=256)
     agent_version: str = "0.1.0"
     model_id: str = "not-invoked"
     sdk_version: str = "NOT_VERIFIED"
@@ -320,6 +321,16 @@ class AgentRunState(BaseModel):
     @classmethod
     def normalize_workspace(cls, value: str) -> str:
         return str(Path(value).expanduser())
+
+    @field_validator("objective_gate_id")
+    @classmethod
+    def normalize_objective_gate_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("objective_gate_id must not be empty when supplied")
+        return normalized
 
 
 class FinalAgentReport(FrozenModel):
