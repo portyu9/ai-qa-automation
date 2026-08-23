@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from .coherent_control import CoherentRuntimeControl
 from .internal_tools import RuntimeServices
@@ -24,7 +25,7 @@ class LiveRuntimeServices(RuntimeServices):
         if self.control is None:
             raise ValueError("live runtime services require RuntimeControl")
 
-    def consume(self, tool_name: str, tool_input: dict[str, object]) -> None:
+    def consume(self, tool_name: str, tool_input: dict[str, Any]) -> None:
         del tool_name, tool_input
         if self.control is None:  # pragma: no cover - guarded by __post_init__
             raise RuntimeError("live runtime services lost RuntimeControl")
