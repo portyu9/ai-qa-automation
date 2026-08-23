@@ -18,6 +18,7 @@ from ..telemetry import (
 from .budget import BudgetExceededError
 
 _MAX_JOURNAL_LINE_BYTES = 1_000_000
+_MAX_JOURNAL_BYTES = 64_000_000
 _MAX_RESTORE_EVENTS = 100_000
 
 
@@ -128,8 +129,12 @@ class RunJournal:
             rendered = (
                 json.dumps({**body, "record_hash": record_hash}, sort_keys=True, default=str) + "\n"
             )
-            if len(rendered.encode("utf-8")) > _MAX_JOURNAL_LINE_BYTES:
+            rendered_bytes = rendered.encode("utf-8")
+            if len(rendered_bytes) > _MAX_JOURNAL_LINE_BYTES:
                 raise ValueError("run-journal event exceeds line-size bound")
+            existing_size = self.path.stat().st_size if self.path.exists() else 0
+            if existing_size + len(rendered_bytes) > _MAX_JOURNAL_BYTES:
+                raise BudgetExceededError("run-journal byte budget exhausted")
             with self.path.open("a", encoding="utf-8") as stream:
                 stream.write(rendered)
                 stream.flush()
@@ -153,17 +158,21 @@ class RunJournal:
             self._assert_owned_path()
             previous: str | None = None
             count = 0
+            total_bytes = 0
             expected_seq = 1
             if not self.path.exists():
                 return {"valid": True, "events": 0, "head_hash": None}
             # Read byte-bounded lines so a corrupted or adversarial JSONL record cannot
-            # turn recovery/attestation into an unbounded-memory operation.
+            # turn recovery/attestation into an unbounded-memory or unbounded-I/O operation.
             restore_limit = max(self.max_events, _MAX_RESTORE_EVENTS)
             with self.path.open("rb") as stream:
                 while True:
                     raw = stream.readline(_MAX_JOURNAL_LINE_BYTES + 1)
                     if not raw:
                         break
+                    total_bytes += len(raw)
+                    if total_bytes > _MAX_JOURNAL_BYTES:
+                        return {"valid": False, "events": count, "head_hash": previous}
                     if len(raw) > _MAX_JOURNAL_LINE_BYTES:
                         return {"valid": False, "events": count, "head_hash": previous}
                     if not raw.strip():
