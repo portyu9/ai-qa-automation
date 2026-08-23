@@ -51,18 +51,23 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
             max_bytes=_MAX_RUNTIME_METADATA_BYTES,
             label="runtime.json",
         )
-    except OSError:
-        return {"recoverable": False, "reason": "runtime.json could not be read safely"}
     except UnicodeError:
         return {"recoverable": False, "reason": "runtime.json is not valid UTF-8"}
+    except OSError:
+        return {"recoverable": False, "reason": "runtime.json is unreadable"}
     except ValueError as exc:
-        if "exceeds" in str(exc):
+        message = str(exc)
+        if "exceeds" in message and "ingestion limit" in message:
             return {"recoverable": False, "reason": "runtime.json exceeds restore size bound"}
-        return {"recoverable": False, "reason": "runtime.json has invalid file ownership"}
+        return {
+            "recoverable": False,
+            "reason": "runtime.json ownership or file-type validation failed",
+        }
+
     try:
         raw_runtime = json.loads(rendered_runtime)
     except json.JSONDecodeError:
-        return {"recoverable": False, "reason": "runtime.json contains malformed JSON"}
+        return {"recoverable": False, "reason": "runtime.json is invalid JSON"}
     if not isinstance(raw_runtime, dict):
         return {"recoverable": False, "reason": "runtime.json root must be an object"}
     runtime_metadata: dict[str, Any] = raw_runtime
