@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from ..io_safety import read_text_bounded
 from ..models import ValidationStatus
 from ..state import StateStore
 from .journal import RunJournal
@@ -78,11 +79,15 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
         return {"recoverable": False, "reason": "journal hash chain is invalid"}
 
     try:
-        if runtime_path.stat().st_size > _MAX_RUNTIME_METADATA_BYTES:
-            return {"recoverable": False, "reason": "runtime.json exceeds restore size bound"}
-        raw_runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        return {"recoverable": False, "reason": "runtime.json is invalid"}
+        raw_runtime = json.loads(
+            read_text_bounded(
+                runtime_path,
+                max_bytes=_MAX_RUNTIME_METADATA_BYTES,
+                label="runtime.json",
+            )
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+        return {"recoverable": False, "reason": "runtime.json is invalid or exceeds restore bound"}
     if not isinstance(raw_runtime, dict):
         return {"recoverable": False, "reason": "runtime.json root must be an object"}
     runtime_metadata: dict[str, Any] = raw_runtime
