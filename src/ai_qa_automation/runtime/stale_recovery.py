@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from ..io_safety import read_bytes_bounded, read_text_bounded
+from ..io_safety import fsync_directory, read_bytes_bounded, read_text_bounded
 from .journal import RunJournal
 from .run_control import _atomic_write_bytes, atomic_write_json
 
@@ -206,6 +206,7 @@ def recover_stale_mutation(
         backup_to_cleanup = backup
     else:
         target.unlink(missing_ok=True)
+        fsync_directory(target.parent)
 
     # The restored target and rollback bytes intentionally coexist until runtime
     # metadata durably closes the pending transaction. If closure fails, preserve
