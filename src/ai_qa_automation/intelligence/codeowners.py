@@ -4,6 +4,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from ..io_safety import read_text_bounded
+
 _CODEOWNERS_LOCATIONS = (".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS")
 
 
@@ -64,10 +66,10 @@ class CodeownersResolver:
                 continue
             if path.is_symlink() or not path.is_file():
                 continue
-            if path.stat().st_size > max_bytes:
-                return cls((), source_path=relative, unsupported_patterns=("<file-too-large>",))
             try:
-                text = path.read_text(encoding="utf-8")
+                text = read_text_bounded(path, max_bytes=max_bytes, label="CODEOWNERS")
+            except ValueError:
+                return cls((), source_path=relative, unsupported_patterns=("<file-too-large>",))
             except (OSError, UnicodeError):
                 return cls((), source_path=relative, unsupported_patterns=("<unreadable>",))
             rules, unsupported = cls._parse(text)
