@@ -5,7 +5,12 @@ from typing import Any, cast
 
 import pytest
 
-from ai_qa_automation.models import AgentRunState, TerminalStatus, ValidationResult, ValidationStatus
+from ai_qa_automation.models import (
+    AgentRunState,
+    TerminalStatus,
+    ValidationResult,
+    ValidationStatus,
+)
 from ai_qa_automation.policy import PolicyEngine
 from ai_qa_automation.runtime.budget import ExecutionBudget
 from ai_qa_automation.runtime.coherent_control import CoherentRuntimeControl, RepeatedActionError
@@ -185,9 +190,7 @@ def test_sdk_tool_surface_exposes_only_configured_external_namespaces() -> None:
         "mcp__github",
     ]
 
-    assert sdk_allowed_tools(["mcp__qa__inspect_repository"], {}) == [
-        "mcp__qa__inspect_repository"
-    ]
+    assert sdk_allowed_tools(["mcp__qa__inspect_repository"], {}) == ["mcp__qa__inspect_repository"]
 
     with pytest.raises(ValueError, match="invalid trusted MCP server name"):
         sdk_allowed_tools([], {"bad__name?": object()})
