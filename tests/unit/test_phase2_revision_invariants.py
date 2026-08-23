@@ -5,15 +5,23 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from ai_qa_automation.models import AgentRunState, TerminalStatus, ValidationResult, ValidationStatus
-from ai_qa_automation.runtime.validation_truth import determine_terminal_outcome, evaluate_revision_closure
+from ai_qa_automation.models import (
+    AgentRunState,
+    TerminalStatus,
+    ValidationResult,
+    ValidationStatus,
+)
+from ai_qa_automation.runtime.validation_truth import (
+    determine_terminal_outcome,
+    evaluate_revision_closure,
+)
 
 
-def _passing_gate() -> ValidationResult:
+def _passing_gate(*, revision: int = 0) -> ValidationResult:
     return ValidationResult(
         name="pytest",
         gate_id="pytest:full",
-        revision=0,
+        revision=revision,
         status=ValidationStatus.PASS,
         summary="full pytest passed",
     )
@@ -51,3 +59,20 @@ def test_negative_revision_never_closes_or_promotes_terminal_success() -> None:
     )
     assert status is TerminalStatus.NOT_VERIFIED
     assert "revision is invalid" in reason.lower()
+
+
+def test_future_validation_revision_never_closes_or_promotes_success() -> None:
+    future_gate = _passing_gate(revision=1)
+
+    closure = evaluate_revision_closure([future_gate], current_revision=0)
+    assert closure.closed is False
+    assert closure.code == "future_validation_revision"
+
+    status, reason = determine_terminal_outcome(
+        "success",
+        [future_gate],
+        current_revision=0,
+        objective_gate_id="pytest:full",
+    )
+    assert status is TerminalStatus.NOT_VERIFIED
+    assert "ahead of canonical change revision" in reason.lower()
