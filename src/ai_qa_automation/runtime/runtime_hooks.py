@@ -33,8 +33,10 @@ from .run_control import (
     CircuitOpenError,
     MutationPendingError,
     PendingMutation,
+    RepeatedActionError,
     RuntimeControl,
 )
+from .validation_truth import evaluate_revision_closure
 
 _NETWORK_TOOLS = {
     "mcp__qa__probe_api",
@@ -60,6 +62,11 @@ def _checkpoint(
         state_store.save(state)
     if control is not None:
         control.persist()
+
+
+def _sync_tool_count(state: AgentRunState | None, control: RuntimeControl | None) -> None:
+    if state is not None and control is not None:
+        state.tool_call_count = control.budget.snapshot().tool_calls
 
 
 def _tool_response_failed(response: Any) -> bool:
@@ -156,38 +163,6 @@ def _bind_latest_targeted_pytest_to_pending_mutation(
         return
 
 
-def _revision_closed(state: AgentRunState, *, expected_path: str) -> bool:
-    if state.change_revision == 0:
-        return True
-    current = [item for item in state.validation_results if item.revision == state.change_revision]
-    patch_safety = any(
-        item.name == "test_patch_safety"
-        and item.details.get("path") == expected_path
-        and item.status.value == "PASS"
-        for item in current
-    )
-    targeted = any(
-        item.name == "pytest"
-        and item.status.value == "PASS"
-        and item.details.get("scope") == "targeted"
-        and _pytest_validation_targets_path(item, expected_path)
-        for item in current
-    )
-    regression = any(
-        item.name == "pytest"
-        and item.status.value == "PASS"
-        and item.details.get("scope") == "regression"
-        for item in current
-    )
-    return (
-        bool(current)
-        and all(item.status.value == "PASS" for item in current)
-        and patch_safety
-        and targeted
-        and regression
-    )
-
-
 def pretool_policy_output(
     policy: PolicyEngine,
     input_data: dict[str, Any],
@@ -196,20 +171,33 @@ def pretool_policy_output(
     state_store: StateStore | None = None,
     control: RuntimeControl | None = None,
 ) -> dict[str, Any]:
-    """Fail-closed policy + operational circuit breakers for every tool call."""
+    """Apply the one live request-budget/repetition/policy authority before execution."""
     tool_name = str(input_data.get("tool_name", ""))
     tool_input = input_data.get("tool_input") or {}
+    fingerprint = _input_fingerprint(tool_name, tool_input)
 
     try:
         if control is not None:
             control.budget.charge_tool()
-            control.before_tool(tool_name)
+            _sync_tool_count(state, control)
+            control.register_tool_request(tool_name, fingerprint)
             if tool_name in _NETWORK_TOOLS or tool_name.startswith(
                 ("mcp__github__", "mcp__atlassian__")
             ):
                 control.budget.charge_network()
             if tool_name in _MUTATION_TOOLS:
                 control.budget.charge_mutation()
+    except RepeatedActionError as exc:
+        if control is not None:
+            control.journal.append("repetition_denied", tool_name=tool_name, reason=str(exc))
+        _checkpoint(state, state_store, control)
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": f"runtime-repetition: {exc}",
+            }
+        }
     except CircuitOpenError as exc:
         if control is not None:
             control.journal.append("circuit_denied", tool_name=tool_name, reason=str(exc))
@@ -240,7 +228,7 @@ def pretool_policy_output(
         control.journal.append(
             "tool_requested",
             tool_name=tool_name,
-            input_hash=_input_fingerprint(tool_name, tool_input),
+            input_hash=fingerprint,
         )
 
     if tool_name in _MUTATION_TOOLS and state is not None and control is not None:
@@ -308,6 +296,9 @@ def pretool_policy_output(
             }
 
     decision = policy.authorize_tool(tool_name, tool_input)
+    if state is not None:
+        state.policy_decisions.append(decision)
+
     if decision.decision.value == "ALLOW":
         if tool_name in _MUTATION_TOOLS and control is not None:
             try:
@@ -472,10 +463,12 @@ def posttool_policy_output(
         elif tool_name == "mcp__qa__run_pytest" and not failed and state is not None:
             if control.pending_mutation is not None:
                 _bind_latest_targeted_pytest_to_pending_mutation(state, control)
-                if _revision_closed(
-                    state,
+                closure = evaluate_revision_closure(
+                    state.validation_results,
+                    current_revision=state.change_revision,
                     expected_path=control.pending_mutation.relative_path,
-                ):
+                )
+                if closure.closed:
                     control.commit_pending_mutation()
                     control.set_workspace_fingerprint(
                         RepositoryInspector(control.workspace).snapshot().fingerprint
@@ -558,6 +551,8 @@ def build_hooks(
     state_store: StateStore | None = None,
     control: RuntimeControl | None = None,
 ) -> dict[HookEvent, list[HookMatcher]]:
+    """Build the single live hook surface for policy, execution control, and provenance."""
+
     async def pre_tool_use(
         input_data: HookInput,
         _tool_use_id: str | None,
@@ -605,11 +600,10 @@ def build_hooks(
             ),
         )
 
-    hooks: dict[HookEvent, list[HookMatcher]] = {
+    return {
         "PreToolUse": [HookMatcher(matcher=None, hooks=[pre_tool_use], timeout=10)],
         "PostToolUse": [HookMatcher(matcher=None, hooks=[post_tool_use], timeout=10)],
         "PostToolUseFailure": [
             HookMatcher(matcher=None, hooks=[post_tool_use_failure], timeout=10)
         ],
     }
-    return hooks
