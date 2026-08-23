@@ -8,6 +8,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from ..io_safety import open_regular_binary
 from .execution_env import resolve_executable, restricted_subprocess_env, run_bounded_subprocess
 
 _SAFE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@{}~^:+-]{0,255}$")
@@ -284,7 +285,10 @@ class RepositoryInspector:
             size = 0
             exceeded: str | None = None
             try:
-                with candidate.open("rb") as stream:
+                with open_regular_binary(
+                    candidate,
+                    label=f"workspace fingerprint subject {relative}",
+                ) as stream:
                     for chunk in iter(lambda: stream.read(1024 * 1024), b""):
                         size += len(chunk)
                         if size > _MAX_FINGERPRINT_FILE_BYTES:
@@ -297,6 +301,10 @@ class RepositoryInspector:
             except OSError:
                 file_rows.append({"path": relative, "state": "unreadable"})
                 incomplete_reasons.add("changed-file-unreadable")
+                continue
+            except ValueError:
+                file_rows.append({"path": relative, "state": "ownership-ambiguous"})
+                incomplete_reasons.add("changed-path-ownership-ambiguous")
                 continue
             if exceeded is not None:
                 file_rows.append({"path": relative, "state": exceeded, "size_read": size})
