@@ -64,6 +64,54 @@ jobs:
       - name: Apply only reviewed exact repairs
         run: python .pr12-maintenance/.github/pr12-remediate.py
 
+      - name: Apply final reviewed simplification repairs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_exact(path_s: str, old: str, new: str) -> None:
+              path = Path(path_s)
+              text = path.read_text(encoding="utf-8")
+              observed = text.count(old)
+              if observed != 1:
+                  raise SystemExit(
+                      f"refusing ambiguous final repair in {path}: expected 1 occurrence, "
+                      f"found {observed}: {old!r}"
+                  )
+              path.write_text(text.replace(old, new), encoding="utf-8")
+
+          replace_exact(
+              "src/ai_qa_automation/intelligence/quality_review.py",
+              "    if isinstance(node, ast.Compare) and len(node.ops) == 1 and len(node.comparators) == 1:\n"
+              "        if isinstance(node.ops[0], (ast.Eq, ast.Is, ast.GtE, ast.LtE)):\n"
+              "            return ast.dump(node.left, include_attributes=False) == ast.dump(\n"
+              "                node.comparators[0], include_attributes=False\n"
+              "            )",
+              "    if (\n"
+              "        isinstance(node, ast.Compare)\n"
+              "        and len(node.ops) == 1\n"
+              "        and len(node.comparators) == 1\n"
+              "        and isinstance(node.ops[0], (ast.Eq, ast.Is, ast.GtE, ast.LtE))\n"
+              "    ):\n"
+              "        return ast.dump(node.left, include_attributes=False) == ast.dump(\n"
+              "            node.comparators[0], include_attributes=False\n"
+              "        )",
+          )
+          replace_exact(
+              "tests/unit/test_telemetry.py",
+              "    with pytest.raises(ValueError, match=\"runtime failure\"):\n"
+              "        with telemetry.trace_span(\"failed-runtime\"):\n"
+              "            raise ValueError(\"runtime failure\")",
+              "    with (\n"
+              "        pytest.raises(ValueError, match=\"runtime failure\"),\n"
+              "        telemetry.trace_span(\"failed-runtime\"),\n"
+              "    ):\n"
+              "        raise ValueError(\"runtime failure\")",
+          )
+          PY
+
       - name: Apply only Ruff-declared safe cleanup and canonical formatting
         shell: bash
         run: |
