@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
-import threading
+import stat
+from _thread import RLock
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from ..io_safety import fsync_directory, open_regular_binary
 from ..redaction import sanitize
 from ..telemetry import (
     record_mcp_outcome,
@@ -18,6 +21,7 @@ from ..telemetry import (
 from .budget import BudgetExceededError
 
 _MAX_JOURNAL_LINE_BYTES = 1_000_000
+_MAX_JOURNAL_BYTES = 64_000_000
 _MAX_RESTORE_EVENTS = 100_000
 
 
@@ -91,16 +95,18 @@ class RunJournal:
         self.path = raw_parent.resolve() / requested.name
         self.regulated_mode = regulated_mode
         self.max_events = max_events
-        self._lock = threading.Lock()
+        self._lock = RLock()
         self._seq, self._head = self._inspect_existing()
 
     @property
     def event_count(self) -> int:
-        return self._seq
+        with self._lock:
+            return self._seq
 
     @property
     def head_hash(self) -> str | None:
-        return self._head
+        with self._lock:
+            return self._head
 
     def _assert_owned_path(self) -> None:
         if self.path.parent.is_symlink():
@@ -126,13 +132,40 @@ class RunJournal:
             rendered = (
                 json.dumps({**body, "record_hash": record_hash}, sort_keys=True, default=str) + "\n"
             )
-            if len(rendered.encode("utf-8")) > _MAX_JOURNAL_LINE_BYTES:
+            rendered_bytes = rendered.encode("utf-8")
+            if len(rendered_bytes) > _MAX_JOURNAL_LINE_BYTES:
                 raise ValueError("run-journal event exceeds line-size bound")
-            with self.path.open("a", encoding="utf-8") as stream:
-                stream.write(rendered)
-                stream.flush()
-                if self.regulated_mode:
+
+            flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0)
+            nofollow = getattr(os, "O_NOFOLLOW", 0)
+            if nofollow:
+                flags |= nofollow
+            try:
+                fd = os.open(self.path, flags, 0o600)
+            except OSError as exc:
+                if nofollow and exc.errno == errno.ELOOP:
+                    raise RuntimeError(
+                        "run journal became a symlink during append and ownership is ambiguous"
+                    ) from exc
+                raise
+            try:
+                opened = os.fstat(fd)
+                if not stat.S_ISREG(opened.st_mode):
+                    raise RuntimeError("run journal must remain a regular file")
+                if opened.st_size + len(rendered_bytes) > _MAX_JOURNAL_BYTES:
+                    raise BudgetExceededError("run-journal byte budget exhausted")
+                with os.fdopen(fd, "a", encoding="utf-8") as stream:
+                    fd = -1
+                    stream.write(rendered)
+                    stream.flush()
+                    # Journal lineage is authority-bearing in every runtime mode.
+                    # Regulated mode may add policy, but durability is not optional.
                     os.fsync(stream.fileno())
+                if opened.st_size == 0:
+                    fsync_directory(self.path.parent)
+            finally:
+                if fd >= 0:
+                    os.close(fd)
             self._seq += 1
             self._head = record_hash
         if isinstance(safe_payload, dict):
@@ -147,43 +180,50 @@ class RunJournal:
         return True
 
     def verify(self) -> dict[str, Any]:
-        self._assert_owned_path()
-        previous: str | None = None
-        count = 0
-        expected_seq = 1
-        if not self.path.exists():
-            return {"valid": True, "events": 0, "head_hash": None}
-        # Read byte-bounded lines so a corrupted or adversarial JSONL record cannot
-        # turn recovery/attestation into an unbounded-memory operation.
-        restore_limit = max(self.max_events, _MAX_RESTORE_EVENTS)
-        with self.path.open("rb") as stream:
-            while True:
-                raw = stream.readline(_MAX_JOURNAL_LINE_BYTES + 1)
-                if not raw:
-                    break
-                if len(raw) > _MAX_JOURNAL_LINE_BYTES:
-                    return {"valid": False, "events": count, "head_hash": previous}
-                if not raw.strip():
-                    continue
-                if count >= restore_limit:
-                    return {"valid": False, "events": count, "head_hash": previous}
-                try:
-                    record = json.loads(raw.decode("utf-8"))
-                    if not isinstance(record, dict):
+        with self._lock:
+            self._assert_owned_path()
+            previous: str | None = None
+            count = 0
+            total_bytes = 0
+            expected_seq = 1
+            if not self.path.exists():
+                return {"valid": True, "events": 0, "head_hash": None}
+            # Read byte-bounded lines so a corrupted or adversarial JSONL record cannot
+            # turn recovery/attestation into an unbounded-memory or unbounded-I/O operation.
+            restore_limit = max(self.max_events, _MAX_RESTORE_EVENTS)
+            with open_regular_binary(self.path, label="run journal") as stream:
+                while True:
+                    raw = stream.readline(_MAX_JOURNAL_LINE_BYTES + 1)
+                    if not raw:
+                        break
+                    total_bytes += len(raw)
+                    if total_bytes > _MAX_JOURNAL_BYTES:
                         return {"valid": False, "events": count, "head_hash": previous}
-                    if record.get("seq") != expected_seq:
+                    if len(raw) > _MAX_JOURNAL_LINE_BYTES:
                         return {"valid": False, "events": count, "head_hash": previous}
-                    body = {key: value for key, value in record.items() if key != "record_hash"}
-                    canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
-                except (UnicodeDecodeError, ValueError, TypeError, RecursionError):
-                    return {"valid": False, "events": count, "head_hash": previous}
-                actual = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-                if record.get("prev_hash") != previous or record.get("record_hash") != actual:
-                    return {"valid": False, "events": count, "head_hash": previous}
-                previous = actual
-                count += 1
-                expected_seq += 1
-        return {"valid": True, "events": count, "head_hash": previous}
+                    if not raw.strip():
+                        continue
+                    if count >= restore_limit:
+                        return {"valid": False, "events": count, "head_hash": previous}
+                    try:
+                        record = json.loads(raw.decode("utf-8"))
+                        if not isinstance(record, dict):
+                            return {"valid": False, "events": count, "head_hash": previous}
+                        if record.get("seq") != expected_seq:
+                            return {"valid": False, "events": count, "head_hash": previous}
+                        body = {key: value for key, value in record.items() if key != "record_hash"}
+                        canonical = json.dumps(
+                            body, sort_keys=True, separators=(",", ":"), default=str
+                        )
+                    except (UnicodeDecodeError, ValueError, TypeError, RecursionError):
+                        return {"valid": False, "events": count, "head_hash": previous}
+                    actual = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+                    if record.get("prev_hash") != previous or record.get("record_hash") != actual:
+                        return {"valid": False, "events": count, "head_hash": previous}
+                    previous = actual
+                    count += 1
+                    expected_seq += 1
+            return {"valid": True, "events": count, "head_hash": previous}
 
     def _inspect_existing(self) -> tuple[int, str | None]:
         result = self.verify()

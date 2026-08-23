@@ -8,11 +8,14 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from ..io_safety import open_regular_binary
 from .execution_env import resolve_executable, restricted_subprocess_env, run_bounded_subprocess
 
 _SAFE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@{}~^:+-]{0,255}$")
 _HEX_SHA = re.compile(r"^[0-9a-fA-F]{40,64}$")
 _MAX_FINGERPRINT_CHANGED_FILES = 1000
+_MAX_FINGERPRINT_FILE_BYTES = 16_000_000
+_MAX_FINGERPRINT_TOTAL_BYTES = 128_000_000
 _MAX_GIT_TEXT_OUTPUT_BYTES = 8_000_000
 
 
@@ -227,9 +230,10 @@ class RepositoryInspector:
         status: str,
         changed_files: tuple[str, ...],
     ) -> tuple[str, bool, tuple[str, ...]]:
-        """Hash Git state plus current bytes and expose whether that proof is complete."""
+        """Hash Git state plus bounded current bytes and expose proof completeness."""
         file_rows: list[dict[str, object]] = []
         incomplete_reasons: set[str] = set()
+        total_hashed_bytes = 0
         if len(changed_files) > _MAX_FINGERPRINT_CHANGED_FILES:
             incomplete_reasons.add("changed-file-limit-exceeded")
         for line in status.splitlines():
@@ -258,17 +262,55 @@ class RepositoryInspector:
                 file_rows.append({"path": relative, "state": "non-file"})
                 incomplete_reasons.add("changed-non-file-not-byte-bound")
                 continue
+            try:
+                size_hint = candidate.stat().st_size
+            except OSError:
+                file_rows.append({"path": relative, "state": "unreadable"})
+                incomplete_reasons.add("changed-file-unreadable")
+                continue
+            if size_hint > _MAX_FINGERPRINT_FILE_BYTES:
+                file_rows.append(
+                    {"path": relative, "state": "file-byte-limit-exceeded", "size": size_hint}
+                )
+                incomplete_reasons.add("changed-file-byte-limit-exceeded")
+                continue
+            if total_hashed_bytes + size_hint > _MAX_FINGERPRINT_TOTAL_BYTES:
+                file_rows.append(
+                    {"path": relative, "state": "total-byte-limit-exceeded", "size": size_hint}
+                )
+                incomplete_reasons.add("changed-total-byte-limit-exceeded")
+                continue
+
             digest = hashlib.sha256()
             size = 0
+            exceeded: str | None = None
             try:
-                with candidate.open("rb") as stream:
+                with open_regular_binary(
+                    candidate,
+                    label=f"workspace fingerprint subject {relative}",
+                ) as stream:
                     for chunk in iter(lambda: stream.read(1024 * 1024), b""):
                         size += len(chunk)
+                        if size > _MAX_FINGERPRINT_FILE_BYTES:
+                            exceeded = "changed-file-byte-limit-exceeded"
+                            break
+                        if total_hashed_bytes + size > _MAX_FINGERPRINT_TOTAL_BYTES:
+                            exceeded = "changed-total-byte-limit-exceeded"
+                            break
                         digest.update(chunk)
             except OSError:
                 file_rows.append({"path": relative, "state": "unreadable"})
                 incomplete_reasons.add("changed-file-unreadable")
                 continue
+            except ValueError:
+                file_rows.append({"path": relative, "state": "ownership-ambiguous"})
+                incomplete_reasons.add("changed-path-ownership-ambiguous")
+                continue
+            if exceeded is not None:
+                file_rows.append({"path": relative, "state": exceeded, "size_read": size})
+                incomplete_reasons.add(exceeded)
+                continue
+            total_hashed_bytes += size
             file_rows.append({"path": relative, "size": size, "sha256": digest.hexdigest()})
         if len(changed_files) > _MAX_FINGERPRINT_CHANGED_FILES:
             file_rows.append({"state": "changed-file-overflow", "count": len(changed_files)})

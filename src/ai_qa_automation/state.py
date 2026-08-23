@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 from pathlib import Path
 
+from .io_safety import fsync_directory, read_text_bounded
 from .models import AgentRunState
 
 _MAX_STATE_BYTES = 16_000_000
@@ -20,10 +22,14 @@ class StateStore:
         raw_parent = requested.parent
         if raw_parent.is_symlink():
             raise ValueError("state directory is a symlink and has ambiguous ownership")
+        parent_existed = raw_parent.exists()
         raw_parent.mkdir(parents=True, exist_ok=True)
         if raw_parent.is_symlink():
             raise ValueError("state directory became a symlink")
+        if not parent_existed:
+            fsync_directory(raw_parent.resolve().parent)
         self.path = raw_parent.resolve() / requested.name
+        self._lock = threading.RLock()
         self._assert_owned()
 
     def _assert_owned(self) -> None:
@@ -33,29 +39,35 @@ class StateStore:
             raise ValueError("state path is a symlink and has ambiguous ownership")
 
     def save(self, state: AgentRunState) -> None:
-        self._assert_owned()
-        rendered = state.model_dump_json(indent=2)
-        if len(rendered.encode("utf-8")) > _MAX_STATE_BYTES:
-            raise ValueError("canonical state exceeds persistence size bound")
-        handle, raw_temp = tempfile.mkstemp(
-            dir=self.path.parent,
-            prefix=f".{self.path.name}.",
-            suffix=".tmp",
-            text=True,
-        )
-        temp = Path(raw_temp)
-        try:
-            with os.fdopen(handle, "w", encoding="utf-8") as stream:
-                stream.write(rendered)
-                stream.flush()
-                os.fsync(stream.fileno())
+        with self._lock:
             self._assert_owned()
-            temp.replace(self.path)
-        finally:
-            temp.unlink(missing_ok=True)
+            rendered = state.model_dump_json(indent=2)
+            if len(rendered.encode("utf-8")) > _MAX_STATE_BYTES:
+                raise ValueError("canonical state exceeds persistence size bound")
+            handle, raw_temp = tempfile.mkstemp(
+                dir=self.path.parent,
+                prefix=f".{self.path.name}.",
+                suffix=".tmp",
+                text=True,
+            )
+            temp = Path(raw_temp)
+            try:
+                with os.fdopen(handle, "w", encoding="utf-8") as stream:
+                    stream.write(rendered)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                self._assert_owned()
+                temp.replace(self.path)
+                fsync_directory(self.path.parent)
+            finally:
+                temp.unlink(missing_ok=True)
 
     def load(self) -> AgentRunState:
-        self._assert_owned()
-        if self.path.stat().st_size > _MAX_STATE_BYTES:
-            raise ValueError("canonical state exceeds restore size bound")
-        return AgentRunState.model_validate(json.loads(self.path.read_text(encoding="utf-8")))
+        with self._lock:
+            self._assert_owned()
+            rendered = read_text_bounded(
+                self.path,
+                max_bytes=_MAX_STATE_BYTES,
+                label="canonical state",
+            )
+            return AgentRunState.model_validate(json.loads(rendered))

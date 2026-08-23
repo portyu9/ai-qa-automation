@@ -16,6 +16,7 @@ from ..intelligence.prioritization import RegressionPrioritizer
 from ..intelligence.quality_review import review_python_test_source
 from ..intelligence.self_healing import SelfHealingEngine
 from ..intelligence.test_generation import TestGenerationPlanner
+from ..io_safety import read_text_bounded
 from ..models import (
     AgentRunState,
     EvidenceItem,
@@ -45,10 +46,11 @@ _MAX_MODEL_SOURCE_CHARS = 12_000
 
 
 def _read_bounded_utf8(path: Path, *, max_bytes: int = _MAX_MODEL_SOURCE_BYTES) -> str:
-    size = path.stat().st_size
-    if size > max_bytes:
-        raise ValueError(f"file exceeds {max_bytes} byte model-facing source limit")
-    return path.read_text(encoding="utf-8")
+    return read_text_bounded(
+        path,
+        max_bytes=max_bytes,
+        label="model-facing source file",
+    )
 
 
 def _stable_gate_id(prefix: str, payload: Any) -> str:
@@ -193,17 +195,12 @@ def _coverage_search(
                 continue
             if path.is_symlink() or not path.is_file() or not _is_test_code_path(relative):
                 continue
-            try:
-                if path.stat().st_size > _MAX_MODEL_SOURCE_BYTES:
-                    continue
-            except OSError:
-                continue
             if not needle:
                 rows.append({"path": relative.as_posix(), "matches": []})
                 continue
             try:
-                text = path.read_text(encoding="utf-8")
-            except (OSError, UnicodeError):
+                text = _read_bounded_utf8(path)
+            except (OSError, UnicodeError, ValueError):
                 continue
             matches: list[str] = []
             for line_no, line in enumerate(text.splitlines(), 1):

@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from ..io_safety import fsync_directory, read_bytes_bounded, read_text_bounded
 from .journal import RunJournal
 from .run_control import _atomic_write_bytes, atomic_write_json
 
@@ -57,13 +58,20 @@ def _validated_backup_path(rollback_root: Path, backup_raw: str) -> Path:
 
 def _load_runtime_metadata(runtime_path: Path) -> dict[str, Any]:
     try:
-        if runtime_path.stat().st_size > _MAX_RUNTIME_METADATA_BYTES:
-            raise ValueError("prior runtime metadata exceeds recovery ingestion limit")
-        raw = json.loads(runtime_path.read_text(encoding="utf-8"))
+        rendered = read_text_bounded(
+            runtime_path,
+            max_bytes=_MAX_RUNTIME_METADATA_BYTES,
+            label="prior runtime metadata",
+        )
+        raw = json.loads(rendered)
     except OSError as exc:
         raise ValueError("prior runtime metadata is unreadable") from exc
+    except UnicodeError as exc:
+        raise ValueError("prior runtime metadata is not valid UTF-8") from exc
     except json.JSONDecodeError as exc:
         raise ValueError("prior runtime metadata is invalid JSON") from exc
+    except ValueError as exc:
+        raise ValueError("prior runtime metadata exceeds recovery ingestion limit") from exc
     if not isinstance(raw, dict):
         raise ValueError("prior runtime metadata root must be an object")
     return raw
@@ -163,6 +171,7 @@ def recover_stale_mutation(
     except ValueError as exc:
         return {"status": "BLOCKED", "reason": str(exc)}
 
+    backup_to_cleanup: Path | None = None
     if bool(pending.get("existed")):
         backup_raw = str(pending.get("backup_path") or "")
         original_sha = str(pending.get("original_sha256") or "")
@@ -176,28 +185,58 @@ def recover_stale_mutation(
         if not backup.is_file():
             return {"status": "BLOCKED", "reason": "prior rollback backup is unavailable"}
         try:
-            if backup.stat().st_size > _MAX_ROLLBACK_BYTES:
-                return {
-                    "status": "BLOCKED",
-                    "reason": "prior rollback backup exceeds 2 MB recovery safety limit",
-                }
-            data = backup.read_bytes()
+            data = read_bytes_bounded(
+                backup,
+                max_bytes=_MAX_ROLLBACK_BYTES,
+                label="prior rollback backup",
+            )
         except OSError:
             return {"status": "BLOCKED", "reason": "prior rollback backup is unavailable"}
+        except ValueError:
+            return {
+                "status": "BLOCKED",
+                "reason": "prior rollback backup exceeds 2 MB recovery safety limit",
+            }
         if hashlib.sha256(data).hexdigest() != original_sha:
             return {
                 "status": "BLOCKED",
                 "reason": "prior rollback backup failed integrity verification",
             }
         _atomic_write_bytes(target, data)
-        backup.unlink()
+        backup_to_cleanup = backup
     else:
         target.unlink(missing_ok=True)
+        fsync_directory(target.parent)
 
+    # The restored target and rollback bytes intentionally coexist until runtime
+    # metadata durably closes the pending transaction. If closure fails, preserve
+    # the backup and fail closed. The old persisted workspace fingerprint describes
+    # the pre-recovery workspace, so a later automatic retry cannot safely assume
+    # that a fingerprint mismatch came only from this recovery rather than newer
+    # external work; reconciliation must therefore re-establish ownership explicitly.
     metadata["pending_mutation"] = None
     metadata["recovered_by_run_id"] = recovering_run_id
     metadata["recovered_at"] = datetime.now(UTC).isoformat()
-    atomic_write_json(runtime_path, metadata)
+    try:
+        atomic_write_json(runtime_path, metadata)
+    except (OSError, RuntimeError, ValueError):
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": previous_run_id,
+            "reason": (
+                "stale mutation bytes were restored but recovery metadata could not be "
+                "durably closed; rollback authority was retained and manual reconciliation "
+                "is required before another automatic recovery attempt"
+            ),
+        }
+
+    rollback_cleanup_failed = False
+    if backup_to_cleanup is not None:
+        try:
+            backup_to_cleanup.unlink()
+        except OSError:
+            rollback_cleanup_failed = True
+
     try:
         journal_event_count = _validated_journal_event_count(metadata)
         RunJournal(
@@ -210,9 +249,11 @@ def recover_stale_mutation(
             "stale_mutation_recovered",
             recovering_run_id=recovering_run_id,
             path=relative_path,
+            rollback_cleanup_failed=rollback_cleanup_failed,
         )
     except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
-        # Recovery of target bytes has already completed. Journal augmentation is
-        # best-effort and must never roll the target forward again or hide recovery.
+        # Recovery of target bytes and durable metadata closure have already
+        # completed. Journal augmentation is observational and must not resurrect
+        # pending state or hide a successful recovery transition.
         pass
     return {"status": "RECOVERED", "previous_run_id": previous_run_id, "path": relative_path}

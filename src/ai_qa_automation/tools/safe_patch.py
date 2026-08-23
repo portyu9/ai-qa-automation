@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
+from ..io_safety import fsync_directory, read_text_bounded
 from ..models import ToolDecision
 from ..policy import PolicyEngine
 from .locators import parse_locator_expression
@@ -94,9 +95,14 @@ class SafeTestPatcher:
             )
         if not destination.is_file():
             raise FileNotFoundError(destination)
-        if destination.stat().st_size > self._MAX_TEST_FILE_BYTES:
-            raise ValueError(f"test file exceeds {self._MAX_TEST_FILE_BYTES} byte patch limit")
-        original = destination.read_text(encoding="utf-8")
+        for label, text in (("old_text", old_text), ("new_text", new_text)):
+            if len(text.encode("utf-8")) > self._MAX_TEST_FILE_BYTES:
+                raise ValueError(f"{label} exceeds bounded patch input limit")
+        original = read_text_bounded(
+            destination,
+            max_bytes=self._MAX_TEST_FILE_BYTES,
+            label="test file",
+        )
         actual_sha = self.sha256_text(original)
         if actual_sha != expected_sha256:
             raise RuntimeError("test file changed since proposal; refusing stale patch")
@@ -104,6 +110,8 @@ class SafeTestPatcher:
             raise ValueError("old_text must match exactly once")
 
         updated = original.replace(old_text, new_text, 1)
+        if len(updated.encode("utf-8")) > self._MAX_TEST_FILE_BYTES:
+            raise ValueError(f"patched test exceeds {self._MAX_TEST_FILE_BYTES} byte limit")
         self._validate_python_quality(destination, original, updated)
         normalized_relative = path.as_posix()
         diff = "".join(
@@ -245,7 +253,10 @@ class SafeTestPatcher:
         violations = self.policy.validate_patch(synthetic_diff)
         if violations:
             raise PermissionError(f"unsafe generated test rejected: {', '.join(violations)}")
+        parent_existed = destination.parent.exists()
         destination.parent.mkdir(parents=True, exist_ok=True)
+        if not parent_existed:
+            fsync_directory(destination.parent.resolve().parent)
         self._atomic_create(destination, content)
         digest = self.sha256_text(content)
         return PatchResult(
@@ -278,6 +289,8 @@ class SafeTestPatcher:
 
     @staticmethod
     def _write_secure_temp(destination: Path, content: str) -> Path:
+        if destination.is_symlink() or destination.parent.is_symlink():
+            raise PermissionError("mutation destination has ambiguous symlink ownership")
         handle, raw_path = tempfile.mkstemp(
             dir=destination.parent,
             prefix=f".{destination.name}.",
@@ -299,7 +312,10 @@ class SafeTestPatcher:
     def _atomic_replace(cls, destination: Path, content: str) -> None:
         temp = cls._write_secure_temp(destination, content)
         try:
+            if destination.is_symlink() or destination.parent.is_symlink():
+                raise PermissionError("mutation destination changed to an ambiguous symlink")
             temp.replace(destination)
+            fsync_directory(destination.parent)
         finally:
             temp.unlink(missing_ok=True)
 
@@ -307,7 +323,10 @@ class SafeTestPatcher:
     def _atomic_create(cls, destination: Path, content: str) -> None:
         temp = cls._write_secure_temp(destination, content)
         try:
+            if destination.is_symlink() or destination.parent.is_symlink():
+                raise PermissionError("mutation destination changed to an ambiguous symlink")
             os.link(temp, destination)
+            fsync_directory(destination.parent)
         except FileExistsError:
             raise FileExistsError(destination) from None
         finally:
