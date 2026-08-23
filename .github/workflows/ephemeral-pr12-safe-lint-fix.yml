@@ -1,7 +1,7 @@
-name: Ephemeral PR 12 Safe Lint Fix
+name: Ephemeral PR 12 Remaining Lint Remediation
 
 # Temporary PR-scoped maintenance harness authorized by the repository owner.
-# Applies only proven contract repairs plus selected Ruff safe fixes, validates fully, then pushes.
+# Applies only exact, reviewed lint repairs and pushes only after strict deterministic validation.
 on:
   pull_request:
     branches: [main]
@@ -16,11 +16,11 @@ env:
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
 jobs:
-  safe-fix:
+  remediate:
     if: github.event.pull_request.number == 12 && github.head_ref == 'feature/observability-metrics-hardening'
-    name: Proven contract repairs and Ruff safe fixes
+    name: Exact remaining Ruff remediation
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 40
     env:
       SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
     steps:
@@ -51,96 +51,187 @@ jobs:
           python -m pip check
           test "$(ruff --version)" = "ruff 0.16.2"
 
-      - name: Apply only proven deterministic contract repairs
+      - name: Apply reviewed exact repairs
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
-          import json
           from pathlib import Path
 
-          for relative in (
-              "evals/scenarios/20.json",
-              "evals/scenarios/23.json",
-              "evals/scenarios/27.json",
-          ):
-              path = Path(relative)
-              data = json.loads(path.read_text(encoding="utf-8"))
-              if data.get("holdout") is not True:
-                  raise SystemExit(f"expected proven primary-catalog defect is absent or changed: {relative}")
-              data["holdout"] = False
-              path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-
-          replacements = {
-              Path("src/ai_qa_automation/agent.py"): (
-                  "no trusted validation was explicitly bound to the requested objective.",
-                  "no trusted validation was deterministically bound to the requested objective.",
-              ),
-              Path("src/ai_qa_automation/runtime/runtime_hooks.py"): (
-                  "workspace-integrity: autonomous writes require a Git-backed isolated worktree",
-                  "workspace-integrity: autonomous writes require a git-backed isolated worktree",
-              ),
-          }
-          for path, (before, after) in replacements.items():
+          def replace(path_s: str, old: str, new: str, *, count: int = 1) -> None:
+              path = Path(path_s)
               text = path.read_text(encoding="utf-8")
-              if text.count(before) != 1:
-                  raise SystemExit(f"expected proven contract text occurs {text.count(before)} times in {path}")
-              path.write_text(text.replace(before, after), encoding="utf-8")
+              observed = text.count(old)
+              if observed != count:
+                  raise SystemExit(
+                      f"refusing ambiguous repair in {path}: expected {count} occurrence(s), found {observed}: {old!r}"
+                  )
+              path.write_text(text.replace(old, new), encoding="utf-8")
+
+          for path in ("evals/runner.py", "evals/holdout_runner.py"):
+              replace(path, "import sys\n", "")
+              replace(path, 'sys.path.insert(0, str(ROOT / "src"))\n\n', "")
+
+          replace("src/ai_qa_automation/cli.py", "from pathlib import Path\n", "from pathlib import Path\nfrom typing import Annotated\n")
+          replace(
+              "src/ai_qa_automation/cli.py",
+              '    run_dir: Path = typer.Argument(..., exists=True, file_okay=False, resolve_path=True),',
+              '    run_dir: Annotated[Path, typer.Argument(exists=True, file_okay=False, resolve_path=True)],',
+              count=2,
+          )
+          replace(
+              "src/ai_qa_automation/cli.py",
+              '    run_dir: Path = typer.Argument(..., exists=True, file_okay=False, resolve_path=True),\n    output_format: str = typer.Option("json", "--format", help="json or dot"),',
+              '    run_dir: Annotated[Path, typer.Argument(exists=True, file_okay=False, resolve_path=True)],\n    output_format: Annotated[str, typer.Option("--format", help="json or dot")] = "json",',
+          )
+          replace(
+              "src/ai_qa_automation/cli.py",
+              '    baseline: Path = typer.Option(\n        ..., "--baseline", exists=True, dir_okay=False, resolve_path=True\n    ),\n    current: Path = typer.Option(..., "--current", exists=True, dir_okay=False, resolve_path=True),',
+              '    baseline: Annotated[\n        Path, typer.Option("--baseline", exists=True, dir_okay=False, resolve_path=True)\n    ],\n    current: Annotated[\n        Path, typer.Option("--current", exists=True, dir_okay=False, resolve_path=True)\n    ],',
+          )
+          replace(
+              "src/ai_qa_automation/cli.py",
+              '    objective: str = typer.Argument(..., help="Bounded QA objective"),\n    workspace: Path = typer.Option(\n        ..., "--workspace", exists=True, file_okay=False, resolve_path=True\n    ),\n    control_root: Path | None = typer.Option(\n        None, "--control-root", exists=True, file_okay=False, resolve_path=True\n    ),',
+              '    objective: Annotated[str, typer.Argument(help="Bounded QA objective")],\n    workspace: Annotated[\n        Path, typer.Option("--workspace", exists=True, file_okay=False, resolve_path=True)\n    ],\n    control_root: Annotated[\n        Path | None, typer.Option("--control-root", exists=True, file_okay=False, resolve_path=True)\n    ] = None,',
+          )
+          replace("examples/reference_sut/app.py", "from typing import Literal\n", "from typing import Annotated, Literal\n")
+          replace(
+              "examples/reference_sut/app.py",
+              'def checkout(mode: Mode = Query(default="pass")) -> str:',
+              'def checkout(mode: Annotated[Mode, Query()] = "pass") -> str:',
+          )
+
+          replace("src/ai_qa_automation/intelligence/change_impact.py", "from pathlib import PurePosixPath\n", "from pathlib import PurePosixPath\nfrom typing import ClassVar\n")
+          for name in ("_CRITICAL", "_HIGH", "_MEDIUM"):
+              replace("src/ai_qa_automation/intelligence/change_impact.py", f"    {name} = {{", f"    {name}: ClassVar[dict[str, tuple[str, ...]]] = {{")
+          replace("src/ai_qa_automation/intelligence/contract_drift.py", "from typing import Any\n", "from typing import Any, ClassVar\n")
+          replace(
+              "src/ai_qa_automation/intelligence/contract_drift.py",
+              '    _METHODS = {"get", "put", "post", "delete", "options", "head", "patch", "trace"}',
+              '    _METHODS: ClassVar[set[str]] = {"get", "put", "post", "delete", "options", "head", "patch", "trace"}',
+          )
+          replace("src/ai_qa_automation/intelligence/repository_profile.py", "from pathlib import Path\n", "from pathlib import Path\nfrom typing import ClassVar\n")
+          replace("src/ai_qa_automation/intelligence/repository_profile.py", "    _EXTENSIONS = {", "    _EXTENSIONS: ClassVar[dict[str, str]] = {")
+          replace("src/ai_qa_automation/policy.py", "from typing import Any\n", "from typing import Any, ClassVar\n")
+          replace("src/ai_qa_automation/policy.py", "    OFFICIAL_EXTERNAL_MCP = {", "    OFFICIAL_EXTERNAL_MCP: ClassVar[dict[str, str]] = {")
+          for name in ("_DANGEROUS_TOOL_NAMES", "_APPROVED_SKILLS", "_INTERNAL_QA_TOOLS", "_PROTECTED_RELATIVE_PATHS"):
+              replace("src/ai_qa_automation/policy.py", f"    {name} = {{", f"    {name}: ClassVar[set[str]] = {{")
+          replace("src/ai_qa_automation/policy.py", "    _UNSAFE_PATCH_PATTERNS = {", "    _UNSAFE_PATCH_PATTERNS: ClassVar[dict[str, re.Pattern[str]]] = {")
+          replace("src/ai_qa_automation/tools/safe_patch.py", "from pathlib import Path\n", "from pathlib import Path\nfrom typing import ClassVar\n")
+          replace("src/ai_qa_automation/tools/safe_patch.py", '    _SUPPORTED_SUFFIXES = {".py", ".js", ".ts"}', '    _SUPPORTED_SUFFIXES: ClassVar[set[str]] = {".py", ".js", ".ts"}')
+          replace("src/ai_qa_automation/tools/test_execution.py", "from pathlib import Path\n", "from pathlib import Path\nfrom typing import ClassVar\n")
+          replace("src/ai_qa_automation/tools/test_execution.py", "    _SAFE_FLAGS = {", "    _SAFE_FLAGS: ClassVar[set[str]] = {")
+          replace("src/ai_qa_automation/tools/test_execution.py", '    _SAFE_VALUE_OPTIONS = {"-k", "-m", "--maxfail", "--tb"}', '    _SAFE_VALUE_OPTIONS: ClassVar[set[str]] = {"-k", "-m", "--maxfail", "--tb"}')
+          replace("tests/integration/test_agent_sdk_contract.py", "from typing import Any\n", "from typing import Any, ClassVar\n")
+          replace("tests/integration/test_agent_sdk_contract.py", "    last_kwargs: dict[str, Any] = {}", "    last_kwargs: ClassVar[dict[str, Any]] = {}")
+
+          replace("src/ai_qa_automation/evidence.py", "        os.replace(temp, path)", "        temp.replace(path)")
+          replace("src/ai_qa_automation/state.py", "            os.replace(temp, self.path)", "            temp.replace(self.path)")
+          replace("src/ai_qa_automation/runtime/run_control.py", "        os.replace(temp, path)", "        temp.replace(path)", count=2)
+          replace("src/ai_qa_automation/tools/safe_patch.py", "            os.replace(temp, destination)", "            temp.replace(destination)")
+
+          replace("src/ai_qa_automation/runtime/run_control.py", "from pathlib import Path\n", "from pathlib import Path\nfrom contextlib import suppress\n")
+          replace("src/ai_qa_automation/runtime/run_control.py", "from .workspace_lease import WorkspaceBusyError, WorkspaceLease\n", "")
+          replace(
+              "src/ai_qa_automation/runtime/run_control.py",
+              "            if backup_path is not None:\n                try:\n                    backup_path.unlink(missing_ok=True)\n                except OSError:\n                    pass",
+              "            if backup_path is not None:\n                with suppress(OSError):\n                    backup_path.unlink(missing_ok=True)",
+          )
+          replace("src/ai_qa_automation/runtime/workspace_lease.py", "from contextlib import AbstractContextManager\n", "from contextlib import AbstractContextManager, suppress\n")
+          replace(
+              "src/ai_qa_automation/runtime/workspace_lease.py",
+              "            try:\n                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)\n            except OSError:\n                pass",
+              "            with suppress(OSError):\n                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)",
+          )
+          replace("src/ai_qa_automation/tools/execution_env.py", "from collections.abc import Mapping, Sequence\n", "from collections.abc import Mapping, Sequence\nfrom contextlib import suppress\n")
+          replace(
+              "src/ai_qa_automation/tools/execution_env.py",
+              "            try:\n                process.stdout.close()\n            except OSError:\n                pass\n            try:\n                process.stderr.close()\n            except OSError:\n                pass",
+              "            with suppress(OSError):\n                process.stdout.close()\n            with suppress(OSError):\n                process.stderr.close()",
+          )
+
+          replace(
+              "src/ai_qa_automation/tools/safe_patch.py",
+              '                if ch == "\\\\":\n                    if i + 1 < len(chars):\n                        chars[i] = " "\n                        if chars[i + 1] != "\\n":\n                            chars[i + 1] = " "\n                        i += 2\n                        continue',
+              '                if ch == "\\\\" and i + 1 < len(chars):\n                    chars[i] = " "\n                    if chars[i + 1] != "\\n":\n                        chars[i + 1] = " "\n                    i += 2\n                    continue',
+          )
+          replace(
+              "src/ai_qa_automation/intelligence/quality_review.py",
+              '        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):\n            if node.func.attr == "sleep":\n                findings.append(\n                    TestQualityFinding("QA001", "HIGH", "Arbitrary sleep detected", node.lineno)\n                )\n            if node.func.attr in {"skip", "xfail"}:\n                findings.append(\n                    TestQualityFinding(\n                        "QA002",\n                        "HIGH",\n                        "Skip/xfail requires explicit justification",\n                        node.lineno,\n                    )\n                )',
+              '        if (\n            isinstance(node, ast.Call)\n            and isinstance(node.func, ast.Attribute)\n            and node.func.attr == "sleep"\n        ):\n            findings.append(\n                TestQualityFinding("QA001", "HIGH", "Arbitrary sleep detected", node.lineno)\n            )\n        if (\n            isinstance(node, ast.Call)\n            and isinstance(node.func, ast.Attribute)\n            and node.func.attr in {"skip", "xfail"}\n        ):\n            findings.append(\n                TestQualityFinding(\n                    "QA002",\n                    "HIGH",\n                    "Skip/xfail requires explicit justification",\n                    node.lineno,\n                )\n            )',
+          )
+
+          regex_repairs = {
+              "tests/unit/test_agent_terminal_status.py": [('match="CLAUDE.md"', 'match=r"CLAUDE\\.md"', 1)],
+              "tests/unit/test_attestation.py": [('match="state.json.*symlink"', 'match=r"state\\.json.*symlink"', 1), ('match="state.json"', 'match=r"state\\.json"', 1)],
+              "tests/unit/test_evidence_ownership.py": [('match="control file.*symlink"', 'match=r"control file.*symlink"', 2)],
+              "tests/unit/test_journal_ownership.py": [('match="journal path.*symlink"', 'match=r"journal path.*symlink"', 1)],
+              "tests/unit/test_k6_egress_contract.py": [('match="existing .js file"', 'match=r"existing \\.js file"', 1)],
+              "tests/unit/test_lineage.py": [('match="state.json"', 'match=r"state\\.json"', 1)],
+              "tests/unit/test_run_control_rollback_root.py": [('match="rollback directory.*symlink"', 'match=r"rollback directory.*symlink"', 2)],
+              "tests/unit/test_workspace_lease_ownership.py": [('match="lease directory.*symlink"', 'match=r"lease directory.*symlink"', 1), ('match="lease file.*symlink"', 'match=r"lease file.*symlink"', 1)],
+          }
+          for path, repairs in regex_repairs.items():
+              for old, new, count in repairs:
+                  replace(path, old, new, count=count)
           PY
 
-      - name: Apply only selected Ruff safe fixes
+      - name: Apply only Ruff-declared safe cleanup and canonical formatting
         shell: bash
         run: |
           set -euo pipefail
-          ruff check --fix --select I001,UP037,UP035,UP012,RUF100,PTH201 src evals examples tests
+          ruff check --fix --select I001,F401,SIM117 src evals examples tests
           ruff format src evals examples tests
 
-      - name: Enforce exact mutation scope and inspect delta
+      - name: Enforce mutation scope and whitespace integrity
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           import subprocess
-
-          allowed_json = {
-              "evals/scenarios/20.json",
-              "evals/scenarios/23.json",
-              "evals/scenarios/27.json",
-          }
           raw = subprocess.check_output(["git", "diff", "--name-only", "-z"])
           paths = [item.decode() for item in raw.split(b"\0") if item]
-          invalid = []
-          for path in paths:
-              if not (path.endswith(".py") or path in allowed_json):
-                  invalid.append(f"unexpected change: {path}")
-              if path.startswith((".github/", ".claude/")) or path in {
-                  "CLAUDE.md", ".mcp.json", "SECURITY.md", "docs/SECURITY.md", "pyproject.toml"
-              }:
-                  invalid.append(f"protected change: {path}")
-          missing = sorted(allowed_json.difference(paths))
-          if missing:
-              invalid.append(f"expected catalog repairs missing: {missing}")
+          invalid = [
+              path for path in paths
+              if not path.endswith(".py")
+              or path.startswith((".github/", ".claude/"))
+              or path in {"CLAUDE.md", ".mcp.json", "SECURITY.md", "docs/SECURITY.md", "pyproject.toml"}
+          ]
           if invalid:
-              raise SystemExit("\n".join(invalid))
-          print(f"Validated candidate mutation scope across {len(paths)} files")
+              raise SystemExit(f"unexpected/protected candidate changes: {invalid}")
+          print(f"Reviewed lint candidate changes {len(paths)} Python files")
           for path in paths:
               print(path)
           PY
           git diff --check
 
-      - name: Run focused contract regressions before full suite
+      - name: Require zero Ruff findings and clean Mypy before tests
         run: |
-          pytest -q \
-            tests/evaluations/test_scenario_catalog.py \
-            tests/unit/test_agent_terminal_status.py::test_read_only_success_requires_objective_bound_deterministic_validation \
-            tests/unit/test_runtime_hooks.py::test_pretool_mutation_without_git_identity_is_blocked_before_write
+          ruff format --check .
+          ruff check .
+          mypy src
 
-      - name: Compile and full deterministic regression before push
+      - name: Compile and smoke evaluator/CLI wiring
+        shell: bash
         run: |
+          set -euo pipefail
           python -m compileall -q src evals examples
-          pytest -q
+          python -m ai_qa_automation.cli --help >/dev/null
+          python -m ai_qa_automation.cli recover --help >/dev/null
+          python -m ai_qa_automation.cli lineage --help >/dev/null
+          python -m ai_qa_automation.cli attest --help >/dev/null
+          python -m ai_qa_automation.cli contract-diff --help >/dev/null
+          python -m ai_qa_automation.cli agent --help >/dev/null
+          python - <<'PY'
+          from examples.reference_sut.app import app
+          assert any(route.path == "/" for route in app.routes)
+          assert any(route.path == "/health" for route in app.routes)
+          PY
 
-      - name: Re-run primary and holdout evaluators before push
+      - name: Full deterministic pytest before push
+        run: pytest -q
+
+      - name: Primary and holdout evaluators before push
         shell: bash
         run: |
           set -euo pipefail
@@ -160,16 +251,7 @@ jobs:
           assert holdout['failures'] == 0
           PY
 
-      - name: Show remaining lint without weakening gate
-        shell: bash
-        run: |
-          set +e
-          ruff check .
-          status=$?
-          echo "Remaining Ruff status: $status"
-          exit 0
-
-      - name: Re-verify branch head and push validated candidate
+      - name: Re-verify branch head and push fully validated lint closure
         shell: bash
         run: |
           set -euo pipefail
@@ -177,7 +259,7 @@ jobs:
           test "$remote_head" = "$SOURCE_SHA"
           git config user.name "Ƴunior Ƥortal"
           git config user.email "35150859+portyu9@users.noreply.github.com"
-          git add -- '*.py' evals/scenarios/20.json evals/scenarios/23.json evals/scenarios/27.json
+          git add -- '*.py'
           git diff --cached --check
-          git commit -m "Reconcile deterministic contracts and Ruff lint"
+          git commit -m "Close remaining strict lint findings"
           git push origin "HEAD:refs/heads/$SOURCE_BRANCH"
