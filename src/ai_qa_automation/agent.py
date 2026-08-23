@@ -424,6 +424,25 @@ def _paths_overlap(left: Path, right: Path) -> bool:
         return False
 
 
+def run_agent_sync(
+    objective: str,
+    workspace: Path,
+    settings: Settings | None = None,
+    *,
+    objective_gate_id: str | None = None,
+) -> dict[str, Any]:
+    """Run the bounded async agent from synchronous CLI/application entry points."""
+
+    return asyncio.run(
+        run_agent(
+            objective,
+            workspace,
+            settings,
+            objective_gate_id=objective_gate_id,
+        )
+    )
+
+
 def configuration_fingerprint(settings: Settings) -> str:
     """Stable hash of non-secret runtime configuration used in provenance."""
 
