@@ -154,6 +154,8 @@ def test_legacy_internal_mutation_precheck_conforms_to_shared_closure(tmp_path: 
         evidence=cast(Any, object()),
         policy=cast(Any, object()),
         test_runner=cast(Any, object()),
+        max_tool_calls=10,
+        max_repeated_action=3,
     )
 
     scenarios = [
