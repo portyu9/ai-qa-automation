@@ -6,7 +6,7 @@ import tempfile
 import threading
 from pathlib import Path
 
-from .io_safety import read_text_bounded
+from .io_safety import fsync_directory, read_text_bounded
 from .models import AgentRunState
 
 _MAX_STATE_BYTES = 16_000_000
@@ -55,6 +55,7 @@ class StateStore:
                     os.fsync(stream.fileno())
                 self._assert_owned()
                 temp.replace(self.path)
+                fsync_directory(self.path.parent)
             finally:
                 temp.unlink(missing_ok=True)
 
