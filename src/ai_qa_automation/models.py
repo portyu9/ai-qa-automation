@@ -295,10 +295,10 @@ class AgentRunState(BaseModel):
     target_git_sha: str | None = None
     workspace: str
     phase: str = "INITIALIZE"
-    iteration: int = 0
-    change_revision: int = 0
-    tool_call_count: int = 0
-    retry_count: int = 0
+    iteration: int = Field(default=0, ge=0)
+    change_revision: int = Field(default=0, ge=0)
+    tool_call_count: int = Field(default=0, ge=0)
+    retry_count: int = Field(default=0, ge=0)
     observations: list[str] = Field(default_factory=list)
     hypotheses: list[Hypothesis] = Field(default_factory=list)
     evidence_ids: list[str] = Field(default_factory=list)
@@ -311,9 +311,9 @@ class AgentRunState(BaseModel):
     mcp_status: dict[str, MCPStatus] = Field(default_factory=dict)
     external_evidence: list[str] = Field(default_factory=list)
     policy_decisions: list[PolicyDecision] = Field(default_factory=list)
-    token_usage: int = 0
-    cost: float = 0.0
-    duration: float = 0.0
+    token_usage: int = Field(default=0, ge=0)
+    cost: float = Field(default=0.0, ge=0)
+    duration: float = Field(default=0.0, ge=0)
     terminal_status: TerminalStatus | None = None
     terminal_reason: str | None = None
 
