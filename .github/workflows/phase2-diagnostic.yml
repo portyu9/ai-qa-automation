@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  SOURCE_SHA: 091b449c93571448a3534e8f9ec3ae17a6ad7235
+  SOURCE_SHA: 8b7c0f8597eba73a3d5a9f2f277f48a245d95afd
   PYTHONUNBUFFERED: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
@@ -49,6 +49,7 @@ jobs:
         run: >-
           pytest -q
           tests/unit/test_phase2_architecture_coherence.py
+          tests/unit/test_phase2_adversarial_contracts.py
           tests/unit/test_agent_terminal_status.py
           tests/unit/test_bounded_repository_scans.py
           tests/unit/test_lineage.py
