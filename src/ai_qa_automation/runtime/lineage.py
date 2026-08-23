@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..io_safety import read_text_bounded
 from .journal import RunJournal
 
 _MAX_LINEAGE_CONTROL_BYTES = 10_000_000
@@ -318,9 +319,13 @@ def _load_object(path: Path, *, required: bool) -> dict[str, Any]:
         if required:
             raise FileNotFoundError(path.name)
         return {}
-    if path.stat().st_size > _MAX_LINEAGE_CONTROL_BYTES:
-        raise ValueError(f"{path.name} exceeds lineage control-file size bound")
-    value = json.loads(path.read_text(encoding="utf-8"))
+    value = json.loads(
+        read_text_bounded(
+            path,
+            max_bytes=_MAX_LINEAGE_CONTROL_BYTES,
+            label=f"lineage control file {path.name}",
+        )
+    )
     if not isinstance(value, dict):
         raise ValueError(f"{path.name} root must be an object")
     return value
