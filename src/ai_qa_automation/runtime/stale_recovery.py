@@ -208,9 +208,11 @@ def recover_stale_mutation(
         target.unlink(missing_ok=True)
 
     # The restored target and rollback bytes intentionally coexist until runtime
-    # metadata durably closes the pending transaction. A crash or persistence
-    # failure before that point therefore leaves enough authority to retry the
-    # recovery safely instead of stranding pending metadata without rollback bytes.
+    # metadata durably closes the pending transaction. If closure fails, preserve
+    # the backup and fail closed. The old persisted workspace fingerprint describes
+    # the pre-recovery workspace, so a later automatic retry cannot safely assume
+    # that a fingerprint mismatch came only from this recovery rather than newer
+    # external work; reconciliation must therefore re-establish ownership explicitly.
     metadata["pending_mutation"] = None
     metadata["recovered_by_run_id"] = recovering_run_id
     metadata["recovered_at"] = datetime.now(UTC).isoformat()
@@ -222,7 +224,8 @@ def recover_stale_mutation(
             "previous_run_id": previous_run_id,
             "reason": (
                 "stale mutation bytes were restored but recovery metadata could not be "
-                "durably closed; rollback authority was retained for a safe retry"
+                "durably closed; rollback authority was retained and manual reconciliation "
+                "is required before another automatic recovery attempt"
             ),
         }
 
