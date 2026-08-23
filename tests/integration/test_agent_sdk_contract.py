@@ -115,6 +115,7 @@ async def test_live_runtime_contract_is_strict_and_model_success_is_not_pass(
     assert report["terminal_status"] == "NOT_VERIFIED"
     assert report["validation_results"] == []
     assert report["provenance"]["objective_gate_id"] == "NOT_SUPPLIED"
+    assert "provenance" not in result
 
     options = FakeClaudeAgentOptions.last_kwargs
     assert options["tools"] == []
@@ -169,7 +170,7 @@ async def test_external_mcp_is_registered_but_not_blanket_auto_approved(
 
 
 @pytest.mark.asyncio
-async def test_objective_gate_contract_is_persisted_in_report_and_response_provenance(
+async def test_objective_gate_contract_has_one_canonical_report_provenance_surface(
     tmp_path: Path,
     fake_sdk: ModuleType,
 ) -> None:
@@ -185,7 +186,7 @@ async def test_objective_gate_contract_is_persisted_in_report_and_response_prove
 
     assert result["report"]["terminal_status"] == "NOT_VERIFIED"
     assert result["report"]["provenance"]["objective_gate_id"] == "pytest:objective-exact"
-    assert result["provenance"]["objective_gate_id"] == "pytest:objective-exact"
+    assert "provenance" not in result
 
 
 def test_sync_entry_point_preserves_objective_contract(
@@ -203,4 +204,4 @@ def test_sync_entry_point_preserves_objective_contract(
     )
 
     assert result["report"]["terminal_status"] == "NOT_VERIFIED"
-    assert result["provenance"]["objective_gate_id"] == "pytest:sync-objective"
+    assert result["report"]["provenance"]["objective_gate_id"] == "pytest:sync-objective"
