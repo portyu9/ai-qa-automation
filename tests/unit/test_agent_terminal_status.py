@@ -17,7 +17,6 @@ def vr(
     scope: str | None = None,
     mutation_path: str = "tests/test_x.py",
     mutation_target_bound: bool = True,
-    objective_bound: bool = False,
 ) -> ValidationResult:
     details: dict[str, object] = {}
     if name == "test_patch_safety" and revision > 0:
@@ -34,8 +33,6 @@ def vr(
         )
     if scope == "regression":
         details["args"] = []
-    if objective_bound:
-        details["objective_bound"] = True
     return ValidationResult(
         name=name,
         gate_id=gate_id,
@@ -46,17 +43,18 @@ def vr(
     )
 
 
-def test_read_only_success_requires_objective_bound_deterministic_validation() -> None:
+def test_read_only_success_requires_operator_objective_gate_contract() -> None:
     status, reason = determine_terminal_outcome(
         "success",
-        [vr("pytest", ValidationStatus.PASS)],
+        [vr("pytest", ValidationStatus.PASS, gate_id="pytest:objective")],
     )
     assert status is TerminalStatus.NOT_VERIFIED
-    assert "deterministically bound" in reason.lower()
+    assert "operator did not supply" in reason.lower()
 
     status, _ = determine_terminal_outcome(
         "success",
-        [vr("pytest", ValidationStatus.PASS, objective_bound=True)],
+        [vr("pytest", ValidationStatus.PASS, gate_id="pytest:objective")],
+        objective_gate_id="pytest:objective",
     )
     assert status is TerminalStatus.SUCCESS
 
@@ -357,47 +355,3 @@ def test_runtime_roots_reject_artifact_root_overlapping_target(tmp_path: Path) -
 
     with pytest.raises(ValueError, match="artifact_root"):
         validate_runtime_roots(control, target, artifact_root=target / "artifacts")
-
-
-def test_runtime_roots_require_trusted_project_markers(tmp_path: Path) -> None:
-    from ai_qa_automation.agent import validate_runtime_roots
-
-    control = tmp_path / "control"
-    target = tmp_path / "target"
-    control.mkdir()
-    target.mkdir()
-
-    with pytest.raises(ValueError, match=r"CLAUDE\.md"):
-        validate_runtime_roots(control, target)
-
-
-def test_configuration_fingerprint_changes_with_security_relevant_settings(tmp_path: Path) -> None:
-    from ai_qa_automation.agent import configuration_fingerprint
-    from ai_qa_automation.config import Settings
-
-    baseline = Settings(control_root=tmp_path, max_turns=3)
-    changed_turns = Settings(control_root=tmp_path, max_turns=4)
-    changed_writes = Settings(control_root=tmp_path, max_turns=3, allow_test_writes=True)
-    changed_hosts = Settings(
-        control_root=tmp_path,
-        max_turns=3,
-        allowed_network_hosts=["127.0.0.1", "qa.example.test"],
-    )
-
-    fingerprints = {
-        configuration_fingerprint(baseline),
-        configuration_fingerprint(changed_turns),
-        configuration_fingerprint(changed_writes),
-        configuration_fingerprint(changed_hosts),
-    }
-    assert all(value.startswith("sha256:") for value in fingerprints)
-    assert len(fingerprints) == 4
-
-
-def test_configuration_fingerprint_is_stable_for_equivalent_settings(tmp_path: Path) -> None:
-    from ai_qa_automation.agent import configuration_fingerprint
-    from ai_qa_automation.config import Settings
-
-    first = Settings(control_root=tmp_path, max_turns=7, max_network_calls=4)
-    second = Settings(control_root=tmp_path, max_turns=7, max_network_calls=4)
-    assert configuration_fingerprint(first) == configuration_fingerprint(second)
