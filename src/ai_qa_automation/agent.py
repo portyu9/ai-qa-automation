@@ -200,11 +200,12 @@ async def run_agent(
         state.mcp_status = {name: MCPStatus(status) for name, status in statuses.items()}
         mcp_servers: dict[str, Any] = {"qa": internal_server, **external}
 
-        # `allowed_tools` is an SDK permission allow-rule, not an availability list.
-        # Internal QA tools are safe to pre-approve because PreToolUse still applies
-        # the deterministic runtime policy to every request. External MCP tools must
-        # remain unlisted here so permission_mode="default" routes each concrete
-        # provider action through can_use_tool instead of granting server-wide approval.
+        # `allowed_tools` is an SDK auto-approval rule, not an availability list.
+        # Internal QA tools may be pre-approved because the universal PreToolUse
+        # hook still applies deterministic runtime policy before execution.
+        # External MCP tools remain unlisted so an allowed request still reaches
+        # default SDK permission handling/can_use_tool; requests denied by
+        # PreToolUse never reach a second permission stage.
         allowed_tools = list(internal_tool_names)
 
         options = ClaudeAgentOptions(
@@ -490,14 +491,6 @@ def _final_response(
             mode="json"
         ),
         "agent_result": agent_result,
-        "provenance": {
-            "run_id": state.run_id,
-            "model_id": state.model_id,
-            "sdk_version": state.sdk_version,
-            "configuration_version": state.configuration_version,
-            "target_git_sha": state.target_git_sha,
-            "objective_gate_id": state.objective_gate_id,
-        },
     }
 
 
