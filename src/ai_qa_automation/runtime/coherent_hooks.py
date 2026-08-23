@@ -7,6 +7,7 @@ from typing import Any, cast
 from claude_agent_sdk.types import HookContext, HookEvent, HookInput, HookJSONOutput, HookMatcher
 
 from ..evidence import EvidenceStore
+from ..integrations.mcp_health import normalize_mcp_failure
 from ..models import (
     AgentRunState,
     EvidenceItem,
@@ -26,7 +27,6 @@ from .runtime_hooks import (
     _bind_latest_targeted_pytest_to_pending_mutation,
     _reconcile_rolled_back_mutation,
     _tool_response_failed,
-    normalize_mcp_failure,
     posttool_failure_output,
 )
 from .validation_truth import evaluate_revision_closure
