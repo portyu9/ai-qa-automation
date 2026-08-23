@@ -5,44 +5,11 @@ from pathlib import Path
 from typing import Any
 
 from ..io_safety import read_text_bounded
-from ..models import ValidationStatus
 from ..state import StateStore
 from .journal import RunJournal
+from .validation_truth import evaluate_revision_closure
 
 _MAX_RUNTIME_METADATA_BYTES = 2_000_000
-
-
-def _revision_closed(state: Any) -> bool:
-    if state.change_revision == 0:
-        return True
-    current = [item for item in state.validation_results if item.revision == state.change_revision]
-    if not current or any(item.status != ValidationStatus.PASS for item in current):
-        return False
-    patch_paths = {
-        str(item.details.get("path") or "")
-        for item in current
-        if item.name == "test_patch_safety"
-        and item.status == ValidationStatus.PASS
-        and str(item.details.get("path") or "")
-    }
-    if len(patch_paths) != 1:
-        return False
-    mutation_path = next(iter(patch_paths))
-    targeted = any(
-        item.name == "pytest"
-        and item.status == ValidationStatus.PASS
-        and item.details.get("scope") == "targeted"
-        and item.details.get("mutation_target_bound") is True
-        and item.details.get("mutation_target") == mutation_path
-        for item in current
-    )
-    regression = any(
-        item.name == "pytest"
-        and item.status == ValidationStatus.PASS
-        and item.details.get("scope") == "regression"
-        for item in current
-    )
-    return targeted and regression
 
 
 def inspect_recovery(run_dir: Path) -> dict[str, Any]:
@@ -84,28 +51,27 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
             max_bytes=_MAX_RUNTIME_METADATA_BYTES,
             label="runtime.json",
         )
+    except OSError:
+        return {"recoverable": False, "reason": "runtime.json could not be read safely"}
     except UnicodeError:
         return {"recoverable": False, "reason": "runtime.json is not valid UTF-8"}
-    except OSError:
-        return {"recoverable": False, "reason": "runtime.json is unreadable"}
     except ValueError as exc:
-        message = str(exc)
-        if "exceeds" in message and "ingestion limit" in message:
+        if "exceeds" in str(exc):
             return {"recoverable": False, "reason": "runtime.json exceeds restore size bound"}
-        return {
-            "recoverable": False,
-            "reason": "runtime.json ownership or file-type validation failed",
-        }
-
+        return {"recoverable": False, "reason": "runtime.json has invalid file ownership"}
     try:
         raw_runtime = json.loads(rendered_runtime)
     except json.JSONDecodeError:
-        return {"recoverable": False, "reason": "runtime.json is invalid JSON"}
+        return {"recoverable": False, "reason": "runtime.json contains malformed JSON"}
     if not isinstance(raw_runtime, dict):
         return {"recoverable": False, "reason": "runtime.json root must be an object"}
     runtime_metadata: dict[str, Any] = raw_runtime
 
-    revision_closed = _revision_closed(state)
+    closure = evaluate_revision_closure(
+        state.validation_results,
+        current_revision=state.change_revision,
+    )
+    revision_closed = closure.closed
     pending_mutation = runtime_metadata.get("pending_mutation")
     if pending_mutation:
         revision_closed = False
@@ -116,6 +82,12 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
         "terminal_status": state.terminal_status.value if state.terminal_status else None,
         "change_revision": state.change_revision,
         "revision_closed": revision_closed,
+        "revision_closure": {
+            "closed": closure.closed,
+            "code": closure.code,
+            "reason": closure.reason,
+            "mutation_path": closure.mutation_path,
+        },
         "journal": journal_status,
         "runtime": runtime_metadata,
         "pending_mutation": pending_mutation,
