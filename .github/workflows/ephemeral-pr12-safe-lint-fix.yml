@@ -3,22 +3,22 @@ name: Ephemeral PR 12 Safe Lint Fix
 # Temporary exact-source maintenance harness authorized by the repository owner.
 # Applies only selected Ruff safe fixes and validates before pushing.
 on:
-  pull_request:
+  push:
     branches: [main]
-    types: [synchronize]
+    paths:
+      - .github/workflows/ephemeral-pr12-safe-lint-fix.yml
 
 permissions:
   contents: write
 
 env:
-  SOURCE_SHA: 5723f1b573a4f32c8a2800f662b0c060665fbc79
+  SOURCE_SHA: 872b3eae7fb47114ab1931a2b1c05eed80bb7ae9
   SOURCE_BRANCH: feature/observability-metrics-hardening
   PYTHONUNBUFFERED: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
 jobs:
   safe-fix:
-    if: github.event.pull_request.number == 12 && github.head_ref == 'feature/observability-metrics-hardening'
     name: Selected Ruff safe fixes with deterministic validation
     runs-on: ubuntu-latest
     timeout-minutes: 35
