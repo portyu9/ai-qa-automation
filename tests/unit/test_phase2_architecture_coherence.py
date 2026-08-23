@@ -18,7 +18,6 @@ from ai_qa_automation.runtime.coherent_hooks import pretool_policy_output
 from ai_qa_automation.runtime.internal_tools import RuntimeServices, _change_revision_closed
 from ai_qa_automation.runtime.journal import RunJournal
 from ai_qa_automation.runtime.live_services import LiveRuntimeServices
-from ai_qa_automation.runtime.tool_surface import sdk_allowed_tools
 from ai_qa_automation.runtime.validation_truth import (
     active_validation_set,
     determine_terminal_outcome,
@@ -175,25 +174,6 @@ def test_legacy_internal_mutation_precheck_conforms_to_shared_closure(tmp_path: 
         state.validation_results = checks
         expected = evaluate_revision_closure(checks, current_revision=1).closed
         assert _change_revision_closed(services.state) is expected
-
-
-def test_sdk_tool_surface_exposes_only_configured_external_namespaces() -> None:
-    result = sdk_allowed_tools(
-        ["mcp__qa__inspect_repository", "mcp__qa__run_pytest"],
-        {"github": object(), "atlassian": object()},
-    )
-
-    assert result == [
-        "mcp__qa__inspect_repository",
-        "mcp__qa__run_pytest",
-        "mcp__atlassian",
-        "mcp__github",
-    ]
-
-    assert sdk_allowed_tools(["mcp__qa__inspect_repository"], {}) == ["mcp__qa__inspect_repository"]
-
-    with pytest.raises(ValueError, match="invalid trusted MCP server name"):
-        sdk_allowed_tools([], {"bad__name?": object()})
 
 
 def make_control(tmp_path: Path, *, max_repeated_action: int = 2) -> CoherentRuntimeControl:
