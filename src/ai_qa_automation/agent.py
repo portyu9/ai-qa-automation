@@ -12,19 +12,15 @@ from typing import Any
 from .config import Settings
 from .evidence import EvidenceStore
 from .integrations.mcp_registry import build_external_mcp
-from .models import (
-    AgentRunState,
-    MCPStatus,
-    TerminalStatus,
-    ValidationResult,
-    ValidationStatus,
-)
+from .models import AgentRunState, MCPStatus, TerminalStatus
 from .policy import PolicyEngine
 from .reporting import build_final_report
 from .runtime.bootstrap import bootstrap_runtime_context
 from .runtime.budget import BudgetExceededError, ExecutionBudget
-from .runtime.internal_tools import RuntimeServices, build_internal_mcp_server
+from .runtime.coherent_control import CoherentRuntimeControl
+from .runtime.internal_tools import build_internal_mcp_server
 from .runtime.journal import RunJournal
+from .runtime.live_services import LiveRuntimeServices
 from .runtime.run_control import RuntimeControl
 from .runtime.runtime_hooks import build_hooks, build_permission_handler
 from .runtime.sdk_recovery import (
@@ -35,6 +31,8 @@ from .runtime.sdk_recovery import (
 )
 from .runtime.stale_recovery import recover_stale_mutation
 from .runtime.system_prompt import RUNTIME_SYSTEM_PROMPT
+from .runtime.tool_surface import sdk_allowed_tools
+from .runtime.validation_truth import determine_terminal_outcome
 from .runtime.workspace_lease import WorkspaceBusyError, WorkspaceLease
 from .state import StateStore
 from .telemetry import emit_event, trace_span
@@ -43,7 +41,11 @@ from .tools.test_execution import TestRunner
 
 
 async def run_agent(
-    objective: str, workspace: Path, settings: Settings | None = None
+    objective: str,
+    workspace: Path,
+    settings: Settings | None = None,
+    *,
+    objective_gate_id: str | None = None,
 ) -> dict[str, Any]:
     """Run one bounded agent session against an exclusively leased target workspace."""
     cfg = settings or Settings()
@@ -60,6 +62,7 @@ async def run_agent(
     started = time.monotonic()
     state = AgentRunState(
         objective=objective,
+        objective_gate_id=objective_gate_id,
         model_id=cfg.model,
         sdk_version=_package_version("claude-agent-sdk"),
         configuration_version=configuration_fingerprint(cfg),
@@ -84,12 +87,13 @@ async def run_agent(
         max_events=max(1000, cfg.max_tool_calls * 50),
     )
     lease = WorkspaceLease(artifact_root, workspace, state.run_id)
-    control = RuntimeControl(
+    control = CoherentRuntimeControl(
         workspace=workspace,
         budget=budget,
         journal=journal,
         metadata_path=run_dir / "runtime.json",
         lease_id=lease.lease_id,
+        max_repeated_action=cfg.max_repeated_action,
     )
     control.persist()
     state_store.save(state)
@@ -171,7 +175,7 @@ async def run_agent(
         )
         policy = PolicyEngine(cfg.control_root, workspace, allow_test_writes=cfg.allow_test_writes)
         runner = TestRunner(workspace, evidence, timeout_seconds=cfg.tool_timeout_seconds)
-        services = RuntimeServices(
+        services = LiveRuntimeServices(
             workspace=workspace,
             state=state,
             evidence=evidence,
@@ -184,12 +188,14 @@ async def run_agent(
             allow_mutating_api_methods=cfg.allow_mutating_api_methods,
             k6_external_egress_enforced=cfg.k6_external_egress_enforced,
             state_store=state_store,
+            control=control,
         )
         internal_server, internal_tool_names = build_internal_mcp_server(services)
 
         external, statuses = build_external_mcp(cfg, policy)
         state.mcp_status = {name: MCPStatus(status) for name, status in statuses.items()}
         mcp_servers: dict[str, Any] = {"qa": internal_server, **external}
+        allowed_tools = sdk_allowed_tools(internal_tool_names, external)
 
         options = ClaudeAgentOptions(
             model=cfg.model,
@@ -204,7 +210,7 @@ async def run_agent(
                 "performance-test",
             ],
             tools=[],
-            allowed_tools=internal_tool_names,
+            allowed_tools=allowed_tools,
             disallowed_tools=[
                 "Bash",
                 "Edit",
@@ -322,6 +328,7 @@ async def run_agent(
                     result_subtype,
                     state.validation_results,
                     current_revision=state.change_revision,
+                    objective_gate_id=state.objective_gate_id,
                 )
         finally:
             if control.pending_mutation is not None:
@@ -445,9 +452,20 @@ def validate_runtime_roots(
 
 
 def run_agent_sync(
-    objective: str, workspace: Path, settings: Settings | None = None
+    objective: str,
+    workspace: Path,
+    settings: Settings | None = None,
+    *,
+    objective_gate_id: str | None = None,
 ) -> dict[str, Any]:
-    return asyncio.run(run_agent(objective, workspace, settings))
+    return asyncio.run(
+        run_agent(
+            objective,
+            workspace,
+            settings,
+            objective_gate_id=objective_gate_id,
+        )
+    )
 
 
 def configuration_fingerprint(settings: Settings) -> str:
@@ -461,126 +479,6 @@ def _package_version(name: str) -> str:
         return importlib.metadata.version(name)
     except importlib.metadata.PackageNotFoundError:
         return "NOT_VERIFIED"
-
-
-def determine_terminal_outcome(
-    result_subtype: str | None,
-    validations: list[ValidationResult],
-    *,
-    current_revision: int = 0,
-) -> tuple[TerminalStatus, str]:
-    if result_subtype != "success":
-        return TerminalStatus.FAILURE, f"Agent result subtype: {result_subtype or 'unknown'}"
-    if not validations:
-        return (
-            TerminalStatus.NOT_VERIFIED,
-            "Agent completed, but no deterministic validation gate proved success.",
-        )
-
-    grouped: dict[str, list[ValidationResult]] = {}
-    for item in validations:
-        grouped.setdefault(item.gate_id or item.name, []).append(item)
-    active: list[ValidationResult] = []
-    flaky_gates: list[str] = []
-    for gate_id, items in grouped.items():
-        latest_revision = max(item.revision for item in items)
-        current = [item for item in items if item.revision == latest_revision]
-        statuses = {item.status for item in current}
-        if ValidationStatus.PASS in statuses and ValidationStatus.FAIL in statuses:
-            flaky_gates.append(gate_id)
-        active.extend(current)
-    if flaky_gates:
-        return (
-            TerminalStatus.NOT_VERIFIED,
-            "Conflicting PASS/FAIL results at the same change revision; possible flakiness: "
-            + ", ".join(sorted(flaky_gates))
-            + ".",
-        )
-    failed = [item for item in active if item.status == ValidationStatus.FAIL]
-    if failed:
-        names = ", ".join(sorted({item.gate_id or item.name for item in failed}))
-        return TerminalStatus.FAILURE, f"Current deterministic validation failed: {names}."
-    incomplete = sorted(
-        {item.status.value for item in active if item.status != ValidationStatus.PASS}
-    )
-    if incomplete:
-        return (
-            TerminalStatus.NOT_VERIFIED,
-            "Agent completed, but current validation remained incomplete: "
-            + ", ".join(incomplete)
-            + ".",
-        )
-    if current_revision == 0:
-        objective_bound = [
-            item
-            for item in active
-            if item.status == ValidationStatus.PASS and item.details.get("objective_bound") is True
-        ]
-        if not objective_bound:
-            return (
-                TerminalStatus.NOT_VERIFIED,
-                "Agent completed with passing deterministic checks, but no trusted validation was deterministically bound to the requested objective.",
-            )
-    if current_revision > 0:
-        current_revision_results = [item for item in active if item.revision == current_revision]
-        if not current_revision_results:
-            return (
-                TerminalStatus.NOT_VERIFIED,
-                "Files changed, but no deterministic validation was executed at the current change revision.",
-            )
-        current_pytest = [
-            item
-            for item in current_revision_results
-            if item.name == "pytest" and item.status == ValidationStatus.PASS
-        ]
-        if not current_pytest:
-            return (
-                TerminalStatus.NOT_VERIFIED,
-                "Files changed, but no passing pytest gate validated the current change revision.",
-            )
-        patch_safety = [
-            item
-            for item in current_revision_results
-            if item.name == "test_patch_safety" and item.status == ValidationStatus.PASS
-        ]
-        if not patch_safety:
-            return (
-                TerminalStatus.NOT_VERIFIED,
-                "Files changed, but deterministic patch-safety validation is missing for the current revision.",
-            )
-        patch_paths = {
-            str(item.details.get("path") or "")
-            for item in patch_safety
-            if str(item.details.get("path") or "")
-        }
-        if len(patch_paths) != 1:
-            return (
-                TerminalStatus.NOT_VERIFIED,
-                "A changed revision must resolve to exactly one patch-safety target path before commit.",
-            )
-        mutation_path = next(iter(patch_paths))
-        targeted = [
-            item
-            for item in current_pytest
-            if item.details.get("scope") == "targeted"
-            and item.details.get("mutation_target_bound") is True
-            and item.details.get("mutation_target") == mutation_path
-        ]
-        regression = [item for item in current_pytest if item.details.get("scope") == "regression"]
-        if not targeted or not regression:
-            return (
-                TerminalStatus.NOT_VERIFIED,
-                "A changed test requires an exact-path-bound targeted pytest PASS and a full-regression pytest PASS at the current revision.",
-            )
-    if all(item.status == ValidationStatus.PASS for item in active):
-        return (
-            TerminalStatus.SUCCESS,
-            "Agent completed and all current deterministic validation gates passed; historical failures remain recorded.",
-        )
-    return (
-        TerminalStatus.NOT_VERIFIED,
-        "Agent completed without a complete deterministic validation closure.",
-    )
 
 
 def sdk_exception_outcome(exc: BaseException) -> tuple[TerminalStatus, str]:
