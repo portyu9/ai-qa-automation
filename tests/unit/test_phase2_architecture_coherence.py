@@ -13,11 +13,11 @@ from ai_qa_automation.models import (
 )
 from ai_qa_automation.policy import PolicyEngine
 from ai_qa_automation.runtime.budget import ExecutionBudget
-from ai_qa_automation.runtime.coherent_control import CoherentRuntimeControl, RepeatedActionError
-from ai_qa_automation.runtime.coherent_hooks import pretool_policy_output
 from ai_qa_automation.runtime.internal_tools import RuntimeServices, _change_revision_closed
 from ai_qa_automation.runtime.journal import RunJournal
 from ai_qa_automation.runtime.live_services import LiveRuntimeServices
+from ai_qa_automation.runtime.run_control import RepeatedActionError, RuntimeControl
+from ai_qa_automation.runtime.runtime_hooks import pretool_policy_output
 from ai_qa_automation.runtime.validation_truth import (
     active_validation_set,
     determine_terminal_outcome,
@@ -176,11 +176,11 @@ def test_legacy_internal_mutation_precheck_conforms_to_shared_closure(tmp_path: 
         assert _change_revision_closed(services.state) is expected
 
 
-def make_control(tmp_path: Path, *, max_repeated_action: int = 2) -> CoherentRuntimeControl:
+def make_control(tmp_path: Path, *, max_repeated_action: int = 2) -> RuntimeControl:
     workspace = tmp_path / "sut"
     workspace.mkdir()
     run_dir = tmp_path / "run"
-    return CoherentRuntimeControl(
+    return RuntimeControl(
         workspace=workspace,
         budget=ExecutionBudget(
             max_tool_calls=10,
