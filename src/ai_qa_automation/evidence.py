@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
+import stat
 import tempfile
 import threading
 from collections.abc import Iterator
@@ -10,7 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .io_safety import read_text_bounded, sha256_file_bounded
+from .io_safety import fsync_directory, open_regular_binary, read_text_bounded, sha256_file_bounded
 from .models import ArtifactRecord, EvidenceItem, SanitizationStatus
 from .redaction import sanitize
 
@@ -173,6 +175,7 @@ class EvidenceStore:
                     os.fsync(stream.fileno())
                 try:
                     os.link(temp, destination)
+                    fsync_directory(destination.parent)
                 except FileExistsError:
                     raise FileExistsError(
                         f"artifact path is immutable and already exists: {relative_path}"
@@ -214,6 +217,7 @@ class EvidenceStore:
                 if self._audit_sequence == audit_sequence_before:
                     self._artifacts.pop(record.artifact_id, None)
                     destination.unlink(missing_ok=True)
+                    fsync_directory(destination.parent)
                 raise
             return record.path, digest
 
@@ -247,13 +251,33 @@ class EvidenceStore:
         rendered_bytes = rendered.encode("utf-8")
         if len(rendered_bytes) > _MAX_EVIDENCE_AUDIT_LINE_BYTES:
             raise ValueError("regulated audit event exceeds line-size bound")
-        existing_size = path.stat().st_size if path.exists() else 0
-        if existing_size + len(rendered_bytes) > _MAX_EVIDENCE_AUDIT_BYTES:
-            raise ValueError("regulated audit log exceeds persistence size bound")
-        with path.open("a", encoding="utf-8") as stream:
-            stream.write(rendered)
-            stream.flush()
-            os.fsync(stream.fileno())
+
+        flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0)
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        if nofollow:
+            flags |= nofollow
+        try:
+            fd = os.open(path, flags, 0o600)
+        except OSError as exc:
+            if nofollow and exc.errno == errno.ELOOP:
+                raise ValueError("regulated audit log became a symlink during append") from exc
+            raise
+        try:
+            opened = os.fstat(fd)
+            if not stat.S_ISREG(opened.st_mode):
+                raise ValueError("regulated audit log must remain a regular file")
+            if opened.st_size + len(rendered_bytes) > _MAX_EVIDENCE_AUDIT_BYTES:
+                raise ValueError("regulated audit log exceeds persistence size bound")
+            with os.fdopen(fd, "a", encoding="utf-8") as stream:
+                fd = -1
+                stream.write(rendered)
+                stream.flush()
+                os.fsync(stream.fileno())
+            if opened.st_size == 0:
+                fsync_directory(path.parent)
+        finally:
+            if fd >= 0:
+                os.close(fd)
         self._audit_sequence = next_sequence
         self._audit_previous_hash = event_hash
 
@@ -302,7 +326,7 @@ class EvidenceStore:
             return
         if path.stat().st_size > _MAX_EVIDENCE_AUDIT_BYTES:
             raise ValueError("regulated audit log exceeds restore size bound")
-        with path.open("rb") as stream:
+        with open_regular_binary(path, label="regulated audit log") as stream:
             total_bytes = 0
             while True:
                 raw_line = stream.readline(_MAX_EVIDENCE_AUDIT_LINE_BYTES + 1)
@@ -473,5 +497,6 @@ class EvidenceStore:
                 stream.flush()
                 os.fsync(stream.fileno())
             temp.replace(path)
+            fsync_directory(path.parent)
         finally:
             temp.unlink(missing_ok=True)
