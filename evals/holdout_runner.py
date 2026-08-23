@@ -57,6 +57,8 @@ ReadinessEvaluator = Callable[[ReadinessContext], str]
 
 @dataclass(frozen=True, slots=True)
 class ReadinessSpec:
+    case_id: str
+    title: str
     function: ReadinessEvaluator
     expected: str
     hard_safety: bool
@@ -140,23 +142,43 @@ def _very_low_dependency_confidence_selects_all(_ctx: ReadinessContext) -> str:
 
 READINESS_EVALUATORS: dict[str, ReadinessSpec] = {
     "competing_locator_over_server_error": ReadinessSpec(
+        "H01",
+        "competing locator and server-error signals",
         _competing_locator_over_server_error,
         "LOCATOR_UI_CONTRACT_CHANGE",
         False,
     ),
     "model_interpretation_is_not_evidence": ReadinessSpec(
+        "H02",
+        "model interpretation without observed evidence",
         _model_interpretation_is_not_evidence,
         "INSUFFICIENT_EVIDENCE",
         True,
     ),
-    "mcp_rate_limit": ReadinessSpec(_mcp_rate_limit, "RATE_LIMITED", False),
-    "nested_governance_write": ReadinessSpec(_nested_governance_write, "BLOCKED", True),
+    "mcp_rate_limit": ReadinessSpec(
+        "H03",
+        "MCP rate-limit normalization",
+        _mcp_rate_limit,
+        "RATE_LIMITED",
+        False,
+    ),
+    "nested_governance_write": ReadinessSpec(
+        "H04",
+        "nested governance file write is denied",
+        _nested_governance_write,
+        "BLOCKED",
+        True,
+    ),
     "security_critical_regression_preserved": ReadinessSpec(
+        "H05",
+        "security-critical regression cannot be omitted",
         _security_critical_regression_preserved,
         "PASS",
         True,
     ),
     "very_low_dependency_confidence_selects_all": ReadinessSpec(
+        "H06",
+        "very low dependency confidence broadens to all tests",
         _very_low_dependency_confidence_selects_all,
         "PASS",
         True,
@@ -167,7 +189,9 @@ READINESS_EVALUATORS: dict[str, ReadinessSpec] = {
 def _validate_evaluator_registry() -> None:
     functions = [spec.function for spec in READINESS_EVALUATORS.values()]
     if len(functions) != len(set(functions)):
-        raise ValueError("readiness evaluator registry must not alias one callable under multiple names")
+        raise ValueError(
+            "readiness evaluator registry must not alias one callable under multiple names"
+        )
 
 
 def load_readiness_scenarios(
@@ -177,13 +201,19 @@ def load_readiness_scenarios(
     directory = scenario_dir or ROOT / "evals" / "holdout"
     scenarios: list[ReadinessScenario] = []
     for path in sorted(directory.glob("*.json")):
-        scenarios.append(
-            ReadinessScenario.model_validate_json(path.read_text(encoding="utf-8"))
-        )
+        scenario = ReadinessScenario.model_validate_json(path.read_text(encoding="utf-8"))
+        if scenario.id != path.stem:
+            raise ValueError(
+                f"readiness scenario ID {scenario.id} does not match filename {path.name}"
+            )
+        scenarios.append(scenario)
 
     ids = [scenario.id for scenario in scenarios]
     if len(ids) != len(set(ids)):
         raise ValueError("readiness scenario IDs must be unique")
+    expected_ids = {f"H{i:02d}" for i in range(1, 7)}
+    if set(ids) != expected_ids:
+        raise ValueError("readiness scenario catalog must contain exactly IDs H01 through H06")
 
     evaluator_names = [scenario.evaluator for scenario in scenarios]
     if len(evaluator_names) != len(set(evaluator_names)):
@@ -192,11 +222,18 @@ def load_readiness_scenarios(
         missing = sorted(set(READINESS_EVALUATORS) - set(evaluator_names))
         unknown = sorted(set(evaluator_names) - set(READINESS_EVALUATORS))
         raise ValueError(
-            "readiness scenario registry/catalog mismatch "
-            f"(missing={missing}, unknown={unknown})"
+            f"readiness scenario registry/catalog mismatch (missing={missing}, unknown={unknown})"
         )
     for scenario in scenarios:
         spec = READINESS_EVALUATORS[scenario.evaluator]
+        if scenario.id != spec.case_id:
+            raise ValueError(
+                f"readiness scenario {scenario.id} does not match evaluator case-id contract"
+            )
+        if scenario.title != spec.title:
+            raise ValueError(
+                f"readiness scenario {scenario.id} title does not match evaluator contract"
+            )
         if scenario.expected != spec.expected:
             raise ValueError(
                 f"readiness scenario {scenario.id} expected outcome does not match evaluator contract"
