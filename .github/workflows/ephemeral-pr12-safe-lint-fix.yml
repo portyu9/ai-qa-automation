@@ -64,23 +64,37 @@ jobs:
       - name: Apply only reviewed exact repairs
         run: python .pr12-maintenance/.github/pr12-remediate.py
 
-      - name: Apply final reviewed simplification repairs
+      - name: Apply final reviewed lint and fixture repairs
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
 
-          def replace_exact(path_s: str, old: str, new: str) -> None:
+          def replace_exact(path_s: str, old: str, new: str, *, count: int = 1) -> None:
               path = Path(path_s)
               text = path.read_text(encoding="utf-8")
               observed = text.count(old)
-              if observed != 1:
+              if observed != count:
                   raise SystemExit(
-                      f"refusing ambiguous final repair in {path}: expected 1 occurrence, "
+                      f"refusing ambiguous final repair in {path}: expected {count} occurrence(s), "
                       f"found {observed}: {old!r}"
                   )
               path.write_text(text.replace(old, new), encoding="utf-8")
+
+          # ROOT is runtime data, not import setup. Keep it after every module import.
+          for path_s, last_import in (
+              ("evals/runner.py", "from ai_qa_automation.tools.validation import ValidationGate\n"),
+              ("evals/holdout_runner.py", "from ai_qa_automation.policy import PolicyEngine\n"),
+          ):
+              path = Path(path_s)
+              text = path.read_text(encoding="utf-8")
+              root_line = 'ROOT = Path(__file__).resolve().parents[1]\n'
+              if text.count(root_line) != 1 or text.count(last_import) != 1:
+                  raise SystemExit(f"refusing ambiguous evaluator import repair in {path}")
+              text = text.replace(root_line, "", 1)
+              text = text.replace(last_import, last_import + "\n" + root_line, 1)
+              path.write_text(text, encoding="utf-8")
 
           replace_exact(
               "src/ai_qa_automation/intelligence/quality_review.py",
@@ -110,6 +124,33 @@ jobs:
               "    ):\n"
               "        raise ValueError(\"runtime failure\")",
           )
+
+          # These exact lines are synthetic credential-shaped fixtures used to prove
+          # redaction/non-leakage. Inline allowlisting leaves every other repository
+          # line under detect-secrets rather than excluding test directories wholesale.
+          allowlist_repairs = {
+              "tests/unit/test_doctor.py": [
+                  ('    secret = "test-only-secret-that-must-never-appear"', '    secret = "test-only-secret-that-must-never-appear"  # pragma: allowlist secret', 1),
+              ],
+              "tests/unit/test_redaction.py": [
+                  ('        "AK" + "IA" + "1234567890ABCDEF",', '        "AK" + "IA" + "1234567890ABCDEF",  # pragma: allowlist secret', 1),
+                  ('        "gh" + "p_" + "abcdefghijklmnopqrstuvwxyz123456",', '        "gh" + "p_" + "abcdefghijklmnopqrstuvwxyz123456",  # pragma: allowlist secret', 1),
+                  ('        "github_" + "pat_" + "1234567890abcdefghijklmnopqrstuv",', '        "github_" + "pat_" + "1234567890abcdefghijklmnopqrstuv",  # pragma: allowlist secret', 1),
+                  ('        "sk-" + "ant-" + "abcdefghijklmnopqrstuvwxyz",', '        "sk-" + "ant-" + "abcdefghijklmnopqrstuvwxyz",  # pragma: allowlist secret', 1),
+                  ('        "sk-" + "proj-" + "abcdefghijklmnopqrstuvwxyz1234567890",', '        "sk-" + "proj-" + "abcdefghijklmnopqrstuvwxyz1234567890",  # pragma: allowlist secret', 1),
+                  ('        "xox" + "b-" + "1234567890-abcdefghijklmnop",', '        "xox" + "b-" + "1234567890-abcdefghijklmnop",  # pragma: allowlist secret', 1),
+                  ('    text = "https://automation-user:super-secret-password@example.test/api"', '    text = "https://automation-user:super-secret-password@example.test/api"  # pragma: allowlist secret', 1),
+                  ('    secret = "unknown-format-secret-that-still-must-not-survive"', '    secret = "unknown-format-secret-that-still-must-not-survive"  # pragma: allowlist secret', 1),
+                  ('        "nested": ["https://user:password@example.test"],', '        "nested": ["https://user:password@example.test"],  # pragma: allowlist secret', 1),
+              ],
+              "tests/unit/test_runtime_hooks.py": [
+                  ('    secret = "sk-" + "ant-" + "this-must-never-enter-the-journal"', '    secret = "sk-" + "ant-" + "this-must-never-enter-the-journal"  # pragma: allowlist secret', 1),
+                  ('    secret = "github_" + "pat_" + "1234567890abcdefghijklmnopqrstuv"', '    secret = "github_" + "pat_" + "1234567890abcdefghijklmnopqrstuv"  # pragma: allowlist secret', 1),
+              ],
+          }
+          for path_s, repairs in allowlist_repairs.items():
+              for old, new, count in repairs:
+                  replace_exact(path_s, old, new, count=count)
           PY
 
       - name: Apply only Ruff-declared safe cleanup and canonical formatting
@@ -172,6 +213,22 @@ jobs:
       - name: Full deterministic pytest before push
         run: pytest -q
 
+      - name: Validate reviewed secret fixtures remain the only scanner-shaped data
+        shell: bash
+        run: |
+          set -euo pipefail
+          detect-secrets scan --all-files --exclude-files '(^|/)\.git/' > /tmp/secret-scan.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          findings = json.loads(Path('/tmp/secret-scan.json').read_text()).get('results', {})
+          if findings:
+              for path, items in findings.items():
+                  print(path, len(items))
+              raise SystemExit('detect-secrets still reports candidate findings')
+          print('No unallowlisted potential secrets detected in candidate.')
+          PY
+
       - name: Primary and holdout evaluators before push
         shell: bash
         run: |
@@ -202,5 +259,5 @@ jobs:
           git config user.email "35150859+portyu9@users.noreply.github.com"
           git add -- '*.py'
           git diff --cached --check
-          git commit -m "Close remaining strict lint findings"
+          git commit -m "Close remaining strict lint and security fixture findings"
           git push origin "HEAD:refs/heads/$SOURCE_BRANCH"
