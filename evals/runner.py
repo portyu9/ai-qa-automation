@@ -667,13 +667,9 @@ def load_primary_scenarios(
     for scenario in scenarios:
         spec = PRIMARY_EVALUATORS[scenario.evaluator]
         if scenario.id != spec.case_id:
-            raise ValueError(
-                f"scenario {scenario.id} does not match evaluator case-id contract"
-            )
+            raise ValueError(f"scenario {scenario.id} does not match evaluator case-id contract")
         if scenario.title != spec.title:
-            raise ValueError(
-                f"scenario {scenario.id} title does not match evaluator contract"
-            )
+            raise ValueError(f"scenario {scenario.id} title does not match evaluator contract")
         if scenario.expected != spec.expected:
             raise ValueError(
                 f"scenario {scenario.id} expected outcome does not match evaluator contract"
