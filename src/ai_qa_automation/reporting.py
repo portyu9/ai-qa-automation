@@ -26,5 +26,6 @@ def build_final_report(
             "tool_schema_version": state.tool_schema_version,
             "configuration_version": state.configuration_version,
             "target_git_sha": state.target_git_sha or "NOT_OBSERVED",
+            "objective_gate_id": state.objective_gate_id or "NOT_SUPPLIED",
         },
     )
