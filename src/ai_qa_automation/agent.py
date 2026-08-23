@@ -32,7 +32,6 @@ from .runtime.sdk_recovery import (
 )
 from .runtime.stale_recovery import recover_stale_mutation
 from .runtime.system_prompt import RUNTIME_SYSTEM_PROMPT
-from .runtime.tool_surface import sdk_allowed_tools
 from .runtime.validation_truth import determine_terminal_outcome
 from .runtime.workspace_lease import WorkspaceBusyError, WorkspaceLease
 from .state import StateStore
@@ -196,7 +195,13 @@ async def run_agent(
         external, statuses = build_external_mcp(cfg, policy)
         state.mcp_status = {name: MCPStatus(status) for name, status in statuses.items()}
         mcp_servers: dict[str, Any] = {"qa": internal_server, **external}
-        allowed_tools = sdk_allowed_tools(internal_tool_names, external)
+
+        # `allowed_tools` is an SDK permission allow-rule, not an availability list.
+        # Internal QA tools are safe to pre-approve because PreToolUse still applies
+        # the deterministic runtime policy to every request. External MCP tools must
+        # remain unlisted here so permission_mode="default" routes each concrete
+        # provider action through can_use_tool instead of granting server-wide approval.
+        allowed_tools = list(internal_tool_names)
 
         options = ClaudeAgentOptions(
             model=cfg.model,
@@ -358,11 +363,11 @@ async def run_agent(
                     )
                     journal.try_append("rollback_failed", error_type=type(rollback_exc).__name__)
             state.phase = "TERMINAL"
-            state.duration = time.monotonic() - started
+            state.duration_seconds = max(0.0, time.monotonic() - started)
             journal.try_append(
                 "agent_run_finished",
-                terminal_status=state.terminal_status.value if state.terminal_status else "UNKNOWN",
-                duration_seconds=round(state.duration, 3),
+                terminal_status=state.terminal_status.value,
+                duration_seconds=state.duration_seconds,
                 tool_calls=state.tool_call_count,
             )
             _sync_operational_state(state, state_store, control)
@@ -370,49 +375,14 @@ async def run_agent(
                 logger,
                 "agent_run_finished",
                 run_id=state.run_id,
-                terminal_status=state.terminal_status.value if state.terminal_status else "UNKNOWN",
-                duration_seconds=round(state.duration, 3),
+                terminal_status=state.terminal_status.value,
+                duration_seconds=round(state.duration_seconds, 3),
                 tool_calls=state.tool_call_count,
             )
-
-        return _final_response(
-            state,
-            agent_result=final_text,
-            limitations=[
-                "A model response is not a test result; only deterministic validations can produce verified success.",
-                "External MCP capability remains NOT_VERIFIED unless authenticated and exercised in this environment.",
-                "Crash recovery verifies persisted state/journal integrity and starts a new model session; it does not replay a prior conversation.",
-            ],
-        )
     finally:
         lease.release()
 
-
-def _remove_latest_modified_path(state: AgentRunState, path: str) -> None:
-    """Remove only the rolled-back mutation occurrence, preserving earlier committed history."""
-    for index in range(len(state.files_modified) - 1, -1, -1):
-        if state.files_modified[index] == path:
-            state.files_modified.pop(index)
-            return
-
-
-def _sync_operational_state(
-    state: AgentRunState,
-    state_store: StateStore,
-    control: RuntimeControl,
-) -> None:
-    state_store.save(state)
-    control.persist()
-
-
-def _final_response(
-    state: AgentRunState,
-    *,
-    agent_result: str,
-    limitations: list[str],
-) -> dict[str, Any]:
-    report = build_final_report(state, limitations=limitations)
-    return {"report": report.model_dump(mode="json"), "agent_result": agent_result}
+    return _final_response(state, agent_result=final_text)
 
 
 def validate_runtime_roots(
@@ -421,70 +391,153 @@ def validate_runtime_roots(
     *,
     artifact_root: Path | None = None,
 ) -> None:
-    control_root = control_root.expanduser().resolve()
-    workspace = workspace.expanduser().resolve()
-    required = [control_root / "CLAUDE.md", control_root / ".claude" / "settings.json"]
-    missing = [path.relative_to(control_root).as_posix() for path in required if not path.is_file()]
-    if missing:
-        raise ValueError(
-            "control_root is not a trusted agent project root; missing: " + ", ".join(missing)
-        )
-    if (
-        control_root == workspace
-        or control_root in workspace.parents
-        or workspace in control_root.parents
-    ):
-        raise ValueError(
-            "control_root and target workspace must be disjoint; use an isolated SUT clone/worktree"
-        )
+    """Require trusted control, target, and artifact roots to remain disjoint."""
+
+    control = control_root.expanduser().resolve()
+    target = workspace.expanduser().resolve()
+    if _paths_overlap(control, target):
+        raise ValueError("control_root and target workspace must be disjoint")
     if artifact_root is not None:
         artifacts = artifact_root.expanduser().resolve()
-        if (
-            artifacts == workspace
-            or artifacts in workspace.parents
-            or workspace in artifacts.parents
-        ):
-            raise ValueError(
-                "artifact_root and target workspace must be disjoint so evidence/state cannot modify the SUT"
-            )
+        if _paths_overlap(artifacts, target):
+            raise ValueError("artifact_root and target workspace must be disjoint")
+
+    required = [
+        control / "CLAUDE.md",
+        control / ".claude" / "settings.json",
+    ]
+    missing = [str(path.relative_to(control)) for path in required if not path.is_file()]
+    if missing:
+        raise ValueError("control_root is missing trusted runtime configuration: " + ", ".join(missing))
 
 
-def run_agent_sync(
-    objective: str,
-    workspace: Path,
-    settings: Settings | None = None,
-    *,
-    objective_gate_id: str | None = None,
-) -> dict[str, Any]:
-    return asyncio.run(
-        run_agent(
-            objective,
-            workspace,
-            settings,
-            objective_gate_id=objective_gate_id,
-        )
-    )
+def _paths_overlap(left: Path, right: Path) -> bool:
+    try:
+        right.relative_to(left)
+        return True
+    except ValueError:
+        pass
+    try:
+        left.relative_to(right)
+        return True
+    except ValueError:
+        return False
 
 
 def configuration_fingerprint(settings: Settings) -> str:
-    payload = settings.model_dump(mode="json")
-    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
-    return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
+    """Stable hash of non-secret runtime configuration used in provenance."""
+
+    payload = {
+        "model": settings.model,
+        "regulated_mode": settings.regulated_mode,
+        "allow_external_network": settings.allow_external_network,
+        "allowed_network_hosts": sorted(settings.allowed_network_hosts),
+        "allow_test_writes": settings.allow_test_writes,
+        "allow_mutating_api_methods": settings.allow_mutating_api_methods,
+        "k6_external_egress_enforced": settings.k6_external_egress_enforced,
+        "enable_github_mcp": settings.enable_github_mcp,
+        "enable_atlassian_mcp": settings.enable_atlassian_mcp,
+        "max_turns": settings.max_turns,
+        "max_tool_calls": settings.max_tool_calls,
+        "max_network_calls": settings.max_network_calls,
+        "max_mutations": settings.max_mutations,
+        "max_repeated_action": settings.max_repeated_action,
+        "max_sdk_retries": settings.max_sdk_retries,
+        "sdk_retry_backoff_seconds": settings.sdk_retry_backoff_seconds,
+        "sdk_retry_max_backoff_seconds": settings.sdk_retry_max_backoff_seconds,
+        "tool_timeout_seconds": settings.tool_timeout_seconds,
+        "global_timeout_seconds": settings.global_timeout_seconds,
+        "max_cost_usd": settings.max_cost_usd,
+    }
+    rendered = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+
+
+def _sync_operational_state(
+    state: AgentRunState,
+    state_store: StateStore,
+    control: RuntimeControl,
+) -> None:
+    snapshot = control.snapshot()
+    state.runtime_budget = dict(snapshot["budget"])
+    state.open_circuits = list(snapshot["open_circuits"])
+    pending = snapshot["pending_mutation"]
+    state.pending_mutation = str(pending) if pending else None
+    state_store.save(state)
+    control.persist()
+
+
+def _final_response(
+    state: AgentRunState,
+    *,
+    agent_result: str,
+    limitations: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "report": build_final_report(state, limitations=limitations).model_dump(mode="json"),
+        "agent_result": agent_result,
+        "provenance": {
+            "run_id": state.run_id,
+            "model_id": state.model_id,
+            "sdk_version": state.sdk_version,
+            "configuration_version": state.configuration_version,
+            "target_git_sha": state.target_git_sha,
+            "objective_gate_id": state.objective_gate_id,
+        },
+    }
+
+
+def _remove_latest_modified_path(state: AgentRunState, path: str) -> None:
+    for index in range(len(state.files_modified) - 1, -1, -1):
+        if state.files_modified[index] == path:
+            state.files_modified.pop(index)
+            break
+
+
+def sdk_exception_outcome(exc: BaseException) -> tuple[TerminalStatus, str]:
+    """Classify SDK failures conservatively without depending on private SDK exception types."""
+
+    text = f"{type(exc).__name__}: {exc}".casefold()
+    if any(
+        marker in text
+        for marker in (
+            "authentication",
+            "unauthorized",
+            "401",
+            "403",
+            "invalid api key",
+            "invalid_api_key",
+        )
+    ):
+        return (
+            TerminalStatus.BLOCKED,
+            f"Agent SDK authentication/authorization failed: {type(exc).__name__}",
+        )
+    if any(
+        marker in text
+        for marker in (
+            "connection",
+            "connecterror",
+            "timeout",
+            "timed out",
+            "network",
+            "unavailable",
+            "overloaded",
+            "rate limit",
+            "rate_limit",
+            "429",
+            "529",
+        )
+    ):
+        return (
+            TerminalStatus.INFRASTRUCTURE_FAILURE,
+            f"Agent SDK/provider transport failed: {type(exc).__name__}",
+        )
+    return TerminalStatus.FAILURE, f"Agent SDK execution failed: {type(exc).__name__}"
 
 
 def _package_version(name: str) -> str:
     try:
         return importlib.metadata.version(name)
-    except importlib.metadata.PackageNotFoundError:
-        return "NOT_VERIFIED"
-
-
-def sdk_exception_outcome(exc: BaseException) -> tuple[TerminalStatus, str]:
-    if isinstance(exc, BudgetExceededError):
-        return TerminalStatus.BUDGET_EXCEEDED, str(exc)
-    if isinstance(exc, WorkspaceBusyError):
-        return TerminalStatus.BLOCKED, str(exc)
-    return (
-        TerminalStatus.INFRASTRUCTURE_FAILURE,
-        f"Agent SDK execution failed: {type(exc).__name__}",
-    )
+    except importlib.metadata.PackageNotFoundError:  # pragma: no cover
+        return "unknown"
