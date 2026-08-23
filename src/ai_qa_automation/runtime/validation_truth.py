@@ -56,10 +56,17 @@ def evaluate_revision_closure(
     Revision zero has no autonomous mutation to close. A positive revision closes
     only when every result at that revision is PASS, exactly one patch-safety
     subject exists, targeted pytest is explicitly bound to that subject, and a
-    full regression pytest PASS exists at the same revision.
+    full regression pytest PASS exists at the same revision. Negative revision
+    state is invalid and fails closed rather than being treated as unchanged.
     """
 
-    if current_revision <= 0:
+    if current_revision < 0:
+        return RevisionClosure(
+            False,
+            "invalid_revision",
+            "Change revision must be a non-negative integer before deterministic closure.",
+        )
+    if current_revision == 0:
         return RevisionClosure(True, "unchanged", "No changed revision requires closure.")
 
     current = [item for item in validations if item.revision == current_revision]
@@ -164,6 +171,11 @@ def determine_terminal_outcome(
 
     if result_subtype != "success":
         return TerminalStatus.FAILURE, f"Agent result subtype: {result_subtype or 'unknown'}"
+    if current_revision < 0:
+        return (
+            TerminalStatus.NOT_VERIFIED,
+            "Agent completed, but change revision is invalid and deterministic closure cannot be established.",
+        )
     if not validations:
         return (
             TerminalStatus.NOT_VERIFIED,
