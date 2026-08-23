@@ -1,9 +1,9 @@
 name: Temporary Phase 1 Exact-SHA Validation
 
 on:
-  push:
+  pull_request:
     branches:
-      - feature/phase1-runtime-hardening
+      - main
     paths:
       - .github/workflows/phase1-exact-sha-validation.yml
 
