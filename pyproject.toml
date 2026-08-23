@@ -75,7 +75,7 @@ packages = ["src/ai_qa_automation"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 addopts = "-q --strict-markers --disable-warnings -m 'not browser and not model'"
 markers = [
   "integration: deterministic integration tests",
