@@ -45,6 +45,14 @@ def active_validation_set(validations: list[ValidationResult]) -> ActiveValidati
     return ActiveValidationSet(tuple(active), tuple(conflicts))
 
 
+def _future_validation_revisions(
+    validations: list[ValidationResult] | tuple[ValidationResult, ...],
+    *,
+    current_revision: int,
+) -> tuple[int, ...]:
+    return tuple(sorted({item.revision for item in validations if item.revision > current_revision}))
+
+
 def evaluate_revision_closure(
     validations: list[ValidationResult] | tuple[ValidationResult, ...],
     *,
@@ -56,8 +64,8 @@ def evaluate_revision_closure(
     Revision zero has no autonomous mutation to close. A positive revision closes
     only when every result at that revision is PASS, exactly one patch-safety
     subject exists, targeted pytest is explicitly bound to that subject, and a
-    full regression pytest PASS exists at the same revision. Negative revision
-    state is invalid and fails closed rather than being treated as unchanged.
+    full regression pytest PASS exists at the same revision. Negative or
+    future-ahead revision state is invalid and fails closed.
     """
 
     if current_revision < 0:
@@ -65,6 +73,18 @@ def evaluate_revision_closure(
             False,
             "invalid_revision",
             "Change revision must be a non-negative integer before deterministic closure.",
+        )
+    future_revisions = _future_validation_revisions(
+        validations,
+        current_revision=current_revision,
+    )
+    if future_revisions:
+        return RevisionClosure(
+            False,
+            "future_validation_revision",
+            "Validation lineage is ahead of canonical change revision: "
+            + ", ".join(str(item) for item in future_revisions)
+            + ".",
         )
     if current_revision == 0:
         return RevisionClosure(True, "unchanged", "No changed revision requires closure.")
@@ -175,6 +195,17 @@ def determine_terminal_outcome(
         return (
             TerminalStatus.NOT_VERIFIED,
             "Agent completed, but change revision is invalid and deterministic closure cannot be established.",
+        )
+    future_revisions = _future_validation_revisions(
+        validations,
+        current_revision=current_revision,
+    )
+    if future_revisions:
+        return (
+            TerminalStatus.NOT_VERIFIED,
+            "Agent completed, but validation lineage is ahead of canonical change revision: "
+            + ", ".join(str(item) for item in future_revisions)
+            + ".",
         )
     if not validations:
         return (
