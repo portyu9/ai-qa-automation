@@ -72,7 +72,9 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
         try:
             decoded = normalized.decode("utf-8")
         except UnicodeDecodeError as exc:
-            raise OSError("workspace lease metadata is not valid UTF-8; manual review is required") from exc
+            raise OSError(
+                "workspace lease metadata is not valid UTF-8; manual review is required"
+            ) from exc
         try:
             previous = json.loads(decoded)
         except json.JSONDecodeError as exc:
