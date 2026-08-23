@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .coherent_control import CoherentRuntimeControl
 from .internal_tools import RuntimeServices
+from .run_control import RuntimeControl
 
 
 @dataclass
@@ -12,13 +12,13 @@ class LiveRuntimeServices(RuntimeServices):
     """RuntimeServices adapter whose live tool accounting is owned by PreToolUse.
 
     Internal tool implementations still call ``consume`` as an execution
-    checkpoint, but they no longer maintain an independent budget/repetition
-    authority. The hook-owned RuntimeControl covers internal and external tools
-    uniformly and this adapter mirrors its charged request count into canonical
-    run state.
+    checkpoint, but they do not maintain an independent live budget/repetition
+    authority. Canonical RuntimeControl covers internal and external SDK tool
+    requests uniformly; this adapter only mirrors that charged request count into
+    AgentRunState while preserving standalone RuntimeServices behavior elsewhere.
     """
 
-    control: CoherentRuntimeControl | None = None
+    control: RuntimeControl | None = None
 
     def __post_init__(self) -> None:
         super().__post_init__()
