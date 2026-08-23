@@ -29,7 +29,7 @@ def fsync_directory(path: Path) -> None:
         os.close(fd)
 
 
-def _open_regular_binary(path: Path, *, label: str) -> BinaryIO:
+def open_regular_binary(path: Path, *, label: str) -> BinaryIO:
     """Open a regular file without following a final-component symlink when supported."""
 
     if path.is_symlink():
@@ -73,7 +73,7 @@ def read_bytes_bounded(path: Path, *, max_bytes: int, label: str) -> bytes:
     """
 
     limit = _validated_bound(max_bytes)
-    with _open_regular_binary(path, label=label) as stream:
+    with open_regular_binary(path, label=label) as stream:
         content = stream.read(limit + 1)
     if len(content) > limit:
         raise ValueError(f"{label} exceeds {limit} byte ingestion limit")
@@ -92,7 +92,7 @@ def sha256_file_bounded(path: Path, *, max_bytes: int, label: str) -> tuple[str,
     limit = _validated_bound(max_bytes)
     digest = hashlib.sha256()
     total = 0
-    with _open_regular_binary(path, label=label) as stream:
+    with open_regular_binary(path, label=label) as stream:
         while True:
             chunk = stream.read(_READ_CHUNK_BYTES)
             if not chunk:
