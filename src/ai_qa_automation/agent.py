@@ -444,32 +444,11 @@ def run_agent_sync(
 
 
 def configuration_fingerprint(settings: Settings) -> str:
-    """Stable hash of non-secret runtime configuration used in provenance."""
+    """Bind provenance to the complete trusted runtime configuration."""
 
-    payload = {
-        "model": settings.model,
-        "regulated_mode": settings.regulated_mode,
-        "allow_external_network": settings.allow_external_network,
-        "allowed_network_hosts": sorted(settings.allowed_network_hosts),
-        "allow_test_writes": settings.allow_test_writes,
-        "allow_mutating_api_methods": settings.allow_mutating_api_methods,
-        "k6_external_egress_enforced": settings.k6_external_egress_enforced,
-        "enable_github_mcp": settings.enable_github_mcp,
-        "enable_atlassian_mcp": settings.enable_atlassian_mcp,
-        "max_turns": settings.max_turns,
-        "max_tool_calls": settings.max_tool_calls,
-        "max_network_calls": settings.max_network_calls,
-        "max_mutations": settings.max_mutations,
-        "max_repeated_action": settings.max_repeated_action,
-        "max_sdk_retries": settings.max_sdk_retries,
-        "sdk_retry_backoff_seconds": settings.sdk_retry_backoff_seconds,
-        "sdk_retry_max_backoff_seconds": settings.sdk_retry_max_backoff_seconds,
-        "tool_timeout_seconds": settings.tool_timeout_seconds,
-        "global_timeout_seconds": settings.global_timeout_seconds,
-        "max_cost_usd": settings.max_cost_usd,
-    }
-    rendered = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+    payload = settings.model_dump(mode="json")
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
 
 
 def _sync_operational_state(
@@ -559,4 +538,4 @@ def _package_version(name: str) -> str:
     try:
         return importlib.metadata.version(name)
     except importlib.metadata.PackageNotFoundError:  # pragma: no cover
-        return "unknown"
+        return "NOT_VERIFIED"
