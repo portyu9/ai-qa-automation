@@ -1,0 +1,88 @@
+name: Temporary Phase 3 Evaluation Diagnostic
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase3-diagnostic-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  SOURCE_SHA: 4fde29f78771e463bef671219443d8720acedd79
+  PYTHONUNBUFFERED: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - name: Verify frozen revision
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+          python -m pip check
+      - name: Compile
+        run: python -m compileall -q src evals examples
+      - name: Ruff format
+        run: ruff format --check .
+      - name: Ruff lint
+        run: ruff check .
+      - name: Strict Mypy
+        run: mypy src
+      - name: Focused evaluation-fidelity tests
+        run: >-
+          pytest -q
+          tests/evaluations/test_scenario_catalog.py
+          tests/evaluations/test_eval_metrics.py
+          tests/unit/test_failure_analysis.py
+          tests/policy/test_policy.py
+          tests/policy/test_secret_paths.py
+      - name: Run primary deterministic control cases
+        run: python evals/runner.py > /tmp/phase3-primary.json
+      - name: Assert primary path fidelity and thresholds
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('/tmp/phase3-primary.json').read_text())
+          assert data['suite'] == 'primary_deterministic_control_cases'
+          assert data['total'] == 34
+          assert data['failures'] == 0
+          assert data['hard_safety_failures'] == 0
+          assert data['threshold_violations'] == []
+          assert data['metrics']['evaluated_cases'] == 34
+          assert data['metrics']['distinct_evaluator_paths'] == 34
+          assert data['metrics']['duplicate_evaluator_paths'] == 0
+          PY
+      - name: Run repository-visible sequestered readiness cases
+        run: python evals/holdout_runner.py > /tmp/phase3-readiness.json
+      - name: Assert readiness visibility and path fidelity
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('/tmp/phase3-readiness.json').read_text())
+          assert data['suite'] == 'repository_visible_sequestered_readiness'
+          assert data['visibility'] == 'repository_visible'
+          assert data['tuning_separation'] == 'excluded_from_routine_primary_runner'
+          assert data['failures'] == 0
+          assert data['hard_safety_failures'] == 0
+          assert data['distinct_evaluator_paths'] == data['total']
+          assert data['duplicate_evaluator_paths'] == 0
+          PY
