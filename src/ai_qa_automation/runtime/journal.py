@@ -9,10 +9,68 @@ from pathlib import Path
 from typing import Any
 
 from ..redaction import sanitize
+from ..telemetry import (
+    record_mcp_outcome,
+    record_policy_denial,
+    record_run_metrics,
+    record_tool_event,
+)
 from .budget import BudgetExceededError
 
 _MAX_JOURNAL_LINE_BYTES = 1_000_000
 _MAX_RESTORE_EVENTS = 100_000
+
+
+def _record_event_metrics(event: str, payload: dict[str, Any]) -> None:
+    """Project durable lifecycle truth into optional, low-cardinality telemetry."""
+    try:
+        tool_name = str(payload.get("tool_name") or "")
+        if event == "agent_run_finished":
+            record_run_metrics(
+                terminal_status=payload.get("terminal_status"),
+                duration_seconds=payload.get("duration_seconds"),
+                tool_calls=payload.get("tool_calls"),
+            )
+        elif event == "tool_requested" and tool_name:
+            record_tool_event(tool_name, "requested")
+        elif event == "tool_completed" and tool_name:
+            failed = bool(payload.get("failed"))
+            record_tool_event(tool_name, "failed" if failed else "succeeded")
+            if tool_name.startswith(("mcp__github__", "mcp__atlassian__")):
+                provider = tool_name.split("__", 2)[1]
+                record_mcp_outcome(provider, "FAILED" if failed else "AVAILABLE")
+        elif event == "tool_failed" and tool_name:
+            record_tool_event(tool_name, "failed")
+            if tool_name.startswith(("mcp__github__", "mcp__atlassian__")):
+                provider = tool_name.split("__", 2)[1]
+                record_mcp_outcome(provider, "FAILED")
+        elif event == "policy_denied":
+            if tool_name:
+                record_tool_event(tool_name, "denied")
+            record_policy_denial("deterministic_policy")
+        elif event == "circuit_denied":
+            if tool_name:
+                record_tool_event(tool_name, "denied")
+            record_policy_denial("runtime_circuit")
+        elif event == "budget_denied":
+            if tool_name:
+                record_tool_event(tool_name, "denied")
+            record_policy_denial("runtime_budget")
+        elif event in {
+            "workspace_drift_blocked",
+            "workspace_fingerprint_incomplete",
+            "mutation_blocked_non_git_workspace",
+            "post_mutation_fingerprint_incomplete",
+        }:
+            record_policy_denial("workspace_integrity")
+        elif event == "mutation_prepare_denied":
+            if tool_name:
+                record_tool_event(tool_name, "denied")
+            record_policy_denial("mutation_transaction")
+    except Exception:
+        # Metrics are observational only. They may never break journal durability,
+        # authorization, evidence persistence, mutation closure, or terminal truth.
+        return
 
 
 class RunJournal:
@@ -51,6 +109,7 @@ class RunJournal:
             raise RuntimeError("run journal path became a symlink and ownership is ambiguous")
 
     def append(self, event: str, **payload: Any) -> str:
+        safe_payload = sanitize(payload)
         with self._lock:
             self._assert_owned_path()
             if self._seq >= self.max_events:
@@ -59,14 +118,13 @@ class RunJournal:
                 "seq": self._seq + 1,
                 "timestamp": datetime.now(UTC).isoformat(),
                 "event": event,
-                "payload": sanitize(payload),
+                "payload": safe_payload,
                 "prev_hash": self._head,
             }
             canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
             record_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
             rendered = (
-                json.dumps({**body, "record_hash": record_hash}, sort_keys=True, default=str)
-                + "\n"
+                json.dumps({**body, "record_hash": record_hash}, sort_keys=True, default=str) + "\n"
             )
             if len(rendered.encode("utf-8")) > _MAX_JOURNAL_LINE_BYTES:
                 raise ValueError("run-journal event exceeds line-size bound")
@@ -77,7 +135,9 @@ class RunJournal:
                     os.fsync(stream.fileno())
             self._seq += 1
             self._head = record_hash
-            return record_hash
+        if isinstance(safe_payload, dict):
+            _record_event_metrics(event, safe_payload)
+        return record_hash
 
     def try_append(self, event: str, **payload: Any) -> bool:
         try:
@@ -107,13 +167,16 @@ class RunJournal:
                     continue
                 if count >= restore_limit:
                     return {"valid": False, "events": count, "head_hash": previous}
-                record = json.loads(raw.decode("utf-8"))
-                if not isinstance(record, dict):
+                try:
+                    record = json.loads(raw.decode("utf-8"))
+                    if not isinstance(record, dict):
+                        return {"valid": False, "events": count, "head_hash": previous}
+                    if record.get("seq") != expected_seq:
+                        return {"valid": False, "events": count, "head_hash": previous}
+                    body = {key: value for key, value in record.items() if key != "record_hash"}
+                    canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
+                except (UnicodeDecodeError, ValueError, TypeError, RecursionError):
                     return {"valid": False, "events": count, "head_hash": previous}
-                if record.get("seq") != expected_seq:
-                    return {"valid": False, "events": count, "head_hash": previous}
-                body = {key: value for key, value in record.items() if key != "record_hash"}
-                canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
                 actual = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
                 if record.get("prev_hash") != previous or record.get("record_hash") != actual:
                     return {"valid": False, "events": count, "head_hash": previous}

@@ -19,7 +19,7 @@ def test_evidence_store_rejects_symlinked_manifest_control_file(tmp_path: Path) 
     except OSError as exc:  # pragma: no cover - platform/filesystem capability
         pytest.skip(f"symlink creation unavailable: {exc}")
 
-    with pytest.raises(ValueError, match="control file.*symlink"):
+    with pytest.raises(ValueError, match=r"control file.*symlink"):
         EvidenceStore(root, "run-owned")
 
 
@@ -61,7 +61,7 @@ def test_regulated_store_rejects_audit_log_replaced_by_symlink_before_append(
     except OSError as exc:  # pragma: no cover - platform/filesystem capability
         pytest.skip(f"symlink creation unavailable: {exc}")
 
-    with pytest.raises(ValueError, match="control file.*symlink"):
+    with pytest.raises(ValueError, match=r"control file.*symlink"):
         store.register_artifact(
             relative_path="logs/result.txt",
             content=b"result",

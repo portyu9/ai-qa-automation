@@ -15,6 +15,9 @@ def test_runtime_budget_settings_are_independently_configurable(
     monkeypatch.setenv("AI_QA_MAX_NETWORK_CALLS", "7")
     monkeypatch.setenv("AI_QA_MAX_MUTATIONS", "2")
     monkeypatch.setenv("AI_QA_MAX_REPEATED_ACTION", "4")
+    monkeypatch.setenv("AI_QA_MAX_SDK_RETRIES", "1")
+    monkeypatch.setenv("AI_QA_SDK_RETRY_BACKOFF_SECONDS", "0.5")
+    monkeypatch.setenv("AI_QA_SDK_RETRY_MAX_BACKOFF_SECONDS", "2.0")
 
     settings = Settings(control_root=tmp_path)
 
@@ -22,6 +25,9 @@ def test_runtime_budget_settings_are_independently_configurable(
     assert settings.max_network_calls == 7
     assert settings.max_mutations == 2
     assert settings.max_repeated_action == 4
+    assert settings.max_sdk_retries == 1
+    assert settings.sdk_retry_backoff_seconds == 0.5
+    assert settings.sdk_retry_max_backoff_seconds == 2.0
 
 
 def test_safe_capability_defaults_are_fail_closed(tmp_path: Path) -> None:
@@ -34,6 +40,9 @@ def test_safe_capability_defaults_are_fail_closed(tmp_path: Path) -> None:
     assert settings.enable_github_mcp is False
     assert settings.enable_atlassian_mcp is False
     assert settings.allowed_network_hosts == ["127.0.0.1", "localhost"]
+    assert settings.max_sdk_retries == 2
+    assert settings.sdk_retry_backoff_seconds == 1.0
+    assert settings.sdk_retry_max_backoff_seconds == 4.0
 
 
 def test_network_hosts_are_canonicalized_and_deduplicated(tmp_path: Path) -> None:
@@ -65,9 +74,7 @@ def test_network_hosts_are_canonicalized_and_deduplicated(tmp_path: Path) -> Non
         "999.999.999.999",
     ],
 )
-def test_network_allowlist_rejects_ambiguous_or_non_host_entries(
-    tmp_path: Path, host: str
-) -> None:
+def test_network_allowlist_rejects_ambiguous_or_non_host_entries(tmp_path: Path, host: str) -> None:
     with pytest.raises(ValidationError):
         Settings(control_root=tmp_path, allowed_network_hosts=[host])
 
@@ -83,7 +90,9 @@ def test_artifact_root_defaults_to_trusted_control_root(tmp_path: Path) -> None:
     assert settings.artifact_root == (tmp_path / "artifacts").resolve()
 
 
-def test_explicit_roots_are_expanded_and_resolved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_explicit_roots_are_expanded_and_resolved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
@@ -110,6 +119,8 @@ def test_explicit_roots_are_expanded_and_resolved(tmp_path: Path, monkeypatch: p
         ("max_mutations", 21),
         ("max_repeated_action", 0),
         ("max_repeated_action", 11),
+        ("max_sdk_retries", -1),
+        ("max_sdk_retries", 6),
         ("tool_timeout_seconds", 0),
         ("tool_timeout_seconds", 901),
         ("global_timeout_seconds", 9),
@@ -123,6 +134,31 @@ def test_runtime_safety_bounds_reject_out_of_range_values(
 ) -> None:
     with pytest.raises(ValidationError):
         Settings(control_root=tmp_path, **{field: value})
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("sdk_retry_backoff_seconds", 0.0),
+        ("sdk_retry_backoff_seconds", 31.0),
+        ("sdk_retry_max_backoff_seconds", 0.0),
+        ("sdk_retry_max_backoff_seconds", 61.0),
+    ],
+)
+def test_sdk_retry_timing_bounds_reject_out_of_range_values(
+    tmp_path: Path, field: str, value: float
+) -> None:
+    with pytest.raises(ValidationError):
+        Settings(control_root=tmp_path, **{field: value})
+
+
+def test_sdk_retry_max_backoff_cannot_be_lower_than_base(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError):
+        Settings(
+            control_root=tmp_path,
+            sdk_retry_backoff_seconds=2.0,
+            sdk_retry_max_backoff_seconds=1.0,
+        )
 
 
 def test_dotenv_file_is_not_implicitly_loaded_as_trusted_runtime_configuration(

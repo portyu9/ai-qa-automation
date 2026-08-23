@@ -4,9 +4,10 @@ import hashlib
 import json
 import os
 import tempfile
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from .models import ArtifactRecord, EvidenceItem, SanitizationStatus
 from .redaction import sanitize
@@ -67,7 +68,9 @@ class EvidenceStore:
     def _assert_control_file_owned(self, name: str) -> Path:
         path = self.run_root / name
         if path.is_symlink():
-            raise ValueError(f"evidence control file is a symlink and has ambiguous ownership: {name}")
+            raise ValueError(
+                f"evidence control file is a symlink and has ambiguous ownership: {name}"
+            )
         return path
 
     def _owned_artifact_path(self, relative_path: str) -> Path:
@@ -231,9 +234,9 @@ class EvidenceStore:
             "payload": sanitize(payload),
             "previous_hash": self._audit_previous_hash,
         }
-        canonical = json.dumps(
-            core, sort_keys=True, separators=(",", ":"), default=str
-        ).encode("utf-8")
+        canonical = json.dumps(core, sort_keys=True, separators=(",", ":"), default=str).encode(
+            "utf-8"
+        )
         event_hash = self.hash_bytes(canonical)
         record = {**core, "event_hash": event_hash}
         rendered = json.dumps(record, sort_keys=True, default=str) + "\n"
@@ -314,9 +317,13 @@ class EvidenceStore:
             try:
                 path = self._owned_artifact_path(record.path)
             except ValueError as exc:
-                raise ValueError(f"regulated artifact ownership check failed: {record.path}") from exc
+                raise ValueError(
+                    f"regulated artifact ownership check failed: {record.path}"
+                ) from exc
             if not path.is_file():
-                raise ValueError(f"regulated artifact is missing or escaped run root: {record.path}")
+                raise ValueError(
+                    f"regulated artifact is missing or escaped run root: {record.path}"
+                )
             size = path.stat().st_size
             if size > _MAX_ARTIFACT_BYTES:
                 raise ValueError(f"regulated artifact exceeds persistence limit: {record.path}")
@@ -338,25 +345,21 @@ class EvidenceStore:
         for record in self._iter_audit_records():
             payload = record.get("payload") or {}
             if record.get("event_type") == "evidence_registered":
-                evidence_hashes[str(payload.get("evidence_id"))] = str(
-                    payload.get("content_hash")
-                )
+                evidence_hashes[str(payload.get("evidence_id"))] = str(payload.get("content_hash"))
             elif record.get("event_type") == "artifact_registered":
-                artifact_hashes[str(payload.get("artifact_id"))] = str(
-                    payload.get("content_hash")
-                )
+                artifact_hashes[str(payload.get("artifact_id"))] = str(payload.get("content_hash"))
 
         if set(evidence_hashes) != set(self._items):
             raise ValueError("regulated evidence registry does not match audit log")
         if set(artifact_hashes) != set(self._artifacts):
             raise ValueError("regulated artifact registry does not match audit log")
 
-        for evidence_id, item in self._items.items():
-            actual = self.hash_bytes(item.model_dump_json().encode("utf-8"))
+        for evidence_id, evidence_item in self._items.items():
+            actual = self.hash_bytes(evidence_item.model_dump_json().encode("utf-8"))
             if evidence_hashes[evidence_id] != actual:
                 raise ValueError(f"regulated evidence integrity check failed: {evidence_id}")
-        for artifact_id, item in self._artifacts.items():
-            if artifact_hashes[artifact_id] != item.content_hash:
+        for artifact_id, artifact_record in self._artifacts.items():
+            if artifact_hashes[artifact_id] != artifact_record.content_hash:
                 raise ValueError(
                     f"regulated artifact registry integrity check failed: {artifact_id}"
                 )
@@ -444,6 +447,6 @@ class EvidenceStore:
                 stream.write(rendered)
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.replace(temp, path)
+            temp.replace(path)
         finally:
             temp.unlink(missing_ok=True)

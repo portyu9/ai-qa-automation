@@ -77,6 +77,41 @@ artifacts/<run_id>/
 
 ---
 
+## Observability and correlation
+
+Observability is deliberately downstream of runtime truth. Structured logs, traces, and metrics can describe execution; they cannot authorize an action, create evidence, close a validation gate, commit a mutation, or promote a terminal outcome.
+
+The framework provides:
+
+- sanitized JSON lifecycle logging through `emit_event`;
+- optional OpenTelemetry spans through the global tracer provider;
+- optional OpenTelemetry metrics through the global meter provider;
+- `run_id` / `session_id` correlation in canonical state and structured run records;
+- durable tool/lifecycle correlation through the hash-chained run journal;
+- evidence/artifact correlation through IDs, manifests, hashes, and validation lineage.
+
+No exporter or telemetry backend is hard-coded. Deployment may configure an OpenTelemetry SDK/exporter using its normal environment or bootstrap policy; absence or failure of telemetry collection never changes deterministic QA truth.
+
+### Metric instruments
+
+| Instrument | Kind | Meaning |
+|---|---|---|
+| `ai_qa.agent.runs` | counter | completed live-agent run reports grouped by deterministic terminal outcome |
+| `ai_qa.agent.duration` | histogram | terminal live-agent wall-clock duration in seconds |
+| `ai_qa.agent.tool_calls` | histogram | controlled tool-call count at terminal run reporting |
+| `ai_qa.tool.events` | counter | requested/completed/failed/denied lifecycle events by coarse tool surface |
+| `ai_qa.policy.denials` | counter | fail-closed denial events by bounded runtime/policy category |
+| `ai_qa.mcp.outcomes` | counter | observed GitHub/Atlassian provider success/failure outcome family |
+
+Metric attributes are intentionally low-cardinality. They may contain bounded values such as terminal outcome, coarse tool surface, policy category, approved provider, and normalized provider outcome. They **do not** contain run IDs, objectives, file paths, selectors, URLs, raw tool arguments, provider payloads, credentials, or external text.
+
+The journal remains authoritative lifecycle provenance: metrics are projected only after a journal event is durably appended, and instrumentation failure is fail-soft. A telemetry outage therefore cannot erase the journal event or turn a denied/failed action into a successful one.
+
+> [!NOTE]
+> `run_id` is appropriate for logs, traces, state, evidence, and artifacts where direct correlation is required. It is intentionally excluded from metric labels to prevent unbounded cardinality.
+
+---
+
 ## Live workspace discipline
 
 A live run requires:

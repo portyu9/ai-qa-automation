@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import urlparse
 
 from .models import PolicyDecision, RiskLevel, ToolDecision
@@ -11,12 +11,12 @@ from .models import PolicyDecision, RiskLevel, ToolDecision
 class PolicyEngine:
     """Deterministic, fail-closed policy for runtime tool and change authorization."""
 
-    OFFICIAL_EXTERNAL_MCP = {
+    OFFICIAL_EXTERNAL_MCP: ClassVar[dict[str, str]] = {
         "github": "github/github-mcp-server",
         "atlassian": "atlassian/rovo-mcp",
     }
 
-    _DANGEROUS_TOOL_NAMES = {
+    _DANGEROUS_TOOL_NAMES: ClassVar[set[str]] = {
         "Bash",
         "Edit",
         "Write",
@@ -25,14 +25,14 @@ class PolicyEngine:
         "WebFetch",
         "WebSearch",
     }
-    _APPROVED_SKILLS = {
+    _APPROVED_SKILLS: ClassVar[set[str]] = {
         "investigate-test-failure",
         "self-heal-test",
         "generate-test",
         "prioritize-regression",
         "performance-test",
     }
-    _INTERNAL_QA_TOOLS = {
+    _INTERNAL_QA_TOOLS: ClassVar[set[str]] = {
         "inspect_repository",
         "run_pytest",
         "probe_api",
@@ -52,7 +52,7 @@ class PolicyEngine:
         "inspect_mobile_runtime",
         "run_k6",
     }
-    _PROTECTED_RELATIVE_PATHS = {
+    _PROTECTED_RELATIVE_PATHS: ClassVar[set[str]] = {
         "CLAUDE.md",
         ".mcp.json",
         ".env",
@@ -70,7 +70,7 @@ class PolicyEngine:
         re.compile(r"\brm\s+-rf\s+/(?:\s|$)"),
         re.compile(r"\bgit\s+rebase\b"),
     )
-    _UNSAFE_PATCH_PATTERNS = {
+    _UNSAFE_PATCH_PATTERNS: ClassVar[dict[str, re.Pattern[str]]] = {
         "test_skip": re.compile(
             r"^\+.*(?:pytest\.skip|@pytest\.mark\.skip|unittest\.skip|(?:test|it|describe)\.skip\s*\()",
             re.M,
@@ -197,20 +197,20 @@ class PolicyEngine:
         """Normalize snake/camel/mixed MCP action names into conservative verb tokens."""
         raw_action = tool_name.rsplit("__", 1)[-1]
         snake_action = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", raw_action).lower()
-        tokens = tuple(token for token in re.split(r"[^a-z0-9]+", snake_action) if token)
+        tokens = tuple(segment for segment in re.split(r"[^a-z0-9]+", snake_action) if segment)
         return snake_action, tokens
 
     @staticmethod
     def _semantic_action_tokens(tokens: tuple[str, ...]) -> tuple[str, ...]:
         """Remove known resource-noun collisions without weakening actual action verbs."""
         semantic: list[str] = []
-        for index, token in enumerate(tokens):
-            # In GitHub tool names, "pull request" is a resource noun. The token
+        for index, segment in enumerate(tokens):
+            # In GitHub tool names, "pull request" is a resource noun. The word
             # "request" must therefore not turn get_pull_request/pull_request_read
             # into a write. A leading request_* action remains a write verb.
-            if token == "request" and index > 0 and tokens[index - 1] == "pull":
+            if segment == "request" and index > 0 and tokens[index - 1] == "pull":
                 continue
-            semantic.append(token)
+            semantic.append(segment)
         return tuple(semantic)
 
     def _authorize_external_mcp_tool(self, tool_name: str) -> PolicyDecision:

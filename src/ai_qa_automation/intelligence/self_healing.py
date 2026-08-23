@@ -40,17 +40,27 @@ class SelfHealingEngine:
             if candidate.uniqueness_count != 1:
                 rejected = rejected or "candidate is not unique"
             if candidate.strategy not in _STRATEGY_STABILITY:
-                rejected = rejected or "unknown locator strategy is not eligible for autonomous repair"
+                rejected = (
+                    rejected or "unknown locator strategy is not eligible for autonomous repair"
+                )
             if candidate.strategy in {"xpath", "positional"} or re.search(
                 r"(?:xpath=|//|:nth-(?:child|of-type)|>>\s*nth=|\[\d+\])",
                 candidate.locator,
                 re.I,
             ):
-                rejected = rejected or "structural/positional locator is too fragile for autonomous repair"
+                rejected = (
+                    rejected or "structural/positional locator is too fragile for autonomous repair"
+                )
             if original_spec is None:
-                rejected = rejected or "original locator is outside the supported semantic locator contract"
+                rejected = (
+                    rejected
+                    or "original locator is outside the supported semantic locator contract"
+                )
             if candidate_spec is None or candidate_spec.strategy != candidate.strategy:
-                rejected = rejected or "candidate locator syntax/strategy is not deterministically supported"
+                rejected = (
+                    rejected
+                    or "candidate locator syntax/strategy is not deterministically supported"
+                )
 
             semantic_score = (
                 deterministic_locator_semantic_score(original_spec, candidate_spec)
@@ -58,7 +68,9 @@ class SelfHealingEngine:
                 else 0.0
             )
             if semantic_score < _MIN_AUTONOMOUS_SEMANTIC_SCORE:
-                rejected = rejected or "candidate does not preserve enough deterministic semantic intent"
+                rejected = (
+                    rejected or "candidate does not preserve enough deterministic semantic intent"
+                )
 
             # Both values below are policy-owned. Model-supplied semantic/stability
             # confidence may help proposal generation, but cannot authorize mutation.

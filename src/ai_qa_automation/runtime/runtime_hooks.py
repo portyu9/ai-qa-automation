@@ -2,7 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
+from typing import Any, cast
+
+from claude_agent_sdk.types import (
+    HookContext,
+    HookEvent,
+    HookInput,
+    HookJSONOutput,
+    HookMatcher,
+)
 
 from ..evidence import EvidenceStore
 from ..integrations.mcp_health import normalize_mcp_failure
@@ -20,8 +28,8 @@ from ..policy import PolicyEngine
 from ..redaction import sanitize
 from ..state import StateStore
 from ..tools.repository import RepositoryInspector
+from .budget import BudgetExceededError
 from .run_control import (
-    BudgetExceededError,
     CircuitOpenError,
     MutationPendingError,
     PendingMutation,
@@ -40,7 +48,7 @@ _MUTATION_TOOLS = {"mcp__qa__create_test_file", "mcp__qa__apply_locator_heal"}
 def _input_fingerprint(tool_name: str, tool_input: dict[str, Any]) -> str:
     safe = sanitize(tool_input)
     canonical = json.dumps(safe, sort_keys=True, separators=(",", ":"), default=str)
-    return hashlib.sha256(f"{tool_name}:{canonical}".encode("utf-8")).hexdigest()
+    return hashlib.sha256(f"{tool_name}:{canonical}".encode()).hexdigest()
 
 
 def _checkpoint(
@@ -116,8 +124,7 @@ def _pytest_validation_targets_path(validation: Any, expected_path: str) -> bool
         return False
     expected = _normalize_selector_path(expected_path)
     return any(
-        not str(raw).startswith("-")
-        and _normalize_selector_path(str(raw)) == expected
+        not str(raw).startswith("-") and _normalize_selector_path(str(raw)) == expected
         for raw in args
     )
 
@@ -246,16 +253,14 @@ def pretool_policy_output(
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "deny",
-                    "permissionDecisionReason": "workspace-integrity: autonomous writes require a Git-backed isolated worktree",
+                    "permissionDecisionReason": "workspace-integrity: autonomous writes require a git-backed isolated worktree",
                 }
             }
         current_snapshot = RepositoryInspector(control.workspace).snapshot()
         if not current_snapshot.fingerprint_complete:
             reasons = ", ".join(current_snapshot.fingerprint_incomplete_reasons)
             state.terminal_status = TerminalStatus.BLOCKED
-            state.terminal_reason = (
-                "Mutation blocked because the workspace fingerprint cannot bind every changed subject"
-            )
+            state.terminal_reason = "Mutation blocked because the workspace fingerprint cannot bind every changed subject"
             control.journal.append(
                 "workspace_fingerprint_incomplete",
                 reasons=list(current_snapshot.fingerprint_incomplete_reasons),
@@ -275,7 +280,9 @@ def pretool_policy_output(
         expected = control.expected_workspace_fingerprint
         if expected is None:
             state.terminal_status = TerminalStatus.BLOCKED
-            state.terminal_reason = "Mutation blocked because no workspace fingerprint baseline exists"
+            state.terminal_reason = (
+                "Mutation blocked because no workspace fingerprint baseline exists"
+            )
             control.journal.append("workspace_drift_blocked", expected=None, actual=current)
             _checkpoint(state, state_store, control)
             return {
@@ -287,10 +294,10 @@ def pretool_policy_output(
             }
         if current != expected:
             state.terminal_status = TerminalStatus.BLOCKED
-            state.terminal_reason = "Target workspace changed outside the agent after its baseline was captured"
-            control.journal.append(
-                "workspace_drift_blocked", expected=expected, actual=current
+            state.terminal_reason = (
+                "Target workspace changed outside the agent after its baseline was captured"
             )
+            control.journal.append("workspace_drift_blocked", expected=expected, actual=current)
             _checkpoint(state, state_store, control)
             return {
                 "hookSpecificOutput": {
@@ -500,7 +507,9 @@ def posttool_failure_output(
         status = normalize_mcp_failure(message=error)
         if state is not None:
             state.mcp_status[provider] = status
-        context = f"External MCP failure normalized as {status.value}; no remote evidence was fabricated."
+        context = (
+            f"External MCP failure normalized as {status.value}; no remote evidence was fabricated."
+        )
     if control is not None:
         if tool_name in _MUTATION_TOOLS:
             pending = control.pending_mutation
@@ -548,54 +557,59 @@ def build_hooks(
     evidence: EvidenceStore | None = None,
     state_store: StateStore | None = None,
     control: RuntimeControl | None = None,
-) -> dict[str, list[Any]]:
-    try:
-        from claude_agent_sdk import HookMatcher
-    except ImportError as exc:  # pragma: no cover
-        raise RuntimeError("claude-agent-sdk is required for live agent mode") from exc
-
+) -> dict[HookEvent, list[HookMatcher]]:
     async def pre_tool_use(
-        input_data: dict[str, Any],
+        input_data: HookInput,
         _tool_use_id: str | None,
-        _context: Any,
-    ) -> dict[str, Any]:
-        return pretool_policy_output(
-            policy,
-            input_data,
-            state=state,
-            state_store=state_store,
-            control=control,
+        _context: HookContext,
+    ) -> HookJSONOutput:
+        return cast(
+            HookJSONOutput,
+            pretool_policy_output(
+                policy,
+                cast(dict[str, Any], input_data),
+                state=state,
+                state_store=state_store,
+                control=control,
+            ),
         )
 
     async def post_tool_use(
-        input_data: dict[str, Any],
+        input_data: HookInput,
         _tool_use_id: str | None,
-        _context: Any,
-    ) -> dict[str, Any]:
-        return posttool_policy_output(
-            input_data,
-            state=state,
-            evidence=evidence,
-            state_store=state_store,
-            control=control,
+        _context: HookContext,
+    ) -> HookJSONOutput:
+        return cast(
+            HookJSONOutput,
+            posttool_policy_output(
+                cast(dict[str, Any], input_data),
+                state=state,
+                evidence=evidence,
+                state_store=state_store,
+                control=control,
+            ),
         )
 
     async def post_tool_use_failure(
-        input_data: dict[str, Any],
+        input_data: HookInput,
         _tool_use_id: str | None,
-        _context: Any,
-    ) -> dict[str, Any]:
-        return posttool_failure_output(
-            input_data,
-            state=state,
-            state_store=state_store,
-            control=control,
+        _context: HookContext,
+    ) -> HookJSONOutput:
+        return cast(
+            HookJSONOutput,
+            posttool_failure_output(
+                cast(dict[str, Any], input_data),
+                state=state,
+                state_store=state_store,
+                control=control,
+            ),
         )
 
-    return {
+    hooks: dict[HookEvent, list[HookMatcher]] = {
         "PreToolUse": [HookMatcher(matcher=None, hooks=[pre_tool_use], timeout=10)],
         "PostToolUse": [HookMatcher(matcher=None, hooks=[post_tool_use], timeout=10)],
         "PostToolUseFailure": [
             HookMatcher(matcher=None, hooks=[post_tool_use_failure], timeout=10)
         ],
     }
+    return hooks

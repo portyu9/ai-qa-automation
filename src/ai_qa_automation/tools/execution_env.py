@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import math
 import os
+import shutil
 import signal
 import subprocess
 import threading
+from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, Mapping, Sequence
+from typing import BinaryIO
 
 _SAFE_INHERITED_ENV = {
     "PATH",
@@ -26,6 +29,7 @@ _MAX_OUTPUT_BYTES = 16_000_000
 _READ_CHUNK_BYTES = 64 * 1024
 _DRAIN_JOIN_SECONDS = 2.0
 _WINDOWS_NEW_PROCESS_GROUP = 0x00000200
+_WINDOWS_DEFAULT_PATHEXT = ".COM;.EXE;.BAT;.CMD"
 
 
 @dataclass(frozen=True)
@@ -65,6 +69,65 @@ class _TailBuffer:
         return f"...[output truncated to last {self.limit} bytes]...\n{rendered}"
 
 
+def _assert_executable_file(path: Path, *, env: Mapping[str, str]) -> None:
+    if os.name == "nt":
+        raw_pathext = env.get("PATHEXT") or _WINDOWS_DEFAULT_PATHEXT
+        allowed_suffixes = {
+            suffix.casefold() for suffix in raw_pathext.split(os.pathsep) if suffix.strip()
+        }
+        if path.suffix.casefold() not in allowed_suffixes:
+            raise PermissionError(
+                f"subprocess executable has an unsupported Windows suffix: {path}"
+            )
+        return
+    if not os.access(path, os.X_OK):
+        raise PermissionError(f"subprocess executable is not executable: {path}")
+
+
+def resolve_executable(executable: str, *, env: Mapping[str, str]) -> str:
+    """Resolve a subprocess executable to one existing absolute executable file.
+
+    Named executables are resolved through the explicitly supplied subprocess PATH,
+    then bound to the resulting absolute path before process creation. Relative paths
+    containing directory components are rejected so the working directory cannot
+    silently change executable identity.
+    """
+    raw = str(executable).strip()
+    if not raw or "\x00" in raw:
+        raise ValueError("subprocess executable must be a non-empty path or command name")
+
+    candidate = Path(raw)
+    if candidate.is_absolute():
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError as exc:
+            raise FileNotFoundError(f"subprocess executable was not found: {raw}") from exc
+    else:
+        if candidate.parent != Path():
+            raise ValueError(
+                "relative subprocess executable paths with directory components are forbidden"
+            )
+        search_path = env.get("PATH")
+        if not search_path:
+            raise FileNotFoundError(f"subprocess executable cannot be resolved without PATH: {raw}")
+        discovered = shutil.which(raw, path=search_path)
+        if discovered is None:
+            raise FileNotFoundError(
+                f"subprocess executable was not found on the controlled PATH: {raw}"
+            )
+        try:
+            resolved = Path(discovered).resolve(strict=True)
+        except OSError as exc:
+            raise FileNotFoundError(
+                f"resolved subprocess executable no longer exists: {raw}"
+            ) from exc
+
+    if not resolved.is_file():
+        raise FileNotFoundError(f"subprocess executable is not a regular file: {resolved}")
+    _assert_executable_file(resolved, env=env)
+    return str(resolved)
+
+
 def _drain_stream(stream: BinaryIO, buffer: _TailBuffer) -> None:
     try:
         while True:
@@ -85,6 +148,7 @@ def _spawn_process(
     env: Mapping[str, str],
 ) -> subprocess.Popen[bytes]:
     argv = [str(item) for item in command]
+    argv[0] = resolve_executable(argv[0], env=env)
     if os.name == "nt":
         return subprocess.Popen(
             argv,
@@ -106,7 +170,11 @@ def _spawn_process(
     )
 
 
-def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
+def _terminate_process_tree(
+    process: subprocess.Popen[bytes],
+    *,
+    env: Mapping[str, str],
+) -> None:
     """Best-effort bounded termination of the validator process tree."""
     if os.name != "nt":
         try:
@@ -119,18 +187,20 @@ def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
         return
 
     # CREATE_NEW_PROCESS_GROUP above gives Windows taskkill a stable tree root.
-    # taskkill is part of supported Windows installations and is used only for
-    # cleanup of the child tree created by this adapter.
+    # Resolve taskkill to an absolute executable before invoking it so cleanup does
+    # not rely on partial-path process execution or a broader inherited environment.
     try:
-        cleanup = subprocess.run(  # noqa: S603 - fixed executable/arguments, no shell
-            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+        taskkill = resolve_executable("taskkill", env=env)
+        cleanup = subprocess.run(
+            [taskkill, "/PID", str(process.pid), "/T", "/F"],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=5,
             check=False,
+            env=dict(env),
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, ValueError, subprocess.TimeoutExpired):
         cleanup = None
     if (cleanup is None or cleanup.returncode != 0) and process.poll() is None:
         process.kill()
@@ -162,15 +232,13 @@ def run_bounded_subprocess(
         or not isinstance(max_output_bytes, int)
         or not 1 <= max_output_bytes <= _MAX_OUTPUT_BYTES
     ):
-        raise ValueError(
-            f"max_output_bytes must be an integer between 1 and {_MAX_OUTPUT_BYTES}"
-        )
+        raise ValueError(f"max_output_bytes must be an integer between 1 and {_MAX_OUTPUT_BYTES}")
     if not command:
         raise ValueError("subprocess command must not be empty")
 
     process = _spawn_process(command, cwd=cwd, env=env)
     if process.stdout is None or process.stderr is None:  # pragma: no cover - Popen contract
-        _terminate_process_tree(process)
+        _terminate_process_tree(process, env=env)
         process.wait()
         raise RuntimeError("subprocess pipes were not created")
 
@@ -196,33 +264,31 @@ def run_bounded_subprocess(
         process.wait(timeout=float(timeout_seconds))
     except subprocess.TimeoutExpired:
         timed_out = True
-        _terminate_process_tree(process)
+        _terminate_process_tree(process, env=env)
         process.wait()
     else:
         # The direct validator process exited. Clean up any background descendants
         # before waiting for pipe EOF; otherwise an inherited descriptor can keep
         # the drain threads blocked after the validator itself has finished.
-        _terminate_process_tree(process)
+        _terminate_process_tree(process, env=env)
     finally:
         stdout_thread.join(timeout=_DRAIN_JOIN_SECONDS)
         stderr_thread.join(timeout=_DRAIN_JOIN_SECONDS)
         drains_stuck = stdout_thread.is_alive() or stderr_thread.is_alive()
         if drains_stuck:
-            try:
+            with suppress(OSError):
                 process.stdout.close()
-            except OSError:
-                pass
-            try:
+            with suppress(OSError):
                 process.stderr.close()
-            except OSError:
-                pass
             stdout_thread.join(timeout=_DRAIN_JOIN_SECONDS)
             stderr_thread.join(timeout=_DRAIN_JOIN_SECONDS)
         else:
             process.stdout.close()
             process.stderr.close()
         if stdout_thread.is_alive() or stderr_thread.is_alive():
-            raise RuntimeError("subprocess output drains did not terminate after process-tree cleanup")
+            raise RuntimeError(
+                "subprocess output drains did not terminate after process-tree cleanup"
+            )
 
     if process.returncode is None:  # pragma: no cover - wait() contract
         raise RuntimeError("subprocess ended without a return code")

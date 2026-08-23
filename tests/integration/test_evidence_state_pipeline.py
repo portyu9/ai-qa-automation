@@ -7,9 +7,21 @@ from ai_qa_automation.state import StateStore
 
 
 def test_evidence_and_state_persist_outside_conversation(tmp_path: Path) -> None:
-    state = AgentRunState(objective="investigate", workspace=str(tmp_path), terminal_status=TerminalStatus.NOT_VERIFIED)
+    state = AgentRunState(
+        objective="investigate",
+        workspace=str(tmp_path),
+        terminal_status=TerminalStatus.NOT_VERIFIED,
+    )
     evidence = EvidenceStore(tmp_path / "artifacts", state.run_id)
-    item = evidence.add(EvidenceItem(run_id=state.run_id, kind=EvidenceKind.EXIT_CODE, source="pytest", summary="exit 1", structured_data={"exit_code": 1}))
+    item = evidence.add(
+        EvidenceItem(
+            run_id=state.run_id,
+            kind=EvidenceKind.EXIT_CODE,
+            source="pytest",
+            summary="exit 1",
+            structured_data={"exit_code": 1},
+        )
+    )
     state.evidence_ids.append(item.id)
     store = StateStore(tmp_path / "state.json")
     store.save(state)
@@ -23,7 +35,9 @@ def test_evidence_and_state_persist_outside_conversation(tmp_path: Path) -> None
 def test_artifact_path_escape_is_rejected(tmp_path: Path) -> None:
     evidence = EvidenceStore(tmp_path / "artifacts", "run")
     try:
-        evidence.register_artifact(relative_path="../../escape.txt", content=b"bad", originating_tool="test")
+        evidence.register_artifact(
+            relative_path="../../escape.txt", content=b"bad", originating_tool="test"
+        )
     except ValueError:
         pass
     else:

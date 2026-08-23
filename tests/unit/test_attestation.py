@@ -60,7 +60,9 @@ def write_complete_integrity_fixture(run_dir: Path) -> Path:
     return artifact
 
 
-def test_attestation_verifies_persisted_integrity_without_claiming_signature(tmp_path: Path) -> None:
+def test_attestation_verifies_persisted_integrity_without_claiming_signature(
+    tmp_path: Path,
+) -> None:
     run_dir = tmp_path / "run-1"
     write_json(run_dir / "state.json", base_state())
     artifact = write_complete_integrity_fixture(run_dir)
@@ -102,7 +104,10 @@ def test_pending_mutation_prevents_integrity_verified(tmp_path: Path) -> None:
 
     assert attestation["integrity"]["pending_mutation"] is True
     assert attestation["integrity"]["integrity_verified"] is False
-    assert attestation["interpretation"] == "One or more persisted run-integrity checks are incomplete or failed."
+    assert (
+        attestation["interpretation"]
+        == "One or more persisted run-integrity checks are incomplete or failed."
+    )
 
 
 def test_tampered_journal_is_reported_not_fabricated_as_valid(tmp_path: Path) -> None:
@@ -187,10 +192,10 @@ def test_attestation_rejects_symlinked_subject(tmp_path: Path) -> None:
     except OSError as exc:  # pragma: no cover - platform/filesystem capability
         pytest.skip(f"symlink creation unavailable: {exc}")
 
-    with pytest.raises(ValueError, match="state.json.*symlink"):
+    with pytest.raises(ValueError, match=r"state\.json.*symlink"):
         build_run_attestation(run_dir)
 
 
 def test_attestation_requires_state(tmp_path: Path) -> None:
-    with pytest.raises(FileNotFoundError, match="state.json"):
+    with pytest.raises(FileNotFoundError, match=r"state\.json"):
         build_run_attestation(tmp_path / "missing")

@@ -25,9 +25,7 @@ _SIMPLE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ),
     (
         "placeholder",
-        re.compile(
-            rf"^(?:page\.)?(?:get_by_placeholder|getByPlaceholder)\(\s*{_QUOTED}\s*\)$"
-        ),
+        re.compile(rf"^(?:page\.)?(?:get_by_placeholder|getByPlaceholder)\(\s*{_QUOTED}\s*\)$"),
     ),
     (
         "exact_text",

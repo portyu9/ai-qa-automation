@@ -129,7 +129,8 @@ def _runtime_write_posture(settings: Settings) -> dict[str, str]:
             enabled.append("mutating API methods")
         return {
             "status": "ELEVATED_EXPLICIT",
-            "detail": ", ".join(enabled) + " explicitly enabled; deterministic policy still applies",
+            "detail": ", ".join(enabled)
+            + " explicitly enabled; deterministic policy still applies",
         }
     return {
         "status": "SAFE_DEFAULT",

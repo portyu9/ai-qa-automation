@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import PurePosixPath
+from typing import ClassVar
 
 from ..models import RiskLevel, TestLayer
 
@@ -31,22 +32,41 @@ class ChangeImpactAssessment:
 class ChangeImpactAnalyzer:
     """Deterministically converts a changed-file set into regression risk signals."""
 
-    _CRITICAL = {
+    _CRITICAL: ClassVar[dict[str, tuple[str, ...]]] = {
         "security": ("auth", "oauth", "iam", "rbac", "crypto", "secret", "permission", "policy"),
         "data_integrity": ("migration", "schema", "database", "payment", "billing", "ledger"),
     }
-    _HIGH = {
+    _HIGH: ClassVar[dict[str, tuple[str, ...]]] = {
         "api_contract": ("openapi", "swagger", "graphql", "proto", "api/", "routes", "contract"),
-        "infrastructure": ("terraform", "k8s", "kubernetes", "helm", "docker", "deployment", "infra/"),
-        "dependencies": ("requirements", "pyproject", "package.json", "lock", "pom.xml", "build.gradle"),
+        "infrastructure": (
+            "terraform",
+            "k8s",
+            "kubernetes",
+            "helm",
+            "docker",
+            "deployment",
+            "infra/",
+        ),
+        "dependencies": (
+            "requirements",
+            "pyproject",
+            "package.json",
+            "lock",
+            "pom.xml",
+            "build.gradle",
+        ),
     }
-    _MEDIUM = {
+    _MEDIUM: ClassVar[dict[str, tuple[str, ...]]] = {
         "ui": ("frontend", "ui/", "components", "pages", "templates", ".tsx", ".jsx", ".vue"),
         "configuration": ("config", "settings", ".env", "feature_flag", "feature-flag"),
     }
 
     def assess(self, changed_files: list[str] | tuple[str, ...]) -> ChangeImpactAssessment:
-        normalized = tuple(sorted({PurePosixPath(str(path)).as_posix() for path in changed_files if str(path).strip()}))
+        normalized = tuple(
+            sorted(
+                {PurePosixPath(str(path)).as_posix() for path in changed_files if str(path).strip()}
+            )
+        )
         if not normalized:
             return ChangeImpactAssessment(
                 risk=RiskLevel.LOW,
@@ -55,7 +75,9 @@ class ChangeImpactAnalyzer:
                 recommended_layers=(TestLayer.UNIT,),
                 recommended_tags=("smoke",),
                 confidence=0.4,
-                rationale=("No changed files were observed; selection should remain conservative.",),
+                rationale=(
+                    "No changed files were observed; selection should remain conservative.",
+                ),
             )
 
         areas: set[str] = set()
@@ -124,9 +146,17 @@ class ChangeImpactAnalyzer:
 
         confidence = min(0.98, 0.62 + min(len(normalized), 12) * 0.02 + len(areas) * 0.04)
         if not rationale:
-            rationale.append("No high-risk path heuristic matched; retain baseline smoke and unit coverage.")
+            rationale.append(
+                "No high-risk path heuristic matched; retain baseline smoke and unit coverage."
+            )
 
-        order = {TestLayer.UNIT: 0, TestLayer.COMPONENT: 1, TestLayer.API: 2, TestLayer.INTEGRATION: 3, TestLayer.UI: 4}
+        order = {
+            TestLayer.UNIT: 0,
+            TestLayer.COMPONENT: 1,
+            TestLayer.API: 2,
+            TestLayer.INTEGRATION: 3,
+            TestLayer.UI: 4,
+        }
         return ChangeImpactAssessment(
             risk=risk,
             changed_files=normalized,

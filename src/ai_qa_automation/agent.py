@@ -22,25 +22,29 @@ from .models import (
 from .policy import PolicyEngine
 from .reporting import build_final_report
 from .runtime.bootstrap import bootstrap_runtime_context
+from .runtime.budget import BudgetExceededError, ExecutionBudget
 from .runtime.internal_tools import RuntimeServices, build_internal_mcp_server
-from .runtime.run_control import (
-    BudgetExceededError,
-    ExecutionBudget,
-    RunJournal,
-    RuntimeControl,
-    WorkspaceBusyError,
-    WorkspaceLease,
-)
+from .runtime.journal import RunJournal
+from .runtime.run_control import RuntimeControl
 from .runtime.runtime_hooks import build_hooks, build_permission_handler
+from .runtime.sdk_recovery import (
+    SDKRetryDecision,
+    retry_decision,
+    retry_delay_seconds,
+    retry_failure_reason,
+)
 from .runtime.stale_recovery import recover_stale_mutation
 from .runtime.system_prompt import RUNTIME_SYSTEM_PROMPT
+from .runtime.workspace_lease import WorkspaceBusyError, WorkspaceLease
 from .state import StateStore
 from .telemetry import emit_event, trace_span
 from .tools.repository import RepositoryInspector
 from .tools.test_execution import TestRunner
 
 
-async def run_agent(objective: str, workspace: Path, settings: Settings | None = None) -> dict[str, Any]:
+async def run_agent(
+    objective: str, workspace: Path, settings: Settings | None = None
+) -> dict[str, Any]:
     """Run one bounded agent session against an exclusively leased target workspace."""
     cfg = settings or Settings()
     workspace = workspace.expanduser().resolve()
@@ -237,22 +241,64 @@ async def run_agent(objective: str, workspace: Path, settings: Settings | None =
         )
         final_text = ""
         result_subtype: str | None = None
+        last_retry_decision: SDKRetryDecision | None = None
         try:
             with trace_span("ai_qa_automation.agent_run"):
                 async with asyncio.timeout(cfg.global_timeout_seconds):
-                    async with ClaudeSDKClient(options=options) as client:
-                        await client.query(bounded_prompt)
-                        async for message in client.receive_response():
-                            state.iteration += 1
-                            budget.assert_wall_time()
-                            if isinstance(message, ResultMessage):
-                                final_text = str(message.result or "")
-                                result_subtype = str(message.subtype)
-                                state.cost = float(message.total_cost_usd or 0.0)
-                                usage = message.usage or {}
-                                state.token_usage = int(usage.get("input_tokens", 0)) + int(
-                                    usage.get("output_tokens", 0)
-                                )
+                    while True:
+                        provider_request_started = False
+                        try:
+                            async with ClaudeSDKClient(options=options) as client:
+                                # Entering the SDK session itself is replay-safe. Once query
+                                # submission starts, provider work/cost may have begun even if
+                                # no response message reaches this process, so replay is denied.
+                                provider_request_started = True
+                                await client.query(bounded_prompt)
+                                async for message in client.receive_response():
+                                    state.iteration += 1
+                                    budget.assert_wall_time()
+                                    if isinstance(message, ResultMessage):
+                                        final_text = str(message.result or "")
+                                        result_subtype = str(message.subtype)
+                                        state.cost = float(message.total_cost_usd or 0.0)
+                                        usage = message.usage or {}
+                                        state.token_usage = int(usage.get("input_tokens", 0)) + int(
+                                            usage.get("output_tokens", 0)
+                                        )
+                            break
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as exc:
+                            decision = retry_decision(
+                                exc,
+                                state=state,
+                                retry_limit=cfg.max_sdk_retries,
+                                pending_mutation=control.pending_mutation is not None,
+                                provider_request_started=provider_request_started,
+                            )
+                            last_retry_decision = decision
+                            if not decision.retry:
+                                raise
+                            state.retry_count += 1
+                            delay = retry_delay_seconds(
+                                state.retry_count,
+                                base_seconds=cfg.sdk_retry_backoff_seconds,
+                                max_seconds=cfg.sdk_retry_max_backoff_seconds,
+                            )
+                            state.observations.append(
+                                "Transient Agent SDK session-start failure occurred before provider "
+                                f"query submission; scheduling bounded retry {state.retry_count}/{cfg.max_sdk_retries}."
+                            )
+                            journal.try_append(
+                                "sdk_retry_scheduled",
+                                retry_number=state.retry_count,
+                                retry_limit=cfg.max_sdk_retries,
+                                category=decision.category,
+                                error_type=type(exc).__name__,
+                                delay_seconds=delay,
+                            )
+                            _sync_operational_state(state, state_store, control)
+                            await asyncio.sleep(delay)
         except asyncio.CancelledError:
             state.terminal_status = TerminalStatus.CANCELLED
             state.terminal_reason = "Execution cancelled"
@@ -262,6 +308,10 @@ async def run_agent(objective: str, workspace: Path, settings: Settings | None =
             state.terminal_reason = "Global execution-time budget exhausted"
         except Exception as exc:
             state.terminal_status, state.terminal_reason = sdk_exception_outcome(exc)
+            if last_retry_decision is not None:
+                retry_reason = retry_failure_reason(last_retry_decision, exc)
+                if retry_reason is not None:
+                    state.terminal_reason = retry_reason
         else:
             if state.terminal_status not in {
                 TerminalStatus.BUDGET_EXCEEDED,
@@ -299,12 +349,9 @@ async def run_agent(objective: str, workspace: Path, settings: Settings | None =
                 except (OSError, RuntimeError) as rollback_exc:
                     state.terminal_status = TerminalStatus.INFRASTRUCTURE_FAILURE
                     state.terminal_reason = (
-                        "Rollback integrity could not be guaranteed: "
-                        f"{type(rollback_exc).__name__}"
+                        f"Rollback integrity could not be guaranteed: {type(rollback_exc).__name__}"
                     )
-                    journal.try_append(
-                        "rollback_failed", error_type=type(rollback_exc).__name__
-                    )
+                    journal.try_append("rollback_failed", error_type=type(rollback_exc).__name__)
             state.phase = "TERMINAL"
             state.duration = time.monotonic() - started
             journal.try_append(
@@ -377,19 +424,29 @@ def validate_runtime_roots(
         raise ValueError(
             "control_root is not a trusted agent project root; missing: " + ", ".join(missing)
         )
-    if control_root == workspace or control_root in workspace.parents or workspace in control_root.parents:
+    if (
+        control_root == workspace
+        or control_root in workspace.parents
+        or workspace in control_root.parents
+    ):
         raise ValueError(
             "control_root and target workspace must be disjoint; use an isolated SUT clone/worktree"
         )
     if artifact_root is not None:
         artifacts = artifact_root.expanduser().resolve()
-        if artifacts == workspace or artifacts in workspace.parents or workspace in artifacts.parents:
+        if (
+            artifacts == workspace
+            or artifacts in workspace.parents
+            or workspace in artifacts.parents
+        ):
             raise ValueError(
                 "artifact_root and target workspace must be disjoint so evidence/state cannot modify the SUT"
             )
 
 
-def run_agent_sync(objective: str, workspace: Path, settings: Settings | None = None) -> dict[str, Any]:
+def run_agent_sync(
+    objective: str, workspace: Path, settings: Settings | None = None
+) -> dict[str, Any]:
     return asyncio.run(run_agent(objective, workspace, settings))
 
 
@@ -443,7 +500,9 @@ def determine_terminal_outcome(
     if failed:
         names = ", ".join(sorted({item.gate_id or item.name for item in failed}))
         return TerminalStatus.FAILURE, f"Current deterministic validation failed: {names}."
-    incomplete = sorted({item.status.value for item in active if item.status != ValidationStatus.PASS})
+    incomplete = sorted(
+        {item.status.value for item in active if item.status != ValidationStatus.PASS}
+    )
     if incomplete:
         return (
             TerminalStatus.NOT_VERIFIED,
@@ -460,7 +519,7 @@ def determine_terminal_outcome(
         if not objective_bound:
             return (
                 TerminalStatus.NOT_VERIFIED,
-                "Agent completed with passing deterministic checks, but no trusted validation was explicitly bound to the requested objective.",
+                "Agent completed with passing deterministic checks, but no trusted validation was deterministically bound to the requested objective.",
             )
     if current_revision > 0:
         current_revision_results = [item for item in active if item.revision == current_revision]
@@ -507,9 +566,7 @@ def determine_terminal_outcome(
             and item.details.get("mutation_target_bound") is True
             and item.details.get("mutation_target") == mutation_path
         ]
-        regression = [
-            item for item in current_pytest if item.details.get("scope") == "regression"
-        ]
+        regression = [item for item in current_pytest if item.details.get("scope") == "regression"]
         if not targeted or not regression:
             return (
                 TerminalStatus.NOT_VERIFIED,
@@ -531,4 +588,7 @@ def sdk_exception_outcome(exc: BaseException) -> tuple[TerminalStatus, str]:
         return TerminalStatus.BUDGET_EXCEEDED, str(exc)
     if isinstance(exc, WorkspaceBusyError):
         return TerminalStatus.BLOCKED, str(exc)
-    return TerminalStatus.INFRASTRUCTURE_FAILURE, f"Agent SDK execution failed: {type(exc).__name__}"
+    return (
+        TerminalStatus.INFRASTRUCTURE_FAILURE,
+        f"Agent SDK execution failed: {type(exc).__name__}",
+    )

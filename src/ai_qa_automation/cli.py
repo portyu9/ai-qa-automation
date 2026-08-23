@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Annotated
 
 import typer
 
@@ -32,7 +33,7 @@ def demo() -> None:
 
 @app.command("recover")
 def recover_command(
-    run_dir: Path = typer.Argument(..., exists=True, file_okay=False, resolve_path=True),
+    run_dir: Annotated[Path, typer.Argument(exists=True, file_okay=False, resolve_path=True)],
 ) -> None:
     """Verify an interrupted run checkpoint and report whether a new session can safely continue."""
     typer.echo(json.dumps(inspect_recovery(run_dir), indent=2, default=str))
@@ -40,8 +41,8 @@ def recover_command(
 
 @app.command("lineage")
 def lineage_command(
-    run_dir: Path = typer.Argument(..., exists=True, file_okay=False, resolve_path=True),
-    output_format: str = typer.Option("json", "--format", help="json or dot"),
+    run_dir: Annotated[Path, typer.Argument(exists=True, file_okay=False, resolve_path=True)],
+    output_format: Annotated[str, typer.Option("--format", help="json or dot")] = "json",
 ) -> None:
     """Export evidence, artifact, validation, hypothesis, and runtime-event lineage."""
     graph = build_run_lineage(run_dir)
@@ -56,7 +57,7 @@ def lineage_command(
 
 @app.command("attest")
 def attest_command(
-    run_dir: Path = typer.Argument(..., exists=True, file_okay=False, resolve_path=True),
+    run_dir: Annotated[Path, typer.Argument(exists=True, file_okay=False, resolve_path=True)],
 ) -> None:
     """Emit an unsigned content-addressed integrity attestation for persisted run records."""
     typer.echo(json.dumps(build_run_attestation(run_dir), indent=2, default=str))
@@ -64,8 +65,12 @@ def attest_command(
 
 @app.command("contract-diff")
 def contract_diff_command(
-    baseline: Path = typer.Option(..., "--baseline", exists=True, dir_okay=False, resolve_path=True),
-    current: Path = typer.Option(..., "--current", exists=True, dir_okay=False, resolve_path=True),
+    baseline: Annotated[
+        Path, typer.Option("--baseline", exists=True, dir_okay=False, resolve_path=True)
+    ],
+    current: Annotated[
+        Path, typer.Option("--current", exists=True, dir_okay=False, resolve_path=True)
+    ],
 ) -> None:
     """Deterministically report conservative OpenAPI/Swagger compatibility drift."""
     report = OpenAPIContractDriftAnalyzer().analyze(
@@ -78,13 +83,13 @@ def contract_diff_command(
 
 @app.command("agent")
 def agent_command(
-    objective: str = typer.Argument(..., help="Bounded QA objective"),
-    workspace: Path = typer.Option(
-        ..., "--workspace", exists=True, file_okay=False, resolve_path=True
-    ),
-    control_root: Path | None = typer.Option(
-        None, "--control-root", exists=True, file_okay=False, resolve_path=True
-    ),
+    objective: Annotated[str, typer.Argument(help="Bounded QA objective")],
+    workspace: Annotated[
+        Path, typer.Option("--workspace", exists=True, file_okay=False, resolve_path=True)
+    ],
+    control_root: Annotated[
+        Path | None, typer.Option("--control-root", exists=True, file_okay=False, resolve_path=True)
+    ] = None,
 ) -> None:
     """Run one bounded Claude Agent SDK session."""
     settings = Settings(control_root=control_root) if control_root is not None else Settings()

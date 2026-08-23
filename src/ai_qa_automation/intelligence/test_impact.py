@@ -7,8 +7,31 @@ from pathlib import Path, PurePosixPath
 
 _TOKEN = re.compile(r"[A-Za-z0-9_]+")
 _TEST_SUFFIXES = {".py", ".js", ".jsx", ".ts", ".tsx", ".java", ".cs", ".rb", ".go"}
-_IGNORED = {".git", ".venv", "venv", "node_modules", "dist", "build", ".tox", ".pytest_cache", "__pycache__"}
-_STOPWORDS = {"src", "lib", "app", "test", "tests", "spec", "specs", "index", "main", "common", "utils", "util"}
+_IGNORED = {
+    ".git",
+    ".venv",
+    "venv",
+    "node_modules",
+    "dist",
+    "build",
+    ".tox",
+    ".pytest_cache",
+    "__pycache__",
+}
+_STOPWORDS = {
+    "src",
+    "lib",
+    "app",
+    "test",
+    "tests",
+    "spec",
+    "specs",
+    "index",
+    "main",
+    "common",
+    "utils",
+    "util",
+}
 
 
 @dataclass(frozen=True)
@@ -115,7 +138,7 @@ class TestImpactMapper:
                     relative = path.relative_to(root)
                 except ValueError:
                     continue
-                if not self._is_test_file(relative):
+                if not self._is_test_file(PurePosixPath(relative.as_posix())):
                     continue
                 if scanned_tests >= max_test_files:
                     truncated = True
@@ -123,7 +146,11 @@ class TestImpactMapper:
                     break
                 scanned_tests += 1
                 try:
-                    if path.is_symlink() or not path.is_file() or path.stat().st_size > max_file_bytes:
+                    if (
+                        path.is_symlink()
+                        or not path.is_file()
+                        or path.stat().st_size > max_file_bytes
+                    ):
                         continue
                     source = path.read_text(encoding="utf-8")
                 except (OSError, UnicodeError):
@@ -167,7 +194,9 @@ class TestImpactMapper:
         signals: set[str] = set()
         matched: list[str] = []
 
-        test_top = PurePosixPath(test_path).parts[0].casefold() if PurePosixPath(test_path).parts else ""
+        test_top = (
+            PurePosixPath(test_path).parts[0].casefold() if PurePosixPath(test_path).parts else ""
+        )
         for changed, (tokens, stem, top) in change_features.items():
             local = 0.0
             local_signals: list[str] = []

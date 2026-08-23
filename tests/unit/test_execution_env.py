@@ -6,7 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from ai_qa_automation.tools.execution_env import _TailBuffer, run_bounded_subprocess
+from ai_qa_automation.tools.execution_env import (
+    _TailBuffer,
+    resolve_executable,
+    run_bounded_subprocess,
+)
 
 
 def test_tail_buffer_retains_only_bounded_recent_bytes() -> None:
@@ -26,6 +30,33 @@ def test_tail_buffer_replaces_tail_when_single_chunk_exceeds_limit() -> None:
     assert bytes(buffer.data) == b"efgh"
     assert buffer.total == 8
     assert buffer.truncated is True
+
+
+def test_resolve_executable_binds_absolute_existing_file() -> None:
+    resolved = Path(resolve_executable(sys.executable, env=os.environ))
+
+    assert resolved.is_absolute()
+    assert resolved.is_file()
+    assert resolved.samefile(Path(sys.executable).resolve())
+
+
+def test_resolve_executable_rejects_ambiguous_or_missing_commands(tmp_path: Path) -> None:
+    with pytest.raises(ValueError):
+        resolve_executable("relative/tool", env={"PATH": str(tmp_path)})
+    with pytest.raises(FileNotFoundError):
+        resolve_executable("definitely-not-an-aiqa-executable", env={"PATH": str(tmp_path)})
+    with pytest.raises(FileNotFoundError):
+        resolve_executable("python", env={})
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX execute bits are not portable to Windows")
+def test_resolve_executable_rejects_absolute_non_executable_file(tmp_path: Path) -> None:
+    candidate = tmp_path / "not-executable"
+    candidate.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    candidate.chmod(0o600)
+
+    with pytest.raises(PermissionError, match="not executable"):
+        resolve_executable(str(candidate), env=os.environ)
 
 
 @pytest.mark.parametrize(

@@ -108,7 +108,9 @@ def test_artifact_path_must_be_non_traversing_relative_path(
         )
 
 
-def test_absolute_artifact_path_is_rejected_even_when_it_points_inside_run_root(tmp_path: Path) -> None:
+def test_absolute_artifact_path_is_rejected_even_when_it_points_inside_run_root(
+    tmp_path: Path,
+) -> None:
     store = EvidenceStore(tmp_path / "artifacts", "run-safe")
     absolute_inside = str((store.run_root / "inside.txt").resolve())
 

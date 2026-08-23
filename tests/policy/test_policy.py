@@ -81,7 +81,10 @@ def test_test_write_requires_approval_by_default(tmp_path: Path) -> None:
 
 def test_test_write_can_be_enabled_but_app_write_stays_denied(tmp_path: Path) -> None:
     policy = make_policy(tmp_path, writes=True)
-    assert policy.authorize_path(Path("tests/test_checkout.py"), write=True).decision is ToolDecision.ALLOW
+    assert (
+        policy.authorize_path(Path("tests/test_checkout.py"), write=True).decision
+        is ToolDecision.ALLOW
+    )
     decision = policy.authorize_path(Path("src/app.py"), write=True)
     assert decision.decision is ToolDecision.DENY
     assert decision.rule_id == "WRITE-002"
@@ -115,14 +118,22 @@ def test_official_mcp_identity_requires_exact_match(tmp_path: Path) -> None:
         policy.validate_mcp_server("github", "GitHub/github-mcp-server").decision
         is ToolDecision.DENY
     )
-    assert policy.validate_mcp_server("unknown", "github/github-mcp-server").decision is ToolDecision.DENY
+    assert (
+        policy.validate_mcp_server("unknown", "github/github-mcp-server").decision
+        is ToolDecision.DENY
+    )
 
 
 def test_external_mcp_read_write_and_destructive_are_separated(tmp_path: Path) -> None:
     policy = make_policy(tmp_path)
     assert policy.authorize_tool("mcp__github__get_issue", {}).decision is ToolDecision.ALLOW
-    assert policy.authorize_tool("mcp__github__create_issue", {}).decision is ToolDecision.REQUIRE_APPROVAL
-    assert policy.authorize_tool("mcp__github__merge_pull_request", {}).decision is ToolDecision.DENY
+    assert (
+        policy.authorize_tool("mcp__github__create_issue", {}).decision
+        is ToolDecision.REQUIRE_APPROVAL
+    )
+    assert (
+        policy.authorize_tool("mcp__github__merge_pull_request", {}).decision is ToolDecision.DENY
+    )
 
 
 def test_mixed_external_mcp_action_cannot_smuggle_write_under_read_prefix(tmp_path: Path) -> None:
@@ -195,7 +206,9 @@ def test_unsafe_test_patch_patterns_are_detected(tmp_path: Path) -> None:
         "+page.set_default_timeout(timeout=30000)\n"
     )
     violations = policy.validate_patch(diff)
-    assert {"test_skip", "arbitrary_sleep", "assertion_removal", "timeout_inflation"} <= set(violations)
+    assert {"test_skip", "arbitrary_sleep", "assertion_removal", "timeout_inflation"} <= set(
+        violations
+    )
 
 
 @pytest.mark.parametrize(
@@ -214,7 +227,9 @@ def test_patch_safety_detects_individual_shortcuts(
     assert violation in make_policy(tmp_path).validate_patch(line)
 
 
-def test_assertion_replacement_with_equal_or_stronger_assertion_is_not_removal(tmp_path: Path) -> None:
+def test_assertion_replacement_with_equal_or_stronger_assertion_is_not_removal(
+    tmp_path: Path,
+) -> None:
     diff = "-assert response.status_code == 200\n+assert response.status_code == 201\n"
     assert "assertion_removal" not in make_policy(tmp_path).validate_patch(diff)
 
@@ -266,25 +281,37 @@ def test_internal_write_tool_honors_test_write_policy(tmp_path: Path) -> None:
 
 def test_internal_write_tool_cannot_escape_test_directories(tmp_path: Path) -> None:
     policy = make_policy(tmp_path, writes=True)
-    decision = policy.authorize_tool(
-        "mcp__qa__create_test_file", {"path": "src/generated_test.py"}
-    )
+    decision = policy.authorize_tool("mcp__qa__create_test_file", {"path": "src/generated_test.py"})
     assert decision.decision is ToolDecision.DENY
     assert decision.rule_id == "WRITE-002"
 
 
 def test_external_mcp_read_names_are_not_misclassified_by_nouns(tmp_path: Path) -> None:
     policy = make_policy(tmp_path)
-    assert policy.authorize_tool("mcp__github__get_issue_comments", {}).decision is ToolDecision.ALLOW
-    assert policy.authorize_tool("mcp__github__pull_request_read", {}).decision is ToolDecision.ALLOW
-    assert policy.authorize_tool("mcp__github__add_comment", {}).decision is ToolDecision.REQUIRE_APPROVAL
-    assert policy.authorize_tool("mcp__github__resolve_review_thread", {}).decision is ToolDecision.REQUIRE_APPROVAL
+    assert (
+        policy.authorize_tool("mcp__github__get_issue_comments", {}).decision is ToolDecision.ALLOW
+    )
+    assert (
+        policy.authorize_tool("mcp__github__pull_request_read", {}).decision is ToolDecision.ALLOW
+    )
+    assert (
+        policy.authorize_tool("mcp__github__add_comment", {}).decision
+        is ToolDecision.REQUIRE_APPROVAL
+    )
+    assert (
+        policy.authorize_tool("mcp__github__resolve_review_thread", {}).decision
+        is ToolDecision.REQUIRE_APPROVAL
+    )
 
 
 def test_only_explicit_project_skills_are_allowed(tmp_path: Path) -> None:
     policy = make_policy(tmp_path)
-    assert policy.authorize_tool("Skill", {"skill": "self-heal-test"}).decision is ToolDecision.ALLOW
-    assert policy.authorize_tool("Skill", {"skill": "untrusted-skill"}).decision is ToolDecision.DENY
+    assert (
+        policy.authorize_tool("Skill", {"skill": "self-heal-test"}).decision is ToolDecision.ALLOW
+    )
+    assert (
+        policy.authorize_tool("Skill", {"skill": "untrusted-skill"}).decision is ToolDecision.DENY
+    )
     assert policy.authorize_tool("Skill", {}).decision is ToolDecision.DENY
 
 

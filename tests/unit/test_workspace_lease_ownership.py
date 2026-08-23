@@ -21,7 +21,7 @@ def test_workspace_lease_rejects_symlinked_lease_directory(tmp_path: Path) -> No
     except OSError as exc:  # pragma: no cover - platform/filesystem capability
         pytest.skip(f"symlink creation unavailable: {exc}")
 
-    with pytest.raises(OSError, match="lease directory.*symlink"):
+    with pytest.raises(OSError, match=r"lease directory.*symlink"):
         WorkspaceLease(artifact_root, workspace, "run-1")
 
     assert list(outside.iterdir()) == []
@@ -42,7 +42,7 @@ def test_workspace_lease_rejects_symlinked_lock_file(tmp_path: Path) -> None:
     except OSError as exc:  # pragma: no cover - platform/filesystem capability
         pytest.skip(f"symlink creation unavailable: {exc}")
 
-    with pytest.raises(OSError, match="lease file.*symlink"):
+    with pytest.raises(OSError, match=r"lease file.*symlink"):
         WorkspaceLease(artifact_root, workspace, "run-1")
 
     assert outside.read_text(encoding="utf-8") == "do not modify\n"

@@ -8,7 +8,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from .execution_env import restricted_subprocess_env, run_bounded_subprocess
+from .execution_env import resolve_executable, restricted_subprocess_env, run_bounded_subprocess
 
 _SAFE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@{}~^:+-]{0,255}$")
 _HEX_SHA = re.compile(r"^[0-9a-fA-F]{40,64}$")
@@ -69,9 +69,10 @@ class RepositoryInspector:
         try:
             sha = self._git("rev-parse", "HEAD", allow_failure=True)
             branch = self._git("branch", "--show-current", allow_failure=True)
-            status = self._git(
-                "status", "--porcelain=v1", "--untracked-files=all", allow_failure=True
-            ) or ""
+            status = (
+                self._git("status", "--porcelain=v1", "--untracked-files=all", allow_failure=True)
+                or ""
+            )
         except RuntimeError as exc:
             message = str(exc).casefold()
             reason = (
@@ -129,14 +130,17 @@ class RepositoryInspector:
         if merge_base is None:
             raise RuntimeError(f"baseline ref has no merge base with HEAD: {safe_ref}")
 
-        raw_committed = self._git(
-            "diff",
-            "--name-only",
-            "--diff-filter=ACDMRTUXB",
-            merge_base,
-            head,
-            "--",
-        ) or ""
+        raw_committed = (
+            self._git(
+                "diff",
+                "--name-only",
+                "--diff-filter=ACDMRTUXB",
+                merge_base,
+                head,
+                "--",
+            )
+            or ""
+        )
         committed = tuple(sorted({line for line in raw_committed.splitlines() if line.strip()}))
         worktree_snapshot = self.snapshot()
         if not worktree_snapshot.fingerprint_complete:
@@ -153,7 +157,9 @@ class RepositoryInspector:
             changed_files=changed,
         )
 
-    def read_file_at(self, commit_sha: str, relative_path: str, *, max_bytes: int = 2_000_000) -> bytes:
+    def read_file_at(
+        self, commit_sha: str, relative_path: str, *, max_bytes: int = 2_000_000
+    ) -> bytes:
         """Read one bounded tracked file from an immutable commit without checkout."""
         if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 1:
             raise ValueError("max_bytes must be a positive integer")
@@ -174,7 +180,9 @@ class RepositoryInspector:
         if result is None:
             raise FileNotFoundError(path)
         if len(result) > max_bytes:
-            raise RuntimeError("Git returned more baseline bytes than the preflight object size allowed")
+            raise RuntimeError(
+                "Git returned more baseline bytes than the preflight object size allowed"
+            )
         return result
 
     def diff(self, *paths: str) -> str:
@@ -186,7 +194,9 @@ class RepositoryInspector:
     def _validate_ref(base_ref: str) -> str:
         value = base_ref.strip()
         if not _SAFE_REF.fullmatch(value) or value.startswith("-") or ".." in value:
-            raise ValueError("baseline ref contains unsupported characters or revision-range syntax")
+            raise ValueError(
+                "baseline ref contains unsupported characters or revision-range syntax"
+            )
         return value
 
     @staticmethod
@@ -308,9 +318,17 @@ class RepositoryInspector:
             env = restricted_subprocess_env(
                 home=Path(temp_home), extra={"GIT_CONFIG_NOSYSTEM": "1"}
             )
+            git_executable = resolve_executable("git", env=env)
             try:
                 result = subprocess.run(
-                    ["git", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", *args],
+                    [
+                        git_executable,
+                        "-c",
+                        "core.fsmonitor=false",
+                        "-c",
+                        "core.untrackedCache=false",
+                        *args,
+                    ],
                     cwd=self.workspace,
                     text=False,
                     capture_output=True,

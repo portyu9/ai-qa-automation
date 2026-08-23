@@ -34,7 +34,9 @@ def test_journal_detects_tampering_and_refuses_corrupt_reopen(tmp_path: Path) ->
 
     records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
     records[0]["payload"]["evidence_id"] = "tampered"
-    path.write_text("\n".join(json.dumps(item, sort_keys=True) for item in records) + "\n", encoding="utf-8")
+    path.write_text(
+        "\n".join(json.dumps(item, sort_keys=True) for item in records) + "\n", encoding="utf-8"
+    )
 
     assert journal.verify()["valid"] is False
     with pytest.raises(RuntimeError, match="hash-chain verification"):
@@ -75,5 +77,27 @@ def test_journal_rejects_oversized_restore_line_before_json_parse(tmp_path: Path
     path = tmp_path / "oversized.jsonl"
     path.write_bytes(b"{" + (b"x" * 1_000_001) + b"}\n")
 
+    with pytest.raises(RuntimeError, match="hash-chain verification"):
+        RunJournal(path)
+
+
+def test_journal_marks_malformed_json_invalid_and_refuses_reopen(tmp_path: Path) -> None:
+    path = tmp_path / "malformed.jsonl"
+    path.write_bytes(b'{"seq":1,"event":"broken"\n')
+
+    probe = RunJournal(tmp_path / "clean.jsonl")
+    probe.path = path
+    assert probe.verify() == {"valid": False, "events": 0, "head_hash": None}
+    with pytest.raises(RuntimeError, match="hash-chain verification"):
+        RunJournal(path)
+
+
+def test_journal_marks_invalid_utf8_invalid_and_refuses_reopen(tmp_path: Path) -> None:
+    path = tmp_path / "invalid-utf8.jsonl"
+    path.write_bytes(b"\xff\xfe\n")
+
+    probe = RunJournal(tmp_path / "clean.jsonl")
+    probe.path = path
+    assert probe.verify() == {"valid": False, "events": 0, "head_hash": None}
     with pytest.raises(RuntimeError, match="hash-chain verification"):
         RunJournal(path)

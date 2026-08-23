@@ -4,6 +4,7 @@ import os
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
 
 @dataclass(frozen=True)
@@ -31,7 +32,7 @@ class RepositoryProfile:
 class RepositoryProfiler:
     """Bounded path-level repository profiler; it never executes SUT code."""
 
-    _EXTENSIONS = {
+    _EXTENSIONS: ClassVar[dict[str, str]] = {
         ".py": "python",
         ".ts": "typescript",
         ".tsx": "typescript",
@@ -125,18 +126,14 @@ class RepositoryProfiler:
                     architecture.add("protobuf")
                 if "graphql" in lower or path.suffix.casefold() == ".graphql":
                     architecture.add("graphql")
-                if any(
-                    part.casefold() in {"migrations", "migration"} for part in relative.parts
-                ):
+                if any(part.casefold() in {"migrations", "migration"} for part in relative.parts):
                     architecture.add("database-migrations")
                 if name in {"dockerfile", "docker-compose.yml", "docker-compose.yaml"}:
                     architecture.add("containers")
                     notable.add(relative.as_posix())
                 if path.suffix.casefold() == ".tf":
                     architecture.add("terraform")
-                if any(
-                    token in lower for token in ("kubernetes", "k8s/", "helm/", "chart.yaml")
-                ):
+                if any(token in lower for token in ("kubernetes", "k8s/", "helm/", "chart.yaml")):
                     architecture.add("kubernetes")
                 if any(token in lower for token in ("android", "ios/", "xcodeproj", "gradle")):
                     architecture.add("mobile")

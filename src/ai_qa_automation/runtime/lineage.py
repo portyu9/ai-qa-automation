@@ -20,7 +20,12 @@ class LineageNode:
     attributes: dict[str, Any]
 
     def as_dict(self) -> dict[str, object]:
-        return {"id": self.id, "kind": self.kind, "label": self.label, "attributes": self.attributes}
+        return {
+            "id": self.id,
+            "kind": self.kind,
+            "label": self.label,
+            "attributes": self.attributes,
+        }
 
 
 @dataclass(frozen=True)
@@ -207,7 +212,9 @@ def build_run_lineage(run_dir: Path, *, max_journal_events: int = 500) -> RunLin
                     if eid in evidence_ids:
                         edges.add((f"evidence:{eid}", node_id, "SUPPORTS_VALIDATION"))
                     else:
-                        warnings.append(f"validation {validation_id} references missing evidence {eid}")
+                        warnings.append(
+                            f"validation {validation_id} references missing evidence {eid}"
+                        )
 
     hypotheses = state.get("hypotheses", [])
     if isinstance(hypotheses, list):

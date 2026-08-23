@@ -46,7 +46,7 @@ def _validated_backup_path(rollback_root: Path, backup_raw: str) -> Path:
         relative = absolute.absolute().relative_to(rollback_root)
     except ValueError as exc:
         raise ValueError("prior rollback backup escaped run rollback directory") from exc
-    if relative == Path(".") or not relative.parts:
+    if relative == Path() or not relative.parts:
         raise ValueError("prior rollback backup path is invalid")
     return _confined_non_symlink_path(
         rollback_root,
@@ -75,7 +75,7 @@ def _validated_journal_event_count(metadata: dict[str, Any]) -> int:
         raise ValueError("prior runtime journal_event_count is invalid")
     if raw < 0 or raw > _MAX_RECOVERY_JOURNAL_EVENTS:
         raise ValueError("prior runtime journal_event_count exceeds recovery safety bounds")
-    return raw
+    return int(raw)
 
 
 def recover_stale_mutation(
@@ -125,7 +125,10 @@ def recover_stale_mutation(
     except ValueError as exc:
         return {"status": "BLOCKED", "reason": str(exc)}
     if str(metadata.get("workspace") or "") != str(workspace):
-        return {"status": "BLOCKED", "reason": "prior runtime workspace does not match lease workspace"}
+        return {
+            "status": "BLOCKED",
+            "reason": "prior runtime workspace does not match lease workspace",
+        }
     pending = metadata.get("pending_mutation")
     if pending in (None, {}, False):
         return {"status": "NONE", "previous_run_id": previous_run_id}
@@ -182,7 +185,10 @@ def recover_stale_mutation(
         except OSError:
             return {"status": "BLOCKED", "reason": "prior rollback backup is unavailable"}
         if hashlib.sha256(data).hexdigest() != original_sha:
-            return {"status": "BLOCKED", "reason": "prior rollback backup failed integrity verification"}
+            return {
+                "status": "BLOCKED",
+                "reason": "prior rollback backup failed integrity verification",
+            }
         _atomic_write_bytes(target, data)
         backup.unlink()
     else:

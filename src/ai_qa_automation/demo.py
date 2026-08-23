@@ -35,8 +35,15 @@ def run_demo(root: Path) -> dict[str, object]:
 
     candidates = [
         RegressionCandidate(test_id="smoke::checkout", mandatory=True, business_criticality=1.0),
-        RegressionCandidate(test_id="api::orders", changed_component_overlap=1.0, dependency_overlap=0.9, business_criticality=0.9),
-        RegressionCandidate(test_id="ui::profile", changed_component_overlap=0.05, dependency_overlap=0.05),
+        RegressionCandidate(
+            test_id="api::orders",
+            changed_component_overlap=1.0,
+            dependency_overlap=0.9,
+            business_criticality=0.9,
+        ),
+        RegressionCandidate(
+            test_id="ui::profile", changed_component_overlap=0.05, dependency_overlap=0.05
+        ),
     ]
     selection = RegressionPrioritizer().select(candidates, dependency_confidence=0.5)
     return {

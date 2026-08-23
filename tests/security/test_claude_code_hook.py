@@ -3,7 +3,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 HOOK = Path(".claude/hooks/policy_guard.py")
 
 

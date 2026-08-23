@@ -49,7 +49,9 @@ def sanitize(value: Any) -> Any:
         result: dict[str, Any] = {}
         for key, item in value.items():
             rendered_key = str(key)
-            result[rendered_key] = "[REDACTED]" if _SENSITIVE_KEYS.search(rendered_key) else sanitize(item)
+            result[rendered_key] = (
+                "[REDACTED]" if _SENSITIVE_KEYS.search(rendered_key) else sanitize(item)
+            )
         return result
     if isinstance(value, list):
         return [sanitize(v) for v in value]

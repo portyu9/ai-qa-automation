@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import tempfile
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,7 +12,6 @@ from typing import Any
 
 from .budget import BudgetExceededError, ExecutionBudget
 from .journal import RunJournal
-from .workspace_lease import WorkspaceBusyError, WorkspaceLease
 
 _MAX_ROLLBACK_BYTES = 2_000_000
 _MAX_RUNTIME_METADATA_BYTES = 2_000_000
@@ -138,10 +138,8 @@ class RuntimeControl:
                         "mutation preparation failed and pending metadata could not be cleared"
                     ) from cleanup_exc
             if backup_path is not None:
-                try:
+                with suppress(OSError):
                     backup_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
             raise
 
     def commit_pending_mutation(self) -> str | None:
@@ -238,7 +236,7 @@ class RuntimeControl:
             relative = absolute_backup.relative_to(rollback_root)
         except ValueError as exc:
             raise RuntimeError("pending rollback backup escaped rollback directory") from exc
-        if relative == Path("."):
+        if relative == Path():
             raise RuntimeError("pending rollback backup cannot be the rollback directory")
 
         cursor = rollback_root
@@ -349,7 +347,7 @@ def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
             stream.write(rendered)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temp, path)
+        temp.replace(path)
     finally:
         temp.unlink(missing_ok=True)
 
@@ -363,6 +361,6 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temp, path)
+        temp.replace(path)
     finally:
         temp.unlink(missing_ok=True)

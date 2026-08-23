@@ -9,7 +9,9 @@ from .atlassian_mcp import atlassian_mcp_config
 from .github_mcp import github_mcp_config
 
 
-def build_external_mcp(settings: Settings, policy: PolicyEngine) -> tuple[dict[str, Any], dict[str, MCPStatus]]:
+def build_external_mcp(
+    settings: Settings, policy: PolicyEngine
+) -> tuple[dict[str, Any], dict[str, MCPStatus]]:
     servers: dict[str, Any] = {}
     statuses: dict[str, MCPStatus] = {}
 

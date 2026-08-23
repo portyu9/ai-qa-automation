@@ -92,7 +92,7 @@ def test_pretool_mutation_without_git_identity_is_blocked_before_write(tmp_path:
 def test_pretool_journal_records_only_fingerprint_not_raw_secret_input(tmp_path: Path) -> None:
     control = make_control(tmp_path)
     policy = PolicyEngine(tmp_path, control.workspace)
-    secret = "sk-" + "ant-" + "this-must-never-enter-the-journal"
+    secret = "sk-" + "ant-" + "this-must-never-enter-the-journal"  # pragma: allowlist secret
 
     result = pretool_policy_output(
         policy,
@@ -114,7 +114,7 @@ def test_external_mcp_success_is_sanitized_and_registered_as_observed_evidence(
 ) -> None:
     state = AgentRunState(objective="read issue", workspace=str(tmp_path))
     evidence = EvidenceStore(tmp_path / "artifacts", state.run_id)
-    secret = "github_" + "pat_" + "1234567890abcdefghijklmnopqrstuv"
+    secret = "github_" + "pat_" + "1234567890abcdefghijklmnopqrstuv"  # pragma: allowlist secret
 
     result = posttool_policy_output(
         {

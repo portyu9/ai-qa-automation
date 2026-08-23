@@ -84,6 +84,9 @@ class Settings(BaseSettings):
     max_network_calls: int = Field(default=12, ge=1, le=100)
     max_mutations: int = Field(default=3, ge=1, le=20)
     max_repeated_action: int = Field(default=3, ge=1, le=10)
+    max_sdk_retries: int = Field(default=2, ge=0, le=5)
+    sdk_retry_backoff_seconds: float = Field(default=1.0, ge=0.1, le=30.0)
+    sdk_retry_max_backoff_seconds: float = Field(default=4.0, ge=0.1, le=60.0)
     tool_timeout_seconds: int = Field(default=120, ge=1, le=900)
     global_timeout_seconds: int = Field(default=600, ge=10, le=3600)
     max_cost_usd: float = Field(default=5.0, gt=0, le=100)
@@ -103,10 +106,14 @@ class Settings(BaseSettings):
         return normalized
 
     @model_validator(mode="after")
-    def resolve_roots(self) -> "Settings":
+    def resolve_roots(self) -> Settings:
         self.control_root = self.control_root.expanduser().resolve()
         if self.artifact_root is None:
             self.artifact_root = self.control_root / "artifacts"
         else:
             self.artifact_root = self.artifact_root.expanduser().resolve()
+        if self.sdk_retry_max_backoff_seconds < self.sdk_retry_backoff_seconds:
+            raise ValueError(
+                "sdk_retry_max_backoff_seconds must be greater than or equal to sdk_retry_backoff_seconds"
+            )
         return self

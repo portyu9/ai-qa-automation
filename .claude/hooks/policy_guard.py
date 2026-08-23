@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Control-plane Claude Code hook: reject obvious governance/destructive mutations."""
+
 from __future__ import annotations
 
 import json

@@ -111,7 +111,10 @@ def test_lineage_bounds_journal_graph(tmp_path: Path) -> None:
     graph = build_run_lineage(run_dir, max_journal_events=2)
 
     assert "journal graph truncated at 2 events" in graph.warnings
-    assert {node.id for node in graph.nodes if node.kind == "runtime_event"} == {"event:1", "event:2"}
+    assert {node.id for node in graph.nodes if node.kind == "runtime_event"} == {
+        "event:1",
+        "event:2",
+    }
 
 
 def test_lineage_does_not_graph_invalid_journal_events(tmp_path: Path) -> None:
@@ -152,5 +155,5 @@ def test_lineage_rejects_invalid_event_bound(tmp_path: Path, bound: object) -> N
 
 
 def test_lineage_requires_persisted_state(tmp_path: Path) -> None:
-    with pytest.raises(FileNotFoundError, match="state.json"):
+    with pytest.raises(FileNotFoundError, match=r"state\.json"):
         build_run_lineage(tmp_path / "missing")

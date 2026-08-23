@@ -9,6 +9,7 @@ import tempfile
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
 from ..models import ToolDecision
 from ..policy import PolicyEngine
@@ -26,7 +27,7 @@ class PatchResult:
 class SafeTestPatcher:
     """Optimistic-concurrency test patcher with intent and filesystem guards."""
 
-    _SUPPORTED_SUFFIXES = {".py", ".js", ".ts"}
+    _SUPPORTED_SUFFIXES: ClassVar[set[str]] = {".py", ".js", ".ts"}
     _MAX_TEST_FILE_BYTES = 1_000_000
     _NON_PYTHON_ASSERTION = re.compile(
         r"(?:"
@@ -63,7 +64,9 @@ class SafeTestPatcher:
                 continue
             cursor = cursor / part
             if cursor.is_symlink():
-                raise PermissionError("mutation path contains a symlink and has ambiguous ownership")
+                raise PermissionError(
+                    "mutation path contains a symlink and has ambiguous ownership"
+                )
 
         destination = (self.workspace / path).resolve()
         try:
@@ -190,13 +193,12 @@ class SafeTestPatcher:
                 if ch != "\n":
                     chars[i] = " "
             elif state == "string":
-                if ch == "\\":
-                    if i + 1 < len(chars):
-                        chars[i] = " "
-                        if chars[i + 1] != "\n":
-                            chars[i + 1] = " "
-                        i += 2
-                        continue
+                if ch == "\\" and i + 1 < len(chars):
+                    chars[i] = " "
+                    if chars[i + 1] != "\n":
+                        chars[i + 1] = " "
+                    i += 2
+                    continue
                 if ch == quote:
                     state = "code"
                     quote = ""
@@ -236,7 +238,9 @@ class SafeTestPatcher:
                     + ", ".join(f"{item.code}@{item.line}" for item in blockers)
                 )
         elif not self._has_non_python_assertion(content):
-            raise PermissionError("generated JavaScript/TypeScript test has no observable assertion")
+            raise PermissionError(
+                "generated JavaScript/TypeScript test has no observable assertion"
+            )
         synthetic_diff = "".join(f"+{line}" for line in content.splitlines(keepends=True))
         violations = self.policy.validate_patch(synthetic_diff)
         if violations:
@@ -295,7 +299,7 @@ class SafeTestPatcher:
     def _atomic_replace(cls, destination: Path, content: str) -> None:
         temp = cls._write_secure_temp(destination, content)
         try:
-            os.replace(temp, destination)
+            temp.replace(destination)
         finally:
             temp.unlink(missing_ok=True)
 

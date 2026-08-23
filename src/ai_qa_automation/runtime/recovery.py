@@ -70,7 +70,10 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
     try:
         journal_status = RunJournal(journal_path, regulated_mode=False).verify()
     except (OSError, UnicodeError, json.JSONDecodeError, RuntimeError, ValueError) as exc:
-        return {"recoverable": False, "reason": f"journal could not be verified: {type(exc).__name__}"}
+        return {
+            "recoverable": False,
+            "reason": f"journal could not be verified: {type(exc).__name__}",
+        }
     if not journal_status["valid"]:
         return {"recoverable": False, "reason": "journal hash chain is invalid"}
 

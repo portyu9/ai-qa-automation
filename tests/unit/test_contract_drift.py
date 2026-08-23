@@ -12,7 +12,9 @@ def encode(document: dict[str, object]) -> bytes:
     return json.dumps(document, sort_keys=True).encode("utf-8")
 
 
-def openapi(paths: dict[str, object], *, schemas: dict[str, object] | None = None) -> dict[str, object]:
+def openapi(
+    paths: dict[str, object], *, schemas: dict[str, object] | None = None
+) -> dict[str, object]:
     document: dict[str, object] = {
         "openapi": "3.1.0",
         "info": {"title": "test", "version": "1"},
@@ -32,9 +34,7 @@ def test_removed_operation_is_breaking() -> None:
             }
         }
     )
-    current = openapi(
-        {"/orders": {"get": {"responses": {"200": {"description": "ok"}}}}}
-    )
+    current = openapi({"/orders": {"get": {"responses": {"200": {"description": "ok"}}}}})
 
     result = OpenAPIContractDriftAnalyzer().analyze(
         path="openapi.json", baseline=encode(baseline), current=encode(current)
@@ -46,15 +46,18 @@ def test_removed_operation_is_breaking() -> None:
 
 
 def test_required_parameter_addition_is_breaking() -> None:
-    baseline = openapi(
-        {"/orders": {"get": {"responses": {"200": {"description": "ok"}}}}}
-    )
+    baseline = openapi({"/orders": {"get": {"responses": {"200": {"description": "ok"}}}}})
     current = openapi(
         {
             "/orders": {
                 "get": {
                     "parameters": [
-                        {"name": "tenant", "in": "header", "required": True, "schema": {"type": "string"}}
+                        {
+                            "name": "tenant",
+                            "in": "header",
+                            "required": True,
+                            "schema": {"type": "string"},
+                        }
                     ],
                     "responses": {"200": {"description": "ok"}},
                 }
@@ -100,9 +103,7 @@ def test_enum_narrowing_is_breaking() -> None:
 
 def test_additive_path_is_non_breaking() -> None:
     baseline = openapi({})
-    current = openapi(
-        {"/health": {"get": {"responses": {"200": {"description": "ok"}}}}}
-    )
+    current = openapi({"/health": {"get": {"responses": {"200": {"description": "ok"}}}}})
 
     result = OpenAPIContractDriftAnalyzer().analyze(
         path="openapi.json", baseline=encode(baseline), current=encode(current)

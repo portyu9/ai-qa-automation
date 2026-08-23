@@ -15,7 +15,7 @@ def test_journal_rejects_preexisting_symlink_target(tmp_path: Path) -> None:
     except OSError as exc:  # pragma: no cover - platform/filesystem capability
         pytest.skip(f"symlink creation unavailable: {exc}")
 
-    with pytest.raises(ValueError, match="journal path.*symlink"):
+    with pytest.raises(ValueError, match=r"journal path.*symlink"):
         RunJournal(journal)
 
     assert outside.read_text(encoding="utf-8") == "outside\n"

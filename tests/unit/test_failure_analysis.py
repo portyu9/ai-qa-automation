@@ -56,7 +56,13 @@ def test_auth_failure_is_classified_from_observed_status() -> None:
 
 def test_semantic_control_present_plus_locator_failure_is_contract_change() -> None:
     result = FailureAnalyzer().classify(
-        [ev(EvidenceKind.ACCESSIBILITY_SNAPSHOT, expected_control_present=True, locator_failed=True)]
+        [
+            ev(
+                EvidenceKind.ACCESSIBILITY_SNAPSHOT,
+                expected_control_present=True,
+                locator_failed=True,
+            )
+        ]
     )
     assert result.classification is FailureClass.LOCATOR_UI_CONTRACT_CHANGE
 
@@ -71,7 +77,9 @@ def test_playwright_unique_semantic_candidate_supports_locator_contract_change()
     assert result.classification is FailureClass.LOCATOR_UI_CONTRACT_CHANGE
 
 
-def test_unique_but_semantically_unrelated_candidate_does_not_prove_locator_contract_change() -> None:
+def test_unique_but_semantically_unrelated_candidate_does_not_prove_locator_contract_change() -> (
+    None
+):
     result = FailureAnalyzer().classify(
         locator_verification(
             "get_by_role('button', name='Delete Account')",

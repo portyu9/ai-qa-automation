@@ -117,7 +117,7 @@ def _change_revision_closed(state: AgentRunState) -> bool:
     return targeted and regression
 
 
-def _require_closed_revision_before_mutation(services: "RuntimeServices") -> str | None:
+def _require_closed_revision_before_mutation(services: RuntimeServices) -> str | None:
     if _change_revision_closed(services.state):
         return None
     return (
@@ -217,7 +217,7 @@ def _coverage_search(
 
 
 def _record_patch_safety_validation(
-    services: "RuntimeServices",
+    services: RuntimeServices,
     *,
     path: str,
     evidence_id: str,
@@ -237,7 +237,7 @@ def _record_patch_safety_validation(
 
 
 def _record_capability_validation(
-    services: "RuntimeServices", *, name: str, status: ValidationStatus, summary: str
+    services: RuntimeServices, *, name: str, status: ValidationStatus, summary: str
 ) -> None:
     services.state.validation_results.append(
         ValidationResult(
@@ -301,7 +301,9 @@ class RuntimeServices:
     def network_hosts(self, url: str) -> set[str]:
         host = (urlparse(url).hostname or "").lower()
         if not host or host not in self.allowed_network_hosts:
-            raise PermissionError(f"network host is not explicitly allowlisted: {host or '<missing>'}")
+            raise PermissionError(
+                f"network host is not explicitly allowlisted: {host or '<missing>'}"
+            )
         local_hosts = {"localhost", "127.0.0.1", "::1"}
         if not self.allow_external_network and host not in local_hosts:
             raise PermissionError("external network access is disabled")
@@ -343,7 +345,11 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
         services.checkpoint()
         return {"content": [{"type": "text", "text": item.model_dump_json()}]}
 
-    @tool("run_pytest", "Execute pytest in the isolated target workspace and capture deterministic evidence.", {"args": list[str]})
+    @tool(
+        "run_pytest",
+        "Execute pytest in the isolated target workspace and capture deterministic evidence.",
+        {"args": list[str]},
+    )
     async def run_pytest(args: dict[str, Any]) -> dict[str, Any]:
         services.consume("run_pytest", args)
         pytest_args = [str(item) for item in (args.get("args") or [])]
@@ -382,7 +388,11 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
             "is_error": result.exit_code != 0,
         }
 
-    @tool("probe_api", "Make one policy-approved HTTP request and register sanitized response evidence.", {"method": str, "url": str})
+    @tool(
+        "probe_api",
+        "Make one policy-approved HTTP request and register sanitized response evidence.",
+        {"method": str, "url": str},
+    )
     async def probe_api(args: dict[str, Any]) -> dict[str, Any]:
         services.consume("probe_api", args)
         method_decision = services.policy.authorize_api_method(
@@ -392,7 +402,12 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
         if method_decision.decision.value != "ALLOW":
             services.checkpoint()
             return {
-                "content": [{"type": "text", "text": f"DENIED {method_decision.rule_id}: {method_decision.reason}"}],
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"DENIED {method_decision.rule_id}: {method_decision.reason}",
+                    }
+                ],
                 "is_error": True,
             }
         allow_hosts = services.network_hosts(args["url"])
@@ -441,7 +456,11 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
             ]
         }
 
-    @tool("inspect_browser", "Collect allowlisted browser accessibility, screenshot, console, and network evidence.", {"url": str})
+    @tool(
+        "inspect_browser",
+        "Collect allowlisted browser accessibility, screenshot, console, and network evidence.",
+        {"url": str},
+    )
     async def inspect_browser(args: dict[str, Any]) -> dict[str, Any]:
         services.consume("inspect_browser", args)
         allow_hosts = services.network_hosts(args["url"])
@@ -494,7 +513,9 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
             ]
             if evidence_id
         ]
-        services.state.evidence_ids.extend(eid for eid in ids if eid not in services.state.evidence_ids)
+        services.state.evidence_ids.extend(
+            eid for eid in ids if eid not in services.state.evidence_ids
+        )
         services.checkpoint()
         return {
             "content": [
@@ -515,7 +536,11 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
             ]
         }
 
-    @tool("classify_failure", "Classify currently collected evidence with a deterministic first-pass classifier.", {})
+    @tool(
+        "classify_failure",
+        "Classify currently collected evidence with a deterministic first-pass classifier.",
+        {},
+    )
     async def classify_failure(args: dict[str, Any]) -> dict[str, Any]:
         services.consume("classify_failure", args)
         result = FailureAnalyzer().classify(services.evidence.all())
@@ -524,21 +549,38 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
         services.checkpoint()
         return {"content": [{"type": "text", "text": result.model_dump_json()}]}
 
-    @tool("read_test_file", "Read a UTF-8 test file after deterministic path authorization.", {"path": str})
+    @tool(
+        "read_test_file",
+        "Read a UTF-8 test file after deterministic path authorization.",
+        {"path": str},
+    )
     async def read_test_file(args: dict[str, Any]) -> dict[str, Any]:
         services.consume("read_test_file", args)
         relative = Path(args["path"])
         decision = services.policy.authorize_path(relative, write=False)
         services.state.policy_decisions.append(decision)
         if decision.decision.value != "ALLOW":
-            return {"content": [{"type": "text", "text": f"DENIED {decision.rule_id}: {decision.reason}"}], "is_error": True}
+            return {
+                "content": [
+                    {"type": "text", "text": f"DENIED {decision.rule_id}: {decision.reason}"}
+                ],
+                "is_error": True,
+            }
         target = (services.workspace / relative).resolve()
         if not target.is_file() or target.suffix not in {".py", ".ts", ".js", ".java", ".cs"}:
-            return {"content": [{"type": "text", "text": "DENIED: file is not an approved test-code type"}], "is_error": True}
+            return {
+                "content": [
+                    {"type": "text", "text": "DENIED: file is not an approved test-code type"}
+                ],
+                "is_error": True,
+            }
         try:
             source = _read_bounded_utf8(target)
         except (OSError, UnicodeError, ValueError) as exc:
-            return {"content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}], "is_error": True}
+            return {
+                "content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}],
+                "is_error": True,
+            }
         text = redact_text(source[:_MAX_MODEL_SOURCE_CHARS])
         digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
         services.state.files_read.append(relative.as_posix())
@@ -573,7 +615,10 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
                 max_results=int(args.get("max_results", 100)),
             )
         except (ValueError, OSError) as exc:
-            return {"content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}], "is_error": True}
+            return {
+                "content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}],
+                "is_error": True,
+            }
         item = services.evidence.add(
             EvidenceItem(
                 run_id=services.state.run_id,
@@ -587,7 +632,14 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
         )
         services.state.evidence_ids.append(item.id)
         services.checkpoint()
-        return {"content": [{"type": "text", "text": json.dumps({"coverage_evidence_id": item.id, "results": rows})[:16000]}]}
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": json.dumps({"coverage_evidence_id": item.id, "results": rows})[:16000],
+                }
+            ]
+        }
 
     @tool(
         "plan_tests",
@@ -599,31 +651,62 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
         try:
             coverage_evidence = services.evidence.get(args["coverage_evidence_id"])
         except KeyError:
-            return {"content": [{"type": "text", "text": "DENIED: coverage evidence does not exist in this run"}], "is_error": True}
+            return {
+                "content": [
+                    {"type": "text", "text": "DENIED: coverage evidence does not exist in this run"}
+                ],
+                "is_error": True,
+            }
         if (
             coverage_evidence.kind != EvidenceKind.SOURCE_OBSERVATION
             or coverage_evidence.nature != EvidenceNature.OBSERVED_FACT
             or coverage_evidence.source != "repository_test_coverage_search"
             or coverage_evidence.id not in services.state.evidence_ids
         ):
-            return {"content": [{"type": "text", "text": "DENIED: test planning requires observed repository coverage-search evidence"}], "is_error": True}
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "DENIED: test planning requires observed repository coverage-search evidence",
+                    }
+                ],
+                "is_error": True,
+            }
         try:
             existing_coverage = json.loads(args["existing_coverage_json"])
         except json.JSONDecodeError as exc:
-            return {"content": [{"type": "text", "text": f"DENIED: malformed coverage JSON: {redact_text(str(exc))}"}], "is_error": True}
-        if not isinstance(existing_coverage, list) or not all(
-            isinstance(item, str) and len(item) <= 500 for item in existing_coverage
-        ) or len(existing_coverage) > 500:
             return {
-                "content": [{"type": "text", "text": "DENIED: existing coverage must be a JSON string list with at most 500 bounded entries"}],
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"DENIED: malformed coverage JSON: {redact_text(str(exc))}",
+                    }
+                ],
+                "is_error": True,
+            }
+        if (
+            not isinstance(existing_coverage, list)
+            or not all(isinstance(item, str) and len(item) <= 500 for item in existing_coverage)
+            or len(existing_coverage) > 500
+        ):
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "DENIED: existing coverage must be a JSON string list with at most 500 bounded entries",
+                    }
+                ],
                 "is_error": True,
             }
         requirement = str(args["requirement"])
         if not requirement.strip() or len(requirement) > 8000:
-            return {"content": [{"type": "text", "text": "DENIED: requirement must be 1-8000 characters"}], "is_error": True}
-        result = TestGenerationPlanner().plan(
-            requirement, existing_coverage=existing_coverage
-        )
+            return {
+                "content": [
+                    {"type": "text", "text": "DENIED: requirement must be 1-8000 characters"}
+                ],
+                "is_error": True,
+            }
+        result = TestGenerationPlanner().plan(requirement, existing_coverage=existing_coverage)
         item = services.evidence.add(
             EvidenceItem(
                 run_id=services.state.run_id,
@@ -640,9 +723,22 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
         )
         services.state.evidence_ids.append(item.id)
         services.checkpoint()
-        return {"content": [{"type": "text", "text": json.dumps({"plan_evidence_id": item.id, "plan": result.model_dump(mode="json")})[:16000]}]}
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": json.dumps(
+                        {"plan_evidence_id": item.id, "plan": result.model_dump(mode="json")}
+                    )[:16000],
+                }
+            ]
+        }
 
-    @tool("prioritize_regression", "Risk-rank regression candidates; low confidence broadens selection.", {"candidates_json": str, "dependency_confidence": float})
+    @tool(
+        "prioritize_regression",
+        "Risk-rank regression candidates; low confidence broadens selection.",
+        {"candidates_json": str, "dependency_confidence": float},
+    )
     async def prioritize_regression(args: dict[str, Any]) -> dict[str, Any]:
         services.consume("prioritize_regression", args)
         try:
@@ -654,27 +750,54 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
                 candidates, dependency_confidence=float(args["dependency_confidence"])
             )
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
-            return {"content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}], "is_error": True}
+            return {
+                "content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}],
+                "is_error": True,
+            }
         return {"content": [{"type": "text", "text": result.model_dump_json()}]}
 
-    @tool("review_python_test", "Run deterministic test-quality checks against a Python test file.", {"path": str})
+    @tool(
+        "review_python_test",
+        "Run deterministic test-quality checks against a Python test file.",
+        {"path": str},
+    )
     async def review_python_test(args: dict[str, Any]) -> dict[str, Any]:
         services.consume("review_python_test", args)
         relative = Path(args["path"])
         decision = services.policy.authorize_path(relative, write=False)
         if decision.decision.value != "ALLOW":
-            return {"content": [{"type": "text", "text": f"DENIED {decision.rule_id}: {decision.reason}"}], "is_error": True}
+            return {
+                "content": [
+                    {"type": "text", "text": f"DENIED {decision.rule_id}: {decision.reason}"}
+                ],
+                "is_error": True,
+            }
         target = (services.workspace / relative).resolve()
         if target.suffix != ".py" or not target.is_file():
-            return {"content": [{"type": "text", "text": "DENIED: only existing Python test files are supported"}], "is_error": True}
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "DENIED: only existing Python test files are supported",
+                    }
+                ],
+                "is_error": True,
+            }
         try:
             source = _read_bounded_utf8(target)
         except (OSError, UnicodeError, ValueError) as exc:
-            return {"content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}], "is_error": True}
+            return {
+                "content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}],
+                "is_error": True,
+            }
         findings = [item.__dict__ for item in review_python_test_source(source)]
         return {"content": [{"type": "text", "text": json.dumps({"findings": findings})}]}
 
-    @tool("create_test_file", "Create a new policy-approved test file from a coverage-aware plan after deterministic syntax/quality checks.", {"path": str, "content": str, "plan_evidence_id": str})
+    @tool(
+        "create_test_file",
+        "Create a new policy-approved test file from a coverage-aware plan after deterministic syntax/quality checks.",
+        {"path": str, "content": str, "plan_evidence_id": str},
+    )
     async def create_test_file(args: dict[str, Any]) -> dict[str, Any]:
         services.consume("create_test_file", args)
         if reason := _require_closed_revision_before_mutation(services):
@@ -682,14 +805,30 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
         try:
             plan_item = services.evidence.get(args["plan_evidence_id"])
         except KeyError:
-            return {"content": [{"type": "text", "text": "DENIED: test-generation plan evidence does not exist in this run"}], "is_error": True}
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "DENIED: test-generation plan evidence does not exist in this run",
+                    }
+                ],
+                "is_error": True,
+            }
         if (
             plan_item.kind != EvidenceKind.TEST_PLAN
             or plan_item.nature != EvidenceNature.MODEL_INTERPRETATION
             or plan_item.source != "test_generation_planner"
             or plan_item.id not in services.state.evidence_ids
         ):
-            return {"content": [{"type": "text", "text": "DENIED: test creation requires a coverage-aware plan from this run"}], "is_error": True}
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "DENIED: test creation requires a coverage-aware plan from this run",
+                    }
+                ],
+                "is_error": True,
+            }
         patcher = SafeTestPatcher(services.workspace, services.policy)
         try:
             result = patcher.create_test(relative_path=args["path"], content=args["content"])
@@ -697,7 +836,20 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
             return {"content": [{"type": "text", "text": f"DENIED: {exc}"}], "is_error": True}
         services.state.files_modified.append(result.path)
         services.state.change_revision += 1
-        item = services.evidence.add(EvidenceItem(run_id=services.state.run_id, kind=EvidenceKind.GIT_DIFF, source="safe_test_patcher", summary="Generated test file created; execution validation still required", structured_data={"path": result.path, "new_sha256": result.new_sha256, "diff": result.diff[:12000], "plan_evidence_id": plan_item.id}))
+        item = services.evidence.add(
+            EvidenceItem(
+                run_id=services.state.run_id,
+                kind=EvidenceKind.GIT_DIFF,
+                source="safe_test_patcher",
+                summary="Generated test file created; execution validation still required",
+                structured_data={
+                    "path": result.path,
+                    "new_sha256": result.new_sha256,
+                    "diff": result.diff[:12000],
+                    "plan_evidence_id": plan_item.id,
+                },
+            )
+        )
         services.state.evidence_ids.append(item.id)
         _record_patch_safety_validation(
             services,
@@ -706,7 +858,14 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
             summary="Generated test passed deterministic syntax, path, assertion, and unsafe-diff checks.",
         )
         services.checkpoint()
-        return {"content": [{"type": "text", "text": f"TEST_CREATED evidence_id={item.id}; run deterministic validation next"}]}
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"TEST_CREATED evidence_id={item.id}; run deterministic validation next",
+                }
+            ]
+        }
 
     @tool(
         "verify_locator_candidates",
@@ -785,10 +944,14 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
         services.consume("propose_locator_heal", args)
         classification = services.state.classification
         confidence = services.state.classification_confidence or 0.0
-        if classification not in {
-            FailureClass.LOCATOR_UI_CONTRACT_CHANGE,
-            FailureClass.TEST_AUTOMATION_DEFECT,
-        } or confidence < 0.75:
+        if (
+            classification
+            not in {
+                FailureClass.LOCATOR_UI_CONTRACT_CHANGE,
+                FailureClass.TEST_AUTOMATION_DEFECT,
+            }
+            or confidence < 0.75
+        ):
             return {
                 "content": [
                     {
@@ -801,32 +964,63 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
         try:
             verification = services.evidence.get(args["verification_evidence_id"])
         except KeyError:
-            return {"content": [{"type": "text", "text": "DENIED: locator verification evidence does not exist in this run"}], "is_error": True}
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "DENIED: locator verification evidence does not exist in this run",
+                    }
+                ],
+                "is_error": True,
+            }
         if (
             verification.kind != EvidenceKind.SOURCE_OBSERVATION
             or verification.nature != EvidenceNature.OBSERVED_FACT
             or verification.source != "playwright_locator_verification"
             or verification.id not in services.state.evidence_ids
         ):
-            return {"content": [{"type": "text", "text": "DENIED: supplied evidence is not authoritative Playwright locator verification from this run"}], "is_error": True}
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "DENIED: supplied evidence is not authoritative Playwright locator verification from this run",
+                    }
+                ],
+                "is_error": True,
+            }
 
         all_items = {item.id: item for item in services.evidence.all()}
         context_ids = verification.structured_data.get("context_evidence_ids", [])
         if not isinstance(context_ids, list) or len(context_ids) != 2:
             return {
-                "content": [{"type": "text", "text": "DENIED: locator verification is missing same-DOM context evidence"}],
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "DENIED: locator verification is missing same-DOM context evidence",
+                    }
+                ],
                 "is_error": True,
             }
         try:
             context_items = [all_items[str(eid)] for eid in context_ids]
         except KeyError:
             return {
-                "content": [{"type": "text", "text": "DENIED: locator verification context evidence is unavailable in this run"}],
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "DENIED: locator verification context evidence is unavailable in this run",
+                    }
+                ],
                 "is_error": True,
             }
         if any(item.id not in services.state.evidence_ids for item in context_items):
             return {
-                "content": [{"type": "text", "text": "DENIED: locator verification context is not registered in canonical run state"}],
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "DENIED: locator verification context is not registered in canonical run state",
+                    }
+                ],
                 "is_error": True,
             }
         context_kinds = {item.kind for item in context_items}
@@ -836,12 +1030,28 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
             for item in context_items
         ):
             return {
-                "content": [{"type": "text", "text": "DENIED: locator repair requires screenshot and accessibility evidence captured by the same Playwright verification"}],
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "DENIED: locator repair requires screenshot and accessibility evidence captured by the same Playwright verification",
+                    }
+                ],
                 "is_error": True,
             }
 
-        if str(verification.structured_data.get("original_locator") or "") != args["original_locator"]:
-            return {"content": [{"type": "text", "text": "DENIED: original locator does not match the browser verification evidence"}], "is_error": True}
+        if (
+            str(verification.structured_data.get("original_locator") or "")
+            != args["original_locator"]
+        ):
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "DENIED: original locator does not match the browser verification evidence",
+                    }
+                ],
+                "is_error": True,
+            }
         observed_rows = verification.structured_data.get("candidates", [])
         observed_map = {
             (str(row.get("locator")), str(row.get("strategy"))): row
@@ -857,7 +1067,9 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
                 candidate = LocatorCandidate.model_validate(raw)
                 observed = observed_map.get((candidate.locator, candidate.strategy))
                 if observed is None:
-                    raise ValueError("candidate was not measured by the supplied Playwright verification evidence")
+                    raise ValueError(
+                        "candidate was not measured by the supplied Playwright verification evidence"
+                    )
                 bound.append(
                     candidate.model_copy(
                         update={
@@ -867,7 +1079,10 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
                     )
                 )
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
-            return {"content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}], "is_error": True}
+            return {
+                "content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}],
+                "is_error": True,
+            }
 
         proposal = SelfHealingEngine().propose(
             classification=classification,
@@ -923,7 +1138,15 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
         try:
             proposal_item = services.evidence.get(args["proposal_evidence_id"])
         except KeyError:
-            return {"content": [{"type": "text", "text": "DENIED: healing proposal evidence does not exist in this run"}], "is_error": True}
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "DENIED: healing proposal evidence does not exist in this run",
+                    }
+                ],
+                "is_error": True,
+            }
         data = proposal_item.structured_data
         if (
             proposal_item.kind != EvidenceKind.HEALING_PROPOSAL
@@ -932,15 +1155,34 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
             or data.get("allowed") is not True
             or data.get("risk") not in {RiskLevel.LOW.value, RiskLevel.MEDIUM.value}
         ):
-            return {"content": [{"type": "text", "text": "DENIED: proposal is not an approved low/medium-risk healing decision from this run"}], "is_error": True}
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "DENIED: proposal is not an approved low/medium-risk healing decision from this run",
+                    }
+                ],
+                "is_error": True,
+            }
         path = str(data.get("path") or "")
         if str(args.get("path") or "") != path:
-            return {"content": [{"type": "text", "text": "DENIED: requested path does not match the path bound into the healing proposal"}], "is_error": True}
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "DENIED: requested path does not match the path bound into the healing proposal",
+                    }
+                ],
+                "is_error": True,
+            }
         expected_sha256 = str(data.get("expected_sha256") or "")
         original_locator = str(data.get("original_locator") or "")
         proposed_locator = str(data.get("proposed_locator") or "")
         if not all((path, expected_sha256, original_locator, proposed_locator)):
-            return {"content": [{"type": "text", "text": "DENIED: healing proposal is incomplete"}], "is_error": True}
+            return {
+                "content": [{"type": "text", "text": "DENIED: healing proposal is incomplete"}],
+                "is_error": True,
+            }
         patcher = SafeTestPatcher(services.workspace, services.policy)
         try:
             result = patcher.replace_locator_once(
@@ -950,7 +1192,10 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
                 new_locator=proposed_locator,
             )
         except (PermissionError, RuntimeError, ValueError, FileNotFoundError) as exc:
-            return {"content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}], "is_error": True}
+            return {
+                "content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}],
+                "is_error": True,
+            }
         services.state.change_revision += 1
         services.state.files_modified.append(result.path)
         item = services.evidence.add(
@@ -1000,7 +1245,10 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
             schema = json.loads(args["schema_json"])
             result = validate_json_schema(instance, schema)
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
-            return {"content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}], "is_error": True}
+            return {
+                "content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}],
+                "is_error": True,
+            }
         result = result.model_copy(
             update={
                 "gate_id": _stable_gate_id(
@@ -1026,7 +1274,11 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
         )
         return {"content": [{"type": "text", "text": json.dumps(signal.__dict__)}]}
 
-    @tool("inspect_mobile_runtime", "Report whether an Appium mobile runtime is actually configured.", {})
+    @tool(
+        "inspect_mobile_runtime",
+        "Report whether an Appium mobile runtime is actually configured.",
+        {},
+    )
     async def inspect_mobile_runtime(args: dict[str, Any]) -> dict[str, Any]:
         services.consume("inspect_mobile_runtime", args)
         result = MobileRuntimeInspector().inspect()
@@ -1104,9 +1356,7 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
             )
             services.checkpoint()
             return {
-                "content": [
-                    {"type": "text", "text": f"{status.value}: {redact_text(str(exc))}"}
-                ],
+                "content": [{"type": "text", "text": f"{status.value}: {redact_text(str(exc))}"}],
                 "is_error": True,
             }
         item = services.evidence.add(

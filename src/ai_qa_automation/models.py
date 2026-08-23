@@ -26,7 +26,7 @@ class TerminalStatus(StrEnum):
 
 
 class ValidationStatus(StrEnum):
-    PASS = "PASS"
+    PASS = "PASS"  # nosec B105 - deterministic validation state, not a credential
     FAIL = "FAIL"
     NOT_EXECUTED = "NOT_EXECUTED"
     NOT_OBSERVED = "NOT_OBSERVED"

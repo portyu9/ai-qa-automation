@@ -60,6 +60,7 @@ dev = [
   "bandit>=1.8,<2",
   "detect-secrets>=1.5,<2",
   "mypy>=1.14,<2",
+  "types-jsonschema>=4.23,<5",
   "pip-audit>=2.8,<3",
   "pytest>=9,<10",
   "pytest-asyncio>=1,<2",
@@ -75,7 +76,7 @@ packages = ["src/ai_qa_automation"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 addopts = "-q --strict-markers --disable-warnings -m 'not browser and not model'"
 markers = [
   "integration: deterministic integration tests",

@@ -19,9 +19,7 @@ def test_codeowners_uses_last_matching_rule(tmp_path: Path) -> None:
     codeowners = tmp_path / ".github" / "CODEOWNERS"
     codeowners.parent.mkdir(parents=True)
     codeowners.write_text(
-        "* @all\n"
-        "/src/** @backend\n"
-        "/src/security/** @security\n",
+        "* @all\n/src/** @backend\n/src/security/** @security\n",
         encoding="utf-8",
     )
 
@@ -38,8 +36,7 @@ def test_codeowners_uses_last_matching_rule(tmp_path: Path) -> None:
 def test_directory_and_question_mark_patterns_are_supported(tmp_path: Path) -> None:
     codeowners = tmp_path / "CODEOWNERS"
     codeowners.write_text(
-        "/docs/ @docs\n"
-        "config?.yaml @platform\n",
+        "/docs/ @docs\nconfig?.yaml @platform\n",
         encoding="utf-8",
     )
 
@@ -55,9 +52,7 @@ def test_directory_and_question_mark_patterns_are_supported(tmp_path: Path) -> N
 def test_unsupported_patterns_are_reported_not_guessed(tmp_path: Path) -> None:
     codeowners = tmp_path / "CODEOWNERS"
     codeowners.write_text(
-        "!generated/** @nobody\n"
-        "src/[ab].py @team\n"
-        "src/** @backend\n",
+        "!generated/** @nobody\nsrc/[ab].py @team\nsrc/** @backend\n",
         encoding="utf-8",
     )
 

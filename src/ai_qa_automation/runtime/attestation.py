@@ -38,9 +38,7 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
 
     state = _load_object(state_path, max_bytes=_MAX_STATE_BYTES)
     runtime = (
-        _load_object(runtime_path, max_bytes=_MAX_RUNTIME_BYTES)
-        if runtime_path.is_file()
-        else {}
+        _load_object(runtime_path, max_bytes=_MAX_RUNTIME_BYTES) if runtime_path.is_file() else {}
     )
     manifest = (
         _load_object(manifest_path, max_bytes=_MAX_MANIFEST_BYTES)
@@ -142,9 +140,7 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
             "reason": "repository provides content-addressed integrity metadata but no trusted signing key",
         },
     }
-    canonical = json.dumps(core, sort_keys=True, separators=(",", ":"), default=str).encode(
-        "utf-8"
-    )
+    canonical = json.dumps(core, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
     return {
         **core,
         "generated_at": datetime.now(UTC).isoformat(),
@@ -190,7 +186,11 @@ def _verify_manifest_artifacts(root: Path, manifest: dict[str, Any]) -> dict[str
     if not isinstance(artifacts, list):
         return {"valid": False, "checked": 0, "reason": "manifest artifacts must be a list"}
     if len(artifacts) > _MAX_ARTIFACT_COUNT:
-        return {"valid": False, "checked": 0, "reason": "manifest artifact count exceeds attestation bound"}
+        return {
+            "valid": False,
+            "checked": 0,
+            "reason": "manifest artifact count exceeds attestation bound",
+        }
     checked = 0
     total_bytes = 0
     for raw in artifacts:
