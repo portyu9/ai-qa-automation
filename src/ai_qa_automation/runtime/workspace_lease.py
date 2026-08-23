@@ -58,14 +58,18 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
         if nofollow:
             flags |= nofollow
         fd = os.open(self.path, flags, 0o600)
-        return os.fdopen(fd, "r+", encoding="utf-8")
+        return os.fdopen(fd, "r+b")
 
-    def _parse_previous_metadata(self, raw: str) -> dict[str, Any] | None:
-        normalized = raw.strip().strip("\0")
+    def _parse_previous_metadata(self, raw: bytes) -> dict[str, Any] | None:
+        normalized = raw.strip().strip(b"\0")
         if not normalized:
             return None
         try:
-            previous = json.loads(normalized)
+            decoded = normalized.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise OSError("workspace lease metadata is not valid UTF-8; manual review is required") from exc
+        try:
+            previous = json.loads(decoded)
         except json.JSONDecodeError as exc:
             raise OSError("workspace lease metadata is corrupt; manual review is required") from exc
         if not isinstance(previous, dict):
@@ -87,7 +91,7 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             locked = True
             stream.seek(0)
             raw = stream.read(_MAX_LEASE_METADATA_BYTES + 1)
-            if len(raw.encode("utf-8")) > _MAX_LEASE_METADATA_BYTES:
+            if len(raw) > _MAX_LEASE_METADATA_BYTES:
                 raise OSError("workspace lease metadata exceeds bounded ingestion limit")
             self.previous_metadata = self._parse_previous_metadata(raw)
 
@@ -99,8 +103,8 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
                 "hostname": socket.gethostname(),
                 "acquired_at": datetime.now(UTC).isoformat(),
             }
-            rendered = json.dumps(metadata, sort_keys=True)
-            if len(rendered.encode("utf-8")) > _MAX_LEASE_METADATA_BYTES:
+            rendered = json.dumps(metadata, sort_keys=True).encode("utf-8")
+            if len(rendered) > _MAX_LEASE_METADATA_BYTES:
                 raise OSError("workspace lease metadata exceeds persistence limit")
             stream.seek(0)
             stream.truncate(0)
@@ -141,7 +145,7 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             try:
                 stream.seek(0, os.SEEK_END)
                 if stream.tell() == 0:
-                    stream.write("\0")
+                    stream.write(b"\0")
                     stream.flush()
                 stream.seek(0)
                 msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
