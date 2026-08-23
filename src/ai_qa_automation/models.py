@@ -284,6 +284,7 @@ class AgentRunState(BaseModel):
     run_id: str = Field(default_factory=lambda: f"run-{uuid4().hex[:12]}")
     session_id: str = Field(default_factory=lambda: f"session-{uuid4().hex[:10]}")
     objective: str
+    objective_gate_id: str | None = Field(default=None, max_length=256)
     agent_version: str = "0.1.0"
     model_id: str = "not-invoked"
     sdk_version: str = "NOT_VERIFIED"
@@ -294,10 +295,10 @@ class AgentRunState(BaseModel):
     target_git_sha: str | None = None
     workspace: str
     phase: str = "INITIALIZE"
-    iteration: int = 0
-    change_revision: int = 0
-    tool_call_count: int = 0
-    retry_count: int = 0
+    iteration: int = Field(default=0, ge=0)
+    change_revision: int = Field(default=0, ge=0)
+    tool_call_count: int = Field(default=0, ge=0)
+    retry_count: int = Field(default=0, ge=0)
     observations: list[str] = Field(default_factory=list)
     hypotheses: list[Hypothesis] = Field(default_factory=list)
     evidence_ids: list[str] = Field(default_factory=list)
@@ -310,9 +311,9 @@ class AgentRunState(BaseModel):
     mcp_status: dict[str, MCPStatus] = Field(default_factory=dict)
     external_evidence: list[str] = Field(default_factory=list)
     policy_decisions: list[PolicyDecision] = Field(default_factory=list)
-    token_usage: int = 0
-    cost: float = 0.0
-    duration: float = 0.0
+    token_usage: int = Field(default=0, ge=0)
+    cost: float = Field(default=0.0, ge=0)
+    duration: float = Field(default=0.0, ge=0)
     terminal_status: TerminalStatus | None = None
     terminal_reason: str | None = None
 
@@ -320,6 +321,16 @@ class AgentRunState(BaseModel):
     @classmethod
     def normalize_workspace(cls, value: str) -> str:
         return str(Path(value).expanduser())
+
+    @field_validator("objective_gate_id")
+    @classmethod
+    def normalize_objective_gate_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("objective_gate_id must not be empty when supplied")
+        return normalized
 
 
 class FinalAgentReport(FrozenModel):

@@ -21,6 +21,7 @@ def test_lineage_connects_evidence_artifacts_hypotheses_and_validation(tmp_path:
         {
             "run_id": "run-123",
             "objective": "Investigate checkout failure",
+            "objective_gate_id": "pytest:checkout",
             "terminal_status": "NOT_VERIFIED",
             "target_git_sha": "abc123",
             "configuration_version": "cfg-1",
@@ -81,8 +82,10 @@ def test_lineage_connects_evidence_artifacts_hypotheses_and_validation(tmp_path:
     graph = build_run_lineage(run_dir)
     node_ids = {node.id for node in graph.nodes}
     edges = {(edge.source, edge.target, edge.relation) for edge in graph.edges}
+    run_node = next(node for node in graph.nodes if node.id == "run:run-123")
 
     assert graph.run_id == "run-123"
+    assert run_node.attributes["objective_gate_id"] == "pytest:checkout"
     assert {
         "run:run-123",
         "evidence:ev-1",
@@ -126,6 +129,43 @@ def test_lineage_does_not_graph_invalid_journal_events(tmp_path: Path) -> None:
 
     assert not [node for node in graph.nodes if node.kind == "runtime_event"]
     assert any("journal" in warning for warning in graph.warnings)
+
+
+def test_lineage_fails_closed_when_verified_journal_is_swapped_before_graphing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = tmp_path / "run"
+    write_json(run_dir / "state.json", {"run_id": "run", "objective": "race"})
+    journal_path = run_dir / "journal.jsonl"
+    RunJournal(journal_path).append("owned-event")
+    outside = tmp_path / "outside-journal.jsonl"
+    outside.write_text('{"seq":1,"event":"forged"}\n', encoding="utf-8")
+    real_verify = RunJournal.verify
+    verify_calls = 0
+
+    def verify_then_swap_on_lineage_check(self: RunJournal) -> dict[str, object]:
+        nonlocal verify_calls
+        verify_calls += 1
+        result = real_verify(self)
+        # RunJournal construction verifies once via _inspect_existing. Swap only
+        # after build_run_lineage performs its explicit second verification so the
+        # test exercises the final-component race immediately before graph-open.
+        if verify_calls == 2:
+            self.path.unlink()
+            try:
+                self.path.symlink_to(outside)
+            except OSError as exc:  # pragma: no cover - platform/filesystem capability
+                pytest.skip(f"symlink creation unavailable: {exc}")
+        return result
+
+    monkeypatch.setattr(RunJournal, "verify", verify_then_swap_on_lineage_check)
+
+    graph = build_run_lineage(run_dir)
+
+    assert verify_calls == 2
+    assert not [node for node in graph.nodes if node.kind == "runtime_event"]
+    assert "journal could not be graphed: ValueError" in graph.warnings
 
 
 def test_lineage_rejects_symlinked_control_subject(tmp_path: Path) -> None:

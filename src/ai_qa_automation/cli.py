@@ -90,10 +90,31 @@ def agent_command(
     control_root: Annotated[
         Path | None, typer.Option("--control-root", exists=True, file_okay=False, resolve_path=True)
     ] = None,
+    objective_gate_id: Annotated[
+        str | None,
+        typer.Option(
+            "--objective-gate-id",
+            help=(
+                "Exact deterministic validation gate authorized by the operator to close an unchanged objective; "
+                "omit to preserve NOT_VERIFIED when no trusted objective contract exists"
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Run one bounded Claude Agent SDK session."""
     settings = Settings(control_root=control_root) if control_root is not None else Settings()
-    typer.echo(json.dumps(run_agent_sync(objective, workspace, settings), indent=2, default=str))
+    typer.echo(
+        json.dumps(
+            run_agent_sync(
+                objective,
+                workspace,
+                settings,
+                objective_gate_id=objective_gate_id,
+            ),
+            indent=2,
+            default=str,
+        )
+    )
 
 
 if __name__ == "__main__":

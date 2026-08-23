@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..io_safety import read_text_bounded
+from ..io_safety import open_regular_binary, read_text_bounded
 from .journal import RunJournal
 
 _MAX_LINEAGE_CONTROL_BYTES = 10_000_000
@@ -98,6 +98,7 @@ def build_run_lineage(run_dir: Path, *, max_journal_events: int = 500) -> RunLin
         label=run_id,
         attributes={
             "objective": str(state.get("objective") or "")[:500],
+            "objective_gate_id": state.get("objective_gate_id"),
             "terminal_status": state.get("terminal_status"),
             "target_git_sha": state.get("target_git_sha"),
             "configuration_version": state.get("configuration_version"),
@@ -255,7 +256,7 @@ def build_run_lineage(run_dir: Path, *, max_journal_events: int = 500) -> RunLin
             else:
                 count = 0
                 try:
-                    with journal_path.open("rb") as stream:
+                    with open_regular_binary(journal_path, label="lineage journal") as stream:
                         while True:
                             raw_line = stream.readline(_MAX_LINEAGE_JOURNAL_LINE_BYTES + 1)
                             if not raw_line:
@@ -294,7 +295,7 @@ def build_run_lineage(run_dir: Path, *, max_journal_events: int = 500) -> RunLin
                             )
                             edges.add((run_node, node_id, "RUNTIME_EVENT"))
                             count += 1
-                except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
                     warnings.append(f"journal could not be graphed: {type(exc).__name__}")
 
     ordered_nodes = tuple(nodes[key] for key in sorted(nodes))

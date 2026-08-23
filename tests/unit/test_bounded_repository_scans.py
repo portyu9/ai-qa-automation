@@ -4,9 +4,11 @@ from pathlib import Path
 
 import pytest
 
+import ai_qa_automation.runtime.bootstrap as bootstrap
 from ai_qa_automation.intelligence.repository_profile import RepositoryProfiler
 from ai_qa_automation.runtime.bootstrap import _dependency_inventory
 from ai_qa_automation.runtime.internal_tools import _coverage_search
+from ai_qa_automation.tools.repository import RepositoryChangeSet
 
 
 def test_repository_profiler_stops_at_file_work_bound(tmp_path: Path) -> None:
@@ -43,6 +45,94 @@ def test_dependency_inventory_refuses_to_hash_oversized_manifest(tmp_path: Path)
             "sha256": None,
             "hashed": False,
             "reason": "file-size-limit:16",
+        }
+    ]
+
+
+def test_dependency_inventory_fails_closed_on_final_component_symlink_swap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = tmp_path / "pyproject.toml"
+    manifest.write_text("[project]\nname='owned'\n", encoding="utf-8")
+    outside = tmp_path / "outside.toml"
+    outside.write_text("[project]\nname='untrusted'\n", encoding="utf-8")
+    real_hash = bootstrap.sha256_file_bounded
+
+    def swap_then_hash(path: Path, **kwargs: object) -> tuple[str, int]:
+        path.unlink()
+        try:
+            path.symlink_to(outside)
+        except OSError as exc:  # pragma: no cover - platform/filesystem capability
+            pytest.skip(f"symlink creation unavailable: {exc}")
+        return real_hash(path, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(bootstrap, "sha256_file_bounded", swap_then_hash)
+
+    rows, truncated = bootstrap._dependency_inventory(tmp_path)
+
+    assert truncated is True
+    assert rows == [
+        {
+            "path": "pyproject.toml",
+            "size": len("[project]\nname='owned'\n"),
+            "sha256": None,
+            "hashed": False,
+            "reason": "read-failed-or-grew-during-hash",
+        }
+    ]
+
+
+def test_contract_drift_fails_closed_on_final_component_symlink_swap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = tmp_path / "openapi.json"
+    current.write_text('{"openapi":"3.1.0","paths":{}}', encoding="utf-8")
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"openapi":"3.1.0","paths":{"/evil":{}}}', encoding="utf-8")
+    real_read = bootstrap.read_bytes_bounded
+
+    def swap_then_read(path: Path, **kwargs: object) -> bytes:
+        path.unlink()
+        try:
+            path.symlink_to(outside)
+        except OSError as exc:  # pragma: no cover - platform/filesystem capability
+            pytest.skip(f"symlink creation unavailable: {exc}")
+        return real_read(path, **kwargs)  # type: ignore[arg-type]
+
+    class Inspector:
+        @staticmethod
+        def read_file_at(_commit_sha: str, _relative_path: str, *, max_bytes: int) -> bytes:
+            assert max_bytes == 2_000_000
+            return b'{"openapi":"3.1.0","paths":{}}'
+
+    change_set = RepositoryChangeSet(
+        requested_base_ref="main",
+        baseline_sha="a" * 40,
+        merge_base_sha="b" * 40,
+        head_sha="c" * 40,
+        committed_files=("openapi.json",),
+        worktree_files=(),
+        changed_files=("openapi.json",),
+    )
+    monkeypatch.setattr(bootstrap, "read_bytes_bounded", swap_then_read)
+
+    reports = bootstrap._contract_drift_reports(
+        workspace=tmp_path,
+        inspector=Inspector(),  # type: ignore[arg-type]
+        change_set=change_set,
+        changed_files=("openapi.json",),
+    )
+
+    assert reports == [
+        {
+            "path": "openapi.json",
+            "contract_kind": "openapi",
+            "severity": "NOT_ANALYZED",
+            "changes": [],
+            "analyzed": False,
+            "reason": "current read failed: ValueError",
         }
     ]
 
