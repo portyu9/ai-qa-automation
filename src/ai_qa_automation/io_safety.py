@@ -16,6 +16,19 @@ def _validated_bound(max_bytes: int) -> int:
     return max_bytes
 
 
+def fsync_directory(path: Path) -> None:
+    """Durably persist directory-entry changes on platforms that expose directory fsync."""
+
+    if os.name == "nt":  # Python does not expose a portable Windows directory flush primitive.
+        return
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    fd = os.open(path, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def _open_regular_binary(path: Path, *, label: str) -> BinaryIO:
     """Open a regular file without following a final-component symlink when supported."""
 
