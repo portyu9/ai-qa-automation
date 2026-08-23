@@ -81,7 +81,9 @@ def evaluate_revision_closure(
             "Files changed, but no deterministic validation was executed at the current change revision.",
         )
 
-    failed = sorted({item.gate_id or item.name for item in current if item.status == ValidationStatus.FAIL})
+    failed = sorted(
+        {item.gate_id or item.name for item in current if item.status == ValidationStatus.FAIL}
+    )
     if failed:
         return RevisionClosure(
             False,
@@ -89,7 +91,9 @@ def evaluate_revision_closure(
             "Current deterministic validation failed: " + ", ".join(failed) + ".",
         )
 
-    incomplete = sorted({item.status.value for item in current if item.status != ValidationStatus.PASS})
+    incomplete = sorted(
+        {item.status.value for item in current if item.status != ValidationStatus.PASS}
+    )
     if incomplete:
         return RevisionClosure(
             False,
@@ -192,7 +196,9 @@ def determine_terminal_outcome(
         names = ", ".join(sorted({item.gate_id or item.name for item in failed}))
         return TerminalStatus.FAILURE, f"Current deterministic validation failed: {names}."
 
-    incomplete = sorted({item.status.value for item in active if item.status != ValidationStatus.PASS})
+    incomplete = sorted(
+        {item.status.value for item in active if item.status != ValidationStatus.PASS}
+    )
     if incomplete:
         return (
             TerminalStatus.NOT_VERIFIED,
