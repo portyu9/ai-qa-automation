@@ -50,7 +50,9 @@ def _future_validation_revisions(
     *,
     current_revision: int,
 ) -> tuple[int, ...]:
-    return tuple(sorted({item.revision for item in validations if item.revision > current_revision}))
+    return tuple(
+        sorted({item.revision for item in validations if item.revision > current_revision})
+    )
 
 
 def evaluate_revision_closure(
