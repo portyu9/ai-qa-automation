@@ -482,7 +482,9 @@ def _final_response(
         if limitation not in resolved_limitations:
             resolved_limitations.append(limitation)
     return {
-        "report": build_final_report(state, limitations=resolved_limitations).model_dump(mode="json"),
+        "report": build_final_report(state, limitations=resolved_limitations).model_dump(
+            mode="json"
+        ),
         "agent_result": agent_result,
         "provenance": {
             "run_id": state.run_id,
