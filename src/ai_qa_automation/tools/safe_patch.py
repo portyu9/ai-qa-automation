@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
-from ..io_safety import read_text_bounded
+from ..io_safety import fsync_directory, read_text_bounded
 from ..models import ToolDecision
 from ..policy import PolicyEngine
 from .locators import parse_locator_expression
@@ -253,7 +253,10 @@ class SafeTestPatcher:
         violations = self.policy.validate_patch(synthetic_diff)
         if violations:
             raise PermissionError(f"unsafe generated test rejected: {', '.join(violations)}")
+        parent_existed = destination.parent.exists()
         destination.parent.mkdir(parents=True, exist_ok=True)
+        if not parent_existed:
+            fsync_directory(destination.parent.resolve().parent)
         self._atomic_create(destination, content)
         digest = self.sha256_text(content)
         return PatchResult(
@@ -312,6 +315,7 @@ class SafeTestPatcher:
             if destination.is_symlink() or destination.parent.is_symlink():
                 raise PermissionError("mutation destination changed to an ambiguous symlink")
             temp.replace(destination)
+            fsync_directory(destination.parent)
         finally:
             temp.unlink(missing_ok=True)
 
@@ -322,6 +326,7 @@ class SafeTestPatcher:
             if destination.is_symlink() or destination.parent.is_symlink():
                 raise PermissionError("mutation destination changed to an ambiguous symlink")
             os.link(temp, destination)
+            fsync_directory(destination.parent)
         except FileExistsError:
             raise FileExistsError(destination) from None
         finally:
