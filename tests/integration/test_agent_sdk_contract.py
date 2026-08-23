@@ -7,6 +7,7 @@ from typing import Any, ClassVar
 
 import pytest
 
+import ai_qa_automation.agent as agent_module
 from ai_qa_automation.agent import run_agent
 from ai_qa_automation.config import Settings
 
@@ -87,6 +88,16 @@ def fake_sdk(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     return module
 
 
+def runtime_settings(tmp_path: Path) -> Settings:
+    return Settings(
+        control_root=Path.cwd(),
+        artifact_root=tmp_path / "artifacts",
+        max_turns=3,
+        max_tool_calls=4,
+        max_cost_usd=0.5,
+    )
+
+
 @pytest.mark.asyncio
 async def test_live_runtime_contract_is_strict_and_model_success_is_not_pass(
     tmp_path: Path,
@@ -97,18 +108,13 @@ async def test_live_runtime_contract_is_strict_and_model_success_is_not_pass(
     result = await run_agent(
         "Inspect the target and report evidence.",
         target,
-        Settings(
-            control_root=Path.cwd(),
-            artifact_root=tmp_path / "artifacts",
-            max_turns=3,
-            max_tool_calls=4,
-            max_cost_usd=0.5,
-        ),
+        runtime_settings(tmp_path),
     )
 
     report = result["report"]
     assert report["terminal_status"] == "NOT_VERIFIED"
     assert report["validation_results"] == []
+    assert report["provenance"]["objective_gate_id"] == "NOT_SUPPLIED"
 
     options = FakeClaudeAgentOptions.last_kwargs
     assert options["tools"] == []
@@ -130,3 +136,53 @@ async def test_live_runtime_contract_is_strict_and_model_success_is_not_pass(
     assert "mcp__qa__search_test_coverage" in options["allowed_tools"]
     assert "mcp__qa__verify_locator_candidates" in options["allowed_tools"]
     assert "mcp__qa__apply_locator_heal" in options["allowed_tools"]
+
+
+@pytest.mark.asyncio
+async def test_external_mcp_is_registered_but_not_blanket_auto_approved(
+    tmp_path: Path,
+    fake_sdk: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    external_server = {"type": "stdio", "command": "provider"}
+
+    monkeypatch.setattr(
+        agent_module,
+        "build_external_mcp",
+        lambda _settings, _policy: ({"github": external_server}, {}),
+    )
+
+    await run_agent(
+        "Inspect provider evidence only if policy permits it.",
+        target,
+        runtime_settings(tmp_path),
+    )
+
+    options = FakeClaudeAgentOptions.last_kwargs
+    assert options["mcp_servers"]["github"] is external_server
+    assert options["mcp_servers"]["qa"]["name"] == "qa"
+    assert all(not name.startswith("mcp__github") for name in options["allowed_tools"])
+    assert options["permission_mode"] == "default"
+    assert callable(options["can_use_tool"])
+
+
+@pytest.mark.asyncio
+async def test_objective_gate_contract_is_persisted_in_report_and_response_provenance(
+    tmp_path: Path,
+    fake_sdk: ModuleType,
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+
+    result = await run_agent(
+        "Run the exact bounded objective validation.",
+        target,
+        runtime_settings(tmp_path),
+        objective_gate_id="pytest:objective-exact",
+    )
+
+    assert result["report"]["terminal_status"] == "NOT_VERIFIED"
+    assert result["report"]["provenance"]["objective_gate_id"] == "pytest:objective-exact"
+    assert result["provenance"]["objective_gate_id"] == "pytest:objective-exact"
