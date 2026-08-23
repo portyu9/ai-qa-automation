@@ -16,7 +16,7 @@ from .models import AgentRunState, MCPStatus, TerminalStatus
 from .policy import PolicyEngine
 from .reporting import build_final_report
 from .runtime.bootstrap import bootstrap_runtime_context
-from .runtime.budget import BudgetExceededError, ExecutionBudget
+from .runtime.budget import ExecutionBudget
 from .runtime.internal_tools import build_internal_mcp_server
 from .runtime.journal import RunJournal
 from .runtime.live_services import LiveRuntimeServices
