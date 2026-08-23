@@ -23,6 +23,10 @@ class CircuitOpenError(RuntimeError):
     """Raised when a repeatedly failing tool circuit has opened."""
 
 
+class RepeatedActionError(RuntimeError):
+    """Raised when one identical authorized request exceeds its bounded repetition budget."""
+
+
 class MutationPendingError(RuntimeError):
     """Raised when a second mutation is attempted before validation closes the first."""
 
@@ -38,7 +42,7 @@ class PendingMutation:
 
 @dataclass
 class RuntimeControl:
-    """Operational state kept separate from canonical QA decision state."""
+    """Authoritative live operational state for bounded tool execution and mutation recovery."""
 
     workspace: Path
     budget: ExecutionBudget
@@ -47,14 +51,18 @@ class RuntimeControl:
     lease_id: str
     expected_workspace_fingerprint: str | None = None
     circuit_failure_threshold: int = 3
+    max_repeated_action: int = 3
     circuit_failures: dict[str, int] = field(default_factory=dict)
     open_circuits: set[str] = field(default_factory=set)
+    repeated_action_counts: dict[str, int] = field(default_factory=dict)
     pending_mutation: PendingMutation | None = None
     _lock: RLock = field(default_factory=RLock, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if type(self.circuit_failure_threshold) is not int or self.circuit_failure_threshold < 1:
             raise ValueError("circuit_failure_threshold must be a positive integer")
+        if type(self.max_repeated_action) is not int or self.max_repeated_action < 1:
+            raise ValueError("max_repeated_action must be a positive integer")
         self.workspace = self.workspace.expanduser().resolve()
         self.metadata_path = self.metadata_path.expanduser()
 
@@ -62,6 +70,21 @@ class RuntimeControl:
         with self._lock:
             if tool_name in self.open_circuits:
                 raise CircuitOpenError(f"tool circuit is open after repeated failures: {tool_name}")
+
+    def register_tool_request(self, tool_name: str, input_fingerprint: str) -> None:
+        """Apply the one live circuit/repetition rule to an already-charged SDK request."""
+
+        with self._lock:
+            if tool_name in self.open_circuits:
+                raise CircuitOpenError(f"tool circuit is open after repeated failures: {tool_name}")
+            key = f"{tool_name}:{input_fingerprint}"
+            seen = self.repeated_action_counts.get(key, 0)
+            if seen >= self.max_repeated_action:
+                raise RepeatedActionError(
+                    f"repeated identical action budget exhausted for tool: {tool_name}"
+                )
+            self.repeated_action_counts[key] = seen + 1
+            self.persist()
 
     def record_tool_result(self, tool_name: str, *, failed: bool) -> None:
         with self._lock:
@@ -318,6 +341,8 @@ class RuntimeControl:
                 "journal_head_hash": self.journal.head_hash,
                 "circuit_failures": dict(sorted(self.circuit_failures.items())),
                 "open_circuits": sorted(self.open_circuits),
+                "max_repeated_action": self.max_repeated_action,
+                "repeated_action_counts": dict(sorted(self.repeated_action_counts.items())),
                 "pending_mutation": pending,
                 "updated_at": datetime.now(UTC).isoformat(),
             }
