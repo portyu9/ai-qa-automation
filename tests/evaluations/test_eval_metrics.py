@@ -179,3 +179,17 @@ def test_threshold_metadata_cannot_be_omitted_or_rewritten() -> None:
         _validate_thresholds(missing_precommit)
     with pytest.raises(ValueError):
         _validate_thresholds(wrong_schema)
+
+
+def test_unknown_evaluator_cannot_spoof_metric_family_membership() -> None:
+    with pytest.raises(ValueError, match="unknown evaluator"):
+        _metrics(
+            [
+                {
+                    "evaluator": "classifier_looks_legitimate_but_is_unregistered",
+                    "actual": "APPLICATION_DEFECT",
+                    "expected": "APPLICATION_DEFECT",
+                    "pass": True,
+                }
+            ]
+        )
