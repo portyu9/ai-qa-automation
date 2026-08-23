@@ -366,11 +366,18 @@ async def run_agent(
                         f"Rollback integrity could not be guaranteed: {type(rollback_exc).__name__}"
                     )
                     journal.try_append("rollback_failed", error_type=type(rollback_exc).__name__)
+            if state.terminal_status is None:
+                state.terminal_status = TerminalStatus.NOT_VERIFIED
+                state.terminal_reason = (
+                    state.terminal_reason
+                    or "Run reached terminalization without an explicit deterministic terminal outcome."
+                )
+            terminal_status = state.terminal_status
             state.phase = "TERMINAL"
             state.duration = max(0.0, time.monotonic() - started)
             journal.try_append(
                 "agent_run_finished",
-                terminal_status=state.terminal_status.value,
+                terminal_status=terminal_status.value,
                 duration_seconds=state.duration,
                 tool_calls=state.tool_call_count,
             )
@@ -379,7 +386,7 @@ async def run_agent(
                 logger,
                 "agent_run_finished",
                 run_id=state.run_id,
-                terminal_status=state.terminal_status.value,
+                terminal_status=terminal_status.value,
                 duration_seconds=round(state.duration, 3),
                 tool_calls=state.tool_call_count,
             )
@@ -462,11 +469,8 @@ def _sync_operational_state(
     state_store: StateStore,
     control: RuntimeControl,
 ) -> None:
-    snapshot = control.snapshot()
-    state.runtime_budget = dict(snapshot["budget"])
-    state.open_circuits = list(snapshot["open_circuits"])
-    pending = snapshot["pending_mutation"]
-    state.pending_mutation = str(pending) if pending else None
+    """Persist QA state and runtime authority without duplicating control-plane fields."""
+
     state_store.save(state)
     control.persist()
 
