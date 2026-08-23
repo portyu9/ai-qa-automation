@@ -1,14 +1,26 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import os
 import socket
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, cast
 from uuid import uuid4
+
+
+class _MSVCRTLocking(Protocol):
+    LK_NBLCK: int
+    LK_UNLCK: int
+
+    def locking(self, fd: int, mode: int, nbytes: int) -> None: ...
+
+
+def _load_msvcrt() -> _MSVCRTLocking:
+    return cast(_MSVCRTLocking, importlib.import_module("msvcrt"))
 
 
 class WorkspaceBusyError(RuntimeError):
@@ -98,7 +110,7 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
         try:
             import fcntl
         except ImportError:  # pragma: no cover - Windows path
-            import msvcrt
+            msvcrt = _load_msvcrt()
 
             try:
                 stream.seek(0, os.SEEK_END)
@@ -120,12 +132,10 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
         try:
             import fcntl
         except ImportError:  # pragma: no cover - Windows path
-            import msvcrt
+            msvcrt = _load_msvcrt()
 
             stream.seek(0)
-            try:
+            with suppress(OSError):
                 msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
-            except OSError:
-                pass
         else:
             fcntl.flock(stream.fileno(), fcntl.LOCK_UN)

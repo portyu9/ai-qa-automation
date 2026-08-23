@@ -2,13 +2,9 @@ from __future__ import annotations
 
 import json
 import math
-import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
 
 from pydantic import ValidationError
 
@@ -31,6 +27,8 @@ from ai_qa_automation.runtime.internal_tools import RuntimeServices
 from ai_qa_automation.runtime.system_prompt import RUNTIME_SYSTEM_PROMPT
 from ai_qa_automation.tools.test_execution import TestRunner
 from ai_qa_automation.tools.validation import ValidationGate
+
+ROOT = Path(__file__).resolve().parents[1]
 
 _FALSE_HEAL_EVALUATORS = {
     "unsafe_patch",

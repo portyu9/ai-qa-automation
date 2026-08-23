@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import PurePosixPath
-from typing import Any
+from typing import Any, ClassVar
 
 
 class ContractDriftSeverity(StrEnum):
@@ -59,7 +59,16 @@ class OpenAPIContractDriftAnalyzer:
     risk detector, not a substitute for a full protocol-compatibility proof.
     """
 
-    _METHODS = {"get", "put", "post", "delete", "options", "head", "patch", "trace"}
+    _METHODS: ClassVar[set[str]] = {
+        "get",
+        "put",
+        "post",
+        "delete",
+        "options",
+        "head",
+        "patch",
+        "trace",
+    }
 
     def analyze(self, *, path: str, baseline: bytes, current: bytes) -> ContractDriftReport:
         try:

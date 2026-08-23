@@ -192,10 +192,10 @@ def test_attestation_rejects_symlinked_subject(tmp_path: Path) -> None:
     except OSError as exc:  # pragma: no cover - platform/filesystem capability
         pytest.skip(f"symlink creation unavailable: {exc}")
 
-    with pytest.raises(ValueError, match="state.json.*symlink"):
+    with pytest.raises(ValueError, match=r"state\.json.*symlink"):
         build_run_attestation(run_dir)
 
 
 def test_attestation_requires_state(tmp_path: Path) -> None:
-    with pytest.raises(FileNotFoundError, match="state.json"):
+    with pytest.raises(FileNotFoundError, match=r"state\.json"):
         build_run_attestation(tmp_path / "missing")

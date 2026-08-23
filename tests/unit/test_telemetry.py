@@ -237,9 +237,11 @@ def test_trace_exit_failure_never_masks_runtime_outcome(monkeypatch: Any) -> Non
     with telemetry.trace_span("successful-runtime") as span:
         assert span is not None
 
-    with pytest.raises(ValueError, match="runtime failure"):
-        with telemetry.trace_span("failed-runtime"):
-            raise ValueError("runtime failure")
+    with (
+        pytest.raises(ValueError, match="runtime failure"),
+        telemetry.trace_span("failed-runtime"),
+    ):
+        raise ValueError("runtime failure")
 
 
 def test_emit_event_is_fail_soft_for_logging_failure() -> None:

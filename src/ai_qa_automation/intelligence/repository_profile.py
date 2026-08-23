@@ -4,6 +4,7 @@ import os
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
 
 @dataclass(frozen=True)
@@ -31,7 +32,7 @@ class RepositoryProfile:
 class RepositoryProfiler:
     """Bounded path-level repository profiler; it never executes SUT code."""
 
-    _EXTENSIONS = {
+    _EXTENSIONS: ClassVar[dict[str, str]] = {
         ".py": "python",
         ".ts": "typescript",
         ".tsx": "typescript",

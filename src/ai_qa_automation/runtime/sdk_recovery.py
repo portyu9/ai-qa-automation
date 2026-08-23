@@ -166,4 +166,5 @@ def retry_delay_seconds(
         raise ValueError("retry backoff values must be positive")
     if max_seconds < base_seconds:
         raise ValueError("max_seconds must be greater than or equal to base_seconds")
-    return min(float(max_seconds), float(base_seconds) * (2 ** (retry_number - 1)))
+    delay = float(base_seconds) * (2.0 ** (retry_number - 1))
+    return min(float(max_seconds), delay)

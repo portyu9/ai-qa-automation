@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -12,7 +12,7 @@ from ai_qa_automation.config import Settings
 
 
 class FakeClaudeAgentOptions:
-    last_kwargs: dict[str, Any] = {}
+    last_kwargs: ClassVar[dict[str, Any]] = {}
 
     def __init__(self, **kwargs: Any) -> None:
         type(self).last_kwargs = kwargs

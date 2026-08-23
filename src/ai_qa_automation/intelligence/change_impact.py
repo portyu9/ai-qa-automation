@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import PurePosixPath
+from typing import ClassVar
 
 from ..models import RiskLevel, TestLayer
 
@@ -31,11 +32,11 @@ class ChangeImpactAssessment:
 class ChangeImpactAnalyzer:
     """Deterministically converts a changed-file set into regression risk signals."""
 
-    _CRITICAL = {
+    _CRITICAL: ClassVar[dict[str, tuple[str, ...]]] = {
         "security": ("auth", "oauth", "iam", "rbac", "crypto", "secret", "permission", "policy"),
         "data_integrity": ("migration", "schema", "database", "payment", "billing", "ledger"),
     }
-    _HIGH = {
+    _HIGH: ClassVar[dict[str, tuple[str, ...]]] = {
         "api_contract": ("openapi", "swagger", "graphql", "proto", "api/", "routes", "contract"),
         "infrastructure": (
             "terraform",
@@ -55,7 +56,7 @@ class ChangeImpactAnalyzer:
             "build.gradle",
         ),
     }
-    _MEDIUM = {
+    _MEDIUM: ClassVar[dict[str, tuple[str, ...]]] = {
         "ui": ("frontend", "ui/", "components", "pages", "templates", ".tsx", ".jsx", ".vue"),
         "configuration": ("config", "settings", ".env", "feature_flag", "feature-flag"),
     }

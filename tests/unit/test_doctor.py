@@ -26,7 +26,7 @@ def test_doctor_requires_trusted_control_markers(tmp_path: Path) -> None:
 def test_doctor_reports_secret_presence_without_revealing_secret(
     monkeypatch, tmp_path: Path
 ) -> None:
-    secret = "test-only-secret-that-must-never-appear"
+    secret = "test-only-secret-that-must-never-appear"  # pragma: allowlist secret
     monkeypatch.setenv("ANTHROPIC_API_KEY", secret)
 
     report = environment_report(tmp_path)

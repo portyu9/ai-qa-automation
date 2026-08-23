@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import urlparse
 
 from .models import PolicyDecision, RiskLevel, ToolDecision
@@ -11,12 +11,12 @@ from .models import PolicyDecision, RiskLevel, ToolDecision
 class PolicyEngine:
     """Deterministic, fail-closed policy for runtime tool and change authorization."""
 
-    OFFICIAL_EXTERNAL_MCP = {
+    OFFICIAL_EXTERNAL_MCP: ClassVar[dict[str, str]] = {
         "github": "github/github-mcp-server",
         "atlassian": "atlassian/rovo-mcp",
     }
 
-    _DANGEROUS_TOOL_NAMES = {
+    _DANGEROUS_TOOL_NAMES: ClassVar[set[str]] = {
         "Bash",
         "Edit",
         "Write",
@@ -25,14 +25,14 @@ class PolicyEngine:
         "WebFetch",
         "WebSearch",
     }
-    _APPROVED_SKILLS = {
+    _APPROVED_SKILLS: ClassVar[set[str]] = {
         "investigate-test-failure",
         "self-heal-test",
         "generate-test",
         "prioritize-regression",
         "performance-test",
     }
-    _INTERNAL_QA_TOOLS = {
+    _INTERNAL_QA_TOOLS: ClassVar[set[str]] = {
         "inspect_repository",
         "run_pytest",
         "probe_api",
@@ -52,7 +52,7 @@ class PolicyEngine:
         "inspect_mobile_runtime",
         "run_k6",
     }
-    _PROTECTED_RELATIVE_PATHS = {
+    _PROTECTED_RELATIVE_PATHS: ClassVar[set[str]] = {
         "CLAUDE.md",
         ".mcp.json",
         ".env",
@@ -70,7 +70,7 @@ class PolicyEngine:
         re.compile(r"\brm\s+-rf\s+/(?:\s|$)"),
         re.compile(r"\bgit\s+rebase\b"),
     )
-    _UNSAFE_PATCH_PATTERNS = {
+    _UNSAFE_PATCH_PATTERNS: ClassVar[dict[str, re.Pattern[str]]] = {
         "test_skip": re.compile(
             r"^\+.*(?:pytest\.skip|@pytest\.mark\.skip|unittest\.skip|(?:test|it|describe)\.skip\s*\()",
             re.M,

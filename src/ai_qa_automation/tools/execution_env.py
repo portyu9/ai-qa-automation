@@ -7,6 +7,7 @@ import signal
 import subprocess
 import threading
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
@@ -275,14 +276,10 @@ def run_bounded_subprocess(
         stderr_thread.join(timeout=_DRAIN_JOIN_SECONDS)
         drains_stuck = stdout_thread.is_alive() or stderr_thread.is_alive()
         if drains_stuck:
-            try:
+            with suppress(OSError):
                 process.stdout.close()
-            except OSError:
-                pass
-            try:
+            with suppress(OSError):
                 process.stderr.close()
-            except OSError:
-                pass
             stdout_thread.join(timeout=_DRAIN_JOIN_SECONDS)
             stderr_thread.join(timeout=_DRAIN_JOIN_SECONDS)
         else:

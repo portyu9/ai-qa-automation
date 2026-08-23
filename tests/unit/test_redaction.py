@@ -8,12 +8,12 @@ from ai_qa_automation.redaction import redact_text, sanitize
 def secret_samples() -> list[str]:
     """Construct scanner-shaped fixtures at runtime without storing credential-like literals."""
     return [
-        "AK" + "IA" + "1234567890ABCDEF",
-        "gh" + "p_" + "abcdefghijklmnopqrstuvwxyz123456",
-        "github_" + "pat_" + "1234567890abcdefghijklmnopqrstuv",
-        "sk-" + "ant-" + "abcdefghijklmnopqrstuvwxyz",
-        "sk-" + "proj-" + "abcdefghijklmnopqrstuvwxyz1234567890",
-        "xox" + "b-" + "1234567890-abcdefghijklmnop",
+        "AK" + "IA" + "1234567890ABCDEF",  # pragma: allowlist secret
+        "gh" + "p_" + "abcdefghijklmnopqrstuvwxyz123456",  # pragma: allowlist secret
+        "github_" + "pat_" + "1234567890abcdefghijklmnopqrstuv",  # pragma: allowlist secret
+        "sk-" + "ant-" + "abcdefghijklmnopqrstuvwxyz",  # pragma: allowlist secret
+        "sk-" + "proj-" + "abcdefghijklmnopqrstuvwxyz1234567890",  # pragma: allowlist secret
+        "xox" + "b-" + "1234567890-abcdefghijklmnop",  # pragma: allowlist secret
     ]
 
 
@@ -34,7 +34,9 @@ def test_authorization_header_and_bearer_token_are_redacted() -> None:
 
 
 def test_url_basic_auth_password_is_redacted_but_host_and_username_remain() -> None:
-    text = "https://automation-user:super-secret-password@example.test/api"
+    text = (
+        "https://automation-user:super-secret-password@example.test/api"  # pragma: allowlist secret
+    )
     redacted = redact_text(text)
 
     assert "super-secret-password" not in redacted
@@ -55,7 +57,7 @@ def test_private_key_block_is_redacted_as_one_secret() -> None:
 
 
 def test_nested_values_and_sensitive_keys_are_sanitized_recursively() -> None:
-    secret = "unknown-format-secret-that-still-must-not-survive"
+    secret = "unknown-format-secret-that-still-must-not-survive"  # pragma: allowlist secret
     safe = sanitize(
         {
             "headers": {"authorization": "Bearer abcdefghijklmnop"},
@@ -86,7 +88,7 @@ def test_sanitization_is_idempotent() -> None:
     value = {
         "authorization": "Bearer abcdefghijklmnop",
         "message": "token=abcdefghijklmnop",
-        "nested": ["https://user:password@example.test"],
+        "nested": ["https://user:password@example.test"],  # pragma: allowlist secret
     }
     once = sanitize(value)
     twice = sanitize(once)

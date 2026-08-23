@@ -354,12 +354,12 @@ class EvidenceStore:
         if set(artifact_hashes) != set(self._artifacts):
             raise ValueError("regulated artifact registry does not match audit log")
 
-        for evidence_id, item in self._items.items():
-            actual = self.hash_bytes(item.model_dump_json().encode("utf-8"))
+        for evidence_id, evidence_item in self._items.items():
+            actual = self.hash_bytes(evidence_item.model_dump_json().encode("utf-8"))
             if evidence_hashes[evidence_id] != actual:
                 raise ValueError(f"regulated evidence integrity check failed: {evidence_id}")
-        for artifact_id, item in self._artifacts.items():
-            if artifact_hashes[artifact_id] != item.content_hash:
+        for artifact_id, artifact_record in self._artifacts.items():
+            if artifact_hashes[artifact_id] != artifact_record.content_hash:
                 raise ValueError(
                     f"regulated artifact registry integrity check failed: {artifact_id}"
                 )
@@ -447,6 +447,6 @@ class EvidenceStore:
                 stream.write(rendered)
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.replace(temp, path)
+            temp.replace(path)
         finally:
             temp.unlink(missing_ok=True)

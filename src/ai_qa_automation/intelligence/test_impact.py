@@ -138,7 +138,7 @@ class TestImpactMapper:
                     relative = path.relative_to(root)
                 except ValueError:
                     continue
-                if not self._is_test_file(relative):
+                if not self._is_test_file(PurePosixPath(relative.as_posix())):
                     continue
                 if scanned_tests >= max_test_files:
                     truncated = True

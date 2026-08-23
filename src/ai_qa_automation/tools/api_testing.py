@@ -94,29 +94,31 @@ class ApiProbe:
         truncated = False
         safe_url = redact_text(url)
         try:
-            async with httpx.AsyncClient(
-                timeout=self.timeout_seconds,
-                follow_redirects=False,
-                transport=self.transport,
-                trust_env=False,
-            ) as client:
-                async with client.stream(
+            async with (
+                httpx.AsyncClient(
+                    timeout=self.timeout_seconds,
+                    follow_redirects=False,
+                    transport=self.transport,
+                    trust_env=False,
+                ) as client,
+                client.stream(
                     normalized_method,
                     url,
                     follow_redirects=False,
                     **kwargs,
-                ) as response:
-                    status_code = response.status_code
-                    headers = sanitize(dict(response.headers))
-                    async for chunk in response.aiter_bytes():
-                        remaining = self.max_response_bytes - len(content)
-                        if remaining <= 0:
-                            truncated = True
-                            break
-                        content.extend(chunk[:remaining])
-                        if len(chunk) > remaining:
-                            truncated = True
-                            break
+                ) as response,
+            ):
+                status_code = response.status_code
+                headers = sanitize(dict(response.headers))
+                async for chunk in response.aiter_bytes():
+                    remaining = self.max_response_bytes - len(content)
+                    if remaining <= 0:
+                        truncated = True
+                        break
+                    content.extend(chunk[:remaining])
+                    if len(chunk) > remaining:
+                        truncated = True
+                        break
         except httpx.RequestError as exc:
             elapsed_ms = (time.monotonic() - started) * 1000
             item = self.evidence.add(

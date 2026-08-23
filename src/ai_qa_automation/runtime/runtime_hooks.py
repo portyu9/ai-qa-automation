@@ -2,7 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
+from typing import Any, cast
+
+from claude_agent_sdk.types import (
+    HookContext,
+    HookEvent,
+    HookInput,
+    HookJSONOutput,
+    HookMatcher,
+)
 
 from ..evidence import EvidenceStore
 from ..integrations.mcp_health import normalize_mcp_failure
@@ -20,8 +28,8 @@ from ..policy import PolicyEngine
 from ..redaction import sanitize
 from ..state import StateStore
 from ..tools.repository import RepositoryInspector
+from .budget import BudgetExceededError
 from .run_control import (
-    BudgetExceededError,
     CircuitOpenError,
     MutationPendingError,
     PendingMutation,
@@ -549,54 +557,59 @@ def build_hooks(
     evidence: EvidenceStore | None = None,
     state_store: StateStore | None = None,
     control: RuntimeControl | None = None,
-) -> dict[str, list[Any]]:
-    try:
-        from claude_agent_sdk import HookMatcher
-    except ImportError as exc:  # pragma: no cover
-        raise RuntimeError("claude-agent-sdk is required for live agent mode") from exc
-
+) -> dict[HookEvent, list[HookMatcher]]:
     async def pre_tool_use(
-        input_data: dict[str, Any],
+        input_data: HookInput,
         _tool_use_id: str | None,
-        _context: Any,
-    ) -> dict[str, Any]:
-        return pretool_policy_output(
-            policy,
-            input_data,
-            state=state,
-            state_store=state_store,
-            control=control,
+        _context: HookContext,
+    ) -> HookJSONOutput:
+        return cast(
+            HookJSONOutput,
+            pretool_policy_output(
+                policy,
+                cast(dict[str, Any], input_data),
+                state=state,
+                state_store=state_store,
+                control=control,
+            ),
         )
 
     async def post_tool_use(
-        input_data: dict[str, Any],
+        input_data: HookInput,
         _tool_use_id: str | None,
-        _context: Any,
-    ) -> dict[str, Any]:
-        return posttool_policy_output(
-            input_data,
-            state=state,
-            evidence=evidence,
-            state_store=state_store,
-            control=control,
+        _context: HookContext,
+    ) -> HookJSONOutput:
+        return cast(
+            HookJSONOutput,
+            posttool_policy_output(
+                cast(dict[str, Any], input_data),
+                state=state,
+                evidence=evidence,
+                state_store=state_store,
+                control=control,
+            ),
         )
 
     async def post_tool_use_failure(
-        input_data: dict[str, Any],
+        input_data: HookInput,
         _tool_use_id: str | None,
-        _context: Any,
-    ) -> dict[str, Any]:
-        return posttool_failure_output(
-            input_data,
-            state=state,
-            state_store=state_store,
-            control=control,
+        _context: HookContext,
+    ) -> HookJSONOutput:
+        return cast(
+            HookJSONOutput,
+            posttool_failure_output(
+                cast(dict[str, Any], input_data),
+                state=state,
+                state_store=state_store,
+                control=control,
+            ),
         )
 
-    return {
+    hooks: dict[HookEvent, list[HookMatcher]] = {
         "PreToolUse": [HookMatcher(matcher=None, hooks=[pre_tool_use], timeout=10)],
         "PostToolUse": [HookMatcher(matcher=None, hooks=[post_tool_use], timeout=10)],
         "PostToolUseFailure": [
             HookMatcher(matcher=None, hooks=[post_tool_use_failure], timeout=10)
         ],
     }
+    return hooks

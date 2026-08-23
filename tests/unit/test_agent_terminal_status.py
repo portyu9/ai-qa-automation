@@ -367,7 +367,7 @@ def test_runtime_roots_require_trusted_project_markers(tmp_path: Path) -> None:
     control.mkdir()
     target.mkdir()
 
-    with pytest.raises(ValueError, match="CLAUDE.md"):
+    with pytest.raises(ValueError, match=r"CLAUDE\.md"):
         validate_runtime_roots(control, target)
 
 

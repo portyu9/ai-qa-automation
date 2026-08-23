@@ -49,7 +49,7 @@ def test_k6_requires_infrastructure_egress_even_for_localhost(tmp_path: Path) ->
 def test_k6_explicit_egress_assertion_advances_to_normal_script_validation(tmp_path: Path) -> None:
     runner = K6Runner(tmp_path, policy(tmp_path), external_egress_enforced=True)
 
-    with pytest.raises(PermissionError, match="existing .js file"):
+    with pytest.raises(PermissionError, match=r"existing \.js file"):
         runner.run(
             Path("performance/missing.js"),
             target_url="http://127.0.0.1:8000",

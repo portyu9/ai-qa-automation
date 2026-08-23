@@ -1,12 +1,8 @@
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
 
 from ai_qa_automation.integrations.mcp_health import normalize_mcp_failure
 from ai_qa_automation.intelligence.failure_analysis import FailureAnalyzer
@@ -18,6 +14,8 @@ from ai_qa_automation.models import (
     RegressionCandidate,
 )
 from ai_qa_automation.policy import PolicyEngine
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _evidence(

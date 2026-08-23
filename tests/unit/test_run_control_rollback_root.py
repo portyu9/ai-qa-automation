@@ -42,7 +42,7 @@ def test_prepare_mutation_rejects_symlinked_rollback_directory(tmp_path: Path) -
     except OSError as exc:  # pragma: no cover - platform/filesystem capability
         pytest.skip(f"symlink creation unavailable: {exc}")
 
-    with pytest.raises(MutationPendingError, match="rollback directory.*symlink"):
+    with pytest.raises(MutationPendingError, match=r"rollback directory.*symlink"):
         subject.prepare_mutation("tests/test_checkout.py")
 
     assert subject.pending_mutation is None
@@ -73,7 +73,7 @@ def test_existing_transaction_rejects_rollback_directory_replaced_by_symlink(
         pytest.skip(f"symlink creation unavailable: {exc}")
 
     target.write_text("candidate\n", encoding="utf-8")
-    with pytest.raises(RuntimeError, match="rollback directory.*symlink"):
+    with pytest.raises(RuntimeError, match=r"rollback directory.*symlink"):
         subject.rollback_pending_mutation(reason="validation failed")
 
     assert target.read_text(encoding="utf-8") == "candidate\n"

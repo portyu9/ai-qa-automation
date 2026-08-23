@@ -50,7 +50,7 @@ class StateStore:
                 stream.flush()
                 os.fsync(stream.fileno())
             self._assert_owned()
-            os.replace(temp, self.path)
+            temp.replace(self.path)
         finally:
             temp.unlink(missing_ok=True)
 

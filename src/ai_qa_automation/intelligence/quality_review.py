@@ -42,11 +42,15 @@ def _is_assertion_call(node: ast.Call) -> bool:
 def _is_tautological_assert(node: ast.expr) -> bool:
     if isinstance(node, ast.Constant) and node.value is True:
         return True
-    if isinstance(node, ast.Compare) and len(node.ops) == 1 and len(node.comparators) == 1:
-        if isinstance(node.ops[0], (ast.Eq, ast.Is, ast.GtE, ast.LtE)):
-            return ast.dump(node.left, include_attributes=False) == ast.dump(
-                node.comparators[0], include_attributes=False
-            )
+    if (
+        isinstance(node, ast.Compare)
+        and len(node.ops) == 1
+        and len(node.comparators) == 1
+        and isinstance(node.ops[0], (ast.Eq, ast.Is, ast.GtE, ast.LtE))
+    ):
+        return ast.dump(node.left, include_attributes=False) == ast.dump(
+            node.comparators[0], include_attributes=False
+        )
     return False
 
 
@@ -94,20 +98,27 @@ def review_python_test_source(source: str) -> list[TestQualityFinding]:
     findings: list[TestQualityFinding] = []
     tree = ast.parse(source)
     for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-            if node.func.attr == "sleep":
-                findings.append(
-                    TestQualityFinding("QA001", "HIGH", "Arbitrary sleep detected", node.lineno)
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "sleep"
+        ):
+            findings.append(
+                TestQualityFinding("QA001", "HIGH", "Arbitrary sleep detected", node.lineno)
+            )
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"skip", "xfail"}
+        ):
+            findings.append(
+                TestQualityFinding(
+                    "QA002",
+                    "HIGH",
+                    "Skip/xfail requires explicit justification",
+                    node.lineno,
                 )
-            if node.func.attr in {"skip", "xfail"}:
-                findings.append(
-                    TestQualityFinding(
-                        "QA002",
-                        "HIGH",
-                        "Skip/xfail requires explicit justification",
-                        node.lineno,
-                    )
-                )
+            )
         if isinstance(node, ast.Try):
             for handler in node.handlers:
                 broad = handler.type is None or (

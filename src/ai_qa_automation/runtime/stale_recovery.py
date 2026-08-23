@@ -75,7 +75,7 @@ def _validated_journal_event_count(metadata: dict[str, Any]) -> int:
         raise ValueError("prior runtime journal_event_count is invalid")
     if raw < 0 or raw > _MAX_RECOVERY_JOURNAL_EVENTS:
         raise ValueError("prior runtime journal_event_count exceeds recovery safety bounds")
-    return raw
+    return int(raw)
 
 
 def recover_stale_mutation(

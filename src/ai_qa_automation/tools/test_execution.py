@@ -4,6 +4,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 from uuid import uuid4
 
 from ..evidence import EvidenceStore
@@ -33,7 +34,7 @@ class TestRunner:
     repository and still certify their own result.
     """
 
-    _SAFE_FLAGS = {
+    _SAFE_FLAGS: ClassVar[set[str]] = {
         "-q",
         "--quiet",
         "-x",
@@ -42,7 +43,7 @@ class TestRunner:
         "--disable-warnings",
         "--strict-markers",
     }
-    _SAFE_VALUE_OPTIONS = {"-k", "-m", "--maxfail", "--tb"}
+    _SAFE_VALUE_OPTIONS: ClassVar[set[str]] = {"-k", "-m", "--maxfail", "--tb"}
     _SAFE_VALUE_PREFIXES = ("--maxfail=", "--tb=")
     _WORKSPACE_INTEGRITY_EXIT_CODE = 125
     _TIMEOUT_EXIT_CODE = 124
@@ -142,6 +143,7 @@ class TestRunner:
                 content_hash=artifact_hash,
             )
         )
+        ids: tuple[str, ...]
         if exit_code != 0:
             exception = self.evidence.add(
                 EvidenceItem(
