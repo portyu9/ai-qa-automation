@@ -208,7 +208,7 @@ jobs:
 
       - name: Install project and security tools
         run: |
-          python -m pip install --upgrade pip
+          python -m pip install --upgrade pip 'setuptools>=83.0.0'
           python -m pip install -e '.[dev]'
           python -m pip check
 
