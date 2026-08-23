@@ -8,7 +8,7 @@ from typing import Any, ClassVar
 import pytest
 
 import ai_qa_automation.agent as agent_module
-from ai_qa_automation.agent import run_agent
+from ai_qa_automation.agent import run_agent, run_agent_sync
 from ai_qa_automation.config import Settings
 
 
@@ -186,3 +186,21 @@ async def test_objective_gate_contract_is_persisted_in_report_and_response_prove
     assert result["report"]["terminal_status"] == "NOT_VERIFIED"
     assert result["report"]["provenance"]["objective_gate_id"] == "pytest:objective-exact"
     assert result["provenance"]["objective_gate_id"] == "pytest:objective-exact"
+
+
+def test_sync_entry_point_preserves_objective_contract(
+    tmp_path: Path,
+    fake_sdk: ModuleType,
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+
+    result = run_agent_sync(
+        "Use the synchronous application entry point.",
+        target,
+        runtime_settings(tmp_path),
+        objective_gate_id="pytest:sync-objective",
+    )
+
+    assert result["report"]["terminal_status"] == "NOT_VERIFIED"
+    assert result["provenance"]["objective_gate_id"] == "pytest:sync-objective"
