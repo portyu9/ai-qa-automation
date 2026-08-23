@@ -6,7 +6,7 @@ from typing import Any, cast
 import pytest
 from pydantic import ValidationError
 
-from ai_qa_automation.agent import _final_response, configuration_fingerprint
+from ai_qa_automation.agent import _final_response, configuration_fingerprint, sdk_exception_outcome
 from ai_qa_automation.config import Settings
 from ai_qa_automation.models import AgentRunState, TerminalStatus, ValidationResult, ValidationStatus
 from ai_qa_automation.runtime.budget import ExecutionBudget
@@ -51,6 +51,24 @@ def test_final_response_always_carries_verification_boundaries(tmp_path: Path) -
     assert any("model response is not a test result" in item.lower() for item in limitations)
     assert any("external mcp capability remains not_verified" in item.lower() for item in limitations)
     assert any("does not replay a prior conversation" in item.lower() for item in limitations)
+
+
+@pytest.mark.parametrize(
+    ("exc", "expected"),
+    [
+        (RuntimeError("401 invalid api key"), TerminalStatus.BLOCKED),
+        (ConnectionError("provider connection reset"), TerminalStatus.INFRASTRUCTURE_FAILURE),
+        (RuntimeError("schema contract violated"), TerminalStatus.FAILURE),
+    ],
+)
+def test_sdk_terminal_classification_is_explicit(
+    exc: BaseException,
+    expected: TerminalStatus,
+) -> None:
+    status, reason = sdk_exception_outcome(exc)
+
+    assert status is expected
+    assert type(exc).__name__ in reason
 
 
 def _validation(
