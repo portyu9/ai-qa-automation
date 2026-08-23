@@ -57,7 +57,9 @@ def test_bounded_read_and_hash_enforce_actual_bytes_not_only_preflight(tmp_path:
 def test_state_store_concurrent_saves_leave_one_complete_valid_state(tmp_path: Path) -> None:
     store = StateStore(tmp_path / "run" / "state.json")
     states = [
-        AgentRunState(run_id=f"run-{index}", objective=f"objective-{index}", workspace=str(tmp_path))
+        AgentRunState(
+            run_id=f"run-{index}", objective=f"objective-{index}", workspace=str(tmp_path)
+        )
         for index in range(20)
     ]
 
@@ -65,13 +67,13 @@ def test_state_store_concurrent_saves_leave_one_complete_valid_state(tmp_path: P
         list(pool.map(store.save, states))
 
     loaded = store.load()
-    assert (loaded.run_id, loaded.objective) in {
-        (item.run_id, item.objective) for item in states
-    }
+    assert (loaded.run_id, loaded.objective) in {(item.run_id, item.objective) for item in states}
     assert not list((tmp_path / "run").glob(".state.json.*.tmp"))
 
 
-def test_evidence_concurrent_registration_preserves_manifest_and_audit_chain(tmp_path: Path) -> None:
+def test_evidence_concurrent_registration_preserves_manifest_and_audit_chain(
+    tmp_path: Path,
+) -> None:
     store = EvidenceStore(tmp_path / "artifacts", "run-concurrent", regulated_mode=True)
 
     def register(index: int) -> str:
