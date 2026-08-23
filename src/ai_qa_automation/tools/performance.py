@@ -9,6 +9,7 @@ from typing import Any
 from urllib.parse import urlparse
 from uuid import uuid4
 
+from ..io_safety import read_text_bounded
 from ..models import PerformanceMetrics, ToolDecision
 from ..policy import PolicyEngine
 from .execution_env import restricted_subprocess_env, run_bounded_subprocess
@@ -74,12 +75,19 @@ class K6Runner:
                 )
             if len(visited) >= _MAX_K6_MODULES:
                 raise PermissionError(f"k6 import graph exceeds {_MAX_K6_MODULES} local modules")
-            if module_path.stat().st_size > _MAX_K6_MODULE_BYTES:
-                raise PermissionError(f"k6 module exceeds {_MAX_K6_MODULE_BYTES} byte limit")
             visited.add(module_path)
-            source = module_path.read_text(encoding="utf-8")
-            if len(source.encode("utf-8")) > _MAX_K6_MODULE_BYTES:
-                raise PermissionError(f"k6 module exceeds {_MAX_K6_MODULE_BYTES} byte limit")
+            try:
+                source = read_text_bounded(
+                    module_path,
+                    max_bytes=_MAX_K6_MODULE_BYTES,
+                    label="k6 module",
+                )
+            except ValueError as exc:
+                raise PermissionError(
+                    f"k6 module exceeds {_MAX_K6_MODULE_BYTES} byte limit"
+                ) from exc
+            except (OSError, UnicodeError) as exc:
+                raise PermissionError("k6 module is unreadable") from exc
             if re.search(r"\bopen\s*\(", source):
                 raise PermissionError("k6 scripts may not read local files through open()")
             if root and ("__ENV.BASE_URL" in source or "__ENV.TARGET_URL" in source):
@@ -209,11 +217,17 @@ class K6Runner:
                 raise RuntimeError(result.stderr[-3000:] or "k6 failed")
             if not summary_path.is_file():
                 raise RuntimeError("k6 completed without producing the required summary artifact")
-            if summary_path.stat().st_size > _MAX_K6_SUMMARY_BYTES:
+            try:
+                rendered = read_text_bounded(
+                    summary_path,
+                    max_bytes=_MAX_K6_SUMMARY_BYTES,
+                    label="k6 summary",
+                )
+            except ValueError as exc:
                 raise RuntimeError(
                     f"k6 summary exceeds {_MAX_K6_SUMMARY_BYTES} byte ingestion limit"
-                )
-            data = json.loads(summary_path.read_text(encoding="utf-8"))
+                ) from exc
+            data = json.loads(rendered)
             if not isinstance(data, dict):
                 raise RuntimeError("k6 summary root must be a JSON object")
 
