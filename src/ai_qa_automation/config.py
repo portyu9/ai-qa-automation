@@ -106,7 +106,7 @@ class Settings(BaseSettings):
         return normalized
 
     @model_validator(mode="after")
-    def resolve_roots(self) -> "Settings":
+    def resolve_roots(self) -> Settings:
         self.control_root = self.control_root.expanduser().resolve()
         if self.artifact_root is None:
             self.artifact_root = self.control_root / "artifacts"

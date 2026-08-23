@@ -40,7 +40,7 @@ _MUTATION_TOOLS = {"mcp__qa__create_test_file", "mcp__qa__apply_locator_heal"}
 def _input_fingerprint(tool_name: str, tool_input: dict[str, Any]) -> str:
     safe = sanitize(tool_input)
     canonical = json.dumps(safe, sort_keys=True, separators=(",", ":"), default=str)
-    return hashlib.sha256(f"{tool_name}:{canonical}".encode("utf-8")).hexdigest()
+    return hashlib.sha256(f"{tool_name}:{canonical}".encode()).hexdigest()
 
 
 def _checkpoint(
@@ -245,7 +245,7 @@ def pretool_policy_output(
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "deny",
-                    "permissionDecisionReason": "workspace-integrity: autonomous writes require a Git-backed isolated worktree",
+                    "permissionDecisionReason": "workspace-integrity: autonomous writes require a git-backed isolated worktree",
                 }
             }
         current_snapshot = RepositoryInspector(control.workspace).snapshot()

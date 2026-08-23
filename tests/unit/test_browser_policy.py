@@ -161,7 +161,7 @@ def test_locator_verification_failure_creates_evidence(tmp_path, monkeypatch) ->
     import asyncio
     from contextlib import asynccontextmanager
 
-    from ai_qa_automation.models import LocatorCandidate, EvidenceKind
+    from ai_qa_automation.models import EvidenceKind, LocatorCandidate
     from ai_qa_automation.tools.browser_evidence import BrowserProbeExecutionError
 
     class FakePage:

@@ -56,10 +56,10 @@ class _ObservableAssertionVisitor(ast.NodeVisitor):
     def __init__(self) -> None:
         self.found = False
 
-    def visit_Assert(self, node: ast.Assert) -> None:  # noqa: N802 - ast visitor API
+    def visit_Assert(self, node: ast.Assert) -> None:
         self.found = True
 
-    def visit_Call(self, node: ast.Call) -> None:  # noqa: N802 - ast visitor API
+    def visit_Call(self, node: ast.Call) -> None:
         if _is_assertion_call(node):
             self.found = True
             return
@@ -67,16 +67,16 @@ class _ObservableAssertionVisitor(ast.NodeVisitor):
 
     # Nested scopes are separate executable units. An assertion inside an unused
     # local helper/class/lambda must not make the surrounding test observable.
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # noqa: N802
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         return
 
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:  # noqa: N802
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         return
 
-    def visit_ClassDef(self, node: ast.ClassDef) -> None:  # noqa: N802
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
         return
 
-    def visit_Lambda(self, node: ast.Lambda) -> None:  # noqa: N802
+    def visit_Lambda(self, node: ast.Lambda) -> None:
         return
 
 

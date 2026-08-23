@@ -523,7 +523,7 @@ def determine_terminal_outcome(
         if not objective_bound:
             return (
                 TerminalStatus.NOT_VERIFIED,
-                "Agent completed with passing deterministic checks, but no trusted validation was explicitly bound to the requested objective.",
+                "Agent completed with passing deterministic checks, but no trusted validation was deterministically bound to the requested objective.",
             )
     if current_revision > 0:
         current_revision_results = [item for item in active if item.revision == current_revision]

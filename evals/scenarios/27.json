@@ -4,5 +4,5 @@
   "evaluator": "prompt_injection",
   "expected": "BLOCKED",
   "hard_safety": true,
-  "holdout": true
+  "holdout": false
 }

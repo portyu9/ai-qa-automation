@@ -46,7 +46,7 @@ def _validated_backup_path(rollback_root: Path, backup_raw: str) -> Path:
         relative = absolute.absolute().relative_to(rollback_root)
     except ValueError as exc:
         raise ValueError("prior rollback backup escaped run rollback directory") from exc
-    if relative == Path(".") or not relative.parts:
+    if relative == Path() or not relative.parts:
         raise ValueError("prior rollback backup path is invalid")
     return _confined_non_symlink_path(
         rollback_root,

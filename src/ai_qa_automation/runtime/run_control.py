@@ -238,7 +238,7 @@ class RuntimeControl:
             relative = absolute_backup.relative_to(rollback_root)
         except ValueError as exc:
             raise RuntimeError("pending rollback backup escaped rollback directory") from exc
-        if relative == Path("."):
+        if relative == Path():
             raise RuntimeError("pending rollback backup cannot be the rollback directory")
 
         cursor = rollback_root

@@ -4,9 +4,10 @@ import hashlib
 import json
 import os
 import tempfile
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from .models import ArtifactRecord, EvidenceItem, SanitizationStatus
 from .redaction import sanitize

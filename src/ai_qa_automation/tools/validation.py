@@ -11,7 +11,7 @@ class ValidationGate:
     def __init__(self) -> None:
         self._checks: list[tuple[str, Callable[[], tuple[bool, str]]]] = []
 
-    def add(self, name: str, check: Callable[[], tuple[bool, str]]) -> "ValidationGate":
+    def add(self, name: str, check: Callable[[], tuple[bool, str]]) -> ValidationGate:
         if not name.strip():
             raise ValueError("validation gate name must not be empty")
         self._checks.append((name, check))

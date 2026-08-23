@@ -6,7 +6,6 @@ import pytest
 
 from evals.runner import _metrics, _threshold_violations, _validate_thresholds
 
-
 THRESHOLDS = {
     "schema_version": 1,
     "defined_before_model_evaluation": True,

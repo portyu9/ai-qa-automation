@@ -2,7 +2,6 @@ from fastapi.testclient import TestClient
 
 from examples.reference_sut.app import app
 
-
 client = TestClient(app)
 
 

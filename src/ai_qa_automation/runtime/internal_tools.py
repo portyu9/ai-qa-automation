@@ -117,7 +117,7 @@ def _change_revision_closed(state: AgentRunState) -> bool:
     return targeted and regression
 
 
-def _require_closed_revision_before_mutation(services: "RuntimeServices") -> str | None:
+def _require_closed_revision_before_mutation(services: RuntimeServices) -> str | None:
     if _change_revision_closed(services.state):
         return None
     return (
@@ -217,7 +217,7 @@ def _coverage_search(
 
 
 def _record_patch_safety_validation(
-    services: "RuntimeServices",
+    services: RuntimeServices,
     *,
     path: str,
     evidence_id: str,
@@ -237,7 +237,7 @@ def _record_patch_safety_validation(
 
 
 def _record_capability_validation(
-    services: "RuntimeServices", *, name: str, status: ValidationStatus, summary: str
+    services: RuntimeServices, *, name: str, status: ValidationStatus, summary: str
 ) -> None:
     services.state.validation_results.append(
         ValidationResult(

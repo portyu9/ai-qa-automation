@@ -6,9 +6,10 @@ import shutil
 import signal
 import subprocess
 import threading
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, Mapping, Sequence
+from typing import BinaryIO
 
 _SAFE_INHERITED_ENV = {
     "PATH",
@@ -101,7 +102,7 @@ def resolve_executable(executable: str, *, env: Mapping[str, str]) -> str:
         except OSError as exc:
             raise FileNotFoundError(f"subprocess executable was not found: {raw}") from exc
     else:
-        if candidate.parent != Path("."):
+        if candidate.parent != Path():
             raise ValueError(
                 "relative subprocess executable paths with directory components are forbidden"
             )
@@ -189,7 +190,7 @@ def _terminate_process_tree(
     # not rely on partial-path process execution or a broader inherited environment.
     try:
         taskkill = resolve_executable("taskkill", env=env)
-        cleanup = subprocess.run(  # noqa: S603 - resolved executable/fixed arguments, no shell
+        cleanup = subprocess.run(
             [taskkill, "/PID", str(process.pid), "/T", "/F"],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,

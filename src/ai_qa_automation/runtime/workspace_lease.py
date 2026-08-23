@@ -45,7 +45,7 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
         fd = os.open(self.path, flags, 0o600)
         return os.fdopen(fd, "r+", encoding="utf-8")
 
-    def acquire(self) -> "WorkspaceLease":
+    def acquire(self) -> WorkspaceLease:
         stream = self._open_owned_stream()
         try:
             self._lock_stream(stream)
@@ -87,7 +87,7 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             self._stream.close()
             self._stream = None
 
-    def __enter__(self) -> "WorkspaceLease":
+    def __enter__(self) -> WorkspaceLease:
         return self.acquire()
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:

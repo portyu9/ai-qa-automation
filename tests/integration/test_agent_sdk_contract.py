@@ -33,7 +33,7 @@ class FakeClaudeSDKClient:
         self.options = options
         self.prompt = ""
 
-    async def __aenter__(self) -> "FakeClaudeSDKClient":
+    async def __aenter__(self) -> FakeClaudeSDKClient:
         return self
 
     async def __aexit__(self, *_args: Any) -> None:
