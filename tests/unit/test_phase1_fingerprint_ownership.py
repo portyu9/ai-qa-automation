@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Never
 
 import pytest
 
@@ -16,7 +17,7 @@ def test_workspace_fingerprint_fails_closed_when_opened_subject_ownership_is_amb
     target.parent.mkdir()
     target.write_text("def test_subject():\n    assert True\n", encoding="utf-8")
 
-    def reject_ambiguous_open(_path: Path, *, label: str):  # type: ignore[no-untyped-def]
+    def reject_ambiguous_open(_path: Path, *, label: str) -> Never:
         raise ValueError(f"{label} changed identity during bounded ingestion")
 
     monkeypatch.setattr(repository_module, "open_regular_binary", reject_ambiguous_open)
