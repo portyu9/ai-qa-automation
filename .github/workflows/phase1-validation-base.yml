@@ -1,0 +1,180 @@
+name: Temporary Phase 1 Base Validation
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase1-base-validation-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+env:
+  SOURCE_SHA: eb2809b0489ce92989e35f76abe6986cd0da07a4
+  PYTHONUNBUFFERED: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  quality:
+    name: Quality / Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - name: Verify frozen revision
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+          python -m pip check
+      - name: Compile
+        run: python -m compileall -q src evals examples
+      - name: Ruff format
+        run: ruff format --check .
+      - name: Ruff lint
+        run: ruff check .
+      - name: Strict Mypy
+        if: matrix.python-version == '3.11'
+        run: mypy src
+      - name: Full deterministic pytest
+        run: pytest --cov=ai_qa_automation --cov-report=term-missing
+
+  deterministic-evals:
+    name: 34-Scenario Agent Evaluation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - name: Verify frozen revision
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+      - name: Run and enforce deterministic evaluation
+        run: |
+          set -o pipefail
+          python evals/runner.py | tee /tmp/evals.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          results = json.loads(Path('/tmp/evals.json').read_text())
+          thresholds = json.loads(Path('evals/thresholds.json').read_text())
+          assert results['hard_safety_failures'] <= thresholds['hard_safety_max_failures']
+          assert results['threshold_schema_version'] == thresholds['schema_version']
+          assert results['threshold_violations'] == []
+          assert results['failures'] == 0
+          PY
+
+  holdout:
+    name: H-Series Holdout
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - name: Verify frozen revision
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+      - name: Run holdout
+        run: |
+          set -o pipefail
+          python evals/holdout_runner.py | tee /tmp/holdout.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          results = json.loads(Path('/tmp/holdout.json').read_text())
+          thresholds = json.loads(Path('evals/thresholds.json').read_text())
+          assert results['hard_safety_failures'] <= thresholds['hard_safety_max_failures']
+          assert results['failures'] == 0
+          PY
+
+  security:
+    name: Security Gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Verify frozen revision
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: |
+          python -m pip install --upgrade pip 'setuptools>=83.0.0'
+          python -m pip install -e '.[dev]'
+          python -m pip check
+      - name: Bandit
+        run: bandit -c pyproject.toml -q -r src
+      - name: Dependency audit
+        run: pip-audit
+      - name: Secret scan
+        run: |
+          detect-secrets scan --all-files --exclude-files '(^|/)\.git/' > /tmp/secrets.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          findings = json.loads(Path('/tmp/secrets.json').read_text()).get('results', {})
+          if findings:
+              raise SystemExit(f'Potential secrets detected: {sorted(findings)}')
+          PY
+
+  browser-reference-sut:
+    name: Playwright Reference SUT
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - name: Verify frozen revision
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+          python -m playwright install --with-deps chromium
+      - name: Start reference SUT
+        run: |
+          uvicorn examples.reference_sut.app:app --host 127.0.0.1 --port 8000 > /tmp/reference-sut.log 2>&1 &
+          curl --fail --retry 20 --retry-delay 1 --retry-all-errors http://127.0.0.1:8000/health
+      - name: Browser integration
+        run: pytest -o addopts='' -q -m browser tests/integration/test_reference_sut_browser.py
