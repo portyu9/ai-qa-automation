@@ -261,13 +261,9 @@ def test_ci_contract_rejects_missing_mermaid_render_evidence_upload(tmp_path: Pa
 def test_ci_contract_rejects_disabled_supply_chain_evidence_upload(tmp_path: Path) -> None:
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "ci.yml"
-    marker = (
-        f"      - name: {ci_contract.SUPPLY_CHAIN_UPLOAD_STEP_NAME}\n"
-        "        if: always()\n"
-    )
+    marker = f"      - name: {ci_contract.SUPPLY_CHAIN_UPLOAD_STEP_NAME}\n        if: always()\n"
     replacement = (
-        f"      - name: {ci_contract.SUPPLY_CHAIN_UPLOAD_STEP_NAME}\n"
-        "        if: ${{ false }}\n"
+        f"      - name: {ci_contract.SUPPLY_CHAIN_UPLOAD_STEP_NAME}\n        if: ${{{{ false }}}}\n"
     )
     text = path.read_text(encoding="utf-8").replace(marker, replacement, 1)
     path.write_text(text, encoding="utf-8")
