@@ -115,12 +115,15 @@ def test_stale_recovery_rejects_coercive_existed_flag_before_touching_target(
     backup = rollback / "backup.bin"
     backup_content = b"original\n"
     backup.write_bytes(backup_content)
+    journal = RunJournal(prior_run / "journal.jsonl")
+    journal.append("mutation_prepared")
     (prior_run / "runtime.json").write_text(
         json.dumps(
             {
                 "workspace": str(workspace.resolve()),
                 "workspace_fingerprint": "fp",
-                "journal_event_count": 0,
+                "journal_event_count": journal.event_count,
+                "journal_head_hash": journal.head_hash,
                 "pending_mutation": {
                     "relative_path": "tests/test_x.py",
                     "existed": "false",
