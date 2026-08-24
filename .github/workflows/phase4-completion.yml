@@ -90,7 +90,6 @@ jobs:
           python - <<'PY'
           import json
           from pathlib import Path
-
           primary = json.loads(Path('/tmp/primary.json').read_text())
           metrics = primary['metrics']
           assert primary['threshold_schema_version'] == 2
@@ -102,7 +101,6 @@ jobs:
           assert metrics['distinct_evaluator_paths'] == 34
           assert metrics['duplicate_evaluator_paths'] == 0
           assert metrics['fabricated_passes'] == 0
-
           readiness = json.loads(Path('/tmp/readiness.json').read_text())
           assert readiness['suite'] == 'repository_visible_sequestered_readiness'
           assert readiness['visibility'] == 'repository_visible'
@@ -112,7 +110,6 @@ jobs:
           assert readiness['hard_safety_failures'] == 0
           assert readiness['distinct_evaluator_paths'] == 6
           assert readiness['duplicate_evaluator_paths'] == 0
-
           thresholds = json.loads(Path('evals/thresholds.json').read_text())
           assert thresholds == {
               'schema_version': 2,
@@ -211,11 +208,7 @@ jobs:
           mapfile -t wheel_b < <(find /tmp/wheel-b -maxdepth 1 -type f -name '*.whl' -print)
           test "${#wheel_a[@]}" -eq 1
           test "${#wheel_b[@]}" -eq 1
-          python scripts/generate_build_manifest.py \
-            --wheel-a "${wheel_a[0]}" \
-            --wheel-b "${wheel_b[0]}" \
-            --sbom /tmp/runtime-sbom.cdx.json \
-            --output /tmp/build-manifest.json
+          python scripts/generate_build_manifest.py --wheel-a "${wheel_a[0]}" --wheel-b "${wheel_b[0]}" --sbom /tmp/runtime-sbom.cdx.json --output /tmp/build-manifest.json
       - name: Build and inspect runtime image
         run: |
           set -euo pipefail
@@ -280,21 +273,12 @@ jobs:
           python - <<'PY'
           import subprocess
           allowed = {
-              '.github/workflows/ci.yml',
-              '.pre-commit-config.yaml',
-              'Dockerfile',
-              'Makefile',
-              'docs/README.md',
-              'docs/SUPPLY_CHAIN.md',
-              'pyproject.toml',
-              'requirements/base-image.lock',
-              'requirements/build-py311.lock',
-              'requirements/dev-py311.lock',
-              'requirements/dev-py313.lock',
-              'requirements/runtime-py311.lock',
-              'scripts/generate_build_manifest.py',
-              'scripts/verify_supply_chain.py',
-              'tests/unit/test_supply_chain_integrity.py',
+              '.github/workflows/ci.yml', '.pre-commit-config.yaml', 'Dockerfile', 'Makefile',
+              'docs/README.md', 'docs/SUPPLY_CHAIN.md', 'pyproject.toml',
+              'requirements/base-image.lock', 'requirements/build-py311.lock',
+              'requirements/dev-py311.lock', 'requirements/dev-py313.lock',
+              'requirements/runtime-py311.lock', 'scripts/generate_build_manifest.py',
+              'scripts/verify_supply_chain.py', 'tests/unit/test_supply_chain_integrity.py',
           }
           out = subprocess.check_output(['git', 'diff', '--name-only', 'a6089366610b3037920be425c12efa8b6b560cbc', 'HEAD'], text=True)
           changed = {line for line in out.splitlines() if line}
@@ -309,13 +293,11 @@ jobs:
           import re
           from pathlib import Path
           from urllib.parse import unquote
-
           workflows = sorted(path.name for path in Path('.github/workflows').glob('*') if path.is_file())
           assert workflows == ['ci.yml'], workflows
           assert not list(Path('.').glob('.phase4-*'))
           assert 'Current status' not in Path('README.md').read_text(encoding='utf-8')
           assert 'Status vocabulary' not in Path('docs/PRODUCTION_READINESS.md').read_text(encoding='utf-8')
-
           link_re = re.compile(r'(?<!!)\[[^\]]*\]\(([^)]+)\)')
           failures = []
           for md in [Path('README.md'), *sorted(Path('docs').rglob('*.md'))]:
@@ -325,10 +307,7 @@ jobs:
                   if target.startswith(('http://', 'https://', 'mailto:', '#')):
                       continue
                   target = unquote(target.split('#', 1)[0].split('?', 1)[0])
-                  if not target:
-                      continue
-                  resolved = (md.parent / target).resolve()
-                  if not resolved.exists():
+                  if target and not (md.parent / target).resolve().exists():
                       failures.append(f'{md}: {raw}')
           assert not failures, failures
           PY
@@ -342,6 +321,6 @@ jobs:
               line[1:] for line in Path('/tmp/phase4.diff').read_text(encoding='utf-8').splitlines()
               if line.startswith('+') and not line.startswith('+++')
           )
-          for pattern in (r'\bTODO\b', r'\bFIXME\b', r'\bTBD\b', r'NotImplemented', r'type:\s*ignore'):
+          for pattern in (r'\bTODO\b', r'\bFIXME\b', r'\bTBD\b', r'\bNotImplemented\b', r'type:\s*ignore'):
               assert not re.search(pattern, additions), pattern
           PY
