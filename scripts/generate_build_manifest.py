@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import platform
@@ -9,7 +8,13 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from ai_qa_automation.io_safety import read_text_bounded, sha256_file_bounded
+
 SOURCE_DATE_EPOCH = "315532800"
+MAX_WHEEL_BYTES = 64 * 1024 * 1024
+MAX_SBOM_BYTES = 8 * 1024 * 1024
+MAX_SOURCE_INPUT_BYTES = 1024 * 1024
+MAX_LOCK_BYTES = 1024 * 1024
 LOCK_NAMES = (
     "base-image.lock",
     "build-py311.lock",
@@ -19,14 +24,8 @@ LOCK_NAMES = (
 )
 
 
-def _sha256(path: Path) -> str:
-    if path.is_symlink() or not path.is_file():
-        raise ValueError(f"{path} must be a regular non-symlink file")
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+def _sha256(path: Path, *, max_bytes: int, label: str) -> tuple[str, int]:
+    return sha256_file_bounded(path, max_bytes=max_bytes, label=label)
 
 
 def _git(*args: str) -> str:
@@ -40,27 +39,31 @@ def _git(*args: str) -> str:
     return result.stdout.strip()
 
 
-def _load_sbom(path: Path) -> dict[str, Any]:
-    if path.is_symlink() or not path.is_file():
-        raise ValueError("SBOM must be a regular non-symlink file")
-    data = json.loads(path.read_text(encoding="utf-8"))
+def _load_sbom(path: Path) -> tuple[dict[str, Any], str]:
+    text = read_text_bounded(path, max_bytes=MAX_SBOM_BYTES, label="runtime CycloneDX SBOM")
+    data = json.loads(text)
     if data.get("bomFormat") != "CycloneDX":
         raise ValueError("SBOM is not CycloneDX JSON")
     if not isinstance(data.get("components"), list) or not data["components"]:
         raise ValueError("SBOM contains no components")
-    return data
+    digest, _ = _sha256(path, max_bytes=MAX_SBOM_BYTES, label="runtime CycloneDX SBOM")
+    return data, digest
 
 
 def generate_manifest(root: Path, wheel_a: Path, wheel_b: Path, sbom: Path) -> dict[str, Any]:
     root = root.resolve()
-    wheel_a = wheel_a.resolve()
-    wheel_b = wheel_b.resolve()
-    sbom = sbom.resolve()
+    wheel_a = wheel_a.absolute()
+    wheel_b = wheel_b.absolute()
+    sbom = sbom.absolute()
 
-    digest_a = _sha256(wheel_a)
-    digest_b = _sha256(wheel_b)
-    if digest_a != digest_b:
-        raise ValueError("two independent wheel builds produced different SHA-256 digests")
+    digest_a, wheel_a_size = _sha256(
+        wheel_a, max_bytes=MAX_WHEEL_BYTES, label="first reproducible wheel"
+    )
+    digest_b, wheel_b_size = _sha256(
+        wheel_b, max_bytes=MAX_WHEEL_BYTES, label="second reproducible wheel"
+    )
+    if digest_a != digest_b or wheel_a_size != wheel_b_size:
+        raise ValueError("two independent wheel builds produced different SHA-256 digests or sizes")
     if wheel_a.name != wheel_b.name:
         raise ValueError("two independent wheel builds produced different artifact names")
     if os.environ.get("SOURCE_DATE_EPOCH") != SOURCE_DATE_EPOCH:
@@ -70,9 +73,26 @@ def generate_manifest(root: Path, wheel_a: Path, wheel_b: Path, sbom: Path) -> d
     if tracked_status:
         raise ValueError("tracked worktree is dirty; build provenance would be ambiguous")
 
-    sbom_data = _load_sbom(sbom)
-    lock_digests = {name: _sha256(root / "requirements" / name) for name in LOCK_NAMES}
-    base_image = (root / "requirements" / "base-image.lock").read_text(encoding="utf-8").strip()
+    sbom_data, sbom_digest = _load_sbom(sbom)
+    lock_digests = {
+        name: _sha256(
+            root / "requirements" / name,
+            max_bytes=MAX_LOCK_BYTES,
+            label=f"supply-chain lock {name}",
+        )[0]
+        for name in LOCK_NAMES
+    }
+    base_image = read_text_bounded(
+        root / "requirements" / "base-image.lock",
+        max_bytes=256,
+        label="container base-image lock",
+    ).strip()
+    dockerfile_digest, _ = _sha256(
+        root / "Dockerfile", max_bytes=MAX_SOURCE_INPUT_BYTES, label="Dockerfile"
+    )
+    pyproject_digest, _ = _sha256(
+        root / "pyproject.toml", max_bytes=MAX_SOURCE_INPUT_BYTES, label="pyproject.toml"
+    )
 
     return {
         "schema_version": 1,
@@ -87,20 +107,20 @@ def generate_manifest(root: Path, wheel_a: Path, wheel_b: Path, sbom: Path) -> d
             "source_date_epoch": SOURCE_DATE_EPOCH,
             "wheel_name": wheel_a.name,
             "wheel_sha256": digest_a,
-            "wheel_size_bytes": wheel_a.stat().st_size,
+            "wheel_size_bytes": wheel_a_size,
             "two_builds_byte_identical": True,
         },
         "inputs": {
             "base_image": base_image,
-            "dockerfile_sha256": _sha256(root / "Dockerfile"),
-            "pyproject_sha256": _sha256(root / "pyproject.toml"),
+            "dockerfile_sha256": dockerfile_digest,
+            "pyproject_sha256": pyproject_digest,
             "lock_sha256": lock_digests,
         },
         "sbom": {
             "format": "CycloneDX JSON",
             "spec_version": sbom_data.get("specVersion"),
             "components": len(sbom_data["components"]),
-            "sha256": _sha256(sbom),
+            "sha256": sbom_digest,
         },
         "identity": {
             "signed": False,
