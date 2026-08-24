@@ -13,7 +13,7 @@ MAX_DOC_ENTRIES = 64
 PUBLIC_ROOT_MARKDOWN = ("README.md", "CONTRIBUTING.md", "SECURITY.md")
 EXTERNAL_SCHEMES = ("http://", "https://", "mailto:")
 MARKDOWN_LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
-REFERENCE_LINK_RE = re.compile(r"^\s*\[[^\]]+\]:\s*(\S+)", re.MULTILINE)
+REFERENCE_LINK_RE = re.compile(r"^\s*\[(?!\^)[^\]]+\]:\s*(\S+)", re.MULTILINE)
 HTML_ATTR_RE = re.compile(r"\b(?:href|src|srcset)=[\"']([^\"']+)[\"']", re.IGNORECASE)
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
 CURRENT_STATUS_HEADING_RE = re.compile(
