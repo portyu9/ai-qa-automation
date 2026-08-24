@@ -1,0 +1,142 @@
+name: Manual Validation — ƳƤ AI QA Automation Framework
+run-name: Manual Validation — H-series=${{ inputs.run_holdout }} · model=${{ inputs.run_model }}
+
+# Designed and engineered by Ƴunior Ƥortal (ƳƤ).
+# Manual-only execution for deliberately separated readiness and credentialed model evidence.
+on:
+  workflow_dispatch:
+    inputs:
+      run_holdout:
+        description: Run the repository-visible H-series readiness gate
+        required: true
+        type: boolean
+        default: true
+      run_model:
+        description: Run the credentialed Claude Agent SDK smoke evaluation
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-qa-manual-validation-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  holdout-evals:
+    name: Repository-Visible H-Series Readiness Gate
+    if: ${{ inputs.run_holdout }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact dispatch subject
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source revision
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.11.16"
+          cache: pip
+          cache-dependency-path: requirements/dev-py311.lock
+
+      - name: Install hash-locked project environment
+        run: |
+          python -m pip install --require-hashes -r requirements/dev-py311.lock
+          python -m pip install --no-deps --no-build-isolation .
+          python -m pip check
+
+      - name: Run repository-visible sequestered readiness corpus
+        run: |
+          set -o pipefail
+          mkdir -p artifacts/ci
+          python evals/holdout_runner.py | tee artifacts/ci/readiness-evals.json
+
+      - name: Enforce readiness result contract
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          results = json.loads(Path('artifacts/ci/readiness-evals.json').read_text())
+          assert results['suite'] == 'repository_visible_sequestered_readiness'
+          assert results['visibility'] == 'repository_visible'
+          assert results['tuning_separation'] == 'excluded_from_routine_primary_runner'
+          assert results['total'] == 6
+          assert results['failures'] == 0
+          assert results['hard_safety_failures'] == 0
+          assert results['distinct_evaluator_paths'] == 6
+          assert results['duplicate_evaluator_paths'] == 0
+          PY
+
+      - name: Upload readiness evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: sequestered-readiness-evals
+          path: artifacts/ci/readiness-evals.json
+          if-no-files-found: error
+          retention-days: 30
+
+  model-smoke:
+    name: Claude Agent SDK Smoke (Credentialed / Manual)
+    if: ${{ inputs.run_model && github.ref == 'refs/heads/main' }}
+    environment: credentialed-validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact dispatch subject
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source revision
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Require main branch for credentialed validation
+        run: |
+          test "$GITHUB_REF" = "refs/heads/main" || { echo 'Credentialed model validation is restricted to refs/heads/main'; exit 1; }
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.11.16"
+          cache: pip
+          cache-dependency-path: requirements/dev-py311.lock
+
+      - name: Install hash-locked project environment
+        run: |
+          python -m pip install --require-hashes -r requirements/dev-py311.lock
+          python -m pip install --no-deps --no-build-isolation .
+          python -m pip check
+
+      - name: Require explicit credential
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          test -n "$ANTHROPIC_API_KEY" || { echo 'ANTHROPIC_API_KEY environment secret is required when run_model=true'; exit 1; }
+
+      - name: Run bounded live Agent SDK evaluation
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: pytest -o addopts='' -q -m model tests/evaluations/test_live_agent_smoke.py --junitxml=model-smoke.xml
+
+      - name: Upload model evaluation metadata
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: claude-agent-sdk-smoke
+          path: model-smoke.xml
+          if-no-files-found: warn
+          retention-days: 14

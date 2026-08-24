@@ -229,7 +229,9 @@ The included Dockerfile defines a non-root control-plane image shape. Deployment
 
 ### CI/CD
 
-The operator-dispatched workflow separates deterministic quality/evaluation/security/reference-browser and optional model paths. Workflow logic does not replace branch protection, trusted-runner policy, fork isolation, secret governance, artifact retention, or dependency provenance.
+The automatic PR/main workflow is read-only, secret-free, revision-bound, and aggregates deterministic quality/evaluation/security/supply-chain/reference-browser checks behind `Required PR Gate`. H-series readiness and credentialed model smoke remain manual-only and separately scoped. Repository workflow logic and a green check do not prove that branch protection is enabled, that a hosted runner is immutable, that secrets exist, or that release/deployment authority was exercised.
+
+See [CI/CD and Repository Governance](CI_CD.md).
 
 ### Reference SUT
 
@@ -263,6 +265,7 @@ That discipline is part of the framework's quality model, not an apology for it.
 
 ## Related documentation
 
+- [CI/CD and repository governance](CI_CD.md)
 - [Verification boundaries](VERIFICATION_BOUNDARIES.md)
 - [Production readiness](PRODUCTION_READINESS.md)
 - [Security architecture](SECURITY.md)
