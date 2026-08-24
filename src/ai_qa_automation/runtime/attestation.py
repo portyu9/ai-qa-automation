@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from ..io_safety import read_json_object_bounded, sha256_file_bounded
+from ..models import ArtifactRecord, EvidenceItem
 from ..state import StateStore
 from .journal import RunJournal
 
@@ -14,6 +15,7 @@ _MAX_STATE_BYTES = 16_000_000
 _MAX_MANIFEST_BYTES = 16_000_000
 _MAX_RUNTIME_BYTES = 2_000_000
 _MAX_JOURNAL_BYTES = 64_000_000
+_MAX_EVIDENCE_COUNT = 10_000
 _MAX_ARTIFACT_BYTES = 32_000_000
 _MAX_ARTIFACT_COUNT = 5_000
 _MAX_TOTAL_ARTIFACT_BYTES = 256_000_000
@@ -50,6 +52,11 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
         if manifest_path.is_file()
         else {}
     )
+    manifest_integrity, evidence_records, artifact_records = _validate_manifest_structure(
+        manifest,
+        expected_run_id=state["run_id"],
+        present=manifest_path.is_file(),
+    )
 
     try:
         if journal_path.is_file() and journal_path.stat().st_size > _MAX_JOURNAL_BYTES:
@@ -60,12 +67,12 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
         journal = {"valid": False, "reason": f"{type(exc).__name__}"}
 
     artifact_integrity = (
-        _verify_manifest_artifacts(root, manifest)
-        if manifest_path.is_file()
+        _verify_manifest_artifacts(root, artifact_records)
+        if manifest_integrity["valid"]
         else {
             "valid": False,
             "checked": 0,
-            "reason": "evidence-manifest.json is missing",
+            "reason": "evidence manifest failed structural validation",
         }
     )
     subjects = {
@@ -97,6 +104,7 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
     integrity_verified = (
         subjects_complete
         and bool(journal.get("valid"))
+        and bool(manifest_integrity.get("valid"))
         and bool(artifact_integrity.get("valid"))
         and pending_mutation_authority_valid
         and pending_mutation is None
@@ -122,24 +130,13 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
             "terminal_status": terminal_status,
             "terminal_reason": state.get("terminal_reason"),
             "change_revision": state.get("change_revision"),
-            "validation_count": (
-                len(state.get("validation_results", []))
-                if isinstance(state.get("validation_results"), list)
-                else 0
-            ),
-            "evidence_count": (
-                len(manifest.get("evidence", []))
-                if isinstance(manifest.get("evidence"), list)
-                else 0
-            ),
-            "artifact_count": (
-                len(manifest.get("artifacts", []))
-                if isinstance(manifest.get("artifacts"), list)
-                else 0
-            ),
+            "validation_count": len(state.get("validation_results", [])),
+            "evidence_count": len(evidence_records),
+            "artifact_count": len(artifact_records),
         },
         "integrity": {
             "journal": journal,
+            "manifest": manifest_integrity,
             "artifacts": artifact_integrity,
             "pending_mutation": pending_mutation is not None,
             "persisted_subjects": subjects,
@@ -157,13 +154,89 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
         "generated_at": datetime.now(UTC).isoformat(),
         "attestation_digest": f"sha256:{hashlib.sha256(canonical).hexdigest()}",
         "interpretation": (
-            "Owned persisted subjects, the journal chain, and registered artifact hashes passed "
-            "the available integrity checks. This does not change the run terminal status or prove "
-            "environment-dependent capabilities."
+            "Owned persisted subjects, the journal chain, structurally valid evidence manifest, "
+            "and registered artifact hashes passed the available integrity checks. This does not "
+            "change the run terminal status or prove environment-dependent capabilities."
             if integrity_verified
             else "One or more persisted run-integrity checks are incomplete or failed."
         ),
     }
+
+
+def _validate_manifest_structure(
+    manifest: dict[str, Any],
+    *,
+    expected_run_id: str,
+    present: bool,
+) -> tuple[dict[str, Any], list[EvidenceItem], list[ArtifactRecord]]:
+    if not present:
+        return (
+            {"valid": False, "reason": "evidence-manifest.json is missing"},
+            [],
+            [],
+        )
+    run_id = manifest.get("run_id")
+    if not isinstance(run_id, str) or run_id != expected_run_id:
+        return ({"valid": False, "reason": "evidence manifest run_id mismatch"}, [], [])
+    regulated_mode = manifest.get("regulated_mode")
+    if type(regulated_mode) is not bool:
+        return (
+            {"valid": False, "reason": "evidence manifest regulated_mode must be a boolean"},
+            [],
+            [],
+        )
+    raw_evidence = manifest.get("evidence")
+    raw_artifacts = manifest.get("artifacts")
+    if not isinstance(raw_evidence, list) or not isinstance(raw_artifacts, list):
+        return (
+            {"valid": False, "reason": "evidence manifest registries must be lists"},
+            [],
+            [],
+        )
+    if len(raw_evidence) > _MAX_EVIDENCE_COUNT:
+        return (
+            {"valid": False, "reason": "evidence manifest exceeds evidence count limit"},
+            [],
+            [],
+        )
+    if len(raw_artifacts) > _MAX_ARTIFACT_COUNT:
+        return (
+            {"valid": False, "reason": "evidence manifest exceeds artifact count limit"},
+            [],
+            [],
+        )
+    try:
+        evidence_records = [
+            EvidenceItem.model_validate_json(json.dumps(raw), strict=True) for raw in raw_evidence
+        ]
+        artifact_records = [
+            ArtifactRecord.model_validate_json(json.dumps(raw), strict=True) for raw in raw_artifacts
+        ]
+    except (TypeError, ValueError) as exc:
+        return (
+            {
+                "valid": False,
+                "reason": f"evidence manifest record schema is invalid: {type(exc).__name__}",
+            },
+            [],
+            [],
+        )
+    if len({item.id for item in evidence_records}) != len(evidence_records):
+        return ({"valid": False, "reason": "evidence manifest has duplicate evidence ids"}, [], [])
+    if len({item.artifact_id for item in artifact_records}) != len(artifact_records):
+        return ({"valid": False, "reason": "evidence manifest has duplicate artifact ids"}, [], [])
+    if len({item.path for item in artifact_records}) != len(artifact_records):
+        return ({"valid": False, "reason": "evidence manifest has duplicate artifact paths"}, [], [])
+    return (
+        {
+            "valid": True,
+            "regulated_mode": regulated_mode,
+            "evidence_records": len(evidence_records),
+            "artifact_records": len(artifact_records),
+        },
+        evidence_records,
+        artifact_records,
+    )
 
 
 def _owned_subject(root: Path, name: str) -> Path:
@@ -192,28 +265,17 @@ def _owned_artifact_path(root: Path, relative_path: str) -> Path:
     return resolved
 
 
-def _verify_manifest_artifacts(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
-    artifacts = manifest.get("artifacts")
-    if not isinstance(artifacts, list):
-        return {"valid": False, "checked": 0, "reason": "manifest artifacts must be a list"}
-    if len(artifacts) > _MAX_ARTIFACT_COUNT:
-        return {
-            "valid": False,
-            "checked": 0,
-            "reason": "manifest artifact count exceeds attestation bound",
-        }
+def _verify_manifest_artifacts(root: Path, artifacts: list[ArtifactRecord]) -> dict[str, Any]:
     checked = 0
     total_bytes = 0
-    for raw in artifacts:
-        if not isinstance(raw, dict):
-            return {"valid": False, "checked": checked, "reason": "artifact record is invalid"}
-        relative_path = str(raw.get("path") or "")
-        expected_hash = str(raw.get("content_hash") or "")
-        if not relative_path or not expected_hash.startswith("sha256:"):
+    for record in artifacts:
+        relative_path = record.path
+        expected_hash = record.content_hash
+        if not expected_hash.startswith("sha256:"):
             return {
                 "valid": False,
                 "checked": checked,
-                "reason": "artifact record lacks a path or SHA-256 content hash",
+                "reason": "artifact record lacks a SHA-256 content hash",
             }
         try:
             path = _owned_artifact_path(root, relative_path)
