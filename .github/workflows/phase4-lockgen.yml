@@ -59,18 +59,23 @@ jobs:
             --no-header \
             --output-file "generated/dev-py${suffix}.lock"
           rm generated/build-backend.in
-      - name: Generate hashed runtime lock and base-image digest
+      - name: Generate isolated build, runtime, and base-image locks
         if: matrix.python-version == '3.11.16'
         shell: bash
         run: |
           set -euo pipefail
           printf 'hatchling==1.32.0\n' > generated/build-backend.in
-          uv pip compile pyproject.toml generated/build-backend.in \
+          uv pip compile generated/build-backend.in \
+            --python-version '3.11.16' \
+            --generate-hashes \
+            --no-header \
+            --output-file generated/build-py311.lock
+          rm generated/build-backend.in
+          uv pip compile pyproject.toml \
             --python-version '3.11.16' \
             --generate-hashes \
             --no-header \
             --output-file generated/runtime-py311.lock
-          rm generated/build-backend.in
           docker pull python:3.11.16-slim
           digest="$(docker image inspect --format '{{index .RepoDigests 0}}' python:3.11.16-slim)"
           case "$digest" in
@@ -114,24 +119,29 @@ jobs:
           set -euo pipefail
           test -z "$(find generated -type l -print -quit)"
           mapfile -t files < <(find generated -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
-          expected=(base-image.lock dev-py311.lock dev-py313.lock runtime-py311.lock)
+          expected=(base-image.lock build-py311.lock dev-py311.lock dev-py313.lock runtime-py311.lock)
           test "${files[*]}" = "${expected[*]}"
           for file in generated/*.lock; do
             test "$(stat -c '%s' "$file")" -le 1048576
             LC_ALL=C grep -q '[^[:space:]]' "$file"
           done
-          grep -q -- '--hash=sha256:' generated/dev-py311.lock
-          grep -q -- '--hash=sha256:' generated/dev-py313.lock
-          grep -q -- '--hash=sha256:' generated/runtime-py311.lock
+          for file in generated/build-py311.lock generated/dev-py311.lock generated/dev-py313.lock generated/runtime-py311.lock; do
+            grep -q -- '--hash=sha256:' "$file"
+          done
+          grep -q '^hatchling==1.32.0' generated/build-py311.lock
           grep -q '^hatchling==1.32.0' generated/dev-py311.lock
           grep -q '^hatchling==1.32.0' generated/dev-py313.lock
-          grep -q '^hatchling==1.32.0' generated/runtime-py311.lock
+          if grep -Eq '^(hatchling|trove-classifiers)==' generated/runtime-py311.lock; then
+            echo 'Runtime lock contains build-only tooling.' >&2
+            exit 67
+          fi
           grep -Eq '^python:3\.11\.16-slim@sha256:[0-9a-f]{64}$' generated/base-image.lock
       - name: Commit generated lock data only
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p requirements
+          install -m 0644 generated/build-py311.lock requirements/build-py311.lock
           install -m 0644 generated/dev-py311.lock requirements/dev-py311.lock
           install -m 0644 generated/dev-py313.lock requirements/dev-py313.lock
           install -m 0644 generated/runtime-py311.lock requirements/runtime-py311.lock
@@ -141,8 +151,8 @@ jobs:
             echo 'Generated lock data already matches the branch.'
             exit 0
           fi
-          test -z "$(git diff --cached --name-only | grep -Ev '^requirements/(dev-py311\.lock|dev-py313\.lock|runtime-py311\.lock|base-image\.lock)$' || true)"
+          test -z "$(git diff --cached --name-only | grep -Ev '^requirements/(build-py311\.lock|dev-py311\.lock|dev-py313\.lock|runtime-py311\.lock|base-image\.lock)$' || true)"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'add hashed dependency lock artifacts'
+          git commit -m 'separate hashed build and runtime lock artifacts'
           git push origin HEAD:feature/phase4-security-supply-chain
