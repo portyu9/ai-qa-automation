@@ -1,1 +1,1 @@
-Temporary trigger for the Phase 4 read-only lock-generation pipeline using uv 0.12.1. Remove after generated locks are audited.
+Temporary trigger for the Phase 4 read-only lock-generation pipeline using uv 0.12.1 with relaxed build-metadata version check. Remove after generated locks are audited.
