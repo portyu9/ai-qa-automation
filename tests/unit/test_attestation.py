@@ -171,6 +171,26 @@ def test_tampered_registered_artifact_prevents_integrity_verified(tmp_path: Path
     assert "hash mismatch" in attestation["integrity"]["artifacts"]["reason"]
 
 
+def test_cross_run_evidence_prevents_integrity_verified(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-1"
+    write_json(run_dir / "state.json", base_state())
+    write_complete_integrity_fixture(run_dir)
+    manifest_path = run_dir / "evidence-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["evidence"][0]["run_id"] = "run-2"
+    write_json(manifest_path, manifest)
+
+    attestation = build_run_attestation(run_dir)
+
+    assert attestation["integrity"]["integrity_verified"] is False
+    assert attestation["integrity"]["manifest"] == {
+        "valid": False,
+        "reason": "evidence manifest contains evidence from another run",
+    }
+    assert attestation["outcome"]["evidence_count"] == 0
+    assert attestation["outcome"]["artifact_count"] == 0
+
+
 def test_attestation_fails_closed_when_registered_artifacts_exceed_cumulative_bound(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
