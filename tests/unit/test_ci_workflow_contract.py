@@ -34,9 +34,7 @@ def test_ci_action_authority_matches_supply_chain_verifier() -> None:
 
 
 def test_manual_model_credential_scope_is_narrow() -> None:
-    text = (ROOT / ".github" / "workflows" / "manual-validation.yml").read_text(
-        encoding="utf-8"
-    )
+    text = (ROOT / ".github" / "workflows" / "manual-validation.yml").read_text(encoding="utf-8")
     model = ci_contract._semantic_text(ci_contract._job_block(text, "model-smoke"))
 
     assert "    environment: credentialed-validation" in model
