@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from ai_qa_automation.evidence import EvidenceStore
 from ai_qa_automation.models import (
     AgentRunState,
@@ -9,6 +11,8 @@ from ai_qa_automation.models import (
     EvidenceNature,
     MCPStatus,
     TerminalStatus,
+    ValidationResult,
+    ValidationStatus,
 )
 from ai_qa_automation.policy import PolicyEngine
 from ai_qa_automation.runtime.budget import ExecutionBudget
@@ -19,6 +23,7 @@ from ai_qa_automation.runtime.runtime_hooks import (
     posttool_policy_output,
     pretool_policy_output,
 )
+from ai_qa_automation.runtime.validation_truth import determine_terminal_outcome
 
 
 def make_control(tmp_path: Path, *, max_tool_calls: int = 20) -> RuntimeControl:
@@ -186,4 +191,119 @@ def test_external_mcp_failure_normalizes_health_without_fabricating_evidence(
     assert state.mcp_status["github"] is MCPStatus.RATE_LIMITED
     assert state.evidence_ids == []
     assert state.external_evidence == []
+    assert state.validation_results == []
     assert "no remote evidence was fabricated" in result["hookSpecificOutput"]["additionalContext"]
+
+
+@pytest.mark.parametrize(
+    "tool_name",
+    [
+        "mcp__qa__run_pytest",
+        "mcp__qa__inspect_browser",
+        "mcp__qa__verify_locator_candidates",
+        "mcp__qa__validate_json_contract",
+        "mcp__qa__inspect_mobile_runtime",
+        "mcp__qa__run_k6",
+    ],
+)
+def test_unexpected_validation_tool_failure_records_not_verified_lineage(
+    tmp_path: Path,
+    tool_name: str,
+) -> None:
+    state = AgentRunState(
+        objective="validate",
+        workspace=str(tmp_path),
+        change_revision=3,
+    )
+    secret = "sk-" + "ant-" + "validator-secret-must-not-persist"  # pragma: allowlist secret
+
+    result = posttool_failure_output(
+        {
+            "tool_name": tool_name,
+            "tool_input": {"subject": "tests/test_target.py", "token": secret},
+            "error": f"validator crashed while processing {secret}",
+        },
+        state=state,
+    )
+
+    assert len(state.validation_results) == 1
+    failure = state.validation_results[0]
+    assert failure.name == "validation_tool_execution"
+    assert failure.status is ValidationStatus.NOT_VERIFIED
+    assert failure.revision == 3
+    assert failure.details["tool_name"] == tool_name
+    assert failure.details["scope"] == "unexpected_execution_failure"
+    assert len(failure.details["input_hash"]) == 64
+    assert secret not in str(failure.model_dump(mode="json"))
+    assert secret not in str(result)
+    assert "deterministic closure is NOT_VERIFIED" in result["hookSpecificOutput"]["additionalContext"]
+
+
+def test_later_unexpected_pytest_failure_cannot_leave_prior_objective_pass_green(
+    tmp_path: Path,
+) -> None:
+    state = AgentRunState(objective="verify", workspace=str(tmp_path))
+    objective_gate = "pytest:objective"
+    state.validation_results.append(
+        ValidationResult(
+            name="pytest",
+            gate_id=objective_gate,
+            revision=0,
+            status=ValidationStatus.PASS,
+            summary="Earlier pytest execution passed.",
+        )
+    )
+
+    posttool_failure_output(
+        {
+            "tool_name": "mcp__qa__run_pytest",
+            "tool_input": {"args": []},
+            "error": "unexpected runner exception",
+        },
+        state=state,
+    )
+
+    terminal, reason = determine_terminal_outcome(
+        "success",
+        state.validation_results,
+        current_revision=0,
+        objective_gate_id=objective_gate,
+    )
+
+    assert terminal is TerminalStatus.NOT_VERIFIED
+    assert "current validation remained incomplete" in reason
+
+
+def test_advisory_tool_failure_does_not_invalidate_unrelated_objective_pass(
+    tmp_path: Path,
+) -> None:
+    state = AgentRunState(objective="verify", workspace=str(tmp_path))
+    objective_gate = "pytest:objective"
+    state.validation_results.append(
+        ValidationResult(
+            name="pytest",
+            gate_id=objective_gate,
+            revision=0,
+            status=ValidationStatus.PASS,
+            summary="Objective-bound pytest execution passed.",
+        )
+    )
+
+    posttool_failure_output(
+        {
+            "tool_name": "mcp__qa__classify_failure",
+            "tool_input": {"evidence_ids": []},
+            "error": "advisory classifier crashed",
+        },
+        state=state,
+    )
+
+    assert len(state.validation_results) == 1
+    terminal, reason = determine_terminal_outcome(
+        "success",
+        state.validation_results,
+        current_revision=0,
+        objective_gate_id=objective_gate,
+    )
+    assert terminal is TerminalStatus.SUCCESS
+    assert "all current deterministic validation gates passed" in reason
