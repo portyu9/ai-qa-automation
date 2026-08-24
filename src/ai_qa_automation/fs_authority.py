@@ -3,9 +3,9 @@ from __future__ import annotations
 import errno
 import os
 import stat
+from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
-from typing import Iterator
 from uuid import uuid4
 
 _READ_CHUNK_BYTES = 1024 * 1024
@@ -47,6 +47,23 @@ def _relative_parts(relative_path: str | Path, *, label: str) -> tuple[tuple[str
     if not parts:
         raise ValueError(f"{label} must name a file below its trusted root")
     return parts[:-1], parts[-1]
+
+
+def _raise_symlink_component_if_present(
+    parent_fd: int,
+    part: str,
+    *,
+    label: str,
+    cause: OSError,
+) -> None:
+    if cause.errno not in {errno.ELOOP, errno.ENOTDIR}:
+        return
+    try:
+        current = os.stat(part, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError:
+        return
+    if stat.S_ISLNK(current.st_mode):
+        raise ValueError(f"{label} contains a symlinked parent component") from cause
 
 
 @contextmanager
@@ -97,8 +114,12 @@ def _open_confined_parent(
                 os.fsync(current_fd)
                 child_fd = os.open(part, directory_flags, dir_fd=current_fd)
             except OSError as exc:
-                if exc.errno == errno.ELOOP:
-                    raise ValueError(f"{label} contains a symlinked parent component") from exc
+                _raise_symlink_component_if_present(
+                    current_fd,
+                    part,
+                    label=label,
+                    cause=exc,
+                )
                 raise
 
             try:
