@@ -33,6 +33,17 @@ MERMAID_RENDER_COMMAND = f"python scripts/validate_mermaid.py | tee {MERMAID_VAL
 DOCUMENTATION_STEP_NAME = "Verify documentation authority contract"
 MERMAID_STEP_NAME = "Render Mermaid documentation with digest-pinned official CLI"
 SUPPLY_CHAIN_UPLOAD_STEP_NAME = "Upload supply-chain evidence"
+SUPPLY_CHAIN_ARTIFACTS = (
+    "artifacts/ci/supply-chain-verification.json",
+    "artifacts/ci/ci-contract-verification.json",
+    DOCUMENTATION_INTEGRITY_ARTIFACT,
+    MERMAID_VALIDATION_ARTIFACT,
+    "artifacts/ci/runtime-sbom.cdx.json",
+    "artifacts/ci/build-manifest.json",
+    "artifacts/ci/build-checksums.sha256",
+    "artifacts/ci/wheel-a/*.whl",
+    "artifacts/ci/container-image-id.txt",
+)
 ACTION_RE = re.compile(r"^\s*uses:\s*([^@\s]+)@([^\s#]+)", re.MULTILINE)
 HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
 WRITE_PERMISSION_RE = re.compile(r"^\s+[A-Za-z0-9_-]+:\s*write\s*$", re.MULTILINE)
@@ -275,6 +286,29 @@ def _require_exact_script_step(job: str, *, step_name: str, command: str) -> Non
         raise ValueError(f"{step_name} must be the exact reviewed fail-closed script step")
 
 
+def _require_exact_supply_chain_upload_step(job: str) -> None:
+    step = _semantic_text(_step_block(job, SUPPLY_CHAIN_UPLOAD_STEP_NAME)).strip("\n")
+    artifact_lines = tuple(f"            {artifact}" for artifact in SUPPLY_CHAIN_ARTIFACTS)
+    expected = "\n".join(
+        (
+            f"      - name: {SUPPLY_CHAIN_UPLOAD_STEP_NAME}",
+            "        if: always()",
+            "        uses: actions/upload-artifact@"
+            f"{EXPECTED_ACTION_SHAS['actions/upload-artifact']} # v7",
+            "        with:",
+            "          name: supply-chain-evidence",
+            "          path: |",
+            *artifact_lines,
+            "          if-no-files-found: error",
+            "          retention-days: 30",
+        )
+    )
+    if step != expected:
+        raise ValueError(
+            "supply-chain evidence upload must be the exact reviewed pinned action step"
+        )
+
+
 def _verify_action_revisions(workflows: dict[str, str]) -> dict[str, str]:
     observed: dict[str, str] = {}
     for name, raw_text in workflows.items():
@@ -360,15 +394,7 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
         step_name=MERMAID_STEP_NAME,
         command=MERMAID_RENDER_COMMAND,
     )
-    upload_step = _semantic_text(_step_block(supply_chain_raw, SUPPLY_CHAIN_UPLOAD_STEP_NAME))
-    if upload_step.count(DOCUMENTATION_INTEGRITY_ARTIFACT) != 1:
-        raise ValueError(
-            f"{name}: supply-chain upload step must persist documentation integrity evidence exactly once"
-        )
-    if upload_step.count(MERMAID_VALIDATION_ARTIFACT) != 1:
-        raise ValueError(
-            f"{name}: supply-chain upload step must persist Mermaid validation evidence exactly once"
-        )
+    _require_exact_supply_chain_upload_step(supply_chain_raw)
     if supply_chain.count(DOCUMENTATION_INTEGRITY_COMMAND) != 1:
         raise ValueError(
             f"{name}: documentation integrity command must not appear outside its reviewed step"
@@ -397,6 +423,7 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
         "required_gate": "Required PR Gate",
         "documentation_integrity": "required-via-supply-chain",
         "mermaid_render": "required-via-supply-chain",
+        "supply_chain_evidence": "pinned-upload-action",
         "permissions": "contents:read",
         "secrets": False,
     }
