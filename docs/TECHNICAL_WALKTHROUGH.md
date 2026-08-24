@@ -13,6 +13,9 @@
 
 ```mermaid
 flowchart LR
+    accTitle: Reviewer path through runtime truth, trust, evidence, authority, recovery, integrations, evaluation, and traceability
+    accDescr: The review starts with runtime truth and trusted roots, proceeds through configuration, bootstrap evidence, durable state, tool authority, QA intelligence, mutation and recovery, network and MCP controls, and finishes with evaluation and traceability.
+
     A[1. Runtime truth] --> B[2. Trust roots]
     B --> C[3. Config parsing]
     C --> D[4. Bootstrap evidence]
