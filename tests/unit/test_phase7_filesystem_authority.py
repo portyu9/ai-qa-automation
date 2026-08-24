@@ -174,7 +174,9 @@ def test_runtime_rejects_workspace_root_replacement_before_mutation(
     replacement_target.parent.mkdir(parents=True)
     replacement_target.write_text("original\n", encoding="utf-8")
 
-    with pytest.raises(MutationPendingError, match="trusted root changed identity since authorization"):
+    with pytest.raises(
+        MutationPendingError, match="trusted root changed identity since authorization"
+    ):
         control.prepare_mutation("tests/test_checkout.py")
 
     assert control.pending_mutation is None
