@@ -132,7 +132,7 @@ def test_ci_contract_rejects_unbound_checkout(tmp_path: Path) -> None:
     text = path.read_text(encoding="utf-8").replace("ref: ${{ github.sha }}", "ref: main")
     path.write_text(text, encoding="utf-8")
 
-    with pytest.raises(ValueError, match="every checkout must bind to github.sha"):
+    with pytest.raises(ValueError, match=r"every checkout must bind to github\.sha"):
         ci_contract.verify_ci_contract(root)
 
 
