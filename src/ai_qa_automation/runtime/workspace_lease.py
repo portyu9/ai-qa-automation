@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 from uuid import uuid4
 
+from ..fs_authority import descriptor_relative_authority_supported, pin_directory_identity
 from ..io_safety import fsync_directory, parse_json_object_strict
 
 
@@ -52,6 +53,11 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
         self.artifact_root = artifact_root.expanduser().resolve()
         self.workspace = workspace.expanduser().resolve()
         self.run_id = run_id
+        self._workspace_root_identity = (
+            pin_directory_identity(self.workspace, label="target workspace")
+            if descriptor_relative_authority_supported()
+            else None
+        )
         key = hashlib.sha256(str(self.workspace).encode("utf-8")).hexdigest()[:24]
         lease_root = self.artifact_root / ".leases"
         if lease_root.is_symlink():
@@ -71,8 +77,24 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
         self._stream: Any | None = None
         self.previous_metadata: dict[str, Any] | None = None
 
+    @property
+    def workspace_root_identity(self) -> tuple[int, int] | None:
+        """Return the target workspace identity this lease instance was created for."""
+
+        return self._workspace_root_identity
+
     def _supports_descriptor_relative_lease_open(self) -> bool:
         return _DESCRIPTOR_RELATIVE_LEASE_OPEN_SUPPORTED
+
+    def _revalidate_workspace_root(self) -> None:
+        if self._workspace_root_identity is None:
+            return
+        try:
+            current = pin_directory_identity(self.workspace, label="target workspace")
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise OSError("target workspace identity could not be revalidated") from exc
+        if current != self._workspace_root_identity:
+            raise OSError("target workspace changed identity during lease acquisition")
 
     def _open_owned_stream(self) -> tuple[Any, int | None]:
         lease_root = self.path.parent
@@ -203,25 +225,45 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             raise OSError("workspace lease run_id must be a non-empty string")
         if not isinstance(previous_lease_id, str) or not previous_lease_id.strip():
             raise OSError("workspace lease lease_id must be a non-empty string")
+        if "workspace_root_identity" in previous:
+            root_identity = previous["workspace_root_identity"]
+            if root_identity is not None:
+                if not isinstance(root_identity, dict) or set(root_identity) != {"device", "inode"}:
+                    raise OSError("workspace lease root identity authority is invalid")
+                device = root_identity.get("device")
+                inode = root_identity.get("inode")
+                if type(device) is not int or type(inode) is not int or device < 0 or inode < 0:
+                    raise OSError("workspace lease root identity authority is invalid")
         return previous
 
     def acquire(self) -> WorkspaceLease:
+        self._revalidate_workspace_root()
         stream, directory_fd = self._open_owned_stream()
         locked = False
         try:
             self._lock_stream(stream)
             locked = True
             self._revalidate_lease_root(directory_fd)
+            self._revalidate_workspace_root()
             stream.seek(0)
             raw = stream.read(_MAX_LEASE_METADATA_BYTES + 1)
             if len(raw) > _MAX_LEASE_METADATA_BYTES:
                 raise OSError("workspace lease metadata exceeds bounded ingestion limit")
             self.previous_metadata = self._parse_previous_metadata(raw)
 
+            workspace_root_identity = (
+                {
+                    "device": self._workspace_root_identity[0],
+                    "inode": self._workspace_root_identity[1],
+                }
+                if self._workspace_root_identity is not None
+                else None
+            )
             metadata = {
                 "lease_id": self.lease_id,
                 "run_id": self.run_id,
                 "workspace": str(self.workspace),
+                "workspace_root_identity": workspace_root_identity,
                 "pid": os.getpid(),
                 "hostname": socket.gethostname(),
                 "acquired_at": datetime.now(UTC).isoformat(),
@@ -239,6 +281,7 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             else:
                 fsync_directory(self.path.parent)
             self._revalidate_lease_root(directory_fd)
+            self._revalidate_workspace_root()
             self._stream = stream
             return self
         except Exception:
