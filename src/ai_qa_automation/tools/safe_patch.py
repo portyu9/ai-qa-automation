@@ -49,6 +49,7 @@ class SafeTestPatcher:
     def __init__(self, workspace: Path, policy: PolicyEngine) -> None:
         self.workspace = workspace.expanduser().resolve()
         self.policy = policy
+        self._workspace_identity: tuple[int, int] | None
         current_identity = (
             pin_directory_identity(self.workspace, label="test patch workspace")
             if descriptor_relative_authority_supported()
