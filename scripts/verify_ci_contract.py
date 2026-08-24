@@ -115,7 +115,9 @@ def _read_workflow_set(workflow_dir: Path) -> dict[str, WorkflowSnapshot]:
         try:
             entries = os.scandir(directory_fd)
         except (TypeError, NotImplementedError, OSError) as exc:
-            raise RuntimeError("CI verification requires descriptor-based directory enumeration") from exc
+            raise RuntimeError(
+                "CI verification requires descriptor-based directory enumeration"
+            ) from exc
 
         observed_names: set[str] = set()
         observed_entries = 0
