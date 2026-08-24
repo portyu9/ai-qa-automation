@@ -26,7 +26,9 @@ LIVE_PIP_UPGRADE_RE = re.compile(r"\b(?:python\s+-m\s+)?pip\s+install\s+--upgrad
 EDITABLE_DEV_INSTALL_RE = re.compile(
     r"\b(?:python\s+-m\s+)?pip\s+install\b[^\n]*(?:\s-e(?:\s|=)|\s--editable(?:\s|=))[^\n]*\.\[dev\]"
 )
-FENCE_RE = re.compile(r"^```(?:([A-Za-z0-9_+.-]+))?\s*$")
+FENCE_OPEN_RE = re.compile(
+    r"^(?P<fence>`{3,}|~{3,})[ \t]*(?P<info>[A-Za-z0-9_+.-]*)[ \t]*$"
+)
 MERMAID_DIAGRAM_PREFIXES = (
     "flowchart ",
     "graph ",
@@ -66,9 +68,13 @@ def _load_public_documents(root: Path) -> dict[str, PublicDocument]:
     docs_dir = root / "docs"
     if docs_dir.is_symlink() or not docs_dir.is_dir():
         raise ValueError("docs must be a real directory, not a symlink")
-    entries = list(docs_dir.iterdir())
-    if len(entries) > MAX_DOC_ENTRIES:
-        raise ValueError(f"docs exceeds {MAX_DOC_ENTRIES} direct entries")
+
+    entries: list[Path] = []
+    for path in docs_dir.iterdir():
+        if len(entries) >= MAX_DOC_ENTRIES:
+            raise ValueError(f"docs exceeds {MAX_DOC_ENTRIES} direct entries")
+        entries.append(path)
+
     for path in sorted(entries, key=lambda value: value.name):
         if path.suffix.lower() != ".md":
             continue
@@ -85,15 +91,45 @@ def _load_public_documents(root: Path) -> dict[str, PublicDocument]:
     return documents
 
 
+def _parse_fence_open(line: str) -> tuple[str, int, str] | None:
+    match = FENCE_OPEN_RE.match(line.strip())
+    if match is None:
+        return None
+    fence = match.group("fence")
+    return fence[0], len(fence), match.group("info").lower()
+
+
+def _is_fence_close(line: str, *, fence_char: str, minimum_length: int) -> bool:
+    stripped = line.strip()
+    return (
+        len(stripped) >= minimum_length
+        and bool(stripped)
+        and all(character == fence_char for character in stripped)
+    )
+
+
 def _without_fenced_code(text: str) -> str:
     output: list[str] = []
-    in_fence = False
+    fence_char: str | None = None
+    minimum_length = 0
+
     for line in text.splitlines():
-        if FENCE_RE.match(line.strip()):
-            in_fence = not in_fence
+        if fence_char is None:
+            opened = _parse_fence_open(line)
+            if opened is None:
+                output.append(line)
+                continue
+            fence_char, minimum_length, _language = opened
             output.append("")
             continue
-        output.append("" if in_fence else line)
+
+        if _is_fence_close(line, fence_char=fence_char, minimum_length=minimum_length):
+            fence_char = None
+            minimum_length = 0
+        output.append("")
+
+    if fence_char is not None:
+        raise ValueError("unterminated fenced code block in public documentation")
     return "\n".join(output)
 
 
@@ -196,24 +232,36 @@ def _validate_links(root: Path, documents: dict[str, PublicDocument]) -> int:
 
 def _iter_fenced_blocks(text: str) -> list[tuple[str, str]]:
     blocks: list[tuple[str, str]] = []
-    language: str | None = None
+    fence_char: str | None = None
+    minimum_length = 0
+    language = ""
     lines: list[str] = []
+
     for line in text.splitlines():
-        match = FENCE_RE.match(line.strip())
-        if match:
-            if language is None:
-                language = (match.group(1) or "").lower()
-                lines = []
-            else:
-                blocks.append((language, "\n".join(lines)))
-                language = None
-                lines = []
+        if fence_char is None:
+            opened = _parse_fence_open(line)
+            if opened is None:
+                continue
+            fence_char, minimum_length, language = opened
+            lines = []
             continue
-        if language is not None:
-            lines.append(line)
-    if language is not None:
+
+        if _is_fence_close(line, fence_char=fence_char, minimum_length=minimum_length):
+            blocks.append((language, "\n".join(lines)))
+            fence_char = None
+            minimum_length = 0
+            language = ""
+            lines = []
+            continue
+        lines.append(line)
+
+    if fence_char is not None:
         raise ValueError("unterminated fenced code block in public documentation")
     return blocks
+
+
+def _nonblank_metadata(lines: list[str], prefix: str) -> list[str]:
+    return [line for line in lines if line.startswith(prefix) and line[len(prefix) :].strip()]
 
 
 def _validate_mermaid(document: PublicDocument) -> int:
@@ -227,10 +275,17 @@ def _validate_mermaid(document: PublicDocument) -> int:
             raise ValueError(
                 f"{document.relative_path}: Mermaid block has no supported diagram header"
             )
-        if not any(line.startswith("accTitle:") for line in stripped):
-            raise ValueError(f"{document.relative_path}: Mermaid block is missing accTitle")
-        if not any(line.startswith("accDescr:") for line in stripped):
-            raise ValueError(f"{document.relative_path}: Mermaid block is missing accDescr")
+
+        titles = _nonblank_metadata(stripped, "accTitle:")
+        descriptions = _nonblank_metadata(stripped, "accDescr:")
+        if len(titles) != 1:
+            raise ValueError(
+                f"{document.relative_path}: Mermaid block requires exactly one non-blank accTitle"
+            )
+        if len(descriptions) != 1:
+            raise ValueError(
+                f"{document.relative_path}: Mermaid block requires exactly one non-blank accDescr"
+            )
     return count
 
 
