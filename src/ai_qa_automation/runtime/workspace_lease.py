@@ -31,6 +31,14 @@ def _identity(value: os.stat_result) -> tuple[int, int]:
 
 
 _MAX_LEASE_METADATA_BYTES = 64_000
+_DESCRIPTOR_RELATIVE_LEASE_OPEN_SUPPORTED = bool(
+    os.name != "nt"
+    and getattr(os, "O_DIRECTORY", 0)
+    and getattr(os, "O_NOFOLLOW", 0)
+    and os.open in os.supports_dir_fd
+    and os.stat in os.supports_dir_fd
+    and os.stat in os.supports_follow_symlinks
+)
 
 
 class WorkspaceBusyError(RuntimeError):
@@ -52,6 +60,10 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
         lease_root.mkdir(parents=True, exist_ok=True)
         if not lease_root_existed:
             fsync_directory(self.artifact_root)
+        lease_root_status = lease_root.stat(follow_symlinks=False)
+        if not stat.S_ISDIR(lease_root_status.st_mode):
+            raise OSError("workspace lease directory does not have regular directory ownership")
+        self._lease_root_identity = _identity(lease_root_status)
         self.path = lease_root / f"{key}.lock"
         if self.path.is_symlink():
             raise OSError("workspace lease file is a symlink and has ambiguous ownership")
@@ -60,13 +72,7 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
         self.previous_metadata: dict[str, Any] | None = None
 
     def _supports_descriptor_relative_lease_open(self) -> bool:
-        return bool(
-            os.name != "nt"
-            and getattr(os, "O_DIRECTORY", 0)
-            and getattr(os, "O_NOFOLLOW", 0)
-            and os.open in os.supports_dir_fd
-            and os.stat in os.supports_dir_fd
-        )
+        return _DESCRIPTOR_RELATIVE_LEASE_OPEN_SUPPORTED
 
     def _open_owned_stream(self) -> tuple[Any, int | None]:
         lease_root = self.path.parent
@@ -86,7 +92,8 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
                 if (
                     not stat.S_ISDIR(opened_directory.st_mode)
                     or not stat.S_ISDIR(current_directory.st_mode)
-                    or _identity(opened_directory) != _identity(current_directory)
+                    or _identity(opened_directory) != self._lease_root_identity
+                    or _identity(current_directory) != self._lease_root_identity
                 ):
                     raise OSError("workspace lease directory changed identity during lock open")
 
@@ -116,15 +123,19 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
         # Windows and other platforms without descriptor-relative no-follow opens
         # retain a post-open identity check rather than trusting pathname preflight.
         before_directory = lease_root.stat(follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(before_directory.st_mode)
+            or _identity(before_directory) != self._lease_root_identity
+        ):
+            raise OSError("workspace lease directory changed identity during lock open")
         fd = os.open(self.path, flags, 0o600)
         try:
             opened_file = os.fstat(fd)
             current_file = self.path.stat(follow_symlinks=False)
             after_directory = lease_root.stat(follow_symlinks=False)
             if (
-                not stat.S_ISDIR(before_directory.st_mode)
-                or not stat.S_ISDIR(after_directory.st_mode)
-                or _identity(before_directory) != _identity(after_directory)
+                not stat.S_ISDIR(after_directory.st_mode)
+                or _identity(after_directory) != self._lease_root_identity
             ):
                 raise OSError("workspace lease directory changed identity during lock open")
             if (
@@ -140,16 +151,23 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
 
     def _revalidate_lease_root(self, directory_fd: int | None) -> None:
         lease_root = self.path.parent
+        try:
+            current_directory = lease_root.stat(follow_symlinks=False)
+        except OSError as exc:
+            raise OSError(
+                "workspace lease directory changed identity during lease acquisition"
+            ) from exc
+        if (
+            not stat.S_ISDIR(current_directory.st_mode)
+            or _identity(current_directory) != self._lease_root_identity
+        ):
+            raise OSError("workspace lease directory changed identity during lease acquisition")
         if directory_fd is None:
-            if lease_root.is_symlink() or not lease_root.is_dir():
-                raise OSError("workspace lease directory changed identity during lease acquisition")
             return
         opened_directory = os.fstat(directory_fd)
-        current_directory = lease_root.stat(follow_symlinks=False)
         if (
             not stat.S_ISDIR(opened_directory.st_mode)
-            or not stat.S_ISDIR(current_directory.st_mode)
-            or _identity(opened_directory) != _identity(current_directory)
+            or _identity(opened_directory) != self._lease_root_identity
         ):
             raise OSError("workspace lease directory changed identity during lease acquisition")
 
