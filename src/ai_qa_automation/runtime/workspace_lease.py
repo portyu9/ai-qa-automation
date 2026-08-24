@@ -75,6 +75,7 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             raise OSError("workspace lease file is a symlink and has ambiguous ownership")
         self.lease_id = f"lease-{uuid4().hex[:16]}"
         self._stream: Any | None = None
+        self._workspace_lock_fd: int | None = None
         self.previous_metadata: dict[str, Any] | None = None
 
     @property
@@ -95,6 +96,39 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             raise OSError("target workspace identity could not be revalidated") from exc
         if current != self._workspace_root_identity:
             raise OSError("target workspace changed identity during lease acquisition")
+
+    def _lock_workspace_root(self) -> int | None:
+        """Lock the target inode so lease-directory substitution cannot fork authority."""
+
+        if self._workspace_root_identity is None:
+            return None
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        fd = os.open(self.workspace, flags)
+        try:
+            opened = os.fstat(fd)
+            if not stat.S_ISDIR(opened.st_mode) or _identity(opened) != self._workspace_root_identity:
+                raise OSError("target workspace changed identity during lease acquisition")
+            try:
+                import fcntl
+            except ImportError as exc:  # pragma: no cover - guarded POSIX capability
+                raise OSError("target workspace inode locking is unavailable") from exc
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                raise WorkspaceBusyError("target workspace is already leased") from exc
+            self._revalidate_workspace_root()
+            return fd
+        except Exception:
+            os.close(fd)
+            raise
+
+    @staticmethod
+    def _unlock_workspace_root(fd: int) -> None:
+        try:
+            import fcntl
+        except ImportError:  # pragma: no cover - guarded POSIX capability
+            return
+        fcntl.flock(fd, fcntl.LOCK_UN)
 
     def _open_owned_stream(self) -> tuple[Any, int | None]:
         lease_root = self.path.parent
@@ -238,7 +272,15 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
 
     def acquire(self) -> WorkspaceLease:
         self._revalidate_workspace_root()
-        stream, directory_fd = self._open_owned_stream()
+        workspace_lock_fd = self._lock_workspace_root()
+        try:
+            stream, directory_fd = self._open_owned_stream()
+        except Exception:
+            if workspace_lock_fd is not None:
+                with suppress(OSError):
+                    self._unlock_workspace_root(workspace_lock_fd)
+                os.close(workspace_lock_fd)
+            raise
         locked = False
         try:
             self._lock_stream(stream)
@@ -283,25 +325,39 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             self._revalidate_lease_root(directory_fd)
             self._revalidate_workspace_root()
             self._stream = stream
+            self._workspace_lock_fd = workspace_lock_fd
             return self
         except Exception:
             if locked:
                 with suppress(OSError):
                     self._unlock_stream(stream)
             stream.close()
+            if workspace_lock_fd is not None:
+                with suppress(OSError):
+                    self._unlock_workspace_root(workspace_lock_fd)
+                os.close(workspace_lock_fd)
             raise
         finally:
             if directory_fd is not None:
                 os.close(directory_fd)
 
     def release(self) -> None:
-        if self._stream is None:
-            return
+        stream = self._stream
+        workspace_lock_fd = self._workspace_lock_fd
+        self._stream = None
+        self._workspace_lock_fd = None
         try:
-            self._unlock_stream(self._stream)
+            if stream is not None:
+                try:
+                    self._unlock_stream(stream)
+                finally:
+                    stream.close()
         finally:
-            self._stream.close()
-            self._stream = None
+            if workspace_lock_fd is not None:
+                try:
+                    self._unlock_workspace_root(workspace_lock_fd)
+                finally:
+                    os.close(workspace_lock_fd)
 
     def __enter__(self) -> WorkspaceLease:
         return self.acquire()
