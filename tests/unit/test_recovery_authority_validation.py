@@ -16,6 +16,7 @@ def _prepare_run(tmp_path: Path, runtime_payload: dict[str, object]) -> Path:
     run_dir = tmp_path / "run-1"
     workspace = tmp_path / "sut"
     workspace.mkdir()
+    workspace_status = workspace.stat(follow_symlinks=False)
     state = AgentRunState(
         run_id="run-1",
         objective="Inspect persisted recovery authority",
@@ -28,6 +29,10 @@ def _prepare_run(tmp_path: Path, runtime_payload: dict[str, object]) -> Path:
     journal.append("run_started")
     rendered_runtime: dict[str, object] = {
         "workspace": str(workspace.resolve()),
+        "workspace_root_identity": {
+            "device": workspace_status.st_dev,
+            "inode": workspace_status.st_ino,
+        },
         "journal_event_count": journal.event_count,
         "journal_head_hash": journal.head_hash,
     }
@@ -92,6 +97,22 @@ def test_recovery_inspection_rejects_missing_pending_mutation_authority(tmp_path
     assert result == {
         "recoverable": False,
         "reason": "runtime.json is missing pending_mutation authority",
+    }
+
+
+def test_recovery_inspection_rejects_missing_workspace_root_identity_authority(
+    tmp_path: Path,
+) -> None:
+    run_dir = _prepare_run(
+        tmp_path,
+        {"workspace_root_identity": None, "pending_mutation": None},
+    )
+
+    result = inspect_recovery(run_dir)
+
+    assert result == {
+        "recoverable": False,
+        "reason": "runtime.json workspace root identity authority is missing",
     }
 
 
