@@ -1,4 +1,4 @@
-name: Temporary Phase 3 Evaluation Diagnostic
+name: Temporary Phase 3 Completion Validation
 
 on:
   pull_request:
@@ -9,16 +9,55 @@ permissions:
   contents: read
 
 concurrency:
-  group: phase3-diagnostic-${{ github.event.pull_request.number }}
+  group: phase3-completion-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 env:
-  SOURCE_SHA: 2ea6ff394bacbdf879ba1613088dcc9a3b85e43b
+  SOURCE_SHA: 0cdbd905b65c1d6f723e1e06b8c189d1ca382d79
   PYTHONUNBUFFERED: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
 jobs:
-  diagnostic:
+  quality:
+    name: Quality / Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - name: Verify frozen revision
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+          python -m pip check
+      - name: Compile
+        run: python -m compileall -q src evals examples
+      - name: Ruff format
+        run: ruff format --check .
+      - name: Ruff lint
+        run: ruff check .
+      - name: Strict Mypy
+        if: matrix.python-version == '3.11'
+        run: mypy src
+      - name: Full deterministic pytest with coverage
+        run: |
+          mkdir -p artifacts/phase3
+          pytest --cov=ai_qa_automation --cov-report=term-missing --cov-report=xml:artifacts/phase3/coverage-${{ matrix.python-version }}.xml --junitxml=artifacts/phase3/junit-${{ matrix.python-version }}.xml
+
+  evaluation-fidelity:
+    name: Evaluation Fidelity
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -37,25 +76,11 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e '.[dev]'
           python -m pip check
-      - name: Compile
-        run: python -m compileall -q src evals examples
-      - name: Ruff format
-        run: ruff format --check .
-      - name: Ruff lint
-        run: ruff check .
-      - name: Strict Mypy
-        run: mypy src
-      - name: Focused evaluation-fidelity tests
-        run: >-
-          pytest -q
-          tests/evaluations/test_scenario_catalog.py
-          tests/evaluations/test_eval_metrics.py
-          tests/unit/test_failure_analysis.py
-          tests/policy/test_policy.py
-          tests/policy/test_secret_paths.py
+      - name: Evaluation-fidelity regression tests
+        run: pytest -q tests/evaluations/test_scenario_catalog.py tests/evaluations/test_eval_metrics.py
       - name: Run primary deterministic control cases
         run: python evals/runner.py > /tmp/phase3-primary.json
-      - name: Assert primary path fidelity and thresholds
+      - name: Assert schema-v2 primary fidelity
         run: |
           python - <<'PY'
           import json
@@ -79,7 +104,7 @@ jobs:
           PY
       - name: Run repository-visible sequestered readiness cases
         run: python evals/holdout_runner.py > /tmp/phase3-readiness.json
-      - name: Assert readiness visibility and path fidelity
+      - name: Assert readiness visibility and fidelity
         run: |
           python - <<'PY'
           import json
@@ -88,8 +113,145 @@ jobs:
           assert data['suite'] == 'repository_visible_sequestered_readiness'
           assert data['visibility'] == 'repository_visible'
           assert data['tuning_separation'] == 'excluded_from_routine_primary_runner'
+          assert data['total'] == 6
           assert data['failures'] == 0
           assert data['hard_safety_failures'] == 0
-          assert data['distinct_evaluator_paths'] == data['total']
+          assert data['distinct_evaluator_paths'] == 6
           assert data['duplicate_evaluator_paths'] == 0
+          PY
+
+  security:
+    name: Security Gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - name: Verify frozen revision
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip 'setuptools>=83.0.0'
+          python -m pip install -e '.[dev]'
+          python -m pip check
+      - name: Bandit
+        run: bandit -c pyproject.toml -q -r src
+      - name: Dependency audit
+        run: pip-audit
+      - name: Secret scan
+        run: |
+          detect-secrets scan --all-files --exclude-files '(^|/)\.git/' > /tmp/phase3-secrets.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          findings = json.loads(Path('/tmp/phase3-secrets.json').read_text()).get('results', {})
+          if findings:
+              for path, items in findings.items():
+                  print(path, len(items))
+              raise SystemExit('Potential secrets detected')
+          PY
+
+  browser-reference-sut:
+    name: Playwright Reference SUT
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - name: Verify frozen revision
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+          python -m playwright install --with-deps chromium
+      - name: Start reference SUT
+        run: |
+          uvicorn examples.reference_sut.app:app --host 127.0.0.1 --port 8000 > /tmp/reference-sut.log 2>&1 &
+          curl --fail --retry 20 --retry-delay 1 --retry-all-errors http://127.0.0.1:8000/health
+      - name: Browser evidence test
+        run: pytest -o addopts='' -q -m browser tests/integration/test_reference_sut_browser.py
+
+  docs-and-workflow-integrity:
+    name: Docs and Workflow Integrity
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - name: Verify frozen revision
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install YAML parser
+        run: python -m pip install 'PyYAML>=6.0.3,<7'
+      - name: Parse permanent workflow and enforce evidence labels
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+
+          workflow = Path('.github/workflows/ci.yml')
+          yaml.safe_load(workflow.read_text(encoding='utf-8'))
+          text = workflow.read_text(encoding='utf-8')
+          assert '34-Scenario Agent Evaluation' not in text
+          assert '34-Case Deterministic Control Evaluation' in text
+          assert 'Repository-Visible H-Series Readiness Gate' in text
+          PY
+      - name: Enforce documentation evidence semantics
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          readme = Path('README.md').read_text(encoding='utf-8')
+          evaluation = Path('docs/EVALUATION.md').read_text(encoding='utf-8')
+          architecture = Path('docs/ARCHITECTURE.md').read_text(encoding='utf-8')
+          walkthrough = Path('docs/TECHNICAL_WALKTHROUGH.md').read_text(encoding='utf-8')
+          readiness = Path('docs/PRODUCTION_READINESS.md').read_text(encoding='utf-8')
+          combined = '\n'.join([readme, evaluation, architecture, walkthrough, readiness])
+
+          assert 'Current status' not in readme
+          assert 'Status vocabulary' not in readiness
+          assert '34-Scenario Agent Evaluation' not in combined
+          assert 'independent H-series holdout' not in combined.casefold()
+          assert 'physically separate H-series holdout' not in combined.casefold()
+          assert 'repository-visible' in evaluation
+          assert 'not a blind' in evaluation
+          PY
+      - name: Check local Markdown links
+        run: |
+          python - <<'PY'
+          import re
+          from pathlib import Path
+
+          files = [Path('README.md'), *Path('docs').glob('*.md'), Path('CONTRIBUTING.md')]
+          broken = []
+          pattern = re.compile(r'(?<!!)\[[^\]]+\]\(([^)]+)\)')
+          for path in files:
+              text = path.read_text(encoding='utf-8')
+              for target in pattern.findall(text):
+                  target = target.split('#', 1)[0].strip()
+                  if not target or '://' in target or target.startswith('mailto:'):
+                      continue
+                  candidate = (path.parent / target).resolve()
+                  if not candidate.exists():
+                      broken.append(f'{path}: {target}')
+          if broken:
+              raise SystemExit('Broken local Markdown links:\n' + '\n'.join(broken))
           PY
