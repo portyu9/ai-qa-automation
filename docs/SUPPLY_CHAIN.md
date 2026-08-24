@@ -20,7 +20,7 @@ The repository separates four supply-chain subjects:
 | Python build backend | `requirements/build-py311.lock` + `hatchling==1.32.0` in `pyproject.toml` | isolated backend graph, separate from runtime |
 | Container base | `requirements/base-image.lock` | exact `python:3.11.16-slim` OCI digest used by every Docker stage |
 
-The dependency lock files are generated from declared project constraints, then committed and reviewed. Runtime installation uses `pip --require-hashes`; direct URL/VCS/editable requirements, non-exact pins, missing hashes, unexpected lock files, and non-SHA-256 hash directives are rejected by `scripts/verify_supply_chain.py`.
+The dependency lock files are repository-owned resolution snapshots derived from declared project constraints, then committed and reviewed. Runtime installation uses `pip --require-hashes`; direct URL/VCS/editable requirements, non-exact pins, missing hashes, unexpected lock files, and non-SHA-256 hash directives are rejected by `scripts/verify_supply_chain.py`.
 
 > [!NOTE]
 > A package hash constrains which bytes can be accepted. It does **not** guarantee that the public package index is available, that a package publisher is trustworthy, or that future vulnerability intelligence will remain unchanged.
@@ -80,6 +80,10 @@ CI also names exact CPython patch releases (`3.11.16`, `3.13.15`) and uses the `
 > [!CAUTION]
 > `ubuntu-24.04` is a stable hosted-runner family label, **not an immutable runner-image digest**. GitHub can service that family with newer image revisions. The repository records this as a residual platform boundary rather than calling hosted CI hermetic.
 
+### Bootstrap trust boundary
+
+The initial Python interpreter and `pip` process are supplied by the GitHub-hosted runner/toolcache selected by `actions/setup-python`. The repository pins the Action source and exact CPython patch version, but it cannot independently attest the bytes of that hosted bootstrap environment. If the toolcache already contains the same `pip` version named by a development lock, `pip` may report it as already satisfied rather than reinstalling it from a hashed artifact. `--require-hashes` constrains package candidates that the bootstrap installer resolves/installs; it is not a cryptographic attestation of the bootstrap installer itself. This remains an explicit environment-owned trust root.
+
 ---
 
 ## Deterministic repository verifier
@@ -87,7 +91,7 @@ CI also names exact CPython patch releases (`3.11.16`, `3.13.15`) and uses the `
 `scripts/verify_supply_chain.py` fails closed when repository supply-chain authority drifts. Among other checks, it requires:
 
 - exactly the five expected lock files;
-- bounded regular lock files;
+- a descriptor-pinned, no-follow `requirements/` directory scan with bounded actual ingestion and file/directory identity revalidation;
 - exact `==` pins with SHA-256 hashes;
 - no direct URLs, VCS requirements, editable lock entries, custom index/find-links directives, or duplicate packages;
 - declared runtime/dev/build dependencies to be represented by their corresponding locks;
@@ -99,7 +103,9 @@ CI also names exact CPython patch releases (`3.11.16`, `3.13.15`) and uses the `
 - only the reviewed immutable GitHub Action commits;
 - only the reviewed immutable pre-commit revision.
 
-The verifier emits a machine-readable JSON statement about these repository invariants. Its `PASS` means those deterministic repository checks passed; it does not certify external package availability, external publisher identity, hosted-runner immutability, or release signing.
+The verifier rejects symlink substitution, lock-file identity changes, requirements-directory replacement, and entry exhaustion instead of falling back to weaker pathname enumeration when the required descriptor-relative primitives are unavailable.
+
+The verifier emits a machine-readable JSON statement about these repository invariants. Its `PASS` means those deterministic repository checks passed; it does not certify external package availability, external publisher identity, hosted-runner immutability, bootstrap-tool identity, or release signing.
 
 ---
 
@@ -111,9 +117,11 @@ The permanent supply-chain CI job builds the project wheel twice from two indepe
 
 1. both builds produce one wheel with the same artifact name;
 2. the two wheel SHA-256 digests are identical;
-3. the tracked checkout is clean;
+3. the tracked checkout is clean before and after source-input observation;
 4. the expected source-date epoch is active;
 5. the CycloneDX runtime SBOM is structurally present.
+
+The manifest generator binds parsed SBOM metadata and the SBOM digest to the same bounded no-follow byte observation. The container-base text and its recorded lock digest are likewise derived from one observed byte sequence rather than independent pathname reads. Manifest persistence rejects ambiguous symlink ownership and uses atomic replacement plus directory fsync.
 
 The resulting unsigned manifest records:
 
@@ -150,7 +158,7 @@ Vulnerability results are time-sensitive observations. A green audit at one revi
 
 | Claim | What proves it | What does **not** prove it |
 |---|---|---|
-| Accepted Python dependency bytes are constrained | exact lock pins + `--require-hashes` | package-index availability or publisher trust |
+| Accepted Python package candidates are constrained | exact lock pins + `--require-hashes` | package-index availability, publisher trust, or bootstrap-installer identity |
 | Build backend is repository-bound | exact `hatchling==1.32.0` + build lock | build publisher identity |
 | Container base subject is fixed | OCI digest in `base-image.lock` and Dockerfile | byte-identical rebuilt container image |
 | Wheel is reproducible for the recorded build inputs | two fresh-tree builds with identical SHA-256 | signer/publisher identity |
@@ -165,13 +173,15 @@ Vulnerability results are time-sensitive observations. A green audit at one revi
 A dependency, Action, build-backend, interpreter, or container-base update is a controlled engineering change—not a background resolver event. The update should:
 
 1. verify official provenance of the proposed upstream subject;
-2. regenerate the affected lock/digest material deliberately;
-3. review graph additions/removals and authority changes;
+2. resolve/regenerate the affected candidate lock or digest material deliberately from the declared repository constraints, recording the interpreter and resolver/tooling used for the update;
+3. review graph additions/removals and authority changes rather than treating generated comments as authority;
 4. run the deterministic repository verifier and adversarial tests;
 5. run applicable vulnerability/secret/static scans;
 6. reproduce the project wheel and regenerate the runtime SBOM;
 7. build and inspect the final runtime container;
 8. bind completion evidence to the exact source revision before merge.
+
+A lock refresh is not claimed to reproduce an old resolver decision indefinitely: package-index metadata and available distributions can evolve. The committed reviewed lock is the build/install authority until a deliberately reviewed replacement supersedes it.
 
 Release publication, signing keys, registry credentials, and external transparency/attestation services remain environment-owned privileged operations. They should be manual or environment-protected unless a dedicated release design deliberately adds those authorities.
 
