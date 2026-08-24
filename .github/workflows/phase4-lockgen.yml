@@ -40,7 +40,7 @@ jobs:
           test "$(python -c 'import platform; print(platform.python_version())')" = "${{ matrix.python-version }}"
           python -m pip install 'pip==26.2.1' 'uv==0.12.1'
           python -m pip check
-          test "$(uv --version)" = 'uv 0.12.1'
+          uv --version | grep -Eq '^uv 0\.12\.1($| )'
       - name: Generate hashed development lock
         shell: bash
         run: |
