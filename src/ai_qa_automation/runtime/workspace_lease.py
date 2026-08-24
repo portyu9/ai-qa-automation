@@ -106,7 +106,10 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
         fd = os.open(self.workspace, flags)
         try:
             opened = os.fstat(fd)
-            if not stat.S_ISDIR(opened.st_mode) or _identity(opened) != self._workspace_root_identity:
+            if (
+                not stat.S_ISDIR(opened.st_mode)
+                or _identity(opened) != self._workspace_root_identity
+            ):
                 raise OSError("target workspace changed identity during lease acquisition")
             try:
                 import fcntl
