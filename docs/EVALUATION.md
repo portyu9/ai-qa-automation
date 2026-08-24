@@ -88,13 +88,15 @@ Coverage includes distinct deterministic paths for:
 
 Each primary case must map to exactly one registered evaluator path. The loader binds case ID, filename, title, evaluator, expected result, and hard-safety designation to repository-owned executable metadata. Duplicate IDs, duplicate evaluator paths, callable aliases, unknown evaluators, relabeled expectations, and hard-safety demotion fail closed.
 
-Scenario and threshold JSON use bounded no-follow ingestion, reject duplicate JSON keys and non-standard numeric constants, and use strict scenario typing. A fixture cannot gain authority by relying on parser coercion or final-component symlink substitution.
+Primary and readiness **catalog directories** use descriptor-pinned, no-follow ingestion rather than pathname enumeration after a separate preflight. Enumeration is bounded while it occurs; each direct JSON entry is opened relative to the pinned directory descriptor, read under an actual byte limit, and checked for file-identity or directory-identity changes before the catalog can close successfully. Duplicate JSON keys, non-standard numeric constants, parser coercion, symlink substitution, catalog replacement, concurrent catalog mutation, and entry-count exhaustion therefore fail closed. The standalone `evals/thresholds.json` file uses the bounded no-follow single-file ingestion path.
+
+This catalog guarantee intentionally has a platform prerequisite: the runtime must provide no-follow directory opens, descriptor-relative `open`/`stat`, and descriptor-based directory enumeration. The implementation proves descriptor enumeration by attempting `os.scandir(directory_fd)` on the already-open directory; it does not trust capability metadata as evidence. If those primitives are unavailable, evaluator catalog ingestion fails closed instead of falling back to a weaker pathname scan. The repository CI evidence for this path is Linux-hosted; it does not by itself establish equivalent filesystem semantics on every operating system.
 
 ### What the untrusted-authority cases prove
 
 Cases 24–27 prove that deterministic policy still denies four concrete authority requests when they originate from untrusted-context fixtures and that the runtime system prompt preserves the untrusted-data boundary.
 
-They do **not** submit four injected payloads to Claude and therefore do not establish a model prompt-injection success rate. Credentialed model behavior belongs to the separate model-marked evidence layer.
+They do **not** submit four injected payloads to Claude and therefore do not establish a model prompt-injection success rate. The fixtures exercise deterministic request/policy paths; credentialed model behavior belongs to the separate model-marked evidence layer.
 
 ---
 
