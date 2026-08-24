@@ -45,7 +45,7 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
 1. [`CHANGE_INTELLIGENCE.md`](CHANGE_INTELLIGENCE.md) — merge-base-aware change analysis
 2. [`SKILLS.md`](SKILLS.md) — five trusted Claude QA procedures
-3. [`EVALUATION.md`](EVALUATION.md) — deterministic, adversarial, and holdout evaluation architecture
+3. [`EVALUATION.md`](EVALUATION.md) — deterministic primary and repository-visible sequestered readiness evaluation architecture
 4. [`RESULT_CONTRACT.md`](RESULT_CONTRACT.md) — how evidence becomes a runtime outcome
 5. [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) — production control model
 
