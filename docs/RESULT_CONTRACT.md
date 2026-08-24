@@ -105,6 +105,9 @@ If PASS and FAIL are both observed for the same gate at the same revision, the e
 
 ```mermaid
 stateDiagram-v2
+    accTitle: Revision-bound mutation transaction from authorization through rollback-backed validation closure
+    accDescr: An authorized mutation receives an owned rollback snapshot and enters a pending state. Exact-path patch safety, exact-path-bound targeted pytest, and full regression must all pass before commit; failures or incomplete closure route to rollback, and unprovable rollback ownership or integrity escalates to infrastructure failure.
+
     [*] --> Authorized
     Authorized --> Pending: owned rollback snapshot
     Pending --> PatchSafe: exact-path patch safety PASS
