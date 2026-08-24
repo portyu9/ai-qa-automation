@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import errno
 import hashlib
+import json
 import os
 import stat
 from pathlib import Path
-from typing import BinaryIO
+from typing import Any, BinaryIO
 
 _READ_CHUNK_BYTES = 1024 * 1024
 
@@ -84,6 +85,31 @@ def read_text_bounded(path: Path, *, max_bytes: int, label: str) -> str:
     """Read bounded UTF-8 text without a stat/read TOCTOU size gap."""
 
     return read_bytes_bounded(path, max_bytes=max_bytes, label=label).decode("utf-8")
+
+
+def read_json_object_bounded(path: Path, *, max_bytes: int, label: str) -> dict[str, Any]:
+    """Read one bounded JSON object without ambiguous keys or non-standard constants."""
+
+    def reject_duplicate_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"{label} contains duplicate JSON key: {key}")
+            result[key] = value
+        return result
+
+    def reject_constant(value: str) -> None:
+        raise ValueError(f"{label} contains non-standard JSON numeric constant: {value}")
+
+    text = read_text_bounded(path, max_bytes=max_bytes, label=label)
+    parsed = json.loads(
+        text,
+        object_pairs_hook=reject_duplicate_pairs,
+        parse_constant=reject_constant,
+    )
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{label} root must be a JSON object")
+    return parsed
 
 
 def sha256_file_bounded(path: Path, *, max_bytes: int, label: str) -> tuple[str, int]:
