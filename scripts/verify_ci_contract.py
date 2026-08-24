@@ -33,6 +33,7 @@ MERMAID_RENDER_COMMAND = f"python scripts/validate_mermaid.py | tee {MERMAID_VAL
 DOCUMENTATION_STEP_NAME = "Verify documentation authority contract"
 MERMAID_STEP_NAME = "Render Mermaid documentation with digest-pinned official CLI"
 SUPPLY_CHAIN_UPLOAD_STEP_NAME = "Upload supply-chain evidence"
+REQUIRED_GATE_STEP_NAME = "Require every automatic gate to succeed"
 SUPPLY_CHAIN_ARTIFACTS = (
     "artifacts/ci/supply-chain-verification.json",
     "artifacts/ci/ci-contract-verification.json",
@@ -309,6 +310,23 @@ def _require_exact_supply_chain_upload_step(job: str) -> None:
         )
 
 
+def _require_exact_required_gate_step(job: str) -> None:
+    step = _semantic_text(_step_block(job, REQUIRED_GATE_STEP_NAME)).strip("\n")
+    result_lines = tuple(
+        f'          test "${{{{ needs.{job}.result }}}}" = "success"'
+        for job in AUTOMATIC_REQUIRED_JOBS
+    )
+    expected = "\n".join(
+        (
+            f"      - name: {REQUIRED_GATE_STEP_NAME}",
+            "        run: |",
+            *result_lines,
+        )
+    )
+    if step != expected:
+        raise ValueError("Required PR Gate result checks must be the exact reviewed fail-closed aggregate step")
+
+
 def _verify_action_revisions(workflows: dict[str, str]) -> dict[str, str]:
     observed: dict[str, str] = {}
     for name, raw_text in workflows.items():
@@ -404,17 +422,16 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
             f"{name}: Mermaid render command must not appear outside its reviewed step"
         )
 
-    required_gate = _semantic_text(_job_block(text, "required-gate"))
+    required_gate_raw = _job_block(text, "required-gate")
+    required_gate = _semantic_text(required_gate_raw)
     if "    name: Required PR Gate" not in required_gate:
         raise ValueError(f"{name}: stable Required PR Gate name is missing")
     if "    if: ${{ always() }}" not in required_gate:
         raise ValueError(f"{name}: Required PR Gate must execute with if: always()")
+    _require_exact_required_gate_step(required_gate_raw)
     for job in AUTOMATIC_REQUIRED_JOBS:
         if f"      - {job}\n" not in required_gate:
             raise ValueError(f"{name}: Required PR Gate does not depend on {job}")
-        result_check = 'test "${{ needs.' + job + '.result }}" = "success"'
-        if result_check not in required_gate:
-            raise ValueError(f"{name}: Required PR Gate does not fail closed on {job}")
 
     return {
         "triggers": sorted(expected_triggers),
