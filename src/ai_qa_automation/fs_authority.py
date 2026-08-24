@@ -9,20 +9,26 @@ from pathlib import Path
 from uuid import uuid4
 
 _READ_CHUNK_BYTES = 1024 * 1024
+_DESCRIPTOR_RELATIVE_AUTHORITY_SUPPORTED = bool(
+    os.name != "nt"
+    and getattr(os, "O_DIRECTORY", 0)
+    and getattr(os, "O_NOFOLLOW", 0)
+    and all(
+        operation in os.supports_dir_fd
+        for operation in (os.open, os.stat, os.mkdir, os.unlink, os.link, os.rename)
+    )
+)
 
 
 def descriptor_relative_authority_supported() -> bool:
-    """Return whether this platform can pin mutation authority to directory descriptors."""
+    """Return whether this platform can pin mutation authority to directory descriptors.
 
-    return bool(
-        os.name != "nt"
-        and getattr(os, "O_DIRECTORY", 0)
-        and getattr(os, "O_NOFOLLOW", 0)
-        and all(
-            operation in os.supports_dir_fd
-            for operation in (os.open, os.stat, os.mkdir, os.unlink, os.link, os.rename)
-        )
-    )
+    Platform capability is process-invariant. Cache it before tests or runtime hooks can
+    wrap individual ``os`` callables; a wrapper must not make a supported platform look
+    unsupported midway through a descriptor-pinned operation.
+    """
+
+    return _DESCRIPTOR_RELATIVE_AUTHORITY_SUPPORTED
 
 
 def _identity(value: os.stat_result) -> tuple[int, int]:
@@ -171,12 +177,10 @@ def read_bytes_confined(
         try:
             opened = os.fstat(file_fd)
             current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-            if (
-                not stat.S_ISREG(opened.st_mode)
-                or not stat.S_ISREG(current.st_mode)
-                or _identity(opened) != _identity(current)
-            ):
+            if _identity(opened) != _identity(current):
                 raise ValueError(f"{label} changed identity during confined read")
+            if not stat.S_ISREG(opened.st_mode) or not stat.S_ISREG(current.st_mode):
+                raise ValueError(f"{label} must be a regular file")
             initial_signature = _stable_file_signature(opened)
 
             chunks: list[bytes] = []
