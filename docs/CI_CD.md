@@ -16,7 +16,7 @@ The repository deliberately separates ordinary automatic validation from manuall
 | Surface | Trigger | Secret authority | Purpose |
 |---|---|---|---|
 | `.github/workflows/ci.yml` | `pull_request`, `push` to `main`, `merge_group` | none | automatic non-privileged repository gates |
-| `.github/workflows/manual-validation.yml` | `workflow_dispatch` only | model job may receive `ANTHROPIC_API_KEY` | H-series readiness and optional credentialed Agent SDK evidence |
+| `.github/workflows/manual-validation.yml` | `workflow_dispatch` only | model job references the `credentialed-validation` environment; Anthropic secret is step-scoped | H-series readiness and optional credentialed Agent SDK evidence |
 
 Both workflows declare only `contents: read`. Every checkout disables persisted credentials, binds to `${{ github.sha }}`, and immediately verifies that `git rev-parse HEAD` equals `GITHUB_SHA`.
 
@@ -62,9 +62,13 @@ The H-series corpus remains repository-visible and execution-separated from the 
 
 ### Credentialed model smoke
 
-The Claude Agent SDK smoke path executes only when `run_model=true` is explicitly selected. That job alone consumes `ANTHROPIC_API_KEY` from GitHub Secrets. Automatic PR CI contains no secret references and does not depend on live model/provider availability.
+The Claude Agent SDK smoke path executes only when `run_model=true` is explicitly selected. The job references the named GitHub environment `credentialed-validation`, and the workflow rejects any credentialed validation subject whose `GITHUB_REF` is not exactly `refs/heads/main` before any credential-bearing step executes.
 
-A missing credential, provider outage, or environment limitation is not converted into automatic PR PASS evidence.
+`ANTHROPIC_API_KEY` is not a job-level environment variable. Checkout, revision verification, Python setup, and hash-locked project installation execute without the provider credential. The secret is scoped only to the explicit credential-presence check and the bounded live Agent SDK evaluation step.
+
+GitHub settings remain an independent authority boundary. The `credentialed-validation` environment should be configured with appropriate environment protection and restricted deployment branches/tags, and `ANTHROPIC_API_KEY` should be stored as an environment-scoped secret rather than a broadly available repository secret. The repository workflow can reference that control point and fail closed on its own subject checks, but repository code cannot prove the external environment protections are enabled.
+
+A missing credential, provider outage, unapproved environment, or other environment limitation is not converted into automatic PR PASS evidence.
 
 ---
 
@@ -90,7 +94,7 @@ The verifier fails closed unless repository workflow definitions preserve the in
 - no editable/live dependency-resolution shortcuts in CI;
 - the stable `Required PR Gate`, `if: always()`, complete dependency set, and explicit success assertion for every required job.
 
-Adversarial unit tests cover trigger-comment spoofing, write permission, secret introduction, automatic-trigger leakage into the manual workflow, unexpected workflow files, symlinked workflow paths/directories, directory exhaustion, unbound checkout, missing aggregate dependencies, corrupted aggregate result checks, and a fail-open aggregate condition.
+Adversarial unit tests cover trigger-comment spoofing, write permission, secret introduction, automatic-trigger leakage into the manual workflow, unexpected workflow files, symlinked workflow paths/directories, directory exhaustion, unbound checkout, missing aggregate dependencies, corrupted aggregate result checks, a fail-open aggregate condition, and the credentialed model job's environment/main-ref/step-local-secret scope.
 
 The automatic supply-chain job emits the verifier's JSON result as `ci-contract-verification.json` with the other revision-bound supply-chain evidence.
 
@@ -134,9 +138,9 @@ Automatic CI is designed for non-privileged execution:
 - checkout credentials are not persisted;
 - no automatic job references repository secrets;
 - `pull_request_target` is forbidden;
-- model credentials remain manual-only.
+- model credentials remain manual-only, main-subject-gated, environment-bound, and step-scoped.
 
-This limits repository-token/secret authority if a pull request contains hostile code. It does not replace GitHub's platform isolation, organization policy, runner trust, or general secure-review requirements.
+This limits repository-token/secret authority if a pull request contains hostile code. It does not replace GitHub's platform isolation, organization policy, runner trust, environment protection, or general secure-review requirements.
 
 ---
 
@@ -144,7 +148,7 @@ This limits repository-token/secret authority if a pull request contains hostile
 
 This phase does not add publishing, package registry, image registry, deployment, production mutation, signing-key, or destructive infrastructure authority.
 
-If those capabilities are added later, credentialed/destructive jobs should remain explicit, manual or environment-protected, least-privilege, subject-bound, and separate from ordinary untrusted PR execution.
+If those capabilities are added later, credentialed/destructive jobs should remain explicit, manual and environment-protected, least-privilege, subject-bound, and separate from ordinary untrusted PR execution.
 
 A green automatic CI run is not a release signature, deployment approval, or proof that a production environment was modified.
 
@@ -157,6 +161,7 @@ A successful automatic run proves that the repository-controlled automatic jobs 
 It does **not** by itself prove:
 
 - branch protection or required-check settings are enabled;
+- the `credentialed-validation` environment is configured with the intended external protection rules;
 - the GitHub-hosted runner image/tool cache is cryptographically attested by this repository;
 - manual H-series or credentialed model validation ran for that revision;
 - external provider credentials/services were available;
