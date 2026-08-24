@@ -5,7 +5,7 @@ import tempfile
 import threading
 from pathlib import Path
 
-from .io_safety import fsync_directory, read_json_object_bounded
+from .io_safety import fsync_directory, parse_json_object_strict, read_text_bounded
 from .models import AgentRunState
 
 _MAX_STATE_BYTES = 16_000_000
@@ -64,9 +64,14 @@ class StateStore:
     def load(self) -> AgentRunState:
         with self._lock:
             self._assert_owned()
-            raw = read_json_object_bounded(
+            rendered = read_text_bounded(
                 self.path,
                 max_bytes=_MAX_STATE_BYTES,
                 label="canonical state",
             )
-            return AgentRunState.model_validate(raw)
+            # Parse once with the repository's ambiguity guard before schema validation.
+            # Pydantic's JSON parser does not own duplicate-key policy; strict JSON-mode
+            # validation then prevents string/number/boolean coercion in authority fields
+            # while still accepting the JSON representations of enums and datetimes.
+            parse_json_object_strict(rendered, label="canonical state")
+            return AgentRunState.model_validate_json(rendered, strict=True)
