@@ -96,7 +96,8 @@ def _validated_manifest_rows(
             EvidenceItem.model_validate_json(json.dumps(raw), strict=True) for raw in evidence_rows
         ]
         artifact_records = [
-            ArtifactRecord.model_validate_json(json.dumps(raw), strict=True) for raw in artifact_rows
+            ArtifactRecord.model_validate_json(json.dumps(raw), strict=True)
+            for raw in artifact_rows
         ]
     except (TypeError, ValueError) as exc:
         raise ValueError(
