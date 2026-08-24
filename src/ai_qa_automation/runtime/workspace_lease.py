@@ -85,13 +85,18 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             raise OSError(
                 "workspace lease metadata is corrupt or ambiguous; manual review is required"
             ) from exc
-        previous_workspace = str(previous.get("workspace") or "")
-        previous_run_id = str(previous.get("run_id") or "")
-        previous_lease_id = str(previous.get("lease_id") or "")
+
+        previous_workspace = previous.get("workspace")
+        previous_run_id = previous.get("run_id")
+        previous_lease_id = previous.get("lease_id")
+        if not isinstance(previous_workspace, str):
+            raise OSError("workspace lease workspace identity must be a string")
         if previous_workspace != str(self.workspace):
             raise OSError("workspace lease metadata is bound to a different workspace")
-        if not previous_run_id or not previous_lease_id:
-            raise OSError("workspace lease metadata is incomplete; manual review is required")
+        if not isinstance(previous_run_id, str) or not previous_run_id.strip():
+            raise OSError("workspace lease run_id must be a non-empty string")
+        if not isinstance(previous_lease_id, str) or not previous_lease_id.strip():
+            raise OSError("workspace lease lease_id must be a non-empty string")
         return previous
 
     def acquire(self) -> WorkspaceLease:
