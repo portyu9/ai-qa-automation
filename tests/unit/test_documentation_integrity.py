@@ -411,7 +411,7 @@ def test_docs_verifier_rejects_symlinked_skill_manifest(tmp_path: Path) -> None:
     except (NotImplementedError, OSError):
         pytest.skip("symlink creation unavailable on this platform")
 
-    with pytest.raises(ValueError, match="owned regular SKILL.md"):
+    with pytest.raises(ValueError, match=r"owned regular SKILL\.md"):
         verify_documentation(tmp_path)
 
 
@@ -419,7 +419,7 @@ def test_docs_verifier_rejects_missing_skill_manifest(tmp_path: Path) -> None:
     _minimal_public_docs(tmp_path)
     (tmp_path / ".claude" / "skills" / "beta" / "SKILL.md").unlink()
 
-    with pytest.raises(ValueError, match="owned regular SKILL.md"):
+    with pytest.raises(ValueError, match=r"owned regular SKILL\.md"):
         verify_documentation(tmp_path)
 
 
