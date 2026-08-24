@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from scripts.validate_mermaid import _candidate_files, _discover_mermaid_documents, _read_regular_file
+from scripts.validate_mermaid import (
+    _candidate_files,
+    _discover_mermaid_documents,
+    _read_regular_file,
+)
 
 
 def _write_required_root_docs(root: Path) -> None:
