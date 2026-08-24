@@ -25,8 +25,10 @@ def _prepare_run(tmp_path: Path, runtime_payload: dict[str, object]) -> Path:
     )
     StateStore(run_dir / "state.json").save(state)
     RunJournal(run_dir / "journal.jsonl").append("run_started")
+    rendered_runtime: dict[str, object] = {"workspace": str(workspace.resolve())}
+    rendered_runtime.update(runtime_payload)
     (run_dir / "runtime.json").write_text(
-        json.dumps(runtime_payload, sort_keys=True),
+        json.dumps(rendered_runtime, sort_keys=True),
         encoding="utf-8",
     )
     return run_dir
@@ -78,13 +80,49 @@ def test_recovery_inspection_rejects_coercive_or_empty_pending_mutation_authorit
 
 
 def test_recovery_inspection_rejects_missing_pending_mutation_authority(tmp_path: Path) -> None:
-    run_dir = _prepare_run(tmp_path, {"workspace": str(tmp_path / "sut")})
+    run_dir = _prepare_run(tmp_path, {})
 
     result = inspect_recovery(run_dir)
 
     assert result == {
         "recoverable": False,
         "reason": "runtime.json is missing pending_mutation authority",
+    }
+
+
+@pytest.mark.parametrize("runtime_workspace", [None, 123, False, ""])
+def test_recovery_inspection_rejects_invalid_runtime_workspace_identity(
+    tmp_path: Path,
+    runtime_workspace: object,
+) -> None:
+    run_dir = _prepare_run(
+        tmp_path,
+        {"workspace": runtime_workspace, "pending_mutation": None},
+    )
+
+    result = inspect_recovery(run_dir)
+
+    assert result == {
+        "recoverable": False,
+        "reason": "runtime.json workspace identity is invalid",
+    }
+
+
+def test_recovery_inspection_rejects_runtime_workspace_from_another_subject(
+    tmp_path: Path,
+) -> None:
+    other_workspace = tmp_path / "other-sut"
+    other_workspace.mkdir()
+    run_dir = _prepare_run(
+        tmp_path,
+        {"workspace": str(other_workspace.resolve()), "pending_mutation": None},
+    )
+
+    result = inspect_recovery(run_dir)
+
+    assert result == {
+        "recoverable": False,
+        "reason": "runtime.json workspace does not match canonical state workspace",
     }
 
 
