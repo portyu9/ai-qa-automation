@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 env:
-  SOURCE_SHA: 7c5fc0a920f2c55b0de8a7055a6c4a5c4ed511bb
+  SOURCE_SHA: f8a0d489070ded8f9fbe9c3f399437cf988b5a47
   PYTHONUNBUFFERED: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
