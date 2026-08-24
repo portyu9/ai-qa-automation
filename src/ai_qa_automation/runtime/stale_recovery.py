@@ -7,9 +7,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from ..io_safety import fsync_directory, read_bytes_bounded, read_json_object_bounded
+from ..fs_authority import (
+    atomic_write_bytes_confined,
+    read_bytes_confined,
+    unlink_file_confined,
+)
+from ..io_safety import read_json_object_bounded
 from .journal import RunJournal, validate_runtime_journal_binding
-from .run_control import _atomic_write_bytes, atomic_write_json
+from .run_control import atomic_write_json
 
 _MAX_RUNTIME_METADATA_BYTES = 2_000_000
 _MAX_ROLLBACK_BYTES = 2_000_000
@@ -37,24 +42,19 @@ def _confined_non_symlink_path(root: Path, requested: Path, *, label: str) -> Pa
     return resolved
 
 
-def _validated_backup_path(rollback_root: Path, backup_raw: str) -> Path:
-    raw_rollback_root = rollback_root.expanduser()
-    if raw_rollback_root.is_symlink():
-        raise ValueError("prior rollback directory is a symlink and has ambiguous ownership")
-    rollback_root = raw_rollback_root.resolve()
+def _validated_backup_relative(prior_run_dir: Path, backup_raw: str) -> Path:
+    """Return the rollback backup as a lexical path below the prior run root."""
+
+    prior_run_dir = prior_run_dir.expanduser().absolute()
     raw = Path(backup_raw).expanduser()
-    absolute = raw if raw.is_absolute() else rollback_root / raw
+    absolute = raw if raw.is_absolute() else prior_run_dir / "rollback" / raw
     try:
-        relative = absolute.absolute().relative_to(rollback_root)
+        relative = absolute.absolute().relative_to(prior_run_dir)
     except ValueError as exc:
-        raise ValueError("prior rollback backup escaped run rollback directory") from exc
-    if relative == Path() or not relative.parts:
-        raise ValueError("prior rollback backup path is invalid")
-    return _confined_non_symlink_path(
-        rollback_root,
-        relative,
-        label="prior rollback backup",
-    )
+        raise ValueError("prior rollback backup escaped run directory") from exc
+    if len(relative.parts) < 2 or relative.parts[0] != "rollback":
+        raise ValueError("prior rollback backup escaped run rollback directory")
+    return relative
 
 
 def _load_runtime_metadata(runtime_path: Path) -> dict[str, Any]:
@@ -209,7 +209,7 @@ def recover_stale_mutation(
     if type(existed) is not bool:
         return {"status": "BLOCKED", "reason": "prior pending mutation existed flag is invalid"}
     try:
-        target = _confined_non_symlink_path(
+        _confined_non_symlink_path(
             workspace,
             Path(relative_path),
             label="prior pending mutation path",
@@ -228,37 +228,65 @@ def recover_stale_mutation(
             or not original_sha
         ):
             return {"status": "BLOCKED", "reason": "prior rollback backup metadata is incomplete"}
-        rollback_root = prior_run_dir / "rollback"
         try:
-            backup = _validated_backup_path(rollback_root, backup_raw)
-        except ValueError as exc:
-            return {"status": "BLOCKED", "reason": str(exc)}
-        if not backup.is_file():
-            return {"status": "BLOCKED", "reason": "prior rollback backup is unavailable"}
-        try:
-            data = read_bytes_bounded(
-                backup,
+            backup_relative = _validated_backup_relative(prior_run_dir, backup_raw)
+            data = read_bytes_confined(
+                prior_run_dir,
+                backup_relative,
                 max_bytes=_MAX_ROLLBACK_BYTES,
                 label="prior rollback backup",
             )
         except OSError:
             return {"status": "BLOCKED", "reason": "prior rollback backup is unavailable"}
-        except ValueError:
+        except RuntimeError as exc:
             return {
                 "status": "BLOCKED",
-                "reason": "prior rollback backup exceeds 2 MB recovery safety limit",
+                "reason": f"prior rollback backup authority is unavailable: {type(exc).__name__}",
             }
+        except ValueError as exc:
+            if "exceeds" in str(exc) and "ingestion limit" in str(exc):
+                return {
+                    "status": "BLOCKED",
+                    "reason": "prior rollback backup exceeds 2 MB recovery safety limit",
+                }
+            return {"status": "BLOCKED", "reason": str(exc)}
         if hashlib.sha256(data).hexdigest() != original_sha:
             return {
                 "status": "BLOCKED",
                 "reason": "prior rollback backup failed integrity verification",
             }
-        _atomic_write_bytes(target, data)
-        backup_to_cleanup = backup
+        try:
+            atomic_write_bytes_confined(
+                workspace,
+                relative_path,
+                data,
+                create_parents=True,
+                create_only=False,
+                label="stale recovery target",
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            return {
+                "status": "BLOCKED",
+                "reason": f"stale rollback target could not be restored safely: {type(exc).__name__}",
+            }
+        backup_to_cleanup = backup_relative
     else:
-        target.unlink(missing_ok=True)
-        if target.parent.is_dir():
-            fsync_directory(target.parent)
+        try:
+            unlink_file_confined(
+                workspace,
+                relative_path,
+                missing_ok=True,
+                label="stale recovery target",
+            )
+        except FileNotFoundError:
+            # The failed mutation may never have created a missing nested parent.
+            # A missing parent therefore means there is no target entry to remove.
+            pass
+        except (OSError, RuntimeError, ValueError) as exc:
+            return {
+                "status": "BLOCKED",
+                "reason": f"stale rollback target could not be removed safely: {type(exc).__name__}",
+            }
 
     # Recovery journal augmentation remains observational: inability to append the
     # event does not undo already-restored target bytes. But runtime closure must be
@@ -318,7 +346,12 @@ def recover_stale_mutation(
     if backup_to_cleanup is not None:
         # Runtime authority is already durably closed. An orphaned rollback
         # snapshot is safer than weakening the completed recovery transition.
-        with suppress(OSError):
-            backup_to_cleanup.unlink()
+        with suppress(OSError, RuntimeError, ValueError):
+            unlink_file_confined(
+                prior_run_dir,
+                backup_to_cleanup,
+                missing_ok=True,
+                label="stale recovery backup cleanup",
+            )
 
     return {"status": "RECOVERED", "previous_run_id": previous_run_id, "path": relative_path}
