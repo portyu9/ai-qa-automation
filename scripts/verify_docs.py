@@ -47,6 +47,25 @@ MERMAID_DIAGRAM_PREFIXES = (
     "timeline",
     "gitGraph",
 )
+COUNT_WORDS = (
+    "zero",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+    "eleven",
+    "twelve",
+    "thirteen",
+    "fourteen",
+    "fifteen",
+    "sixteen",
+)
 
 
 @dataclass(frozen=True)
@@ -514,9 +533,7 @@ def _trusted_skill_count(root: Path) -> int:
                     finally:
                         os.close(skill_file_fd)
                     final_opened_skill = os.fstat(skill_fd)
-                    final_current_skill = os.stat(
-                        name, dir_fd=directory_fd, follow_symlinks=False
-                    )
+                    final_current_skill = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
                     if (
                         not stat.S_ISDIR(final_opened_skill.st_mode)
                         or not stat.S_ISDIR(final_current_skill.st_mode)
@@ -555,7 +572,7 @@ def _validate_implementation_claims(root: Path, readme: str) -> dict[str, object
         f"`claude-agent-sdk=={sdk_version}`",
         f"default model identifier `{default_model}`",
         f"{internal_tools} least-privilege, purpose-built in-process QA tools",
-        f"exactly {trusted_skills} allowlisted Claude Skills",
+        f"exactly {COUNT_WORDS[trusted_skills]} allowlisted Claude Skills",
     )
     missing = [claim for claim in expected_claims if claim not in readme]
     if missing:
