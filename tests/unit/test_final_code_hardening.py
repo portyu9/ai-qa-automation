@@ -291,11 +291,15 @@ def test_incomplete_fingerprint_blocks_real_stale_pending_mutation(tmp_path: Pat
     target.write_text("generated but unverified\n", encoding="utf-8")
     prior_run = artifact_root / "run-old"
     prior_run.mkdir(parents=True)
+    journal = RunJournal(prior_run / "journal.jsonl")
+    journal.append("mutation_prepared")
     (prior_run / "runtime.json").write_text(
         json.dumps(
             {
                 "workspace": str(workspace.resolve()),
                 "workspace_fingerprint": "sha256:prior",
+                "journal_event_count": journal.event_count,
+                "journal_head_hash": journal.head_hash,
                 "pending_mutation": {
                     "relative_path": "tests/test_generated.py",
                     "existed": False,
