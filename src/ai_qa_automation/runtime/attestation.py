@@ -221,6 +221,12 @@ def _validate_manifest_structure(
             [],
             [],
         )
+    if any(item.run_id != run_id for item in evidence_records):
+        return (
+            {"valid": False, "reason": "evidence manifest contains evidence from another run"},
+            [],
+            [],
+        )
     if len({item.id for item in evidence_records}) != len(evidence_records):
         return ({"valid": False, "reason": "evidence manifest has duplicate evidence ids"}, [], [])
     if len({item.artifact_id for item in artifact_records}) != len(artifact_records):
