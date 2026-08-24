@@ -14,6 +14,7 @@ _TEST_MODEL = "test-model"
 _TEST_TOOL_COUNT = 2
 _TEST_SKILL_COUNT = 2
 _TEST_SKILL_WORD = "two"
+_TEST_SKILLS = ("alpha", "beta")
 
 
 def _claim_readme(body: str = "") -> str:
@@ -28,25 +29,39 @@ def _claim_readme(body: str = "") -> str:
     )
 
 
+def _agent_source(skills: tuple[str, ...] = _TEST_SKILLS) -> str:
+    entries = "\n".join(f'            "{name}",' for name in skills)
+    return (
+        "def configure():\n"
+        "    return ClaudeAgentOptions(\n"
+        "        skills=[\n"
+        f"{entries}\n"
+        "        ],\n"
+        "    )\n"
+    )
+
+
 def _minimal_implementation_surface(root: Path) -> None:
     (root / "pyproject.toml").write_text(
         f'[project]\nname = "fixture"\ndependencies = ["claude-agent-sdk=={_TEST_SDK}"]\n',
         encoding="utf-8",
     )
-    config = root / "src" / "ai_qa_automation" / "config.py"
+    package = root / "src" / "ai_qa_automation"
+    config = package / "config.py"
     config.parent.mkdir(parents=True)
     config.write_text(
         f'class Settings:\n    model: str = "{_TEST_MODEL}"\n',
         encoding="utf-8",
     )
-    internal_tools = root / "src" / "ai_qa_automation" / "runtime" / "internal_tools.py"
+    internal_tools = package / "runtime" / "internal_tools.py"
     internal_tools.parent.mkdir(parents=True)
     internal_tools.write_text(
         "def build_tools():\n    tools = [object(), object()]\n    return tools\n",
         encoding="utf-8",
     )
+    (package / "agent.py").write_text(_agent_source(), encoding="utf-8")
     skills = root / ".claude" / "skills"
-    for name in ("alpha", "beta"):
+    for name in _TEST_SKILLS:
         path = skills / name
         path.mkdir(parents=True)
         (path / "SKILL.md").write_text(f"# {name}\n", encoding="utf-8")
@@ -81,6 +96,13 @@ def test_repository_public_documentation_contract_is_self_consistent() -> None:
         "default_model": "claude-sonnet-5",
         "internal_qa_tools": 18,
         "trusted_skills": 5,
+        "trusted_skill_names": [
+            "investigate-test-failure",
+            "self-heal-test",
+            "generate-test",
+            "prioritize-regression",
+            "performance-test",
+        ],
     }
 
 
@@ -398,4 +420,32 @@ def test_docs_verifier_rejects_missing_skill_manifest(tmp_path: Path) -> None:
     (tmp_path / ".claude" / "skills" / "beta" / "SKILL.md").unlink()
 
     with pytest.raises(ValueError, match="owned regular SKILL.md"):
+        verify_documentation(tmp_path)
+
+
+def test_docs_verifier_rejects_unlisted_skill_directory(tmp_path: Path) -> None:
+    _minimal_public_docs(tmp_path)
+    extra = tmp_path / ".claude" / "skills" / "gamma"
+    extra.mkdir()
+    (extra / "SKILL.md").write_text("# gamma\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="runtime Skill allowlist and trusted Skill directories differ"):
+        verify_documentation(tmp_path)
+
+
+def test_docs_verifier_rejects_runtime_skill_without_matching_directory(tmp_path: Path) -> None:
+    _minimal_public_docs(tmp_path)
+    agent = tmp_path / "src" / "ai_qa_automation" / "agent.py"
+    agent.write_text(_agent_source(("alpha", "gamma")), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="runtime Skill allowlist and trusted Skill directories differ"):
+        verify_documentation(tmp_path)
+
+
+def test_docs_verifier_rejects_duplicate_runtime_skill_allowlist(tmp_path: Path) -> None:
+    _minimal_public_docs(tmp_path)
+    agent = tmp_path / "src" / "ai_qa_automation" / "agent.py"
+    agent.write_text(_agent_source(("alpha", "alpha")), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="non-empty, unique"):
         verify_documentation(tmp_path)
