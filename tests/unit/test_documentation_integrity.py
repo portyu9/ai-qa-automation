@@ -84,9 +84,7 @@ def test_docs_verifier_rejects_unaccessible_mermaid_block(tmp_path: Path) -> Non
 
 
 @pytest.mark.parametrize("blank_field", ["accTitle", "accDescr"])
-def test_docs_verifier_rejects_blank_mermaid_metadata(
-    tmp_path: Path, blank_field: str
-) -> None:
+def test_docs_verifier_rejects_blank_mermaid_metadata(tmp_path: Path, blank_field: str) -> None:
     _minimal_public_docs(tmp_path)
     title = "" if blank_field == "accTitle" else "Accessible title"
     description = "" if blank_field == "accDescr" else "Accessible description"
