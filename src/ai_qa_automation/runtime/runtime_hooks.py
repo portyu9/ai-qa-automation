@@ -45,6 +45,14 @@ _NETWORK_TOOLS = {
     "mcp__qa__run_k6",
 }
 _MUTATION_TOOLS = {"mcp__qa__create_test_file", "mcp__qa__apply_locator_heal"}
+_VALIDATION_BEARING_TOOLS = {
+    "mcp__qa__run_pytest",
+    "mcp__qa__inspect_browser",
+    "mcp__qa__verify_locator_candidates",
+    "mcp__qa__validate_json_contract",
+    "mcp__qa__inspect_mobile_runtime",
+    "mcp__qa__run_k6",
+}
 
 
 def _input_fingerprint(tool_name: str, tool_input: dict[str, Any]) -> str:
@@ -71,6 +79,34 @@ def _sync_tool_count(state: AgentRunState | None, control: RuntimeControl | None
 
 def _tool_response_failed(response: Any) -> bool:
     return isinstance(response, dict) and bool(response.get("is_error"))
+
+
+def _record_unexpected_validation_tool_failure(
+    state: AgentRunState,
+    *,
+    tool_name: str,
+    tool_input: dict[str, Any],
+) -> None:
+    """Latch unexpected validator execution uncertainty into deterministic lineage."""
+
+    fingerprint = _input_fingerprint(tool_name, tool_input)
+    state.validation_results.append(
+        ValidationResult(
+            name="validation_tool_execution",
+            gate_id=f"validation_tool_execution:{tool_name}:{fingerprint}",
+            revision=state.change_revision,
+            status=ValidationStatus.NOT_VERIFIED,
+            summary=(
+                "Validation-bearing tool execution failed before it could produce deterministic "
+                "closure."
+            ),
+            details={
+                "tool_name": tool_name,
+                "scope": "unexpected_execution_failure",
+                "input_hash": fingerprint,
+            },
+        )
+    )
 
 
 def _reconcile_rolled_back_mutation(
@@ -493,8 +529,20 @@ def posttool_failure_output(
 ) -> dict[str, Any]:
     """Normalize failures into explicit health/provenance without inventing evidence."""
     tool_name = str(input_data.get("tool_name", ""))
+    raw_tool_input = input_data.get("tool_input")
+    tool_input = raw_tool_input if isinstance(raw_tool_input, dict) else {}
     error = str(input_data.get("error", ""))
     context = "Tool execution failed."
+    if state is not None and tool_name in _VALIDATION_BEARING_TOOLS:
+        _record_unexpected_validation_tool_failure(
+            state,
+            tool_name=tool_name,
+            tool_input=tool_input,
+        )
+        context = (
+            "Validation-bearing tool execution failed unexpectedly; deterministic closure is "
+            "NOT_VERIFIED for this revision."
+        )
     if tool_name.startswith(("mcp__github__", "mcp__atlassian__")):
         provider = tool_name.split("__", 2)[1]
         status = normalize_mcp_failure(message=error)
