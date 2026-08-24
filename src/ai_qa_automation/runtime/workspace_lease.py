@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 from uuid import uuid4
 
-from ..io_safety import fsync_directory
+from ..io_safety import fsync_directory, parse_json_object_strict
 
 
 class _MSVCRTLocking(Protocol):
@@ -76,11 +76,15 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
                 "workspace lease metadata is not valid UTF-8; manual review is required"
             ) from exc
         try:
-            previous = json.loads(decoded)
+            previous = parse_json_object_strict(decoded, label="workspace lease metadata")
         except json.JSONDecodeError as exc:
             raise OSError("workspace lease metadata is corrupt; manual review is required") from exc
-        if not isinstance(previous, dict):
-            raise OSError("workspace lease metadata root must be an object")
+        except ValueError as exc:
+            if "root must be a JSON object" in str(exc):
+                raise OSError("workspace lease metadata root must be an object") from exc
+            raise OSError(
+                "workspace lease metadata is corrupt or ambiguous; manual review is required"
+            ) from exc
         previous_workspace = str(previous.get("workspace") or "")
         previous_run_id = str(previous.get("run_id") or "")
         previous_lease_id = str(previous.get("lease_id") or "")
