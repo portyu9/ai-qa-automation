@@ -11,21 +11,26 @@
 
 Runtime safety is a deterministic subsystem, not a prompt convention. The framework separates QA decision state from process-control state so model/conversation failure cannot erase workspace ownership, mutation transactions, resource budgets, or journal facts.
 
-That invariant applies during normal execution, transaction commit/rollback, crash recovery, and recovery inspection.
+That invariant applies during normal execution, transaction commit/rollback, crash recovery, recovery inspection, and integrity attestation.
 
 ## Workspace ownership
 
-A live run acquires an OS advisory lock whose metadata lives beneath trusted artifact storage rather than inside the target repository.
+A live run acquires an OS advisory lease whose metadata lives beneath trusted artifact storage rather than inside the target repository. On platforms with descriptor-relative no-follow filesystem support, the runtime also pins the target workspace root to its `(device, inode)` identity and holds a non-blocking advisory lock on that directory inode. The second lock prevents replacement of `.leases/` from creating a second cooperating authority for the same still-open workspace object.
 
 The lease path itself is part of the trust boundary:
 
 - `.leases/` must not be a symlink;
+- the lease-directory identity is pinned and revalidated during acquisition;
 - the per-workspace lock file must not be a symlink;
 - ownership is rechecked immediately before opening the file;
-- `O_NOFOLLOW` is used when the operating system supports it;
-- metadata is written through the locked file descriptor.
+- `O_NOFOLLOW` and descriptor-relative opens are used when the operating system supports them;
+- metadata is written through the locked file descriptor;
+- the target workspace root is revalidated against its pinned identity before and after lease acquisition; and
+- where descriptor-relative authority is available, the workspace directory inode remains locked for the lease lifetime in addition to the artifact-store lock file.
 
-The lease prevents cooperating framework processes from simultaneously holding mutation authority over the same worktree, but it is only the first layer. Autonomous writes also require a Git-backed isolated target, a content-sensitive workspace fingerprint, and unambiguous path ownership.
+The lease prevents cooperating framework processes from simultaneously holding mutation authority over the same worktree, but it is only the first layer. Autonomous writes also require a Git-backed isolated target, a content-sensitive workspace fingerprint, descriptor-pinned target-path ownership, and unambiguous mutation provenance.
+
+Trusted artifact storage remains a deployment-owned control-plane boundary. Repository code rejects ambiguous/symlinked control paths and validates persisted authority, but it does not claim to defend against an already-compromised operating-system account with arbitrary write authority over the trusted artifact root.
 
 ## Mutation transaction state machine
 
@@ -33,9 +38,9 @@ The lease prevents cooperating framework processes from simultaneously holding m
 stateDiagram-v2
     direction LR
     accTitle: Autonomous mutation transaction and crash-recovery state machine
-    accDescr: A mutation starts only from an owned baseline. Exact-path patch safety, exact-path-bound targeted pytest, and full regression must pass before commit. Failed or incomplete proof rolls back. A crashed transaction is automatically recovered only when workspace ownership, fingerprint, paths, and backup integrity remain provable; otherwise the runtime blocks for manual review.
+    accDescr: A mutation starts only from an owned baseline. Exact-path patch safety, exact-path-bound targeted pytest, and full regression must pass before commit. Failed or incomplete proof rolls back. A crashed transaction is automatically recovered only when workspace root identity, fingerprint, paths, and backup integrity remain provable; otherwise the runtime blocks for manual review.
 
-    [*] --> Baseline: owned lease + fingerprint
+    [*] --> Baseline: owned lease + root identity + fingerprint
 
     Baseline --> Blocked: non-Git / drift / policy denial / ambiguous path
     Baseline --> Pending: authorized mutation + owned rollback snapshot
@@ -60,9 +65,9 @@ stateDiagram-v2
     Targeted --> Crashed
     Regression --> Crashed
 
-    Crashed --> Recovered: exact fingerprint + owned paths + verified backup
+    Crashed --> Recovered: exact root identity + fingerprint + owned paths + verified backup
     Recovered --> Baseline: stale mutation reverted before new bootstrap
-    Crashed --> ManualReview: newer work / path ambiguity / integrity ambiguity
+    Crashed --> ManualReview: replacement workspace / newer work / path ambiguity / integrity ambiguity
 
     classDef active fill:#ddf4ff,stroke:#0969da,color:#24292f,stroke-width:2px
     classDef verified fill:#dafbe1,stroke:#1a7f37,color:#24292f,stroke-width:2px
@@ -77,7 +82,7 @@ stateDiagram-v2
 
 **State key:** blue = actively controlled transaction · green = deterministic proof/closure · purple = recovery path · red = fail-closed/manual intervention. State names remain explicit so color is supplementary.
 
-The state machine is asymmetric by design: preserving newer human work is more important than automatically cleaning an older agent transaction.
+The state machine is asymmetric by design: preserving newer human work or a replacement workspace is more important than automatically cleaning an older agent transaction.
 
 ## Mutation preparation
 
@@ -85,16 +90,18 @@ Only one autonomous mutation may remain pending at a time.
 
 Before a write, the runtime:
 
-1. validates the relative target path;
-2. rejects absolute paths and `..` traversal;
-3. rejects symlink components before resolution;
-4. confirms the resolved target remains inside the workspace;
-5. independently applies the same ownership check inside the reusable safe patcher;
-6. confirms no prior mutation is unresolved;
-7. rejects a symlinked rollback directory;
-8. snapshots existing bytes when the target already exists;
-9. bounds rollback snapshot size and records SHA-256;
-10. persists pending-mutation metadata before the candidate revision is trusted.
+1. pins the workspace root identity where descriptor-relative authority is available;
+2. validates the relative target path;
+3. rejects absolute paths and `..` traversal;
+4. rejects symlink components before resolution;
+5. confirms the resolved target remains inside the workspace;
+6. binds the pending mutation to the same workspace-root identity used during authorization;
+7. independently applies the same ownership check inside the reusable safe patcher;
+8. confirms no prior mutation is unresolved;
+9. rejects a symlinked rollback directory;
+10. snapshots existing bytes when the target already exists;
+11. bounds rollback snapshot size and records SHA-256;
+12. persists pending-mutation metadata, including root authority, before the candidate revision is trusted.
 
 New files are tracked as absent-before-mutation so rollback removes them rather than manufacturing previous content.
 
@@ -146,6 +153,7 @@ For an existing file, rollback does not trust persisted path metadata blindly.
 
 Before restore—or before discarding a backup after successful closure—the runtime verifies:
 
+- the workspace root still matches the identity bound to the pending mutation where that authority is available;
 - rollback directory is still owned and not a symlink;
 - backup metadata exists;
 - backup path remains beneath the trusted rollback directory;
@@ -153,7 +161,7 @@ Before restore—or before discarding a backup after successful closure—the ru
 - backup is a regular file;
 - SHA-256 of backup bytes matches the original recorded digest.
 
-If a transaction begins safely and the rollback directory is later replaced by a symlink, restore/commit is refused. The framework does not follow the new alias.
+If a transaction begins safely and the target workspace or rollback directory is later replaced, restore/commit is refused. The framework does not redirect authority to the replacement pathname.
 
 If any integrity check fails, the pending transaction is preserved and the framework escalates rather than performing a best-effort overwrite.
 
@@ -175,15 +183,18 @@ Recovery validates the complete ownership chain before touching the target.
 
 - pending mutation metadata is structurally usable;
 - persisted post-mutation fingerprint exists;
-- current workspace fingerprint exactly matches it.
+- current workspace fingerprint exactly matches it;
+- on platforms that can enforce descriptor-relative filesystem authority, persisted `workspace_root_identity` is mandatory rather than optional legacy metadata; and
+- current `(device, inode)` identity must exactly match that persisted authority before rollback and again before recovery closure.
 
-A mismatch means newer human/out-of-band work may exist, so automatic rollback is refused.
+A fingerprint mismatch means newer human/out-of-band work may exist. A root-identity mismatch means the same pathname may now designate a replacement workspace. Either condition blocks automatic rollback.
 
 ### Target ownership
 
 - pending target path is relative and non-traversing;
 - no path component is a symlink;
-- resolved target remains inside the workspace.
+- target traversal and publication use descriptor-relative no-follow filesystem authority where supported;
+- resolved target remains inside the authorized workspace object.
 
 ### Backup ownership
 
@@ -223,12 +234,12 @@ A later successful invocation resets the circuit. A broken provider/tool therefo
 
 | Record | Purpose | Ownership rule |
 |---|---|---|
-| `state.json` | canonical QA decision/evidence state | recovery/attestation reject ambiguous symlink ownership |
-| `runtime.json` | lease, fingerprint, budgets, circuits, mutation metadata, journal head | stale recovery requires owned metadata; writes/restores are size-bounded |
+| `state.json` | canonical QA decision/evidence state | recovery/attestation reject ambiguous symlink ownership; trusted artifact storage remains deployment-owned |
+| `runtime.json` | lease, workspace-root identity, fingerprint, budgets, circuits, mutation metadata, journal head | stale recovery requires owned metadata plus root/fingerprint subject binding; writes/restores are size-bounded |
 | `journal.jsonl` | append-only hash-chained lifecycle/tool events | journal rejects pre-existing and post-init symlink substitution and byte-bounds records |
-| `evidence-manifest.json` | evidence/artifact identities and hashes | evidence store rejects symlink control-file substitution and enforces bounded registries |
+| `evidence-manifest.json` | evidence/artifact identities and hashes | evidence store rejects symlink control-file substitution, strict-JSON ambiguity, cross-run records, and bounded-registry violations |
 | `rollback/` | temporary authoritative prior bytes | directory + backup ownership, size, and hashes are revalidated |
-| `.leases/*.lock` | cross-process workspace ownership | directory/file symlink ownership rejected |
+| `.leases/*.lock` | cross-process workspace ownership | lease-directory/file identities are revalidated; POSIX-capable runtimes additionally lock the target workspace inode |
 
 Keeping these concerns separate prevents process recovery metadata from becoming test evidence or a QA conclusion.
 
@@ -240,7 +251,7 @@ ai-qa recover artifacts/run-<id>
 
 Recovery inspection uses the same subject-bound closure rule as live terminal evaluation. A changed revision is closed only when one exact patch target has patch-safety PASS, targeted pytest is bound to that target, regression passed, and no pending mutation remains.
 
-The inspection path also rejects symlinked run/state/runtime/journal control paths rather than following ambiguous aliases.
+The inspection path also rejects symlinked run/state/runtime/journal control paths and, where descriptor-relative identity is available, requires persisted workspace-root identity to match the current workspace before declaring the run recoverable. Recreating byte-equivalent content at the same pathname is not sufficient subject identity.
 
 It does not replay or reconstruct hidden Claude conversational state; it decides whether a **new** session may safely begin from persisted evidence.
 
@@ -248,8 +259,9 @@ It does not replay or reconstruct hidden Claude conversational state; it decides
 
 | Condition | Framework response |
 |---|---|
-| Another process owns target lease | `BLOCKED` |
+| Another process owns target lease/inode | `BLOCKED` |
 | Lease path ownership is ambiguous | infrastructure/lease failure before agent execution |
+| Workspace root identity changes after authorization | `BLOCKED` / manual reconciliation |
 | Workspace drift before mutation | `BLOCKED` |
 | Target path has traversal/symlink ambiguity | `BLOCKED` |
 | Rollback directory/backup ownership is ambiguous | mutation or recovery refused |
@@ -258,6 +270,7 @@ It does not replay or reconstruct hidden Claude conversational state; it decides
 | Tool circuit open | tool action denied |
 | Revision cannot close | rollback before terminal report |
 | Human/out-of-band edit after crash | preserve newer work; manual review |
+| Replacement workspace at same pathname | preserve replacement; manual review |
 | Rollback integrity cannot be guaranteed | `INFRASTRUCTURE_FAILURE` |
 | Journal integrity is invalid | recovery cannot be represented as clean |
 

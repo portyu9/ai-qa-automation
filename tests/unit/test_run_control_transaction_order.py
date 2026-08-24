@@ -108,14 +108,8 @@ def test_commit_cleanup_failure_cannot_resurrect_pending_metadata(
     assert control.pending_mutation is not None
     backup = Path(str(control.pending_mutation.backup_path))
     target.write_text("validated candidate\n", encoding="utf-8")
-    original_unlink = Path.unlink
 
-    def guarded_unlink(path: Path, *args: object, **kwargs: object) -> None:
-        if path == backup:
-            raise OSError("cleanup denied")
-        original_unlink(path, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "unlink", guarded_unlink)
+    monkeypatch.setattr(control, "_discard_backup_best_effort", lambda _backup: False)
 
     assert control.commit_pending_mutation() == "tests/test_checkout.py"
 

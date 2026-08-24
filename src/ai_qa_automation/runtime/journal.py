@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from ..io_safety import fsync_directory, open_regular_binary
+from ..io_safety import fsync_directory, open_regular_binary, parse_json_object_strict
 from ..redaction import sanitize
 from ..telemetry import (
     record_mcp_outcome,
@@ -23,6 +23,55 @@ from .budget import BudgetExceededError
 _MAX_JOURNAL_LINE_BYTES = 1_000_000
 _MAX_JOURNAL_BYTES = 64_000_000
 _MAX_RESTORE_EVENTS = 100_000
+_LOWER_HEX = frozenset("0123456789abcdef")
+
+
+def validate_runtime_journal_binding(
+    runtime_metadata: dict[str, Any],
+    journal_status: dict[str, Any],
+) -> dict[str, Any]:
+    """Bind a verified journal to the exact head/count persisted by RuntimeControl."""
+    if journal_status.get("valid") is not True:
+        return {"valid": False, "reason": "journal hash chain is invalid"}
+    if "journal_event_count" not in runtime_metadata:
+        return {"valid": False, "reason": "runtime journal_event_count authority is missing"}
+    expected_events = runtime_metadata["journal_event_count"]
+    if type(expected_events) is not int or expected_events < 0:
+        return {"valid": False, "reason": "runtime journal_event_count authority is invalid"}
+    if "journal_head_hash" not in runtime_metadata:
+        return {"valid": False, "reason": "runtime journal_head_hash authority is missing"}
+    expected_head = runtime_metadata["journal_head_hash"]
+    if expected_head is not None and (
+        not isinstance(expected_head, str)
+        or len(expected_head) != 64
+        or any(character not in _LOWER_HEX for character in expected_head)
+    ):
+        return {"valid": False, "reason": "runtime journal_head_hash authority is invalid"}
+    if expected_events == 0 and expected_head is not None:
+        return {"valid": False, "reason": "empty runtime journal must not have a head hash"}
+    if expected_events > 0 and expected_head is None:
+        return {"valid": False, "reason": "non-empty runtime journal is missing its head hash"}
+
+    actual_events = journal_status.get("events")
+    actual_head = journal_status.get("head_hash")
+    if type(actual_events) is not int or actual_events < 0:
+        return {"valid": False, "reason": "verified journal event count is invalid"}
+    if actual_head is not None and not isinstance(actual_head, str):
+        return {"valid": False, "reason": "verified journal head hash is invalid"}
+    if actual_events != expected_events or actual_head != expected_head:
+        return {
+            "valid": False,
+            "reason": "runtime journal authority does not match persisted journal",
+            "expected_events": expected_events,
+            "actual_events": actual_events,
+            "expected_head_hash": expected_head,
+            "actual_head_hash": actual_head,
+        }
+    return {
+        "valid": True,
+        "events": expected_events,
+        "head_hash": expected_head,
+    }
 
 
 def _record_event_metrics(event: str, payload: dict[str, Any]) -> None:
@@ -206,10 +255,12 @@ class RunJournal:
                     if count >= restore_limit:
                         return {"valid": False, "events": count, "head_hash": previous}
                     try:
-                        record = json.loads(raw.decode("utf-8"))
-                        if not isinstance(record, dict):
-                            return {"valid": False, "events": count, "head_hash": previous}
-                        if record.get("seq") != expected_seq:
+                        record = parse_json_object_strict(
+                            raw.decode("utf-8"),
+                            label=f"run journal record {expected_seq}",
+                        )
+                        sequence = record.get("seq")
+                        if type(sequence) is not int or sequence != expected_seq:
                             return {"valid": False, "events": count, "head_hash": previous}
                         body = {key: value for key, value in record.items() if key != "record_hash"}
                         canonical = json.dumps(

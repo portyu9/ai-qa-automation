@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 
-import ai_qa_automation.runtime.run_control as run_control_module
+import ai_qa_automation.fs_authority as fs_authority
 from ai_qa_automation.models import AgentRunState
 from ai_qa_automation.runtime.budget import ExecutionBudget
 from ai_qa_automation.runtime.journal import RunJournal
@@ -75,18 +76,21 @@ def test_new_file_rollback_flushes_existing_parent_after_removal(
     target = control.workspace / relative
     target.parent.mkdir(parents=True)
     target.write_text("def test_generated():\n    assert True\n", encoding="utf-8")
+    parent_stat = target.parent.stat(follow_symlinks=False)
+    parent_identity = (parent_stat.st_dev, parent_stat.st_ino)
 
-    flushed: list[Path] = []
-    real_fsync_directory = run_control_module.fsync_directory
+    flushed: list[tuple[int, int]] = []
+    real_fsync = os.fsync
 
-    def record_fsync(path: Path) -> None:
-        flushed.append(path)
-        real_fsync_directory(path)
+    def record_fsync(fd: int) -> None:
+        current = os.fstat(fd)
+        flushed.append((current.st_dev, current.st_ino))
+        real_fsync(fd)
 
-    monkeypatch.setattr(run_control_module, "fsync_directory", record_fsync)
+    monkeypatch.setattr(fs_authority.os, "fsync", record_fsync)
     rolled_back = control.rollback_pending_mutation(reason="validation failed")
 
     assert rolled_back == relative
     assert not target.exists()
-    assert target.parent in flushed
+    assert parent_identity in flushed
     assert control.pending_mutation is None

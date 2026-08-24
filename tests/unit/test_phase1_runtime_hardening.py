@@ -207,6 +207,7 @@ def test_stale_recovery_retains_backup_until_runtime_closure_is_durable(
     artifact_root = tmp_path / "artifacts"
     workspace = tmp_path / "sut"
     workspace.mkdir()
+    workspace_status = workspace.stat(follow_symlinks=False)
     target = workspace / "tests" / "test_checkout.py"
     target.parent.mkdir(parents=True)
     target.write_text("mutated\n", encoding="utf-8")
@@ -216,11 +217,18 @@ def test_stale_recovery_retains_backup_until_runtime_closure_is_durable(
     backup.parent.mkdir(parents=True)
     original = b"original\n"
     backup.write_bytes(original)
+    journal = RunJournal(prior_run / "journal.jsonl")
+    journal.append("mutation_prepared")
     runtime_path = prior_run / "runtime.json"
     runtime_payload = {
         "workspace": str(workspace.resolve()),
+        "workspace_root_identity": {
+            "device": workspace_status.st_dev,
+            "inode": workspace_status.st_ino,
+        },
         "workspace_fingerprint": "fp-after-mutation",
-        "journal_event_count": 0,
+        "journal_event_count": journal.event_count,
+        "journal_head_hash": journal.head_hash,
         "pending_mutation": {
             "relative_path": "tests/test_checkout.py",
             "existed": True,

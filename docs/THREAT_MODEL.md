@@ -27,7 +27,7 @@ The engineering target is therefore **containment and truth preservation**, not 
 | **Target integrity** | source, tests, developer worktree changes, target data |
 | **Control authority** | policy, hooks, Skills, schemas, thresholds, trusted configuration |
 | **QA truth** | canonical state, validation lineage, failure classification, terminal outcome |
-| **Recovery state** | runtime metadata, leases, fingerprints, rollback backups |
+| **Recovery state** | runtime metadata, leases, workspace-root identity, fingerprints, rollback backups |
 | **Evidence** | logs, screenshots, manifests, artifacts, journals, audit records |
 | **External systems** | GitHub, Jira/Confluence, CI, API/browser/load/mobile targets |
 | **Resource budgets** | model cost, wall time, tool/network/mutation/retry budgets |
@@ -39,21 +39,21 @@ The engineering target is therefore **containment and truth preservation**, not 
 ```mermaid
 flowchart LR
     accTitle: Threat-model trust zones across control plane, untrusted target, providers, and deployment infrastructure
-    accDescr: The trusted control plane reaches deterministic policy, tools, and evidence. That surface interacts with the untrusted SUT and approved external providers, while deployment infrastructure independently supplies isolation, egress, identity, secret, and environment controls.
+    accDescr: The trusted control plane reaches deterministic policy, tools, and evidence. That surface interacts with the untrusted SUT and approved external providers, while deployment infrastructure independently supplies isolation, egress, identity, secret, trusted-artifact-storage, and environment controls.
 
     C[Trusted control plane] --> P[Policy + tools + evidence]
     P <--> T[Untrusted SUT / repository]
     P <--> X[Approved external providers]
     D[Deployment infrastructure] -. isolation / egress / identity / secrets .-> P
-    D -. environment controls .-> T
+    D -. artifact-root ownership / environment controls .-> T
 ```
 
 | Zone | Trust posture |
 |---|---|
-| **Control plane** | trusted framework code/configuration that defines authority |
+| **Control plane** | trusted framework code/configuration and trusted artifact storage that define/persist authority |
 | **Target / SUT** | untrusted data, even when content looks like instructions or configuration |
 | **External integrations** | provider identity explicitly approved; returned content remains untrusted evidence |
-| **Deployment infrastructure** | independent enforcement domain for process/container/network/identity/secrets/retention |
+| **Deployment infrastructure** | independent enforcement domain for process/container/network/identity/secrets/retention and artifact-root ownership |
 
 > [!NOTE]
 > “Trusted provider,” “trusted bytes,” “authorized action,” and “verified QA success” are different claims and are never collapsed into one another.
@@ -76,9 +76,11 @@ An apparently read-only operation may hide a write/destructive verb, or a provid
 
 ### 3. Filesystem ownership substitution
 
-Traversal, symlinks, stale aliases, or replaced artifact paths may redirect a write outside its intended ownership boundary.
+Traversal, symlinks, stale aliases, byte-equivalent replacement workspaces, or replaced lease/control paths may redirect a write or make evidence appear bound to the wrong subject.
 
-**Controls:** lexical + resolved confinement, path-component symlink rejection, no-follow lease opening where supported, owned rollback directories/backups, journal/evidence/attestation ownership checks, and exact run-root confinement.
+**Controls:** lexical + resolved confinement, path-component symlink rejection, descriptor-relative no-follow mutation/recovery I/O where supported, persisted workspace `(device, inode)` authority, target-inode advisory locking, owned rollback directories/backups, journal/evidence/attestation ownership checks, and exact run-root confinement.
+
+Trusted artifact storage remains a deployment-owned control-plane boundary. The repository does not claim protection from an operating-system identity that already has arbitrary write authority over that trusted storage root.
 
 ### 4. False validation / stale evidence
 
@@ -106,9 +108,9 @@ A model may consume one failure path indefinitely.
 
 ### 8. Evidence tampering / provenance confusion
 
-Persisted bytes may be replaced, cross-run data mixed, or integrity metadata overstated.
+Persisted bytes may be replaced, cross-run data mixed, ambiguous JSON decoded with last-key-wins semantics, or integrity metadata overstated.
 
-**Controls:** immutable evidence IDs/paths, content hashes, hash-chained journal, regulated audit chain, symlink-resistant artifact ownership, artifact hash verification, and unsigned attestation semantics that do not claim identity or PASS.
+**Controls:** strict authority JSON parsing, typed persisted record validation, immutable evidence IDs/paths, content hashes, hash-chained journal, runtime journal-head binding, regulated audit chain, run-bound lineage, symlink-resistant artifact ownership, artifact hash verification, workspace-root attestation, and unsigned attestation semantics that do not claim identity or PASS.
 
 ---
 
@@ -123,11 +125,15 @@ Persisted bytes may be replaced, cross-run data mixed, or integrity metadata ove
 | Runtime self-policy weakening | authority-bearing paths protected; no generic autonomous rewrite capability |
 | Destructive Git/system mutation | no runtime Bash; destructive action policy; test-path-only writes |
 | Filesystem traversal | lexical + resolved confinement for target, run, artifact, rollback, recovery paths |
-| Symlink redirection during live mutation | component-by-component symlink rejection before transaction preparation |
+| Symlink redirection during live mutation | component-by-component rejection plus descriptor-relative no-follow mutation I/O |
+| Workspace-root replacement after authorization | persisted `(device, inode)` binding + descriptor-pinned mutation/recovery operations |
 | Symlinked rollback directory | live and stale recovery reject rollback-root ownership substitution |
 | Symlinked lease file/directory | lease ownership checks + no-follow open where available |
+| Lease-directory namespace replacement creates second lock | workspace-root inode advisory lock remains authoritative on supported POSIX runtimes |
 | Symlinked runtime journal | construction/append/verify reject journal symlink target |
 | Symlinked evidence artifact with valid bytes | ownership verification rejects symlink replacement even if digest matches |
+| Ambiguous duplicate-key persisted JSON | shared strict parser rejects duplicate keys recursively and non-standard numeric constants |
+| Cross-run evidence contaminates lineage | lineage manifest/run binding + typed evidence/artifact validation + duplicate identity rejection |
 | False product-defect attribution | evidence-weighted deterministic classification + insufficient-evidence outcome |
 | Model-inflated locator confidence | Playwright owns uniqueness; deterministic semantic/stability policy owns authorization |
 | Wrong nearby locator repair | same-DOM evidence + syntax/semantic/stability checks + exact file/hash binding |
@@ -140,11 +146,12 @@ Persisted bytes may be replaced, cross-run data mixed, or integrity metadata ove
 | Retry hides contradiction | same-gate same-revision PASS/FAIL -> `NOT_VERIFIED` |
 | Old evidence certifies new bytes | revision lineage + current-revision closure |
 | Regression under-selection | mandatory coverage preserved; uncertainty broadens selection |
-| Concurrent agent corruption | OS-backed lease + content-sensitive fingerprint |
+| Concurrent agent corruption | artifact-store OS lock + target-workspace inode lock where supported + content-sensitive fingerprint |
 | Crash overwrites newer human work | stale rollback requires exact post-mutation fingerprint match |
+| Crash targets byte-equivalent replacement workspace | stale rollback requires exact persisted workspace-root identity on supported platforms |
 | Rollback backup substitution | rollback-root confinement + non-symlink ownership + SHA-256 verification |
-| Recovery CLI reports weaker closure than runtime | recovery uses exact-path target binding + full regression semantics |
-| Cross-run evidence contamination | confined run roots + immutable IDs/paths + run IDs |
+| Recovery CLI reports weaker closure than runtime | recovery uses exact-path target binding + full regression semantics + workspace-root subject binding |
+| Cross-run evidence contamination | confined run roots + immutable IDs/paths + run IDs + strict lineage manifest binding |
 | Rogue/community MCP | vendor-official allowlist + strict explicit registry |
 | Excessive MCP privilege | provider identity separated from action authorization |
 | Action-name privilege smuggling | camel/snake/mixed tokenization; destructive > write > read; noun collisions handled |
@@ -157,6 +164,7 @@ Persisted bytes may be replaced, cross-run data mixed, or integrity metadata ove
 | Unbounded autonomous loop | independent budgets + per-tool circuits |
 | Supply-chain vulnerability | deliberate provenance/version review + compatibility/vulnerability/static/secret gates |
 | Integrity hash misrepresented as identity/PASS | unsigned attestation explicitly separates integrity from signing/correctness |
+| Attestation says “verified” after workspace-root substitution | persisted root identity must match the current workspace before integrity verification |
 | Attestation says “verified” while artifact was changed | registered artifact bytes are re-hashed and ownership-checked before integrity verification |
 
 ---
@@ -179,12 +187,17 @@ The strongest regression and holdout cases attack assumptions rather than syntax
 - a JS/TS generated test attempting to enter live autonomous pytest commit closure;
 - a targeted pytest run selecting a different file than the pending mutation;
 - an autonomous write redirected through a symlink;
+- a byte-equivalent replacement workspace created at the same pathname after mutation authorization;
+- persisted stale-recovery root identity removed to attempt an authority downgrade;
+- `.leases/` replaced after one process acquires its lock to attempt a second lock namespace;
 - a trusted rollback directory replaced by a symlink;
 - a journal/lease file replaced by a symlink;
 - a registered artifact replaced by a symlink to matching bytes;
 - a stale rollback redirected after a crash;
 - a tampered rollback backup with correct path but wrong bytes;
 - a developer edit after an agent crash;
+- duplicate JSON keys attempting last-key-wins authority substitution;
+- cross-run or malformed evidence records attempting to enter the lineage graph;
 - low-confidence test-impact data attempting to shrink regression scope;
 - wildcard, URL-shaped, scoped-IPv6, or malformed dotted network configuration;
 - a k6 script dynamically constructing an external host while the declared target is localhost;
@@ -207,6 +220,7 @@ Repository code cannot independently establish every property of a deployed syst
 - outbound firewall/proxy/network policy;
 - organization identity and secret lifecycle;
 - provider-side authentication/authorization;
+- trusted artifact-root ownership and protection from arbitrary same-account writers;
 - artifact encryption, access, retention, backup, and destruction;
 - legal/compliance controls;
 - target-application authorization and data policy;

@@ -6,12 +6,26 @@ from pathlib import Path
 
 import pytest
 
+from ai_qa_automation.runtime.journal import RunJournal
 from ai_qa_automation.runtime.stale_recovery import recover_stale_mutation
 
 
-def write_runtime(path: Path, payload: dict[str, object]) -> None:
+def write_runtime(
+    path: Path,
+    payload: dict[str, object],
+    *,
+    bind_journal: bool = True,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    rendered = dict(payload)
+    pending = rendered.get("pending_mutation")
+    if bind_journal and isinstance(pending, dict) and pending:
+        journal = RunJournal(path.parent / "journal.jsonl")
+        if journal.event_count == 0:
+            journal.append("mutation_prepared")
+        rendered["journal_event_count"] = journal.event_count
+        rendered["journal_head_hash"] = journal.head_hash
+    path.write_text(json.dumps(rendered, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def stale_runtime_payload(
@@ -23,10 +37,13 @@ def stale_runtime_payload(
     original_sha256: str | None = None,
     fingerprint: str = "fp",
 ) -> dict[str, object]:
+    status = workspace.stat(follow_symlinks=False)
     return {
         "workspace": str(workspace.resolve()),
+        "workspace_root_identity": {"device": status.st_dev, "inode": status.st_ino},
         "workspace_fingerprint": fingerprint,
         "journal_event_count": 0,
+        "journal_head_hash": None,
         "pending_mutation": {
             "relative_path": relative_path,
             "existed": existed,
@@ -84,6 +101,9 @@ def test_stale_existing_file_mutation_is_restored_when_fingerprint_matches(tmp_p
     assert metadata["pending_mutation"] is None
     assert metadata["recovered_by_run_id"] == "run-new"
     assert metadata["recovered_at"]
+    journal = RunJournal(prior_run / "journal.jsonl")
+    assert metadata["journal_event_count"] == journal.event_count
+    assert metadata["journal_head_hash"] == journal.head_hash
 
 
 def test_operator_edit_after_crash_blocks_automatic_rollback(tmp_path: Path) -> None:
@@ -141,6 +161,32 @@ def test_stale_unverified_new_file_is_removed(tmp_path: Path) -> None:
 
     assert result["status"] == "RECOVERED"
     assert not target.exists()
+
+
+def test_hash_valid_journal_mismatch_blocks_before_stale_rollback(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+    target = workspace / "tests" / "test_generated.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("generated but unverified\n", encoding="utf-8")
+
+    prior_run = artifact_root / "run-old"
+    write_runtime(
+        prior_run / "runtime.json",
+        stale_runtime_payload(
+            workspace,
+            relative_path="tests/test_generated.py",
+            existed=False,
+        ),
+    )
+    RunJournal(prior_run / "journal.jsonl").append("unexpected_valid_event")
+
+    result = recover(artifact_root, workspace)
+
+    assert result["status"] == "BLOCKED"
+    assert "runtime journal authority does not match persisted journal" in str(result["reason"])
+    assert target.exists()
 
 
 def test_stale_recovery_rejects_symlinked_target_alias(tmp_path: Path) -> None:
@@ -274,6 +320,7 @@ def test_stale_recovery_rejects_symlinked_journal_before_mutation(tmp_path: Path
             relative_path="tests/test_generated.py",
             existed=False,
         ),
+        bind_journal=False,
     )
     outside_journal = tmp_path / "outside-journal.jsonl"
     outside_journal.write_text("do not touch\n", encoding="utf-8")

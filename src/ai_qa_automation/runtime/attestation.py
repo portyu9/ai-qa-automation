@@ -6,13 +6,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from ..io_safety import read_text_bounded, sha256_file_bounded
-from .journal import RunJournal
+from ..fs_authority import descriptor_relative_authority_supported, pin_directory_identity
+from ..io_safety import read_json_object_bounded, sha256_file_bounded
+from ..models import ArtifactRecord, EvidenceItem
+from ..state import StateStore
+from .journal import RunJournal, validate_runtime_journal_binding
 
 _MAX_STATE_BYTES = 16_000_000
 _MAX_MANIFEST_BYTES = 16_000_000
 _MAX_RUNTIME_BYTES = 2_000_000
 _MAX_JOURNAL_BYTES = 64_000_000
+_MAX_EVIDENCE_COUNT = 10_000
 _MAX_ARTIFACT_BYTES = 32_000_000
 _MAX_ARTIFACT_COUNT = 5_000
 _MAX_TOTAL_ARTIFACT_BYTES = 256_000_000
@@ -37,7 +41,10 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
     if not state_path.is_file():
         raise FileNotFoundError("state.json is required for attestation")
 
-    state = _load_object(state_path, max_bytes=_MAX_STATE_BYTES)
+    # Canonical state must have one interpretation everywhere. Reuse StateStore's
+    # ambiguity guard and strict JSON-mode schema validation rather than treating
+    # attestation as a weaker parallel state reader.
+    state = StateStore(state_path).load().model_dump(mode="json")
     runtime = (
         _load_object(runtime_path, max_bytes=_MAX_RUNTIME_BYTES) if runtime_path.is_file() else {}
     )
@@ -45,6 +52,17 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
         _load_object(manifest_path, max_bytes=_MAX_MANIFEST_BYTES)
         if manifest_path.is_file()
         else {}
+    )
+    manifest_integrity, evidence_records, artifact_records = _validate_manifest_structure(
+        manifest,
+        expected_run_id=state["run_id"],
+        present=manifest_path.is_file(),
+    )
+    workspace_integrity = _validate_runtime_workspace(
+        state.get("workspace"),
+        runtime.get("workspace"),
+        runtime.get("workspace_root_identity"),
+        root_identity_present="workspace_root_identity" in runtime,
     )
 
     try:
@@ -54,14 +72,15 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
             journal = RunJournal(journal_path, regulated_mode=False).verify()
     except (OSError, UnicodeError, json.JSONDecodeError, RuntimeError, ValueError) as exc:
         journal = {"valid": False, "reason": f"{type(exc).__name__}"}
+    journal_binding = validate_runtime_journal_binding(runtime, journal)
 
     artifact_integrity = (
-        _verify_manifest_artifacts(root, manifest)
-        if manifest_path.is_file()
+        _verify_manifest_artifacts(root, artifact_records)
+        if manifest_integrity["valid"]
         else {
             "valid": False,
             "checked": 0,
-            "reason": "evidence-manifest.json is missing",
+            "reason": "evidence manifest failed structural validation",
         }
     )
     subjects = {
@@ -83,13 +102,21 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
         ),
     }
     subjects_complete = all(value is not None for value in subjects.values())
-    pending_mutation = runtime.get("pending_mutation") if isinstance(runtime, dict) else None
+    pending_mutation_present = "pending_mutation" in runtime
+    pending_mutation = runtime.get("pending_mutation")
+    pending_mutation_authority_valid = pending_mutation_present and (
+        pending_mutation is None or (isinstance(pending_mutation, dict) and bool(pending_mutation))
+    )
     terminal_status = state.get("terminal_status")
     integrity_verified = (
         subjects_complete
         and bool(journal.get("valid"))
+        and bool(journal_binding.get("valid"))
+        and bool(manifest_integrity.get("valid"))
         and bool(artifact_integrity.get("valid"))
-        and pending_mutation in (None, {}, False)
+        and bool(workspace_integrity.get("valid"))
+        and pending_mutation_authority_valid
+        and pending_mutation is None
     )
 
     core: dict[str, Any] = {
@@ -112,26 +139,17 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
             "terminal_status": terminal_status,
             "terminal_reason": state.get("terminal_reason"),
             "change_revision": state.get("change_revision"),
-            "validation_count": (
-                len(state.get("validation_results", []))
-                if isinstance(state.get("validation_results"), list)
-                else 0
-            ),
-            "evidence_count": (
-                len(manifest.get("evidence", []))
-                if isinstance(manifest.get("evidence"), list)
-                else 0
-            ),
-            "artifact_count": (
-                len(manifest.get("artifacts", []))
-                if isinstance(manifest.get("artifacts"), list)
-                else 0
-            ),
+            "validation_count": len(state.get("validation_results", [])),
+            "evidence_count": len(evidence_records),
+            "artifact_count": len(artifact_records),
         },
         "integrity": {
             "journal": journal,
+            "journal_binding": journal_binding,
+            "manifest": manifest_integrity,
             "artifacts": artifact_integrity,
-            "pending_mutation": bool(pending_mutation),
+            "workspace": workspace_integrity,
+            "pending_mutation": pending_mutation is not None,
             "persisted_subjects": subjects,
             "subjects_complete": subjects_complete,
             "integrity_verified": integrity_verified,
@@ -147,13 +165,144 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
         "generated_at": datetime.now(UTC).isoformat(),
         "attestation_digest": f"sha256:{hashlib.sha256(canonical).hexdigest()}",
         "interpretation": (
-            "Owned persisted subjects, the journal chain, and registered artifact hashes passed "
-            "the available integrity checks. This does not change the run terminal status or prove "
+            "Owned persisted subjects, workspace identity, the journal chain and recorded journal "
+            "head, structurally valid evidence manifest, and registered artifact hashes passed the "
+            "available integrity checks. This does not change the run terminal status or prove "
             "environment-dependent capabilities."
             if integrity_verified
             else "One or more persisted run-integrity checks are incomplete or failed."
         ),
     }
+
+
+def _validate_manifest_structure(
+    manifest: dict[str, Any],
+    *,
+    expected_run_id: str,
+    present: bool,
+) -> tuple[dict[str, Any], list[EvidenceItem], list[ArtifactRecord]]:
+    if not present:
+        return (
+            {"valid": False, "reason": "evidence-manifest.json is missing"},
+            [],
+            [],
+        )
+    run_id = manifest.get("run_id")
+    if not isinstance(run_id, str) or run_id != expected_run_id:
+        return ({"valid": False, "reason": "evidence manifest run_id mismatch"}, [], [])
+    regulated_mode = manifest.get("regulated_mode")
+    if type(regulated_mode) is not bool:
+        return (
+            {"valid": False, "reason": "evidence manifest regulated_mode must be a boolean"},
+            [],
+            [],
+        )
+    raw_evidence = manifest.get("evidence")
+    raw_artifacts = manifest.get("artifacts")
+    if not isinstance(raw_evidence, list) or not isinstance(raw_artifacts, list):
+        return (
+            {"valid": False, "reason": "evidence manifest registries must be lists"},
+            [],
+            [],
+        )
+    if len(raw_evidence) > _MAX_EVIDENCE_COUNT:
+        return (
+            {"valid": False, "reason": "evidence manifest exceeds evidence count limit"},
+            [],
+            [],
+        )
+    if len(raw_artifacts) > _MAX_ARTIFACT_COUNT:
+        return (
+            {"valid": False, "reason": "evidence manifest exceeds artifact count limit"},
+            [],
+            [],
+        )
+    try:
+        evidence_records = [
+            EvidenceItem.model_validate_json(json.dumps(raw), strict=True) for raw in raw_evidence
+        ]
+        artifact_records = [
+            ArtifactRecord.model_validate_json(json.dumps(raw), strict=True)
+            for raw in raw_artifacts
+        ]
+    except (TypeError, ValueError) as exc:
+        return (
+            {
+                "valid": False,
+                "reason": f"evidence manifest record schema is invalid: {type(exc).__name__}",
+            },
+            [],
+            [],
+        )
+    if any(item.run_id != run_id for item in evidence_records):
+        return (
+            {"valid": False, "reason": "evidence manifest contains evidence from another run"},
+            [],
+            [],
+        )
+    if len({item.id for item in evidence_records}) != len(evidence_records):
+        return ({"valid": False, "reason": "evidence manifest has duplicate evidence ids"}, [], [])
+    if len({item.artifact_id for item in artifact_records}) != len(artifact_records):
+        return ({"valid": False, "reason": "evidence manifest has duplicate artifact ids"}, [], [])
+    if len({item.path for item in artifact_records}) != len(artifact_records):
+        return (
+            {"valid": False, "reason": "evidence manifest has duplicate artifact paths"},
+            [],
+            [],
+        )
+    return (
+        {
+            "valid": True,
+            "regulated_mode": regulated_mode,
+            "evidence_records": len(evidence_records),
+            "artifact_records": len(artifact_records),
+        },
+        evidence_records,
+        artifact_records,
+    )
+
+
+def _validate_runtime_workspace(
+    state_workspace: object,
+    runtime_workspace: object,
+    runtime_root_identity: object,
+    *,
+    root_identity_present: bool,
+) -> dict[str, object]:
+    if not isinstance(state_workspace, str) or not state_workspace.strip():
+        return {"valid": False, "reason": "canonical state workspace identity is invalid"}
+    if not isinstance(runtime_workspace, str) or not runtime_workspace.strip():
+        return {"valid": False, "reason": "runtime workspace identity is missing or invalid"}
+    try:
+        expected = Path(state_workspace).expanduser().resolve()
+        observed = Path(runtime_workspace).expanduser().resolve()
+    except (OSError, RuntimeError):
+        return {"valid": False, "reason": "workspace identity could not be resolved"}
+    if observed != expected:
+        return {"valid": False, "reason": "runtime workspace identity mismatch"}
+    if not root_identity_present or runtime_root_identity is None:
+        return {"valid": False, "reason": "runtime workspace root identity authority is missing"}
+    if not isinstance(runtime_root_identity, dict) or set(runtime_root_identity) != {
+        "device",
+        "inode",
+    }:
+        return {"valid": False, "reason": "runtime workspace root identity authority is invalid"}
+    device = runtime_root_identity.get("device")
+    inode = runtime_root_identity.get("inode")
+    if type(device) is not int or type(inode) is not int or device < 0 or inode < 0:
+        return {"valid": False, "reason": "runtime workspace root identity authority is invalid"}
+    if not descriptor_relative_authority_supported():
+        return {
+            "valid": False,
+            "reason": "runtime workspace root identity cannot be verified on this platform",
+        }
+    try:
+        current_identity = pin_directory_identity(expected, label="attestation workspace")
+    except (OSError, RuntimeError, ValueError):
+        return {"valid": False, "reason": "runtime workspace root identity could not be verified"}
+    if current_identity != (device, inode):
+        return {"valid": False, "reason": "runtime workspace root identity mismatch"}
+    return {"valid": True}
 
 
 def _owned_subject(root: Path, name: str) -> Path:
@@ -182,28 +331,17 @@ def _owned_artifact_path(root: Path, relative_path: str) -> Path:
     return resolved
 
 
-def _verify_manifest_artifacts(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
-    artifacts = manifest.get("artifacts")
-    if not isinstance(artifacts, list):
-        return {"valid": False, "checked": 0, "reason": "manifest artifacts must be a list"}
-    if len(artifacts) > _MAX_ARTIFACT_COUNT:
-        return {
-            "valid": False,
-            "checked": 0,
-            "reason": "manifest artifact count exceeds attestation bound",
-        }
+def _verify_manifest_artifacts(root: Path, artifacts: list[ArtifactRecord]) -> dict[str, Any]:
     checked = 0
     total_bytes = 0
-    for raw in artifacts:
-        if not isinstance(raw, dict):
-            return {"valid": False, "checked": checked, "reason": "artifact record is invalid"}
-        relative_path = str(raw.get("path") or "")
-        expected_hash = str(raw.get("content_hash") or "")
-        if not relative_path or not expected_hash.startswith("sha256:"):
+    for record in artifacts:
+        relative_path = record.path
+        expected_hash = record.content_hash
+        if not expected_hash.startswith("sha256:"):
             return {
                 "valid": False,
                 "checked": checked,
-                "reason": "artifact record lacks a path or SHA-256 content hash",
+                "reason": "artifact record lacks a SHA-256 content hash",
             }
         try:
             path = _owned_artifact_path(root, relative_path)
@@ -245,12 +383,11 @@ def _verify_manifest_artifacts(root: Path, manifest: dict[str, Any]) -> dict[str
 
 
 def _load_object(path: Path, *, max_bytes: int) -> dict[str, Any]:
-    value = json.loads(
-        read_text_bounded(path, max_bytes=max_bytes, label=f"attestation subject {path.name}")
+    return read_json_object_bounded(
+        path,
+        max_bytes=max_bytes,
+        label=f"attestation subject {path.name}",
     )
-    if not isinstance(value, dict):
-        raise ValueError(f"{path.name} root must be an object")
-    return value
 
 
 def _file_digest(path: Path, *, max_bytes: int) -> dict[str, object]:

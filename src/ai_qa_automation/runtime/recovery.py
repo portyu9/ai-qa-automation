@@ -4,12 +4,55 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ..io_safety import read_text_bounded
+from ..fs_authority import descriptor_relative_authority_supported, pin_directory_identity
+from ..io_safety import read_json_object_bounded
 from ..state import StateStore
-from .journal import RunJournal
+from .journal import RunJournal, validate_runtime_journal_binding
 from .validation_truth import evaluate_revision_closure
 
 _MAX_RUNTIME_METADATA_BYTES = 2_000_000
+
+
+def _validate_workspace_root_authority(
+    metadata: dict[str, Any],
+    workspace: Path,
+) -> dict[str, object]:
+    if "workspace_root_identity" not in metadata or metadata["workspace_root_identity"] is None:
+        return {
+            "valid": False,
+            "reason": "runtime.json workspace root identity authority is missing",
+        }
+    raw = metadata["workspace_root_identity"]
+    if not isinstance(raw, dict) or set(raw) != {"device", "inode"}:
+        return {
+            "valid": False,
+            "reason": "runtime.json workspace root identity authority is invalid",
+        }
+    device = raw.get("device")
+    inode = raw.get("inode")
+    if type(device) is not int or type(inode) is not int or device < 0 or inode < 0:
+        return {
+            "valid": False,
+            "reason": "runtime.json workspace root identity authority is invalid",
+        }
+    if not descriptor_relative_authority_supported():
+        return {
+            "valid": False,
+            "reason": "runtime.json workspace root identity cannot be verified on this platform",
+        }
+    try:
+        current = pin_directory_identity(workspace, label="recovery workspace")
+    except (OSError, RuntimeError, ValueError):
+        return {
+            "valid": False,
+            "reason": "runtime.json workspace root identity could not be verified",
+        }
+    if current != (device, inode):
+        return {
+            "valid": False,
+            "reason": "runtime.json workspace root identity does not match current workspace",
+        }
+    return {"valid": True}
 
 
 def inspect_recovery(run_dir: Path) -> dict[str, Any]:
@@ -46,7 +89,7 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
         return {"recoverable": False, "reason": "journal hash chain is invalid"}
 
     try:
-        rendered_runtime = read_text_bounded(
+        runtime_metadata = read_json_object_bounded(
             runtime_path,
             max_bytes=_MAX_RUNTIME_METADATA_BYTES,
             label="runtime.json",
@@ -55,30 +98,62 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
         return {"recoverable": False, "reason": "runtime.json is not valid UTF-8"}
     except OSError:
         return {"recoverable": False, "reason": "runtime.json is unreadable"}
+    except json.JSONDecodeError:
+        return {"recoverable": False, "reason": "runtime.json is invalid JSON"}
     except ValueError as exc:
         message = str(exc)
         if "exceeds" in message and "ingestion limit" in message:
             return {"recoverable": False, "reason": "runtime.json exceeds restore size bound"}
+        if "root must be a JSON object" in message:
+            return {"recoverable": False, "reason": "runtime.json root must be an object"}
         return {
             "recoverable": False,
-            "reason": "runtime.json ownership or file-type validation failed",
+            "reason": f"runtime.json failed strict object validation: {message}",
         }
 
-    try:
-        raw_runtime = json.loads(rendered_runtime)
-    except json.JSONDecodeError:
-        return {"recoverable": False, "reason": "runtime.json is invalid JSON"}
-    if not isinstance(raw_runtime, dict):
-        return {"recoverable": False, "reason": "runtime.json root must be an object"}
-    runtime_metadata: dict[str, Any] = raw_runtime
+    runtime_workspace = runtime_metadata.get("workspace")
+    if not isinstance(runtime_workspace, str) or not runtime_workspace:
+        return {
+            "recoverable": False,
+            "reason": "runtime.json workspace identity is invalid",
+        }
+    canonical_workspace = Path(state.workspace).expanduser().resolve()
+    if runtime_workspace != str(canonical_workspace):
+        return {
+            "recoverable": False,
+            "reason": "runtime.json workspace does not match canonical state workspace",
+        }
+    workspace_authority = _validate_workspace_root_authority(runtime_metadata, canonical_workspace)
+    if not workspace_authority["valid"]:
+        return {"recoverable": False, "reason": workspace_authority["reason"]}
+
+    journal_binding = validate_runtime_journal_binding(runtime_metadata, journal_status)
+    if not journal_binding["valid"]:
+        return {
+            "recoverable": False,
+            "reason": f"runtime journal authority is invalid: {journal_binding['reason']}",
+        }
+
+    if "pending_mutation" not in runtime_metadata:
+        return {
+            "recoverable": False,
+            "reason": "runtime.json is missing pending_mutation authority",
+        }
+    pending_mutation = runtime_metadata["pending_mutation"]
+    if pending_mutation is not None and (
+        not isinstance(pending_mutation, dict) or not pending_mutation
+    ):
+        return {
+            "recoverable": False,
+            "reason": "runtime.json pending_mutation authority is invalid",
+        }
 
     closure = evaluate_revision_closure(
         state.validation_results,
         current_revision=state.change_revision,
     )
     revision_closed = closure.closed
-    pending_mutation = runtime_metadata.get("pending_mutation")
-    if pending_mutation:
+    if pending_mutation is not None:
         revision_closed = False
 
     return {
@@ -94,6 +169,8 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
             "mutation_path": closure.mutation_path,
         },
         "journal": journal_status,
+        "journal_binding": journal_binding,
+        "workspace_authority": workspace_authority,
         "runtime": runtime_metadata,
         "pending_mutation": pending_mutation,
         "resume_policy": (

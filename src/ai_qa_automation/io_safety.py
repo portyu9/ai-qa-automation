@@ -41,7 +41,15 @@ def _stable_directory_signature(value: os.stat_result) -> tuple[int, int, int, i
     return value.st_dev, value.st_ino, value.st_mtime_ns, value.st_ctime_ns
 
 
-def _parse_json_object(text: str, *, label: str) -> dict[str, Any]:
+def parse_json_object_strict(text: str, *, label: str) -> dict[str, Any]:
+    """Parse one unambiguous standards-compliant JSON object.
+
+    Authority-bearing persisted JSON must never rely on Python's default
+    last-key-wins behavior or accept non-standard NaN/Infinity constants.
+    Duplicate-key rejection applies recursively because ``object_pairs_hook``
+    is invoked for every decoded object.
+    """
+
     def reject_duplicate_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         result: dict[str, Any] = {}
         for key, value in pairs:
@@ -137,7 +145,7 @@ def read_json_object_bounded(path: Path, *, max_bytes: int, label: str) -> dict[
     """Read one bounded JSON object without ambiguous keys or non-standard constants."""
 
     text = read_text_bounded(path, max_bytes=max_bytes, label=label)
-    return _parse_json_object(text, label=label)
+    return parse_json_object_strict(text, label=label)
 
 
 def _read_fd_bounded(fd: int, *, max_bytes: int, label: str) -> bytes:
@@ -279,7 +287,7 @@ def read_json_catalog_bounded(
                 finally:
                     os.close(file_fd)
 
-                result[name] = _parse_json_object(content.decode("utf-8"), label=entry_label)
+                result[name] = parse_json_object_strict(content.decode("utf-8"), label=entry_label)
 
         final_opened_directory = os.fstat(directory_fd)
         try:

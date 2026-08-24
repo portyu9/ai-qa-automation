@@ -11,7 +11,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
-from ..io_safety import fsync_directory, read_text_bounded
+from ..fs_authority import (
+    atomic_write_bytes_confined,
+    descriptor_relative_authority_supported,
+    pending_root_authority,
+    pin_directory_identity,
+    read_bytes_confined,
+)
+from ..io_safety import fsync_directory
 from ..models import ToolDecision
 from ..policy import PolicyEngine
 from .locators import parse_locator_expression
@@ -42,6 +49,25 @@ class SafeTestPatcher:
     def __init__(self, workspace: Path, policy: PolicyEngine) -> None:
         self.workspace = workspace.expanduser().resolve()
         self.policy = policy
+        self._workspace_identity: tuple[int, int] | None
+        current_identity = (
+            pin_directory_identity(self.workspace, label="test patch workspace")
+            if descriptor_relative_authority_supported()
+            else None
+        )
+        pending_identity = pending_root_authority(self.workspace)
+        if pending_identity is not None:
+            if current_identity is None:
+                raise RuntimeError(
+                    "pending mutation root authority requires descriptor-relative filesystem support"
+                )
+            if current_identity != pending_identity:
+                raise ValueError(
+                    "test patch workspace changed identity since mutation authorization"
+                )
+            self._workspace_identity = pending_identity
+        else:
+            self._workspace_identity = current_identity
 
     @staticmethod
     def sha256_text(text: str) -> str:
@@ -93,16 +119,17 @@ class SafeTestPatcher:
             raise PermissionError(
                 "safe test patching supports Python/JavaScript/TypeScript test files only"
             )
-        if not destination.is_file():
-            raise FileNotFoundError(destination)
         for label, text in (("old_text", old_text), ("new_text", new_text)):
             if len(text.encode("utf-8")) > self._MAX_TEST_FILE_BYTES:
                 raise ValueError(f"{label} exceeds bounded patch input limit")
-        original = read_text_bounded(
-            destination,
+        raw_original = read_bytes_confined(
+            self.workspace,
+            path,
             max_bytes=self._MAX_TEST_FILE_BYTES,
             label="test file",
+            expected_root_identity=self._workspace_identity,
         )
+        original = raw_original.decode("utf-8")
         actual_sha = self.sha256_text(original)
         if actual_sha != expected_sha256:
             raise RuntimeError("test file changed since proposal; refusing stale patch")
@@ -110,7 +137,8 @@ class SafeTestPatcher:
             raise ValueError("old_text must match exactly once")
 
         updated = original.replace(old_text, new_text, 1)
-        if len(updated.encode("utf-8")) > self._MAX_TEST_FILE_BYTES:
+        updated_bytes = updated.encode("utf-8")
+        if len(updated_bytes) > self._MAX_TEST_FILE_BYTES:
             raise ValueError(f"patched test exceeds {self._MAX_TEST_FILE_BYTES} byte limit")
         self._validate_python_quality(destination, original, updated)
         normalized_relative = path.as_posix()
@@ -126,7 +154,15 @@ class SafeTestPatcher:
         if violations:
             raise PermissionError(f"unsafe patch rejected: {', '.join(violations)}")
 
-        self._atomic_replace(destination, updated)
+        atomic_write_bytes_confined(
+            self.workspace,
+            path,
+            updated_bytes,
+            create_parents=False,
+            create_only=False,
+            label="test patch target",
+            expected_root_identity=self._workspace_identity,
+        )
         return PatchResult(
             path=normalized_relative,
             old_sha256=actual_sha,
@@ -223,7 +259,8 @@ class SafeTestPatcher:
         """Create a new test only after path, syntax, quality, and no-overwrite checks."""
         from ..intelligence.quality_review import review_python_test_source
 
-        if len(content.encode("utf-8")) > self._MAX_TEST_FILE_BYTES:
+        content_bytes = content.encode("utf-8")
+        if len(content_bytes) > self._MAX_TEST_FILE_BYTES:
             raise ValueError(f"generated test exceeds {self._MAX_TEST_FILE_BYTES} byte limit")
         path, destination = self._resolve_owned_path(relative_path)
         decision = self.policy.authorize_path(path, write=True)
@@ -253,11 +290,15 @@ class SafeTestPatcher:
         violations = self.policy.validate_patch(synthetic_diff)
         if violations:
             raise PermissionError(f"unsafe generated test rejected: {', '.join(violations)}")
-        parent_existed = destination.parent.exists()
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        if not parent_existed:
-            fsync_directory(destination.parent.resolve().parent)
-        self._atomic_create(destination, content)
+        atomic_write_bytes_confined(
+            self.workspace,
+            path,
+            content_bytes,
+            create_parents=True,
+            create_only=True,
+            label="generated test target",
+            expected_root_identity=self._workspace_identity,
+        )
         digest = self.sha256_text(content)
         return PatchResult(
             path=path.as_posix(),
@@ -287,6 +328,9 @@ class SafeTestPatcher:
                 + ", ".join(f"{item.code}@{item.line}" for item in introduced)
             )
 
+    # These lower-level helpers remain for compatibility with direct durability
+    # tests and non-live library callers. Autonomous writes above do not use them;
+    # their authority is descriptor-pinned through fs_authority instead.
     @staticmethod
     def _write_secure_temp(destination: Path, content: str) -> Path:
         if destination.is_symlink() or destination.parent.is_symlink():
