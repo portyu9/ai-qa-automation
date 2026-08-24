@@ -51,7 +51,7 @@ def _validated_backup_relative(prior_run_dir: Path, backup_raw: str) -> Path:
     try:
         relative = absolute.absolute().relative_to(prior_run_dir)
     except ValueError as exc:
-        raise ValueError("prior rollback backup escaped run directory") from exc
+        raise ValueError("prior rollback backup escaped rollback directory") from exc
     if len(relative.parts) < 2 or relative.parts[0] != "rollback":
         raise ValueError("prior rollback backup escaped run rollback directory")
     return relative
