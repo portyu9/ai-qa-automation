@@ -282,10 +282,10 @@ def _validate_runtime_workspace(
         return {"valid": False, "reason": "runtime workspace identity mismatch"}
     if not root_identity_present or runtime_root_identity is None:
         return {"valid": False, "reason": "runtime workspace root identity authority is missing"}
-    if (
-        not isinstance(runtime_root_identity, dict)
-        or set(runtime_root_identity) != {"device", "inode"}
-    ):
+    if not isinstance(runtime_root_identity, dict) or set(runtime_root_identity) != {
+        "device",
+        "inode",
+    }:
         return {"valid": False, "reason": "runtime workspace root identity authority is invalid"}
     device = runtime_root_identity.get("device")
     inode = runtime_root_identity.get("inode")
