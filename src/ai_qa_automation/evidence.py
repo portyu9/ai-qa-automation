@@ -303,7 +303,9 @@ class EvidenceStore:
             )
             if data.get("run_id") != self.run_id:
                 raise ValueError("evidence manifest run_id mismatch")
-            manifest_regulated = bool(data.get("regulated_mode", False))
+            manifest_regulated = data.get("regulated_mode")
+            if type(manifest_regulated) is not bool:
+                raise ValueError("evidence manifest regulated_mode must be a boolean")
             if manifest_regulated != self.regulated_mode:
                 raise ValueError("evidence manifest regulated_mode mismatch")
             raw_evidence = data.get("evidence", [])
@@ -424,7 +426,8 @@ class EvidenceStore:
             expected_sequence = 1
             try:
                 for record in self._iter_audit_records():
-                    if int(record.get("sequence", -1)) != expected_sequence:
+                    sequence = record.get("sequence")
+                    if type(sequence) is not int or sequence != expected_sequence:
                         return False
                     if record.get("previous_hash") != expected_previous:
                         return False
