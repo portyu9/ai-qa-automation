@@ -316,8 +316,16 @@ class EvidenceStore:
                 raise ValueError("evidence manifest exceeds evidence count limit")
             if len(raw_artifacts) > _MAX_ARTIFACT_COUNT:
                 raise ValueError("evidence manifest exceeds artifact count limit")
-            evidence_records = [EvidenceItem.model_validate(raw) for raw in raw_evidence]
-            artifact_records = [ArtifactRecord.model_validate(raw) for raw in raw_artifacts]
+            evidence_records = [
+                EvidenceItem.model_validate_json(json.dumps(raw), strict=True)
+                for raw in raw_evidence
+            ]
+            artifact_records = [
+                ArtifactRecord.model_validate_json(json.dumps(raw), strict=True)
+                for raw in raw_artifacts
+            ]
+            if any(item.run_id != self.run_id for item in evidence_records):
+                raise ValueError("evidence manifest contains evidence from another run")
             if len({item.id for item in evidence_records}) != len(evidence_records):
                 raise ValueError("evidence manifest contains duplicate evidence ids")
             if len({item.artifact_id for item in artifact_records}) != len(artifact_records):
