@@ -12,6 +12,8 @@ from .journal import RunJournal
 _MAX_LINEAGE_CONTROL_BYTES = 10_000_000
 _MAX_LINEAGE_JOURNAL_LINE_BYTES = 1_000_000
 _MAX_LINEAGE_JOURNAL_EVENTS = 10_000
+_MAX_LINEAGE_EVIDENCE_RECORDS = 10_000
+_MAX_LINEAGE_ARTIFACT_RECORDS = 5_000
 
 
 @dataclass(frozen=True)
@@ -69,6 +71,63 @@ class RunLineageGraph:
         return "\n".join(lines)
 
 
+def _validated_manifest_rows(
+    manifest: dict[str, Any],
+    *,
+    run_id: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if not manifest:
+        return [], []
+    manifest_run_id = manifest.get("run_id")
+    if not isinstance(manifest_run_id, str) or manifest_run_id != run_id:
+        raise ValueError("lineage evidence manifest run_id does not match canonical state")
+    evidence_rows = manifest.get("evidence")
+    artifact_rows = manifest.get("artifacts")
+    if not isinstance(evidence_rows, list) or not isinstance(artifact_rows, list):
+        raise ValueError("lineage evidence manifest registries must be lists")
+    if len(evidence_rows) > _MAX_LINEAGE_EVIDENCE_RECORDS:
+        raise ValueError("lineage evidence manifest exceeds evidence record bound")
+    if len(artifact_rows) > _MAX_LINEAGE_ARTIFACT_RECORDS:
+        raise ValueError("lineage evidence manifest exceeds artifact record bound")
+
+    validated_evidence: list[dict[str, Any]] = []
+    evidence_ids: set[str] = set()
+    for raw in evidence_rows:
+        if not isinstance(raw, dict):
+            raise ValueError("lineage evidence manifest contains a non-object evidence record")
+        evidence_id = raw.get("id")
+        evidence_run_id = raw.get("run_id")
+        if not isinstance(evidence_id, str) or not evidence_id:
+            raise ValueError("lineage evidence manifest contains an invalid evidence id")
+        if not isinstance(evidence_run_id, str) or evidence_run_id != run_id:
+            raise ValueError("lineage evidence manifest contains evidence from another run")
+        if evidence_id in evidence_ids:
+            raise ValueError("lineage evidence manifest contains duplicate evidence ids")
+        evidence_ids.add(evidence_id)
+        validated_evidence.append(raw)
+
+    validated_artifacts: list[dict[str, Any]] = []
+    artifact_ids: set[str] = set()
+    artifact_paths: set[str] = set()
+    for raw in artifact_rows:
+        if not isinstance(raw, dict):
+            raise ValueError("lineage evidence manifest contains a non-object artifact record")
+        artifact_id = raw.get("artifact_id")
+        path = raw.get("path")
+        if not isinstance(artifact_id, str) or not artifact_id:
+            raise ValueError("lineage evidence manifest contains an invalid artifact id")
+        if not isinstance(path, str) or not path:
+            raise ValueError("lineage evidence manifest contains an invalid artifact path")
+        if artifact_id in artifact_ids:
+            raise ValueError("lineage evidence manifest contains duplicate artifact ids")
+        if path in artifact_paths:
+            raise ValueError("lineage evidence manifest contains duplicate artifact paths")
+        artifact_ids.add(artifact_id)
+        artifact_paths.add(path)
+        validated_artifacts.append(raw)
+    return validated_evidence, validated_artifacts
+
+
 def build_run_lineage(run_dir: Path, *, max_journal_events: int = 500) -> RunLineageGraph:
     """Build a bounded evidence/validation/artifact/operation lineage graph from persisted records."""
     if (
@@ -93,6 +152,7 @@ def build_run_lineage(run_dir: Path, *, max_journal_events: int = 500) -> RunLin
     state = StateStore(state_path).load().model_dump(mode="json")
     manifest = _load_object(manifest_path, required=False)
     run_id = state["run_id"]
+    evidence_rows, artifact_rows = _validated_manifest_rows(manifest, run_id=run_id)
     nodes: dict[str, LineageNode] = {}
     edges: set[tuple[str, str, str]] = set()
     warnings: list[str] = []
@@ -111,87 +171,69 @@ def build_run_lineage(run_dir: Path, *, max_journal_events: int = 500) -> RunLin
         },
     )
 
-    evidence_rows = manifest.get("evidence", []) if isinstance(manifest, dict) else []
-    artifact_rows = manifest.get("artifacts", []) if isinstance(manifest, dict) else []
     evidence_ids: set[str] = set()
     artifact_by_path: dict[str, str] = {}
 
-    if isinstance(evidence_rows, list):
-        for raw in evidence_rows:
-            if not isinstance(raw, dict):
-                continue
-            evidence_id = str(raw.get("id") or "")
-            if not evidence_id:
-                continue
-            node_id = f"evidence:{evidence_id}"
-            evidence_ids.add(evidence_id)
-            nodes[node_id] = LineageNode(
-                id=node_id,
-                kind="evidence",
-                label=str(raw.get("summary") or raw.get("kind") or evidence_id)[:300],
-                attributes={
-                    "evidence_id": evidence_id,
-                    "kind": raw.get("kind"),
-                    "nature": raw.get("nature"),
-                    "source": raw.get("source"),
-                    "source_identifier": raw.get("source_identifier"),
-                    "content_hash": raw.get("content_hash"),
-                    "artifact_reference": raw.get("artifact_reference"),
-                    "reliability": raw.get("reliability"),
-                },
-            )
-            edges.add((run_node, node_id, "OBSERVED"))
+    for raw in evidence_rows:
+        evidence_id = str(raw["id"])
+        node_id = f"evidence:{evidence_id}"
+        evidence_ids.add(evidence_id)
+        nodes[node_id] = LineageNode(
+            id=node_id,
+            kind="evidence",
+            label=str(raw.get("summary") or raw.get("kind") or evidence_id)[:300],
+            attributes={
+                "evidence_id": evidence_id,
+                "kind": raw.get("kind"),
+                "nature": raw.get("nature"),
+                "source": raw.get("source"),
+                "source_identifier": raw.get("source_identifier"),
+                "content_hash": raw.get("content_hash"),
+                "artifact_reference": raw.get("artifact_reference"),
+                "reliability": raw.get("reliability"),
+            },
+        )
+        edges.add((run_node, node_id, "OBSERVED"))
 
-    if isinstance(artifact_rows, list):
-        for raw in artifact_rows:
-            if not isinstance(raw, dict):
-                continue
-            artifact_id = str(raw.get("artifact_id") or "")
-            if not artifact_id:
-                continue
-            node_id = f"artifact:{artifact_id}"
-            path = str(raw.get("path") or "")
-            if path:
-                artifact_by_path[path] = node_id
-            nodes[node_id] = LineageNode(
-                id=node_id,
-                kind="artifact",
-                label=path or artifact_id,
-                attributes={
-                    "artifact_id": artifact_id,
-                    "path": path,
-                    "type": raw.get("type"),
-                    "content_hash": raw.get("content_hash"),
-                    "originating_tool": raw.get("originating_tool"),
-                    "sanitization_status": raw.get("sanitization_status"),
-                    "retention_classification": raw.get("retention_classification"),
-                },
-            )
-            edges.add((run_node, node_id, "PRODUCED_ARTIFACT"))
+    for raw in artifact_rows:
+        artifact_id = str(raw["artifact_id"])
+        node_id = f"artifact:{artifact_id}"
+        path = str(raw["path"])
+        artifact_by_path[path] = node_id
+        nodes[node_id] = LineageNode(
+            id=node_id,
+            kind="artifact",
+            label=path,
+            attributes={
+                "artifact_id": artifact_id,
+                "path": path,
+                "type": raw.get("type"),
+                "content_hash": raw.get("content_hash"),
+                "originating_tool": raw.get("originating_tool"),
+                "sanitization_status": raw.get("sanitization_status"),
+                "retention_classification": raw.get("retention_classification"),
+            },
+        )
+        edges.add((run_node, node_id, "PRODUCED_ARTIFACT"))
 
-    if isinstance(evidence_rows, list):
-        for raw in evidence_rows:
-            if not isinstance(raw, dict):
-                continue
-            evidence_id = str(raw.get("id") or "")
-            if not evidence_id:
-                continue
-            node_id = f"evidence:{evidence_id}"
-            source_identifier = str(raw.get("source_identifier") or "")
-            if source_identifier in evidence_ids:
-                edges.add((f"evidence:{source_identifier}", node_id, "SOURCE_FOR"))
-            related_hypothesis = str(raw.get("related_hypothesis") or "")
-            if related_hypothesis:
-                hypothesis_node = f"hypothesis:{related_hypothesis}"
-                nodes.setdefault(
-                    hypothesis_node,
-                    LineageNode(hypothesis_node, "hypothesis", related_hypothesis, {}),
-                )
-                edges.add((node_id, hypothesis_node, "SUPPORTS_HYPOTHESIS"))
-            artifact_reference = str(raw.get("artifact_reference") or "")
-            artifact_node = artifact_by_path.get(artifact_reference)
-            if artifact_node:
-                edges.add((artifact_node, node_id, "MATERIALIZES"))
+    for raw in evidence_rows:
+        evidence_id = str(raw["id"])
+        node_id = f"evidence:{evidence_id}"
+        source_identifier = str(raw.get("source_identifier") or "")
+        if source_identifier in evidence_ids:
+            edges.add((f"evidence:{source_identifier}", node_id, "SOURCE_FOR"))
+        related_hypothesis = str(raw.get("related_hypothesis") or "")
+        if related_hypothesis:
+            hypothesis_node = f"hypothesis:{related_hypothesis}"
+            nodes.setdefault(
+                hypothesis_node,
+                LineageNode(hypothesis_node, "hypothesis", related_hypothesis, {}),
+            )
+            edges.add((node_id, hypothesis_node, "SUPPORTS_HYPOTHESIS"))
+        artifact_reference = str(raw.get("artifact_reference") or "")
+        artifact_node = artifact_by_path.get(artifact_reference)
+        if artifact_node:
+            edges.add((artifact_node, node_id, "MATERIALIZES"))
 
     validation_rows = state.get("validation_results", [])
     if isinstance(validation_rows, list):
