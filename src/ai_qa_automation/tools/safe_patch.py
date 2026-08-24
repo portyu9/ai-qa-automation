@@ -14,6 +14,7 @@ from typing import ClassVar
 from ..fs_authority import (
     atomic_write_bytes_confined,
     descriptor_relative_authority_supported,
+    pending_root_authority,
     pin_directory_identity,
     read_bytes_confined,
 )
@@ -48,11 +49,22 @@ class SafeTestPatcher:
     def __init__(self, workspace: Path, policy: PolicyEngine) -> None:
         self.workspace = workspace.expanduser().resolve()
         self.policy = policy
-        self._workspace_identity = (
+        current_identity = (
             pin_directory_identity(self.workspace, label="test patch workspace")
             if descriptor_relative_authority_supported()
             else None
         )
+        pending_identity = pending_root_authority(self.workspace)
+        if pending_identity is not None:
+            if current_identity is None:
+                raise RuntimeError(
+                    "pending mutation root authority requires descriptor-relative filesystem support"
+                )
+            if current_identity != pending_identity:
+                raise ValueError("test patch workspace changed identity since mutation authorization")
+            self._workspace_identity = pending_identity
+        else:
+            self._workspace_identity = current_identity
 
     @staticmethod
     def sha256_text(text: str) -> str:
