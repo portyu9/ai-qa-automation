@@ -1,6 +1,7 @@
 import json
 import shutil
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -141,14 +142,14 @@ def _swap_directory_when_scandir_starts(
     original_scandir = io_safety.os.scandir
     swapped = False
 
-    def swapping_scandir(path: object):  # type: ignore[no-untyped-def]
+    def swapping_scandir(path: Any) -> Any:
         nonlocal swapped
         if not swapped and isinstance(path, int):
             swapped = True
             preserved = directory.with_name(f"{directory.name}-preserved")
             directory.rename(preserved)
             directory.symlink_to(external, target_is_directory=True)
-        return original_scandir(path)  # type: ignore[arg-type]
+        return original_scandir(path)
 
     monkeypatch.setattr(io_safety.os, "scandir", swapping_scandir)
 
