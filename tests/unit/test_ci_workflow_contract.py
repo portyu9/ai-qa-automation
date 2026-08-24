@@ -33,13 +33,17 @@ def test_ci_action_authority_matches_supply_chain_verifier() -> None:
     assert ci_contract.EXPECTED_ACTION_SHAS == supply_chain.EXPECTED_ACTION_SHAS
 
 
-def test_ci_contract_rejects_pull_request_target(tmp_path: Path) -> None:
+def test_ci_contract_rejects_pull_request_target_even_with_spoof_comment(tmp_path: Path) -> None:
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "ci.yml"
-    text = path.read_text(encoding="utf-8").replace("  pull_request:\n", "  pull_request_target:\n", 1)
+    text = path.read_text(encoding="utf-8").replace(
+        "  pull_request:\n",
+        "  # pull_request:\n  pull_request_target:\n",
+        1,
+    )
     path.write_text(text, encoding="utf-8")
 
-    with pytest.raises(ValueError, match="missing required automatic trigger|pull_request_target"):
+    with pytest.raises(ValueError, match="automatic trigger set"):
         ci_contract.verify_ci_contract(root)
 
 
@@ -49,7 +53,7 @@ def test_ci_contract_rejects_write_permission(tmp_path: Path) -> None:
     text = path.read_text(encoding="utf-8").replace("  contents: read", "  contents: write", 1)
     path.write_text(text, encoding="utf-8")
 
-    with pytest.raises(ValueError, match="contents: read|write permission"):
+    with pytest.raises(ValueError, match="permissions must be exactly contents: read"):
         ci_contract.verify_ci_contract(root)
 
 
@@ -57,7 +61,7 @@ def test_ci_contract_rejects_secret_in_automatic_workflow(tmp_path: Path) -> Non
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "ci.yml"
     path.write_text(
-        path.read_text(encoding="utf-8") + "\n# ${{ secrets.ANTHROPIC_API_KEY }}\n",
+        path.read_text(encoding="utf-8") + "\nenv:\n  BAD: ${{ secrets.ANTHROPIC_API_KEY }}\n",
         encoding="utf-8",
     )
 
@@ -75,7 +79,7 @@ def test_ci_contract_rejects_automatic_trigger_in_manual_workflow(tmp_path: Path
     )
     path.write_text(text, encoding="utf-8")
 
-    with pytest.raises(ValueError, match="automatic trigger is forbidden"):
+    with pytest.raises(ValueError, match="trigger set must be exactly"):
         ci_contract.verify_ci_contract(root)
 
 
@@ -85,6 +89,40 @@ def test_ci_contract_rejects_unexpected_workflow(tmp_path: Path) -> None:
     rogue.write_text("name: rogue\non: push\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="unexpected workflow set"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_rejects_symlinked_workflow(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    workflow_dir = root / ".github" / "workflows"
+    external = tmp_path / "external.yml"
+    shutil.copyfile(workflow_dir / "ci.yml", external)
+    victim = workflow_dir / "ci.yml"
+    victim.unlink()
+    victim.symlink_to(external)
+
+    with pytest.raises(ValueError, match="regular non-symlink file"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_rejects_workflow_directory_symlink(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    workflow_dir = root / ".github" / "workflows"
+    real = root / ".github" / "workflows-real"
+    workflow_dir.rename(real)
+    workflow_dir.symlink_to(real, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="workflow directory is a symlink"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_enforces_directory_enumeration_bound(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    workflow_dir = root / ".github" / "workflows"
+    for index in range(ci_contract.MAX_WORKFLOW_ENTRIES):
+        (workflow_dir / f"junk-{index:02d}.txt").write_text("x", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="entry ingestion limit"):
         ci_contract.verify_ci_contract(root)
 
 
@@ -98,11 +136,25 @@ def test_ci_contract_rejects_unbound_checkout(tmp_path: Path) -> None:
         ci_contract.verify_ci_contract(root)
 
 
-def test_ci_contract_rejects_fail_open_required_gate(tmp_path: Path) -> None:
+def test_ci_contract_rejects_fail_open_required_gate_dependency(tmp_path: Path) -> None:
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "ci.yml"
     text = path.read_text(encoding="utf-8").replace("      - security\n", "", 1)
     path.write_text(text, encoding="utf-8")
 
     with pytest.raises(ValueError, match="does not depend on security"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_rejects_fail_open_required_gate_condition(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "ci.yml"
+    text = path.read_text(encoding="utf-8").replace(
+        "  required-gate:\n    name: Required PR Gate\n    if: ${{ always() }}\n",
+        "  required-gate:\n    name: Required PR Gate\n    if: ${{ success() }}\n",
+        1,
+    )
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"must execute with if: always\(\)"):
         ci_contract.verify_ci_contract(root)
