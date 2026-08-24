@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
+import os
 import re
+import stat
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,7 +15,10 @@ from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 from packaging.version import Version
 
+from ai_qa_automation.io_safety import read_text_bounded
+
 MAX_LOCK_BYTES = 1_048_576
+MAX_REQUIREMENTS_ENTRIES = 32
 EXPECTED_LOCK_NAMES = {
     "base-image.lock",
     "build-py311.lock",
@@ -54,25 +60,189 @@ class LockedRequirement:
     hashes: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class LockFileSnapshot:
+    text: str
+    sha256: str
+    size_bytes: int
+
+
+def _identity(value: os.stat_result) -> tuple[int, int]:
+    return value.st_dev, value.st_ino
+
+
+def _stable_file_signature(value: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+
+
+def _stable_directory_signature(value: os.stat_result) -> tuple[int, int, int, int]:
+    return value.st_dev, value.st_ino, value.st_mtime_ns, value.st_ctime_ns
+
+
+def _read_fd_bounded(fd: int, *, max_bytes: int, label: str) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while total <= max_bytes:
+        chunk = os.read(fd, min(1024 * 1024, max_bytes + 1 - total))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+    if total > max_bytes:
+        raise ValueError(f"{label} exceeds {max_bytes} byte ingestion limit")
+    return b"".join(chunks)
+
+
+def _read_lock_set(requirements_dir: Path) -> dict[str, LockFileSnapshot]:
+    """Read the exact managed lock set through one pinned no-follow directory descriptor."""
+
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    supports_secure_relative_io = (
+        bool(getattr(os, "O_DIRECTORY", 0))
+        and bool(nofollow)
+        and os.open in os.supports_dir_fd
+        and os.stat in os.supports_dir_fd
+    )
+    if not supports_secure_relative_io:
+        raise RuntimeError(
+            "supply-chain lock verification requires descriptor-relative no-follow ingestion"
+        )
+    directory_flags |= nofollow
+
+    if requirements_dir.is_symlink():
+        raise ValueError("requirements directory is a symlink and has ambiguous ownership")
+    try:
+        directory_fd = os.open(requirements_dir, directory_flags)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise ValueError("requirements directory became a symlink during verification") from exc
+        raise
+
+    try:
+        opened_directory = os.fstat(directory_fd)
+        if not stat.S_ISDIR(opened_directory.st_mode):
+            raise ValueError("requirements path must be a directory")
+        try:
+            current_directory = requirements_dir.stat(follow_symlinks=False)
+        except OSError as exc:
+            raise ValueError("requirements directory changed identity during verification") from exc
+        if stat.S_ISLNK(current_directory.st_mode):
+            raise ValueError("requirements directory became a symlink during verification")
+        if _identity(opened_directory) != _identity(current_directory):
+            raise ValueError("requirements directory changed identity during verification")
+        initial_directory_signature = _stable_directory_signature(opened_directory)
+
+        try:
+            entries = os.scandir(directory_fd)
+        except (TypeError, NotImplementedError, OSError) as exc:
+            raise RuntimeError(
+                "supply-chain lock verification requires descriptor-based directory enumeration"
+            ) from exc
+
+        snapshots: dict[str, LockFileSnapshot] = {}
+        observed_entries = 0
+        with entries:
+            for entry in entries:
+                observed_entries += 1
+                if observed_entries > MAX_REQUIREMENTS_ENTRIES:
+                    raise ValueError(
+                        "requirements directory exceeds "
+                        f"{MAX_REQUIREMENTS_ENTRIES} entry ingestion limit"
+                    )
+                name = entry.name
+                if not name.endswith(".lock"):
+                    continue
+                if Path(name).name != name or name in {".", ".."}:
+                    raise ValueError("requirements directory contains an invalid lock filename")
+
+                label = f"supply-chain lock {name}"
+                before = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                if not stat.S_ISREG(before.st_mode):
+                    raise ValueError(f"{label} must be a regular non-symlink file")
+
+                file_flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | nofollow
+                try:
+                    file_fd = os.open(name, file_flags, dir_fd=directory_fd)
+                except OSError as exc:
+                    if exc.errno == errno.ELOOP:
+                        raise ValueError(f"{label} became a symlink during verification") from exc
+                    raise
+                try:
+                    opened_file = os.fstat(file_fd)
+                    if not stat.S_ISREG(opened_file.st_mode):
+                        raise ValueError(f"{label} must be a regular file")
+                    current_file = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                    if not stat.S_ISREG(current_file.st_mode):
+                        raise ValueError(f"{label} changed file type during verification")
+                    if _identity(opened_file) != _identity(current_file):
+                        raise ValueError(f"{label} changed identity during verification")
+                    initial_file_signature = _stable_file_signature(opened_file)
+
+                    content = _read_fd_bounded(
+                        file_fd,
+                        max_bytes=MAX_LOCK_BYTES,
+                        label=label,
+                    )
+
+                    final_opened_file = os.fstat(file_fd)
+                    final_current_file = os.stat(
+                        name,
+                        dir_fd=directory_fd,
+                        follow_symlinks=False,
+                    )
+                    if (
+                        _stable_file_signature(final_opened_file) != initial_file_signature
+                        or _identity(final_opened_file) != _identity(final_current_file)
+                        or not stat.S_ISREG(final_current_file.st_mode)
+                    ):
+                        raise ValueError(f"{label} changed during verification")
+                finally:
+                    os.close(file_fd)
+
+                snapshots[name] = LockFileSnapshot(
+                    text=content.decode("utf-8"),
+                    sha256=hashlib.sha256(content).hexdigest(),
+                    size_bytes=len(content),
+                )
+
+        if set(snapshots) != EXPECTED_LOCK_NAMES:
+            raise ValueError(
+                "unexpected lock set: expected "
+                f"{sorted(EXPECTED_LOCK_NAMES)}, got {sorted(snapshots)}"
+            )
+
+        final_opened_directory = os.fstat(directory_fd)
+        try:
+            final_current_directory = requirements_dir.stat(follow_symlinks=False)
+        except OSError as exc:
+            raise ValueError("requirements directory changed identity during verification") from exc
+        if (
+            stat.S_ISLNK(final_current_directory.st_mode)
+            or not stat.S_ISDIR(final_current_directory.st_mode)
+            or _identity(final_opened_directory) != _identity(final_current_directory)
+            or _stable_directory_signature(final_opened_directory) != initial_directory_signature
+        ):
+            raise ValueError("requirements directory changed during verification")
+        return snapshots
+    finally:
+        os.close(directory_fd)
+
+
 def _read_regular_text(path: Path, *, max_bytes: int = MAX_LOCK_BYTES) -> str:
-    if path.is_symlink() or not path.is_file():
-        raise ValueError(f"{path} must be a regular non-symlink file")
-    size = path.stat().st_size
-    if size <= 0 or size > max_bytes:
-        raise ValueError(f"{path} size {size} is outside the allowed range")
-    return path.read_text(encoding="utf-8")
+    text = read_text_bounded(path, max_bytes=max_bytes, label=str(path))
+    if not text:
+        raise ValueError(f"{path} must not be empty")
+    return text
 
 
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def parse_hash_lock(path: Path) -> dict[str, LockedRequirement]:
-    text = _read_regular_text(path)
+def _parse_hash_lock_text(text: str, *, source: str) -> dict[str, LockedRequirement]:
     lines = text.splitlines()
     requirements: dict[str, LockedRequirement] = {}
     index = 0
@@ -84,23 +254,23 @@ def parse_hash_lock(path: Path) -> dict[str, LockedRequirement]:
             index += 1
             continue
         if line[0].isspace():
-            raise ValueError(f"{path}:{index + 1}: orphan continuation line")
+            raise ValueError(f"{source}:{index + 1}: orphan continuation line")
         if stripped.startswith(
             ("-e ", "--editable", "--index-url", "--extra-index-url", "--find-links")
         ):
-            raise ValueError(f"{path}:{index + 1}: unsupported lock directive")
+            raise ValueError(f"{source}:{index + 1}: unsupported lock directive")
 
         requirement_text = stripped.removesuffix("\\").rstrip()
         requirement = Requirement(requirement_text)
         if requirement.url is not None:
-            raise ValueError(f"{path}:{index + 1}: direct URL/VCS requirements are forbidden")
+            raise ValueError(f"{source}:{index + 1}: direct URL/VCS requirements are forbidden")
         specifiers = list(requirement.specifier)
         if (
             len(specifiers) != 1
             or specifiers[0].operator != "=="
             or specifiers[0].version.endswith(".*")
         ):
-            raise ValueError(f"{path}:{index + 1}: requirement must use one exact == pin")
+            raise ValueError(f"{source}:{index + 1}: requirement must use one exact == pin")
 
         hashes: list[str] = []
         index += 1
@@ -109,18 +279,18 @@ def parse_hash_lock(path: Path) -> dict[str, LockedRequirement]:
             if continuation and not continuation.startswith("#"):
                 any_hash = ANY_HASH_RE.search(continuation)
                 if any_hash and not continuation.startswith("--hash=sha256:"):
-                    raise ValueError(f"{path}:{index + 1}: only SHA-256 hashes are accepted")
+                    raise ValueError(f"{source}:{index + 1}: only SHA-256 hashes are accepted")
                 match = HASH_RE.fullmatch(continuation)
                 if not match:
-                    raise ValueError(f"{path}:{index + 1}: unsupported lock continuation")
+                    raise ValueError(f"{source}:{index + 1}: unsupported lock continuation")
                 hashes.append(match.group(1))
             index += 1
 
         if not hashes:
-            raise ValueError(f"{path}: {requirement.name} is missing SHA-256 hashes")
+            raise ValueError(f"{source}: {requirement.name} is missing SHA-256 hashes")
         canonical_name = canonicalize_name(requirement.name)
         if canonical_name in requirements:
-            raise ValueError(f"{path}: duplicate locked package {canonical_name}")
+            raise ValueError(f"{source}: duplicate locked package {canonical_name}")
         requirements[canonical_name] = LockedRequirement(
             name=canonical_name,
             version=specifiers[0].version,
@@ -128,8 +298,12 @@ def parse_hash_lock(path: Path) -> dict[str, LockedRequirement]:
         )
 
     if not requirements:
-        raise ValueError(f"{path} contains no locked requirements")
+        raise ValueError(f"{source} contains no locked requirements")
     return requirements
+
+
+def parse_hash_lock(path: Path) -> dict[str, LockedRequirement]:
+    return _parse_hash_lock_text(_read_regular_text(path), source=str(path))
 
 
 def _assert_declared_requirements_satisfied(
@@ -151,23 +325,26 @@ def _assert_declared_requirements_satisfied(
             )
 
 
-def _verify_locks(root: Path, pyproject: dict[str, Any]) -> dict[str, Any]:
+def _verify_locks(root: Path, pyproject: dict[str, Any]) -> tuple[dict[str, Any], str]:
     requirements_dir = root / "requirements"
-    observed = {path.name for path in requirements_dir.glob("*.lock")}
-    if observed != EXPECTED_LOCK_NAMES:
-        raise ValueError(
-            f"unexpected lock set: expected {sorted(EXPECTED_LOCK_NAMES)}, got {sorted(observed)}"
-        )
+    snapshots = _read_lock_set(requirements_dir)
 
-    runtime_path = requirements_dir / "runtime-py311.lock"
-    build_path = requirements_dir / "build-py311.lock"
-    dev311_path = requirements_dir / "dev-py311.lock"
-    dev313_path = requirements_dir / "dev-py313.lock"
-
-    runtime = parse_hash_lock(runtime_path)
-    build = parse_hash_lock(build_path)
-    dev311 = parse_hash_lock(dev311_path)
-    dev313 = parse_hash_lock(dev313_path)
+    runtime = _parse_hash_lock_text(
+        snapshots["runtime-py311.lock"].text,
+        source=str(requirements_dir / "runtime-py311.lock"),
+    )
+    build = _parse_hash_lock_text(
+        snapshots["build-py311.lock"].text,
+        source=str(requirements_dir / "build-py311.lock"),
+    )
+    dev311 = _parse_hash_lock_text(
+        snapshots["dev-py311.lock"].text,
+        source=str(requirements_dir / "dev-py311.lock"),
+    )
+    dev313 = _parse_hash_lock_text(
+        snapshots["dev-py313.lock"].text,
+        source=str(requirements_dir / "dev-py313.lock"),
+    )
 
     project = pyproject["project"]
     runtime_declared = list(project.get("dependencies", []))
@@ -185,21 +362,21 @@ def _verify_locks(root: Path, pyproject: dict[str, Any]) -> dict[str, Any]:
     if leaked:
         raise ValueError(f"runtime lock contains build-only packages: {sorted(leaked)}")
 
-    lock_summary: dict[str, Any] = {}
-    for path in sorted(requirements_dir.glob("*.lock")):
-        lock_summary[path.name] = {
-            "sha256": sha256_file(path),
-            "size_bytes": path.stat().st_size,
+    lock_summary: dict[str, Any] = {
+        name: {
+            "sha256": snapshot.sha256,
+            "size_bytes": snapshot.size_bytes,
         }
+        for name, snapshot in sorted(snapshots.items())
+    }
     lock_summary["build-py311.lock"]["packages"] = len(build)
     lock_summary["runtime-py311.lock"]["packages"] = len(runtime)
     lock_summary["dev-py311.lock"]["packages"] = len(dev311)
     lock_summary["dev-py313.lock"]["packages"] = len(dev313)
-    return lock_summary
+    return lock_summary, snapshots["base-image.lock"].text.strip()
 
 
-def _verify_docker(root: Path) -> str:
-    base_text = _read_regular_text(root / "requirements" / "base-image.lock", max_bytes=256).strip()
+def _verify_docker(root: Path, base_text: str) -> str:
     if not BASE_IMAGE_RE.fullmatch(base_text):
         raise ValueError("base-image.lock does not identify the expected digest-pinned Python base")
 
@@ -280,8 +457,8 @@ def verify_repository(root: Path) -> dict[str, Any]:
     root = root.resolve()
     pyproject_path = root / "pyproject.toml"
     pyproject = tomllib.loads(_read_regular_text(pyproject_path, max_bytes=256 * 1024))
-    locks = _verify_locks(root, pyproject)
-    base_image = _verify_docker(root)
+    locks, base_image_lock = _verify_locks(root, pyproject)
+    base_image = _verify_docker(root, base_image_lock)
     actions = _verify_workflow(root)
     precommit = _verify_precommit(root)
     return {
