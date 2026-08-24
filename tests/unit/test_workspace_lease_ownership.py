@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from ai_qa_automation.runtime.workspace_lease import WorkspaceLease
+from ai_qa_automation.runtime.workspace_lease import WorkspaceBusyError, WorkspaceLease
 
 
 def test_workspace_lease_rejects_symlinked_lease_directory(tmp_path: Path) -> None:
@@ -113,6 +113,32 @@ def test_workspace_lease_rejects_regular_directory_replacement_before_acquire(
         subject.acquire()
 
     assert list(lease_root.iterdir()) == []
+
+
+def test_workspace_inode_lock_survives_lease_directory_namespace_replacement(
+    tmp_path: Path,
+) -> None:
+    artifact_root = tmp_path / "artifacts"
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+    first = WorkspaceLease(artifact_root, workspace, "run-1")
+    if first.workspace_root_identity is None:
+        pytest.skip("workspace inode locking is unavailable")
+    first.acquire()
+    try:
+        lease_root = first.path.parent
+        original_root = artifact_root / ".leases-original"
+        lease_root.rename(original_root)
+        lease_root.mkdir()
+
+        second = WorkspaceLease(artifact_root, workspace, "run-2")
+        with pytest.raises(WorkspaceBusyError, match="already leased"):
+            second.acquire()
+    finally:
+        first.release()
+
+    second.acquire()
+    second.release()
 
 
 def test_workspace_lease_rejects_directory_swap_during_lock_open(
