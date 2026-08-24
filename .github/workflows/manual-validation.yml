@@ -90,10 +90,9 @@ jobs:
   model-smoke:
     name: Claude Agent SDK Smoke (Credentialed / Manual)
     if: ${{ inputs.run_model }}
+    environment: credentialed-validation
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    env:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
       - name: Checkout exact dispatch subject
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -104,6 +103,10 @@ jobs:
       - name: Verify exact source revision
         run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
+      - name: Require main branch for credentialed validation
+        run: |
+          test "$GITHUB_REF" = "refs/heads/main" || { echo 'Credentialed model validation is restricted to refs/heads/main'; exit 1; }
+
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
@@ -111,17 +114,21 @@ jobs:
           cache: pip
           cache-dependency-path: requirements/dev-py311.lock
 
-      - name: Require explicit credential
-        run: |
-          test -n "$ANTHROPIC_API_KEY" || { echo 'ANTHROPIC_API_KEY secret is required when run_model=true'; exit 1; }
-
       - name: Install hash-locked project environment
         run: |
           python -m pip install --require-hashes -r requirements/dev-py311.lock
           python -m pip install --no-deps --no-build-isolation .
           python -m pip check
 
+      - name: Require explicit credential
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          test -n "$ANTHROPIC_API_KEY" || { echo 'ANTHROPIC_API_KEY environment secret is required when run_model=true'; exit 1; }
+
       - name: Run bounded live Agent SDK evaluation
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: pytest -o addopts='' -q -m model tests/evaluations/test_live_agent_smoke.py --junitxml=model-smoke.xml
 
       - name: Upload model evaluation metadata
