@@ -36,9 +36,11 @@ jobs:
           cache: pip
       - name: Verify interpreter and install lock compiler
         run: |
+          set -euo pipefail
           test "$(python -c 'import platform; print(platform.python_version())')" = "${{ matrix.python-version }}"
-          python -m pip install 'pip==26.2.1' 'pip-tools==7.6.0'
+          python -m pip install 'pip==26.2.1' 'uv==0.12.1'
           python -m pip check
+          test "$(uv --version)" = 'uv 0.12.1'
       - name: Generate hashed development lock
         shell: bash
         run: |
@@ -49,26 +51,26 @@ jobs:
             *) exit 64 ;;
           esac
           mkdir -p generated
-          pip-compile pyproject.toml \
-            --all-build-deps \
+          printf 'hatchling==1.32.0\n' > generated/build-backend.in
+          uv pip compile pyproject.toml generated/build-backend.in \
+            --python-version "${{ matrix.python-version }}" \
             --extra dev \
             --generate-hashes \
-            --strip-extras \
-            --no-emit-index-url \
-            --no-emit-trusted-host \
+            --no-header \
             --output-file "generated/dev-py${suffix}.lock"
+          rm generated/build-backend.in
       - name: Generate hashed runtime lock and base-image digest
         if: matrix.python-version == '3.11.16'
         shell: bash
         run: |
           set -euo pipefail
-          pip-compile pyproject.toml \
-            --all-build-deps \
+          printf 'hatchling==1.32.0\n' > generated/build-backend.in
+          uv pip compile pyproject.toml generated/build-backend.in \
+            --python-version '3.11.16' \
             --generate-hashes \
-            --strip-extras \
-            --no-emit-index-url \
-            --no-emit-trusted-host \
+            --no-header \
             --output-file generated/runtime-py311.lock
+          rm generated/build-backend.in
           docker pull python:3.11.16-slim
           digest="$(docker image inspect --format '{{index .RepoDigests 0}}' python:3.11.16-slim)"
           case "$digest" in
@@ -121,6 +123,9 @@ jobs:
           grep -q -- '--hash=sha256:' generated/dev-py311.lock
           grep -q -- '--hash=sha256:' generated/dev-py313.lock
           grep -q -- '--hash=sha256:' generated/runtime-py311.lock
+          grep -q '^hatchling==1.32.0' generated/dev-py311.lock
+          grep -q '^hatchling==1.32.0' generated/dev-py313.lock
+          grep -q '^hatchling==1.32.0' generated/runtime-py311.lock
           grep -Eq '^python:3\.11\.16-slim@sha256:[0-9a-f]{64}$' generated/base-image.lock
       - name: Commit generated lock data only
         shell: bash
