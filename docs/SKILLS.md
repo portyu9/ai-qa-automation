@@ -94,6 +94,9 @@ Generation begins with expected behavior and **observed repository coverage**—
 
 ```mermaid
 flowchart LR
+    accTitle: Coverage-aware test generation from observed evidence to guarded validation
+    accDescr: A requirement or change is inspected through bounded coverage search, producing observed coverage evidence and deterministic candidate gaps. The model may interpret a same-run plan, but guarded creation is followed by deterministic quality, execution, and regression validation.
+
     A[Requirement / change] --> B[Bounded coverage search]
     B --> C[Observed coverage evidence]
     C --> D[Deterministic candidate gaps]
