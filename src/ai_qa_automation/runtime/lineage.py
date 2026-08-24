@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from ..io_safety import open_regular_binary, parse_json_object_strict, read_json_object_bounded
+from ..models import ArtifactRecord, EvidenceItem
 from ..state import StateStore
 from .journal import RunJournal
 
@@ -90,42 +91,31 @@ def _validated_manifest_rows(
     if len(artifact_rows) > _MAX_LINEAGE_ARTIFACT_RECORDS:
         raise ValueError("lineage evidence manifest exceeds artifact record bound")
 
-    validated_evidence: list[dict[str, Any]] = []
-    evidence_ids: set[str] = set()
-    for raw in evidence_rows:
-        if not isinstance(raw, dict):
-            raise ValueError("lineage evidence manifest contains a non-object evidence record")
-        evidence_id = raw.get("id")
-        evidence_run_id = raw.get("run_id")
-        if not isinstance(evidence_id, str) or not evidence_id:
-            raise ValueError("lineage evidence manifest contains an invalid evidence id")
-        if not isinstance(evidence_run_id, str) or evidence_run_id != run_id:
-            raise ValueError("lineage evidence manifest contains evidence from another run")
-        if evidence_id in evidence_ids:
-            raise ValueError("lineage evidence manifest contains duplicate evidence ids")
-        evidence_ids.add(evidence_id)
-        validated_evidence.append(raw)
+    try:
+        evidence_records = [
+            EvidenceItem.model_validate_json(json.dumps(raw), strict=True) for raw in evidence_rows
+        ]
+        artifact_records = [
+            ArtifactRecord.model_validate_json(json.dumps(raw), strict=True) for raw in artifact_rows
+        ]
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"lineage evidence manifest record schema is invalid: {type(exc).__name__}"
+        ) from exc
 
-    validated_artifacts: list[dict[str, Any]] = []
-    artifact_ids: set[str] = set()
-    artifact_paths: set[str] = set()
-    for raw in artifact_rows:
-        if not isinstance(raw, dict):
-            raise ValueError("lineage evidence manifest contains a non-object artifact record")
-        artifact_id = raw.get("artifact_id")
-        path = raw.get("path")
-        if not isinstance(artifact_id, str) or not artifact_id:
-            raise ValueError("lineage evidence manifest contains an invalid artifact id")
-        if not isinstance(path, str) or not path:
-            raise ValueError("lineage evidence manifest contains an invalid artifact path")
-        if artifact_id in artifact_ids:
-            raise ValueError("lineage evidence manifest contains duplicate artifact ids")
-        if path in artifact_paths:
-            raise ValueError("lineage evidence manifest contains duplicate artifact paths")
-        artifact_ids.add(artifact_id)
-        artifact_paths.add(path)
-        validated_artifacts.append(raw)
-    return validated_evidence, validated_artifacts
+    if any(item.run_id != run_id for item in evidence_records):
+        raise ValueError("lineage evidence manifest contains evidence from another run")
+    if len({item.id for item in evidence_records}) != len(evidence_records):
+        raise ValueError("lineage evidence manifest contains duplicate evidence ids")
+    if len({item.artifact_id for item in artifact_records}) != len(artifact_records):
+        raise ValueError("lineage evidence manifest contains duplicate artifact ids")
+    if len({item.path for item in artifact_records}) != len(artifact_records):
+        raise ValueError("lineage evidence manifest contains duplicate artifact paths")
+
+    return (
+        [item.model_dump(mode="json") for item in evidence_records],
+        [item.model_dump(mode="json") for item in artifact_records],
+    )
 
 
 def build_run_lineage(run_dir: Path, *, max_journal_events: int = 500) -> RunLineageGraph:
