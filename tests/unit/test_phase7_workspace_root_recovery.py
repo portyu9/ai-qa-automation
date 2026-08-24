@@ -87,7 +87,9 @@ def test_stale_recovery_rejects_byte_equivalent_workspace_root_replacement(
     assert result["status"] == "BLOCKED"
     assert "workspace root identity changed" in str(result["reason"])
     assert replacement_target.read_text(encoding="utf-8") == "mutated\n"
-    assert (original_workspace / "tests" / "test_checkout.py").read_text(encoding="utf-8") == "mutated\n"
+    assert (original_workspace / "tests" / "test_checkout.py").read_text(
+        encoding="utf-8"
+    ) == "mutated\n"
     assert backup.exists()
     persisted = json.loads((prior_run / "runtime.json").read_text(encoding="utf-8"))
     assert isinstance(persisted["pending_mutation"], dict)
