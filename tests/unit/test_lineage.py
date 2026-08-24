@@ -21,6 +21,7 @@ def test_lineage_connects_evidence_artifacts_hypotheses_and_validation(tmp_path:
         {
             "run_id": "run-123",
             "objective": "Investigate checkout failure",
+            "workspace": str(tmp_path / "sut"),
             "objective_gate_id": "pytest:checkout",
             "terminal_status": "NOT_VERIFIED",
             "target_git_sha": "abc123",
@@ -106,7 +107,10 @@ def test_lineage_connects_evidence_artifacts_hypotheses_and_validation(tmp_path:
 
 def test_lineage_bounds_journal_graph(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
-    write_json(run_dir / "state.json", {"run_id": "run", "objective": "bounded"})
+    write_json(
+        run_dir / "state.json",
+        {"run_id": "run", "objective": "bounded", "workspace": str(tmp_path / "sut")},
+    )
     journal = RunJournal(run_dir / "journal.jsonl")
     for index in range(1, 4):
         journal.append(f"event-{index}")
@@ -122,7 +126,10 @@ def test_lineage_bounds_journal_graph(tmp_path: Path) -> None:
 
 def test_lineage_does_not_graph_invalid_journal_events(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
-    write_json(run_dir / "state.json", {"run_id": "run", "objective": "tamper"})
+    write_json(
+        run_dir / "state.json",
+        {"run_id": "run", "objective": "tamper", "workspace": str(tmp_path / "sut")},
+    )
     (run_dir / "journal.jsonl").write_text('{"seq": 1, "event": "forged"}\n', encoding="utf-8")
 
     graph = build_run_lineage(run_dir)
@@ -136,7 +143,10 @@ def test_lineage_fails_closed_when_verified_journal_is_swapped_before_graphing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run_dir = tmp_path / "run"
-    write_json(run_dir / "state.json", {"run_id": "run", "objective": "race"})
+    write_json(
+        run_dir / "state.json",
+        {"run_id": "run", "objective": "race", "workspace": str(tmp_path / "sut")},
+    )
     journal_path = run_dir / "journal.jsonl"
     RunJournal(journal_path).append("owned-event")
     outside = tmp_path / "outside-journal.jsonl"
