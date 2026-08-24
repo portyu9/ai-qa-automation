@@ -99,22 +99,38 @@ def _read_fd_bounded(fd: int, *, max_bytes: int, label: str) -> bytes:
     return b"".join(chunks)
 
 
+def _relative_stat(name: str, directory_fd: int) -> os.stat_result:
+    try:
+        return os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    except (TypeError, NotImplementedError) as exc:
+        raise RuntimeError(
+            "supply-chain lock verification requires descriptor-relative no-follow stat"
+        ) from exc
+
+
+def _relative_open(name: str, flags: int, directory_fd: int, *, label: str) -> int:
+    try:
+        return os.open(name, flags, dir_fd=directory_fd)
+    except (TypeError, NotImplementedError) as exc:
+        raise RuntimeError(
+            "supply-chain lock verification requires descriptor-relative no-follow open"
+        ) from exc
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise ValueError(f"{label} became a symlink during verification") from exc
+        raise
+
+
 def _read_lock_set(requirements_dir: Path) -> dict[str, LockFileSnapshot]:
     """Read the exact managed lock set through one pinned no-follow directory descriptor."""
 
-    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_flag = getattr(os, "O_DIRECTORY", 0)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
-    supports_secure_relative_io = (
-        bool(getattr(os, "O_DIRECTORY", 0))
-        and bool(nofollow)
-        and os.open in os.supports_dir_fd
-        and os.stat in os.supports_dir_fd
-    )
-    if not supports_secure_relative_io:
+    if not directory_flag or not nofollow:
         raise RuntimeError(
             "supply-chain lock verification requires descriptor-relative no-follow ingestion"
         )
-    directory_flags |= nofollow
+    directory_flags = os.O_RDONLY | directory_flag | nofollow
 
     if requirements_dir.is_symlink():
         raise ValueError("requirements directory is a symlink and has ambiguous ownership")
@@ -163,22 +179,17 @@ def _read_lock_set(requirements_dir: Path) -> dict[str, LockFileSnapshot]:
                     raise ValueError("requirements directory contains an invalid lock filename")
 
                 label = f"supply-chain lock {name}"
-                before = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                before = _relative_stat(name, directory_fd)
                 if not stat.S_ISREG(before.st_mode):
                     raise ValueError(f"{label} must be a regular non-symlink file")
 
                 file_flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | nofollow
-                try:
-                    file_fd = os.open(name, file_flags, dir_fd=directory_fd)
-                except OSError as exc:
-                    if exc.errno == errno.ELOOP:
-                        raise ValueError(f"{label} became a symlink during verification") from exc
-                    raise
+                file_fd = _relative_open(name, file_flags, directory_fd, label=label)
                 try:
                     opened_file = os.fstat(file_fd)
                     if not stat.S_ISREG(opened_file.st_mode):
                         raise ValueError(f"{label} must be a regular file")
-                    current_file = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                    current_file = _relative_stat(name, directory_fd)
                     if not stat.S_ISREG(current_file.st_mode):
                         raise ValueError(f"{label} changed file type during verification")
                     if _identity(opened_file) != _identity(current_file):
@@ -192,11 +203,7 @@ def _read_lock_set(requirements_dir: Path) -> dict[str, LockFileSnapshot]:
                     )
 
                     final_opened_file = os.fstat(file_fd)
-                    final_current_file = os.stat(
-                        name,
-                        dir_fd=directory_fd,
-                        follow_symlinks=False,
-                    )
+                    final_current_file = _relative_stat(name, directory_fd)
                     if (
                         _stable_file_signature(final_opened_file) != initial_file_signature
                         or _identity(final_opened_file) != _identity(final_current_file)
