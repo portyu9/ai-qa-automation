@@ -5,7 +5,6 @@ import json
 import os
 import tempfile
 from _thread import RLock
-from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -143,6 +142,14 @@ class RuntimeControl:
             if existed:
                 if data is None:
                     raise MutationPendingError("mutation rollback bytes are unavailable")
+                try:
+                    # Existing-file rollback requires a durable run root before its
+                    # descriptor-confined backup can be published below that root.
+                    self.persist()
+                except (OSError, RuntimeError, ValueError) as exc:
+                    raise MutationPendingError(
+                        f"mutation runtime authority could not be durably prepared: {type(exc).__name__}"
+                    ) from exc
                 original_hash = hashlib.sha256(data).hexdigest()
                 backup_relative = Path("rollback") / (
                     f"{hashlib.sha256(relative_path.encode()).hexdigest()[:24]}.bin"
@@ -155,11 +162,11 @@ class RuntimeControl:
                         data,
                         create_parents=True,
                         create_only=False,
-                        label="mutation rollback backup",
+                        label="mutation rollback directory backup",
                     )
                 except (OSError, RuntimeError, ValueError) as exc:
                     raise MutationPendingError(
-                        f"mutation rollback backup could not be durably prepared: {type(exc).__name__}"
+                        f"mutation rollback backup could not be durably prepared: {exc}"
                     ) from exc
                 backup_path = run_root / backup_relative
 
@@ -315,13 +322,21 @@ class RuntimeControl:
                 run_root,
                 relative,
                 max_bytes=_MAX_ROLLBACK_BYTES,
-                label="pending rollback backup",
+                label="pending rollback directory backup",
             )
+        except FileNotFoundError as exc:
+            raise RuntimeError("pending rollback backup is missing or not a regular file") from exc
         except ValueError as exc:
             message = str(exc)
             if "exceeds" in message and "ingestion limit" in message:
                 raise RuntimeError("pending rollback backup exceeds 2 MB safety limit") from exc
+            if "symlink" in message:
+                raise RuntimeError(message) from exc
+            if "changed identity during confined read" in message:
+                raise RuntimeError("pending rollback backup is missing or not a regular file") from exc
             raise RuntimeError(message) from exc
+        except OSError as exc:
+            raise RuntimeError("pending rollback backup is unreadable") from exc
         if hashlib.sha256(data).hexdigest() != pending.original_sha256:
             raise RuntimeError("pending rollback backup failed integrity verification")
         return run_root / relative, data
@@ -336,7 +351,7 @@ class RuntimeControl:
                 run_root,
                 relative,
                 missing_ok=True,
-                label="mutation rollback backup cleanup",
+                label="mutation rollback directory backup cleanup",
             )
         except (OSError, RuntimeError, ValueError):
             return False
