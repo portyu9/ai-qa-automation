@@ -12,6 +12,8 @@ from typing import Any
 
 from ..fs_authority import (
     atomic_write_bytes_confined,
+    bind_pending_root_authority,
+    clear_pending_root_authority,
     descriptor_relative_authority_supported,
     pin_directory_identity,
     read_bytes_confined,
@@ -98,6 +100,21 @@ class RuntimeControl:
             raise RuntimeError("runtime workspace identity could not be revalidated") from exc
         if current != self._workspace_identity:
             raise RuntimeError("runtime workspace changed identity since authorization")
+
+    def _bind_pending_root_authority(self) -> None:
+        bind_pending_root_authority(
+            self.workspace,
+            self._workspace_identity,
+            owner=self.lease_id,
+        )
+
+    def _clear_pending_root_authority(self) -> None:
+        if not clear_pending_root_authority(
+            self.workspace,
+            self._workspace_identity,
+            owner=self.lease_id,
+        ):
+            raise RuntimeError("pending workspace root authority is owned by another runtime")
 
     def before_tool(self, tool_name: str) -> None:
         with self._lock:
@@ -202,6 +219,7 @@ class RuntimeControl:
 
             try:
                 self._assert_workspace_identity()
+                self._bind_pending_root_authority()
             except RuntimeError as exc:
                 if backup_path is not None:
                     self._discard_backup_best_effort(backup_path)
@@ -241,6 +259,7 @@ class RuntimeControl:
                         raise RuntimeError(
                             "mutation preparation failed and pending metadata could not be cleared"
                         ) from cleanup_exc
+                self._clear_pending_root_authority()
                 if backup_path is not None:
                     self._discard_backup_best_effort(backup_path)
                 raise
@@ -255,15 +274,20 @@ class RuntimeControl:
             if pending.existed:
                 backup, _ = self._validated_rollback_backup(pending)
 
-            # Commit authority becomes durable by clearing pending metadata first. Only
-            # after that succeeds may the rollback snapshot be discarded. A crash after
-            # metadata persistence can at worst leave an orphan backup, never a committed
-            # target whose only rollback bytes were deleted while metadata still said pending.
+            # Clear process-local mutation authority only immediately before the durable
+            # pending-state transition. If persistence fails it is rebound before return.
+            self._clear_pending_root_authority()
             self.pending_mutation = None
             try:
                 self.persist()
             except Exception:
                 self.pending_mutation = pending
+                try:
+                    self._bind_pending_root_authority()
+                except RuntimeError as bind_exc:
+                    raise RuntimeError(
+                        "mutation commit closure failed and pending root authority could not be restored"
+                    ) from bind_exc
                 raise
 
             cleanup_failed = False
@@ -317,14 +341,20 @@ class RuntimeControl:
             # pending/backup authority rather than certifying rollback on another tree.
             self._assert_workspace_identity()
 
-            # The target bytes are now restored/removed. Persist closure before deleting
-            # the rollback snapshot. If metadata persistence fails, keep the transaction
-            # pending and the backup intact so recovery remains conservative.
+            # Clear process-local mutation authority only immediately before the durable
+            # closure. Persistence failure restores both the pending object and binding.
+            self._clear_pending_root_authority()
             self.pending_mutation = None
             try:
                 self.persist()
             except Exception:
                 self.pending_mutation = pending
+                try:
+                    self._bind_pending_root_authority()
+                except RuntimeError as bind_exc:
+                    raise RuntimeError(
+                        "mutation rollback closure failed and pending root authority could not be restored"
+                    ) from bind_exc
                 raise
 
             cleanup_failed = False
