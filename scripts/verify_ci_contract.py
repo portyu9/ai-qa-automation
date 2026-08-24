@@ -24,8 +24,15 @@ AUTOMATIC_REQUIRED_JOBS = (
     "security",
     "browser-reference-sut",
 )
+DOCUMENTATION_INTEGRITY_ARTIFACT = "artifacts/ci/documentation-integrity.json"
+DOCUMENTATION_INTEGRITY_COMMAND = (
+    f"python scripts/verify_docs.py | tee {DOCUMENTATION_INTEGRITY_ARTIFACT}"
+)
 MERMAID_VALIDATION_ARTIFACT = "artifacts/ci/mermaid-validation.json"
 MERMAID_RENDER_COMMAND = f"python scripts/validate_mermaid.py | tee {MERMAID_VALIDATION_ARTIFACT}"
+DOCUMENTATION_STEP_NAME = "Verify documentation authority contract"
+MERMAID_STEP_NAME = "Render Mermaid documentation with digest-pinned official CLI"
+SUPPLY_CHAIN_UPLOAD_STEP_NAME = "Upload supply-chain evidence"
 ACTION_RE = re.compile(r"^\s*uses:\s*([^@\s]+)@([^\s#]+)", re.MULTILINE)
 HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
 WRITE_PERMISSION_RE = re.compile(r"^\s+[A-Za-z0-9_-]+:\s*write\s*$", re.MULTILINE)
@@ -239,6 +246,35 @@ def _job_block(text: str, job_id: str) -> str:
     return "\n".join(jobs[start:end])
 
 
+def _step_block(job: str, step_name: str) -> str:
+    lines = job.splitlines()
+    marker = f"      - name: {step_name}"
+    starts = [index for index, line in enumerate(lines) if line == marker]
+    if len(starts) != 1:
+        raise ValueError(f"job must contain exactly one step named {step_name}")
+    start = starts[0]
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        if lines[index].startswith("      - name: "):
+            end = index
+            break
+    return "\n".join(lines[start:end])
+
+
+def _require_exact_script_step(job: str, *, step_name: str, command: str) -> None:
+    step = _semantic_text(_step_block(job, step_name)).strip()
+    expected = "\n".join(
+        (
+            f"      - name: {step_name}",
+            "        run: |",
+            "          set -o pipefail",
+            f"          {command}",
+        )
+    )
+    if step != expected:
+        raise ValueError(f"{step_name} must be the exact reviewed fail-closed script step")
+
+
 def _verify_action_revisions(workflows: dict[str, str]) -> dict[str, str]:
     observed: dict[str, str] = {}
     for name, raw_text in workflows.items():
@@ -312,15 +348,33 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
     _verify_read_only_permissions(text, name=name)
     checkout_count = _verify_checkout_binding(text, name=name)
 
-    supply_chain = _semantic_text(_job_block(text, "supply-chain"))
+    supply_chain_raw = _job_block(text, "supply-chain")
+    supply_chain = _semantic_text(supply_chain_raw)
+    _require_exact_script_step(
+        supply_chain_raw,
+        step_name=DOCUMENTATION_STEP_NAME,
+        command=DOCUMENTATION_INTEGRITY_COMMAND,
+    )
+    _require_exact_script_step(
+        supply_chain_raw,
+        step_name=MERMAID_STEP_NAME,
+        command=MERMAID_RENDER_COMMAND,
+    )
+    upload_step = _semantic_text(_step_block(supply_chain_raw, SUPPLY_CHAIN_UPLOAD_STEP_NAME))
+    if upload_step.count(DOCUMENTATION_INTEGRITY_ARTIFACT) != 1:
+        raise ValueError(
+            f"{name}: supply-chain upload step must persist documentation integrity evidence exactly once"
+        )
+    if upload_step.count(MERMAID_VALIDATION_ARTIFACT) != 1:
+        raise ValueError(
+            f"{name}: supply-chain upload step must persist Mermaid validation evidence exactly once"
+        )
+    if supply_chain.count(DOCUMENTATION_INTEGRITY_COMMAND) != 1:
+        raise ValueError(
+            f"{name}: documentation integrity command must not appear outside its reviewed step"
+        )
     if supply_chain.count(MERMAID_RENDER_COMMAND) != 1:
-        raise ValueError(
-            f"{name}: supply-chain job must execute the Mermaid render command exactly once"
-        )
-    if supply_chain.count(MERMAID_VALIDATION_ARTIFACT) != 2:
-        raise ValueError(
-            f"{name}: Mermaid validation evidence must be produced and uploaded exactly once"
-        )
+        raise ValueError(f"{name}: Mermaid render command must not appear outside its reviewed step")
 
     required_gate = _semantic_text(_job_block(text, "required-gate"))
     if "    name: Required PR Gate" not in required_gate:
@@ -339,6 +393,7 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
         "subject": "github.sha",
         "checkout_count": checkout_count,
         "required_gate": "Required PR Gate",
+        "documentation_integrity": "required-via-supply-chain",
         "mermaid_render": "required-via-supply-chain",
         "permissions": "contents:read",
         "secrets": False,
