@@ -38,7 +38,7 @@
 | **Security posture** | fail-closed authorization, explicit trust roots, bounded resources, untrusted external context, independent deployment controls |
 | **Network posture** | exact host allowlists, read-only API default, browser routing controls, independent k6 egress prerequisite |
 | **External MCP** | explicitly approved vendor integrations; server identity never grants blanket authority and returned content remains untrusted evidence |
-| **Evaluation** | deterministic tests, adversarial primary corpus, physically separate H-series holdout, frozen safety thresholds |
+| **Evaluation** | deterministic tests, adversarial primary corpus, repository-visible sequestered H-series readiness corpus, frozen safety thresholds |
 | **Workflow governance** | GitHub Actions is operator-dispatched through `workflow_dispatch` |
 | **License** | MIT |
 
@@ -57,7 +57,7 @@ Use these as inspection prompts; the checkboxes are not runtime results.
 - [ ] Follow one mutation from proposal through exact-path patch safety, targeted pytest, full regression, and durable commit/rollback closure.
 - [ ] Confirm that terminal `SUCCESS` is derived from active validation lineage rather than model prose or provider health.
 - [ ] Inspect independent budgets, tool circuits, workspace ownership, path confinement, and network boundaries for fail-closed behavior.
-- [ ] Compare the primary adversarial corpus with the physically separate H-series holdout and frozen safety thresholds.
+- [ ] Compare the primary adversarial corpus with the repository-visible sequestered H-series readiness cases and frozen safety thresholds.
 
 </details>
 
@@ -708,13 +708,13 @@ The repository defines:
 - deterministic integration tests for evidence/runtime flows;
 - dedicated policy and security tests;
 - a fixed **34-scenario primary adversarial corpus**;
-- a physically separate **H-series holdout corpus**;
+- a repository-visible, separately executed **H-series readiness corpus**;
 - frozen evaluation-threshold schema and hard-safety limits;
 - Playwright-marked tests separated from the default pytest path;
 - credentialed model tests separated behind explicit configuration;
 - predefined hard-safety thresholds that are not rewritten to accommodate a failing implementation.
 
-The separation between visible primary scenarios and the H-series holdout reduces the incentive to optimize solely to known cases. Frozen hard-safety thresholds are policy artifacts, not post-hoc knobs for making a weak implementation look green.
+The H-series corpus is excluded from routine primary execution to preserve execution separation, but its committed fixtures are not blind or independent evidence. Frozen hard-safety thresholds are policy artifacts, not post-hoc knobs for making a weak implementation look green.
 
 ```bash
 make quality
@@ -812,7 +812,7 @@ Start with the [documentation hub](docs/README.md) for reviewer-specific reading
 | Trusted setup and credentials | [Setup](docs/SETUP.md) |
 | Operating the framework | [Operations](docs/OPERATIONS.md) |
 | Change intelligence and regression evidence | [Change Intelligence](docs/CHANGE_INTELLIGENCE.md) |
-| Evaluation and holdout governance | [Evaluation](docs/EVALUATION.md) |
+| Evaluation and readiness-corpus governance | [Evaluation](docs/EVALUATION.md) |
 | Claude Skill contracts | [Skills](docs/SKILLS.md) |
 | External MCP policy | [MCP](docs/MCP.md) |
 | Evidence lineage and attestations | [Traceability](docs/TRACEABILITY.md) |
@@ -826,7 +826,7 @@ Start with the [documentation hub](docs/README.md) for reviewer-specific reading
 
 ## GitHub Actions
 
-`.github/workflows/ci.yml` is operator-dispatched through `workflow_dispatch`. It defines quality/type checks, deterministic pytest, the primary adversarial evaluator, holdout evaluation, security scanning, Playwright reference-SUT coverage, and an optional credentialed Agent SDK smoke path under explicit operator control.
+`.github/workflows/ci.yml` is operator-dispatched through `workflow_dispatch`. It defines quality/type checks, deterministic pytest, the primary adversarial evaluator, repository-visible H-series readiness evaluation, security scanning, Playwright reference-SUT coverage, and an optional credentialed Agent SDK smoke path under explicit operator control.
 
 ## Security and contributions
 
