@@ -18,6 +18,7 @@ FENCE_OPEN_RE = re.compile(r"^(?P<fence>`{3,}|~{3,})[ \t]*(?P<info>[A-Za-z0-9_+.
 MAX_MARKDOWN_FILES = 128
 MAX_MARKDOWN_BYTES = 4 * 1024 * 1024
 MAX_TOTAL_MARKDOWN_BYTES = 16 * 1024 * 1024
+MAX_RENDER_FILE_BYTES = 16 * 1024 * 1024
 RENDER_TIMEOUT_SECONDS = 60
 
 
@@ -156,6 +157,8 @@ def _run_mermaid(root: Path, relative_path: Path, output_root: Path, expected_co
         "1g",
         "--cpus",
         "2",
+        "--ulimit",
+        f"fsize={MAX_RENDER_FILE_BYTES}:{MAX_RENDER_FILE_BYTES}",
         "--user",
         f"{os.getuid()}:{os.getgid()}",
         "--env",
