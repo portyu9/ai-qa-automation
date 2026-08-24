@@ -17,6 +17,52 @@ def _validated_bound(max_bytes: int) -> int:
     return max_bytes
 
 
+def _validated_entry_bound(max_entries: int) -> int:
+    if isinstance(max_entries, bool) or not isinstance(max_entries, int) or max_entries < 1:
+        raise ValueError("max_entries must be a positive integer")
+    return max_entries
+
+
+def _identity(value: os.stat_result) -> tuple[int, int]:
+    return value.st_dev, value.st_ino
+
+
+def _stable_file_signature(value: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+
+
+def _stable_directory_signature(value: os.stat_result) -> tuple[int, int, int, int]:
+    return value.st_dev, value.st_ino, value.st_mtime_ns, value.st_ctime_ns
+
+
+def _parse_json_object(text: str, *, label: str) -> dict[str, Any]:
+    def reject_duplicate_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"{label} contains duplicate JSON key: {key}")
+            result[key] = value
+        return result
+
+    def reject_constant(value: str) -> None:
+        raise ValueError(f"{label} contains non-standard JSON numeric constant: {value}")
+
+    parsed = json.loads(
+        text,
+        object_pairs_hook=reject_duplicate_pairs,
+        parse_constant=reject_constant,
+    )
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{label} root must be a JSON object")
+    return parsed
+
+
 def fsync_directory(path: Path) -> None:
     """Durably persist directory-entry changes on platforms that expose directory fsync."""
 
@@ -56,7 +102,7 @@ def open_regular_binary(path: Path, *, label: str) -> BinaryIO:
             current = path.stat(follow_symlinks=False)
             if stat.S_ISLNK(current.st_mode):
                 raise ValueError(f"{label} is a symlink and has ambiguous ownership")
-            if (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino):
+            if _identity(opened) != _identity(current):
                 raise ValueError(f"{label} changed identity during bounded ingestion")
         return os.fdopen(fd, "rb")
     except Exception:
@@ -90,26 +136,159 @@ def read_text_bounded(path: Path, *, max_bytes: int, label: str) -> str:
 def read_json_object_bounded(path: Path, *, max_bytes: int, label: str) -> dict[str, Any]:
     """Read one bounded JSON object without ambiguous keys or non-standard constants."""
 
-    def reject_duplicate_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-        result: dict[str, Any] = {}
-        for key, value in pairs:
-            if key in result:
-                raise ValueError(f"{label} contains duplicate JSON key: {key}")
-            result[key] = value
-        return result
-
-    def reject_constant(value: str) -> None:
-        raise ValueError(f"{label} contains non-standard JSON numeric constant: {value}")
-
     text = read_text_bounded(path, max_bytes=max_bytes, label=label)
-    parsed = json.loads(
-        text,
-        object_pairs_hook=reject_duplicate_pairs,
-        parse_constant=reject_constant,
+    return _parse_json_object(text, label=label)
+
+
+def _read_fd_bounded(fd: int, *, max_bytes: int, label: str) -> bytes:
+    limit = _validated_bound(max_bytes)
+    chunks: list[bytes] = []
+    total = 0
+    while total <= limit:
+        chunk = os.read(fd, min(_READ_CHUNK_BYTES, limit + 1 - total))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+    if total > limit:
+        raise ValueError(f"{label} exceeds {limit} byte ingestion limit")
+    return b"".join(chunks)
+
+
+def read_json_catalog_bounded(
+    directory: Path,
+    *,
+    max_entries: int,
+    max_bytes_per_file: int,
+    label: str,
+) -> dict[str, dict[str, Any]]:
+    """Read direct ``*.json`` catalog entries through one pinned directory descriptor.
+
+    Authority-bearing catalogs must not be enumerated by pathname after a separate
+    symlink preflight. The directory itself is opened no-follow, enumeration is
+    bounded while it occurs, each JSON file is opened relative to that descriptor,
+    and directory/file identities are revalidated before closure. If the platform
+    cannot provide the descriptor-relative primitives required for those guarantees,
+    ingestion fails closed rather than silently falling back to racy pathname reads.
+    """
+
+    entry_limit = _validated_entry_bound(max_entries)
+    file_limit = _validated_bound(max_bytes_per_file)
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    supports_secure_relative_io = (
+        bool(getattr(os, "O_DIRECTORY", 0))
+        and bool(nofollow)
+        and os.open in os.supports_dir_fd
+        and os.stat in os.supports_dir_fd
+        and os.scandir in os.supports_fd
     )
-    if not isinstance(parsed, dict):
-        raise ValueError(f"{label} root must be a JSON object")
-    return parsed
+    if not supports_secure_relative_io:
+        raise RuntimeError(
+            f"{label} requires descriptor-relative no-follow directory ingestion on this platform"
+        )
+    directory_flags |= nofollow
+
+    if directory.is_symlink():
+        raise ValueError(f"{label} is a symlink and has ambiguous ownership")
+    try:
+        directory_fd = os.open(directory, directory_flags)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise ValueError(f"{label} became a symlink during catalog ingestion") from exc
+        raise
+
+    try:
+        opened_directory = os.fstat(directory_fd)
+        if not stat.S_ISDIR(opened_directory.st_mode):
+            raise ValueError(f"{label} must be a directory")
+        try:
+            current_directory = directory.stat(follow_symlinks=False)
+        except OSError as exc:
+            raise ValueError(f"{label} changed identity during catalog ingestion") from exc
+        if stat.S_ISLNK(current_directory.st_mode):
+            raise ValueError(f"{label} became a symlink during catalog ingestion")
+        if _identity(opened_directory) != _identity(current_directory):
+            raise ValueError(f"{label} changed identity during catalog ingestion")
+        initial_directory_signature = _stable_directory_signature(opened_directory)
+
+        result: dict[str, dict[str, Any]] = {}
+        observed_entries = 0
+        with os.scandir(directory_fd) as entries:
+            for entry in entries:
+                observed_entries += 1
+                if observed_entries > entry_limit:
+                    raise ValueError(f"{label} exceeds {entry_limit} entry ingestion limit")
+                name = entry.name
+                if not name.endswith(".json"):
+                    continue
+                if Path(name).name != name or name in {".", ".."}:
+                    raise ValueError(f"{label} contains an invalid direct-entry name")
+
+                entry_label = f"{label} entry {name}"
+                before = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                if not stat.S_ISREG(before.st_mode):
+                    raise ValueError(f"{entry_label} must be a regular non-symlink file")
+
+                file_flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | nofollow
+                try:
+                    file_fd = os.open(name, file_flags, dir_fd=directory_fd)
+                except OSError as exc:
+                    if exc.errno == errno.ELOOP:
+                        raise ValueError(
+                            f"{entry_label} became a symlink during catalog ingestion"
+                        ) from exc
+                    raise
+                try:
+                    opened_file = os.fstat(file_fd)
+                    if not stat.S_ISREG(opened_file.st_mode):
+                        raise ValueError(f"{entry_label} must be a regular file")
+                    current_file = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                    if not stat.S_ISREG(current_file.st_mode):
+                        raise ValueError(f"{entry_label} changed file type during catalog ingestion")
+                    if _identity(opened_file) != _identity(current_file):
+                        raise ValueError(f"{entry_label} changed identity during catalog ingestion")
+                    initial_file_signature = _stable_file_signature(opened_file)
+
+                    content = _read_fd_bounded(
+                        file_fd,
+                        max_bytes=file_limit,
+                        label=entry_label,
+                    )
+
+                    final_opened_file = os.fstat(file_fd)
+                    final_current_file = os.stat(
+                        name,
+                        dir_fd=directory_fd,
+                        follow_symlinks=False,
+                    )
+                    if (
+                        _stable_file_signature(final_opened_file) != initial_file_signature
+                        or _identity(final_opened_file) != _identity(final_current_file)
+                        or not stat.S_ISREG(final_current_file.st_mode)
+                    ):
+                        raise ValueError(f"{entry_label} changed during catalog ingestion")
+                finally:
+                    os.close(file_fd)
+
+                result[name] = _parse_json_object(content.decode("utf-8"), label=entry_label)
+
+        final_opened_directory = os.fstat(directory_fd)
+        try:
+            final_current_directory = directory.stat(follow_symlinks=False)
+        except OSError as exc:
+            raise ValueError(f"{label} changed identity during catalog ingestion") from exc
+        if (
+            stat.S_ISLNK(final_current_directory.st_mode)
+            or not stat.S_ISDIR(final_current_directory.st_mode)
+            or _identity(final_opened_directory) != _identity(final_current_directory)
+            or _stable_directory_signature(final_opened_directory)
+            != initial_directory_signature
+        ):
+            raise ValueError(f"{label} changed during catalog ingestion")
+        return result
+    finally:
+        os.close(directory_fd)
 
 
 def sha256_file_bounded(path: Path, *, max_bytes: int, label: str) -> tuple[str, int]:
