@@ -95,6 +95,53 @@ def test_stale_recovery_rejects_byte_equivalent_workspace_root_replacement(
     assert isinstance(persisted["pending_mutation"], dict)
 
 
+def test_stale_recovery_rejects_missing_workspace_root_identity_authority(
+    tmp_path: Path,
+) -> None:
+    if not descriptor_relative_authority_supported():
+        pytest.skip("descriptor-relative no-follow filesystem authority is unavailable")
+
+    artifact_root = tmp_path / "artifacts"
+    workspace = tmp_path / "sut"
+    target = workspace / "tests" / "test_checkout.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("mutated\n", encoding="utf-8")
+    status = workspace.stat(follow_symlinks=False)
+    workspace_identity = (status.st_dev, status.st_ino)
+
+    prior_run = artifact_root / "run-old"
+    backup = prior_run / "rollback" / "checkout.bin"
+    backup.parent.mkdir(parents=True)
+    backup.write_bytes(b"original\n")
+    _write_pending_runtime(
+        prior_run=prior_run,
+        workspace=workspace,
+        workspace_identity=workspace_identity,
+        backup=backup,
+        fingerprint="same-fingerprint",
+    )
+    runtime_path = prior_run / "runtime.json"
+    payload = json.loads(runtime_path.read_text(encoding="utf-8"))
+    del payload["workspace_root_identity"]
+    runtime_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+    result = recover_stale_mutation(
+        artifact_root=artifact_root,
+        workspace=workspace,
+        previous_lease={"run_id": "run-old"},
+        current_workspace_fingerprint="same-fingerprint",
+        recovering_run_id="run-new",
+    )
+
+    assert result["status"] == "BLOCKED"
+    assert "workspace root identity authority is missing" in str(result["reason"])
+    assert target.read_text(encoding="utf-8") == "mutated\n"
+    assert backup.exists()
+
+
 def test_stale_recovery_accepts_matching_persisted_workspace_root_identity(
     tmp_path: Path,
 ) -> None:
