@@ -434,9 +434,7 @@ def _runtime_skill_allowlist(root: Path) -> tuple[str, ...]:
     values: list[str] = []
     for item in skill_keywords[0].value.elts:
         if not isinstance(item, ast.Constant) or not isinstance(item.value, str):
-            raise ValueError(
-                "ClaudeAgentOptions.skills must be a literal list of Skill names"
-            )
+            raise ValueError("ClaudeAgentOptions.skills must be a literal list of Skill names")
         values.append(item.value)
     skills = tuple(values)
     if not skills or len(skills) > MAX_SKILL_ENTRIES or len(set(skills)) != len(skills):
