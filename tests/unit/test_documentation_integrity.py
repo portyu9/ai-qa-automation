@@ -48,6 +48,31 @@ def test_docs_verifier_rejects_missing_local_target(tmp_path: Path) -> None:
         verify_documentation(tmp_path)
 
 
+def test_docs_verifier_ignores_footnote_definitions_as_links(tmp_path: Path) -> None:
+    _minimal_public_docs(tmp_path)
+    (tmp_path / "README.md").write_text(
+        "# Root\n\nEvidence-first control.[^note]\n\n"
+        "[Docs](docs/README.md)\n\n"
+        "[^note]: The explanatory text is not a link target.\n",
+        encoding="utf-8",
+    )
+
+    result = verify_documentation(tmp_path)
+
+    assert result["result"] == "PASS"
+
+
+def test_docs_verifier_still_checks_reference_link_definitions(tmp_path: Path) -> None:
+    _minimal_public_docs(tmp_path)
+    (tmp_path / "README.md").write_text(
+        "# Root\n\n[Missing][target]\n\n[target]: docs/DOES_NOT_EXIST.md\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="missing local link target"):
+        verify_documentation(tmp_path)
+
+
 def test_docs_verifier_rejects_repository_escape_link(tmp_path: Path) -> None:
     _minimal_public_docs(tmp_path)
     outside = tmp_path.parent / "outside.md"
