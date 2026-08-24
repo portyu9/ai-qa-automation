@@ -455,7 +455,9 @@ def _trusted_skill_count(root: Path) -> int:
                     )
                 name = entry.name
                 if Path(name).name != name or name in {".", ".."}:
-                    raise ValueError("trusted Skills directory contains an invalid direct-entry name")
+                    raise ValueError(
+                        "trusted Skills directory contains an invalid direct-entry name"
+                    )
                 before = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
                 if not stat.S_ISDIR(before.st_mode):
                     raise ValueError(
@@ -475,16 +477,27 @@ def _trusted_skill_count(root: Path) -> int:
                         or _identity(opened_skill) != _identity(current_skill)
                     ):
                         raise ValueError(f"trusted Skill directory changed identity: {name}")
-                    skill_md = os.stat("SKILL.md", dir_fd=skill_fd, follow_symlinks=False)
+                    initial_skill_signature = _directory_signature(opened_skill)
+                    try:
+                        skill_md = os.stat("SKILL.md", dir_fd=skill_fd, follow_symlinks=False)
+                    except OSError as exc:
+                        raise ValueError(
+                            f"trusted Skill must contain an owned regular SKILL.md: {name}"
+                        ) from exc
                     if not stat.S_ISREG(skill_md.st_mode):
                         raise ValueError(
                             f"trusted Skill must contain an owned regular SKILL.md: {name}"
                         )
-                    skill_file_fd = os.open(
-                        "SKILL.md",
-                        os.O_RDONLY | getattr(os, "O_BINARY", 0) | nofollow,
-                        dir_fd=skill_fd,
-                    )
+                    try:
+                        skill_file_fd = os.open(
+                            "SKILL.md",
+                            os.O_RDONLY | getattr(os, "O_BINARY", 0) | nofollow,
+                            dir_fd=skill_fd,
+                        )
+                    except OSError as exc:
+                        raise ValueError(
+                            f"trusted Skill SKILL.md could not be opened safely: {name}"
+                        ) from exc
                     try:
                         opened_skill_md = os.fstat(skill_file_fd)
                         current_skill_md = os.stat(
@@ -500,6 +513,19 @@ def _trusted_skill_count(root: Path) -> int:
                             )
                     finally:
                         os.close(skill_file_fd)
+                    final_opened_skill = os.fstat(skill_fd)
+                    final_current_skill = os.stat(
+                        name, dir_fd=directory_fd, follow_symlinks=False
+                    )
+                    if (
+                        not stat.S_ISDIR(final_opened_skill.st_mode)
+                        or not stat.S_ISDIR(final_current_skill.st_mode)
+                        or _identity(final_opened_skill) != _identity(final_current_skill)
+                        or _directory_signature(final_opened_skill) != initial_skill_signature
+                    ):
+                        raise ValueError(
+                            f"trusted Skill directory changed during verification: {name}"
+                        )
                 finally:
                     os.close(skill_fd)
                 count += 1
