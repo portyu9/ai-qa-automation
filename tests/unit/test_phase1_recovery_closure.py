@@ -18,6 +18,7 @@ def test_failed_stale_recovery_close_retains_authority_but_requires_reconciliati
     artifact_root = tmp_path / "artifacts"
     workspace = tmp_path / "sut"
     workspace.mkdir()
+    workspace_status = workspace.stat(follow_symlinks=False)
     target = workspace / "tests" / "test_checkout.py"
     target.parent.mkdir(parents=True)
     target.write_text("mutated\n", encoding="utf-8")
@@ -32,6 +33,10 @@ def test_failed_stale_recovery_close_retains_authority_but_requires_reconciliati
     runtime_path = prior_run / "runtime.json"
     runtime_payload = {
         "workspace": str(workspace.resolve()),
+        "workspace_root_identity": {
+            "device": workspace_status.st_dev,
+            "inode": workspace_status.st_ino,
+        },
         "workspace_fingerprint": "fp-after-mutation",
         "journal_event_count": journal.event_count,
         "journal_head_hash": journal.head_hash,
