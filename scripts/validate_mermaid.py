@@ -2,19 +2,19 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
-from scripts.verify_docs import _iter_fenced_blocks
-
 MERMAID_IMAGE = (
     "ghcr.io/mermaid-js/mermaid-cli/mermaid-cli@"
     "sha256:8cc6fb93037759668ac6c48d3b727da15c60419304f3bd4c69c8cd8589e2b485"
 )
 PUBLIC_ROOT_MARKDOWN = ("README.md", "CONTRIBUTING.md", "SECURITY.md")
+FENCE_OPEN_RE = re.compile(r"^(?P<fence>`{3,}|~{3,})[ \t]*(?P<info>[A-Za-z0-9_+.-]*)[ \t]*$")
 MAX_MARKDOWN_FILES = 128
 MAX_MARKDOWN_BYTES = 4 * 1024 * 1024
 MAX_TOTAL_MARKDOWN_BYTES = 16 * 1024 * 1024
@@ -71,8 +71,47 @@ def _read_regular_file(path: Path) -> str:
     return data.decode("utf-8")
 
 
+def _parse_fence_open(line: str) -> tuple[str, int, str] | None:
+    match = FENCE_OPEN_RE.match(line.strip())
+    if match is None:
+        return None
+    fence = match.group("fence")
+    return fence[0], len(fence), match.group("info").lower()
+
+
+def _is_fence_close(line: str, *, fence_char: str, minimum_length: int) -> bool:
+    stripped = line.strip()
+    return (
+        len(stripped) >= minimum_length
+        and bool(stripped)
+        and all(character == fence_char for character in stripped)
+    )
+
+
 def _mermaid_block_count(text: str) -> int:
-    return sum(language == "mermaid" for language, _block in _iter_fenced_blocks(text))
+    count = 0
+    fence_char: str | None = None
+    minimum_length = 0
+    language = ""
+
+    for line in text.splitlines():
+        if fence_char is None:
+            opened = _parse_fence_open(line)
+            if opened is None:
+                continue
+            fence_char, minimum_length, language = opened
+            if language == "mermaid":
+                count += 1
+            continue
+
+        if _is_fence_close(line, fence_char=fence_char, minimum_length=minimum_length):
+            fence_char = None
+            minimum_length = 0
+            language = ""
+
+    if fence_char is not None:
+        raise ValueError("unterminated fenced code block in public documentation")
+    return count
 
 
 def _discover_mermaid_documents(root: Path) -> list[tuple[Path, int]]:
