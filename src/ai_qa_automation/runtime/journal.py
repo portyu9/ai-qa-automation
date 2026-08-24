@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from ..io_safety import fsync_directory, open_regular_binary
+from ..io_safety import fsync_directory, open_regular_binary, parse_json_object_strict
 from ..redaction import sanitize
 from ..telemetry import (
     record_mcp_outcome,
@@ -206,9 +206,10 @@ class RunJournal:
                     if count >= restore_limit:
                         return {"valid": False, "events": count, "head_hash": previous}
                     try:
-                        record = json.loads(raw.decode("utf-8"))
-                        if not isinstance(record, dict):
-                            return {"valid": False, "events": count, "head_hash": previous}
+                        record = parse_json_object_strict(
+                            raw.decode("utf-8"),
+                            label=f"run journal record {expected_seq}",
+                        )
                         if record.get("seq") != expected_seq:
                             return {"valid": False, "events": count, "head_hash": previous}
                         body = {key: value for key, value in record.items() if key != "record_hash"}
