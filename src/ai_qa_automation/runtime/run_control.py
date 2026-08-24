@@ -141,7 +141,8 @@ class RuntimeControl:
             backup_path: Path | None = None
             original_hash: str | None = None
             if existed:
-                assert data is not None
+                if data is None:
+                    raise MutationPendingError("mutation rollback bytes are unavailable")
                 original_hash = hashlib.sha256(data).hexdigest()
                 backup_relative = Path("rollback") / (
                     f"{hashlib.sha256(relative_path.encode()).hexdigest()[:24]}.bin"
