@@ -26,27 +26,34 @@ Each mode has its own evidence source. Local configuration does not stand in for
 
 ## Install
 
-Python **3.11+** is required.
+Project metadata requires Python **3.11+**. The repository-owned development environments are currently locked and continuously exercised on exact **CPython 3.11.16** and **3.13.15**; use one of those interpreters when reproducing repository validation.
+
+Dependency installation is intentionally lock-bound. Do not replace the commands below with an editable `.[dev]` install or a live resolver upgrade when the goal is to reproduce repository-controlled verification.
 
 ### macOS / Linux
 
 ```bash
-python -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e '.[dev]'
+make install
 ```
+
+`make install` selects the committed `requirements/dev-py311.lock` or `requirements/dev-py313.lock` from the active interpreter, installs it with `--require-hashes`, installs the local project non-editably with `--no-deps --no-build-isolation`, and runs `pip check`.
 
 ### Windows PowerShell
 
 ```powershell
-python -m venv .venv
+py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -e '.[dev]'
+$lockSuffix = python -c "import sys; print(f'{sys.version_info.major}{sys.version_info.minor}')"
+python -m pip install --require-hashes -r "requirements/dev-py$lockSuffix.lock"
+python -m pip install --no-deps --no-build-isolation .
+python -m pip check
 ```
 
-The `dev` extra installs repository-contained Python tooling. Docker, k6, browser executables, Appium drivers, emulators, and devices remain runtime/deployment components.
+If the active interpreter has no matching committed development lock, installation should stop rather than silently resolve a new dependency graph. Deliberate dependency/lock updates follow [`SUPPLY_CHAIN.md`](SUPPLY_CHAIN.md).
+
+The development locks install repository-contained Python tooling. Docker, k6, browser executables, Appium drivers, emulators, and devices remain runtime/deployment components. The initial interpreter and bootstrap `pip` still belong to the local/hosted environment trust boundary; package hashes do not attest those bootstrap bytes.
 
 ---
 
