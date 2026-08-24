@@ -51,10 +51,13 @@ def test_lineage_connects_evidence_artifacts_hypotheses_and_validation(tmp_path:
     write_json(
         run_dir / "evidence-manifest.json",
         {
+            "run_id": "run-123",
+            "regulated_mode": False,
             "evidence": [
                 {
                     "id": "ev-1",
-                    "kind": "DOM",
+                    "run_id": "run-123",
+                    "kind": "dom_snapshot",
                     "nature": "OBSERVED_FACT",
                     "source": "playwright",
                     "source_identifier": "page",
