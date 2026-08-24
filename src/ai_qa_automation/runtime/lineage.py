@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..io_safety import open_regular_binary, read_text_bounded
+from ..io_safety import open_regular_binary, parse_json_object_strict, read_json_object_bounded
 from .journal import RunJournal
 
 _MAX_LINEAGE_CONTROL_BYTES = 10_000_000
@@ -271,9 +271,10 @@ def build_run_lineage(run_dir: Path, *, max_journal_events: int = 500) -> RunLin
                                     f"journal graph truncated at {max_journal_events} events"
                                 )
                                 break
-                            raw = json.loads(raw_line.decode("utf-8"))
-                            if not isinstance(raw, dict):
-                                continue
+                            raw = parse_json_object_strict(
+                                raw_line.decode("utf-8"),
+                                label=f"lineage journal record {count + 1}",
+                            )
                             sequence = (
                                 raw.get("seq")
                                 if raw.get("seq") is not None
@@ -320,16 +321,11 @@ def _load_object(path: Path, *, required: bool) -> dict[str, Any]:
         if required:
             raise FileNotFoundError(path.name)
         return {}
-    value = json.loads(
-        read_text_bounded(
-            path,
-            max_bytes=_MAX_LINEAGE_CONTROL_BYTES,
-            label=f"lineage control file {path.name}",
-        )
+    return read_json_object_bounded(
+        path,
+        max_bytes=_MAX_LINEAGE_CONTROL_BYTES,
+        label=f"lineage control file {path.name}",
     )
-    if not isinstance(value, dict):
-        raise ValueError(f"{path.name} root must be an object")
-    return value
 
 
 def _dot_escape(value: str) -> str:
