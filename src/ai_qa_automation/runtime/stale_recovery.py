@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from ..io_safety import fsync_directory, read_bytes_bounded, read_text_bounded
+from ..io_safety import fsync_directory, read_bytes_bounded, read_json_object_bounded
 from .journal import RunJournal
 from .run_control import _atomic_write_bytes, atomic_write_json
 
@@ -58,12 +58,11 @@ def _validated_backup_path(rollback_root: Path, backup_raw: str) -> Path:
 
 def _load_runtime_metadata(runtime_path: Path) -> dict[str, Any]:
     try:
-        rendered = read_text_bounded(
+        return read_json_object_bounded(
             runtime_path,
             max_bytes=_MAX_RUNTIME_METADATA_BYTES,
             label="prior runtime metadata",
         )
-        raw = json.loads(rendered)
     except OSError as exc:
         raise ValueError("prior runtime metadata is unreadable") from exc
     except UnicodeError as exc:
@@ -71,10 +70,12 @@ def _load_runtime_metadata(runtime_path: Path) -> dict[str, Any]:
     except json.JSONDecodeError as exc:
         raise ValueError("prior runtime metadata is invalid JSON") from exc
     except ValueError as exc:
-        raise ValueError("prior runtime metadata exceeds recovery ingestion limit") from exc
-    if not isinstance(raw, dict):
-        raise ValueError("prior runtime metadata root must be an object")
-    return raw
+        message = str(exc)
+        if "exceeds" in message and "ingestion limit" in message:
+            raise ValueError("prior runtime metadata exceeds recovery ingestion limit") from exc
+        if "root must be a JSON object" in message:
+            raise ValueError("prior runtime metadata root must be an object") from exc
+        raise ValueError(message) from exc
 
 
 def _validated_journal_event_count(metadata: dict[str, Any]) -> int:
