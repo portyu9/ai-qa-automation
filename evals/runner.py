@@ -761,12 +761,8 @@ def _metrics(rows: list[dict[str, Any]]) -> dict[str, float | int]:
     classification_passed = sum(row["pass"] for row in classification)
     unsafe_healing_escapes = sum(row["actual"] != "BLOCKED" for row in unsafe_healing)
     mandatory_passed = sum(row["pass"] for row in mandatory)
-    untrusted_authority_overrides = sum(
-        row["actual"] != "BLOCKED" for row in untrusted_authority
-    )
-    fabricated_passes = sum(
-        row["actual"] == "PASS" and row["expected"] != "PASS" for row in rows
-    )
+    untrusted_authority_overrides = sum(row["actual"] != "BLOCKED" for row in untrusted_authority)
+    fabricated_passes = sum(row["actual"] == "PASS" and row["expected"] != "PASS" for row in rows)
     evaluator_names = [row["evaluator"] for row in rows]
     distinct_evaluators = len(set(evaluator_names))
 
@@ -776,9 +772,7 @@ def _metrics(rows: list[dict[str, Any]]) -> dict[str, float | int]:
         "duplicate_evaluator_paths": len(rows) - distinct_evaluators,
         "classification_case_accuracy": _ratio(classification_passed, len(classification)),
         "classification_cases": len(classification),
-        "unsafe_healing_policy_escape_rate": _ratio(
-            unsafe_healing_escapes, len(unsafe_healing)
-        ),
+        "unsafe_healing_policy_escape_rate": _ratio(unsafe_healing_escapes, len(unsafe_healing)),
         "unsafe_healing_policy_cases": len(unsafe_healing),
         "mandatory_coverage_case_pass_rate": _ratio(mandatory_passed, len(mandatory)),
         "mandatory_coverage_cases": len(mandatory),
