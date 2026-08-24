@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from ..io_safety import fsync_directory, read_bytes_bounded, read_json_object_bounded
-from .journal import RunJournal
+from .journal import RunJournal, validate_runtime_journal_binding
 from .run_control import _atomic_write_bytes, atomic_write_json
 
 _MAX_RUNTIME_METADATA_BYTES = 2_000_000
@@ -79,12 +79,14 @@ def _load_runtime_metadata(runtime_path: Path) -> dict[str, Any]:
 
 
 def _validated_journal_event_count(metadata: dict[str, Any]) -> int:
-    raw = metadata.get("journal_event_count", 0)
-    if isinstance(raw, bool) or not isinstance(raw, int):
+    if "journal_event_count" not in metadata:
+        raise ValueError("prior runtime journal_event_count authority is missing")
+    raw = metadata["journal_event_count"]
+    if type(raw) is not int:
         raise ValueError("prior runtime journal_event_count is invalid")
     if raw < 0 or raw > _MAX_RECOVERY_JOURNAL_EVENTS:
         raise ValueError("prior runtime journal_event_count exceeds recovery safety bounds")
-    return int(raw)
+    return raw
 
 
 def recover_stale_mutation(
@@ -152,6 +154,32 @@ def recover_stale_mutation(
         return {"status": "NONE", "previous_run_id": previous_run_id}
     if not isinstance(pending, dict) or not pending:
         return {"status": "BLOCKED", "reason": "prior pending mutation metadata is invalid"}
+
+    # A real pending mutation is authority-bearing and may trigger a workspace write.
+    # Bind the journal to the exact count/head captured in runtime.json before any
+    # fingerprint/path/rollback action can touch the target workspace.
+    try:
+        journal_event_count = _validated_journal_event_count(metadata)
+        journal = RunJournal(
+            journal_path,
+            max_events=min(
+                _MAX_RECOVERY_JOURNAL_EVENTS,
+                max(5000, journal_event_count + 10),
+            ),
+        )
+        journal_status = journal.verify()
+    except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+        return {
+            "status": "BLOCKED",
+            "reason": f"prior run journal could not be verified: {type(exc).__name__}",
+        }
+    journal_binding = validate_runtime_journal_binding(metadata, journal_status)
+    if not journal_binding["valid"]:
+        return {
+            "status": "BLOCKED",
+            "reason": f"prior runtime journal authority is invalid: {journal_binding['reason']}",
+        }
+
     if not current_workspace_fingerprint_complete:
         reasons = ", ".join(current_workspace_fingerprint_reasons) or "unspecified"
         return {
@@ -231,15 +259,51 @@ def recover_stale_mutation(
         if target.parent.is_dir():
             fsync_directory(target.parent)
 
+    # Recovery journal augmentation remains observational: inability to append the
+    # event does not undo already-restored target bytes. But runtime closure must be
+    # bound to the journal state that actually exists after the attempt. If the
+    # journal becomes unverifiable, preserve pending authority and require manual
+    # reconciliation rather than certifying a clean recovery transition.
+    try:
+        journal.try_append(
+            "stale_mutation_recovered",
+            recovering_run_id=recovering_run_id,
+            path=relative_path,
+            rollback_cleanup_failed=False,
+        )
+    except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
+        pass
+    try:
+        post_recovery_journal = journal.verify()
+    except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": previous_run_id,
+            "reason": (
+                "stale mutation bytes were restored but prior journal authority became unreadable; "
+                "rollback authority was retained and manual reconciliation is required"
+            ),
+        }
+    if not post_recovery_journal["valid"]:
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": previous_run_id,
+            "reason": (
+                "stale mutation bytes were restored but prior journal authority became invalid; "
+                "rollback authority was retained and manual reconciliation is required"
+            ),
+        }
+
     # The restored target and rollback bytes intentionally coexist until runtime
     # metadata durably closes the pending transaction. If closure fails, preserve
-    # the backup and fail closed. The old persisted workspace fingerprint describes
-    # the pre-recovery workspace, so a later automatic retry cannot safely assume
-    # that a fingerprint mismatch came only from this recovery rather than newer
-    # external work; reconciliation must therefore re-establish ownership explicitly.
+    # the backup and fail closed. The persisted journal count/head are updated in
+    # the same runtime transition so future inspection cannot accept a valid but
+    # different journal chain as the prior run's authority.
     metadata["pending_mutation"] = None
     metadata["recovered_by_run_id"] = recovering_run_id
     metadata["recovered_at"] = datetime.now(UTC).isoformat()
+    metadata["journal_event_count"] = post_recovery_journal["events"]
+    metadata["journal_head_hash"] = post_recovery_journal["head_hash"]
     try:
         atomic_write_json(runtime_path, metadata)
     except (OSError, RuntimeError, ValueError):
@@ -260,23 +324,9 @@ def recover_stale_mutation(
         except OSError:
             rollback_cleanup_failed = True
 
-    try:
-        journal_event_count = _validated_journal_event_count(metadata)
-        RunJournal(
-            journal_path,
-            max_events=min(
-                _MAX_RECOVERY_JOURNAL_EVENTS,
-                max(5000, journal_event_count + 10),
-            ),
-        ).try_append(
-            "stale_mutation_recovered",
-            recovering_run_id=recovering_run_id,
-            path=relative_path,
-            rollback_cleanup_failed=rollback_cleanup_failed,
-        )
-    except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
-        # Recovery of target bytes and durable metadata closure have already
-        # completed. Journal augmentation is observational and must not resurrect
-        # pending state or hide a successful recovery transition.
-        pass
-    return {"status": "RECOVERED", "previous_run_id": previous_run_id, "path": relative_path}
+    return {
+        "status": "RECOVERED",
+        "previous_run_id": previous_run_id,
+        "path": relative_path,
+        "rollback_cleanup_failed": rollback_cleanup_failed,
+    }
