@@ -176,12 +176,10 @@ def test_recovery_inspection_does_not_certify_duplicate_pending_state(tmp_path: 
 
 def test_attestation_rejects_ambiguous_runtime_subject(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
-    run_dir.mkdir()
-    (run_dir / "state.json").write_text(
-        json.dumps({"run_id": "run", "objective": "attest"}),
-        encoding="utf-8",
-    )
-    _write_duplicate_pending_runtime(run_dir / "runtime.json", workspace=tmp_path / "sut")
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+    _write_state(run_dir / "state.json", workspace=workspace)
+    _write_duplicate_pending_runtime(run_dir / "runtime.json", workspace=workspace)
 
     with pytest.raises(ValueError, match="duplicate JSON key: pending_mutation"):
         build_run_attestation(run_dir)
