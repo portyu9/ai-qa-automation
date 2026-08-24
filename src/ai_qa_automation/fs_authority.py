@@ -204,13 +204,7 @@ def atomic_write_bytes_confined(
         label=label,
     ) as (parent_fd, name):
         temp_name = f".{name}.{uuid4().hex}.aiqa.tmp"
-        flags = (
-            os.O_WRONLY
-            | os.O_CREAT
-            | os.O_EXCL
-            | getattr(os, "O_BINARY", 0)
-            | os.O_NOFOLLOW
-        )
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0) | os.O_NOFOLLOW
         temp_fd = os.open(temp_name, flags, 0o600, dir_fd=parent_fd)
         temp_exists = True
         try:
