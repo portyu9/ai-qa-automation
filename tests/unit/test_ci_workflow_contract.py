@@ -29,6 +29,7 @@ def test_repository_ci_contract_is_self_consistent() -> None:
         result["workflows"]["automatic"]["documentation_integrity"] == "required-via-supply-chain"
     )
     assert result["workflows"]["automatic"]["mermaid_render"] == "required-via-supply-chain"
+    assert result["workflows"]["automatic"]["supply_chain_evidence"] == "pinned-upload-action"
     assert result["workflows"]["automatic"]["secrets"] is False
     assert result["workflows"]["manual"]["credentialed_model"] == "manual-only"
 
@@ -211,7 +212,7 @@ def test_ci_contract_rejects_missing_documentation_integrity_evidence_upload(
     )
     path.write_text(text, encoding="utf-8")
 
-    with pytest.raises(ValueError, match="persist documentation integrity evidence"):
+    with pytest.raises(ValueError, match="exact reviewed pinned action step"):
         ci_contract.verify_ci_contract(root)
 
 
@@ -253,7 +254,46 @@ def test_ci_contract_rejects_missing_mermaid_render_evidence_upload(tmp_path: Pa
     )
     path.write_text(text, encoding="utf-8")
 
-    with pytest.raises(ValueError, match="persist Mermaid validation evidence"):
+    with pytest.raises(ValueError, match="exact reviewed pinned action step"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_rejects_disabled_supply_chain_evidence_upload(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "ci.yml"
+    marker = (
+        f"      - name: {ci_contract.SUPPLY_CHAIN_UPLOAD_STEP_NAME}\n"
+        "        if: always()\n"
+    )
+    replacement = (
+        f"      - name: {ci_contract.SUPPLY_CHAIN_UPLOAD_STEP_NAME}\n"
+        "        if: ${{ false }}\n"
+    )
+    text = path.read_text(encoding="utf-8").replace(marker, replacement, 1)
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="exact reviewed pinned action step"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_rejects_noop_supply_chain_evidence_upload(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "ci.yml"
+    marker = (
+        f"      - name: {ci_contract.SUPPLY_CHAIN_UPLOAD_STEP_NAME}\n"
+        "        if: always()\n"
+        "        uses: actions/upload-artifact@"
+        f"{ci_contract.EXPECTED_ACTION_SHAS['actions/upload-artifact']} # v7\n"
+    )
+    replacement = (
+        f"      - name: {ci_contract.SUPPLY_CHAIN_UPLOAD_STEP_NAME}\n"
+        "        if: always()\n"
+        "        run: true\n"
+    )
+    text = path.read_text(encoding="utf-8").replace(marker, replacement, 1)
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="exact reviewed pinned action step"):
         ci_contract.verify_ci_contract(root)
 
 
