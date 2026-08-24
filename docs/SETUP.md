@@ -14,7 +14,7 @@
 | Mode | Purpose | Credentials / infrastructure |
 |---|---|---|
 | **Deterministic local tooling** | CLI inspection, demo, repository tests/evaluations/security tooling | none |
-| **H-series holdout** | independent deterministic adversarial corpus | none |
+| **H-series readiness** | repository-visible deterministic cases sequestered from routine primary execution | none |
 | **Live Claude agent** | bounded Agent SDK session against isolated target worktree | Anthropic credential |
 | **GitHub MCP** | optional vendor-official repository context | GitHub credential + Docker |
 | **Atlassian MCP** | optional Jira/Confluence context | Atlassian-supported auth/session |
@@ -297,7 +297,7 @@ make verify-local
 make holdout
 ```
 
-The H-series holdout is separate from the routine aggregate so its independent evaluation role remains clear.
+The legacy `holdout` command stays separate from the routine aggregate to preserve execution separation; its committed H-series fixtures are repository-visible, not blind or independent.
 
 ---
 
