@@ -186,6 +186,11 @@ jobs:
           set -o pipefail
           python scripts/verify_ci_contract.py | tee artifacts/ci/ci-contract-verification.json
 
+      - name: Render Mermaid documentation with digest-pinned official CLI
+        run: |
+          set -o pipefail
+          python scripts/validate_mermaid.py | tee artifacts/ci/mermaid-validation.json
+
       - name: Audit hash-locked runtime graph and emit CycloneDX SBOM
         run: |
           pip-audit --require-hashes -r requirements/runtime-py311.lock --format cyclonedx-json --output artifacts/ci/runtime-sbom.cdx.json
@@ -247,6 +252,7 @@ jobs:
           path: |
             artifacts/ci/supply-chain-verification.json
             artifacts/ci/ci-contract-verification.json
+            artifacts/ci/mermaid-validation.json
             artifacts/ci/runtime-sbom.cdx.json
             artifacts/ci/build-manifest.json
             artifacts/ci/build-checksums.sha256
