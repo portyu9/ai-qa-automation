@@ -9,6 +9,8 @@ from typing import Any
 
 from ..fs_authority import (
     atomic_write_bytes_confined,
+    descriptor_relative_authority_supported,
+    pin_directory_identity,
     read_bytes_confined,
     unlink_file_confined,
 )
@@ -88,6 +90,47 @@ def _validated_journal_event_count(metadata: dict[str, Any]) -> int:
     if raw < 0 or raw > _MAX_RECOVERY_JOURNAL_EVENTS:
         raise ValueError("prior runtime journal_event_count exceeds recovery safety bounds")
     return raw
+
+
+def _validated_workspace_root_identity(metadata: dict[str, Any]) -> tuple[int, int] | None:
+    """Validate root identity persisted by runtimes that support descriptor authority.
+
+    Legacy runtime metadata did not carry this field; those records continue through
+    the pre-existing fingerprint firewall. Current runtimes always persist the field,
+    so a present-but-missing or malformed identity fails closed on supported platforms.
+    """
+
+    if "workspace_root_identity" not in metadata:
+        return None
+    raw = metadata["workspace_root_identity"]
+    if raw is None:
+        if descriptor_relative_authority_supported():
+            raise ValueError("prior runtime workspace root identity authority is missing")
+        return None
+    if not isinstance(raw, dict) or set(raw) != {"device", "inode"}:
+        raise ValueError("prior runtime workspace root identity authority is invalid")
+    device = raw.get("device")
+    inode = raw.get("inode")
+    if type(device) is not int or type(inode) is not int or device < 0 or inode < 0:
+        raise ValueError("prior runtime workspace root identity authority is invalid")
+    return device, inode
+
+
+def _current_workspace_identity(
+    workspace: Path,
+    expected: tuple[int, int] | None,
+) -> tuple[int, int] | None:
+    if expected is None:
+        return None
+    try:
+        current = pin_directory_identity(workspace, label="stale recovery workspace")
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ValueError("stale recovery workspace root identity could not be verified") from exc
+    if current != expected:
+        raise ValueError(
+            "workspace root identity changed after crashed mutation; automatic rollback would risk targeting a replacement workspace"
+        )
+    return current
 
 
 def recover_stale_mutation(
@@ -202,6 +245,17 @@ def recover_stale_mutation(
             "previous_run_id": previous_run_id,
             "reason": "workspace changed after crashed mutation; automatic rollback would risk overwriting newer work",
         }
+
+    try:
+        expected_workspace_identity = _validated_workspace_root_identity(metadata)
+        _current_workspace_identity(workspace, expected_workspace_identity)
+    except ValueError as exc:
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": previous_run_id,
+            "reason": str(exc),
+        }
+
     relative_path = pending.get("relative_path")
     if not isinstance(relative_path, str) or not relative_path:
         return {"status": "BLOCKED", "reason": "prior pending mutation path is missing or invalid"}
@@ -263,6 +317,7 @@ def recover_stale_mutation(
                 create_parents=True,
                 create_only=False,
                 label="stale recovery target",
+                expected_root_identity=expected_workspace_identity,
             )
         except (OSError, RuntimeError, ValueError) as exc:
             return {
@@ -277,6 +332,7 @@ def recover_stale_mutation(
                 relative_path,
                 missing_ok=True,
                 label="stale recovery target",
+                expected_root_identity=expected_workspace_identity,
             )
         except FileNotFoundError:
             # The failed mutation may never have created a missing nested parent.
@@ -287,6 +343,18 @@ def recover_stale_mutation(
                 "status": "BLOCKED",
                 "reason": f"stale rollback target could not be removed safely: {type(exc).__name__}",
             }
+
+    try:
+        _current_workspace_identity(workspace, expected_workspace_identity)
+    except ValueError:
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": previous_run_id,
+            "reason": (
+                "stale mutation bytes were restored but workspace root identity changed before "
+                "recovery closure; rollback authority was retained and manual reconciliation is required"
+            ),
+        }
 
     # Recovery journal augmentation remains observational: inability to append the
     # event does not undo already-restored target bytes. But runtime closure must be
