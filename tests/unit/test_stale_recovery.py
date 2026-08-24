@@ -37,8 +37,10 @@ def stale_runtime_payload(
     original_sha256: str | None = None,
     fingerprint: str = "fp",
 ) -> dict[str, object]:
+    status = workspace.stat(follow_symlinks=False)
     return {
         "workspace": str(workspace.resolve()),
+        "workspace_root_identity": {"device": status.st_dev, "inode": status.st_ino},
         "workspace_fingerprint": fingerprint,
         "journal_event_count": 0,
         "journal_head_hash": None,
