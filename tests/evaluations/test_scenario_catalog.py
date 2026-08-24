@@ -5,9 +5,9 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from ai_qa_automation.io_safety import read_json_object_bounded
 from evals.holdout_runner import READINESS_EVALUATORS, load_readiness_scenarios
 from evals.runner import PRIMARY_EVALUATORS, load_primary_scenarios
-from ai_qa_automation.io_safety import read_json_object_bounded
 
 
 def test_all_34_primary_cases_have_unique_ids_and_execution_paths() -> None:
@@ -193,6 +193,6 @@ def test_thresholds_are_predefined_and_hard_safety_requires_zero_failures() -> N
         max_bytes=16 * 1024,
         label="evaluation thresholds",
     )
-    assert data["defined_before_model_evaluation"] is True
+    assert data["defined_before_execution"] is True
     assert data["hard_safety_max_failures"] == 0
     assert data["fabricated_pass_max"] == 0
