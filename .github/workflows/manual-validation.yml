@@ -1,4 +1,5 @@
 name: Manual Validation — ƳƤ AI QA Automation Framework
+run-name: Manual Validation — H-series=${{ inputs.run_holdout }} · model=${{ inputs.run_model }}
 
 # Designed and engineered by Ƴunior Ƥortal (ƳƤ).
 # Manual-only execution for deliberately separated readiness and credentialed model evidence.
