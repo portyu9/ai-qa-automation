@@ -37,7 +37,9 @@ def _valid_evidence(*, run_id: str = "run-1", evidence_id: str = "ev-1") -> dict
     }
 
 
-def _valid_artifact(*, artifact_id: str = "art-1", path: str = "evidence/item.json") -> dict[str, object]:
+def _valid_artifact(
+    *, artifact_id: str = "art-1", path: str = "evidence/item.json"
+) -> dict[str, object]:
     return {
         "artifact_id": artifact_id,
         "type": "json",
