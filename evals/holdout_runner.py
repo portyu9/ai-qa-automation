@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from ai_qa_automation.integrations.mcp_health import normalize_mcp_failure
 from ai_qa_automation.intelligence.failure_analysis import FailureAnalyzer
 from ai_qa_automation.intelligence.prioritization import RegressionPrioritizer
-from ai_qa_automation.io_safety import read_json_object_bounded
+from ai_qa_automation.io_safety import read_json_catalog_bounded
 from ai_qa_automation.models import (
     EvidenceItem,
     EvidenceKind,
@@ -23,6 +23,7 @@ from ai_qa_automation.policy import PolicyEngine
 
 ROOT = Path(__file__).resolve().parents[1]
 _MAX_SCENARIO_BYTES = 64 * 1024
+_MAX_CATALOG_ENTRIES = 16
 
 
 class ReadinessScenario(BaseModel):
@@ -197,30 +198,23 @@ def _validate_evaluator_registry() -> None:
         )
 
 
-def _validate_catalog_directory(directory: Path) -> None:
-    if directory.is_symlink():
-        raise ValueError("readiness scenario directory must not be a symlink")
-    if not directory.is_dir():
-        raise ValueError("readiness scenario directory must exist and be a directory")
-
-
 def load_readiness_scenarios(
     scenario_dir: Path | None = None,
 ) -> list[ReadinessScenario]:
     _validate_evaluator_registry()
     directory = scenario_dir or ROOT / "evals" / "holdout"
-    _validate_catalog_directory(directory)
+    catalog = read_json_catalog_bounded(
+        directory,
+        max_entries=_MAX_CATALOG_ENTRIES,
+        max_bytes_per_file=_MAX_SCENARIO_BYTES,
+        label="readiness scenario catalog",
+    )
     scenarios: list[ReadinessScenario] = []
-    for path in sorted(directory.glob("*.json")):
-        raw = read_json_object_bounded(
-            path,
-            max_bytes=_MAX_SCENARIO_BYTES,
-            label=f"readiness scenario {path.name}",
-        )
+    for filename, raw in sorted(catalog.items()):
         scenario = ReadinessScenario.model_validate(raw)
-        if scenario.id != path.stem:
+        if scenario.id != Path(filename).stem:
             raise ValueError(
-                f"readiness scenario ID {scenario.id} does not match filename {path.name}"
+                f"readiness scenario ID {scenario.id} does not match filename {filename}"
             )
         scenarios.append(scenario)
 
