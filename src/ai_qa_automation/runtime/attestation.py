@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from ..fs_authority import descriptor_relative_authority_supported, pin_directory_identity
 from ..io_safety import read_json_object_bounded, sha256_file_bounded
 from ..models import ArtifactRecord, EvidenceItem
 from ..state import StateStore
@@ -60,6 +61,8 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
     workspace_integrity = _validate_runtime_workspace(
         state.get("workspace"),
         runtime.get("workspace"),
+        runtime.get("workspace_root_identity"),
+        root_identity_present="workspace_root_identity" in runtime,
     )
 
     try:
@@ -262,6 +265,9 @@ def _validate_manifest_structure(
 def _validate_runtime_workspace(
     state_workspace: object,
     runtime_workspace: object,
+    runtime_root_identity: object,
+    *,
+    root_identity_present: bool,
 ) -> dict[str, object]:
     if not isinstance(state_workspace, str) or not state_workspace.strip():
         return {"valid": False, "reason": "canonical state workspace identity is invalid"}
@@ -274,6 +280,28 @@ def _validate_runtime_workspace(
         return {"valid": False, "reason": "workspace identity could not be resolved"}
     if observed != expected:
         return {"valid": False, "reason": "runtime workspace identity mismatch"}
+    if not root_identity_present or runtime_root_identity is None:
+        return {"valid": False, "reason": "runtime workspace root identity authority is missing"}
+    if (
+        not isinstance(runtime_root_identity, dict)
+        or set(runtime_root_identity) != {"device", "inode"}
+    ):
+        return {"valid": False, "reason": "runtime workspace root identity authority is invalid"}
+    device = runtime_root_identity.get("device")
+    inode = runtime_root_identity.get("inode")
+    if type(device) is not int or type(inode) is not int or device < 0 or inode < 0:
+        return {"valid": False, "reason": "runtime workspace root identity authority is invalid"}
+    if not descriptor_relative_authority_supported():
+        return {
+            "valid": False,
+            "reason": "runtime workspace root identity cannot be verified on this platform",
+        }
+    try:
+        current_identity = pin_directory_identity(expected, label="attestation workspace")
+    except (OSError, RuntimeError, ValueError):
+        return {"valid": False, "reason": "runtime workspace root identity could not be verified"}
+    if current_identity != (device, inode):
+        return {"valid": False, "reason": "runtime workspace root identity mismatch"}
     return {"valid": True}
 
 
