@@ -333,7 +333,9 @@ class RuntimeControl:
             if "symlink" in message:
                 raise RuntimeError(message) from exc
             if "changed identity during confined read" in message:
-                raise RuntimeError("pending rollback backup is missing or not a regular file") from exc
+                raise RuntimeError(
+                    "pending rollback backup is missing or not a regular file"
+                ) from exc
             raise RuntimeError(message) from exc
         except OSError as exc:
             raise RuntimeError("pending rollback backup is unreadable") from exc
