@@ -83,13 +83,19 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
         ),
     }
     subjects_complete = all(value is not None for value in subjects.values())
-    pending_mutation = runtime.get("pending_mutation") if isinstance(runtime, dict) else None
+    pending_mutation_present = "pending_mutation" in runtime
+    pending_mutation = runtime.get("pending_mutation")
+    pending_mutation_authority_valid = pending_mutation_present and (
+        pending_mutation is None
+        or (isinstance(pending_mutation, dict) and bool(pending_mutation))
+    )
     terminal_status = state.get("terminal_status")
     integrity_verified = (
         subjects_complete
         and bool(journal.get("valid"))
         and bool(artifact_integrity.get("valid"))
-        and pending_mutation in (None, {}, False)
+        and pending_mutation_authority_valid
+        and pending_mutation is None
     )
 
     core: dict[str, Any] = {
@@ -131,7 +137,7 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
         "integrity": {
             "journal": journal,
             "artifacts": artifact_integrity,
-            "pending_mutation": bool(pending_mutation),
+            "pending_mutation": pending_mutation is not None,
             "persisted_subjects": subjects,
             "subjects_complete": subjects_complete,
             "integrity_verified": integrity_verified,
