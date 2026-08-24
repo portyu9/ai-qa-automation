@@ -245,7 +245,9 @@ def read_json_catalog_bounded(
                         raise ValueError(f"{entry_label} must be a regular file")
                     current_file = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
                     if not stat.S_ISREG(current_file.st_mode):
-                        raise ValueError(f"{entry_label} changed file type during catalog ingestion")
+                        raise ValueError(
+                            f"{entry_label} changed file type during catalog ingestion"
+                        )
                     if _identity(opened_file) != _identity(current_file):
                         raise ValueError(f"{entry_label} changed identity during catalog ingestion")
                     initial_file_signature = _stable_file_signature(opened_file)
@@ -282,8 +284,7 @@ def read_json_catalog_bounded(
             stat.S_ISLNK(final_current_directory.st_mode)
             or not stat.S_ISDIR(final_current_directory.st_mode)
             or _identity(final_opened_directory) != _identity(final_current_directory)
-            or _stable_directory_signature(final_opened_directory)
-            != initial_directory_signature
+            or _stable_directory_signature(final_opened_directory) != initial_directory_signature
         ):
             raise ValueError(f"{label} changed during catalog ingestion")
         return result
