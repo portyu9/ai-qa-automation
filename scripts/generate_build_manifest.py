@@ -71,10 +71,7 @@ def generate_manifest(root: Path, wheel_a: Path, wheel_b: Path, sbom: Path) -> d
         raise ValueError("tracked worktree is dirty; build provenance would be ambiguous")
 
     sbom_data = _load_sbom(sbom)
-    lock_digests = {
-        name: _sha256(root / "requirements" / name)
-        for name in LOCK_NAMES
-    }
+    lock_digests = {name: _sha256(root / "requirements" / name) for name in LOCK_NAMES}
     base_image = (root / "requirements" / "base-image.lock").read_text(encoding="utf-8").strip()
 
     return {
