@@ -16,13 +16,16 @@ MARKDOWN_LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
 REFERENCE_LINK_RE = re.compile(r"^\s*\[[^\]]+\]:\s*(\S+)", re.MULTILINE)
 HTML_ATTR_RE = re.compile(r"\b(?:href|src|srcset)=[\"']([^\"']+)[\"']", re.IGNORECASE)
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
-CURRENT_STATUS_HEADING_RE = re.compile(r"^#{1,6}\s+Current status\s*$", re.IGNORECASE | re.MULTILINE)
-STATUS_VOCAB_HEADING_RE = re.compile(r"^#{1,6}\s+Status vocabulary\s*$", re.IGNORECASE | re.MULTILINE)
+CURRENT_STATUS_HEADING_RE = re.compile(
+    r"^#{1,6}\s+Current status\s*$", re.IGNORECASE | re.MULTILINE
+)
+STATUS_VOCAB_HEADING_RE = re.compile(
+    r"^#{1,6}\s+Status vocabulary\s*$", re.IGNORECASE | re.MULTILINE
+)
 LIVE_PIP_UPGRADE_RE = re.compile(r"\b(?:python\s+-m\s+)?pip\s+install\s+--upgrade\s+pip\b")
 EDITABLE_DEV_INSTALL_RE = re.compile(
     r"\b(?:python\s+-m\s+)?pip\s+install\b[^\n]*(?:\s-e(?:\s|=)|\s--editable(?:\s|=))[^\n]*\.\[dev\]"
 )
-MERMAID_START = "```mermaid"
 FENCE_RE = re.compile(r"^```(?:([A-Za-z0-9_+.-]+))?\s*$")
 MERMAID_DIAGRAM_PREFIXES = (
     "flowchart ",
@@ -70,7 +73,9 @@ def _load_public_documents(root: Path) -> dict[str, PublicDocument]:
         if path.suffix.lower() != ".md":
             continue
         if path.is_symlink() or not path.is_file():
-            raise ValueError(f"public documentation path must be a regular non-symlink file: {path}")
+            raise ValueError(
+                f"public documentation path must be a regular non-symlink file: {path}"
+            )
         relative = path.relative_to(root).as_posix()
         documents[relative] = PublicDocument(
             path=path,
@@ -121,7 +126,9 @@ def _target_from_markdown(raw: str) -> str:
 def _iter_local_targets(text: str) -> list[str]:
     without_code = _without_fenced_code(text)
     targets = [_target_from_markdown(value) for value in MARKDOWN_LINK_RE.findall(without_code)]
-    targets.extend(_target_from_markdown(value) for value in REFERENCE_LINK_RE.findall(without_code))
+    targets.extend(
+        _target_from_markdown(value) for value in REFERENCE_LINK_RE.findall(without_code)
+    )
     for raw in HTML_ATTR_RE.findall(without_code):
         for candidate in raw.split(","):
             target = candidate.strip().split(maxsplit=1)[0]
@@ -177,8 +184,7 @@ def _validate_target(
 
 def _validate_links(root: Path, documents: dict[str, PublicDocument]) -> int:
     anchors = {
-        relative: _github_heading_slugs(document.text)
-        for relative, document in documents.items()
+        relative: _github_heading_slugs(document.text) for relative, document in documents.items()
     }
     checked = 0
     for document in documents.values():
@@ -218,7 +224,9 @@ def _validate_mermaid(document: PublicDocument) -> int:
         count += 1
         stripped = [line.strip() for line in block.splitlines() if line.strip()]
         if not stripped or not stripped[0].startswith(MERMAID_DIAGRAM_PREFIXES):
-            raise ValueError(f"{document.relative_path}: Mermaid block has no supported diagram header")
+            raise ValueError(
+                f"{document.relative_path}: Mermaid block has no supported diagram header"
+            )
         if not any(line.startswith("accTitle:") for line in stripped):
             raise ValueError(f"{document.relative_path}: Mermaid block is missing accTitle")
         if not any(line.startswith("accDescr:") for line in stripped):
