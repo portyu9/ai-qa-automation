@@ -33,6 +33,24 @@ def test_ci_action_authority_matches_supply_chain_verifier() -> None:
     assert ci_contract.EXPECTED_ACTION_SHAS == supply_chain.EXPECTED_ACTION_SHAS
 
 
+def test_manual_model_credential_scope_is_narrow() -> None:
+    text = (ROOT / ".github" / "workflows" / "manual-validation.yml").read_text(
+        encoding="utf-8"
+    )
+    model = ci_contract._semantic_text(ci_contract._job_block(text, "model-smoke"))
+
+    assert "    environment: credentialed-validation" in model
+    assert "Require main branch for credentialed validation" in model
+    assert 'test "$GITHUB_REF" = "refs/heads/main"' in model
+    assert "\n    env:\n      ANTHROPIC_API_KEY:" not in model
+    assert model.count("${{ secrets.ANTHROPIC_API_KEY }}") == 2
+
+    main_guard = model.index("Require main branch for credentialed validation")
+    install = model.index("Install hash-locked project environment")
+    first_secret = model.index("${{ secrets.ANTHROPIC_API_KEY }}")
+    assert main_guard < install < first_secret
+
+
 def test_ci_contract_rejects_pull_request_target_even_with_spoof_comment(tmp_path: Path) -> None:
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "ci.yml"
