@@ -262,7 +262,7 @@ def _step_block(job: str, step_name: str) -> str:
 
 
 def _require_exact_script_step(job: str, *, step_name: str, command: str) -> None:
-    step = _semantic_text(_step_block(job, step_name)).strip()
+    step = _semantic_text(_step_block(job, step_name)).strip("\n")
     expected = "\n".join(
         (
             f"      - name: {step_name}",
@@ -374,7 +374,9 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
             f"{name}: documentation integrity command must not appear outside its reviewed step"
         )
     if supply_chain.count(MERMAID_RENDER_COMMAND) != 1:
-        raise ValueError(f"{name}: Mermaid render command must not appear outside its reviewed step")
+        raise ValueError(
+            f"{name}: Mermaid render command must not appear outside its reviewed step"
+        )
 
     required_gate = _semantic_text(_job_block(text, "required-gate"))
     if "    name: Required PR Gate" not in required_gate:
