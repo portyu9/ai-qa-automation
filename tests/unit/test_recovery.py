@@ -26,10 +26,13 @@ def save_runtime(
     pending_mutation: object | None = None,
 ) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
+    journal_status = RunJournal(run_dir / "journal.jsonl").verify()
     (run_dir / "runtime.json").write_text(
         json.dumps(
             {
                 "workspace": str(workspace.resolve()),
+                "journal_event_count": journal_status["events"],
+                "journal_head_hash": journal_status["head_hash"],
                 "pending_mutation": pending_mutation,
             }
         ),
@@ -96,6 +99,7 @@ def test_revision_zero_is_safe_to_start_new_session_from_persisted_state(tmp_pat
     assert result["run_id"] == "run-1"
     assert result["change_revision"] == 0
     assert result["revision_closed"] is True
+    assert result["journal_binding"]["valid"] is True
     assert result["resume_policy"] == "safe-to-start-a-new-agent-session-from-persisted-evidence"
     assert "does not replay or continue" in result["note"]
 
@@ -175,6 +179,26 @@ def test_pending_mutation_forces_manual_review_even_when_gates_pass(tmp_path: Pa
     assert result["resume_policy"] == "manual-review-required-before-new-session"
 
 
+def test_hash_valid_journal_growth_after_runtime_snapshot_is_not_recoverable(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run-1"
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+    save_state(run_dir, base_state(workspace))
+    RunJournal(run_dir / "journal.jsonl").append("run_started")
+    save_runtime(run_dir, workspace)
+    RunJournal(run_dir / "journal.jsonl").append("unexpected_valid_event")
+
+    result = inspect_recovery(run_dir)
+
+    assert result["recoverable"] is False
+    assert result["reason"] == (
+        "runtime journal authority is invalid: "
+        "runtime journal authority does not match persisted journal"
+    )
+
+
 def test_missing_state_is_not_recoverable(tmp_path: Path) -> None:
     result = inspect_recovery(tmp_path / "missing")
 
@@ -237,9 +261,9 @@ def test_corrupt_journal_is_not_recoverable(tmp_path: Path) -> None:
     workspace = tmp_path / "sut"
     workspace.mkdir()
     save_state(run_dir, base_state(workspace))
-    run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "journal.jsonl").write_text('{"seq": 1, "record_hash": "bad"}\n', encoding="utf-8")
+    RunJournal(run_dir / "journal.jsonl").append("run_started")
     save_runtime(run_dir, workspace)
+    (run_dir / "journal.jsonl").write_text('{"seq": 1, "record_hash": "bad"}\n', encoding="utf-8")
 
     result = inspect_recovery(run_dir)
 
