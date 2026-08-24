@@ -21,12 +21,12 @@ EXPECTED_LOCK_NAMES = {
     "runtime-py311.lock",
 }
 EXPECTED_ACTION_SHAS = {
-    "actions/checkout": "3d3c42e5aac5ba805825da76410c181273ba90b1",
-    "actions/setup-python": "5fda3b95a4ea91299a34e894583c3862153e4b97",
-    "actions/upload-artifact": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+    "actions/checkout": "3d3c42e5aac5ba805825da76410c181273ba90b1",  # pragma: allowlist secret
+    "actions/setup-python": "5fda3b95a4ea91299a34e894583c3862153e4b97",  # pragma: allowlist secret
+    "actions/upload-artifact": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",  # pragma: allowlist secret
 }
 EXPECTED_PRECOMMIT_REVISIONS = {
-    "https://github.com/astral-sh/ruff-pre-commit": "7c55798a78262d14b2074abf623d8a992ebb70d4",
+    "https://github.com/astral-sh/ruff-pre-commit": "7c55798a78262d14b2074abf623d8a992ebb70d4",  # pragma: allowlist secret
 }
 BUILD_ONLY_RUNTIME_DENY = {
     "hatchling",
@@ -85,7 +85,9 @@ def parse_hash_lock(path: Path) -> dict[str, LockedRequirement]:
             continue
         if line[0].isspace():
             raise ValueError(f"{path}:{index + 1}: orphan continuation line")
-        if stripped.startswith(("-e ", "--editable", "--index-url", "--extra-index-url", "--find-links")):
+        if stripped.startswith(
+            ("-e ", "--editable", "--index-url", "--extra-index-url", "--find-links")
+        ):
             raise ValueError(f"{path}:{index + 1}: unsupported lock directive")
 
         requirement_text = stripped.removesuffix("\\").rstrip()
@@ -93,7 +95,11 @@ def parse_hash_lock(path: Path) -> dict[str, LockedRequirement]:
         if requirement.url is not None:
             raise ValueError(f"{path}:{index + 1}: direct URL/VCS requirements are forbidden")
         specifiers = list(requirement.specifier)
-        if len(specifiers) != 1 or specifiers[0].operator != "==" or specifiers[0].version.endswith(".*"):
+        if (
+            len(specifiers) != 1
+            or specifiers[0].operator != "=="
+            or specifiers[0].version.endswith(".*")
+        ):
             raise ValueError(f"{path}:{index + 1}: requirement must use one exact == pin")
 
         hashes: list[str] = []
@@ -221,7 +227,11 @@ def _verify_workflow(root: Path) -> dict[str, str]:
         raise ValueError("permanent CI must not use the moving ubuntu-latest label")
     if '"3.11.16"' not in workflow or '"3.13.15"' not in workflow:
         raise ValueError("permanent CI must name exact supported Python patch versions")
-    if "pip install --upgrade" in workflow or "-e '.[dev]'" in workflow or EDITABLE_INSTALL_RE.search(workflow):
+    if (
+        "pip install --upgrade" in workflow
+        or "-e '.[dev]'" in workflow
+        or EDITABLE_INSTALL_RE.search(workflow)
+    ):
         raise ValueError("permanent CI contains live or editable dependency installation")
     if "--require-hashes" not in workflow:
         raise ValueError("permanent CI does not enforce hash-required installation")
@@ -260,7 +270,9 @@ def _verify_precommit(root: Path) -> dict[str, str]:
                 raise ValueError(f"unreviewed pre-commit revision: {current_repo}@{revision}")
             observed[current_repo] = revision
     if observed != EXPECTED_PRECOMMIT_REVISIONS:
-        raise ValueError("pre-commit repository/revision set differs from the reviewed immutable set")
+        raise ValueError(
+            "pre-commit repository/revision set differs from the reviewed immutable set"
+        )
     return observed
 
 
