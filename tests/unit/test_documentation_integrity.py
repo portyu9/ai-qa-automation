@@ -13,6 +13,7 @@ _TEST_SDK = "9.9.9"
 _TEST_MODEL = "test-model"
 _TEST_TOOL_COUNT = 2
 _TEST_SKILL_COUNT = 2
+_TEST_SKILL_WORD = "two"
 
 
 def _claim_readme(body: str = "") -> str:
@@ -21,7 +22,7 @@ def _claim_readme(body: str = "") -> str:
         f"![Claude Agent SDK](https://img.shields.io/badge/Claude%20Agent%20SDK-{_TEST_SDK}-blue)\n\n"
         f"`claude-agent-sdk=={_TEST_SDK}` · default model identifier `{_TEST_MODEL}`\n\n"
         f"{_TEST_TOOL_COUNT} least-privilege, purpose-built in-process QA tools\n\n"
-        f"exactly {_TEST_SKILL_COUNT} allowlisted Claude Skills\n\n"
+        f"exactly {_TEST_SKILL_WORD} allowlisted Claude Skills\n\n"
         f"{body}"
         "[Docs](docs/README.md)\n"
     )
@@ -97,7 +98,9 @@ def test_docs_verifier_rejects_missing_local_target(tmp_path: Path) -> None:
 def test_docs_verifier_ignores_footnote_definitions_as_links(tmp_path: Path) -> None:
     _minimal_public_docs(tmp_path)
     (tmp_path / "README.md").write_text(
-        _claim_readme("Evidence-first control.[^note]\n\n[^note]: The explanatory text is not a link target.\n\n"),
+        _claim_readme(
+            "Evidence-first control.[^note]\n\n[^note]: The explanatory text is not a link target.\n\n"
+        ),
         encoding="utf-8",
     )
 
@@ -327,8 +330,8 @@ def test_docs_verifier_rejects_symlinked_local_link_target(tmp_path: Path) -> No
             "3 least-privilege, purpose-built in-process QA tools",
         ),
         (
-            f"exactly {_TEST_SKILL_COUNT} allowlisted Claude Skills",
-            "exactly 3 allowlisted Claude Skills",
+            f"exactly {_TEST_SKILL_WORD} allowlisted Claude Skills",
+            "exactly three allowlisted Claude Skills",
         ),
     ],
 )
