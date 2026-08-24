@@ -17,6 +17,8 @@ _DESCRIPTOR_RELATIVE_AUTHORITY_SUPPORTED = bool(
         operation in os.supports_dir_fd
         for operation in (os.open, os.stat, os.mkdir, os.unlink, os.link, os.rename)
     )
+    and os.stat in os.supports_follow_symlinks
+    and os.link in os.supports_follow_symlinks
 )
 
 
@@ -33,6 +35,39 @@ def descriptor_relative_authority_supported() -> bool:
 
 def _identity(value: os.stat_result) -> tuple[int, int]:
     return value.st_dev, value.st_ino
+
+
+def pin_directory_identity(root: Path, *, label: str) -> tuple[int, int]:
+    """Return a descriptor-verified identity for a trusted directory root."""
+
+    if not descriptor_relative_authority_supported():
+        raise RuntimeError(
+            f"{label} requires descriptor-relative no-follow filesystem authority on this platform"
+        )
+
+    root = root.expanduser().absolute()
+    if root.is_symlink():
+        raise ValueError(f"{label} is a symlink and has ambiguous ownership")
+
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    try:
+        directory_fd = os.open(root, directory_flags)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise ValueError(f"{label} became a symlink during identity pinning") from exc
+        raise
+    try:
+        opened = os.fstat(directory_fd)
+        current = root.stat(follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or not stat.S_ISDIR(current.st_mode)
+            or _identity(opened) != _identity(current)
+        ):
+            raise ValueError(f"{label} changed identity during authority pinning")
+        return _identity(opened)
+    finally:
+        os.close(directory_fd)
 
 
 def _stable_file_signature(value: os.stat_result) -> tuple[int, int, int, int, int]:
@@ -79,6 +114,7 @@ def _open_confined_parent(
     *,
     create_parents: bool,
     label: str,
+    expected_root_identity: tuple[int, int] | None = None,
 ) -> Iterator[tuple[int, str]]:
     """Pin the parent of a relative file path without following workspace symlinks."""
 
@@ -103,12 +139,15 @@ def _open_confined_parent(
     try:
         opened_root = os.fstat(current_fd)
         current_root = root.stat(follow_symlinks=False)
+        opened_root_identity = _identity(opened_root)
         if (
             not stat.S_ISDIR(opened_root.st_mode)
             or not stat.S_ISDIR(current_root.st_mode)
-            or _identity(opened_root) != _identity(current_root)
+            or opened_root_identity != _identity(current_root)
         ):
             raise ValueError(f"{label} trusted root changed identity during authority pinning")
+        if expected_root_identity is not None and opened_root_identity != expected_root_identity:
+            raise ValueError(f"{label} trusted root changed identity since authorization")
 
         for part in parent_parts:
             try:
@@ -155,6 +194,7 @@ def read_bytes_confined(
     *,
     max_bytes: int,
     label: str,
+    expected_root_identity: tuple[int, int] | None = None,
 ) -> bytes:
     """Read a stable regular file through a parent descriptor pinned below ``root``."""
 
@@ -166,6 +206,7 @@ def read_bytes_confined(
         relative_path,
         create_parents=False,
         label=label,
+        expected_root_identity=expected_root_identity,
     ) as (parent_fd, name):
         flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | os.O_NOFOLLOW
         try:
@@ -215,6 +256,7 @@ def atomic_write_bytes_confined(
     create_parents: bool,
     create_only: bool,
     label: str,
+    expected_root_identity: tuple[int, int] | None = None,
 ) -> None:
     """Atomically publish bytes below a descriptor-pinned root.
 
@@ -227,6 +269,7 @@ def atomic_write_bytes_confined(
         relative_path,
         create_parents=create_parents,
         label=label,
+        expected_root_identity=expected_root_identity,
     ) as (parent_fd, name):
         temp_name = f".{name}.{uuid4().hex}.aiqa.tmp"
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0) | os.O_NOFOLLOW
@@ -282,6 +325,7 @@ def unlink_file_confined(
     *,
     missing_ok: bool,
     label: str,
+    expected_root_identity: tuple[int, int] | None = None,
 ) -> bool:
     """Remove one regular file from the descriptor-pinned tree and fsync its parent."""
 
@@ -290,6 +334,7 @@ def unlink_file_confined(
         relative_path,
         create_parents=False,
         label=label,
+        expected_root_identity=expected_root_identity,
     ) as (parent_fd, name):
         try:
             current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
