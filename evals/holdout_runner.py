@@ -197,11 +197,19 @@ def _validate_evaluator_registry() -> None:
         )
 
 
+def _validate_catalog_directory(directory: Path) -> None:
+    if directory.is_symlink():
+        raise ValueError("readiness scenario directory must not be a symlink")
+    if not directory.is_dir():
+        raise ValueError("readiness scenario directory must exist and be a directory")
+
+
 def load_readiness_scenarios(
     scenario_dir: Path | None = None,
 ) -> list[ReadinessScenario]:
     _validate_evaluator_registry()
     directory = scenario_dir or ROOT / "evals" / "holdout"
+    _validate_catalog_directory(directory)
     scenarios: list[ReadinessScenario] = []
     for path in sorted(directory.glob("*.json")):
         raw = read_json_object_bounded(
