@@ -181,6 +181,7 @@ def generate_manifest(root: Path, wheel_a: Path, wheel_b: Path, sbom: Path) -> d
         },
         "limitations": [
             "Byte-identical wheel reproduction proves repeatability for the recorded source and inputs, not publisher identity.",
+            "The two wheel reproductions run in one CI job/environment; cross-runner or cross-OS reproducibility is not established.",
             "The SBOM describes the hash-locked Python runtime dependency subject; it does not attest external services or operating-system packages.",
             "No container-image reproducibility or registry publication claim is made by this manifest.",
         ],

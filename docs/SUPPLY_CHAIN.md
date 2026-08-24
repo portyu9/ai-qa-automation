@@ -111,7 +111,7 @@ The verifier emits a machine-readable JSON statement about these repository inva
 
 ## Reproducible wheel evidence
 
-The permanent supply-chain CI job builds the project wheel twice from two independently extracted `git archive` trees of the same checked-out revision with the fixed `SOURCE_DATE_EPOCH`.
+The permanent supply-chain CI job builds the project wheel twice from two independently extracted `git archive` trees of the same checked-out revision with the fixed `SOURCE_DATE_EPOCH`. Both builds run inside one CI job and therefore share the same hosted runner and installed build environment; the evidence establishes same-environment repeatability, not cross-runner or cross-operating-system reproducibility.
 
 `scripts/generate_build_manifest.py` refuses to emit its manifest unless:
 
@@ -161,7 +161,7 @@ Vulnerability results are time-sensitive observations. A green audit at one revi
 | Accepted Python package candidates are constrained | exact lock pins + `--require-hashes` | package-index availability, publisher trust, or bootstrap-installer identity |
 | Build backend is repository-bound | exact `hatchling==1.32.0` + build lock | build publisher identity |
 | Container base subject is fixed | OCI digest in `base-image.lock` and Dockerfile | byte-identical rebuilt container image |
-| Wheel is reproducible for the recorded build inputs | two fresh-tree builds with identical SHA-256 | signer/publisher identity |
+| Wheel is reproducible for the recorded build inputs | two fresh-tree builds with identical SHA-256 in one CI environment | signer/publisher identity or cross-environment reproducibility |
 | Runtime Python SBOM was emitted | CycloneDX output from the runtime lock audit | OS/container/provider coverage |
 | GitHub Actions are source-revision pinned | exact reviewed Action commit SHAs | immutable hosted runner OS/image |
 | Artifact identity is signed | **not provided by repository CI** | SHA-256, SBOM, or reproducibility alone |
