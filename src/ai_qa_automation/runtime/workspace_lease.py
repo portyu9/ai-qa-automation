@@ -5,6 +5,7 @@ import importlib
 import json
 import os
 import socket
+import stat
 from contextlib import AbstractContextManager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,6 +24,10 @@ class _MSVCRTLocking(Protocol):
 
 def _load_msvcrt() -> _MSVCRTLocking:
     return cast(_MSVCRTLocking, importlib.import_module("msvcrt"))
+
+
+def _identity(value: os.stat_result) -> tuple[int, int]:
+    return value.st_dev, value.st_ino
 
 
 _MAX_LEASE_METADATA_BYTES = 64_000
@@ -54,7 +59,16 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
         self._stream: Any | None = None
         self.previous_metadata: dict[str, Any] | None = None
 
-    def _open_owned_stream(self) -> Any:
+    def _supports_descriptor_relative_lease_open(self) -> bool:
+        return bool(
+            os.name != "nt"
+            and getattr(os, "O_DIRECTORY", 0)
+            and getattr(os, "O_NOFOLLOW", 0)
+            and os.open in os.supports_dir_fd
+            and os.stat in os.supports_dir_fd
+        )
+
+    def _open_owned_stream(self) -> tuple[Any, int | None]:
         lease_root = self.path.parent
         if lease_root.is_symlink() or self.path.is_symlink():
             raise OSError("workspace lease path has ambiguous symlink ownership")
@@ -62,8 +76,82 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
         nofollow = getattr(os, "O_NOFOLLOW", 0)
         if nofollow:
             flags |= nofollow
+
+        if self._supports_descriptor_relative_lease_open():
+            directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+            directory_fd = os.open(lease_root, directory_flags)
+            try:
+                opened_directory = os.fstat(directory_fd)
+                current_directory = lease_root.stat(follow_symlinks=False)
+                if (
+                    not stat.S_ISDIR(opened_directory.st_mode)
+                    or not stat.S_ISDIR(current_directory.st_mode)
+                    or _identity(opened_directory) != _identity(current_directory)
+                ):
+                    raise OSError("workspace lease directory changed identity during lock open")
+
+                fd = os.open(self.path.name, flags, 0o600, dir_fd=directory_fd)
+                try:
+                    opened_file = os.fstat(fd)
+                    current_file = os.stat(
+                        self.path.name,
+                        dir_fd=directory_fd,
+                        follow_symlinks=False,
+                    )
+                    if (
+                        not stat.S_ISREG(opened_file.st_mode)
+                        or not stat.S_ISREG(current_file.st_mode)
+                        or _identity(opened_file) != _identity(current_file)
+                    ):
+                        raise OSError("workspace lease file changed identity during lock open")
+                    self._revalidate_lease_root(directory_fd)
+                    return os.fdopen(fd, "r+b"), directory_fd
+                except Exception:
+                    os.close(fd)
+                    raise
+            except Exception:
+                os.close(directory_fd)
+                raise
+
+        # Windows and other platforms without descriptor-relative no-follow opens
+        # retain a post-open identity check rather than trusting pathname preflight.
+        before_directory = lease_root.stat(follow_symlinks=False)
         fd = os.open(self.path, flags, 0o600)
-        return os.fdopen(fd, "r+b")
+        try:
+            opened_file = os.fstat(fd)
+            current_file = self.path.stat(follow_symlinks=False)
+            after_directory = lease_root.stat(follow_symlinks=False)
+            if (
+                not stat.S_ISDIR(before_directory.st_mode)
+                or not stat.S_ISDIR(after_directory.st_mode)
+                or _identity(before_directory) != _identity(after_directory)
+            ):
+                raise OSError("workspace lease directory changed identity during lock open")
+            if (
+                not stat.S_ISREG(opened_file.st_mode)
+                or not stat.S_ISREG(current_file.st_mode)
+                or _identity(opened_file) != _identity(current_file)
+            ):
+                raise OSError("workspace lease file changed identity during lock open")
+            return os.fdopen(fd, "r+b"), None
+        except Exception:
+            os.close(fd)
+            raise
+
+    def _revalidate_lease_root(self, directory_fd: int | None) -> None:
+        lease_root = self.path.parent
+        if directory_fd is None:
+            if lease_root.is_symlink() or not lease_root.is_dir():
+                raise OSError("workspace lease directory changed identity during lease acquisition")
+            return
+        opened_directory = os.fstat(directory_fd)
+        current_directory = lease_root.stat(follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(opened_directory.st_mode)
+            or not stat.S_ISDIR(current_directory.st_mode)
+            or _identity(opened_directory) != _identity(current_directory)
+        ):
+            raise OSError("workspace lease directory changed identity during lease acquisition")
 
     def _parse_previous_metadata(self, raw: bytes) -> dict[str, Any] | None:
         normalized = raw.strip().strip(b"\0")
@@ -100,12 +188,12 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
         return previous
 
     def acquire(self) -> WorkspaceLease:
-        file_existed = self.path.exists()
-        stream = self._open_owned_stream()
+        stream, directory_fd = self._open_owned_stream()
         locked = False
         try:
             self._lock_stream(stream)
             locked = True
+            self._revalidate_lease_root(directory_fd)
             stream.seek(0)
             raw = stream.read(_MAX_LEASE_METADATA_BYTES + 1)
             if len(raw) > _MAX_LEASE_METADATA_BYTES:
@@ -128,8 +216,11 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             stream.write(rendered)
             stream.flush()
             os.fsync(stream.fileno())
-            if not file_existed:
+            if directory_fd is not None:
+                os.fsync(directory_fd)
+            else:
                 fsync_directory(self.path.parent)
+            self._revalidate_lease_root(directory_fd)
             self._stream = stream
             return self
         except Exception:
@@ -138,6 +229,9 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
                     self._unlock_stream(stream)
             stream.close()
             raise
+        finally:
+            if directory_fd is not None:
+                os.close(directory_fd)
 
     def release(self) -> None:
         if self._stream is None:
