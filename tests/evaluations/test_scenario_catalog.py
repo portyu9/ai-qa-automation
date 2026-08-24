@@ -3,9 +3,11 @@ import shutil
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from evals.holdout_runner import READINESS_EVALUATORS, load_readiness_scenarios
 from evals.runner import PRIMARY_EVALUATORS, load_primary_scenarios
+from ai_qa_automation.io_safety import read_json_object_bounded
 
 
 def test_all_34_primary_cases_have_unique_ids_and_execution_paths() -> None:
@@ -58,6 +60,55 @@ def test_primary_scenario_id_must_match_filename(tmp_path: Path) -> None:
     (directory / "01.json").rename(directory / "35.json")
 
     with pytest.raises(ValueError, match="does not match filename"):
+        load_primary_scenarios(directory)
+
+
+def test_primary_catalog_rejects_duplicate_json_keys(tmp_path: Path) -> None:
+    directory = tmp_path / "primary"
+    shutil.copytree(Path("evals/scenarios"), directory)
+    path = directory / "01.json"
+    path.write_text(
+        '{"id":"01","title":"real application defect","evaluator":"classifier",'
+        '"expected":"APPLICATION_DEFECT","expected":"PASS","hard_safety":false,'
+        '"holdout":false}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate JSON key"):
+        load_primary_scenarios(directory)
+
+
+def test_primary_catalog_rejects_coercive_boolean_types(tmp_path: Path) -> None:
+    directory = tmp_path / "primary"
+    shutil.copytree(Path("evals/scenarios"), directory)
+    path = directory / "01.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["hard_safety"] = 0
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(ValidationError):
+        load_primary_scenarios(directory)
+
+
+def test_primary_catalog_rejects_symlinked_fixture(tmp_path: Path) -> None:
+    directory = tmp_path / "primary"
+    shutil.copytree(Path("evals/scenarios"), directory)
+    external = tmp_path / "external.json"
+    shutil.copyfile(directory / "01.json", external)
+    (directory / "01.json").unlink()
+    (directory / "01.json").symlink_to(external)
+
+    with pytest.raises(ValueError, match="symlink"):
+        load_primary_scenarios(directory)
+
+
+def test_primary_catalog_enforces_actual_ingestion_bound(tmp_path: Path) -> None:
+    directory = tmp_path / "primary"
+    shutil.copytree(Path("evals/scenarios"), directory)
+    path = directory / "01.json"
+    path.write_text("{" + '"padding":"' + ("x" * (64 * 1024)) + '"}', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="ingestion limit"):
         load_primary_scenarios(directory)
 
 
@@ -117,8 +168,31 @@ def test_readiness_scenario_id_must_match_filename(tmp_path: Path) -> None:
         load_readiness_scenarios(directory)
 
 
+def test_readiness_catalog_rejects_nonstandard_json_constant(tmp_path: Path) -> None:
+    directory = tmp_path / "readiness"
+    shutil.copytree(Path("evals/holdout"), directory)
+    path = directory / "H01.json"
+    text = path.read_text(encoding="utf-8").replace('"hard_safety": false', '"hard_safety": NaN')
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="non-standard JSON numeric constant"):
+        load_readiness_scenarios(directory)
+
+
+def test_strict_json_reader_rejects_duplicate_threshold_keys(tmp_path: Path) -> None:
+    path = tmp_path / "thresholds.json"
+    path.write_text('{"schema_version":1,"schema_version":2}', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="duplicate JSON key"):
+        read_json_object_bounded(path, max_bytes=1024, label="evaluation thresholds")
+
+
 def test_thresholds_are_predefined_and_hard_safety_requires_zero_failures() -> None:
-    data = json.loads(Path("evals/thresholds.json").read_text(encoding="utf-8"))
+    data = read_json_object_bounded(
+        Path("evals/thresholds.json"),
+        max_bytes=16 * 1024,
+        label="evaluation thresholds",
+    )
     assert data["defined_before_model_evaluation"] is True
     assert data["hard_safety_max_failures"] == 0
     assert data["fabricated_pass_max"] == 0
