@@ -10,7 +10,7 @@ from ai_qa_automation.fs_authority import descriptor_relative_authority_supporte
 from ai_qa_automation.policy import PolicyEngine
 from ai_qa_automation.runtime.budget import ExecutionBudget
 from ai_qa_automation.runtime.journal import RunJournal
-from ai_qa_automation.runtime.run_control import RuntimeControl
+from ai_qa_automation.runtime.run_control import MutationPendingError, RuntimeControl
 from ai_qa_automation.tools.safe_patch import SafeTestPatcher
 
 
@@ -154,3 +154,64 @@ def test_safe_patcher_replace_cannot_be_redirected_by_parent_directory_swap(
     assert "locate('#new')" in restored
     assert "locate('#old')" not in restored
     assert (workspace / "tests").is_symlink()
+
+
+def test_runtime_rejects_workspace_root_replacement_before_mutation(
+    tmp_path: Path,
+) -> None:
+    if not descriptor_relative_authority_supported():
+        pytest.skip("descriptor-relative no-follow filesystem authority is unavailable")
+
+    workspace = tmp_path / "sut"
+    target = workspace / "tests" / "test_checkout.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("original\n", encoding="utf-8")
+    control = _control(tmp_path, workspace)
+
+    owned_workspace = tmp_path / "sut-owned"
+    workspace.rename(owned_workspace)
+    replacement_target = workspace / "tests" / target.name
+    replacement_target.parent.mkdir(parents=True)
+    replacement_target.write_text("original\n", encoding="utf-8")
+
+    with pytest.raises(MutationPendingError, match="trusted root changed identity since authorization"):
+        control.prepare_mutation("tests/test_checkout.py")
+
+    assert control.pending_mutation is None
+    assert replacement_target.read_text(encoding="utf-8") == "original\n"
+    assert (owned_workspace / "tests" / target.name).read_text(encoding="utf-8") == "original\n"
+
+
+def test_safe_patcher_rejects_workspace_root_replacement_before_patch(
+    tmp_path: Path,
+) -> None:
+    if not descriptor_relative_authority_supported():
+        pytest.skip("descriptor-relative no-follow filesystem authority is unavailable")
+
+    workspace = tmp_path / "sut"
+    target = workspace / "tests" / "test_ui.py"
+    target.parent.mkdir(parents=True)
+    original = "def test_button():\n    assert locate('#old')\n"
+    target.write_text(original, encoding="utf-8")
+    patcher = SafeTestPatcher(
+        workspace,
+        PolicyEngine(workspace, workspace, allow_test_writes=True),
+    )
+    digest = patcher.sha256_text(original)
+
+    owned_workspace = tmp_path / "sut-owned"
+    workspace.rename(owned_workspace)
+    replacement_target = workspace / "tests" / target.name
+    replacement_target.parent.mkdir(parents=True)
+    replacement_target.write_text(original, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="trusted root changed identity since authorization"):
+        patcher.replace_once(
+            relative_path="tests/test_ui.py",
+            expected_sha256=digest,
+            old_text="locate('#old')",
+            new_text="locate('#new')",
+        )
+
+    assert replacement_target.read_text(encoding="utf-8") == original
+    assert (owned_workspace / "tests" / target.name).read_text(encoding="utf-8") == original
