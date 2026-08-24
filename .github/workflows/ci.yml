@@ -181,6 +181,11 @@ jobs:
           mkdir -p artifacts/ci
           python scripts/verify_supply_chain.py | tee artifacts/ci/supply-chain-verification.json
 
+      - name: Verify CI authority contract
+        run: |
+          set -o pipefail
+          python scripts/verify_ci_contract.py | tee artifacts/ci/ci-contract-verification.json
+
       - name: Audit hash-locked runtime graph and emit CycloneDX SBOM
         run: |
           pip-audit --require-hashes -r requirements/runtime-py311.lock --format cyclonedx-json --output artifacts/ci/runtime-sbom.cdx.json
@@ -241,6 +246,7 @@ jobs:
           name: supply-chain-evidence
           path: |
             artifacts/ci/supply-chain-verification.json
+            artifacts/ci/ci-contract-verification.json
             artifacts/ci/runtime-sbom.cdx.json
             artifacts/ci/build-manifest.json
             artifacts/ci/build-checksums.sha256
