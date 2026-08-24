@@ -293,19 +293,21 @@ See [`TRACEABILITY.md`](TRACEABILITY.md).
 
 ## GitHub Actions
 
-`.github/workflows/ci.yml` is operator-dispatched with `workflow_dispatch`.
+`.github/workflows/ci.yml` runs automatically for pull requests targeting `main`, pushes to `main`, and merge-queue subjects. It uses read-only token authority, no repository secrets, exact `${{ github.sha }}` checkout/verification, and hash-locked dependency installation.
 
-The workflow defines separable paths for:
+Its automatic gates cover:
 
-- quality/type checks;
-- deterministic pytest;
-- 34-case primary deterministic control evaluation;
-- repository-visible H-series readiness;
-- security tooling;
-- Playwright reference-SUT behavior; and
-- optional credentialed Agent SDK smoke execution.
+- CPython 3.11.16 and 3.13.15 quality/full deterministic pytest;
+- the fixed 34-case primary deterministic control evaluation;
+- security scanning;
+- supply-chain verification, runtime dependency audit, SBOM/repeatability/container evidence;
+- deterministic Playwright reference-SUT execution.
 
-The model path consumes `ANTHROPIC_API_KEY` only when selected.
+`Required PR Gate` executes with `if: always()` and fails unless every automatic prerequisite succeeds. This gives repository settings one stable check name to require without allowing partial green to masquerade as completion.
+
+`.github/workflows/manual-validation.yml` is `workflow_dispatch` only. H-series readiness remains execution-separated there, and the optional model smoke consumes `ANTHROPIC_API_KEY` only when explicitly selected.
+
+The workflow contract is deterministically checked by `scripts/verify_ci_contract.py`. GitHub branch protection/required-check configuration remains separate repository state and is not implied by a green run. See [CI/CD and Repository Governance](CI_CD.md).
 
 ---
 
@@ -345,6 +347,7 @@ See [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) for symptom-oriented guidance.
 
 ## Related documentation
 
+- [CI/CD and repository governance](CI_CD.md)
 - [Setup](SETUP.md)
 - [Runtime control and recovery](RUNTIME_CONTROL.md)
 - [Runtime result contract](RESULT_CONTRACT.md)

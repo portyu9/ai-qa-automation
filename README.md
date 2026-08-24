@@ -13,7 +13,7 @@
 
 **A production-oriented agentic quality engineering control system where Claude can plan, investigate, and adapt while deterministic policy governs authority, controlled tools produce provenance-bound evidence, and subject-bound validation retains terminal authority.**
 
-[Documentation](docs/README.md) · [Architecture](docs/ARCHITECTURE.md) · [Runtime Result Contract](docs/RESULT_CONTRACT.md) · [Runtime Control](docs/RUNTIME_CONTROL.md) · [Security](docs/SECURITY.md) · [Setup](docs/SETUP.md) · [Technical Walkthrough](docs/TECHNICAL_WALKTHROUGH.md)
+[Documentation](docs/README.md) · [Architecture](docs/ARCHITECTURE.md) · [Runtime Result Contract](docs/RESULT_CONTRACT.md) · [Runtime Control](docs/RUNTIME_CONTROL.md) · [Security](docs/SECURITY.md) · [CI/CD](docs/CI_CD.md) · [Setup](docs/SETUP.md) · [Technical Walkthrough](docs/TECHNICAL_WALKTHROUGH.md)
 
 </div>
 
@@ -39,13 +39,13 @@
 | **Network posture** | exact host allowlists, read-only API default, browser routing controls, independent k6 egress prerequisite |
 | **External MCP** | explicitly approved vendor integrations; server identity never grants blanket authority and returned content remains untrusted evidence |
 | **Evaluation** | deterministic tests, adversarial primary corpus, repository-visible sequestered H-series readiness corpus, frozen safety thresholds |
-| **Workflow governance** | GitHub Actions is operator-dispatched through `workflow_dispatch` |
+| **Workflow governance** | automatic read-only, secret-free PR/main/merge-queue CI with fail-closed `Required PR Gate`; H-series/model validation remains manual-only |
 | **License** | MIT |
 
 **On this page:** [Engineering thesis](#engineering-thesis) · [Architecture](#architecture-at-a-glance) · [Quick start](#quick-start) · [Control model](#production-control-model) · [Runtime truth](#runtime-result-contract) · [AI-assisted QA](#ai-assisted-qa-with-deterministic-closure) · [Safety boundaries](#safety-critical-boundaries) · [Evidence](#evidence-traceability-and-attestation) · [Evaluation](#evaluation-architecture) · [Documentation](#documentation-map)
 
 > [!TIP]
-> **Reviewing the engineering rather than installing it?** Read [Architecture](docs/ARCHITECTURE.md) → [Runtime Result Contract](docs/RESULT_CONTRACT.md) → [Runtime Control](docs/RUNTIME_CONTROL.md) → [Security](docs/SECURITY.md) → [Technical Walkthrough](docs/TECHNICAL_WALKTHROUGH.md). The [documentation hub](docs/README.md) provides additional role-specific paths.
+> **Reviewing the engineering rather than installing it?** Read [Architecture](docs/ARCHITECTURE.md) → [Runtime Result Contract](docs/RESULT_CONTRACT.md) → [Runtime Control](docs/RUNTIME_CONTROL.md) → [Security](docs/SECURITY.md) → [CI/CD](docs/CI_CD.md) → [Technical Walkthrough](docs/TECHNICAL_WALKTHROUGH.md). The [documentation hub](docs/README.md) provides additional role-specific paths.
 
 <details>
 <summary><strong>Reviewer checklist — trace the trust model in code</strong></summary>
@@ -779,7 +779,9 @@ The reference SUT is test data for the control architecture, never part of the t
 ├── .mcp.json
 ├── .github/
 │   ├── CODEOWNERS
-│   └── workflows/ci.yml            # operator-dispatched workflow
+│   └── workflows/
+│       ├── ci.yml                  # automatic read-only PR/main/merge-queue gates
+│       └── manual-validation.yml   # manual H-series + optional credentialed model evidence
 ├── src/ai_qa_automation/
 │   ├── agent.py                    # Agent SDK orchestration + terminal truth
 │   ├── models.py                   # state/evidence/result contracts
@@ -810,6 +812,7 @@ Start with the [documentation hub](docs/README.md) for reviewer-specific reading
 | Security architecture | [Security](docs/SECURITY.md) |
 | Threat model and adversarial assumptions | [Threat Model](docs/THREAT_MODEL.md) |
 | Trusted setup and credentials | [Setup](docs/SETUP.md) |
+| CI/CD execution and repository governance | [CI/CD](docs/CI_CD.md) |
 | Operating the framework | [Operations](docs/OPERATIONS.md) |
 | Change intelligence and regression evidence | [Change Intelligence](docs/CHANGE_INTELLIGENCE.md) |
 | Evaluation and readiness-corpus governance | [Evaluation](docs/EVALUATION.md) |
@@ -826,7 +829,9 @@ Start with the [documentation hub](docs/README.md) for reviewer-specific reading
 
 ## GitHub Actions
 
-`.github/workflows/ci.yml` is operator-dispatched through `workflow_dispatch`. It defines quality/type checks, deterministic pytest, the primary adversarial evaluator, repository-visible H-series readiness evaluation, security scanning, Playwright reference-SUT coverage, and an optional credentialed Agent SDK smoke path under explicit operator control.
+`.github/workflows/ci.yml` runs automatically for pull requests targeting `main`, pushes to `main`, and merge-queue subjects. Automatic CI is read-only and secret-free, binds every checkout to the exact GitHub event SHA, and runs quality/full deterministic pytest, the primary adversarial evaluator, security scanning, supply-chain/SBOM/repeatability/container checks, and deterministic Playwright reference-SUT coverage. The fail-closed aggregate check is named `Required PR Gate`.
+
+`.github/workflows/manual-validation.yml` remains operator-dispatched. It preserves execution separation for the repository-visible H-series readiness corpus and contains the optional credentialed Agent SDK smoke path. Workflow code does not itself prove GitHub branch protection or required-check enforcement is enabled. See [CI/CD and Repository Governance](docs/CI_CD.md).
 
 ## Security and contributions
 

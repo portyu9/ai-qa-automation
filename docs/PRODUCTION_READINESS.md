@@ -287,17 +287,22 @@ A material weakness should produce a narrower deterministic control, a regressio
 
 ---
 
-## Operator-dispatched CI design
+## CI/CD execution design
 
-`.github/workflows/ci.yml` uses `workflow_dispatch`. It defines quality/type checks, deterministic pytest, the 34-case primary deterministic control evaluation, repository-visible H-series readiness, security tooling, Playwright reference-SUT coverage, and an optional credentialed Agent SDK smoke path under explicit operator control.
+`.github/workflows/ci.yml` runs automatically for pull requests targeting `main`, pushes to `main`, and merge-queue subjects. Its token authority is read-only, automatic jobs contain no secret references, persisted checkout credentials are disabled, and every job verifies the exact GitHub event SHA before executing project code.
 
-The workflow definition is part of the repository architecture; runtime results remain evidence belonging to the environment and revision where the workflow is deliberately executed.
+The automatic gate covers quality/full deterministic pytest, the 34-case primary evaluator, security scanning, supply-chain/SBOM/repeatability/container evidence, and deterministic Playwright reference-SUT coverage. `Required PR Gate` uses `if: always()` and fails unless every automatic prerequisite succeeds, preventing partial green from becoming aggregate green.
+
+`.github/workflows/manual-validation.yml` is `workflow_dispatch` only. The repository-visible H-series readiness corpus remains execution-separated there, while credentialed Agent SDK smoke execution is opt-in and consumes `ANTHROPIC_API_KEY` only when selected.
+
+`scripts/verify_ci_contract.py` deterministically checks the repository-owned workflow authority model and emits machine-readable evidence during automatic supply-chain execution. That verifier does not prove GitHub branch protection or required-check settings are enabled; repository settings remain separate authority. See [CI/CD and Repository Governance](CI_CD.md).
 
 ---
 
 ## Related documentation
 
 - [Architecture](ARCHITECTURE.md)
+- [CI/CD and repository governance](CI_CD.md)
 - [Runtime result contract](RESULT_CONTRACT.md)
 - [Runtime control and recovery](RUNTIME_CONTROL.md)
 - [Security architecture](SECURITY.md)

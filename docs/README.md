@@ -7,7 +7,7 @@
 **Evidence-First Agentic Quality Engineering**  
 Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
-[Repository](../README.md) · [Architecture](ARCHITECTURE.md) · [Result Contract](RESULT_CONTRACT.md) · [Security](SECURITY.md) · [Setup](SETUP.md)
+[Repository](../README.md) · [Architecture](ARCHITECTURE.md) · [Result Contract](RESULT_CONTRACT.md) · [Security](SECURITY.md) · [CI/CD](CI_CD.md) · [Setup](SETUP.md)
 
 </div>
 
@@ -21,9 +21,9 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 | Reviewer goal | Recommended path |
 |---|---|
 | **Architecture / principal engineering** | [Architecture](ARCHITECTURE.md) → [Result Contract](RESULT_CONTRACT.md) → [Runtime Control](RUNTIME_CONTROL.md) → [Traceability](TRACEABILITY.md) → [Technical Walkthrough](TECHNICAL_WALKTHROUGH.md) |
-| **Security / red team** | [Security](SECURITY.md) → [Threat Model](THREAT_MODEL.md) → [Supply Chain](SUPPLY_CHAIN.md) → [MCP](MCP.md) → [Verification Boundaries](VERIFICATION_BOUNDARIES.md) → [Limitations](LIMITATIONS.md) |
+| **Security / red team** | [Security](SECURITY.md) → [Threat Model](THREAT_MODEL.md) → [Supply Chain](SUPPLY_CHAIN.md) → [CI/CD](CI_CD.md) → [MCP](MCP.md) → [Verification Boundaries](VERIFICATION_BOUNDARIES.md) → [Limitations](LIMITATIONS.md) |
 | **QA automation / AI engineering** | [Change Intelligence](CHANGE_INTELLIGENCE.md) → [Skills](SKILLS.md) → [Evaluation](EVALUATION.md) → [Result Contract](RESULT_CONTRACT.md) → [Production Readiness](PRODUCTION_READINESS.md) |
-| **Operator / adopter** | [Setup](SETUP.md) → [Operations](OPERATIONS.md) → [Troubleshooting](TROUBLESHOOTING.md) → [Runtime Control](RUNTIME_CONTROL.md) → [MCP](MCP.md) |
+| **Operator / adopter** | [Setup](SETUP.md) → [Operations](OPERATIONS.md) → [CI/CD](CI_CD.md) → [Troubleshooting](TROUBLESHOOTING.md) → [Runtime Control](RUNTIME_CONTROL.md) → [MCP](MCP.md) |
 
 ### Architecture / principal engineering
 
@@ -38,9 +38,10 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 1. [`SECURITY.md`](SECURITY.md) — deterministic controls and security posture
 2. [`THREAT_MODEL.md`](THREAT_MODEL.md) — threats, abuse cases, residual boundaries
 3. [`SUPPLY_CHAIN.md`](SUPPLY_CHAIN.md) — dependency, build, Action, SBOM, and reproducibility trust boundaries
-4. [`MCP.md`](MCP.md) — provider identity, action authorization, untrusted remote content
-5. [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md) — evidence ownership across trust domains
-6. [`LIMITATIONS.md`](LIMITATIONS.md) — explicit design boundaries and non-claims
+4. [`CI_CD.md`](CI_CD.md) — automatic/manual workflow authority, exact-subject gates, repository-setting boundary
+5. [`MCP.md`](MCP.md) — provider identity, action authorization, untrusted remote content
+6. [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md) — evidence ownership across trust domains
+7. [`LIMITATIONS.md`](LIMITATIONS.md) — explicit design boundaries and non-claims
 
 ### QA automation / AI engineering
 
@@ -54,9 +55,10 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
 1. [`SETUP.md`](SETUP.md) — installation, configuration, credentials, trust roots
 2. [`OPERATIONS.md`](OPERATIONS.md) — operating ladder and artifact handling
-3. [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) — diagnose without weakening controls
-4. [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md) — recovery and mutation mechanics
-5. [`MCP.md`](MCP.md) — optional GitHub/Atlassian integration policy
+3. [`CI_CD.md`](CI_CD.md) — automatic PR/main gates, manual validation, and repository-governance boundary
+4. [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) — diagnose without weakening controls
+5. [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md) — recovery and mutation mechanics
+6. [`MCP.md`](MCP.md) — optional GitHub/Atlassian integration policy
 
 ---
 
@@ -70,6 +72,7 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 | [`SECURITY.md`](SECURITY.md) | Which security controls are deterministic rather than prompt-based? |
 | [`THREAT_MODEL.md`](THREAT_MODEL.md) | Which adversarial behaviors does the framework assume and defend against? |
 | [`SUPPLY_CHAIN.md`](SUPPLY_CHAIN.md) | How are dependency, build, Action, container-base, SBOM, and reproducibility inputs bound and evidenced? |
+| [`CI_CD.md`](CI_CD.md) | How are automatic PR/main gates, manual credentialed validation, exact-subject binding, and repository-setting authority separated? |
 | [`CHANGE_INTELLIGENCE.md`](CHANGE_INTELLIGENCE.md) | How are committed changes, risk, ownership, test impact, and API drift analyzed? |
 | [`EVALUATION.md`](EVALUATION.md) | How is the agent evaluated as software rather than prose? |
 | [`SKILLS.md`](SKILLS.md) | What procedures do the five trusted Claude Skills provide? |
@@ -123,7 +126,7 @@ Every document is subordinate to the same rules:
 | **Deployment boundary** | infrastructure/organization control outside application-level authority |
 
 > [!TIP]
-> For the shortest complete technical review, read [`ARCHITECTURE.md`](ARCHITECTURE.md), [`RESULT_CONTRACT.md`](RESULT_CONTRACT.md), [`SECURITY.md`](SECURITY.md), and [`TECHNICAL_WALKTHROUGH.md`](TECHNICAL_WALKTHROUGH.md).
+> For the shortest complete technical review, read [`ARCHITECTURE.md`](ARCHITECTURE.md), [`RESULT_CONTRACT.md`](RESULT_CONTRACT.md), [`SECURITY.md`](SECURITY.md), [`CI_CD.md`](CI_CD.md), and [`TECHNICAL_WALKTHROUGH.md`](TECHNICAL_WALKTHROUGH.md).
 
 ---
 

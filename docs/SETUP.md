@@ -303,9 +303,11 @@ The legacy `holdout` command stays separate from the routine aggregate to preser
 
 ## GitHub Actions configuration
 
-`.github/workflows/ci.yml` is operator-dispatched through `workflow_dispatch`.
+`.github/workflows/ci.yml` runs automatically for pull requests targeting `main`, pushes to `main`, and merge-queue subjects. It is read-only and secret-free, binds every checkout to the exact GitHub event SHA, and aggregates quality, primary evaluation, security, supply-chain, and deterministic Playwright evidence behind the stable `Required PR Gate` check.
 
-Its optional live-model path consumes the GitHub `ANTHROPIC_API_KEY` secret only when deliberately selected. Deterministic repository jobs do not require that provider secret.
+`.github/workflows/manual-validation.yml` remains `workflow_dispatch` only. It keeps the repository-visible H-series readiness corpus execution-separated from routine primary CI and exposes the optional credentialed Claude Agent SDK smoke path. `ANTHROPIC_API_KEY` is referenced only by that explicitly selected model job.
+
+The workflow definition does not itself enable GitHub branch protection or make `Required PR Gate` a required repository check; that is separate repository-setting authority. See [CI/CD and Repository Governance](CI_CD.md).
 
 Never place credentials directly in workflow YAML, non-secret repository variables, committed fixtures, logs, or artifacts.
 
@@ -331,6 +333,7 @@ See [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md) and [`PRODUCTION_
 ## Related documentation
 
 - [Architecture](ARCHITECTURE.md)
+- [CI/CD and repository governance](CI_CD.md)
 - [Operations](OPERATIONS.md)
 - [Security architecture](SECURITY.md)
 - [Runtime result contract](RESULT_CONTRACT.md)
