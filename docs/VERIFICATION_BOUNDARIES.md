@@ -41,10 +41,10 @@ flowchart LR
 | Evidence class | Primary owner | Examples |
 |---|---|---|
 | **Repository-contained** | deterministic framework code/config/tests/evaluators | policy, result logic, state/evidence contracts, change intelligence |
-| **Local runtime** | executable/runtime environment | Python, Chromium, Docker, k6, Appium/runtime visibility |
+| **Local runtime** | executable/runtime environment | Python, Chromium, Docker, k6, Appium/runtime visibility, filesystem identity observations |
 | **Credentialed provider** | authorized provider session | Claude, GitHub MCP, Atlassian MCP interactions |
 | **Target environment** | selected SUT/test environment | browser/API behavior, load metrics, app/device behavior |
-| **Deployment infrastructure** | organization/platform | process/container isolation, egress, identity, secrets, retention |
+| **Deployment infrastructure** | organization/platform | process/container isolation, egress, identity, secrets, trusted artifact storage, retention |
 
 A capability may span several classes. The framework keeps those contributions separate rather than declaring the whole capability “verified” from one layer alone.
 
@@ -67,11 +67,14 @@ The codebase defines deterministic contracts for areas including:
 - path/tool/MCP/API/performance authorization;
 - recursive redaction and credential-minimal subprocess environments;
 - evidence/artifact confinement and immutability;
+- strict authority-JSON parsing and typed persisted-record validation;
 - hash-chained journals and regulated audit records;
-- workspace lease, fingerprint, transaction, rollback, and stale recovery logic;
-- symlink-resistant ownership for mutation, rollback, evidence, journal, lease, recovery, and attestation subjects;
+- workspace lease, target-root identity, fingerprint, transaction, rollback, and stale recovery logic;
+- symlink-resistant/descriptor-relative ownership for mutation, rollback, evidence, journal, lease, recovery, and attestation subjects where supported;
+- exact runtime journal head/count binding for recovery and attestation;
 - merge-base change intelligence, CODEOWNERS, test impact, and OpenAPI drift;
-- unsigned run-attestation logic with artifact-byte verification;
+- unsigned run-attestation logic with artifact-byte and workspace-root verification;
+- run-bound typed lineage graph construction;
 - fixed primary and repository-visible sequestered H-series readiness evaluators;
 - deterministic reference-SUT behavior.
 
@@ -88,9 +91,12 @@ Some execution surfaces require locally observable components even when no remot
 - Docker for the configured GitHub MCP container path;
 - k6 executable;
 - Appium/device tooling;
-- Git repository/worktree support.
+- Git repository/worktree support;
+- operating-system filesystem primitives needed for descriptor-relative root identity and inode locking.
 
 `ai-qa doctor` reports what the current environment can actually observe. Package/executable presence does not become provider authentication evidence.
+
+Where descriptor-relative/no-follow filesystem authority is unavailable, repository code must not silently relabel path equality as equivalent root-identity proof. Environment-dependent identity guarantees remain explicit.
 
 ---
 
@@ -132,6 +138,7 @@ Deployment evidence includes:
 - firewall/proxy/egress enforcement;
 - identity and secret lifecycle;
 - provider-side authentication/authorization;
+- trusted artifact-root ownership/protection from arbitrary same-account writers;
 - artifact encryption/access/retention;
 - trusted runner/CI infrastructure;
 - device/cloud security posture;
@@ -149,7 +156,8 @@ Deployment evidence includes:
 |---|---|---|
 | Claude reasoning loop | Agent SDK orchestration, policy, result semantics | credentialed provider interaction |
 | Terminal truth | gate/revision/path lineage and deterministic derivation | actual validation observations for the run |
-| Autonomous mutation | Python-path authority, lease/fingerprint, transaction/rollback, exact-path pytest closure | filesystem/process isolation around runtime |
+| Autonomous mutation | Python-path authority, target-root identity, lease/fingerprint, descriptor-pinned transaction/rollback, exact-path pytest closure | filesystem/process isolation around runtime |
+| Stale recovery | prior-run journal binding, persisted workspace-root identity, exact fingerprint, target/backup confinement | current filesystem identity primitives + trusted artifact storage |
 | GitHub MCP | official config, action policy, failure normalization | auth, permissions, provider responses |
 | Atlassian MCP | official endpoint config, action policy, failure normalization | auth/session, site permissions, provider responses |
 | Network policy | canonical host validation + adapter authorization | DNS/routing/firewall/proxy enforcement |
@@ -158,7 +166,7 @@ Deployment evidence includes:
 | k6 | non-production/host/script/threshold policy + universal egress prerequisite | executable, approved target, actual infrastructure egress |
 | Appium | runtime/capability inspection boundary | app/device/emulator/cloud session |
 | Secret safety | protected paths, redaction, minimal subprocess env | organization secret manager, rotation, access policy |
-| Traceability | manifests, hashes, journal, lineage, artifact-verifying unsigned attestation | external signing/identity/timestamping when required |
+| Traceability | strict run-bound manifests, hashes, journal/runtime binding, typed lineage, artifact/root-verifying unsigned attestation | external signing/identity/timestamping when required |
 | Evaluation | fixed primary definitions plus repository-visible sequestered H-series readiness definitions and hard-safety scoring | execution results for a specific revision/environment |
 
 ---
@@ -167,16 +175,16 @@ Deployment evidence includes:
 
 Text evidence is sanitized/redacted on supported model-facing/text persistence paths. Binary screenshots and similar artifacts remain explicitly `RAW` and require deployment-level storage/access/retention controls.
 
-Hashing and hash chaining establish internal integrity properties. The unsigned attestation can additionally verify owned persisted subjects, journal linkage, pending-mutation state, and registered artifact bytes.
+Hashing and hash chaining establish internal integrity properties. The unsigned attestation can additionally verify owned persisted subjects, exact journal/runtime linkage, pending-mutation state, typed/run-bound manifest structure, registered artifact bytes, and current workspace-root identity where the platform exposes the required filesystem authority.
 
 Those properties still do **not** create:
 
 - a trusted external signer;
 - an external timestamp authority;
-- identity attribution;
+- actor identity attribution;
 - test correctness;
 - provider authentication;
-- environment assurance;
+- deployment isolation assurance;
 - compliance certification.
 
 ---
@@ -192,7 +200,7 @@ Use the narrowest statement that matches the evidence owner.
 | “The provider was available.” | authorized provider interaction |
 | “The target behaved this way.” | target-specific observation |
 | “The deployment enforces this boundary.” | infrastructure/organization evidence |
-| “These persisted bytes are intact.” | owned subject + hash/journal/artifact verification |
+| “These persisted subjects are internally consistent.” | owned subject + strict schema + hash/journal/artifact/root verification applicable to that platform |
 | “This run succeeded.” | current deterministic validation closure under [`RESULT_CONTRACT.md`](RESULT_CONTRACT.md) |
 
 > [!TIP]
@@ -208,9 +216,10 @@ When reviewing a claim, ask:
 2. **Which trust domain owns the evidence?**
 3. **Was the evidence observed for this revision/environment/provider?**
 4. **Can a neighboring green signal be mistaken for this evidence?**
-5. **Does integrity prove only bytes, or is someone accidentally treating it as correctness/identity?**
+5. **Does integrity prove only bytes/subject binding, or is someone accidentally treating it as correctness/identity?**
 6. **Does configuration state merely permit an action, or prove it occurred?**
 7. **If deployment enforcement is required, is it actually external to the application flag?**
+8. **If a filesystem pathname was reused, was subject identity verified rather than inferred from path equality?**
 
 ---
 
