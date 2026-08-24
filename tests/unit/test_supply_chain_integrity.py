@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from scripts.generate_build_manifest import generate_manifest
-from scripts.verify_supply_chain import parse_hash_lock, verify_repository
+from scripts.verify_supply_chain import EDITABLE_INSTALL_RE, parse_hash_lock, verify_repository
 
 ROOT = Path(__file__).resolve().parents[2]
 SHA256_ZERO = "0" * 64
@@ -51,7 +51,9 @@ def test_hash_lock_rejects_direct_url(tmp_path: Path) -> None:
 
 def test_hash_lock_rejects_non_sha256_hash(tmp_path: Path) -> None:
     lock = tmp_path / "md5.lock"
-    lock.write_text("demo==1.0 \\\n    --hash=md5:00000000000000000000000000000000\n", encoding="utf-8")
+    lock.write_text(
+        "demo==1.0 \\\n    --hash=md5:00000000000000000000000000000000\n", encoding="utf-8"
+    )
 
     with pytest.raises(ValueError, match="only SHA-256"):
         parse_hash_lock(lock)
@@ -65,6 +67,22 @@ def test_hash_lock_accepts_exact_sha256_requirement(tmp_path: Path) -> None:
 
     assert parsed["demo"].version == "1.0"
     assert parsed["demo"].hashes == (SHA256_ZERO,)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python -m pip install --no-deps --no-build-isolation -e .",
+        "python -m pip install --no-deps --editable .",
+        "python -m pip install --editable=.",
+    ],
+)
+def test_editable_ci_install_detector_fails_closed(command: str) -> None:
+    assert EDITABLE_INSTALL_RE.search(command)
+
+
+def test_non_editable_ci_install_is_not_misclassified() -> None:
+    assert not EDITABLE_INSTALL_RE.search("python -m pip install --no-deps --no-build-isolation .")
 
 
 def test_build_manifest_requires_two_byte_identical_wheels(
