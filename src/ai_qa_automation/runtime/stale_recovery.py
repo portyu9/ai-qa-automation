@@ -142,10 +142,15 @@ def recover_stale_mutation(
             "status": "BLOCKED",
             "reason": "prior runtime workspace does not match lease workspace",
         }
-    pending = metadata.get("pending_mutation")
-    if pending in (None, {}, False):
+    if "pending_mutation" not in metadata:
+        return {
+            "status": "BLOCKED",
+            "reason": "prior runtime metadata is missing pending_mutation authority",
+        }
+    pending = metadata["pending_mutation"]
+    if pending is None:
         return {"status": "NONE", "previous_run_id": previous_run_id}
-    if not isinstance(pending, dict):
+    if not isinstance(pending, dict) or not pending:
         return {"status": "BLOCKED", "reason": "prior pending mutation metadata is invalid"}
     if not current_workspace_fingerprint_complete:
         reasons = ", ".join(current_workspace_fingerprint_reasons) or "unspecified"
