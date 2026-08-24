@@ -415,6 +415,35 @@ def _internal_tool_count(root: Path) -> int:
     return counts[0]
 
 
+def _runtime_skill_allowlist(root: Path) -> tuple[str, ...]:
+    path = "src/ai_qa_automation/agent.py"
+    tree = ast.parse(_read_implementation_text(root, path), filename=path)
+    matches: list[tuple[str, ...]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Name) or node.func.id != "ClaudeAgentOptions":
+            continue
+        for keyword in node.keywords:
+            if keyword.arg != "skills" or not isinstance(keyword.value, (ast.List, ast.Tuple)):
+                continue
+            values: list[str] = []
+            for item in keyword.value.elts:
+                if not isinstance(item, ast.Constant) or not isinstance(item.value, str):
+                    raise ValueError("ClaudeAgentOptions.skills must be a literal list of Skill names")
+                values.append(item.value)
+            matches.append(tuple(values))
+    if len(matches) != 1:
+        raise ValueError("could not derive exactly one ClaudeAgentOptions.skills allowlist")
+    skills = matches[0]
+    if not skills or len(skills) > MAX_SKILL_ENTRIES or len(set(skills)) != len(skills):
+        raise ValueError("runtime Skill allowlist must be non-empty, unique, and within the Skill bound")
+    for name in skills:
+        if not name or Path(name).name != name or name in {".", ".."}:
+            raise ValueError(f"runtime Skill allowlist contains an invalid direct-entry name: {name!r}")
+    return skills
+
+
 def _identity(value: os.stat_result) -> tuple[int, int]:
     return value.st_dev, value.st_ino
 
@@ -423,7 +452,7 @@ def _directory_signature(value: os.stat_result) -> tuple[int, int, int, int]:
     return value.st_dev, value.st_ino, value.st_mtime_ns, value.st_ctime_ns
 
 
-def _trusted_skill_count(root: Path) -> int:
+def _trusted_skill_count(root: Path, *, expected_skills: tuple[str, ...]) -> int:
     skills_dir = root / ".claude" / "skills"
     directory_flag = getattr(os, "O_DIRECTORY", 0)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
@@ -463,7 +492,7 @@ def _trusted_skill_count(root: Path) -> int:
                 "documentation claim verification requires descriptor-based Skills enumeration"
             ) from exc
 
-        count = 0
+        observed_names: list[str] = []
         observed_entries = 0
         with entries:
             for entry in entries:
@@ -545,7 +574,7 @@ def _trusted_skill_count(root: Path) -> int:
                         )
                 finally:
                     os.close(skill_fd)
-                count += 1
+                observed_names.append(name)
 
         final_opened_directory = os.fstat(directory_fd)
         final_current_directory = skills_dir.stat(follow_symlinks=False)
@@ -556,9 +585,12 @@ def _trusted_skill_count(root: Path) -> int:
             or _directory_signature(final_opened_directory) != initial_signature
         ):
             raise ValueError("trusted Skills directory changed during verification")
-        if count < 1:
-            raise ValueError("trusted Skills directory must contain at least one Skill")
-        return count
+        if sorted(observed_names) != sorted(expected_skills):
+            raise ValueError(
+                "runtime Skill allowlist and trusted Skill directories differ: "
+                f"runtime={sorted(expected_skills)}, disk={sorted(observed_names)}"
+            )
+        return len(expected_skills)
     finally:
         os.close(directory_fd)
 
@@ -567,7 +599,8 @@ def _validate_implementation_claims(root: Path, readme: str) -> dict[str, object
     sdk_version = _sdk_version(root)
     default_model = _default_model(root)
     internal_tools = _internal_tool_count(root)
-    trusted_skills = _trusted_skill_count(root)
+    runtime_skills = _runtime_skill_allowlist(root)
+    trusted_skills = _trusted_skill_count(root, expected_skills=runtime_skills)
     expected_claims = (
         f"`claude-agent-sdk=={sdk_version}`",
         f"default model identifier `{default_model}`",
@@ -584,6 +617,7 @@ def _validate_implementation_claims(root: Path, readme: str) -> dict[str, object
         "default_model": default_model,
         "internal_qa_tools": internal_tools,
         "trusted_skills": trusted_skills,
+        "trusted_skill_names": list(runtime_skills),
     }
 
 
