@@ -109,6 +109,7 @@ def test_stale_recovery_rejects_coercive_existed_flag_before_touching_target(
     rollback.mkdir(parents=True)
     workspace = tmp_path / "sut"
     workspace.mkdir()
+    status = workspace.stat(follow_symlinks=False)
     target = workspace / "tests" / "test_x.py"
     target.parent.mkdir()
     target.write_text("mutated\n", encoding="utf-8")
@@ -121,6 +122,10 @@ def test_stale_recovery_rejects_coercive_existed_flag_before_touching_target(
         json.dumps(
             {
                 "workspace": str(workspace.resolve()),
+                "workspace_root_identity": {
+                    "device": status.st_dev,
+                    "inode": status.st_ino,
+                },
                 "workspace_fingerprint": "fp",
                 "journal_event_count": journal.event_count,
                 "journal_head_hash": journal.head_hash,
