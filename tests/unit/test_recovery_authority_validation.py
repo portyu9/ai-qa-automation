@@ -24,8 +24,13 @@ def _prepare_run(tmp_path: Path, runtime_payload: dict[str, object]) -> Path:
         terminal_reason="persisted for recovery inspection",
     )
     StateStore(run_dir / "state.json").save(state)
-    RunJournal(run_dir / "journal.jsonl").append("run_started")
-    rendered_runtime: dict[str, object] = {"workspace": str(workspace.resolve())}
+    journal = RunJournal(run_dir / "journal.jsonl")
+    journal.append("run_started")
+    rendered_runtime: dict[str, object] = {
+        "workspace": str(workspace.resolve()),
+        "journal_event_count": journal.event_count,
+        "journal_head_hash": journal.head_hash,
+    }
     rendered_runtime.update(runtime_payload)
     (run_dir / "runtime.json").write_text(
         json.dumps(rendered_runtime, sort_keys=True),
