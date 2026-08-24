@@ -11,7 +11,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from ..io_safety import fsync_directory, read_bytes_bounded
+from ..fs_authority import (
+    atomic_write_bytes_confined,
+    read_bytes_confined,
+    unlink_file_confined,
+)
+from ..io_safety import fsync_directory
 from .budget import BudgetExceededError, ExecutionBudget
 from .journal import RunJournal
 
@@ -109,35 +114,53 @@ class RuntimeControl:
                 raise MutationPendingError(
                     f"a mutation is already pending validation: {self.pending_mutation.relative_path}"
                 )
-            target = self._target(relative_path)
-            rollback_root = self.metadata_path.parent / "rollback"
-            if rollback_root.is_symlink():
-                raise MutationPendingError(
-                    "rollback directory is a symlink and has ambiguous ownership"
+            self._target(relative_path)
+
+            existed = False
+            data: bytes | None = None
+            try:
+                data = read_bytes_confined(
+                    self.workspace,
+                    relative_path,
+                    max_bytes=_MAX_ROLLBACK_BYTES,
+                    label="mutation target",
                 )
-            rollback_root.mkdir(parents=True, exist_ok=True)
-            rollback_root = rollback_root.resolve()
-            existed = target.exists()
-            backup_path: Path | None = None
-            original_hash: str | None = None
-            if existed:
-                if not target.is_file():
-                    raise MutationPendingError("mutation target must be a regular file")
-                try:
-                    data = read_bytes_bounded(
-                        target,
-                        max_bytes=_MAX_ROLLBACK_BYTES,
-                        label="mutation target",
-                    )
-                except ValueError as exc:
+                existed = True
+            except FileNotFoundError:
+                existed = False
+            except ValueError as exc:
+                message = str(exc)
+                if "exceeds" in message and "ingestion limit" in message:
                     raise MutationPendingError(
                         "mutation target exceeds 2 MB rollback safety limit"
                     ) from exc
+                raise MutationPendingError(message) from exc
+            except RuntimeError as exc:
+                raise MutationPendingError(str(exc)) from exc
+
+            backup_path: Path | None = None
+            original_hash: str | None = None
+            if existed:
+                assert data is not None
                 original_hash = hashlib.sha256(data).hexdigest()
-                backup_path = rollback_root / (
+                backup_relative = Path("rollback") / (
                     f"{hashlib.sha256(relative_path.encode()).hexdigest()[:24]}.bin"
                 )
-                _atomic_write_bytes(backup_path, data)
+                run_root = self.metadata_path.parent.expanduser().absolute()
+                try:
+                    atomic_write_bytes_confined(
+                        run_root,
+                        backup_relative,
+                        data,
+                        create_parents=True,
+                        create_only=False,
+                        label="mutation rollback backup",
+                    )
+                except (OSError, RuntimeError, ValueError) as exc:
+                    raise MutationPendingError(
+                        f"mutation rollback backup could not be durably prepared: {type(exc).__name__}"
+                    ) from exc
+                backup_path = run_root / backup_relative
 
             pending = PendingMutation(
                 relative_path=relative_path,
@@ -174,8 +197,7 @@ class RuntimeControl:
                             "mutation preparation failed and pending metadata could not be cleared"
                         ) from cleanup_exc
                 if backup_path is not None:
-                    with suppress(OSError):
-                        backup_path.unlink(missing_ok=True)
+                    self._discard_backup_best_effort(backup_path)
                 raise
 
     def commit_pending_mutation(self) -> str | None:
@@ -200,10 +222,7 @@ class RuntimeControl:
 
             cleanup_failed = False
             if backup is not None:
-                try:
-                    backup.unlink()
-                except OSError:
-                    cleanup_failed = True
+                cleanup_failed = not self._discard_backup_best_effort(backup)
             self._journal_after_durable_transition(
                 "mutation_committed",
                 path=pending.relative_path,
@@ -216,20 +235,33 @@ class RuntimeControl:
             pending = self.pending_mutation
             if pending is None:
                 return None
-            target = self._target(pending.relative_path)
+            self._target(pending.relative_path)
             backup: Path | None = None
             if pending.existed:
                 backup, data = self._validated_rollback_backup(pending)
-                target.parent.mkdir(parents=True, exist_ok=True)
-                _atomic_write_bytes(target, data)
+                atomic_write_bytes_confined(
+                    self.workspace,
+                    pending.relative_path,
+                    data,
+                    create_parents=True,
+                    create_only=False,
+                    label="mutation rollback target",
+                )
             else:
-                target.unlink(missing_ok=True)
-                # A prepared new-file mutation may be cancelled before its parent
-                # directory or target is ever created. In that case no directory entry
-                # changed, so there is nothing to flush. If the parent exists, fsync it
-                # to durably persist removal of an actually-created target.
-                if target.parent.is_dir():
-                    fsync_directory(target.parent)
+                try:
+                    unlink_file_confined(
+                        self.workspace,
+                        pending.relative_path,
+                        missing_ok=True,
+                        label="mutation rollback target",
+                    )
+                except FileNotFoundError:
+                    # A prepared new-file mutation may be cancelled before its parent
+                    # directory is ever created. The workspace root itself is checked by
+                    # descriptor authority; a missing nested parent means no target entry
+                    # exists to remove.
+                    if not self.workspace.is_dir():
+                        raise
 
             # The target bytes are now restored/removed. Persist closure before deleting
             # the rollback snapshot. If metadata persistence fails, keep the transaction
@@ -243,10 +275,7 @@ class RuntimeControl:
 
             cleanup_failed = False
             if backup is not None:
-                try:
-                    backup.unlink()
-                except OSError:
-                    cleanup_failed = True
+                cleanup_failed = not self._discard_backup_best_effort(backup)
             self._journal_after_durable_transition(
                 "mutation_rolled_back",
                 path=pending.relative_path,
@@ -270,43 +299,47 @@ class RuntimeControl:
         if not pending.backup_path or not pending.original_sha256:
             raise RuntimeError("pending rollback backup metadata is incomplete")
 
-        raw_rollback_root = (self.metadata_path.parent / "rollback").expanduser()
-        if raw_rollback_root.is_symlink():
-            raise RuntimeError("rollback directory is a symlink and has ambiguous ownership")
-        rollback_root = raw_rollback_root.resolve()
+        run_root = self.metadata_path.parent.expanduser().absolute()
         raw_backup = Path(pending.backup_path).expanduser()
         absolute_backup = raw_backup if raw_backup.is_absolute() else raw_backup.absolute()
         try:
-            relative = absolute_backup.relative_to(rollback_root)
+            relative = absolute_backup.relative_to(run_root)
         except ValueError as exc:
-            raise RuntimeError("pending rollback backup escaped rollback directory") from exc
-        if relative == Path():
-            raise RuntimeError("pending rollback backup cannot be the rollback directory")
+            raise RuntimeError("pending rollback backup escaped run directory") from exc
+        if len(relative.parts) < 2 or relative.parts[0] != "rollback":
+            raise RuntimeError("pending rollback backup escaped rollback directory")
 
-        cursor = rollback_root
-        for part in relative.parts:
-            cursor = cursor / part
-            if cursor.is_symlink():
-                raise RuntimeError("pending rollback backup contains a symlink")
-
-        backup = absolute_backup.resolve()
         try:
-            backup.relative_to(rollback_root)
-        except ValueError as exc:
-            raise RuntimeError("pending rollback backup escaped rollback directory") from exc
-        if not backup.is_file():
-            raise RuntimeError("pending rollback backup is missing or not a regular file")
-        try:
-            data = read_bytes_bounded(
-                backup,
+            data = read_bytes_confined(
+                run_root,
+                relative,
                 max_bytes=_MAX_ROLLBACK_BYTES,
                 label="pending rollback backup",
             )
         except ValueError as exc:
-            raise RuntimeError("pending rollback backup exceeds 2 MB safety limit") from exc
+            message = str(exc)
+            if "exceeds" in message and "ingestion limit" in message:
+                raise RuntimeError("pending rollback backup exceeds 2 MB safety limit") from exc
+            raise RuntimeError(message) from exc
         if hashlib.sha256(data).hexdigest() != pending.original_sha256:
             raise RuntimeError("pending rollback backup failed integrity verification")
-        return backup, data
+        return run_root / relative, data
+
+    def _discard_backup_best_effort(self, backup: Path) -> bool:
+        run_root = self.metadata_path.parent.expanduser().absolute()
+        try:
+            relative = backup.expanduser().absolute().relative_to(run_root)
+            if len(relative.parts) < 2 or relative.parts[0] != "rollback":
+                return False
+            unlink_file_confined(
+                run_root,
+                relative,
+                missing_ok=True,
+                label="mutation rollback backup cleanup",
+            )
+        except (OSError, RuntimeError, ValueError):
+            return False
+        return True
 
     def set_workspace_fingerprint(self, fingerprint: str) -> None:
         with self._lock:
