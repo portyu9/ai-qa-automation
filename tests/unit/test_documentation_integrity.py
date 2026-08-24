@@ -29,24 +29,19 @@ def _claim_readme(body: str = "") -> str:
 
 def _minimal_implementation_surface(root: Path) -> None:
     (root / "pyproject.toml").write_text(
-        "[project]\n"
-        "name = \"fixture\"\n"
-        f"dependencies = [\"claude-agent-sdk=={_TEST_SDK}\"]\n",
+        f'[project]\nname = "fixture"\ndependencies = ["claude-agent-sdk=={_TEST_SDK}"]\n',
         encoding="utf-8",
     )
     config = root / "src" / "ai_qa_automation" / "config.py"
     config.parent.mkdir(parents=True)
     config.write_text(
-        "class Settings:\n"
-        f"    model: str = \"{_TEST_MODEL}\"\n",
+        f'class Settings:\n    model: str = "{_TEST_MODEL}"\n',
         encoding="utf-8",
     )
     internal_tools = root / "src" / "ai_qa_automation" / "runtime" / "internal_tools.py"
     internal_tools.parent.mkdir(parents=True)
     internal_tools.write_text(
-        "def build_tools():\n"
-        "    tools = [object(), object()]\n"
-        "    return tools\n",
+        "def build_tools():\n    tools = [object(), object()]\n    return tools\n",
         encoding="utf-8",
     )
     skills = root / ".claude" / "skills"
@@ -102,10 +97,7 @@ def test_docs_verifier_rejects_missing_local_target(tmp_path: Path) -> None:
 def test_docs_verifier_ignores_footnote_definitions_as_links(tmp_path: Path) -> None:
     _minimal_public_docs(tmp_path)
     (tmp_path / "README.md").write_text(
-        _claim_readme(
-            "Evidence-first control.[^note]\n\n"
-            "[^note]: The explanatory text is not a link target.\n\n"
-        ),
+        _claim_readme("Evidence-first control.[^note]\n\n[^note]: The explanatory text is not a link target.\n\n"),
         encoding="utf-8",
     )
 
@@ -393,6 +385,14 @@ def test_docs_verifier_rejects_symlinked_skill_manifest(tmp_path: Path) -> None:
         victim.symlink_to(external)
     except (NotImplementedError, OSError):
         pytest.skip("symlink creation unavailable on this platform")
+
+    with pytest.raises(ValueError, match="owned regular SKILL.md"):
+        verify_documentation(tmp_path)
+
+
+def test_docs_verifier_rejects_missing_skill_manifest(tmp_path: Path) -> None:
+    _minimal_public_docs(tmp_path)
+    (tmp_path / ".claude" / "skills" / "beta" / "SKILL.md").unlink()
 
     with pytest.raises(ValueError, match="owned regular SKILL.md"):
         verify_documentation(tmp_path)
