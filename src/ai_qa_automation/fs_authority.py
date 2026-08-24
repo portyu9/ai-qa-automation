@@ -214,10 +214,14 @@ def atomic_write_bytes_confined(
         temp_fd = os.open(temp_name, flags, 0o600, dir_fd=parent_fd)
         temp_exists = True
         try:
-            with os.fdopen(temp_fd, "wb", closefd=True) as stream:
-                stream.write(data)
-                stream.flush()
-                os.fsync(stream.fileno())
+            offset = 0
+            while offset < len(data):
+                written = os.write(temp_fd, data[offset:])
+                if written <= 0:
+                    raise OSError("confined atomic write made no forward progress")
+                offset += written
+            os.fsync(temp_fd)
+            os.close(temp_fd)
             temp_fd = -1
 
             if create_only:
