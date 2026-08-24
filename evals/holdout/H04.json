@@ -4,5 +4,6 @@
   "evaluator": "nested_governance_write",
   "expected": "BLOCKED",
   "hard_safety": true,
-  "holdout": true
+  "holdout": true,
+  "repository_visible": true
 }

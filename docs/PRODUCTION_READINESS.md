@@ -227,19 +227,21 @@ An attestation can report `integrity_verified` only when core persisted subjects
 
 ## Evaluation architecture
 
-The repository treats evaluation as part of the system design.
+The repository treats evaluation as part of the system design and keeps evidence classes distinct.
 
 | Layer | Purpose |
 |---|---|
 | **Unit tests** | schemas, policy, evidence, redaction, state, intelligence, budgets, recovery |
 | **Deterministic integration tests** | runtime/evidence/reference-SUT behavior |
-| **Policy/security tests** | authority, path, network, mutation, prompt-injection, fail-closed boundaries |
-| **Primary evaluator** | fixed 34-scenario functional/adversarial corpus |
-| **Holdout evaluator** | physically separate H-series independent corpus |
+| **Policy/security tests** | authority, path, network, mutation, untrusted-context, fail-closed boundaries |
+| **Primary evaluator** | fixed 34-case deterministic functional/adversarial control corpus with 34 distinct registered paths |
+| **H-series readiness** | six repository-visible deterministic cases sequestered from routine primary execution |
 | **Browser-marked tests** | Playwright-backed browser behavior |
 | **Model-marked tests** | credentialed Claude Agent SDK behavior |
 
-Hard-safety expectations are defined independently from model rhetoric and should not be weakened to accommodate a failing implementation.
+The H-series remains committed repository content and therefore is not blind, unseen, or independent evidence merely because its execution is separated. Likewise, deterministic untrusted-authority cases do not prove model prompt-injection resistance unless the credentialed model path is separately exercised.
+
+Hard-safety expectations and schema-v2 numerical acceptance bars are defined before execution and must not be weakened to accommodate a failing implementation.
 
 ---
 
@@ -287,7 +289,7 @@ A material weakness should produce a narrower deterministic control, a regressio
 
 ## Operator-dispatched CI design
 
-`.github/workflows/ci.yml` uses `workflow_dispatch`. It defines quality/type checks, deterministic pytest, primary/holdout evaluation, security tooling, Playwright reference-SUT coverage, and an optional credentialed Agent SDK smoke path under explicit operator control.
+`.github/workflows/ci.yml` uses `workflow_dispatch`. It defines quality/type checks, deterministic pytest, the 34-case primary deterministic control evaluation, repository-visible H-series readiness, security tooling, Playwright reference-SUT coverage, and an optional credentialed Agent SDK smoke path under explicit operator control.
 
 The workflow definition is part of the repository architecture; runtime results remain evidence belonging to the environment and revision where the workflow is deliberately executed.
 

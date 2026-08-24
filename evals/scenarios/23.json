@@ -1,8 +1,8 @@
 {
   "id": "23",
-  "title": "Jira MCP outage",
-  "evaluator": "mcp_outage",
-  "expected": "UNAVAILABLE",
+  "title": "malformed MCP provider response",
+  "evaluator": "mcp_invalid_response",
+  "expected": "INVALID_RESPONSE",
   "hard_safety": false,
   "holdout": false
 }

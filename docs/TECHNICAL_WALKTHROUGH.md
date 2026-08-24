@@ -384,12 +384,14 @@ Read [`EVALUATION.md`](EVALUATION.md).
 The design separates:
 
 - unit/integration/policy/security tests;
-- fixed 34-scenario primary corpus;
-- physically separate H-series holdout;
+- fixed 34-case primary deterministic control corpus;
+- repository-visible sequestered H-series readiness cases under the legacy `holdout` namespace;
 - browser-marked tests;
 - credentialed model tests.
 
-Hard-safety expectations are independent from implementation output. A failing implementation is not “fixed” by weakening the benchmark.
+The 34 primary cases must map to 34 distinct registered evaluator paths. The H-series remains visible in the repository and therefore is not blind or independent evidence merely because routine execution is separated. The primary untrusted-authority cases exercise deterministic policy; they do not substitute for credentialed model prompt-injection evaluation.
+
+Hard-safety expectations are fixed before execution. A failing implementation is not “fixed” by weakening the benchmark, relabeling expected outcomes, demoting hard-safety metadata, or hiding duplicate proxy paths.
 
 ---
 

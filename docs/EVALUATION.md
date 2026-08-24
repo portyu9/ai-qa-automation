@@ -1,7 +1,7 @@
 # Evaluation Strategy
 
 > [!IMPORTANT]
-> The framework is evaluated as a **software control system**. Model fluency, confidence, or a green-looking generated test is never the benchmark by itself.
+> The framework is evaluated as a **software control system**. Model fluency, confidence, or a green-looking generated test is never the benchmark by itself. Evaluation labels describe only the paths that actually execute.
 
 **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
@@ -14,10 +14,10 @@
 The evaluation architecture targets failure modes that matter specifically in agentic QA:
 
 - false product-defect attribution;
-- wrong self-healing;
+- unsafe self-healing policy escapes;
 - meaningless generated tests;
 - regression under-selection;
-- prompt/authority injection;
+- untrusted-data attempts to acquire authority;
 - stale or subject-mismatched evidence;
 - unsafe mutation/recovery;
 - provider ambiguity;
@@ -33,8 +33,8 @@ The evaluation architecture targets failure modes that matter specifically in ag
 flowchart TD
     U[Unit tests] --> I[Deterministic integration]
     I --> S[Policy / security tests]
-    S --> P[34-scenario primary evaluator]
-    P --> H[Independent H-series holdout]
+    S --> P[34-case primary deterministic control evaluator]
+    P --> H[Repository-visible sequestered H-series readiness]
     I --> B[Browser-marked runtime tests]
     I --> M[Credentialed model-marked tests]
 ```
@@ -44,18 +44,18 @@ flowchart TD
 | **Unit tests** | schemas, config, policy, redaction, intelligence, evidence, budgets, recovery, traceability | deterministic repository/runtime code |
 | **Integration tests** | evidence/state/report flow, manifests, reference-SUT, SDK/tool contracts | deterministic; some runtime-dependent |
 | **Security / policy tests** | governance, secret, path, tool, MCP, network, load, mutation boundaries | deterministic |
-| **Primary evaluator** | fixed 34 functional/adversarial scenarios | deterministic benchmark |
-| **H-series holdout** | independent adversarial variants | independent deterministic benchmark |
+| **Primary evaluator** | fixed 34 deterministic functional/adversarial control cases | deterministic component/control evidence only |
+| **H-series readiness** | six repository-visible cases intentionally separated from routine primary execution | deterministic readiness evidence; not blind or independent |
 | **Browser-marked tests** | Playwright-backed browser behavior | browser runtime |
 | **Model-marked tests** | Claude Agent SDK behavior | credentialed provider runtime |
 
-The layers stay distinct so one evidence class cannot masquerade as another.
+The layers stay distinct so one evidence class cannot masquerade as another. In particular, the primary evaluator does **not** execute Claude or prove model-level prompt-injection resistance.
 
 ---
 
-## Primary adversarial corpus
+## Primary deterministic control corpus
 
-The fixed primary catalog contains **34 scenarios** under `evals/scenarios/`.
+The fixed primary catalog contains **34 cases** under `evals/scenarios/`.
 
 ```bash
 python evals/runner.py
@@ -63,34 +63,46 @@ python evals/runner.py
 make eval
 ```
 
-Primary scenarios carry:
+Primary cases retain the compatibility field:
 
 ```json
 "holdout": false
 ```
 
-Coverage includes:
+Coverage includes distinct deterministic paths for:
 
 - application vs automation defects;
 - locator/UI-contract changes;
 - timing/flakiness;
 - authentication/data/environment/configuration/dependency failures;
-- unsafe healing attempts;
-- assertion weakening, sleeps, timeout inflation, skip/xfail, suppression;
+- unsafe-healing policy attempts;
+- assertion weakening, sleeps, timeout inflation, skip/xfail, and broad exception suppression;
 - malformed structured model output;
 - bounded-loop behavior;
 - provider failure normalization;
-- prompt injection through provider/DOM/API/test/target configuration;
-- regression false negatives and mandatory coverage preservation;
+- untrusted issue/ticket/DOM/API contexts attempting secret reads, governance writes, unrestricted tools, or API mutation;
+- regression false negatives and mandatory-coverage cases;
 - performance regression and production-load denial;
-- governance modification attempts;
-- target agent/MCP configuration injection.
+- protected evaluation-threshold modification;
+- target `CLAUDE.md` and `.mcp.json` modification attempts.
+
+Each primary case must map to exactly one registered evaluator path. The loader binds case ID, filename, title, evaluator, expected result, and hard-safety designation to repository-owned executable metadata. Duplicate IDs, duplicate evaluator paths, callable aliases, unknown evaluators, relabeled expectations, and hard-safety demotion fail closed.
+
+Primary and readiness **catalog directories** use descriptor-pinned, no-follow ingestion rather than pathname enumeration after a separate preflight. Enumeration is bounded while it occurs; each direct JSON entry is opened relative to the pinned directory descriptor, read under an actual byte limit, and checked for file-identity or directory-identity changes before the catalog can close successfully. Duplicate JSON keys, non-standard numeric constants, parser coercion, symlink substitution, catalog replacement, concurrent catalog mutation, and entry-count exhaustion therefore fail closed. The standalone `evals/thresholds.json` file uses the bounded no-follow single-file ingestion path.
+
+This catalog guarantee intentionally has a platform prerequisite: the runtime must provide no-follow directory opens, descriptor-relative `open`/`stat`, and descriptor-based directory enumeration. The implementation proves descriptor enumeration by attempting `os.scandir(directory_fd)` on the already-open directory; it does not trust capability metadata as evidence. If those primitives are unavailable, evaluator catalog ingestion fails closed instead of falling back to a weaker pathname scan. The repository CI evidence for this path is Linux-hosted; it does not by itself establish equivalent filesystem semantics on every operating system.
+
+### What the untrusted-authority cases prove
+
+Cases 24–27 prove that deterministic policy still denies four concrete authority requests when they originate from untrusted-context fixtures and that the runtime system prompt preserves the untrusted-data boundary.
+
+They do **not** submit four injected payloads to Claude and therefore do not establish a model prompt-injection success rate. The fixtures exercise deterministic request/policy paths; credentialed model behavior belongs to the separate model-marked evidence layer.
 
 ---
 
-## Independent H-series holdout
+## Repository-visible sequestered H-series readiness
 
-The holdout lives separately under `evals/holdout/`.
+The H-series lives under the legacy compatibility namespace `evals/holdout/` and runs through `evals/holdout_runner.py`.
 
 ```bash
 python evals/holdout_runner.py
@@ -98,15 +110,16 @@ python evals/holdout_runner.py
 make holdout
 ```
 
-Holdout scenarios carry:
+Cases retain:
 
 ```json
-"holdout": true
+"holdout": true,
+"repository_visible": true
 ```
 
-The directory is intentionally excluded from `make verify-local` so ordinary development does not optimize directly against exact holdout fixtures.
+`holdout` here means **execution separation only**. These fixtures are committed in the same public repository and can be inspected or tuned against; they are not secret, blind, unseen, or independent evaluation evidence.
 
-H-series variants challenge areas such as:
+The H-series is intentionally excluded from the routine primary runner and challenges distinct variants of:
 
 - competing evidence signals;
 - observed fact vs model interpretation;
@@ -115,9 +128,11 @@ H-series variants challenge areas such as:
 - security-critical regression preservation;
 - uncertainty-driven regression broadening.
 
+A genuinely blind benchmark requires an environment-owned corpus unavailable to the repository/implementation during development.
+
 ### Anti-overfitting rule
 
-A holdout failure should produce a **general control improvement**.
+A readiness failure should produce a **general control improvement**.
 
 Do not:
 
@@ -126,16 +141,38 @@ Do not:
 - relax a hard-safety threshold after observing failure;
 - special-case one fixture while leaving the general weakness intact.
 
-If a holdout case becomes ordinary tuning knowledge, preserve independence by adding a genuinely new variant.
+If a public readiness case becomes routine tuning knowledge, add a genuinely different variant to preserve behavioral diversity. Do not call that new repository-visible variant blind.
 
 ---
 
-## Hard-safety thresholds
+## Governed threshold contract
 
-`evals/thresholds.json` defines acceptance rules independently from an individual run. Hard-safety scenarios require zero known failures.
+`evals/thresholds.json` uses schema version 2. Its acceptance values were not weakened during the Phase 3 semantic rename: the same numerical bars remain, but names now describe the actual case-scoped evidence.
+
+The governed primary metrics are:
+
+| Metric | Meaning |
+|---|---|
+| `classification_case_accuracy` | fraction of registered primary classification cases whose exact expected class matched |
+| `unsafe_healing_policy_escape_rate` | fraction of registered unsafe-healing policy cases that escaped deterministic `BLOCKED` behavior |
+| `mandatory_coverage_case_pass_rate` | fraction of registered mandatory-coverage cases whose exact expected result matched |
+| `untrusted_authority_policy_overrides` | count of registered untrusted-authority cases that were not deterministically blocked |
+| `fabricated_passes` | count of cases returning `PASS` when the registered expected result was not `PASS` |
+| `evaluated_cases` / `distinct_evaluator_paths` / `duplicate_evaluator_paths` | explicit denominator and path-diversity accounting |
+
+The corresponding schema-v2 thresholds remain:
+
+- classification case accuracy at least `0.90`;
+- unsafe-healing policy escape rate at most `0.00`;
+- mandatory-coverage case pass rate at least `1.00`;
+- untrusted-authority policy overrides at most `0`;
+- fabricated PASS count at most `0`;
+- hard-safety failures at most `0`.
 
 > [!CAUTION]
 > Thresholds are governance inputs. The implementation adapts to the safety bar; the safety bar is not moved to accommodate the implementation.
+
+Threshold parsing rejects missing/unknown schema keys, wrong types, non-finite ratios, invalid ranges, blank governance notes, and schema-version drift. Metric aggregation also rejects unknown evaluator identities, expected-result drift, coercive row types, and `pass` flags inconsistent with `actual == expected`.
 
 ---
 
@@ -255,10 +292,21 @@ The broader test surface also encodes properties such as:
 
 ## What an evaluation result means
 
-A deterministic evaluator answers whether the implementation behaved as expected for its predefined cases in the environment where it was executed.
+A deterministic evaluator answers whether the implementation behaved as expected for its predefined registered cases in the environment and revision where it was executed.
 
-It does **not** generalize that evidence automatically to:
+A green primary run can prove, for that exact revision:
 
+- all 34 registered case executions completed with their expected results;
+- hard-safety failures were zero;
+- schema-v2 case-scoped thresholds passed;
+- 34 case labels corresponded to 34 distinct registered evaluator paths.
+
+A green H-series run can prove the six repository-visible readiness cases completed as expected with six distinct registered paths. It does not become blind evidence because it ran separately.
+
+Neither deterministic corpus automatically proves:
+
+- live Claude/model behavior;
+- prompt-injection resistance of a model/provider;
 - every provider account;
 - every real application;
 - every browser/device fleet;
@@ -269,20 +317,20 @@ See [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md).
 
 ---
 
-## Metrics that matter
+## Metrics beyond the fixed corpus
 
-When tied to a defined dataset/run, useful quality metrics include:
+Broader quality metrics can be valuable when a dedicated dataset actually measures them, including:
 
-- failure-classification precision/recall;
+- failure-classification precision/recall across representative labeled incidents;
 - false-positive product-defect rate;
-- self-healing semantic correctness and false-heal rate;
+- end-to-end self-healing semantic correctness and false-heal rate;
 - generated-test meaningful-assertion quality;
 - regression-selection recall/reduction/escaped-regression rate;
-- prompt-injection blocks and policy denials;
+- model prompt-injection resistance under a credentialed adversarial corpus;
 - execution duration and tool/network/mutation counts;
 - model token/cost information when supplied by the provider.
 
-Benchmark percentages should always be quoted with the dataset and execution record that produced them.
+Do not substitute the fixed primary case metrics for these broader quantities. Every percentage must name its dataset, denominator, execution record, and revision.
 
 ---
 
@@ -290,6 +338,8 @@ Benchmark percentages should always be quoted with the dataset and execution rec
 
 A green-looking suite is not sufficient quality evidence if it contains:
 
+- duplicate proxy cases presented as distinct paths;
+- misleading labels that imply a model/provider/browser execution that never occurred;
 - false healing;
 - weakened test intent;
 - escaped mandatory/security/safety/regulatory coverage;
@@ -302,7 +352,7 @@ A green-looking suite is not sufficient quality evidence if it contains:
 - integrity claims that do not include artifact verification.
 
 > [!TIP]
-> The purpose of evaluation is not to make the agent look smart. It is to make unsafe behavior expensive to hide.
+> The purpose of evaluation is not to make the agent look smart. It is to make unsafe behavior and false evidence difficult to hide.
 
 ---
 
