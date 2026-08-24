@@ -237,8 +237,7 @@ def test_unexpected_validation_tool_failure_records_not_verified_lineage(
     assert secret not in str(failure.model_dump(mode="json"))
     assert secret not in str(result)
     assert (
-        "deterministic closure is NOT_VERIFIED"
-        in result["hookSpecificOutput"]["additionalContext"]
+        "deterministic closure is NOT_VERIFIED" in result["hookSpecificOutput"]["additionalContext"]
     )
 
 
