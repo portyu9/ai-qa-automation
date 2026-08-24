@@ -18,6 +18,9 @@ Every external MCP interaction answers two questions:
 
 ```mermaid
 flowchart LR
+    accTitle: External MCP provider identity and action authorization remain independent gates
+    accDescr: A requested provider must first match an approved vendor identity. Approved providers then pass through deterministic action classification, where reads may be allowed, writes require approval, destructive actions are denied, and only successful reads produce sanitized untrusted evidence.
+
     A[Provider requested] --> B{Approved vendor identity?}
     B -->|no| X[DENY]
     B -->|yes| C{Action class?}
