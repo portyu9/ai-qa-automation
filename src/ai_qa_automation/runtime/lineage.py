@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from ..io_safety import open_regular_binary, parse_json_object_strict, read_json_object_bounded
+from ..state import StateStore
 from .journal import RunJournal
 
 _MAX_LINEAGE_CONTROL_BYTES = 10_000_000
@@ -84,9 +85,14 @@ def build_run_lineage(run_dir: Path, *, max_journal_events: int = 500) -> RunLin
     state_path = _owned_subject(root, "state.json")
     manifest_path = _owned_subject(root, "evidence-manifest.json")
     journal_path = _owned_subject(root, "journal.jsonl")
-    state = _load_object(state_path, required=True)
+    if not state_path.is_file():
+        raise FileNotFoundError(state_path.name)
+    # Canonical state must be interpreted identically by runtime recovery,
+    # attestation, and lineage. Reuse the strict StateStore authority rather than
+    # accepting a weaker graph-only dictionary representation.
+    state = StateStore(state_path).load().model_dump(mode="json")
     manifest = _load_object(manifest_path, required=False)
-    run_id = str(state.get("run_id") or root.name)
+    run_id = state["run_id"]
     nodes: dict[str, LineageNode] = {}
     edges: set[tuple[str, str, str]] = set()
     warnings: list[str] = []
@@ -97,7 +103,7 @@ def build_run_lineage(run_dir: Path, *, max_journal_events: int = 500) -> RunLin
         kind="run",
         label=run_id,
         attributes={
-            "objective": str(state.get("objective") or "")[:500],
+            "objective": state["objective"][:500],
             "objective_gate_id": state.get("objective_gate_id"),
             "terminal_status": state.get("terminal_status"),
             "target_git_sha": state.get("target_git_sha"),
