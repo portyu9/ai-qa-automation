@@ -6,7 +6,7 @@ from typing import Any
 
 from ..io_safety import read_json_object_bounded
 from ..state import StateStore
-from .journal import RunJournal
+from .journal import RunJournal, validate_runtime_journal_binding
 from .validation_truth import evaluate_revision_closure
 
 _MAX_RUNTIME_METADATA_BYTES = 2_000_000
@@ -81,6 +81,13 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
             "reason": "runtime.json workspace does not match canonical state workspace",
         }
 
+    journal_binding = validate_runtime_journal_binding(runtime_metadata, journal_status)
+    if not journal_binding["valid"]:
+        return {
+            "recoverable": False,
+            "reason": f"runtime journal authority is invalid: {journal_binding['reason']}",
+        }
+
     if "pending_mutation" not in runtime_metadata:
         return {
             "recoverable": False,
@@ -116,6 +123,7 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
             "mutation_path": closure.mutation_path,
         },
         "journal": journal_status,
+        "journal_binding": journal_binding,
         "runtime": runtime_metadata,
         "pending_mutation": pending_mutation,
         "resume_policy": (
