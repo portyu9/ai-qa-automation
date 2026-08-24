@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from ..io_safety import read_text_bounded, sha256_file_bounded
+from ..io_safety import read_json_object_bounded, sha256_file_bounded
 from .journal import RunJournal
 
 _MAX_STATE_BYTES = 16_000_000
@@ -245,12 +245,11 @@ def _verify_manifest_artifacts(root: Path, manifest: dict[str, Any]) -> dict[str
 
 
 def _load_object(path: Path, *, max_bytes: int) -> dict[str, Any]:
-    value = json.loads(
-        read_text_bounded(path, max_bytes=max_bytes, label=f"attestation subject {path.name}")
+    return read_json_object_bounded(
+        path,
+        max_bytes=max_bytes,
+        label=f"attestation subject {path.name}",
     )
-    if not isinstance(value, dict):
-        raise ValueError(f"{path.name} root must be an object")
-    return value
 
 
 def _file_digest(path: Path, *, max_bytes: int) -> dict[str, object]:
