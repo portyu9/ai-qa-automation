@@ -80,7 +80,7 @@ def write_complete_integrity_fixture(run_dir: Path) -> Path:
     )
     write_json(
         run_dir / "runtime.json",
-        {"workspace_fingerprint": "fp-1", "pending_mutation": None},
+        {"workspace": "sut", "workspace_fingerprint": "fp-1", "pending_mutation": None},
     )
     RunJournal(run_dir / "journal.jsonl").append("run_started", run_id="run-1")
     return artifact
@@ -103,6 +103,7 @@ def test_attestation_verifies_persisted_integrity_without_claiming_signature(
     assert attestation["integrity"]["integrity_verified"] is True
     assert attestation["integrity"]["subjects_complete"] is True
     assert attestation["integrity"]["journal"]["valid"] is True
+    assert attestation["integrity"]["workspace"] == {"valid": True}
     assert attestation["integrity"]["manifest"] == {
         "valid": True,
         "regulated_mode": False,
@@ -129,7 +130,11 @@ def test_pending_mutation_prevents_integrity_verified(tmp_path: Path) -> None:
     assert artifact.is_file()
     write_json(
         run_dir / "runtime.json",
-        {"workspace_fingerprint": "fp-1", "pending_mutation": {"path": "tests/test_x.py"}},
+        {
+            "workspace": "sut",
+            "workspace_fingerprint": "fp-1",
+            "pending_mutation": {"path": "tests/test_x.py"},
+        },
     )
 
     attestation = build_run_attestation(run_dir)
@@ -191,6 +196,42 @@ def test_cross_run_evidence_prevents_integrity_verified(tmp_path: Path) -> None:
     assert attestation["outcome"]["artifact_count"] == 0
 
 
+def test_mismatched_runtime_workspace_prevents_integrity_verified(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-1"
+    write_json(run_dir / "state.json", base_state())
+    write_complete_integrity_fixture(run_dir)
+    write_json(
+        run_dir / "runtime.json",
+        {"workspace": "other-sut", "workspace_fingerprint": "fp-1", "pending_mutation": None},
+    )
+
+    attestation = build_run_attestation(run_dir)
+
+    assert attestation["integrity"]["integrity_verified"] is False
+    assert attestation["integrity"]["workspace"] == {
+        "valid": False,
+        "reason": "runtime workspace identity mismatch",
+    }
+
+
+def test_missing_runtime_workspace_prevents_integrity_verified(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-1"
+    write_json(run_dir / "state.json", base_state())
+    write_complete_integrity_fixture(run_dir)
+    write_json(
+        run_dir / "runtime.json",
+        {"workspace_fingerprint": "fp-1", "pending_mutation": None},
+    )
+
+    attestation = build_run_attestation(run_dir)
+
+    assert attestation["integrity"]["integrity_verified"] is False
+    assert attestation["integrity"]["workspace"] == {
+        "valid": False,
+        "reason": "runtime workspace identity is missing or invalid",
+    }
+
+
 def test_attestation_fails_closed_when_registered_artifacts_exceed_cumulative_bound(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -198,7 +239,7 @@ def test_attestation_fails_closed_when_registered_artifacts_exceed_cumulative_bo
     write_json(run_dir / "state.json", base_state())
     write_json(
         run_dir / "runtime.json",
-        {"workspace_fingerprint": "fp-1", "pending_mutation": None},
+        {"workspace": "sut", "workspace_fingerprint": "fp-1", "pending_mutation": None},
     )
     RunJournal(run_dir / "journal.jsonl").append("run_started", run_id="run-1")
     artifacts: list[dict[str, object]] = []
