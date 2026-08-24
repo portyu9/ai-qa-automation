@@ -250,17 +250,18 @@ Deep dives: [Architecture](docs/ARCHITECTURE.md) · [Runtime Control](docs/RUNTI
 
 ### Local deterministic tooling
 
+Repository verification is intentionally bound to the committed interpreter-specific development lock. For the shortest reproducible path on macOS/Linux, use an exact supported interpreter and the repository-owned installer:
+
 ```bash
-python -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e '.[dev]'
+make install
 
 ai-qa doctor
 ai-qa demo
 ```
 
-On Windows PowerShell, activate with `.venv\Scripts\Activate.ps1`.
+`make install` selects the matching committed `requirements/dev-py311.lock` or `requirements/dev-py313.lock`, enforces package hashes, installs the project non-editably without dependency resolution, and runs `pip check`. Windows PowerShell and deliberate lock-update procedures are documented in [Setup](docs/SETUP.md) and [Supply-Chain Integrity](docs/SUPPLY_CHAIN.md).
 
 `.env.example` is a reference template only; runtime settings do not automatically load a repository `.env` file.
 
