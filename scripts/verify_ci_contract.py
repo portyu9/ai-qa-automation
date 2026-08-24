@@ -17,9 +17,6 @@ EXPECTED_ACTION_SHAS = {
     "actions/setup-python": "5fda3b95a4ea91299a34e894583c3862153e4b97",  # pragma: allowlist secret
     "actions/upload-artifact": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",  # pragma: allowlist secret
 }
-ACTION_RE = re.compile(r"^\s*uses:\s*([^@\s]+)@([^\s#]+)", re.MULTILINE)
-HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
-WRITE_PERMISSION_RE = re.compile(r"^\s+[A-Za-z0-9_-]+:\s*write\s*$", re.MULTILINE)
 AUTOMATIC_REQUIRED_JOBS = (
     "quality",
     "deterministic-evals",
@@ -27,6 +24,9 @@ AUTOMATIC_REQUIRED_JOBS = (
     "security",
     "browser-reference-sut",
 )
+ACTION_RE = re.compile(r"^\s*uses:\s*([^@\s]+)@([^\s#]+)", re.MULTILINE)
+HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
+WRITE_PERMISSION_RE = re.compile(r"^\s+[A-Za-z0-9_-]+:\s*write\s*$", re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -40,13 +40,7 @@ def _identity(value: os.stat_result) -> tuple[int, int]:
 
 
 def _file_signature(value: os.stat_result) -> tuple[int, int, int, int, int]:
-    return (
-        value.st_dev,
-        value.st_ino,
-        value.st_size,
-        value.st_mtime_ns,
-        value.st_ctime_ns,
-    )
+    return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns
 
 
 def _directory_signature(value: os.stat_result) -> tuple[int, int, int, int]:
@@ -103,9 +97,9 @@ def _read_workflow_set(workflow_dir: Path) -> dict[str, WorkflowSnapshot]:
 
     try:
         opened_directory = os.fstat(directory_fd)
+        current_directory = workflow_dir.stat(follow_symlinks=False)
         if not stat.S_ISDIR(opened_directory.st_mode):
             raise ValueError("workflow path must be a directory")
-        current_directory = workflow_dir.stat(follow_symlinks=False)
         if stat.S_ISLNK(current_directory.st_mode):
             raise ValueError("workflow directory became a symlink during verification")
         if _identity(opened_directory) != _identity(current_directory):
@@ -146,7 +140,6 @@ def _read_workflow_set(workflow_dir: Path) -> dict[str, WorkflowSnapshot]:
             before = _relative_stat(name, directory_fd)
             if not stat.S_ISREG(before.st_mode):
                 raise ValueError(f"{label} must be a regular non-symlink file")
-
             file_fd = _relative_open(name, directory_fd, label=label)
             try:
                 opened_file = os.fstat(file_fd)
@@ -247,8 +240,7 @@ def _job_block(text: str, job_id: str) -> str:
 def _verify_action_revisions(workflows: dict[str, str]) -> dict[str, str]:
     observed: dict[str, str] = {}
     for name, raw_text in workflows.items():
-        text = _semantic_text(raw_text)
-        for action, revision in ACTION_RE.findall(text):
+        for action, revision in ACTION_RE.findall(_semantic_text(raw_text)):
             if not HEX40_RE.fullmatch(revision):
                 raise ValueError(f"{name}: mutable GitHub Action reference: {action}@{revision}")
             expected = EXPECTED_ACTION_SHAS.get(action)
@@ -289,8 +281,8 @@ def _verify_checkout_binding(text: str, *, name: str) -> int:
 def _verify_automatic_workflow(text: str) -> dict[str, Any]:
     name = "ci.yml"
     semantic = _semantic_text(text)
-    triggers = _top_level_keys(_top_level_block(text, "on"))
     expected_triggers = {"pull_request", "push", "merge_group"}
+    triggers = _top_level_keys(_top_level_block(text, "on"))
     if triggers != expected_triggers:
         raise ValueError(
             f"{name}: automatic trigger set must be exactly {sorted(expected_triggers)}, "
@@ -326,7 +318,8 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
     for job in AUTOMATIC_REQUIRED_JOBS:
         if f"      - {job}\n" not in required_gate:
             raise ValueError(f"{name}: Required PR Gate does not depend on {job}")
-        if f'needs.{job}.result }}" = "success"' not in required_gate:
+        result_check = 'test "${{ needs.' + job + '.result }}" = "success"'
+        if result_check not in required_gate:
             raise ValueError(f"{name}: Required PR Gate does not fail closed on {job}")
 
     return {
@@ -382,10 +375,7 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
         "schema_version": 1,
         "result": "PASS",
         "claim": "repository workflow definitions satisfy deterministic CI authority invariants",
-        "workflows": {
-            "automatic": automatic,
-            "manual": manual,
-        },
+        "workflows": {"automatic": automatic, "manual": manual},
         "workflow_sizes": {
             name: snapshot.size_bytes for name, snapshot in sorted(snapshots.items())
         },

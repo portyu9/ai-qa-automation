@@ -146,6 +146,20 @@ def test_ci_contract_rejects_fail_open_required_gate_dependency(tmp_path: Path) 
         ci_contract.verify_ci_contract(root)
 
 
+def test_ci_contract_rejects_fail_open_required_gate_result_check(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "ci.yml"
+    text = path.read_text(encoding="utf-8").replace(
+        'test "${{ needs.security.result }}" = "success"',
+        'test "${{ needs.security.result }}" != "success"',
+        1,
+    )
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="does not fail closed on security"):
+        ci_contract.verify_ci_contract(root)
+
+
 def test_ci_contract_rejects_fail_open_required_gate_condition(tmp_path: Path) -> None:
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "ci.yml"
