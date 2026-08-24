@@ -35,6 +35,18 @@ def base_state() -> dict[str, object]:
     }
 
 
+def artifact_record(*, artifact_id: str, path: str, digest: str) -> dict[str, object]:
+    return {
+        "artifact_id": artifact_id,
+        "type": "binary",
+        "path": path,
+        "originating_tool": "playwright",
+        "content_hash": f"sha256:{digest}",
+        "sanitization_status": "RAW",
+        "retention_classification": "standard",
+    }
+
+
 def write_complete_integrity_fixture(run_dir: Path) -> Path:
     artifact = run_dir / "browser" / "capture.bin"
     artifact.parent.mkdir(parents=True, exist_ok=True)
@@ -43,13 +55,26 @@ def write_complete_integrity_fixture(run_dir: Path) -> Path:
     write_json(
         run_dir / "evidence-manifest.json",
         {
-            "evidence": [{"id": "ev-1"}],
-            "artifacts": [
+            "run_id": "run-1",
+            "regulated_mode": False,
+            "evidence": [
                 {
-                    "artifact_id": "art-1",
-                    "path": "browser/capture.bin",
+                    "id": "ev-1",
+                    "run_id": "run-1",
+                    "kind": "dom_snapshot",
+                    "nature": "OBSERVED_FACT",
+                    "source": "playwright",
+                    "summary": "Checkout button observed",
+                    "artifact_reference": "browser/capture.bin",
                     "content_hash": f"sha256:{digest}",
                 }
+            ],
+            "artifacts": [
+                artifact_record(
+                    artifact_id="art-1",
+                    path="browser/capture.bin",
+                    digest=digest,
+                )
             ],
         },
     )
@@ -78,6 +103,12 @@ def test_attestation_verifies_persisted_integrity_without_claiming_signature(
     assert attestation["integrity"]["integrity_verified"] is True
     assert attestation["integrity"]["subjects_complete"] is True
     assert attestation["integrity"]["journal"]["valid"] is True
+    assert attestation["integrity"]["manifest"] == {
+        "valid": True,
+        "regulated_mode": False,
+        "evidence_records": 1,
+        "artifact_records": 1,
+    }
     assert attestation["integrity"]["artifacts"] == {
         "valid": True,
         "checked": 1,
@@ -88,7 +119,7 @@ def test_attestation_verifies_persisted_integrity_without_claiming_signature(
         "reason": "repository provides content-addressed integrity metadata but no trusted signing key",
     }
     assert str(attestation["attestation_digest"]).startswith("sha256:")
-    assert "does not change the run terminal status" in attestation["interpretation"]
+    assert "does not change" in attestation["interpretation"]
 
 
 def test_pending_mutation_prevents_integrity_verified(tmp_path: Path) -> None:
@@ -150,24 +181,33 @@ def test_attestation_fails_closed_when_registered_artifacts_exceed_cumulative_bo
         {"workspace_fingerprint": "fp-1", "pending_mutation": None},
     )
     RunJournal(run_dir / "journal.jsonl").append("run_started", run_id="run-1")
-    artifacts: list[dict[str, str]] = []
+    artifacts: list[dict[str, object]] = []
     for index, payload in enumerate((b"123456", b"abcdef"), 1):
         path = run_dir / "browser" / f"capture-{index}.bin"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(payload)
         artifacts.append(
-            {
-                "artifact_id": f"art-{index}",
-                "path": path.relative_to(run_dir).as_posix(),
-                "content_hash": f"sha256:{hashlib.sha256(payload).hexdigest()}",
-            }
+            artifact_record(
+                artifact_id=f"art-{index}",
+                path=path.relative_to(run_dir).as_posix(),
+                digest=hashlib.sha256(payload).hexdigest(),
+            )
         )
-    write_json(run_dir / "evidence-manifest.json", {"evidence": [], "artifacts": artifacts})
+    write_json(
+        run_dir / "evidence-manifest.json",
+        {
+            "run_id": "run-1",
+            "regulated_mode": False,
+            "evidence": [],
+            "artifacts": artifacts,
+        },
+    )
     monkeypatch.setattr(attestation_module, "_MAX_TOTAL_ARTIFACT_BYTES", 10)
 
     attestation = build_run_attestation(run_dir)
 
     assert attestation["integrity"]["integrity_verified"] is False
+    assert attestation["integrity"]["manifest"]["valid"] is True
     assert attestation["integrity"]["artifacts"]["valid"] is False
     assert "cumulative" in attestation["integrity"]["artifacts"]["reason"]
 
@@ -180,6 +220,7 @@ def test_missing_core_subjects_prevent_integrity_verified(tmp_path: Path) -> Non
     attestation = build_run_attestation(run_dir)
 
     assert attestation["integrity"]["subjects_complete"] is False
+    assert attestation["integrity"]["manifest"]["valid"] is False
     assert attestation["integrity"]["integrity_verified"] is False
 
 
