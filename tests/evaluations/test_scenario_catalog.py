@@ -164,7 +164,7 @@ def test_primary_catalog_rejects_directory_swap_after_open(
     shutil.copytree(Path("evals/scenarios"), external)
     _swap_directory_when_scandir_starts(directory, external, monkeypatch)
 
-    with pytest.raises(ValueError, match="changed|symlink"):
+    with pytest.raises(ValueError, match=r"changed|symlink"):
         load_primary_scenarios(directory)
 
 
@@ -244,7 +244,7 @@ def test_readiness_catalog_rejects_directory_swap_after_open(
     shutil.copytree(Path("evals/holdout"), external)
     _swap_directory_when_scandir_starts(directory, external, monkeypatch)
 
-    with pytest.raises(ValueError, match="changed|symlink"):
+    with pytest.raises(ValueError, match=r"changed|symlink"):
         load_readiness_scenarios(directory)
 
 
