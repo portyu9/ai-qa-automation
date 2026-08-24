@@ -83,6 +83,22 @@ class RuntimeControl:
                 label="runtime workspace",
             )
 
+    @property
+    def workspace_identity(self) -> tuple[int, int] | None:
+        """Return the run-lifetime filesystem identity authorized for target mutations."""
+
+        return self._workspace_identity
+
+    def _assert_workspace_identity(self) -> None:
+        if self._workspace_identity is None:
+            return
+        try:
+            current = pin_directory_identity(self.workspace, label="runtime workspace")
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise RuntimeError("runtime workspace identity could not be revalidated") from exc
+        if current != self._workspace_identity:
+            raise RuntimeError("runtime workspace changed identity since authorization")
+
     def before_tool(self, tool_name: str) -> None:
         with self._lock:
             if tool_name in self.open_circuits:
@@ -184,6 +200,13 @@ class RuntimeControl:
                     ) from exc
                 backup_path = run_root / backup_relative
 
+            try:
+                self._assert_workspace_identity()
+            except RuntimeError as exc:
+                if backup_path is not None:
+                    self._discard_backup_best_effort(backup_path)
+                raise MutationPendingError(str(exc)) from exc
+
             pending = PendingMutation(
                 relative_path=relative_path,
                 existed=existed,
@@ -227,6 +250,7 @@ class RuntimeControl:
             pending = self.pending_mutation
             if pending is None:
                 return None
+            self._assert_workspace_identity()
             backup: Path | None = None
             if pending.existed:
                 backup, _ = self._validated_rollback_backup(pending)
@@ -258,6 +282,7 @@ class RuntimeControl:
             if pending is None:
                 return None
             self._target(pending.relative_path)
+            self._assert_workspace_identity()
             backup: Path | None = None
             if pending.existed:
                 backup, data = self._validated_rollback_backup(pending)
@@ -286,6 +311,11 @@ class RuntimeControl:
                     # exists to remove.
                     if not self.workspace.is_dir():
                         raise
+
+            # Rebind pathname identity after the target mutation but before durable
+            # transaction closure. A whole-root replacement at this boundary must retain
+            # pending/backup authority rather than certifying rollback on another tree.
+            self._assert_workspace_identity()
 
             # The target bytes are now restored/removed. Persist closure before deleting
             # the rollback snapshot. If metadata persistence fails, keep the transaction
@@ -399,9 +429,18 @@ class RuntimeControl:
                     if include_pending_details
                     else self.pending_mutation.relative_path
                 )
+            workspace_root_identity = (
+                {
+                    "device": self._workspace_identity[0],
+                    "inode": self._workspace_identity[1],
+                }
+                if self._workspace_identity is not None
+                else None
+            )
             return {
                 "lease_id": self.lease_id,
                 "workspace": str(self.workspace),
+                "workspace_root_identity": workspace_root_identity,
                 "workspace_fingerprint": self.expected_workspace_fingerprint,
                 "budget": self.budget.snapshot().as_dict(),
                 "journal_event_count": self.journal.event_count,
