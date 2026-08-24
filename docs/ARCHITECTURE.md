@@ -365,9 +365,11 @@ See [`TRACEABILITY.md`](TRACEABILITY.md).
 
 ## Evaluation as architecture
 
-Evaluation is part of the control design, not a presentation layer. The repository separates unit/integration/policy/security tests, the fixed 34-scenario primary corpus, the independent H-series holdout, browser-marked behavior, and credentialed model behavior.
+Evaluation is part of the control design, not a presentation layer. The repository separates unit/integration/policy/security tests, the fixed 34-case primary deterministic control corpus, the repository-visible sequestered H-series readiness corpus, browser-marked behavior, and credentialed model behavior.
 
-A benchmark failure is addressed by improving the general control, not by weakening its expected outcome after the fact.
+The H-series is physically separated from routine primary execution but remains committed repository content; it is not blind or independent evidence. Likewise, the primary untrusted-authority cases exercise deterministic policy paths and do not by themselves prove model prompt-injection resistance.
+
+An evaluation failure is addressed by improving the general control, not by weakening its expected outcome or governed threshold after the fact.
 
 See [`EVALUATION.md`](EVALUATION.md).
 
