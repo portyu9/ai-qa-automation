@@ -89,7 +89,7 @@ jobs:
 
   model-smoke:
     name: Claude Agent SDK Smoke (Credentialed / Manual)
-    if: ${{ inputs.run_model }}
+    if: ${{ inputs.run_model && github.ref == 'refs/heads/main' }}
     environment: credentialed-validation
     runs-on: ubuntu-24.04
     timeout-minutes: 20
