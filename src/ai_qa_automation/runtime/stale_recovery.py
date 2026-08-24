@@ -269,7 +269,6 @@ def recover_stale_mutation(
             "stale_mutation_recovered",
             recovering_run_id=recovering_run_id,
             path=relative_path,
-            rollback_cleanup_failed=False,
         )
     except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
         pass
@@ -317,16 +316,12 @@ def recover_stale_mutation(
             ),
         }
 
-    rollback_cleanup_failed = False
     if backup_to_cleanup is not None:
         try:
             backup_to_cleanup.unlink()
         except OSError:
-            rollback_cleanup_failed = True
+            # Runtime authority is already durably closed. An orphaned rollback
+            # snapshot is safer than weakening the completed recovery transition.
+            pass
 
-    return {
-        "status": "RECOVERED",
-        "previous_run_id": previous_run_id,
-        "path": relative_path,
-        "rollback_cleanup_failed": rollback_cleanup_failed,
-    }
+    return {"status": "RECOVERED", "previous_run_id": previous_run_id, "path": relative_path}
