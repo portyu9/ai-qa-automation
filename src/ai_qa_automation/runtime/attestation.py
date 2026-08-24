@@ -9,7 +9,7 @@ from typing import Any
 from ..io_safety import read_json_object_bounded, sha256_file_bounded
 from ..models import ArtifactRecord, EvidenceItem
 from ..state import StateStore
-from .journal import RunJournal
+from .journal import RunJournal, validate_runtime_journal_binding
 
 _MAX_STATE_BYTES = 16_000_000
 _MAX_MANIFEST_BYTES = 16_000_000
@@ -69,6 +69,7 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
             journal = RunJournal(journal_path, regulated_mode=False).verify()
     except (OSError, UnicodeError, json.JSONDecodeError, RuntimeError, ValueError) as exc:
         journal = {"valid": False, "reason": f"{type(exc).__name__}"}
+    journal_binding = validate_runtime_journal_binding(runtime, journal)
 
     artifact_integrity = (
         _verify_manifest_artifacts(root, artifact_records)
@@ -107,6 +108,7 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
     integrity_verified = (
         subjects_complete
         and bool(journal.get("valid"))
+        and bool(journal_binding.get("valid"))
         and bool(manifest_integrity.get("valid"))
         and bool(artifact_integrity.get("valid"))
         and bool(workspace_integrity.get("valid"))
@@ -140,6 +142,7 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
         },
         "integrity": {
             "journal": journal,
+            "journal_binding": journal_binding,
             "manifest": manifest_integrity,
             "artifacts": artifact_integrity,
             "workspace": workspace_integrity,
@@ -159,10 +162,10 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
         "generated_at": datetime.now(UTC).isoformat(),
         "attestation_digest": f"sha256:{hashlib.sha256(canonical).hexdigest()}",
         "interpretation": (
-            "Owned persisted subjects, workspace identity, the journal chain, structurally valid "
-            "evidence manifest, and registered artifact hashes passed the available integrity "
-            "checks. This does not change the run terminal status or prove environment-dependent "
-            "capabilities."
+            "Owned persisted subjects, workspace identity, the journal chain and recorded journal "
+            "head, structurally valid evidence manifest, and registered artifact hashes passed the "
+            "available integrity checks. This does not change the run terminal status or prove "
+            "environment-dependent capabilities."
             if integrity_verified
             else "One or more persisted run-integrity checks are incomplete or failed."
         ),
