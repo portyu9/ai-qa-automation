@@ -225,14 +225,19 @@ jobs:
           walkthrough = Path('docs/TECHNICAL_WALKTHROUGH.md').read_text(encoding='utf-8')
           readiness = Path('docs/PRODUCTION_READINESS.md').read_text(encoding='utf-8')
           combined = '\n'.join([readme, evaluation, architecture, walkthrough, readiness])
+          readme_lower = readme.casefold()
+          readiness_lower = readiness.casefold()
+          combined_lower = combined.casefold()
+          evaluation_lower = evaluation.casefold()
 
-          assert 'Current status' not in readme
-          assert 'Status vocabulary' not in readiness
-          assert '34-Scenario Agent Evaluation' not in combined
-          assert 'independent H-series holdout' not in combined.casefold()
-          assert 'physically separate H-series holdout' not in combined.casefold()
-          assert 'repository-visible' in evaluation
-          assert 'not a blind' in evaluation
+          assert '## current status' not in readme_lower
+          assert 'status vocabulary' not in readiness_lower
+          assert '34-scenario agent evaluation' not in combined_lower
+          assert 'independent h-series holdout' not in combined_lower
+          assert 'physically separate h-series holdout' not in combined_lower
+          assert 'repository-visible' in evaluation_lower
+          assert 'not blind or independent' in evaluation_lower
+          assert not list(Path('.').glob('.phase3-*'))
           PY
       - name: Check local Markdown links
         run: |
