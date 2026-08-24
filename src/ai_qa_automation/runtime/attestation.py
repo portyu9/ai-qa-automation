@@ -97,8 +97,7 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
     pending_mutation_present = "pending_mutation" in runtime
     pending_mutation = runtime.get("pending_mutation")
     pending_mutation_authority_valid = pending_mutation_present and (
-        pending_mutation is None
-        or (isinstance(pending_mutation, dict) and bool(pending_mutation))
+        pending_mutation is None or (isinstance(pending_mutation, dict) and bool(pending_mutation))
     )
     terminal_status = state.get("terminal_status")
     integrity_verified = (
@@ -210,7 +209,8 @@ def _validate_manifest_structure(
             EvidenceItem.model_validate_json(json.dumps(raw), strict=True) for raw in raw_evidence
         ]
         artifact_records = [
-            ArtifactRecord.model_validate_json(json.dumps(raw), strict=True) for raw in raw_artifacts
+            ArtifactRecord.model_validate_json(json.dumps(raw), strict=True)
+            for raw in raw_artifacts
         ]
     except (TypeError, ValueError) as exc:
         return (
@@ -226,7 +226,11 @@ def _validate_manifest_structure(
     if len({item.artifact_id for item in artifact_records}) != len(artifact_records):
         return ({"valid": False, "reason": "evidence manifest has duplicate artifact ids"}, [], [])
     if len({item.path for item in artifact_records}) != len(artifact_records):
-        return ({"valid": False, "reason": "evidence manifest has duplicate artifact paths"}, [], [])
+        return (
+            {"valid": False, "reason": "evidence manifest has duplicate artifact paths"},
+            [],
+            [],
+        )
     return (
         {
             "valid": True,
