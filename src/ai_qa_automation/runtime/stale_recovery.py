@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -264,14 +265,12 @@ def recover_stale_mutation(
     # bound to the journal state that actually exists after the attempt. If the
     # journal becomes unverifiable, preserve pending authority and require manual
     # reconciliation rather than certifying a clean recovery transition.
-    try:
+    with suppress(OSError, RuntimeError, ValueError, json.JSONDecodeError):
         journal.try_append(
             "stale_mutation_recovered",
             recovering_run_id=recovering_run_id,
             path=relative_path,
         )
-    except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
-        pass
     try:
         post_recovery_journal = journal.verify()
     except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
@@ -317,11 +316,9 @@ def recover_stale_mutation(
         }
 
     if backup_to_cleanup is not None:
-        try:
+        # Runtime authority is already durably closed. An orphaned rollback
+        # snapshot is safer than weakening the completed recovery transition.
+        with suppress(OSError):
             backup_to_cleanup.unlink()
-        except OSError:
-            # Runtime authority is already durably closed. An orphaned rollback
-            # snapshot is safer than weakening the completed recovery transition.
-            pass
 
     return {"status": "RECOVERED", "previous_run_id": previous_run_id, "path": relative_path}
