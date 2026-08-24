@@ -20,6 +20,7 @@ def base_state() -> dict[str, object]:
     return {
         "run_id": "run-1",
         "objective": "Investigate checkout",
+        "workspace": "sut",
         "terminal_status": "NOT_VERIFIED",
         "terminal_reason": "full regression not executed",
         "target_git_sha": "abc123",
@@ -30,7 +31,7 @@ def base_state() -> dict[str, object]:
         "tool_schema_version": "tools",
         "configuration_version": "cfg",
         "change_revision": 2,
-        "validation_results": [{"status": "PASS"}],
+        "validation_results": [],
     }
 
 
