@@ -210,7 +210,8 @@ class RunJournal:
                             raw.decode("utf-8"),
                             label=f"run journal record {expected_seq}",
                         )
-                        if record.get("seq") != expected_seq:
+                        sequence = record.get("seq")
+                        if type(sequence) is not int or sequence != expected_seq:
                             return {"valid": False, "events": count, "head_hash": previous}
                         body = {key: value for key, value in record.items() if key != "record_hash"}
                         canonical = json.dumps(
