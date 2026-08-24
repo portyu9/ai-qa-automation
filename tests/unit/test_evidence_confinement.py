@@ -196,3 +196,24 @@ def test_manifest_duplicate_evidence_ids_are_rejected_on_reopen(tmp_path: Path) 
 
     with pytest.raises(ValueError, match="duplicate evidence ids"):
         EvidenceStore(root, "run-a")
+
+
+def test_manifest_cross_run_evidence_is_rejected_on_reopen(tmp_path: Path) -> None:
+    root = tmp_path / "artifacts"
+    store = EvidenceStore(root, "run-a")
+    store.add(
+        EvidenceItem(
+            id="ev-fixed",
+            run_id="run-a",
+            kind=EvidenceKind.SOURCE_OBSERVATION,
+            source="test",
+            summary="original",
+        )
+    )
+    manifest_path = store.run_root / "evidence-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["evidence"][0]["run_id"] = "run-b"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="evidence from another run"):
+        EvidenceStore(root, "run-a")
