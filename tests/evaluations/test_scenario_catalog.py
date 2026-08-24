@@ -102,6 +102,16 @@ def test_primary_catalog_rejects_symlinked_fixture(tmp_path: Path) -> None:
         load_primary_scenarios(directory)
 
 
+def test_primary_catalog_rejects_symlinked_directory(tmp_path: Path) -> None:
+    real_directory = tmp_path / "primary-real"
+    shutil.copytree(Path("evals/scenarios"), real_directory)
+    linked_directory = tmp_path / "primary-linked"
+    linked_directory.symlink_to(real_directory, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="directory must not be a symlink"):
+        load_primary_scenarios(linked_directory)
+
+
 def test_primary_catalog_enforces_actual_ingestion_bound(tmp_path: Path) -> None:
     directory = tmp_path / "primary"
     shutil.copytree(Path("evals/scenarios"), directory)
@@ -166,6 +176,16 @@ def test_readiness_scenario_id_must_match_filename(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="does not match filename"):
         load_readiness_scenarios(directory)
+
+
+def test_readiness_catalog_rejects_symlinked_directory(tmp_path: Path) -> None:
+    real_directory = tmp_path / "readiness-real"
+    shutil.copytree(Path("evals/holdout"), real_directory)
+    linked_directory = tmp_path / "readiness-linked"
+    linked_directory.symlink_to(real_directory, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="directory must not be a symlink"):
+        load_readiness_scenarios(linked_directory)
 
 
 def test_readiness_catalog_rejects_nonstandard_json_constant(tmp_path: Path) -> None:
