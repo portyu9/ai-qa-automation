@@ -6,7 +6,7 @@ DEV_LOCK := requirements/dev-py$(PY_LOCK_SUFFIX).lock
 install:
 	test -f "$(DEV_LOCK)" || { echo "No development lock for this Python interpreter: $(DEV_LOCK)" >&2; exit 2; }
 	python -m pip install --require-hashes -r "$(DEV_LOCK)"
-	python -m pip install --no-deps --no-build-isolation -e .
+	python -m pip install --no-deps --no-build-isolation .
 	python -m pip check
 
 quality:
