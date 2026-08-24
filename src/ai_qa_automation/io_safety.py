@@ -181,7 +181,6 @@ def read_json_catalog_bounded(
         and bool(nofollow)
         and os.open in os.supports_dir_fd
         and os.stat in os.supports_dir_fd
-        and os.scandir in os.supports_fd
     )
     if not supports_secure_relative_io:
         raise RuntimeError(
@@ -212,9 +211,16 @@ def read_json_catalog_bounded(
             raise ValueError(f"{label} changed identity during catalog ingestion")
         initial_directory_signature = _stable_directory_signature(opened_directory)
 
+        try:
+            entries = os.scandir(directory_fd)
+        except (TypeError, NotImplementedError, OSError) as exc:
+            raise RuntimeError(
+                f"{label} requires descriptor-based directory enumeration on this platform"
+            ) from exc
+
         result: dict[str, dict[str, Any]] = {}
         observed_entries = 0
-        with os.scandir(directory_fd) as entries:
+        with entries:
             for entry in entries:
                 observed_entries += 1
                 if observed_entries > entry_limit:
