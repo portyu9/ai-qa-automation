@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from ..io_safety import read_json_object_bounded, sha256_file_bounded
+from ..state import StateStore
 from .journal import RunJournal
 
 _MAX_STATE_BYTES = 16_000_000
@@ -37,7 +38,10 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
     if not state_path.is_file():
         raise FileNotFoundError("state.json is required for attestation")
 
-    state = _load_object(state_path, max_bytes=_MAX_STATE_BYTES)
+    # Canonical state must have one interpretation everywhere. Reuse StateStore's
+    # ambiguity guard and strict JSON-mode schema validation rather than treating
+    # attestation as a weaker parallel state reader.
+    state = StateStore(state_path).load().model_dump(mode="json")
     runtime = (
         _load_object(runtime_path, max_bytes=_MAX_RUNTIME_BYTES) if runtime_path.is_file() else {}
     )
