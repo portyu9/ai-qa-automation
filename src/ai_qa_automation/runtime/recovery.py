@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ..io_safety import read_text_bounded
+from ..io_safety import read_json_object_bounded
 from ..state import StateStore
 from .journal import RunJournal
 from .validation_truth import evaluate_revision_closure
@@ -46,7 +46,7 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
         return {"recoverable": False, "reason": "journal hash chain is invalid"}
 
     try:
-        rendered_runtime = read_text_bounded(
+        runtime_metadata = read_json_object_bounded(
             runtime_path,
             max_bytes=_MAX_RUNTIME_METADATA_BYTES,
             label="runtime.json",
@@ -55,22 +55,18 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
         return {"recoverable": False, "reason": "runtime.json is not valid UTF-8"}
     except OSError:
         return {"recoverable": False, "reason": "runtime.json is unreadable"}
+    except json.JSONDecodeError:
+        return {"recoverable": False, "reason": "runtime.json is invalid JSON"}
     except ValueError as exc:
         message = str(exc)
         if "exceeds" in message and "ingestion limit" in message:
             return {"recoverable": False, "reason": "runtime.json exceeds restore size bound"}
+        if "root must be a JSON object" in message:
+            return {"recoverable": False, "reason": "runtime.json root must be an object"}
         return {
             "recoverable": False,
-            "reason": "runtime.json ownership or file-type validation failed",
+            "reason": f"runtime.json failed strict object validation: {message}",
         }
-
-    try:
-        raw_runtime = json.loads(rendered_runtime)
-    except json.JSONDecodeError:
-        return {"recoverable": False, "reason": "runtime.json is invalid JSON"}
-    if not isinstance(raw_runtime, dict):
-        return {"recoverable": False, "reason": "runtime.json root must be an object"}
-    runtime_metadata: dict[str, Any] = raw_runtime
 
     closure = evaluate_revision_closure(
         state.validation_results,
