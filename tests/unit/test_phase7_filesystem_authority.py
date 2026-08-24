@@ -6,7 +6,10 @@ from pathlib import Path
 import pytest
 
 import ai_qa_automation.fs_authority as fs_authority
-from ai_qa_automation.fs_authority import descriptor_relative_authority_supported
+from ai_qa_automation.fs_authority import (
+    descriptor_relative_authority_supported,
+    pending_root_authority,
+)
 from ai_qa_automation.policy import PolicyEngine
 from ai_qa_automation.runtime.budget import ExecutionBudget
 from ai_qa_automation.runtime.journal import RunJournal
@@ -217,3 +220,40 @@ def test_safe_patcher_rejects_workspace_root_replacement_before_patch(
 
     assert replacement_target.read_text(encoding="utf-8") == original
     assert (owned_workspace / "tests" / target.name).read_text(encoding="utf-8") == original
+
+
+def test_patcher_created_after_prepare_inherits_original_workspace_authority(
+    tmp_path: Path,
+) -> None:
+    if not descriptor_relative_authority_supported():
+        pytest.skip("descriptor-relative no-follow filesystem authority is unavailable")
+
+    workspace = tmp_path / "sut"
+    target = workspace / "tests" / "test_ui.py"
+    target.parent.mkdir(parents=True)
+    original = "def test_button():\n    assert locate('#old')\n"
+    target.write_text(original, encoding="utf-8")
+    control = _control(tmp_path, workspace)
+    control.prepare_mutation("tests/test_ui.py")
+    assert pending_root_authority(workspace) == control.workspace_identity
+
+    owned_workspace = tmp_path / "sut-owned"
+    workspace.rename(owned_workspace)
+    replacement_target = workspace / "tests" / target.name
+    replacement_target.parent.mkdir(parents=True)
+    replacement_target.write_text(original, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="changed identity since mutation authorization"):
+        SafeTestPatcher(
+            workspace,
+            PolicyEngine(workspace, workspace, allow_test_writes=True),
+        )
+
+    assert replacement_target.read_text(encoding="utf-8") == original
+    replacement_target.unlink()
+    replacement_target.parent.rmdir()
+    workspace.rmdir()
+    owned_workspace.rename(workspace)
+
+    assert control.rollback_pending_mutation(reason="test cleanup") == "tests/test_ui.py"
+    assert pending_root_authority(workspace) is None
