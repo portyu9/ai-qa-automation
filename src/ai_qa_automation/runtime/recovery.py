@@ -68,6 +68,19 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
             "reason": f"runtime.json failed strict object validation: {message}",
         }
 
+    runtime_workspace = runtime_metadata.get("workspace")
+    if not isinstance(runtime_workspace, str) or not runtime_workspace:
+        return {
+            "recoverable": False,
+            "reason": "runtime.json workspace identity is invalid",
+        }
+    canonical_workspace = str(Path(state.workspace).expanduser().resolve())
+    if runtime_workspace != canonical_workspace:
+        return {
+            "recoverable": False,
+            "reason": "runtime.json workspace does not match canonical state workspace",
+        }
+
     if "pending_mutation" not in runtime_metadata:
         return {
             "recoverable": False,
