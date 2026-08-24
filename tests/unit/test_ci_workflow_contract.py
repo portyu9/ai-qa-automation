@@ -25,7 +25,11 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     assert result["result"] == "PASS"
     assert result["schema_version"] == 1
     assert result["workflows"]["automatic"]["required_gate"] == "Required PR Gate"
+    assert (
+        result["workflows"]["automatic"]["documentation_integrity"] == "required-via-supply-chain"
+    )
     assert result["workflows"]["automatic"]["mermaid_render"] == "required-via-supply-chain"
+    assert result["workflows"]["automatic"]["supply_chain_evidence"] == "pinned-upload-action"
     assert result["workflows"]["automatic"]["secrets"] is False
     assert result["workflows"]["manual"]["credentialed_model"] == "manual-only"
 
@@ -154,6 +158,64 @@ def test_ci_contract_rejects_unbound_checkout(tmp_path: Path) -> None:
         ci_contract.verify_ci_contract(root)
 
 
+def test_ci_contract_rejects_removed_documentation_integrity_command(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "ci.yml"
+    text = path.read_text(encoding="utf-8").replace(
+        f"          {ci_contract.DOCUMENTATION_INTEGRITY_COMMAND}\n",
+        "          true\n",
+        1,
+    )
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="exact reviewed fail-closed script step"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_rejects_fail_open_documentation_step_condition(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "ci.yml"
+    text = path.read_text(encoding="utf-8").replace(
+        f"      - name: {ci_contract.DOCUMENTATION_STEP_NAME}\n        run: |\n",
+        f"      - name: {ci_contract.DOCUMENTATION_STEP_NAME}\n        if: ${{{{ false }}}}\n        run: |\n",
+        1,
+    )
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="exact reviewed fail-closed script step"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_rejects_short_circuited_documentation_command(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "ci.yml"
+    text = path.read_text(encoding="utf-8").replace(
+        f"          {ci_contract.DOCUMENTATION_INTEGRITY_COMMAND}\n",
+        f"          true || {ci_contract.DOCUMENTATION_INTEGRITY_COMMAND}\n",
+        1,
+    )
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="exact reviewed fail-closed script step"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_rejects_missing_documentation_integrity_evidence_upload(
+    tmp_path: Path,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "ci.yml"
+    text = path.read_text(encoding="utf-8").replace(
+        f"            {ci_contract.DOCUMENTATION_INTEGRITY_ARTIFACT}\n",
+        "",
+        1,
+    )
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="exact reviewed pinned action step"):
+        ci_contract.verify_ci_contract(root)
+
+
 def test_ci_contract_rejects_removed_mermaid_render_command(tmp_path: Path) -> None:
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "ci.yml"
@@ -164,7 +226,21 @@ def test_ci_contract_rejects_removed_mermaid_render_command(tmp_path: Path) -> N
     )
     path.write_text(text, encoding="utf-8")
 
-    with pytest.raises(ValueError, match="Mermaid render command exactly once"):
+    with pytest.raises(ValueError, match="exact reviewed fail-closed script step"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_rejects_short_circuited_mermaid_command(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "ci.yml"
+    text = path.read_text(encoding="utf-8").replace(
+        f"          {ci_contract.MERMAID_RENDER_COMMAND}\n",
+        f"          true || {ci_contract.MERMAID_RENDER_COMMAND}\n",
+        1,
+    )
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="exact reviewed fail-closed script step"):
         ci_contract.verify_ci_contract(root)
 
 
@@ -178,7 +254,42 @@ def test_ci_contract_rejects_missing_mermaid_render_evidence_upload(tmp_path: Pa
     )
     path.write_text(text, encoding="utf-8")
 
-    with pytest.raises(ValueError, match="Mermaid validation evidence"):
+    with pytest.raises(ValueError, match="exact reviewed pinned action step"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_rejects_disabled_supply_chain_evidence_upload(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "ci.yml"
+    marker = f"      - name: {ci_contract.SUPPLY_CHAIN_UPLOAD_STEP_NAME}\n        if: always()\n"
+    replacement = (
+        f"      - name: {ci_contract.SUPPLY_CHAIN_UPLOAD_STEP_NAME}\n        if: ${{{{ false }}}}\n"
+    )
+    text = path.read_text(encoding="utf-8").replace(marker, replacement, 1)
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="exact reviewed pinned action step"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_rejects_noop_supply_chain_evidence_upload(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "ci.yml"
+    marker = (
+        f"      - name: {ci_contract.SUPPLY_CHAIN_UPLOAD_STEP_NAME}\n"
+        "        if: always()\n"
+        "        uses: actions/upload-artifact@"
+        f"{ci_contract.EXPECTED_ACTION_SHAS['actions/upload-artifact']} # v7\n"
+    )
+    replacement = (
+        f"      - name: {ci_contract.SUPPLY_CHAIN_UPLOAD_STEP_NAME}\n"
+        "        if: always()\n"
+        "        run: true\n"
+    )
+    text = path.read_text(encoding="utf-8").replace(marker, replacement, 1)
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="exact reviewed pinned action step"):
         ci_contract.verify_ci_contract(root)
 
 
@@ -202,7 +313,21 @@ def test_ci_contract_rejects_fail_open_required_gate_result_check(tmp_path: Path
     )
     path.write_text(text, encoding="utf-8")
 
-    with pytest.raises(ValueError, match="does not fail closed on security"):
+    with pytest.raises(ValueError, match="exact reviewed fail-closed aggregate step"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_rejects_short_circuited_required_gate_result_check(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "ci.yml"
+    text = path.read_text(encoding="utf-8").replace(
+        'test "${{ needs.security.result }}" = "success"',
+        'test "${{ needs.security.result }}" = "success" || true',
+        1,
+    )
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="exact reviewed fail-closed aggregate step"):
         ci_contract.verify_ci_contract(root)
 
 

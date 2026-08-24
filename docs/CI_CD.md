@@ -30,11 +30,13 @@ The automatic workflow runs these repository-owned gates:
 
 - CPython 3.11.16 and 3.13.15 hash-locked quality/full deterministic pytest lanes;
 - the fixed 34-case primary deterministic control evaluation;
-- supply-chain verification, official digest-pinned Mermaid CLI rendering of the public Markdown corpus, runtime dependency audit, CycloneDX SBOM generation, same-environment wheel repeatability, and runtime-container inspection;
+- supply-chain verification, deterministic documentation authority verification, official digest-pinned Mermaid CLI rendering of the public Markdown corpus, runtime dependency audit, CycloneDX SBOM generation, same-environment wheel repeatability, and runtime-container inspection;
 - Bandit, hash-bound dependency audit, and secret scanning;
 - deterministic Playwright reference-SUT execution.
 
 Each automatic job verifies the exact GitHub event revision before installing or executing project code.
+
+The documentation verifier is an explicit required step in the supply-chain job rather than an indirect consequence of the pytest suite. It validates bounded public-document ingestion, local links and anchors, documentation navigation, Mermaid accessibility metadata, prohibited project-progress headings, setup-snippet policy, and selected implementation-coupled README facts. The exact Claude Agent SDK pin, default model identifier, and internal QA-tool count are derived from bounded repository source inputs. The Skill claim is derived from the literal `ClaudeAgentOptions.skills` runtime allowlist and is accepted only when that allowlist matches the safely inspected `.claude/skills` directory set exactly. The resulting `documentation-integrity.json` is persisted with the revision-bound supply-chain evidence.
 
 The Mermaid renderer is part of the required supply-chain job rather than an optional documentation side job. It discovers Mermaid blocks across the public Markdown corpus under bounded ingestion, invokes the official Mermaid CLI image by immutable OCI digest with network disabled and reduced container authority, bounds each renderer-created file to 16 MiB, requires every discovered block to produce the expected SVG output, rejects remaining unrendered Mermaid blocks, and emits `mermaid-validation.json` as revision-bound supply-chain evidence. This proves parser/render success under the pinned CLI subject; it does not claim pixel-identical behavior with GitHub.com's evolving frontend renderer.
 
@@ -46,7 +48,7 @@ The final job is deliberately named:
 Required PR Gate
 ```
 
-It uses `if: ${{ always() }}` and depends on every automatic gate. It succeeds only when every required dependency reports `success`. A skipped, cancelled, timed-out, or failed prerequisite therefore cannot be hidden behind partial green.
+It uses `if: ${{ always() }}` and depends on every automatic gate. Its result-check step is an exact reviewed script block that succeeds only when every required dependency reports `success`; shell short-circuit additions such as `|| true` are rejected by the repository CI-contract verifier. A skipped, cancelled, timed-out, or failed prerequisite therefore cannot be hidden behind partial green.
 
 This stable aggregate is the repository-owned status check intended for GitHub required-check enforcement. It avoids coupling branch policy to every matrix job name while remaining fail closed on all protected work.
 
@@ -94,12 +96,13 @@ The verifier fails closed unless repository workflow definitions preserve the in
 - every checkout bound to `github.sha`, with persisted credentials disabled and exact-revision verification;
 - exact supported Python patch versions and hash-required dependency installation;
 - no editable/live dependency-resolution shortcuts in CI;
-- exactly one required Mermaid render invocation in the supply-chain job plus its evidence upload;
-- the stable `Required PR Gate`, `if: always()`, complete dependency set, and explicit success assertion for every required job.
+- the documentation verifier and Mermaid renderer as exact reviewed, unconditional script steps in the required supply-chain job;
+- the supply-chain evidence step as the exact reviewed immutable `actions/upload-artifact` invocation, including the complete expected path set, `if-no-files-found: error`, and bounded retention;
+- the stable `Required PR Gate`, `if: always()`, complete dependency set, and an exact fail-closed result-check script for every required job.
 
-Adversarial unit tests cover trigger-comment spoofing, write permission, secret introduction, automatic-trigger leakage into the manual workflow, unexpected workflow files, symlinked workflow paths/directories, directory exhaustion, unbound checkout, removal of the Mermaid render invocation or evidence upload, missing aggregate dependencies, corrupted aggregate result checks, a fail-open aggregate condition, and the credentialed model job's environment/main-ref/step-local-secret scope.
+Adversarial unit tests cover trigger-comment spoofing, write permission, secret introduction, automatic-trigger leakage into the manual workflow, unexpected workflow files, symlinked workflow paths/directories, directory exhaustion, unbound checkout, removal or short-circuiting of documentation/Mermaid execution, fail-open documentation step conditions, removed/disabled/no-op evidence upload behavior, missing aggregate dependencies, corrupted or short-circuited aggregate result checks, a fail-open aggregate condition, and the credentialed model job's environment/main-ref/step-local-secret scope.
 
-The automatic supply-chain job emits the verifier's JSON result as `ci-contract-verification.json` with the other revision-bound supply-chain evidence.
+The automatic supply-chain job emits `ci-contract-verification.json` and `documentation-integrity.json` with the other revision-bound supply-chain evidence. Its upload step deliberately uses `if: always()` so failure diagnostics can survive a red job. Consequently, an uploaded artifact or a successful upload step is **not** proof that the supply-chain job passed or that every listed evidence file existed; closure requires the supply-chain job itself, and then the aggregate `Required PR Gate`, to succeed for the exact subject.
 
 ---
 
@@ -160,10 +163,13 @@ A green automatic CI run is not a release signature, deployment approval, or pro
 
 ## What green proves
 
-A successful automatic run proves that the repository-controlled automatic jobs completed successfully for the exact GitHub event subject they each verified. When the supply-chain job succeeds, the pinned Mermaid CLI also parsed/rendered every Mermaid block discovered in the bounded public Markdown corpus and emitted its machine-readable render report for that event subject.
+A successful automatic run proves that the repository-controlled automatic jobs completed successfully for the exact GitHub event subject they each verified. When the supply-chain job succeeds, the documentation verifier also proves its bounded structural invariants and selected source-derived README facts—including exact agreement between the runtime Skill allowlist and trusted Skill directory inventory—for that checked-out subject, while the pinned Mermaid CLI parsed/rendered every Mermaid block discovered in the bounded public Markdown corpus and emitted its machine-readable render report.
+
+Artifact presence by itself is diagnostic evidence, not terminal authority. In particular, a failure-path `if: always()` upload may contain only the evidence produced before a job failed. A green claim therefore depends on the exact-subject job conclusions and aggregate gate, not merely on an artifact being downloadable.
 
 It does **not** by itself prove:
 
+- every narrative statement in the documentation is implementation-derived or externally verified;
 - pixel-equivalent rendering by GitHub.com's current Markdown/Mermaid frontend;
 - branch protection or required-check settings are enabled;
 - the `credentialed-validation` environment is configured with the intended external protection rules;
@@ -172,7 +178,7 @@ It does **not** by itself prove:
 - external provider credentials/services were available;
 - release signing, publishing, deployment, or production validation occurred.
 
-That distinction prevents historical or wrong-subject green evidence from becoming merge/release authority it does not possess.
+That distinction prevents historical, partial, artifact-only, or wrong-subject evidence from becoming merge/release authority it does not possess.
 
 ---
 

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import ast
 import json
+import os
 import re
+import stat
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote
@@ -10,6 +14,8 @@ from ai_qa_automation.io_safety import read_text_bounded
 
 MAX_DOC_BYTES = 128 * 1024
 MAX_DOC_ENTRIES = 64
+MAX_IMPLEMENTATION_BYTES = 1024 * 1024
+MAX_SKILL_ENTRIES = 16
 PUBLIC_ROOT_MARKDOWN = ("README.md", "CONTRIBUTING.md", "SECURITY.md")
 EXTERNAL_SCHEMES = ("http://", "https://", "mailto:")
 MARKDOWN_LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
@@ -41,6 +47,25 @@ MERMAID_DIAGRAM_PREFIXES = (
     "timeline",
     "gitGraph",
 )
+COUNT_WORDS = (
+    "zero",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+    "eleven",
+    "twelve",
+    "thirteen",
+    "fourteen",
+    "fifteen",
+    "sixteen",
+)
 
 
 @dataclass(frozen=True)
@@ -55,6 +80,14 @@ def _read_text(path: Path) -> str:
     if not text:
         raise ValueError(f"public documentation file is empty: {path}")
     return text
+
+
+def _read_implementation_text(root: Path, relative_path: str) -> str:
+    return read_text_bounded(
+        root / relative_path,
+        max_bytes=MAX_IMPLEMENTATION_BYTES,
+        label=f"documentation claim source {relative_path}",
+    )
 
 
 def _load_public_documents(root: Path) -> dict[str, PublicDocument]:
@@ -331,6 +364,268 @@ def _validate_prohibited_headings(documents: dict[str, PublicDocument]) -> None:
         )
 
 
+def _sdk_version(root: Path) -> str:
+    data = tomllib.loads(_read_implementation_text(root, "pyproject.toml"))
+    dependencies = data.get("project", {}).get("dependencies")
+    if not isinstance(dependencies, list):
+        raise ValueError("pyproject.toml project.dependencies must be a list")
+    prefix = "claude-agent-sdk=="
+    matches = [
+        item[len(prefix) :]
+        for item in dependencies
+        if isinstance(item, str) and item.startswith(prefix)
+    ]
+    if len(matches) != 1 or not matches[0]:
+        raise ValueError("pyproject.toml must contain exactly one exact claude-agent-sdk pin")
+    return matches[0]
+
+
+def _default_model(root: Path) -> str:
+    path = "src/ai_qa_automation/config.py"
+    tree = ast.parse(_read_implementation_text(root, path), filename=path)
+    matches: list[str] = []
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef) or node.name != "Settings":
+            continue
+        for item in node.body:
+            if (
+                isinstance(item, ast.AnnAssign)
+                and isinstance(item.target, ast.Name)
+                and item.target.id == "model"
+                and isinstance(item.value, ast.Constant)
+                and isinstance(item.value.value, str)
+            ):
+                matches.append(item.value.value)
+    if len(matches) != 1 or not matches[0]:
+        raise ValueError("could not derive exactly one Settings.model default")
+    return matches[0]
+
+
+def _internal_tool_count(root: Path) -> int:
+    path = "src/ai_qa_automation/runtime/internal_tools.py"
+    tree = ast.parse(_read_implementation_text(root, path), filename=path)
+    counts: list[int] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.List):
+            continue
+        if any(isinstance(target, ast.Name) and target.id == "tools" for target in node.targets):
+            counts.append(len(node.value.elts))
+    if len(counts) != 1 or counts[0] < 1:
+        raise ValueError("could not derive exactly one non-empty internal QA tool list")
+    return counts[0]
+
+
+def _runtime_skill_allowlist(root: Path) -> tuple[str, ...]:
+    path = "src/ai_qa_automation/agent.py"
+    tree = ast.parse(_read_implementation_text(root, path), filename=path)
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "ClaudeAgentOptions"
+    ]
+    if len(calls) != 1:
+        raise ValueError("runtime must contain exactly one direct ClaudeAgentOptions construction")
+    skill_keywords = [keyword for keyword in calls[0].keywords if keyword.arg == "skills"]
+    if len(skill_keywords) != 1 or not isinstance(skill_keywords[0].value, (ast.List, ast.Tuple)):
+        raise ValueError("ClaudeAgentOptions must contain exactly one literal skills allowlist")
+
+    values: list[str] = []
+    for item in skill_keywords[0].value.elts:
+        if not isinstance(item, ast.Constant) or not isinstance(item.value, str):
+            raise ValueError("ClaudeAgentOptions.skills must be a literal list of Skill names")
+        values.append(item.value)
+    skills = tuple(values)
+    if not skills or len(skills) > MAX_SKILL_ENTRIES or len(set(skills)) != len(skills):
+        raise ValueError(
+            "runtime Skill allowlist must be non-empty, unique, and within the Skill bound"
+        )
+    for name in skills:
+        if not name or Path(name).name != name or name in {".", ".."}:
+            raise ValueError(
+                f"runtime Skill allowlist contains an invalid direct-entry name: {name!r}"
+            )
+    return skills
+
+
+def _identity(value: os.stat_result) -> tuple[int, int]:
+    return value.st_dev, value.st_ino
+
+
+def _directory_signature(value: os.stat_result) -> tuple[int, int, int, int]:
+    return value.st_dev, value.st_ino, value.st_mtime_ns, value.st_ctime_ns
+
+
+def _trusted_skill_count(root: Path, *, expected_skills: tuple[str, ...]) -> int:
+    skills_dir = root / ".claude" / "skills"
+    directory_flag = getattr(os, "O_DIRECTORY", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if (
+        not directory_flag
+        or not nofollow
+        or os.open not in os.supports_dir_fd
+        or os.stat not in os.supports_dir_fd
+    ):
+        raise RuntimeError(
+            "documentation claim verification requires descriptor-relative no-follow directory ingestion"
+        )
+    if skills_dir.is_symlink():
+        raise ValueError("trusted Skills directory is a symlink and has ambiguous ownership")
+
+    try:
+        directory_fd = os.open(skills_dir, os.O_RDONLY | directory_flag | nofollow)
+    except OSError as exc:
+        raise ValueError("trusted Skills directory could not be opened safely") from exc
+
+    try:
+        opened_directory = os.fstat(directory_fd)
+        current_directory = skills_dir.stat(follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(opened_directory.st_mode)
+            or stat.S_ISLNK(current_directory.st_mode)
+            or not stat.S_ISDIR(current_directory.st_mode)
+            or _identity(opened_directory) != _identity(current_directory)
+        ):
+            raise ValueError("trusted Skills directory has ambiguous ownership")
+        initial_signature = _directory_signature(opened_directory)
+
+        try:
+            entries = os.scandir(directory_fd)
+        except (TypeError, NotImplementedError, OSError) as exc:
+            raise RuntimeError(
+                "documentation claim verification requires descriptor-based Skills enumeration"
+            ) from exc
+
+        observed_names: list[str] = []
+        observed_entries = 0
+        with entries:
+            for entry in entries:
+                observed_entries += 1
+                if observed_entries > MAX_SKILL_ENTRIES:
+                    raise ValueError(
+                        f"trusted Skills directory exceeds {MAX_SKILL_ENTRIES} direct entries"
+                    )
+                name = entry.name
+                if Path(name).name != name or name in {".", ".."}:
+                    raise ValueError(
+                        "trusted Skills directory contains an invalid direct-entry name"
+                    )
+                before = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                if not stat.S_ISDIR(before.st_mode):
+                    raise ValueError(
+                        f"trusted Skill entry must be a real directory, not a symlink or file: {name}"
+                    )
+                skill_fd = os.open(
+                    name,
+                    os.O_RDONLY | directory_flag | nofollow,
+                    dir_fd=directory_fd,
+                )
+                try:
+                    opened_skill = os.fstat(skill_fd)
+                    current_skill = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                    if (
+                        not stat.S_ISDIR(opened_skill.st_mode)
+                        or not stat.S_ISDIR(current_skill.st_mode)
+                        or _identity(opened_skill) != _identity(current_skill)
+                    ):
+                        raise ValueError(f"trusted Skill directory changed identity: {name}")
+                    initial_skill_signature = _directory_signature(opened_skill)
+                    try:
+                        skill_md = os.stat("SKILL.md", dir_fd=skill_fd, follow_symlinks=False)
+                    except OSError as exc:
+                        raise ValueError(
+                            f"trusted Skill must contain an owned regular SKILL.md: {name}"
+                        ) from exc
+                    if not stat.S_ISREG(skill_md.st_mode):
+                        raise ValueError(
+                            f"trusted Skill must contain an owned regular SKILL.md: {name}"
+                        )
+                    try:
+                        skill_file_fd = os.open(
+                            "SKILL.md",
+                            os.O_RDONLY | getattr(os, "O_BINARY", 0) | nofollow,
+                            dir_fd=skill_fd,
+                        )
+                    except OSError as exc:
+                        raise ValueError(
+                            f"trusted Skill SKILL.md could not be opened safely: {name}"
+                        ) from exc
+                    try:
+                        opened_skill_md = os.fstat(skill_file_fd)
+                        current_skill_md = os.stat(
+                            "SKILL.md", dir_fd=skill_fd, follow_symlinks=False
+                        )
+                        if (
+                            not stat.S_ISREG(opened_skill_md.st_mode)
+                            or not stat.S_ISREG(current_skill_md.st_mode)
+                            or _identity(opened_skill_md) != _identity(current_skill_md)
+                        ):
+                            raise ValueError(
+                                f"trusted Skill SKILL.md changed identity during verification: {name}"
+                            )
+                    finally:
+                        os.close(skill_file_fd)
+                    final_opened_skill = os.fstat(skill_fd)
+                    final_current_skill = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                    if (
+                        not stat.S_ISDIR(final_opened_skill.st_mode)
+                        or not stat.S_ISDIR(final_current_skill.st_mode)
+                        or _identity(final_opened_skill) != _identity(final_current_skill)
+                        or _directory_signature(final_opened_skill) != initial_skill_signature
+                    ):
+                        raise ValueError(
+                            f"trusted Skill directory changed during verification: {name}"
+                        )
+                finally:
+                    os.close(skill_fd)
+                observed_names.append(name)
+
+        final_opened_directory = os.fstat(directory_fd)
+        final_current_directory = skills_dir.stat(follow_symlinks=False)
+        if (
+            stat.S_ISLNK(final_current_directory.st_mode)
+            or not stat.S_ISDIR(final_current_directory.st_mode)
+            or _identity(final_opened_directory) != _identity(final_current_directory)
+            or _directory_signature(final_opened_directory) != initial_signature
+        ):
+            raise ValueError("trusted Skills directory changed during verification")
+        if sorted(observed_names) != sorted(expected_skills):
+            raise ValueError(
+                "runtime Skill allowlist and trusted Skill directories differ: "
+                f"runtime={sorted(expected_skills)}, disk={sorted(observed_names)}"
+            )
+        return len(expected_skills)
+    finally:
+        os.close(directory_fd)
+
+
+def _validate_implementation_claims(root: Path, readme: str) -> dict[str, object]:
+    sdk_version = _sdk_version(root)
+    default_model = _default_model(root)
+    internal_tools = _internal_tool_count(root)
+    runtime_skills = _runtime_skill_allowlist(root)
+    trusted_skills = _trusted_skill_count(root, expected_skills=runtime_skills)
+    expected_claims = (
+        f"`claude-agent-sdk=={sdk_version}`",
+        f"default model identifier `{default_model}`",
+        f"{internal_tools} least-privilege, purpose-built in-process QA tools",
+        f"exactly {COUNT_WORDS[trusted_skills]} allowlisted Claude Skills",
+    )
+    missing = [claim for claim in expected_claims if claim not in readme]
+    if missing:
+        raise ValueError(f"README implementation-coupled claims drifted: {missing}")
+    if f"Claude%20Agent%20SDK-{sdk_version}-" not in readme:
+        raise ValueError("README Claude Agent SDK badge version differs from pyproject.toml")
+    return {
+        "claude_agent_sdk": sdk_version,
+        "default_model": default_model,
+        "internal_qa_tools": internal_tools,
+        "trusted_skills": trusted_skills,
+        "trusted_skill_names": list(runtime_skills),
+    }
+
+
 def verify_documentation(root: Path) -> dict[str, object]:
     root = root.resolve()
     documents = _load_public_documents(root)
@@ -342,6 +637,7 @@ def verify_documentation(root: Path) -> dict[str, object]:
         _validate_install_snippets(document)
         mermaid_blocks += _validate_mermaid(document)
     links_checked = _validate_links(root, documents)
+    implementation_claims = _validate_implementation_claims(root, documents["README.md"].text)
 
     return {
         "schema_version": 1,
@@ -349,11 +645,12 @@ def verify_documentation(root: Path) -> dict[str, object]:
         "documents_checked": len(documents),
         "local_links_checked": links_checked,
         "mermaid_blocks_checked": mermaid_blocks,
-        "claim": "public documentation satisfies repository-owned structural integrity rules",
+        "implementation_claims": implementation_claims,
+        "claim": "public documentation satisfies repository-owned structural and implementation-coupled integrity rules",
         "limitations": [
             "This verifier checks repository structure and Mermaid accessibility metadata; it is not a full browser implementation of GitHub's Markdown/Mermaid renderer.",
             "External URLs are not fetched and therefore are not availability-certified by this verifier.",
-            "Documentation consistency with provider/target/deployment behavior still requires evidence from the owning external domain.",
+            "Implementation-coupled checks cover selected exact README facts; broader documentation consistency with provider/target/deployment behavior still requires evidence from the owning external domain.",
         ],
     }
 

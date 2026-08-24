@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -8,13 +9,68 @@ from scripts.verify_docs import MAX_DOC_BYTES, MAX_DOC_ENTRIES, verify_documenta
 
 ROOT = Path(__file__).resolve().parents[2]
 
+_TEST_SDK = "9.9.9"
+_TEST_MODEL = "test-model"
+_TEST_TOOL_COUNT = 2
+_TEST_SKILL_COUNT = 2
+_TEST_SKILL_WORD = "two"
+_TEST_SKILLS = ("alpha", "beta")
+
+
+def _claim_readme(body: str = "") -> str:
+    return (
+        "# Root\n\n"
+        f"![Claude Agent SDK](https://img.shields.io/badge/Claude%20Agent%20SDK-{_TEST_SDK}-blue)\n\n"
+        f"`claude-agent-sdk=={_TEST_SDK}` · default model identifier `{_TEST_MODEL}`\n\n"
+        f"{_TEST_TOOL_COUNT} least-privilege, purpose-built in-process QA tools\n\n"
+        f"exactly {_TEST_SKILL_WORD} allowlisted Claude Skills\n\n"
+        f"{body}"
+        "[Docs](docs/README.md)\n"
+    )
+
+
+def _agent_source(skills: tuple[str, ...] = _TEST_SKILLS) -> str:
+    entries = "\n".join(f'            "{name}",' for name in skills)
+    return (
+        "def configure():\n"
+        "    return ClaudeAgentOptions(\n"
+        "        skills=[\n"
+        f"{entries}\n"
+        "        ],\n"
+        "    )\n"
+    )
+
+
+def _minimal_implementation_surface(root: Path) -> None:
+    (root / "pyproject.toml").write_text(
+        f'[project]\nname = "fixture"\ndependencies = ["claude-agent-sdk=={_TEST_SDK}"]\n',
+        encoding="utf-8",
+    )
+    package = root / "src" / "ai_qa_automation"
+    config = package / "config.py"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        f'class Settings:\n    model: str = "{_TEST_MODEL}"\n',
+        encoding="utf-8",
+    )
+    internal_tools = package / "runtime" / "internal_tools.py"
+    internal_tools.parent.mkdir(parents=True)
+    internal_tools.write_text(
+        "def build_tools():\n    tools = [object(), object()]\n    return tools\n",
+        encoding="utf-8",
+    )
+    (package / "agent.py").write_text(_agent_source(), encoding="utf-8")
+    skills = root / ".claude" / "skills"
+    for name in _TEST_SKILLS:
+        path = skills / name
+        path.mkdir(parents=True)
+        (path / "SKILL.md").write_text(f"# {name}\n", encoding="utf-8")
+
 
 def _minimal_public_docs(root: Path) -> None:
     (root / "docs").mkdir(parents=True)
-    (root / "README.md").write_text(
-        "# Root\n\n[Docs](docs/README.md)\n",
-        encoding="utf-8",
-    )
+    _minimal_implementation_surface(root)
+    (root / "README.md").write_text(_claim_readme(), encoding="utf-8")
     (root / "CONTRIBUTING.md").write_text("# Contributing\n", encoding="utf-8")
     (root / "SECURITY.md").write_text("# Security\n", encoding="utf-8")
     (root / "docs" / "README.md").write_text(
@@ -35,6 +91,19 @@ def test_repository_public_documentation_contract_is_self_consistent() -> None:
     assert result["documents_checked"] >= 20
     assert result["local_links_checked"] > 0
     assert result["mermaid_blocks_checked"] > 0
+    assert result["implementation_claims"] == {
+        "claude_agent_sdk": "0.2.136",
+        "default_model": "claude-sonnet-5",
+        "internal_qa_tools": 18,
+        "trusted_skills": 5,
+        "trusted_skill_names": [
+            "investigate-test-failure",
+            "self-heal-test",
+            "generate-test",
+            "prioritize-regression",
+            "performance-test",
+        ],
+    }
 
 
 def test_docs_verifier_rejects_missing_local_target(tmp_path: Path) -> None:
@@ -51,9 +120,9 @@ def test_docs_verifier_rejects_missing_local_target(tmp_path: Path) -> None:
 def test_docs_verifier_ignores_footnote_definitions_as_links(tmp_path: Path) -> None:
     _minimal_public_docs(tmp_path)
     (tmp_path / "README.md").write_text(
-        "# Root\n\nEvidence-first control.[^note]\n\n"
-        "[Docs](docs/README.md)\n\n"
-        "[^note]: The explanatory text is not a link target.\n",
+        _claim_readme(
+            "Evidence-first control.[^note]\n\n[^note]: The explanatory text is not a link target.\n\n"
+        ),
         encoding="utf-8",
     )
 
@@ -270,4 +339,129 @@ def test_docs_verifier_rejects_symlinked_local_link_target(tmp_path: Path) -> No
     )
 
     with pytest.raises(ValueError, match="local link target is a symlink"):
+        verify_documentation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (f"`claude-agent-sdk=={_TEST_SDK}`", "`claude-agent-sdk==9.9.8`"),
+        (f"default model identifier `{_TEST_MODEL}`", "default model identifier `other-model`"),
+        (
+            f"{_TEST_TOOL_COUNT} least-privilege, purpose-built in-process QA tools",
+            "3 least-privilege, purpose-built in-process QA tools",
+        ),
+        (
+            f"exactly {_TEST_SKILL_WORD} allowlisted Claude Skills",
+            "exactly three allowlisted Claude Skills",
+        ),
+    ],
+)
+def test_docs_verifier_rejects_implementation_claim_drift(
+    tmp_path: Path, old: str, new: str
+) -> None:
+    _minimal_public_docs(tmp_path)
+    readme = tmp_path / "README.md"
+    readme.write_text(readme.read_text(encoding="utf-8").replace(old, new, 1), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="implementation-coupled claims drifted"):
+        verify_documentation(tmp_path)
+
+
+def test_docs_verifier_rejects_sdk_badge_drift(tmp_path: Path) -> None:
+    _minimal_public_docs(tmp_path)
+    readme = tmp_path / "README.md"
+    readme.write_text(
+        readme.read_text(encoding="utf-8").replace(
+            f"Claude%20Agent%20SDK-{_TEST_SDK}-",
+            "Claude%20Agent%20SDK-9.9.8-",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="badge version"):
+        verify_documentation(tmp_path)
+
+
+def test_docs_verifier_rejects_symlinked_trusted_skill_directory(tmp_path: Path) -> None:
+    _minimal_public_docs(tmp_path)
+    victim = tmp_path / ".claude" / "skills" / "beta"
+    shutil.rmtree(victim)
+    external = tmp_path / "external-skill"
+    external.mkdir()
+    (external / "SKILL.md").write_text("# External\n", encoding="utf-8")
+    try:
+        victim.symlink_to(external, target_is_directory=True)
+    except (NotImplementedError, OSError):
+        pytest.skip("symlink creation unavailable on this platform")
+
+    with pytest.raises(ValueError, match="real directory"):
+        verify_documentation(tmp_path)
+
+
+def test_docs_verifier_rejects_symlinked_skill_manifest(tmp_path: Path) -> None:
+    _minimal_public_docs(tmp_path)
+    victim = tmp_path / ".claude" / "skills" / "beta" / "SKILL.md"
+    victim.unlink()
+    external = tmp_path / "external-skill.md"
+    external.write_text("# External\n", encoding="utf-8")
+    try:
+        victim.symlink_to(external)
+    except (NotImplementedError, OSError):
+        pytest.skip("symlink creation unavailable on this platform")
+
+    with pytest.raises(ValueError, match=r"owned regular SKILL\.md"):
+        verify_documentation(tmp_path)
+
+
+def test_docs_verifier_rejects_missing_skill_manifest(tmp_path: Path) -> None:
+    _minimal_public_docs(tmp_path)
+    (tmp_path / ".claude" / "skills" / "beta" / "SKILL.md").unlink()
+
+    with pytest.raises(ValueError, match=r"owned regular SKILL\.md"):
+        verify_documentation(tmp_path)
+
+
+def test_docs_verifier_rejects_unlisted_skill_directory(tmp_path: Path) -> None:
+    _minimal_public_docs(tmp_path)
+    extra = tmp_path / ".claude" / "skills" / "gamma"
+    extra.mkdir()
+    (extra / "SKILL.md").write_text("# gamma\n", encoding="utf-8")
+
+    with pytest.raises(
+        ValueError, match="runtime Skill allowlist and trusted Skill directories differ"
+    ):
+        verify_documentation(tmp_path)
+
+
+def test_docs_verifier_rejects_runtime_skill_without_matching_directory(tmp_path: Path) -> None:
+    _minimal_public_docs(tmp_path)
+    agent = tmp_path / "src" / "ai_qa_automation" / "agent.py"
+    agent.write_text(_agent_source(("alpha", "gamma")), encoding="utf-8")
+
+    with pytest.raises(
+        ValueError, match="runtime Skill allowlist and trusted Skill directories differ"
+    ):
+        verify_documentation(tmp_path)
+
+
+def test_docs_verifier_rejects_duplicate_runtime_skill_allowlist(tmp_path: Path) -> None:
+    _minimal_public_docs(tmp_path)
+    agent = tmp_path / "src" / "ai_qa_automation" / "agent.py"
+    agent.write_text(_agent_source(("alpha", "alpha")), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="non-empty, unique"):
+        verify_documentation(tmp_path)
+
+
+def test_docs_verifier_rejects_second_runtime_options_construction(tmp_path: Path) -> None:
+    _minimal_public_docs(tmp_path)
+    agent = tmp_path / "src" / "ai_qa_automation" / "agent.py"
+    agent.write_text(
+        _agent_source() + "\ndef configure_again():\n    return ClaudeAgentOptions()\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="exactly one direct ClaudeAgentOptions construction"):
         verify_documentation(tmp_path)

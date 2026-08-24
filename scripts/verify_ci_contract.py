@@ -24,8 +24,27 @@ AUTOMATIC_REQUIRED_JOBS = (
     "security",
     "browser-reference-sut",
 )
+DOCUMENTATION_INTEGRITY_ARTIFACT = "artifacts/ci/documentation-integrity.json"
+DOCUMENTATION_INTEGRITY_COMMAND = (
+    f"python scripts/verify_docs.py | tee {DOCUMENTATION_INTEGRITY_ARTIFACT}"
+)
 MERMAID_VALIDATION_ARTIFACT = "artifacts/ci/mermaid-validation.json"
 MERMAID_RENDER_COMMAND = f"python scripts/validate_mermaid.py | tee {MERMAID_VALIDATION_ARTIFACT}"
+DOCUMENTATION_STEP_NAME = "Verify documentation authority contract"
+MERMAID_STEP_NAME = "Render Mermaid documentation with digest-pinned official CLI"
+SUPPLY_CHAIN_UPLOAD_STEP_NAME = "Upload supply-chain evidence"
+REQUIRED_GATE_STEP_NAME = "Require every automatic gate to succeed"
+SUPPLY_CHAIN_ARTIFACTS = (
+    "artifacts/ci/supply-chain-verification.json",
+    "artifacts/ci/ci-contract-verification.json",
+    DOCUMENTATION_INTEGRITY_ARTIFACT,
+    MERMAID_VALIDATION_ARTIFACT,
+    "artifacts/ci/runtime-sbom.cdx.json",
+    "artifacts/ci/build-manifest.json",
+    "artifacts/ci/build-checksums.sha256",
+    "artifacts/ci/wheel-a/*.whl",
+    "artifacts/ci/container-image-id.txt",
+)
 ACTION_RE = re.compile(r"^\s*uses:\s*([^@\s]+)@([^\s#]+)", re.MULTILINE)
 HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
 WRITE_PERMISSION_RE = re.compile(r"^\s+[A-Za-z0-9_-]+:\s*write\s*$", re.MULTILINE)
@@ -239,6 +258,77 @@ def _job_block(text: str, job_id: str) -> str:
     return "\n".join(jobs[start:end])
 
 
+def _step_block(job: str, step_name: str) -> str:
+    lines = job.splitlines()
+    marker = f"      - name: {step_name}"
+    starts = [index for index, line in enumerate(lines) if line == marker]
+    if len(starts) != 1:
+        raise ValueError(f"job must contain exactly one step named {step_name}")
+    start = starts[0]
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        if lines[index].startswith("      - name: "):
+            end = index
+            break
+    return "\n".join(lines[start:end])
+
+
+def _require_exact_script_step(job: str, *, step_name: str, command: str) -> None:
+    step = _semantic_text(_step_block(job, step_name)).strip("\n")
+    expected = "\n".join(
+        (
+            f"      - name: {step_name}",
+            "        run: |",
+            "          set -o pipefail",
+            f"          {command}",
+        )
+    )
+    if step != expected:
+        raise ValueError(f"{step_name} must be the exact reviewed fail-closed script step")
+
+
+def _require_exact_supply_chain_upload_step(job: str) -> None:
+    step = _semantic_text(_step_block(job, SUPPLY_CHAIN_UPLOAD_STEP_NAME)).strip("\n")
+    artifact_lines = tuple(f"            {artifact}" for artifact in SUPPLY_CHAIN_ARTIFACTS)
+    expected = "\n".join(
+        (
+            f"      - name: {SUPPLY_CHAIN_UPLOAD_STEP_NAME}",
+            "        if: always()",
+            "        uses: actions/upload-artifact@"
+            f"{EXPECTED_ACTION_SHAS['actions/upload-artifact']} # v7",
+            "        with:",
+            "          name: supply-chain-evidence",
+            "          path: |",
+            *artifact_lines,
+            "          if-no-files-found: error",
+            "          retention-days: 30",
+        )
+    )
+    if step != expected:
+        raise ValueError(
+            "supply-chain evidence upload must be the exact reviewed pinned action step"
+        )
+
+
+def _require_exact_required_gate_step(job: str) -> None:
+    step = _semantic_text(_step_block(job, REQUIRED_GATE_STEP_NAME)).strip("\n")
+    result_lines = tuple(
+        f'          test "${{{{ needs.{job}.result }}}}" = "success"'
+        for job in AUTOMATIC_REQUIRED_JOBS
+    )
+    expected = "\n".join(
+        (
+            f"      - name: {REQUIRED_GATE_STEP_NAME}",
+            "        run: |",
+            *result_lines,
+        )
+    )
+    if step != expected:
+        raise ValueError(
+            "Required PR Gate result checks must be the exact reviewed fail-closed aggregate step"
+        )
+
+
 def _verify_action_revisions(workflows: dict[str, str]) -> dict[str, str]:
     observed: dict[str, str] = {}
     for name, raw_text in workflows.items():
@@ -312,34 +402,47 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
     _verify_read_only_permissions(text, name=name)
     checkout_count = _verify_checkout_binding(text, name=name)
 
-    supply_chain = _semantic_text(_job_block(text, "supply-chain"))
+    supply_chain_raw = _job_block(text, "supply-chain")
+    supply_chain = _semantic_text(supply_chain_raw)
+    _require_exact_script_step(
+        supply_chain_raw,
+        step_name=DOCUMENTATION_STEP_NAME,
+        command=DOCUMENTATION_INTEGRITY_COMMAND,
+    )
+    _require_exact_script_step(
+        supply_chain_raw,
+        step_name=MERMAID_STEP_NAME,
+        command=MERMAID_RENDER_COMMAND,
+    )
+    _require_exact_supply_chain_upload_step(supply_chain_raw)
+    if supply_chain.count(DOCUMENTATION_INTEGRITY_COMMAND) != 1:
+        raise ValueError(
+            f"{name}: documentation integrity command must not appear outside its reviewed step"
+        )
     if supply_chain.count(MERMAID_RENDER_COMMAND) != 1:
         raise ValueError(
-            f"{name}: supply-chain job must execute the Mermaid render command exactly once"
-        )
-    if supply_chain.count(MERMAID_VALIDATION_ARTIFACT) != 2:
-        raise ValueError(
-            f"{name}: Mermaid validation evidence must be produced and uploaded exactly once"
+            f"{name}: Mermaid render command must not appear outside its reviewed step"
         )
 
-    required_gate = _semantic_text(_job_block(text, "required-gate"))
+    required_gate_raw = _job_block(text, "required-gate")
+    required_gate = _semantic_text(required_gate_raw)
     if "    name: Required PR Gate" not in required_gate:
         raise ValueError(f"{name}: stable Required PR Gate name is missing")
     if "    if: ${{ always() }}" not in required_gate:
         raise ValueError(f"{name}: Required PR Gate must execute with if: always()")
+    _require_exact_required_gate_step(required_gate_raw)
     for job in AUTOMATIC_REQUIRED_JOBS:
         if f"      - {job}\n" not in required_gate:
             raise ValueError(f"{name}: Required PR Gate does not depend on {job}")
-        result_check = 'test "${{ needs.' + job + '.result }}" = "success"'
-        if result_check not in required_gate:
-            raise ValueError(f"{name}: Required PR Gate does not fail closed on {job}")
 
     return {
         "triggers": sorted(expected_triggers),
         "subject": "github.sha",
         "checkout_count": checkout_count,
         "required_gate": "Required PR Gate",
+        "documentation_integrity": "required-via-supply-chain",
         "mermaid_render": "required-via-supply-chain",
+        "supply_chain_evidence": "pinned-upload-action",
         "permissions": "contents:read",
         "secrets": False,
     }
