@@ -39,6 +39,10 @@ HASH_RE = re.compile(r"--hash=sha256:([0-9a-f]{64})(?:\s*\\)?$")
 ANY_HASH_RE = re.compile(r"--hash=([^\s\\]+)")
 ACTION_RE = re.compile(r"^\s*uses:\s*([^@\s]+)@([^\s#]+)", re.MULTILINE)
 FROM_RE = re.compile(r"^FROM\s+([^\s]+)(?:\s+AS\s+\S+)?\s*$", re.MULTILINE | re.IGNORECASE)
+EDITABLE_INSTALL_RE = re.compile(
+    r"^\s*python\s+-m\s+pip\s+install\b[^\n]*(?:\s-e(?:\s|=)|\s--editable(?:\s|=))",
+    re.MULTILINE,
+)
 HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
 BASE_IMAGE_RE = re.compile(r"^python:3\.11\.16-slim@sha256:[0-9a-f]{64}$")
 
@@ -217,8 +221,8 @@ def _verify_workflow(root: Path) -> dict[str, str]:
         raise ValueError("permanent CI must not use the moving ubuntu-latest label")
     if '"3.11.16"' not in workflow or '"3.13.15"' not in workflow:
         raise ValueError("permanent CI must name exact supported Python patch versions")
-    if "pip install --upgrade" in workflow or "-e '.[dev]'" in workflow:
-        raise ValueError("permanent CI contains live dependency resolution")
+    if "pip install --upgrade" in workflow or "-e '.[dev]'" in workflow or EDITABLE_INSTALL_RE.search(workflow):
+        raise ValueError("permanent CI contains live or editable dependency installation")
     if "--require-hashes" not in workflow:
         raise ValueError("permanent CI does not enforce hash-required installation")
 
