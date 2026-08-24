@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  SOURCE_SHA: 921cd3555fb0e627a52c738c55052b3bb692ff3c
+  SOURCE_SHA: 2ea6ff394bacbdf879ba1613088dcc9a3b85e43b
   PYTHONUNBUFFERED: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
