@@ -41,7 +41,7 @@ jobs:
       - name: Install locked environment
         run: |
           python -m pip install --require-hashes -r "${{ matrix.lock-file }}"
-          python -m pip install --no-deps --no-build-isolation -e .
+          python -m pip install --no-deps --no-build-isolation .
           python -m pip check
       - name: Compile and static quality
         run: |
@@ -75,7 +75,7 @@ jobs:
       - name: Install locked environment
         run: |
           python -m pip install --require-hashes -r requirements/dev-py311.lock
-          python -m pip install --no-deps --no-build-isolation -e .
+          python -m pip install --no-deps --no-build-isolation .
           python -m pip check
       - name: Verify repository supply-chain contract
         run: python scripts/verify_supply_chain.py
@@ -138,7 +138,7 @@ jobs:
       - name: Install locked security environment
         run: |
           python -m pip install --require-hashes -r requirements/dev-py311.lock
-          python -m pip install --no-deps --no-build-isolation -e .
+          python -m pip install --no-deps --no-build-isolation .
           python -m pip check
       - name: Static and dependency scans
         run: |
