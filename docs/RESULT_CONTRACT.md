@@ -58,6 +58,8 @@ Model reasoning can influence **what to investigate next**. It cannot redefine p
 
 None of the non-PASS outcomes is promoted by model judgment. Infrastructure/tool uncertainty is not relabeled as product failure merely because a validator process returned nonzero.
 
+An unexpected exception from an internal **validation-bearing** tool is itself current-revision validation uncertainty. `PostToolUseFailure` therefore records a sanitized `NOT_VERIFIED` lineage item keyed by the tool and a hash of its sanitized request. This marker is intentionally not erased by an older PASS at the same revision: an unexplained validator crash cannot be hidden by earlier green evidence. Failures of advisory-only tools and external-provider reads retain their own diagnostic/provider semantics and do not fabricate deterministic validation outcomes.
+
 ### Objective binding for unchanged runs
 
 When `change_revision == 0`, a set of unrelated green checks does not prove that the requested objective succeeded. Terminal `SUCCESS` requires at least one trusted deterministic PASS carrying explicit objective-binding provenance. If no such gate exists, the correct terminal state is `NOT_VERIFIED` even when all executed checks are green.
