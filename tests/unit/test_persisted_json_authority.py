@@ -195,7 +195,7 @@ def test_workspace_lease_rejects_duplicate_identity_metadata(tmp_path: Path) -> 
         f'"workspace":{json.dumps(str(workspace.resolve()))},'
         '"run_id":"run-old","lease_id":"shadowed","lease_id":"lease-old"'
         "}"
-    ).encode("utf-8")
+    ).encode()
 
     with pytest.raises(OSError, match="corrupt or ambiguous"):
         lease._parse_previous_metadata(raw)
