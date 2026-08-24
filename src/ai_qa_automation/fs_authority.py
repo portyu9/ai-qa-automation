@@ -3,6 +3,7 @@ from __future__ import annotations
 import errno
 import os
 import stat
+from _thread import RLock
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
@@ -20,6 +21,8 @@ _DESCRIPTOR_RELATIVE_AUTHORITY_SUPPORTED = bool(
     and os.stat in os.supports_follow_symlinks
     and os.link in os.supports_follow_symlinks
 )
+_PENDING_ROOT_AUTHORITY_LOCK = RLock()
+_PENDING_ROOT_AUTHORITIES: dict[str, tuple[tuple[int, int], str]] = {}
 
 
 def descriptor_relative_authority_supported() -> bool:
@@ -35,6 +38,62 @@ def descriptor_relative_authority_supported() -> bool:
 
 def _identity(value: os.stat_result) -> tuple[int, int]:
     return value.st_dev, value.st_ino
+
+
+def _root_authority_key(root: Path) -> str:
+    return str(root.expanduser().absolute())
+
+
+def bind_pending_root_authority(
+    root: Path,
+    identity: tuple[int, int] | None,
+    *,
+    owner: str,
+) -> None:
+    """Bind a live pending mutation to one process-local root identity.
+
+    This bridges deterministic PreToolUse authorization to the mutation tool body
+    without trusting the pathname to still identify the same directory in between.
+    """
+
+    if identity is None:
+        return
+    key = _root_authority_key(root)
+    with _PENDING_ROOT_AUTHORITY_LOCK:
+        existing = _PENDING_ROOT_AUTHORITIES.get(key)
+        candidate = (identity, owner)
+        if existing is not None and existing != candidate:
+            raise RuntimeError("workspace already has a conflicting pending root authority")
+        _PENDING_ROOT_AUTHORITIES[key] = candidate
+
+
+def pending_root_authority(root: Path) -> tuple[int, int] | None:
+    """Return the root identity bound by the currently pending mutation, if any."""
+
+    with _PENDING_ROOT_AUTHORITY_LOCK:
+        authority = _PENDING_ROOT_AUTHORITIES.get(_root_authority_key(root))
+        return authority[0] if authority is not None else None
+
+
+def clear_pending_root_authority(
+    root: Path,
+    identity: tuple[int, int] | None,
+    *,
+    owner: str,
+) -> bool:
+    """Clear only the exact pending authority owned by this runtime transaction."""
+
+    if identity is None:
+        return True
+    key = _root_authority_key(root)
+    with _PENDING_ROOT_AUTHORITY_LOCK:
+        existing = _PENDING_ROOT_AUTHORITIES.get(key)
+        if existing is None:
+            return True
+        if existing != (identity, owner):
+            return False
+        del _PENDING_ROOT_AUTHORITIES[key]
+        return True
 
 
 def pin_directory_identity(root: Path, *, label: str) -> tuple[int, int]:
