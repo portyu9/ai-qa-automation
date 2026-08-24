@@ -313,7 +313,7 @@ class RuntimeControl:
         try:
             relative = absolute_backup.relative_to(run_root)
         except ValueError as exc:
-            raise RuntimeError("pending rollback backup escaped run directory") from exc
+            raise RuntimeError("pending rollback backup escaped rollback directory") from exc
         if len(relative.parts) < 2 or relative.parts[0] != "rollback":
             raise RuntimeError("pending rollback backup escaped rollback directory")
 
