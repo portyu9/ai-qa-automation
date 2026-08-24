@@ -17,6 +17,7 @@ MERMAID_FENCE_RE = re.compile(r"^\s*```mermaid\s*$", re.MULTILINE)
 MAX_MARKDOWN_FILES = 128
 MAX_MARKDOWN_BYTES = 4 * 1024 * 1024
 MAX_TOTAL_MARKDOWN_BYTES = 16 * 1024 * 1024
+RENDER_TIMEOUT_SECONDS = 60
 
 
 def _candidate_files(root: Path) -> list[Path]:
@@ -76,7 +77,7 @@ def _discover_mermaid_documents(root: Path) -> list[tuple[Path, int]]:
     return selected
 
 
-def _run_mermaid(root: Path, relative_path: Path, output_root: Path) -> None:
+def _run_mermaid(root: Path, relative_path: Path, output_root: Path, expected_count: int) -> None:
     destination = output_root / relative_path
     destination.parent.mkdir(parents=True, exist_ok=True)
     command = [
@@ -96,6 +97,10 @@ def _run_mermaid(root: Path, relative_path: Path, output_root: Path) -> None:
         "1g",
         "--cpus",
         "2",
+        "--user",
+        f"{os.getuid()}:{os.getgid()}",
+        "--env",
+        "HOME=/tmp",
         "--tmpfs",
         "/tmp:rw,noexec,nosuid,nodev,size=256m",
         "--mount",
@@ -108,9 +113,38 @@ def _run_mermaid(root: Path, relative_path: Path, output_root: Path) -> None:
         "-o",
         f"/out/{relative_path.as_posix()}",
     ]
-    subprocess.run(command, check=True)
+    try:
+        completed = subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=RENDER_TIMEOUT_SECONDS,
+        )
+    except subprocess.CalledProcessError as exc:
+        if exc.stdout:
+            print(exc.stdout, file=sys.stderr, end="")
+        if exc.stderr:
+            print(exc.stderr, file=sys.stderr, end="")
+        raise
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"Mermaid render exceeded {RENDER_TIMEOUT_SECONDS}s for {relative_path}"
+        ) from exc
+
+    if completed.stderr:
+        print(completed.stderr, file=sys.stderr, end="")
     if not destination.is_file():
         raise RuntimeError(f"Mermaid CLI did not emit transformed Markdown for {relative_path}")
+    transformed = destination.read_text(encoding="utf-8")
+    if MERMAID_FENCE_RE.search(transformed):
+        raise RuntimeError(f"Mermaid CLI left an unrendered Mermaid block in {relative_path}")
+    generated = sorted(destination.parent.glob(f"{destination.stem}-*.svg"))
+    if len(generated) != expected_count:
+        raise RuntimeError(
+            f"Mermaid CLI rendered {len(generated)} SVGs for {relative_path}; "
+            f"expected {expected_count}"
+        )
 
 
 def main() -> int:
@@ -118,8 +152,8 @@ def main() -> int:
     documents = _discover_mermaid_documents(root)
     with tempfile.TemporaryDirectory(prefix="aiqa-mermaid-") as temp_dir:
         output_root = Path(temp_dir).resolve()
-        for relative_path, _ in documents:
-            _run_mermaid(root, relative_path, output_root)
+        for relative_path, count in documents:
+            _run_mermaid(root, relative_path, output_root, count)
 
     result = {
         "schema_version": 1,
