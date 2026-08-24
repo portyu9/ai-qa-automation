@@ -37,7 +37,7 @@ make verify-local
 make holdout
 ```
 
-`make verify-local` covers the routine repository-contained aggregate. The H-series holdout remains separate so ordinary development does not tune directly against exact holdout fixtures.
+`make verify-local` covers the routine repository-contained aggregate. The legacy `make holdout` command runs the repository-visible H-series separately so routine primary execution does not directly include those exact readiness fixtures; that separation is not secrecy or blind evaluation.
 
 Execution claims belong to the revision/environment where execution evidence exists; they are not inferred from command/workflow existence.
 
