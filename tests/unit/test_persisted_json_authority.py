@@ -71,7 +71,9 @@ def test_stale_recovery_does_not_hide_pending_mutation_behind_duplicate_key(
     artifact_root = tmp_path / "artifacts"
     workspace = tmp_path / "sut"
     workspace.mkdir()
-    _write_duplicate_pending_runtime(artifact_root / "run-old" / "runtime.json", workspace=workspace)
+    _write_duplicate_pending_runtime(
+        artifact_root / "run-old" / "runtime.json", workspace=workspace
+    )
 
     result = recover_stale_mutation(
         artifact_root=artifact_root,
