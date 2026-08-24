@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import ai_qa_automation.runtime.stale_recovery as stale_recovery_module
+from ai_qa_automation.runtime.journal import RunJournal
 from ai_qa_automation.runtime.stale_recovery import recover_stale_mutation
 
 
@@ -26,11 +27,14 @@ def test_failed_stale_recovery_close_retains_authority_but_requires_reconciliati
     backup.parent.mkdir(parents=True)
     original = b"original\n"
     backup.write_bytes(original)
+    journal = RunJournal(prior_run / "journal.jsonl")
+    journal.append("mutation_prepared")
     runtime_path = prior_run / "runtime.json"
     runtime_payload = {
         "workspace": str(workspace.resolve()),
         "workspace_fingerprint": "fp-after-mutation",
-        "journal_event_count": 0,
+        "journal_event_count": journal.event_count,
+        "journal_head_hash": journal.head_hash,
         "pending_mutation": {
             "relative_path": "tests/test_checkout.py",
             "existed": True,
@@ -69,6 +73,6 @@ def test_failed_stale_recovery_close_retains_authority_but_requires_reconciliati
     )
 
     assert second["status"] == "BLOCKED"
-    assert "overwriting newer work" in str(second["reason"])
+    assert "runtime journal authority does not match persisted journal" in str(second["reason"])
     assert target.read_bytes() == original
     assert backup.read_bytes() == original
