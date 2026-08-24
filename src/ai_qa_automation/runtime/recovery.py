@@ -4,12 +4,55 @@ import json
 from pathlib import Path
 from typing import Any
 
+from ..fs_authority import descriptor_relative_authority_supported, pin_directory_identity
 from ..io_safety import read_json_object_bounded
 from ..state import StateStore
 from .journal import RunJournal, validate_runtime_journal_binding
 from .validation_truth import evaluate_revision_closure
 
 _MAX_RUNTIME_METADATA_BYTES = 2_000_000
+
+
+def _validate_workspace_root_authority(
+    metadata: dict[str, Any],
+    workspace: Path,
+) -> dict[str, object]:
+    if "workspace_root_identity" not in metadata or metadata["workspace_root_identity"] is None:
+        return {
+            "valid": False,
+            "reason": "runtime.json workspace root identity authority is missing",
+        }
+    raw = metadata["workspace_root_identity"]
+    if not isinstance(raw, dict) or set(raw) != {"device", "inode"}:
+        return {
+            "valid": False,
+            "reason": "runtime.json workspace root identity authority is invalid",
+        }
+    device = raw.get("device")
+    inode = raw.get("inode")
+    if type(device) is not int or type(inode) is not int or device < 0 or inode < 0:
+        return {
+            "valid": False,
+            "reason": "runtime.json workspace root identity authority is invalid",
+        }
+    if not descriptor_relative_authority_supported():
+        return {
+            "valid": False,
+            "reason": "runtime.json workspace root identity cannot be verified on this platform",
+        }
+    try:
+        current = pin_directory_identity(workspace, label="recovery workspace")
+    except (OSError, RuntimeError, ValueError):
+        return {
+            "valid": False,
+            "reason": "runtime.json workspace root identity could not be verified",
+        }
+    if current != (device, inode):
+        return {
+            "valid": False,
+            "reason": "runtime.json workspace root identity does not match current workspace",
+        }
+    return {"valid": True}
 
 
 def inspect_recovery(run_dir: Path) -> dict[str, Any]:
@@ -74,12 +117,15 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
             "recoverable": False,
             "reason": "runtime.json workspace identity is invalid",
         }
-    canonical_workspace = str(Path(state.workspace).expanduser().resolve())
-    if runtime_workspace != canonical_workspace:
+    canonical_workspace = Path(state.workspace).expanduser().resolve()
+    if runtime_workspace != str(canonical_workspace):
         return {
             "recoverable": False,
             "reason": "runtime.json workspace does not match canonical state workspace",
         }
+    workspace_authority = _validate_workspace_root_authority(runtime_metadata, canonical_workspace)
+    if not workspace_authority["valid"]:
+        return {"recoverable": False, "reason": workspace_authority["reason"]}
 
     journal_binding = validate_runtime_journal_binding(runtime_metadata, journal_status)
     if not journal_binding["valid"]:
@@ -124,6 +170,7 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
         },
         "journal": journal_status,
         "journal_binding": journal_binding,
+        "workspace_authority": workspace_authority,
         "runtime": runtime_metadata,
         "pending_mutation": pending_mutation,
         "resume_policy": (
