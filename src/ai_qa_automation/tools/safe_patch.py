@@ -61,7 +61,9 @@ class SafeTestPatcher:
                     "pending mutation root authority requires descriptor-relative filesystem support"
                 )
             if current_identity != pending_identity:
-                raise ValueError("test patch workspace changed identity since mutation authorization")
+                raise ValueError(
+                    "test patch workspace changed identity since mutation authorization"
+                )
             self._workspace_identity = pending_identity
         else:
             self._workspace_identity = current_identity
