@@ -12,7 +12,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .io_safety import fsync_directory, open_regular_binary, read_text_bounded, sha256_file_bounded
+from .io_safety import (
+    fsync_directory,
+    open_regular_binary,
+    parse_json_object_strict,
+    read_json_object_bounded,
+    sha256_file_bounded,
+)
 from .models import ArtifactRecord, EvidenceItem, SanitizationStatus
 from .redaction import sanitize
 
@@ -290,14 +296,11 @@ class EvidenceStore:
         if not path.exists():
             return
         try:
-            rendered = read_text_bounded(
+            data = read_json_object_bounded(
                 path,
                 max_bytes=_MAX_EVIDENCE_MANIFEST_BYTES,
                 label="evidence manifest",
             )
-            data = json.loads(rendered)
-            if not isinstance(data, dict):
-                raise ValueError("evidence manifest root must be an object")
             if data.get("run_id") != self.run_id:
                 raise ValueError("evidence manifest run_id mismatch")
             manifest_regulated = bool(data.get("regulated_mode", False))
@@ -343,15 +346,15 @@ class EvidenceStore:
                     raise ValueError("regulated audit event exceeds line-size bound")
                 if not raw_line.strip():
                     continue
-                record = json.loads(raw_line.decode("utf-8"))
-                if not isinstance(record, dict):
-                    raise ValueError("regulated audit event must be a JSON object")
-                yield record
+                yield parse_json_object_strict(
+                    raw_line.decode("utf-8"),
+                    label="regulated audit event",
+                )
 
     def _verify_artifact_hashes(self) -> None:
         if len(self._artifacts) > _MAX_ARTIFACT_COUNT:
             raise ValueError("regulated artifact registry exceeds count limit")
-        total_bytes = 0
+        total = 0
         for record in self._artifacts.values():
             try:
                 path = self._owned_artifact_path(record.path)
@@ -373,8 +376,8 @@ class EvidenceStore:
                 raise ValueError(
                     f"regulated artifact exceeds persistence limit: {record.path}"
                 ) from exc
-            total_bytes += size
-            if total_bytes > _MAX_TOTAL_ARTIFACT_BYTES:
+            total += size
+            if total > _MAX_TOTAL_ARTIFACT_BYTES:
                 raise ValueError("regulated artifacts exceed cumulative persistence limit")
             if f"sha256:{digest}" != record.content_hash:
                 raise ValueError(f"regulated artifact integrity check failed: {record.path}")
