@@ -26,9 +26,7 @@ LIVE_PIP_UPGRADE_RE = re.compile(r"\b(?:python\s+-m\s+)?pip\s+install\s+--upgrad
 EDITABLE_DEV_INSTALL_RE = re.compile(
     r"\b(?:python\s+-m\s+)?pip\s+install\b[^\n]*(?:\s-e(?:\s|=)|\s--editable(?:\s|=))[^\n]*\.\[dev\]"
 )
-FENCE_OPEN_RE = re.compile(
-    r"^(?P<fence>`{3,}|~{3,})[ \t]*(?P<info>[A-Za-z0-9_+.-]*)[ \t]*$"
-)
+FENCE_OPEN_RE = re.compile(r"^(?P<fence>`{3,}|~{3,})[ \t]*(?P<info>[A-Za-z0-9_+.-]*)[ \t]*$")
 MERMAID_DIAGRAM_PREFIXES = (
     "flowchart ",
     "graph ",
