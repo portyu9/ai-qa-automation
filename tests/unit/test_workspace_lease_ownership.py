@@ -67,6 +67,54 @@ def test_workspace_lease_rechecks_file_ownership_before_acquire(tmp_path: Path) 
     assert outside.read_text(encoding="utf-8") == "do not modify\n"
 
 
+def test_workspace_lease_descriptor_capability_survives_os_open_wrapper(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact_root = tmp_path / "artifacts"
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+    subject = WorkspaceLease(artifact_root, workspace, "run-1")
+    if not subject._supports_descriptor_relative_lease_open():
+        pytest.skip("descriptor-relative no-follow lease open unavailable")
+
+    real_open = os.open
+
+    def wrapped_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if dir_fd is None:
+            return real_open(path, flags, mode)
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", wrapped_open)
+
+    assert subject._supports_descriptor_relative_lease_open() is True
+
+
+def test_workspace_lease_rejects_regular_directory_replacement_before_acquire(
+    tmp_path: Path,
+) -> None:
+    artifact_root = tmp_path / "artifacts"
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+    subject = WorkspaceLease(artifact_root, workspace, "run-1")
+
+    lease_root = subject.path.parent
+    original_root = artifact_root / ".leases-original"
+    lease_root.rename(original_root)
+    lease_root.mkdir()
+
+    with pytest.raises(OSError, match="lease directory changed identity"):
+        subject.acquire()
+
+    assert list(lease_root.iterdir()) == []
+
+
 def test_workspace_lease_rejects_directory_swap_during_lock_open(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
