@@ -11,7 +11,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
-from ..fs_authority import atomic_write_bytes_confined, read_bytes_confined
+from ..fs_authority import (
+    atomic_write_bytes_confined,
+    descriptor_relative_authority_supported,
+    pin_directory_identity,
+    read_bytes_confined,
+)
 from ..io_safety import fsync_directory
 from ..models import ToolDecision
 from ..policy import PolicyEngine
@@ -43,6 +48,11 @@ class SafeTestPatcher:
     def __init__(self, workspace: Path, policy: PolicyEngine) -> None:
         self.workspace = workspace.expanduser().resolve()
         self.policy = policy
+        self._workspace_identity = (
+            pin_directory_identity(self.workspace, label="test patch workspace")
+            if descriptor_relative_authority_supported()
+            else None
+        )
 
     @staticmethod
     def sha256_text(text: str) -> str:
@@ -102,6 +112,7 @@ class SafeTestPatcher:
             path,
             max_bytes=self._MAX_TEST_FILE_BYTES,
             label="test file",
+            expected_root_identity=self._workspace_identity,
         )
         original = raw_original.decode("utf-8")
         actual_sha = self.sha256_text(original)
@@ -135,6 +146,7 @@ class SafeTestPatcher:
             create_parents=False,
             create_only=False,
             label="test patch target",
+            expected_root_identity=self._workspace_identity,
         )
         return PatchResult(
             path=normalized_relative,
@@ -270,6 +282,7 @@ class SafeTestPatcher:
             create_parents=True,
             create_only=True,
             label="generated test target",
+            expected_root_identity=self._workspace_identity,
         )
         digest = self.sha256_text(content)
         return PatchResult(
