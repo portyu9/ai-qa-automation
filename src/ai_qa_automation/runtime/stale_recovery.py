@@ -106,8 +106,11 @@ def recover_stale_mutation(
     """
     if not previous_lease:
         return {"status": "NONE"}
-    previous_run_id = str(previous_lease.get("run_id") or "")
-    if not previous_run_id or previous_run_id == recovering_run_id:
+    raw_previous_run_id = previous_lease.get("run_id")
+    if not isinstance(raw_previous_run_id, str) or not raw_previous_run_id.strip():
+        return {"status": "BLOCKED", "reason": "prior lease run_id is invalid"}
+    previous_run_id = raw_previous_run_id
+    if previous_run_id == recovering_run_id:
         return {"status": "NONE"}
     artifact_root = artifact_root.expanduser().resolve()
     workspace = workspace.expanduser().resolve()
@@ -133,7 +136,8 @@ def recover_stale_mutation(
         metadata = _load_runtime_metadata(runtime_path)
     except ValueError as exc:
         return {"status": "BLOCKED", "reason": str(exc)}
-    if str(metadata.get("workspace") or "") != str(workspace):
+    metadata_workspace = metadata.get("workspace")
+    if not isinstance(metadata_workspace, str) or metadata_workspace != str(workspace):
         return {
             "status": "BLOCKED",
             "reason": "prior runtime workspace does not match lease workspace",
@@ -153,16 +157,23 @@ def recover_stale_mutation(
                 f"ownership of every changed subject ({reasons})"
             ),
         }
-    expected_fingerprint = str(metadata.get("workspace_fingerprint") or "")
-    if not expected_fingerprint or expected_fingerprint != current_workspace_fingerprint:
+    expected_fingerprint = metadata.get("workspace_fingerprint")
+    if (
+        not isinstance(expected_fingerprint, str)
+        or not expected_fingerprint
+        or expected_fingerprint != current_workspace_fingerprint
+    ):
         return {
             "status": "BLOCKED",
             "previous_run_id": previous_run_id,
             "reason": "workspace changed after crashed mutation; automatic rollback would risk overwriting newer work",
         }
-    relative_path = str(pending.get("relative_path") or "")
-    if not relative_path:
-        return {"status": "BLOCKED", "reason": "prior pending mutation path is missing"}
+    relative_path = pending.get("relative_path")
+    if not isinstance(relative_path, str) or not relative_path:
+        return {"status": "BLOCKED", "reason": "prior pending mutation path is missing or invalid"}
+    existed = pending.get("existed")
+    if type(existed) is not bool:
+        return {"status": "BLOCKED", "reason": "prior pending mutation existed flag is invalid"}
     try:
         target = _confined_non_symlink_path(
             workspace,
@@ -173,10 +184,15 @@ def recover_stale_mutation(
         return {"status": "BLOCKED", "reason": str(exc)}
 
     backup_to_cleanup: Path | None = None
-    if bool(pending.get("existed")):
-        backup_raw = str(pending.get("backup_path") or "")
-        original_sha = str(pending.get("original_sha256") or "")
-        if not backup_raw or not original_sha:
+    if existed:
+        backup_raw = pending.get("backup_path")
+        original_sha = pending.get("original_sha256")
+        if (
+            not isinstance(backup_raw, str)
+            or not backup_raw
+            or not isinstance(original_sha, str)
+            or not original_sha
+        ):
             return {"status": "BLOCKED", "reason": "prior rollback backup metadata is incomplete"}
         rollback_root = prior_run_dir / "rollback"
         try:
@@ -207,7 +223,8 @@ def recover_stale_mutation(
         backup_to_cleanup = backup
     else:
         target.unlink(missing_ok=True)
-        fsync_directory(target.parent)
+        if target.parent.is_dir():
+            fsync_directory(target.parent)
 
     # The restored target and rollback bytes intentionally coexist until runtime
     # metadata durably closes the pending transaction. If closure fails, preserve
