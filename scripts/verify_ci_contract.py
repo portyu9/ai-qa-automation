@@ -324,7 +324,9 @@ def _require_exact_required_gate_step(job: str) -> None:
         )
     )
     if step != expected:
-        raise ValueError("Required PR Gate result checks must be the exact reviewed fail-closed aggregate step")
+        raise ValueError(
+            "Required PR Gate result checks must be the exact reviewed fail-closed aggregate step"
+        )
 
 
 def _verify_action_revisions(workflows: dict[str, str]) -> dict[str, str]:
