@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
@@ -15,6 +16,7 @@ from ai_qa_automation.integrations.mcp_health import normalize_mcp_failure
 from ai_qa_automation.intelligence.failure_analysis import FailureAnalyzer
 from ai_qa_automation.intelligence.performance import PerformanceAssessor
 from ai_qa_automation.intelligence.prioritization import RegressionPrioritizer
+from ai_qa_automation.io_safety import read_json_object_bounded
 from ai_qa_automation.models import (
     AgentDecision,
     AgentRunState,
@@ -34,6 +36,8 @@ from ai_qa_automation.tools.validation import ValidationGate
 ROOT = Path(__file__).resolve().parents[1]
 
 _THRESHOLD_SCHEMA_VERSION = 1
+_MAX_SCENARIO_BYTES = 64 * 1024
+_MAX_THRESHOLD_BYTES = 16 * 1024
 _RATIO_THRESHOLD_KEYS = {
     "classification_min_accuracy",
     "self_healing_max_false_heal_rate",
@@ -49,7 +53,7 @@ _COUNT_THRESHOLD_KEYS = {
 class PrimaryScenario(BaseModel):
     """Strict repository-owned contract for one primary deterministic evaluation case."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     id: str = Field(pattern=r"^\d{2}$")
     title: str
@@ -641,7 +645,12 @@ def load_primary_scenarios(
     directory = scenario_dir or ROOT / "evals" / "scenarios"
     scenarios: list[PrimaryScenario] = []
     for path in sorted(directory.glob("*.json")):
-        scenario = PrimaryScenario.model_validate_json(path.read_text(encoding="utf-8"))
+        raw = read_json_object_bounded(
+            path,
+            max_bytes=_MAX_SCENARIO_BYTES,
+            label=f"primary scenario {path.name}",
+        )
+        scenario = PrimaryScenario.model_validate(raw)
         if scenario.id != path.stem:
             raise ValueError(
                 f"primary scenario ID {scenario.id} does not match filename {path.name}"
@@ -745,10 +754,6 @@ def _metrics(rows: list[dict[str, Any]]) -> dict[str, float | int]:
     }
 
 
-def _reject_json_constant(value: str) -> None:
-    raise ValueError(f"non-standard JSON numeric constant is forbidden in thresholds: {value}")
-
-
 def _validate_thresholds(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValueError("evaluation thresholds must be a JSON object")
@@ -827,9 +832,10 @@ def _threshold_violations(
 def main() -> int:
     threshold_path = ROOT / "evals" / "thresholds.json"
     thresholds = _validate_thresholds(
-        json.loads(
-            threshold_path.read_text(encoding="utf-8"),
-            parse_constant=_reject_json_constant,
+        read_json_object_bounded(
+            threshold_path,
+            max_bytes=_MAX_THRESHOLD_BYTES,
+            label="evaluation thresholds",
         )
     )
     scenarios = load_primary_scenarios()
