@@ -1,20 +1,23 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import platform
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
-from ai_qa_automation.io_safety import read_text_bounded, sha256_file_bounded
+from ai_qa_automation.io_safety import fsync_directory, read_bytes_bounded, sha256_file_bounded
 
 SOURCE_DATE_EPOCH = "315532800"
 MAX_WHEEL_BYTES = 64 * 1024 * 1024
 MAX_SBOM_BYTES = 8 * 1024 * 1024
 MAX_SOURCE_INPUT_BYTES = 1024 * 1024
 MAX_LOCK_BYTES = 1024 * 1024
+MAX_MANIFEST_BYTES = 1024 * 1024
 LOCK_NAMES = (
     "base-image.lock",
     "build-py311.lock",
@@ -28,6 +31,11 @@ def _sha256(path: Path, *, max_bytes: int, label: str) -> tuple[str, int]:
     return sha256_file_bounded(path, max_bytes=max_bytes, label=label)
 
 
+def _read_hashed_bytes(path: Path, *, max_bytes: int, label: str) -> tuple[bytes, str]:
+    content = read_bytes_bounded(path, max_bytes=max_bytes, label=label)
+    return content, hashlib.sha256(content).hexdigest()
+
+
 def _git(*args: str) -> str:
     result = subprocess.run(
         ["git", *args],
@@ -39,15 +47,70 @@ def _git(*args: str) -> str:
     return result.stdout.strip()
 
 
+def _parse_json_object(text: str, *, label: str) -> dict[str, Any]:
+    def reject_duplicate_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"{label} contains duplicate JSON key: {key}")
+            result[key] = value
+        return result
+
+    def reject_constant(value: str) -> None:
+        raise ValueError(f"{label} contains non-standard JSON numeric constant: {value}")
+
+    parsed = json.loads(
+        text,
+        object_pairs_hook=reject_duplicate_pairs,
+        parse_constant=reject_constant,
+    )
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{label} root must be a JSON object")
+    return parsed
+
+
 def _load_sbom(path: Path) -> tuple[dict[str, Any], str]:
-    text = read_text_bounded(path, max_bytes=MAX_SBOM_BYTES, label="runtime CycloneDX SBOM")
-    data = json.loads(text)
+    content, digest = _read_hashed_bytes(
+        path,
+        max_bytes=MAX_SBOM_BYTES,
+        label="runtime CycloneDX SBOM",
+    )
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("runtime CycloneDX SBOM is not valid UTF-8") from exc
+    data = _parse_json_object(text, label="runtime CycloneDX SBOM")
     if data.get("bomFormat") != "CycloneDX":
         raise ValueError("SBOM is not CycloneDX JSON")
     if not isinstance(data.get("components"), list) or not data["components"]:
         raise ValueError("SBOM contains no components")
-    digest, _ = _sha256(path, max_bytes=MAX_SBOM_BYTES, label="runtime CycloneDX SBOM")
     return data, digest
+
+
+def _load_lock_inputs(root: Path) -> tuple[dict[str, str], str]:
+    lock_digests: dict[str, str] = {}
+    base_image: str | None = None
+    for name in LOCK_NAMES:
+        limit = 256 if name == "base-image.lock" else MAX_LOCK_BYTES
+        content, digest = _read_hashed_bytes(
+            root / "requirements" / name,
+            max_bytes=limit,
+            label=f"supply-chain lock {name}",
+        )
+        lock_digests[name] = digest
+        if name == "base-image.lock":
+            try:
+                base_image = content.decode("utf-8").strip()
+            except UnicodeDecodeError as exc:
+                raise ValueError("container base-image lock is not valid UTF-8") from exc
+    if not base_image:
+        raise ValueError("container base-image lock must not be empty")
+    return lock_digests, base_image
+
+
+def _assert_tracked_worktree_clean() -> None:
+    if _git("status", "--porcelain", "--untracked-files=no"):
+        raise ValueError("tracked worktree is dirty; build provenance would be ambiguous")
 
 
 def generate_manifest(root: Path, wheel_a: Path, wheel_b: Path, sbom: Path) -> dict[str, Any]:
@@ -69,30 +132,20 @@ def generate_manifest(root: Path, wheel_a: Path, wheel_b: Path, sbom: Path) -> d
     if os.environ.get("SOURCE_DATE_EPOCH") != SOURCE_DATE_EPOCH:
         raise ValueError(f"SOURCE_DATE_EPOCH must equal {SOURCE_DATE_EPOCH}")
 
-    tracked_status = _git("status", "--porcelain", "--untracked-files=no")
-    if tracked_status:
-        raise ValueError("tracked worktree is dirty; build provenance would be ambiguous")
+    _assert_tracked_worktree_clean()
 
     sbom_data, sbom_digest = _load_sbom(sbom)
-    lock_digests = {
-        name: _sha256(
-            root / "requirements" / name,
-            max_bytes=MAX_LOCK_BYTES,
-            label=f"supply-chain lock {name}",
-        )[0]
-        for name in LOCK_NAMES
-    }
-    base_image = read_text_bounded(
-        root / "requirements" / "base-image.lock",
-        max_bytes=256,
-        label="container base-image lock",
-    ).strip()
+    lock_digests, base_image = _load_lock_inputs(root)
     dockerfile_digest, _ = _sha256(
         root / "Dockerfile", max_bytes=MAX_SOURCE_INPUT_BYTES, label="Dockerfile"
     )
     pyproject_digest, _ = _sha256(
         root / "pyproject.toml", max_bytes=MAX_SOURCE_INPUT_BYTES, label="pyproject.toml"
     )
+
+    # A tracked source input changing during observation must not yield a manifest whose
+    # individual digests came from different revisions of the checkout.
+    _assert_tracked_worktree_clean()
 
     return {
         "schema_version": 1,
@@ -134,6 +187,46 @@ def generate_manifest(root: Path, wheel_a: Path, wheel_b: Path, sbom: Path) -> d
     }
 
 
+def _owned_output_target(path: Path) -> Path:
+    requested = path.expanduser()
+    if requested.is_symlink():
+        raise ValueError("build manifest output is a symlink and has ambiguous ownership")
+    raw_parent = requested.parent
+    if raw_parent.is_symlink():
+        raise ValueError("build manifest output parent is a symlink and has ambiguous ownership")
+    raw_parent.mkdir(parents=True, exist_ok=True)
+    if raw_parent.is_symlink():
+        raise ValueError("build manifest output parent became a symlink")
+    parent = raw_parent.resolve()
+    target = parent / requested.name
+    if target.is_symlink():
+        raise ValueError("build manifest output is a symlink and has ambiguous ownership")
+    if target.exists() and not target.is_file():
+        raise ValueError("build manifest output must be a regular file when it already exists")
+    return target
+
+
+def _write_manifest(path: Path, payload: dict[str, Any]) -> None:
+    target = _owned_output_target(path)
+    rendered = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    if len(rendered) > MAX_MANIFEST_BYTES:
+        raise ValueError("build manifest exceeds persistence size bound")
+
+    fd, raw = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
+    temp = Path(raw)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(rendered)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if target.is_symlink():
+            raise ValueError("build manifest output became a symlink before persistence")
+        temp.replace(target)
+        fsync_directory(target.parent)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--wheel-a", type=Path, required=True)
@@ -144,8 +237,7 @@ def main() -> None:
 
     root = Path(__file__).resolve().parents[1]
     manifest = generate_manifest(root, args.wheel_a, args.wheel_b, args.sbom)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _write_manifest(args.output, manifest)
     print(json.dumps(manifest, indent=2, sort_keys=True))
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -7,6 +8,7 @@ from typing import Any
 
 import pytest
 
+import scripts.generate_build_manifest as build_manifest
 import scripts.verify_supply_chain as supply_chain
 from scripts.generate_build_manifest import generate_manifest
 from scripts.verify_supply_chain import EDITABLE_INSTALL_RE, parse_hash_lock, verify_repository
@@ -154,11 +156,7 @@ def test_lock_set_rejects_file_substitution_before_open(
 
     def swapping_open(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
         nonlocal swapped
-        if (
-            not swapped
-            and path == "runtime-py311.lock"
-            and kwargs.get("dir_fd") is not None
-        ):
+        if not swapped and path == "runtime-py311.lock" and kwargs.get("dir_fd") is not None:
             swapped = True
             victim = directory / "runtime-py311.lock"
             victim.unlink()
@@ -169,6 +167,86 @@ def test_lock_set_rejects_file_substitution_before_open(
 
     with pytest.raises(ValueError, match=r"became a symlink|changed"):
         supply_chain._read_lock_set(directory)
+
+
+def test_sbom_digest_is_bound_to_the_parsed_bytes_during_substitution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = json.dumps(
+        {
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.4",
+            "components": [{"name": "original", "version": "1"}],
+        }
+    ).encode()
+    replacement = json.dumps(
+        {
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.4",
+            "components": [{"name": "replacement", "version": "2"}],
+        }
+    ).encode()
+    sbom = tmp_path / "runtime-sbom.cdx.json"
+    sbom.write_bytes(original)
+    original_reader = build_manifest.read_bytes_bounded
+    swapped = False
+
+    def swapping_reader(path: Path, *, max_bytes: int, label: str) -> bytes:
+        nonlocal swapped
+        content = original_reader(path, max_bytes=max_bytes, label=label)
+        if not swapped and path == sbom:
+            swapped = True
+            sbom.write_bytes(replacement)
+        return content
+
+    monkeypatch.setattr(build_manifest, "read_bytes_bounded", swapping_reader)
+
+    parsed, digest = build_manifest._load_sbom(sbom)
+
+    assert parsed["components"] == [{"name": "original", "version": "1"}]
+    assert digest == hashlib.sha256(original).hexdigest()
+
+
+def test_base_image_text_and_digest_use_the_same_observed_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    shutil.copytree(ROOT / "requirements", root / "requirements")
+    base_image_path = root / "requirements" / "base-image.lock"
+    original = base_image_path.read_bytes()
+    replacement = b"python:3.11.16-slim@sha256:" + (b"0" * 64) + b"\n"
+    original_reader = build_manifest.read_bytes_bounded
+    swapped = False
+
+    def swapping_reader(path: Path, *, max_bytes: int, label: str) -> bytes:
+        nonlocal swapped
+        content = original_reader(path, max_bytes=max_bytes, label=label)
+        if not swapped and path == base_image_path:
+            swapped = True
+            base_image_path.write_bytes(replacement)
+        return content
+
+    monkeypatch.setattr(build_manifest, "read_bytes_bounded", swapping_reader)
+
+    digests, base_image = build_manifest._load_lock_inputs(root)
+
+    assert base_image == original.decode().strip()
+    assert digests["base-image.lock"] == hashlib.sha256(original).hexdigest()
+
+
+def test_build_manifest_output_rejects_symlink_target(tmp_path: Path) -> None:
+    external = tmp_path / "external.json"
+    external.write_text("untouched\n", encoding="utf-8")
+    output = tmp_path / "manifest.json"
+    output.symlink_to(external)
+
+    with pytest.raises(ValueError, match="symlink"):
+        build_manifest._write_manifest(output, {"schema_version": 1})
+
+    assert external.read_text(encoding="utf-8") == "untouched\n"
 
 
 @pytest.mark.parametrize(
