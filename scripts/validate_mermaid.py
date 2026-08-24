@@ -2,18 +2,19 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import stat
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
+from scripts.verify_docs import _iter_fenced_blocks
+
 MERMAID_IMAGE = (
     "ghcr.io/mermaid-js/mermaid-cli/mermaid-cli@"
     "sha256:8cc6fb93037759668ac6c48d3b727da15c60419304f3bd4c69c8cd8589e2b485"
 )
-MERMAID_FENCE_RE = re.compile(r"^\s*```mermaid\s*$", re.MULTILINE)
+PUBLIC_ROOT_MARKDOWN = ("README.md", "CONTRIBUTING.md", "SECURITY.md")
 MAX_MARKDOWN_FILES = 128
 MAX_MARKDOWN_BYTES = 4 * 1024 * 1024
 MAX_TOTAL_MARKDOWN_BYTES = 16 * 1024 * 1024
@@ -21,15 +22,32 @@ RENDER_TIMEOUT_SECONDS = 60
 
 
 def _candidate_files(root: Path) -> list[Path]:
-    candidates = [root / "README.md"]
+    candidates = [root / name for name in PUBLIC_ROOT_MARKDOWN]
     docs = root / "docs"
-    if docs.exists():
-        candidates.extend(sorted(docs.rglob("*.md")))
+    try:
+        docs_stat = docs.lstat()
+    except FileNotFoundError as exc:
+        raise ValueError("docs directory is required for Mermaid validation") from exc
+    if stat.S_ISLNK(docs_stat.st_mode) or not stat.S_ISDIR(docs_stat.st_mode):
+        raise ValueError("docs must be a real directory, not a symlink")
+
+    entries = list(docs.iterdir())
+    if len(entries) > MAX_MARKDOWN_FILES:
+        raise ValueError(f"docs exceeds {MAX_MARKDOWN_FILES} direct entries")
+    candidates.extend(
+        sorted(
+            (path for path in entries if path.suffix.lower() == ".md"),
+            key=lambda path: path.name,
+        )
+    )
     return candidates
 
 
 def _read_regular_file(path: Path) -> str:
-    before = path.lstat()
+    try:
+        before = path.lstat()
+    except FileNotFoundError as exc:
+        raise ValueError(f"required documentation file is missing: {path}") from exc
     if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
         raise ValueError(f"documentation path must be a regular non-symlink file: {path}")
     if before.st_size > MAX_MARKDOWN_BYTES:
@@ -53,27 +71,29 @@ def _read_regular_file(path: Path) -> str:
     return data.decode("utf-8")
 
 
+def _mermaid_block_count(text: str) -> int:
+    return sum(language == "mermaid" for language, _block in _iter_fenced_blocks(text))
+
+
 def _discover_mermaid_documents(root: Path) -> list[tuple[Path, int]]:
     selected: list[tuple[Path, int]] = []
     total_bytes = 0
-    observed = 0
-    for path in _candidate_files(root):
-        if not path.exists():
-            continue
-        observed += 1
-        if observed > MAX_MARKDOWN_FILES:
-            raise ValueError(f"documentation corpus exceeds {MAX_MARKDOWN_FILES} Markdown files")
+    candidates = _candidate_files(root)
+    if len(candidates) > MAX_MARKDOWN_FILES:
+        raise ValueError(f"documentation corpus exceeds {MAX_MARKDOWN_FILES} Markdown files")
+
+    for path in candidates:
         text = _read_regular_file(path)
         total_bytes += len(text.encode("utf-8"))
         if total_bytes > MAX_TOTAL_MARKDOWN_BYTES:
             raise ValueError(
                 f"documentation corpus exceeds {MAX_TOTAL_MARKDOWN_BYTES} total Markdown bytes"
             )
-        count = len(MERMAID_FENCE_RE.findall(text))
+        count = _mermaid_block_count(text)
         if count:
             selected.append((path.relative_to(root), count))
     if not selected:
-        raise ValueError("no Mermaid diagrams discovered in README.md or docs/**/*.md")
+        raise ValueError("no Mermaid diagrams discovered in the public Markdown corpus")
     return selected
 
 
@@ -137,8 +157,11 @@ def _run_mermaid(root: Path, relative_path: Path, output_root: Path, expected_co
     if not destination.is_file():
         raise RuntimeError(f"Mermaid CLI did not emit transformed Markdown for {relative_path}")
     transformed = destination.read_text(encoding="utf-8")
-    if MERMAID_FENCE_RE.search(transformed):
-        raise RuntimeError(f"Mermaid CLI left an unrendered Mermaid block in {relative_path}")
+    remaining = _mermaid_block_count(transformed)
+    if remaining:
+        raise RuntimeError(
+            f"Mermaid CLI left {remaining} unrendered Mermaid block(s) in {relative_path}"
+        )
     generated = sorted(destination.parent.glob(f"{destination.stem}-*.svg"))
     if len(generated) != expected_count:
         raise RuntimeError(
