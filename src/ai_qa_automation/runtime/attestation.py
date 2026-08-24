@@ -57,6 +57,10 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
         expected_run_id=state["run_id"],
         present=manifest_path.is_file(),
     )
+    workspace_integrity = _validate_runtime_workspace(
+        state.get("workspace"),
+        runtime.get("workspace"),
+    )
 
     try:
         if journal_path.is_file() and journal_path.stat().st_size > _MAX_JOURNAL_BYTES:
@@ -105,6 +109,7 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
         and bool(journal.get("valid"))
         and bool(manifest_integrity.get("valid"))
         and bool(artifact_integrity.get("valid"))
+        and bool(workspace_integrity.get("valid"))
         and pending_mutation_authority_valid
         and pending_mutation is None
     )
@@ -137,6 +142,7 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
             "journal": journal,
             "manifest": manifest_integrity,
             "artifacts": artifact_integrity,
+            "workspace": workspace_integrity,
             "pending_mutation": pending_mutation is not None,
             "persisted_subjects": subjects,
             "subjects_complete": subjects_complete,
@@ -153,9 +159,10 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
         "generated_at": datetime.now(UTC).isoformat(),
         "attestation_digest": f"sha256:{hashlib.sha256(canonical).hexdigest()}",
         "interpretation": (
-            "Owned persisted subjects, the journal chain, structurally valid evidence manifest, "
-            "and registered artifact hashes passed the available integrity checks. This does not "
-            "change the run terminal status or prove environment-dependent capabilities."
+            "Owned persisted subjects, workspace identity, the journal chain, structurally valid "
+            "evidence manifest, and registered artifact hashes passed the available integrity "
+            "checks. This does not change the run terminal status or prove environment-dependent "
+            "capabilities."
             if integrity_verified
             else "One or more persisted run-integrity checks are incomplete or failed."
         ),
@@ -247,6 +254,24 @@ def _validate_manifest_structure(
         evidence_records,
         artifact_records,
     )
+
+
+def _validate_runtime_workspace(
+    state_workspace: object,
+    runtime_workspace: object,
+) -> dict[str, object]:
+    if not isinstance(state_workspace, str) or not state_workspace.strip():
+        return {"valid": False, "reason": "canonical state workspace identity is invalid"}
+    if not isinstance(runtime_workspace, str) or not runtime_workspace.strip():
+        return {"valid": False, "reason": "runtime workspace identity is missing or invalid"}
+    try:
+        expected = Path(state_workspace).expanduser().resolve()
+        observed = Path(runtime_workspace).expanduser().resolve()
+    except (OSError, RuntimeError):
+        return {"valid": False, "reason": "workspace identity could not be resolved"}
+    if observed != expected:
+        return {"valid": False, "reason": "runtime workspace identity mismatch"}
+    return {"valid": True}
 
 
 def _owned_subject(root: Path, name: str) -> Path:
