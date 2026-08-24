@@ -72,7 +72,7 @@ The codebase defines deterministic contracts for areas including:
 - symlink-resistant ownership for mutation, rollback, evidence, journal, lease, recovery, and attestation subjects;
 - merge-base change intelligence, CODEOWNERS, test impact, and OpenAPI drift;
 - unsigned run-attestation logic with artifact-byte verification;
-- fixed primary and independent holdout evaluators;
+- fixed primary and repository-visible sequestered H-series readiness evaluators;
 - deterministic reference-SUT behavior.
 
 These are **framework contracts**. Their existence does not by itself prove a particular runtime/provider/target execution occurred.
@@ -159,7 +159,7 @@ Deployment evidence includes:
 | Appium | runtime/capability inspection boundary | app/device/emulator/cloud session |
 | Secret safety | protected paths, redaction, minimal subprocess env | organization secret manager, rotation, access policy |
 | Traceability | manifests, hashes, journal, lineage, artifact-verifying unsigned attestation | external signing/identity/timestamping when required |
-| Evaluation | fixed primary/holdout definitions and hard-safety scoring | execution results for a specific revision/environment |
+| Evaluation | fixed primary definitions plus repository-visible sequestered H-series readiness definitions and hard-safety scoring | execution results for a specific revision/environment |
 
 ---
 

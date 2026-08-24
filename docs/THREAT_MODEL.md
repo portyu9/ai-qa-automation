@@ -38,6 +38,9 @@ The engineering target is therefore **containment and truth preservation**, not 
 
 ```mermaid
 flowchart LR
+    accTitle: Threat-model trust zones across control plane, untrusted target, providers, and deployment infrastructure
+    accDescr: The trusted control plane reaches deterministic policy, tools, and evidence. That surface interacts with the untrusted SUT and approved external providers, while deployment infrastructure independently supplies isolation, egress, identity, secret, and environment controls.
+
     C[Trusted control plane] --> P[Policy + tools + evidence]
     P <--> T[Untrusted SUT / repository]
     P <--> X[Approved external providers]

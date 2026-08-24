@@ -15,6 +15,9 @@ The framework persists enough structured information to reconstruct **why** a ru
 
 ```mermaid
 flowchart LR
+    accTitle: Run traceability from observed evidence and validation lineage to terminal report and unsigned integrity attestation
+    accDescr: Agent run state links to observed evidence, model hypotheses, validation gates, and the terminal report. Evidence links to registered artifacts and validation, while the runtime journal also contributes to the report. Run state, artifact hashes, and journal integrity feed a separate unsigned integrity attestation.
+
     R[AgentRunState]
     E[Observed evidence]
     A[Registered artifacts + hashes]

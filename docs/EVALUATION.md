@@ -31,6 +31,9 @@ The evaluation architecture targets failure modes that matter specifically in ag
 
 ```mermaid
 flowchart TD
+    accTitle: Layered evaluation evidence from deterministic controls to separately owned runtime evidence
+    accDescr: Unit tests feed deterministic integration and policy/security tests, which lead to the fixed 34-case primary deterministic control evaluator and the repository-visible sequestered H-series readiness corpus. Browser-marked and credentialed model-marked tests branch from integration because those evidence classes require separate runtimes.
+
     U[Unit tests] --> I[Deterministic integration]
     I --> S[Policy / security tests]
     S --> P[34-case primary deterministic control evaluator]

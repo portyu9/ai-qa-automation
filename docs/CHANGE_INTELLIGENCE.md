@@ -25,6 +25,9 @@ That combined set drives risk, ownership, contract, and test-impact analysis.
 
 ```mermaid
 flowchart LR
+    accTitle: Merge-base-aware change intelligence from trusted baseline to conservative test impact
+    accDescr: A trusted base reference and HEAD resolve an immutable merge base. Committed changes are combined with dirty and untracked worktree changes, and that effective change union feeds risk-domain, CODEOWNERS, test-impact, and API-contract-drift analysis.
+
     B[Trusted base ref] --> M[Resolve immutable merge base]
     H[HEAD] --> M
     M --> C[Committed delta]

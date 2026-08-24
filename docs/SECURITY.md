@@ -36,6 +36,9 @@ The design therefore makes a model mistake survivable. A bad hypothesis, malicio
 
 ```mermaid
 flowchart LR
+    accTitle: Security trust zones and independent deployment enforcement
+    accDescr: Trusted control-plane policy and narrow tools produce evidence while interacting with an untrusted SUT and approved external MCP. Deployment infrastructure independently enforces isolation, egress, identity, and secrets.
+
     C[Trusted control plane] --> P[Policy + hooks + narrow tools]
     P --> E[Evidence + validation]
     P <--> S[Untrusted SUT]
@@ -132,6 +135,9 @@ This prevents “same bytes, wrong filesystem object” from being mistaken for 
 
 ```mermaid
 flowchart LR
+    accTitle: Transactional test-mutation integrity and rollback
+    accDescr: An authorized Python test write creates a rollback snapshot, then patch safety, exact-path targeted pytest, and full regression must pass before commit. Any failure or incomplete closure rolls back, and uncertain rollback ownership escalates to infrastructure failure or manual review.
+
     A[Authorized Python test write] --> B[Rollback snapshot]
     B --> C[Candidate revision]
     C --> D[Patch-safety PASS]
