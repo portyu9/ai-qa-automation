@@ -12,6 +12,8 @@ from typing import Any
 
 from ..fs_authority import (
     atomic_write_bytes_confined,
+    descriptor_relative_authority_supported,
+    pin_directory_identity,
     read_bytes_confined,
     unlink_file_confined,
 )
@@ -61,6 +63,12 @@ class RuntimeControl:
     repeated_action_counts: dict[str, int] = field(default_factory=dict)
     pending_mutation: PendingMutation | None = None
     _lock: RLock = field(default_factory=RLock, init=False, repr=False, compare=False)
+    _workspace_identity: tuple[int, int] | None = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         if type(self.circuit_failure_threshold) is not int or self.circuit_failure_threshold < 1:
@@ -69,6 +77,11 @@ class RuntimeControl:
             raise ValueError("max_repeated_action must be a positive integer")
         self.workspace = self.workspace.expanduser().resolve()
         self.metadata_path = self.metadata_path.expanduser()
+        if descriptor_relative_authority_supported():
+            self._workspace_identity = pin_directory_identity(
+                self.workspace,
+                label="runtime workspace",
+            )
 
     def before_tool(self, tool_name: str) -> None:
         with self._lock:
@@ -123,6 +136,7 @@ class RuntimeControl:
                     relative_path,
                     max_bytes=_MAX_ROLLBACK_BYTES,
                     label="mutation target",
+                    expected_root_identity=self._workspace_identity,
                 )
                 existed = True
             except FileNotFoundError:
@@ -254,6 +268,7 @@ class RuntimeControl:
                     create_parents=True,
                     create_only=False,
                     label="mutation rollback target",
+                    expected_root_identity=self._workspace_identity,
                 )
             else:
                 try:
@@ -262,6 +277,7 @@ class RuntimeControl:
                         pending.relative_path,
                         missing_ok=True,
                         label="mutation rollback target",
+                        expected_root_identity=self._workspace_identity,
                     )
                 except FileNotFoundError:
                     # A prepared new-file mutation may be cancelled before its parent
