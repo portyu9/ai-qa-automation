@@ -418,29 +418,36 @@ def _internal_tool_count(root: Path) -> int:
 def _runtime_skill_allowlist(root: Path) -> tuple[str, ...]:
     path = "src/ai_qa_automation/agent.py"
     tree = ast.parse(_read_implementation_text(root, path), filename=path)
-    matches: list[tuple[str, ...]] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        if not isinstance(node.func, ast.Name) or node.func.id != "ClaudeAgentOptions":
-            continue
-        for keyword in node.keywords:
-            if keyword.arg != "skills" or not isinstance(keyword.value, (ast.List, ast.Tuple)):
-                continue
-            values: list[str] = []
-            for item in keyword.value.elts:
-                if not isinstance(item, ast.Constant) or not isinstance(item.value, str):
-                    raise ValueError("ClaudeAgentOptions.skills must be a literal list of Skill names")
-                values.append(item.value)
-            matches.append(tuple(values))
-    if len(matches) != 1:
-        raise ValueError("could not derive exactly one ClaudeAgentOptions.skills allowlist")
-    skills = matches[0]
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "ClaudeAgentOptions"
+    ]
+    if len(calls) != 1:
+        raise ValueError("runtime must contain exactly one direct ClaudeAgentOptions construction")
+    skill_keywords = [keyword for keyword in calls[0].keywords if keyword.arg == "skills"]
+    if len(skill_keywords) != 1 or not isinstance(skill_keywords[0].value, (ast.List, ast.Tuple)):
+        raise ValueError("ClaudeAgentOptions must contain exactly one literal skills allowlist")
+
+    values: list[str] = []
+    for item in skill_keywords[0].value.elts:
+        if not isinstance(item, ast.Constant) or not isinstance(item.value, str):
+            raise ValueError(
+                "ClaudeAgentOptions.skills must be a literal list of Skill names"
+            )
+        values.append(item.value)
+    skills = tuple(values)
     if not skills or len(skills) > MAX_SKILL_ENTRIES or len(set(skills)) != len(skills):
-        raise ValueError("runtime Skill allowlist must be non-empty, unique, and within the Skill bound")
+        raise ValueError(
+            "runtime Skill allowlist must be non-empty, unique, and within the Skill bound"
+        )
     for name in skills:
         if not name or Path(name).name != name or name in {".", ".."}:
-            raise ValueError(f"runtime Skill allowlist contains an invalid direct-entry name: {name!r}")
+            raise ValueError(
+                f"runtime Skill allowlist contains an invalid direct-entry name: {name!r}"
+            )
     return skills
 
 
