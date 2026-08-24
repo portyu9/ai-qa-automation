@@ -429,7 +429,9 @@ def test_docs_verifier_rejects_unlisted_skill_directory(tmp_path: Path) -> None:
     extra.mkdir()
     (extra / "SKILL.md").write_text("# gamma\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="runtime Skill allowlist and trusted Skill directories differ"):
+    with pytest.raises(
+        ValueError, match="runtime Skill allowlist and trusted Skill directories differ"
+    ):
         verify_documentation(tmp_path)
 
 
@@ -438,7 +440,9 @@ def test_docs_verifier_rejects_runtime_skill_without_matching_directory(tmp_path
     agent = tmp_path / "src" / "ai_qa_automation" / "agent.py"
     agent.write_text(_agent_source(("alpha", "gamma")), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="runtime Skill allowlist and trusted Skill directories differ"):
+    with pytest.raises(
+        ValueError, match="runtime Skill allowlist and trusted Skill directories differ"
+    ):
         verify_documentation(tmp_path)
 
 
@@ -448,4 +452,16 @@ def test_docs_verifier_rejects_duplicate_runtime_skill_allowlist(tmp_path: Path)
     agent.write_text(_agent_source(("alpha", "alpha")), encoding="utf-8")
 
     with pytest.raises(ValueError, match="non-empty, unique"):
+        verify_documentation(tmp_path)
+
+
+def test_docs_verifier_rejects_second_runtime_options_construction(tmp_path: Path) -> None:
+    _minimal_public_docs(tmp_path)
+    agent = tmp_path / "src" / "ai_qa_automation" / "agent.py"
+    agent.write_text(
+        _agent_source() + "\ndef configure_again():\n    return ClaudeAgentOptions()\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="exactly one direct ClaudeAgentOptions construction"):
         verify_documentation(tmp_path)
