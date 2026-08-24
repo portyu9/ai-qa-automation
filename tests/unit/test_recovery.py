@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from ai_qa_automation.fs_authority import descriptor_relative_authority_supported
 from ai_qa_automation.models import (
     AgentRunState,
     TerminalStatus,
@@ -27,10 +28,15 @@ def save_runtime(
 ) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
     journal_status = RunJournal(run_dir / "journal.jsonl").verify()
+    workspace_status = workspace.stat(follow_symlinks=False)
     (run_dir / "runtime.json").write_text(
         json.dumps(
             {
                 "workspace": str(workspace.resolve()),
+                "workspace_root_identity": {
+                    "device": workspace_status.st_dev,
+                    "inode": workspace_status.st_ino,
+                },
                 "journal_event_count": journal_status["events"],
                 "journal_head_hash": journal_status["head_hash"],
                 "pending_mutation": pending_mutation,
@@ -86,6 +92,8 @@ def closed_revision_validations(path: str = "tests/test_x.py") -> list[Validatio
 
 
 def test_revision_zero_is_safe_to_start_new_session_from_persisted_state(tmp_path: Path) -> None:
+    if not descriptor_relative_authority_supported():
+        pytest.skip("workspace root recovery authority is unavailable")
     run_dir = tmp_path / "run-1"
     workspace = tmp_path / "sut"
     workspace.mkdir()
@@ -100,6 +108,7 @@ def test_revision_zero_is_safe_to_start_new_session_from_persisted_state(tmp_pat
     assert result["change_revision"] == 0
     assert result["revision_closed"] is True
     assert result["journal_binding"]["valid"] is True
+    assert result["workspace_authority"] == {"valid": True}
     assert result["resume_policy"] == "safe-to-start-a-new-agent-session-from-persisted-evidence"
     assert "does not replay or continue" in result["note"]
 
@@ -107,6 +116,8 @@ def test_revision_zero_is_safe_to_start_new_session_from_persisted_state(tmp_pat
 def test_changed_revision_requires_exact_bound_targeted_and_regression_passes(
     tmp_path: Path,
 ) -> None:
+    if not descriptor_relative_authority_supported():
+        pytest.skip("workspace root recovery authority is unavailable")
     run_dir = tmp_path / "run-1"
     workspace = tmp_path / "sut"
     workspace.mkdir()
@@ -129,6 +140,8 @@ def test_changed_revision_requires_exact_bound_targeted_and_regression_passes(
 
 
 def test_unbound_targeted_validation_is_not_recovery_closed(tmp_path: Path) -> None:
+    if not descriptor_relative_authority_supported():
+        pytest.skip("workspace root recovery authority is unavailable")
     run_dir = tmp_path / "run-1"
     workspace = tmp_path / "sut"
     workspace.mkdir()
@@ -158,6 +171,8 @@ def test_unbound_targeted_validation_is_not_recovery_closed(tmp_path: Path) -> N
 
 
 def test_pending_mutation_forces_manual_review_even_when_gates_pass(tmp_path: Path) -> None:
+    if not descriptor_relative_authority_supported():
+        pytest.skip("workspace root recovery authority is unavailable")
     run_dir = tmp_path / "run-1"
     workspace = tmp_path / "sut"
     workspace.mkdir()
@@ -177,6 +192,28 @@ def test_pending_mutation_forces_manual_review_even_when_gates_pass(tmp_path: Pa
     assert result["recoverable"] is True
     assert result["revision_closed"] is False
     assert result["resume_policy"] == "manual-review-required-before-new-session"
+
+
+def test_replaced_workspace_root_is_not_recoverable(tmp_path: Path) -> None:
+    if not descriptor_relative_authority_supported():
+        pytest.skip("workspace root recovery authority is unavailable")
+    run_dir = tmp_path / "run-1"
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+    save_state(run_dir, base_state(workspace))
+    RunJournal(run_dir / "journal.jsonl").append("run_started")
+    save_runtime(run_dir, workspace)
+
+    original = tmp_path / "sut-original"
+    workspace.rename(original)
+    workspace.mkdir()
+
+    result = inspect_recovery(run_dir)
+
+    assert result == {
+        "recoverable": False,
+        "reason": "runtime.json workspace root identity does not match current workspace",
+    }
 
 
 def test_hash_valid_journal_growth_after_runtime_snapshot_is_not_recoverable(
