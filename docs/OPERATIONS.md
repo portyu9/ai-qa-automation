@@ -18,7 +18,7 @@ Use the narrowest operating mode that answers the engineering question. More env
 | **Capability inspection** | inspect local packages/executables/trust roots | none |
 | **Deterministic demo** | exercise evidence/classification flow | none |
 | **Repository gates** | quality, tests, primary evaluator, security tooling | none |
-| **Independent holdout** | H-series adversarial corpus | none |
+| **Sequestered readiness** | repository-visible H-series cases separated from routine primary execution | none |
 | **Reference browser** | Playwright against deterministic local SUT | browser runtime |
 | **Live model** | bounded Claude Agent SDK session | Anthropic provider/credential |
 | **External systems** | GitHub/Atlassian or real browser/API/load/mobile targets | provider/target infrastructure |
@@ -43,13 +43,13 @@ ai-qa demo
 ```bash
 make quality       # compile + Ruff format/lint + Mypy
 make test          # deterministic default pytest set
-make eval          # fixed 34-scenario primary evaluator
+make eval          # fixed 34-case primary deterministic control evaluator
 make security      # dependency/static/secret security tooling
 make verify-local  # routine local deterministic aggregate
-make holdout       # independent H-series evaluator
+make holdout       # repository-visible sequestered H-series readiness evaluator
 ```
 
-The holdout remains separate from the routine aggregate so normal implementation work does not directly tune against its exact fixtures.
+The legacy holdout command remains separate from the routine aggregate so routine primary execution does not directly include its exact readiness fixtures. Because those fixtures are committed in the repository, separation does not make them blind, unseen, or independent evidence.
 
 > [!NOTE]
 > These commands define the operating surface. A command's existence is not a claim about a different revision/environment where it has not been executed.
@@ -299,8 +299,8 @@ The workflow defines separable paths for:
 
 - quality/type checks;
 - deterministic pytest;
-- primary adversarial evaluation;
-- H-series holdout;
+- 34-case primary deterministic control evaluation;
+- repository-visible H-series readiness;
 - security tooling;
 - Playwright reference-SUT behavior; and
 - optional credentialed Agent SDK smoke execution.
