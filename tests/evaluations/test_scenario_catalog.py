@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+import ai_qa_automation.io_safety as io_safety
 from ai_qa_automation.io_safety import read_json_object_bounded
 from evals.holdout_runner import READINESS_EVALUATORS, load_readiness_scenarios
 from evals.runner import PRIMARY_EVALUATORS, load_primary_scenarios
@@ -98,7 +99,7 @@ def test_primary_catalog_rejects_symlinked_fixture(tmp_path: Path) -> None:
     (directory / "01.json").unlink()
     (directory / "01.json").symlink_to(external)
 
-    with pytest.raises(ValueError, match="symlink"):
+    with pytest.raises(ValueError, match="regular non-symlink file"):
         load_primary_scenarios(directory)
 
 
@@ -108,7 +109,7 @@ def test_primary_catalog_rejects_symlinked_directory(tmp_path: Path) -> None:
     linked_directory = tmp_path / "primary-linked"
     linked_directory.symlink_to(real_directory, target_is_directory=True)
 
-    with pytest.raises(ValueError, match="directory must not be a symlink"):
+    with pytest.raises(ValueError, match="is a symlink"):
         load_primary_scenarios(linked_directory)
 
 
@@ -119,6 +120,50 @@ def test_primary_catalog_enforces_actual_ingestion_bound(tmp_path: Path) -> None
     path.write_text("{" + '"padding":"' + ("x" * (64 * 1024)) + '"}', encoding="utf-8")
 
     with pytest.raises(ValueError, match="ingestion limit"):
+        load_primary_scenarios(directory)
+
+
+def test_primary_catalog_enforces_enumeration_bound_during_scan(tmp_path: Path) -> None:
+    directory = tmp_path / "primary"
+    shutil.copytree(Path("evals/scenarios"), directory)
+    for index in range(31):
+        (directory / f"junk-{index:02d}.txt").write_text("x", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="entry ingestion limit"):
+        load_primary_scenarios(directory)
+
+
+def _swap_directory_when_scandir_starts(
+    directory: Path,
+    external: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_scandir = io_safety.os.scandir
+    swapped = False
+
+    def swapping_scandir(path: object):  # type: ignore[no-untyped-def]
+        nonlocal swapped
+        if not swapped and isinstance(path, int):
+            swapped = True
+            preserved = directory.with_name(f"{directory.name}-preserved")
+            directory.rename(preserved)
+            directory.symlink_to(external, target_is_directory=True)
+        return original_scandir(path)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(io_safety.os, "scandir", swapping_scandir)
+
+
+def test_primary_catalog_rejects_directory_swap_after_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    directory = tmp_path / "primary"
+    external = tmp_path / "external"
+    shutil.copytree(Path("evals/scenarios"), directory)
+    shutil.copytree(Path("evals/scenarios"), external)
+    _swap_directory_when_scandir_starts(directory, external, monkeypatch)
+
+    with pytest.raises(ValueError, match="changed|symlink"):
         load_primary_scenarios(directory)
 
 
@@ -184,8 +229,22 @@ def test_readiness_catalog_rejects_symlinked_directory(tmp_path: Path) -> None:
     linked_directory = tmp_path / "readiness-linked"
     linked_directory.symlink_to(real_directory, target_is_directory=True)
 
-    with pytest.raises(ValueError, match="directory must not be a symlink"):
+    with pytest.raises(ValueError, match="is a symlink"):
         load_readiness_scenarios(linked_directory)
+
+
+def test_readiness_catalog_rejects_directory_swap_after_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    directory = tmp_path / "readiness"
+    external = tmp_path / "external"
+    shutil.copytree(Path("evals/holdout"), directory)
+    shutil.copytree(Path("evals/holdout"), external)
+    _swap_directory_when_scandir_starts(directory, external, monkeypatch)
+
+    with pytest.raises(ValueError, match="changed|symlink"):
+        load_readiness_scenarios(directory)
 
 
 def test_readiness_catalog_rejects_nonstandard_json_constant(tmp_path: Path) -> None:
