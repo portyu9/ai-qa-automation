@@ -37,6 +37,7 @@ def test_manual_model_credential_scope_is_narrow() -> None:
     text = (ROOT / ".github" / "workflows" / "manual-validation.yml").read_text(encoding="utf-8")
     model = ci_contract._semantic_text(ci_contract._job_block(text, "model-smoke"))
 
+    assert "    if: ${{ inputs.run_model && github.ref == 'refs/heads/main' }}" in model
     assert "    environment: credentialed-validation" in model
     assert "Require main branch for credentialed validation" in model
     assert 'test "$GITHUB_REF" = "refs/heads/main"' in model
