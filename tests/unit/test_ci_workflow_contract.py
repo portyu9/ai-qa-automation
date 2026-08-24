@@ -25,6 +25,7 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     assert result["result"] == "PASS"
     assert result["schema_version"] == 1
     assert result["workflows"]["automatic"]["required_gate"] == "Required PR Gate"
+    assert result["workflows"]["automatic"]["mermaid_render"] == "required-via-supply-chain"
     assert result["workflows"]["automatic"]["secrets"] is False
     assert result["workflows"]["manual"]["credentialed_model"] == "manual-only"
 
@@ -150,6 +151,34 @@ def test_ci_contract_rejects_unbound_checkout(tmp_path: Path) -> None:
     path.write_text(text, encoding="utf-8")
 
     with pytest.raises(ValueError, match=r"every checkout must bind to github\.sha"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_rejects_removed_mermaid_render_command(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "ci.yml"
+    text = path.read_text(encoding="utf-8").replace(
+        f"          {ci_contract.MERMAID_RENDER_COMMAND}\n",
+        "          true\n",
+        1,
+    )
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Mermaid render command exactly once"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_rejects_missing_mermaid_render_evidence_upload(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "ci.yml"
+    text = path.read_text(encoding="utf-8").replace(
+        f"            {ci_contract.MERMAID_VALIDATION_ARTIFACT}\n",
+        "",
+        1,
+    )
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Mermaid validation evidence"):
         ci_contract.verify_ci_contract(root)
 
 
