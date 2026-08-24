@@ -26,8 +26,7 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     assert result["schema_version"] == 1
     assert result["workflows"]["automatic"]["required_gate"] == "Required PR Gate"
     assert (
-        result["workflows"]["automatic"]["documentation_integrity"]
-        == "required-via-supply-chain"
+        result["workflows"]["automatic"]["documentation_integrity"] == "required-via-supply-chain"
     )
     assert result["workflows"]["automatic"]["mermaid_render"] == "required-via-supply-chain"
     assert result["workflows"]["automatic"]["secrets"] is False
