@@ -25,9 +25,7 @@ AUTOMATIC_REQUIRED_JOBS = (
     "browser-reference-sut",
 )
 MERMAID_VALIDATION_ARTIFACT = "artifacts/ci/mermaid-validation.json"
-MERMAID_RENDER_COMMAND = (
-    f"python scripts/validate_mermaid.py | tee {MERMAID_VALIDATION_ARTIFACT}"
-)
+MERMAID_RENDER_COMMAND = f"python scripts/validate_mermaid.py | tee {MERMAID_VALIDATION_ARTIFACT}"
 ACTION_RE = re.compile(r"^\s*uses:\s*([^@\s]+)@([^\s#]+)", re.MULTILINE)
 HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
 WRITE_PERMISSION_RE = re.compile(r"^\s+[A-Za-z0-9_-]+:\s*write\s*$", re.MULTILINE)
@@ -316,7 +314,9 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
 
     supply_chain = _semantic_text(_job_block(text, "supply-chain"))
     if supply_chain.count(MERMAID_RENDER_COMMAND) != 1:
-        raise ValueError(f"{name}: supply-chain job must execute the Mermaid render command exactly once")
+        raise ValueError(
+            f"{name}: supply-chain job must execute the Mermaid render command exactly once"
+        )
     if supply_chain.count(MERMAID_VALIDATION_ARTIFACT) != 2:
         raise ValueError(
             f"{name}: Mermaid validation evidence must be produced and uploaded exactly once"
