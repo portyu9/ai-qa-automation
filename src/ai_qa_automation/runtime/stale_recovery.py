@@ -93,14 +93,17 @@ def _validated_journal_event_count(metadata: dict[str, Any]) -> int:
 
 
 def _validated_workspace_root_identity(metadata: dict[str, Any]) -> tuple[int, int] | None:
-    """Validate root identity persisted by runtimes that support descriptor authority.
+    """Validate persisted workspace-root authority before automatic rollback.
 
-    Legacy runtime metadata did not carry this field; those records continue through
-    the pre-existing fingerprint firewall. Current runtimes always persist the field,
-    so a present-but-missing or malformed identity fails closed on supported platforms.
+    On platforms that can enforce descriptor-relative filesystem authority, an
+    absent or null identity is ambiguous and therefore blocks automatic recovery.
+    Older metadata without this authority remains recoverable only on platforms
+    where descriptor-relative root identity cannot be enforced in the first place.
     """
 
     if "workspace_root_identity" not in metadata:
+        if descriptor_relative_authority_supported():
+            raise ValueError("prior runtime workspace root identity authority is missing")
         return None
     raw = metadata["workspace_root_identity"]
     if raw is None:
