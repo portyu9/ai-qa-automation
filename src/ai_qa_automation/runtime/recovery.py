@@ -68,13 +68,26 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
             "reason": f"runtime.json failed strict object validation: {message}",
         }
 
+    if "pending_mutation" not in runtime_metadata:
+        return {
+            "recoverable": False,
+            "reason": "runtime.json is missing pending_mutation authority",
+        }
+    pending_mutation = runtime_metadata["pending_mutation"]
+    if pending_mutation is not None and (
+        not isinstance(pending_mutation, dict) or not pending_mutation
+    ):
+        return {
+            "recoverable": False,
+            "reason": "runtime.json pending_mutation authority is invalid",
+        }
+
     closure = evaluate_revision_closure(
         state.validation_results,
         current_revision=state.change_revision,
     )
     revision_closed = closure.closed
-    pending_mutation = runtime_metadata.get("pending_mutation")
-    if pending_mutation:
+    if pending_mutation is not None:
         revision_closed = False
 
     return {
