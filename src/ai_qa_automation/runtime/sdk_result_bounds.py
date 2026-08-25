@@ -22,6 +22,7 @@ class SDKResultBoundsError(ValueError):
 class BoundedSDKResult:
     result: str
     subtype: str
+    is_error: bool
     total_cost_usd: float
     token_usage: int
     budget_exceeded: bool
@@ -112,6 +113,12 @@ def validate_sdk_result_message(message: Any, *, max_cost_usd: float) -> Bounded
         max_utf8_bytes=MAX_SDK_SUBTYPE_UTF8_BYTES,
         allow_none=False,
     )
+    is_error = getattr(message, "is_error", None)
+    if type(is_error) is not bool:
+        raise SDKResultBoundsError(
+            "is_error_type",
+            "Agent SDK is_error must be a boolean",
+        )
     cost = _bounded_cost(getattr(message, "total_cost_usd", None))
 
     usage = getattr(message, "usage", None)
@@ -142,6 +149,7 @@ def validate_sdk_result_message(message: Any, *, max_cost_usd: float) -> Bounded
     return BoundedSDKResult(
         result=result,
         subtype=subtype,
+        is_error=is_error,
         total_cost_usd=cost,
         token_usage=token_usage,
         budget_exceeded=cost > max_cost_usd,
