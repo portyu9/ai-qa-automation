@@ -181,9 +181,7 @@ class EvidenceStore:
                     {
                         "evidence_id": safe_item.id,
                         "kind": safe_item.kind.value,
-                        "content_hash": self._evidence_item_hash(
-                            safe_item, canonical=True
-                        ),
+                        "content_hash": self._evidence_item_hash(safe_item, canonical=True),
                         "content_hash_algorithm": _CANONICAL_EVIDENCE_HASH_ALGORITHM,
                     },
                 )
@@ -531,9 +529,7 @@ class EvidenceStore:
             elif algorithm == _CANONICAL_EVIDENCE_HASH_ALGORITHM:
                 actual = self._evidence_item_hash(evidence_item, canonical=True)
             else:
-                raise ValueError(
-                    f"regulated evidence hash algorithm is unsupported: {evidence_id}"
-                )
+                raise ValueError(f"regulated evidence hash algorithm is unsupported: {evidence_id}")
             if expected_hash != actual:
                 raise ValueError(f"regulated evidence integrity check failed: {evidence_id}")
         for artifact_id, artifact_record in self._artifacts.items():
