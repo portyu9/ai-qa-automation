@@ -66,11 +66,10 @@ def _safe_opaque_url(match: re.Match[str]) -> str:
 
 
 def redact_text(value: str) -> str:
-    redacted = value
+    redacted = _NETWORK_URL_PATTERN.sub(_safe_network_url, value)
+    redacted = _OPAQUE_URL_PATTERN.sub(_safe_opaque_url, redacted)
     for pattern in _SECRET_PATTERNS:
         redacted = pattern.sub(_replacement, redacted)
-    redacted = _NETWORK_URL_PATTERN.sub(_safe_network_url, redacted)
-    redacted = _OPAQUE_URL_PATTERN.sub(_safe_opaque_url, redacted)
     return redacted
 
 
