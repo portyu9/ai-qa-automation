@@ -77,9 +77,7 @@ def _json_string_size_bounded(
     for character in value:
         codepoint = ord(character)
         if 0xD800 <= codepoint <= 0xDFFF:
-            raise JsonSerializationBoundsError(
-                "unicode", f"{label} contains invalid Unicode"
-            )
+            raise JsonSerializationBoundsError("unicode", f"{label} contains invalid Unicode")
         if character in {'"', "\\"} or character in {"\b", "\f", "\n", "\r", "\t"}:
             width = 2
         elif codepoint <= 0x1F:
@@ -200,16 +198,12 @@ def _preflight_json_serialization(
             raise TypeError(f"Object of type {type(item).__name__} is not JSON serializable")
         identity = id(item)
         if identity in active:
-            raise JsonSerializationBoundsError(
-                "cycle", f"{label} contains a circular JSON value"
-            )
+            raise JsonSerializationBoundsError("cycle", f"{label} contains a circular JSON value")
         active.add(identity)
         try:
             rendered = default(item)
             if rendered is item:
-                raise TypeError(
-                    f"JSON default returned the original {type(item).__name__} value"
-                )
+                raise TypeError(f"JSON default returned the original {type(item).__name__} value")
             visit(rendered, depth=depth)
         finally:
             active.remove(identity)
@@ -256,9 +250,7 @@ def iter_json_text_bounded(
                 )
             yield chunk
     except UnicodeEncodeError as exc:
-        raise JsonSerializationBoundsError(
-            "unicode", f"{label} contains invalid Unicode"
-        ) from exc
+        raise JsonSerializationBoundsError("unicode", f"{label} contains invalid Unicode") from exc
 
 
 def json_size_bounded(
