@@ -5,6 +5,8 @@ from dataclasses import dataclass
 
 from ..models import TerminalStatus, ValidationResult, ValidationStatus
 
+_UNBOUND_OBJECTIVE_GATE_IDS = {"browser_runtime"}
+
 
 @dataclass(frozen=True, slots=True)
 class ActiveValidationSet:
@@ -246,6 +248,11 @@ def determine_terminal_outcome(
             return (
                 TerminalStatus.NOT_VERIFIED,
                 "Agent completed with passing deterministic checks, but the operator did not supply an exact objective-validation gate contract.",
+            )
+        if objective_gate_id in _UNBOUND_OBJECTIVE_GATE_IDS:
+            return (
+                TerminalStatus.NOT_VERIFIED,
+                "Agent completed, but the operator supplied a legacy validation gate that is not bound to an exact deterministic subject.",
             )
         objective_bound = [
             item
