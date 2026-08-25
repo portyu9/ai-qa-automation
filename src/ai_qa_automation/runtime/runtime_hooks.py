@@ -218,6 +218,26 @@ def pretool_policy_output(
     tool_name = str(input_data.get("tool_name", ""))
     raw_tool_input = input_data.get("tool_input")
     tool_input = {} if raw_tool_input is None else raw_tool_input
+
+    try:
+        if control is not None:
+            control.budget.charge_tool()
+            _sync_tool_count(state, control)
+    except BudgetExceededError as exc:
+        if state is not None:
+            state.terminal_status = TerminalStatus.BUDGET_EXCEEDED
+            state.terminal_reason = str(exc)
+        if control is not None:
+            control.journal.append("budget_denied", tool_name=tool_name, reason=str(exc))
+        _checkpoint(state, state_store, control)
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": f"runtime-budget: {exc}",
+            }
+        }
+
     try:
         validate_tool_request(tool_name, tool_input)
     except ToolInputBoundsError as exc:
@@ -241,8 +261,6 @@ def pretool_policy_output(
 
     try:
         if control is not None:
-            control.budget.charge_tool()
-            _sync_tool_count(state, control)
             control.register_tool_request(tool_name, fingerprint)
             if tool_name in _NETWORK_TOOLS or tool_name.startswith(
                 ("mcp__github__", "mcp__atlassian__")
