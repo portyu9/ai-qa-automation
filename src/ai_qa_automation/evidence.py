@@ -12,8 +12,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel
+
 from .io_safety import (
+    JsonSerializationBoundsError,
     fsync_directory,
+    iter_json_text_bounded,
+    json_preflight_scalar_default,
+    json_size_bounded,
     open_regular_binary,
     parse_json_object_strict,
     read_json_object_bounded,
@@ -30,6 +36,18 @@ _MAX_ARTIFACT_BYTES = 32_000_000
 _MAX_ARTIFACT_COUNT = 5_000
 _MAX_TOTAL_ARTIFACT_BYTES = 256_000_000
 _MANIFEST_AUDIT_RESERVE_BYTES = 1_024
+
+
+class _RegistryFieldValue:
+    __slots__ = ("model", "name")
+
+    def __init__(self, model: BaseModel, name: str) -> None:
+        self.model = model
+        self.name = name
+
+
+def _registry_model_proxy(model: BaseModel) -> dict[str, _RegistryFieldValue]:
+    return {name: _RegistryFieldValue(model, name) for name in type(model).model_fields}
 
 
 class EvidenceStore:
@@ -115,6 +133,7 @@ class EvidenceStore:
         with self._lock:
             if item.run_id != self.run_id:
                 raise ValueError("evidence run_id does not match store")
+            self._assert_evidence_item_capacity(item)
             safe_payload = sanitize(item.model_dump(mode="json"))
             safe_item = EvidenceItem.model_validate(safe_payload)
             if safe_item.id in self._items:
@@ -466,13 +485,52 @@ class EvidenceStore:
         self._audit_sequence = int(last["sequence"])
         self._audit_previous_hash = str(last["event_hash"])
 
+    @staticmethod
+    def _manifest_json_default(value: Any) -> Any:
+        if isinstance(value, _RegistryFieldValue):
+            payload = value.model.model_dump(include={value.name}, mode="json")
+            return payload[value.name]
+        if isinstance(value, BaseModel):
+            return _registry_model_proxy(value)
+        raise TypeError(f"unsupported evidence manifest value: {type(value).__name__}")
+
+    @staticmethod
+    def _manifest_json_preflight_default(value: Any) -> Any:
+        if isinstance(value, _RegistryFieldValue):
+            return getattr(value.model, value.name)
+        if isinstance(value, BaseModel):
+            return _registry_model_proxy(value)
+        return json_preflight_scalar_default(value)
+
+    def _assert_evidence_item_capacity(self, item: EvidenceItem) -> None:
+        try:
+            json_size_bounded(
+                _registry_model_proxy(item),
+                max_bytes=_MAX_EVIDENCE_MANIFEST_BYTES,
+                label="evidence item",
+                indent=2,
+                sort_keys=True,
+                ensure_ascii=True,
+                default=self._manifest_json_default,
+                preflight_default=self._manifest_json_preflight_default,
+            )
+        except JsonSerializationBoundsError as exc:
+            if exc.code == "bytes":
+                raise ValueError("evidence item exceeds persistence size bound") from exc
+            raise ValueError(
+                f"evidence item violates persistence serialization bound: {exc.code}"
+            ) from exc
+
     def _manifest_data(self) -> dict[str, Any]:
+        # Keep registry models as references here. The JSON encoder converts one
+        # model at a time through `_manifest_json_default`, avoiding a complete
+        # second Python-object copy of the authority-bearing registry.
         data: dict[str, Any] = {
             "run_id": self.run_id,
             "regulated_mode": self.regulated_mode,
-            "evidence": [item.model_dump(mode="json") for item in self._items.values()],
-            "artifacts": [item.model_dump(mode="json") for item in self._artifacts.values()],
-            "sanitization_status": SanitizationStatus.SANITIZED,
+            "evidence": list(self._items.values()),
+            "artifacts": list(self._artifacts.values()),
+            "sanitization_status": SanitizationStatus.SANITIZED.value,
         }
         if self.regulated_mode:
             audit_path = self._assert_control_file_owned("audit-log.jsonl")
@@ -492,26 +550,60 @@ class EvidenceStore:
             }
         return data
 
-    def _render_manifest(self) -> str:
-        return json.dumps(self._manifest_data(), indent=2, sort_keys=True)
-
     def _assert_manifest_capacity(self, *, reserve_bytes: int = 0) -> None:
-        rendered_bytes = len(self._render_manifest().encode("utf-8"))
-        if rendered_bytes + reserve_bytes > _MAX_EVIDENCE_MANIFEST_BYTES:
+        if type(reserve_bytes) is not int or reserve_bytes < 0:
+            raise ValueError("manifest reserve_bytes must be a non-negative integer")
+        available = _MAX_EVIDENCE_MANIFEST_BYTES - reserve_bytes
+        if available < 1:
             raise ValueError("evidence manifest exceeds persistence size bound")
+        try:
+            json_size_bounded(
+                self._manifest_data(),
+                max_bytes=available,
+                label="evidence manifest",
+                indent=2,
+                sort_keys=True,
+                ensure_ascii=True,
+                default=self._manifest_json_default,
+                preflight_default=self._manifest_json_preflight_default,
+            )
+        except JsonSerializationBoundsError as exc:
+            if exc.code == "bytes":
+                raise ValueError(
+                    "evidence manifest exceeds persistence size bound"
+                ) from exc
+            raise ValueError(
+                f"evidence manifest violates persistence serialization bound: {exc.code}"
+            ) from exc
 
     def _flush_manifest(self) -> None:
         path = self._assert_control_file_owned("evidence-manifest.json")
-        rendered = self._render_manifest()
-        if len(rendered.encode("utf-8")) > _MAX_EVIDENCE_MANIFEST_BYTES:
-            raise ValueError("evidence manifest exceeds persistence size bound")
         handle, raw_temp = tempfile.mkstemp(
             dir=self.run_root, prefix=".evidence-manifest.", suffix=".tmp", text=True
         )
         temp = Path(raw_temp)
         try:
             with os.fdopen(handle, "w", encoding="utf-8") as stream:
-                stream.write(rendered)
+                try:
+                    for chunk in iter_json_text_bounded(
+                        self._manifest_data(),
+                        max_bytes=_MAX_EVIDENCE_MANIFEST_BYTES,
+                        label="evidence manifest",
+                        indent=2,
+                        sort_keys=True,
+                        ensure_ascii=True,
+                        default=self._manifest_json_default,
+                        preflight_default=self._manifest_json_preflight_default,
+                    ):
+                        stream.write(chunk)
+                except JsonSerializationBoundsError as exc:
+                    if exc.code == "bytes":
+                        raise ValueError(
+                            "evidence manifest exceeds persistence size bound"
+                        ) from exc
+                    raise ValueError(
+                        f"evidence manifest violates persistence serialization bound: {exc.code}"
+                    ) from exc
                 stream.flush()
                 os.fsync(stream.fileno())
             temp.replace(path)
