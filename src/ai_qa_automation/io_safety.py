@@ -219,6 +219,7 @@ def iter_json_text_bounded(
     indent: int | None = None,
     sort_keys: bool = False,
     ensure_ascii: bool = False,
+    separators: tuple[str, str] | None = None,
     default: Callable[[Any], Any] | None = None,
     preflight_default: Callable[[Any], Any] | None = None,
 ) -> Iterator[str]:
@@ -237,6 +238,7 @@ def iter_json_text_bounded(
         allow_nan=False,
         indent=indent,
         sort_keys=sort_keys,
+        separators=separators,
         default=default,
     )
     total = 0
@@ -261,6 +263,7 @@ def json_size_bounded(
     indent: int | None = None,
     sort_keys: bool = False,
     ensure_ascii: bool = False,
+    separators: tuple[str, str] | None = None,
     default: Callable[[Any], Any] | None = None,
     preflight_default: Callable[[Any], Any] | None = None,
 ) -> int:
@@ -274,6 +277,7 @@ def json_size_bounded(
         indent=indent,
         sort_keys=sort_keys,
         ensure_ascii=ensure_ascii,
+        separators=separators,
         default=default,
         preflight_default=preflight_default,
     ):
