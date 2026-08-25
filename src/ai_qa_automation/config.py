@@ -76,6 +76,8 @@ class Settings(BaseSettings):
     allowed_network_hosts: list[str] = Field(default_factory=lambda: ["127.0.0.1", "localhost"])
     allow_test_writes: bool = False
     allow_mutating_api_methods: bool = False
+    pytest_process_isolation_enforced: bool = False
+    pytest_external_egress_enforced: bool = False
     k6_external_egress_enforced: bool = False
     enable_github_mcp: bool = False
     enable_atlassian_mcp: bool = False
