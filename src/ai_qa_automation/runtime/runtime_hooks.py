@@ -215,7 +215,7 @@ def pretool_policy_output(
     control: RuntimeControl | None = None,
 ) -> dict[str, Any]:
     """Apply the one live request-budget/repetition/policy authority before execution."""
-    tool_name = str(input_data.get("tool_name", ""))
+    raw_tool_name = input_data.get("tool_name", "")
     raw_tool_input = input_data.get("tool_input")
     tool_input = {} if raw_tool_input is None else raw_tool_input
 
@@ -228,7 +228,11 @@ def pretool_policy_output(
             state.terminal_status = TerminalStatus.BUDGET_EXCEEDED
             state.terminal_reason = str(exc)
         if control is not None:
-            control.journal.append("budget_denied", tool_name=tool_name, reason=str(exc))
+            control.journal.append(
+                "budget_denied",
+                tool_name_state="unvalidated",
+                reason=str(exc),
+            )
         _checkpoint(state, state_store, control)
         return {
             "hookSpecificOutput": {
@@ -239,12 +243,11 @@ def pretool_policy_output(
         }
 
     try:
-        validate_tool_request(tool_name, tool_input)
+        validate_tool_request(raw_tool_name, tool_input)
     except ToolInputBoundsError as exc:
         if control is not None:
             control.journal.append(
                 "tool_input_denied",
-                tool_name=tool_name,
                 reason_code=exc.code,
             )
         _checkpoint(state, state_store, control)
@@ -255,6 +258,9 @@ def pretool_policy_output(
                 "permissionDecisionReason": f"tool-input-bounds: {exc}",
             }
         }
+    if not isinstance(raw_tool_name, str):  # pragma: no cover - guarded above
+        raise ToolInputBoundsError("tool_name_type", "tool name must be a string")
+    tool_name = raw_tool_name
     if not isinstance(tool_input, dict):  # pragma: no cover - guarded above
         raise ToolInputBoundsError("root_type", "tool input must be a JSON object")
     fingerprint = _input_fingerprint(tool_name, tool_input)

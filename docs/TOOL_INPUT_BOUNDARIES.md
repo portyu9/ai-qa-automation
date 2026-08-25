@@ -28,7 +28,7 @@ A live tool input must be a JSON object composed only of JSON-compatible values.
 
 The aggregate UTF-8 limit measures decoded string/key content, not transport framing or JSON escape expansion. After validation, repetition fingerprints are hashed across encoder chunks rather than first joining the complete canonical request document into one additional string.
 
-Inputs containing tuples, arbitrary Python objects, non-string object keys, `NaN`, or infinities are outside the live JSON contract and are denied.
+Inputs containing tuples, arbitrary Python objects, non-string object keys, `NaN`, or infinities are outside the live JSON contract and are denied. `PreToolUse` does not coerce an unvalidated tool name through `str()`; a non-string name is rejected as untrusted metadata.
 
 ## Raw JSON-string fields
 
@@ -59,9 +59,9 @@ Locator verification and healing additionally allow at most **20 candidate entri
 
 For the live Agent SDK path, the ordering is:
 
-1. charge one tool-attempt and enforce the tool-call/wall-clock budget;
+1. charge one tool-attempt and enforce the tool-call/wall-clock budget without inspecting unvalidated tool metadata;
 2. validate tool-name and request shape plus bounded JSON fields;
-3. if invalid, journal only the tool name plus a bounded reason code and deny;
+3. if invalid, journal bounded denial metadata only and deny; raw unvalidated tool names and rejected input values are not persisted;
 4. sanitize the accepted input for the repetition fingerprint;
 5. hash the canonical fingerprint incrementally across encoder chunks;
 6. apply repetition/circuit checks and charge network or mutation budgets when applicable;
@@ -69,7 +69,9 @@ For the live Agent SDK path, the ordering is:
 8. enter the controlled tool;
 9. revalidate in `LiveRuntimeServices.consume()` as defense in depth before tool-specific work.
 
-This ordering is deliberate. A rejected large or malformed request still consumes one tool-call attempt, so repeated invalid requests cannot evade the request-count circuit by failing before execution. Once that tool budget is exhausted, the next request is denied before its potentially large body is scanned. Invalid input does **not** consume network or mutation budget, and the rejected raw value is not persisted in the runtime journal.
+This ordering is deliberate. A rejected large or malformed request still consumes one tool-call attempt, so repeated invalid requests cannot evade the request-count circuit by failing before execution. Once that tool budget is exhausted, the next request is denied before its potentially large body or unvalidated tool name is scanned. Invalid input does **not** consume network or mutation budget.
+
+Pre-validation persistence is intentionally low-information. An input-bound denial records only its bounded reason code. A budget denial that occurs before request validation records the fixed state `tool_name_state="unvalidated"` rather than the raw tool name. This prevents oversized or secret-bearing rejected metadata from creating a second redaction/serialization workload or entering the durable journal.
 
 The programmatic permission handler applies the same request validator, so the permission path cannot become a weaker input surface than `PreToolUse`. Canonical request budgeting remains owned by `RuntimeControl`/`PreToolUse` rather than duplicated in the permission callback.
 
