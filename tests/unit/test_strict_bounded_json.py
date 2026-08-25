@@ -42,6 +42,7 @@ def _control(tmp_path: Path) -> RuntimeControl:
     [
         '{"role":"reader","role":"admin"}',
         '{"outer":{"enabled":false,"enabled":true}}',
+        r'{"\u0072ole":"reader","role":"admin"}',
     ],
 )
 def test_bounded_json_rejects_duplicate_object_keys_at_any_depth(raw: str) -> None:
