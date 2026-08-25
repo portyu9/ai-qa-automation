@@ -8,9 +8,9 @@
 
 ## Purpose
 
-Live tool requests are untrusted runtime inputs even when they originate from model reasoning or an approved provider. They must be bounded **before** they can become a repetition fingerprint, consume execution budget, reach deterministic policy, or enter a tool body.
+Live tool requests are untrusted runtime inputs even when they originate from model reasoning or an approved provider. Every attempted request is first charged against the cheap universal tool-call/wall-clock budget, then its potentially large request body is bounded **before** it can become a repetition fingerprint, consume network or mutation budget, reach deterministic policy, or enter a tool body.
 
-The live runtime therefore applies a code-owned ingestion contract before request serialization or execution. Deployment configuration cannot raise or disable these limits.
+The live runtime applies this source-owned ingestion contract before request serialization or execution. Deployment configuration cannot raise or disable these limits.
 
 ## Live request contract
 
@@ -49,7 +49,7 @@ The guarded fields are:
 - `validate_json_contract.instance_json`;
 - `validate_json_contract.schema_json`.
 
-Malformed JSON is denied at the request boundary. Parser recursion cannot become an optimistic or partially verified tool result.
+Malformed JSON is denied at the request boundary. Parser recursion cannot become an optimistic or partially verified tool result. Accepted raw JSON fields are not reparsed merely to create a repetition fingerprint; fingerprinting rechecks only the generic bounded request shape.
 
 ### Browser candidate bound
 
@@ -59,18 +59,19 @@ Locator verification and healing additionally allow at most **20 candidate entri
 
 For the live Agent SDK path, the ordering is:
 
-1. validate tool-name and request shape plus bounded JSON fields;
-2. deny and journal only the tool name plus a bounded reason code if invalid;
-3. sanitize the accepted input for the repetition fingerprint;
-4. hash the canonical fingerprint incrementally across encoder chunks;
-5. charge tool/network/mutation budgets as applicable;
-6. evaluate deterministic policy;
-7. enter the controlled tool;
-8. revalidate in `LiveRuntimeServices.consume()` as defense in depth before tool-specific work.
+1. charge one tool-attempt and enforce the tool-call/wall-clock budget;
+2. validate tool-name and request shape plus bounded JSON fields;
+3. if invalid, journal only the tool name plus a bounded reason code and deny;
+4. sanitize the accepted input for the repetition fingerprint;
+5. hash the canonical fingerprint incrementally across encoder chunks;
+6. apply repetition/circuit checks and charge network or mutation budgets when applicable;
+7. evaluate deterministic policy;
+8. enter the controlled tool;
+9. revalidate in `LiveRuntimeServices.consume()` as defense in depth before tool-specific work.
 
-An input-bound denial does **not** increment the tool-call budget and does not persist the rejected raw value in the runtime journal.
+This ordering is deliberate. A rejected large or malformed request still consumes one tool-call attempt, so repeated invalid requests cannot evade the request-count circuit by failing before execution. Once that tool budget is exhausted, the next request is denied before its potentially large body is scanned. Invalid input does **not** consume network or mutation budget, and the rejected raw value is not persisted in the runtime journal.
 
-The programmatic permission handler applies the same request validator, so the permission path cannot become a weaker input surface than `PreToolUse`.
+The programmatic permission handler applies the same request validator, so the permission path cannot become a weaker input surface than `PreToolUse`. Canonical request budgeting remains owned by `RuntimeControl`/`PreToolUse` rather than duplicated in the permission callback.
 
 ## Authority boundary
 
