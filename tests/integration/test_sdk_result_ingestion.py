@@ -33,9 +33,7 @@ class FakeResultMessage:
         self.subtype = subtype
         self.is_error = is_error
         self.total_cost_usd = total_cost_usd
-        self.usage = (
-            {"input_tokens": 10, "output_tokens": 5} if usage is None else usage
-        )
+        self.usage = {"input_tokens": 10, "output_tokens": 5} if usage is None else usage
 
 
 class FakeClaudeSDKClient:
