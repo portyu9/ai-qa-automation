@@ -198,7 +198,7 @@ class EvidenceStore:
                     },
                 )
                 self._flush_manifest()
-            except Exception:
+            except BaseException:
                 # If no audit record was durably appended, the staged in-memory item is
                 # not authoritative and can be removed safely. If the audit advanced but
                 # manifest persistence failed, retain the item so live state still agrees
@@ -282,7 +282,7 @@ class EvidenceStore:
                     },
                 )
                 self._flush_manifest()
-            except Exception:
+            except BaseException:
                 if self._audit_sequence == audit_sequence_before:
                     self._artifacts.pop(record.artifact_id, None)
                     destination.unlink(missing_ok=True)
@@ -415,9 +415,21 @@ class EvidenceStore:
                     ) from rollback_exc
                 raise
             if opened.st_size == 0:
-                fsync_directory(path.parent)
+                try:
+                    fsync_directory(path.parent)
+                except BaseException as directory_exc:
+                    self._audit_write_uncertain = True
+                    raise OSError(
+                        "regulated audit log directory durability could not be proven"
+                    ) from directory_exc
         finally:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except BaseException as close_exc:
+                self._audit_write_uncertain = True
+                raise OSError(
+                    "regulated audit log descriptor close could not be proven"
+                ) from close_exc
         self._audit_sequence = next_sequence
         self._audit_previous_hash = event_hash
 

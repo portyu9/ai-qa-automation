@@ -50,6 +50,8 @@ The regulated audit path applies the same resource discipline before append:
 5. the final record is streamed through bounded descriptor writes that handle short writes and is flushed with `fsync` before in-memory audit sequence/hash authority advances;
 6. if a caught append/flush failure occurs after bytes were written, the descriptor is truncated to its exact pre-append length and `fsync`ed before the store may continue;
 7. if rollback cannot be durably proven, that `EvidenceStore` instance latches regulated audit writes closed rather than appending behind an uncertain tail.
+8. if the first audit file write succeeds but directory `fsync`, or descriptor close confirmation, fails, the store also latches audit writes closed because durable publication cannot be proven.
+9. caught operator-interruption/cancellation-style exceptions that occur before audit authority advances roll back staged evidence or artifact registry state (and newly linked artifact files) before the original exception is re-raised.
 
 For the same accepted record, event hash bytes and audit-line JSON formatting therefore remain compatible with the prior representation; the implementation changes allocation and failure-recovery behavior, not the audit-chain digest contract.
 
