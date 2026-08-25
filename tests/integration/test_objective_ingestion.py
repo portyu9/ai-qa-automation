@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import builtins
 from pathlib import Path
 
 import pytest
 
-from ai_qa_automation.agent import run_agent
+from ai_qa_automation.agent import run_agent, run_agent_sync
 from ai_qa_automation.config import Settings
 from ai_qa_automation.runtime.objective_bounds import (
     MAX_OBJECTIVE_UTF8_BYTES,
@@ -68,3 +69,25 @@ async def test_whitespace_objective_is_denied_before_runtime_artifacts(
 
     assert caught.value.code == "objective_empty"
     assert artifact_root.exists() is False
+
+
+def test_sync_entry_rejects_invalid_objective_before_event_loop_creation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    event_loop_started = False
+
+    def forbidden_asyncio_run(_coroutine):
+        nonlocal event_loop_started
+        event_loop_started = True
+        raise AssertionError("asyncio.run must not execute for a denied objective")
+
+    monkeypatch.setattr(asyncio, "run", forbidden_asyncio_run)
+
+    with pytest.raises(ObjectiveBoundsError) as caught:
+        run_agent_sync("", target)
+
+    assert caught.value.code == "objective_empty"
+    assert event_loop_started is False
