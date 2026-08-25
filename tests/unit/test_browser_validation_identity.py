@@ -1,0 +1,129 @@
+from __future__ import annotations
+
+from ai_qa_automation.models import LocatorCandidate, ValidationStatus
+from ai_qa_automation.runtime.browser_validation import (
+    browser_inspection_subject,
+    browser_locator_verification_subject,
+    browser_validation_result,
+)
+from ai_qa_automation.runtime.validation_truth import determine_terminal_outcome
+
+
+def candidate(
+    locator: str,
+    strategy: str,
+    *,
+    uniqueness_count: int = 0,
+    semantic_match: float = 0.0,
+    stability_score: float = 0.5,
+) -> LocatorCandidate:
+    return LocatorCandidate(
+        locator=locator,
+        strategy=strategy,
+        uniqueness_count=uniqueness_count,
+        semantic_match=semantic_match,
+        stability_score=stability_score,
+    )
+
+
+def test_browser_inspection_gate_binds_exact_requested_url_without_persisting_query() -> None:
+    first = browser_inspection_subject("https://example.test/checkout?token=top-secret")
+    same = browser_inspection_subject("https://example.test/checkout?token=top-secret")
+    different = browser_inspection_subject("https://example.test/cart?token=top-secret")
+
+    assert first.gate_id == same.gate_id
+    assert first.gate_id != different.gate_id
+    assert first.name == "browser_inspection"
+    assert first.details["requested_host"] == "example.test"
+    assert first.details["requested_scheme"] == "https"
+    assert "top-secret" not in repr(first.details)
+    assert "checkout" not in repr(first.details)
+
+
+def test_locator_gate_binds_semantic_candidate_set_not_model_claims_or_json_order() -> None:
+    first = browser_locator_verification_subject(
+        "https://example.test/login",
+        'page.get_by_role("button", name="Sign in")',
+        [
+            candidate('[data-testid="login"]', "semantic_css", uniqueness_count=99),
+            candidate('page.get_by_text("Sign in", exact=True)', "exact_text"),
+        ],
+    )
+    reordered = browser_locator_verification_subject(
+        "https://example.test/login",
+        'page.get_by_role("button", name="Sign in")',
+        [
+            candidate(
+                'page.get_by_text("Sign in", exact=True)',
+                "exact_text",
+                uniqueness_count=1,
+                semantic_match=1.0,
+                stability_score=1.0,
+            ),
+            candidate(
+                '[data-testid="login"]',
+                "semantic_css",
+                uniqueness_count=1,
+                semantic_match=1.0,
+                stability_score=1.0,
+            ),
+        ],
+    )
+    changed = browser_locator_verification_subject(
+        "https://example.test/login",
+        'page.get_by_role("button", name="Sign in")',
+        [candidate('[data-testid="submit"]', "semantic_css")],
+    )
+
+    assert first.gate_id == reordered.gate_id
+    assert first.gate_id != changed.gate_id
+    assert first.details["candidate_count"] == 2
+    assert "Sign in" not in repr(first.details)
+    assert "login" not in repr(first.details)
+
+
+def test_unrelated_browser_pass_cannot_close_different_browser_objective() -> None:
+    observed = browser_inspection_subject("https://example.test/a")
+    objective = browser_inspection_subject("https://example.test/b")
+    validation = browser_validation_result(
+        observed,
+        revision=0,
+        status=ValidationStatus.PASS,
+        summary="observed A",
+    )
+
+    status, reason = determine_terminal_outcome(
+        "success",
+        [validation],
+        current_revision=0,
+        objective_gate_id=objective.gate_id,
+    )
+
+    assert status is not ValidationStatus.PASS
+    assert "no active PASS matched" in reason
+
+
+def test_later_same_subject_browser_uncertainty_prevents_stale_pass() -> None:
+    subject = browser_inspection_subject("https://example.test/checkout")
+    passed = browser_validation_result(
+        subject,
+        revision=0,
+        status=ValidationStatus.PASS,
+        summary="browser passed",
+    )
+    unavailable = browser_validation_result(
+        subject,
+        revision=0,
+        status=ValidationStatus.NOT_VERIFIED,
+        summary="browser became unavailable",
+    )
+
+    status, reason = determine_terminal_outcome(
+        "success",
+        [passed, unavailable],
+        current_revision=0,
+        objective_gate_id=subject.gate_id,
+    )
+
+    assert status.value == "NOT_VERIFIED"
+    assert "incomplete" in reason.casefold()
