@@ -40,6 +40,11 @@ from ..tools.performance import K6Runner
 from ..tools.repository import RepositoryInspector
 from ..tools.safe_patch import SafeTestPatcher
 from ..tools.test_execution import TestRunner
+from .browser_validation import (
+    browser_inspection_subject,
+    browser_locator_verification_subject,
+    browser_validation_result,
+)
 
 _MAX_MODEL_SOURCE_BYTES = 1_000_000
 _MAX_MODEL_SOURCE_CHARS = 12_000
@@ -231,21 +236,6 @@ def _record_patch_safety_validation(
             details={"path": path, "scope": "static_patch_safety"},
         )
     )
-
-
-def _record_capability_validation(
-    services: RuntimeServices, *, name: str, status: ValidationStatus, summary: str
-) -> None:
-    services.state.validation_results.append(
-        ValidationResult(
-            name=name,
-            gate_id=name,
-            revision=services.state.change_revision,
-            status=status,
-            summary=summary,
-        )
-    )
-    services.checkpoint()
 
 
 @dataclass
@@ -460,6 +450,7 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
     )
     async def inspect_browser(args: dict[str, Any]) -> dict[str, Any]:
         services.consume("inspect_browser", args)
+        subject = browser_inspection_subject(args["url"])
         allow_hosts = services.network_hosts(args["url"])
         try:
             result = await BrowserProbe(services.evidence, allow_hosts=allow_hosts).inspect(
@@ -468,6 +459,16 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
         except BrowserProbeExecutionError as exc:
             if exc.evidence_id not in services.state.evidence_ids:
                 services.state.evidence_ids.append(exc.evidence_id)
+            services.state.validation_results.append(
+                browser_validation_result(
+                    subject,
+                    revision=services.state.change_revision,
+                    status=ValidationStatus.NOT_VERIFIED,
+                    summary="Browser evidence collection did not complete deterministically.",
+                    evidence_ids=[exc.evidence_id],
+                    details={"failure_kind": "browser_execution"},
+                )
+            )
             services.checkpoint()
             return {
                 "content": [
@@ -478,6 +479,7 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
                                 "status": "BROWSER_ERROR",
                                 "error": str(exc),
                                 "evidence_id": exc.evidence_id,
+                                "gate_id": subject.gate_id,
                             }
                         ),
                     }
@@ -485,22 +487,25 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
                 "is_error": True,
             }
         except RuntimeError as exc:
-            _record_capability_validation(
-                services,
-                name="browser_runtime",
-                status=ValidationStatus.NOT_VERIFIED,
-                summary=redact_text(str(exc)),
+            services.state.validation_results.append(
+                browser_validation_result(
+                    subject,
+                    revision=services.state.change_revision,
+                    status=ValidationStatus.NOT_VERIFIED,
+                    summary=redact_text(str(exc)),
+                    details={"failure_kind": "browser_runtime"},
+                )
             )
+            services.checkpoint()
             return {
-                "content": [{"type": "text", "text": f"NOT_VERIFIED: {redact_text(str(exc))}"}],
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"NOT_VERIFIED gate_id={subject.gate_id}: {redact_text(str(exc))}",
+                    }
+                ],
                 "is_error": True,
             }
-        _record_capability_validation(
-            services,
-            name="browser_runtime",
-            status=ValidationStatus.PASS,
-            summary="Playwright Chromium launched and collected browser evidence.",
-        )
         ids = [
             evidence_id
             for evidence_id in [
@@ -512,6 +517,15 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
         ]
         services.state.evidence_ids.extend(
             eid for eid in ids if eid not in services.state.evidence_ids
+        )
+        services.state.validation_results.append(
+            browser_validation_result(
+                subject,
+                revision=services.state.change_revision,
+                status=ValidationStatus.PASS,
+                summary="Playwright Chromium collected browser evidence for the exact request subject.",
+                evidence_ids=ids,
+            )
         )
         services.checkpoint()
         return {
@@ -527,6 +541,7 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
                             "failed_requests": result.failed_requests,
                             "http_errors": result.http_errors,
                             "evidence_ids": ids,
+                            "gate_id": subject.gate_id,
                         }
                     )[:16000],
                 }
@@ -871,46 +886,93 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
     )
     async def verify_locator_candidates(args: dict[str, Any]) -> dict[str, Any]:
         services.consume("verify_locator_candidates", args)
+        subject = None
         try:
             payload = json.loads(args["candidates_json"])
             if not isinstance(payload, list):
                 raise ValueError("candidates_json must contain a JSON list")
             candidates = [LocatorCandidate.model_validate(item) for item in payload]
+            subject = browser_locator_verification_subject(
+                args["url"], args["original_locator"], candidates
+            )
             allow_hosts = services.network_hosts(args["url"])
             verified, evidence_id = await BrowserProbe(
                 services.evidence, allow_hosts=allow_hosts
             ).verify_locator_candidates(args["url"], args["original_locator"], candidates)
-        except (ValueError, PermissionError, BrowserProbeExecutionError) as exc:
+        except BrowserProbeExecutionError as exc:
+            if exc.evidence_id not in services.state.evidence_ids:
+                services.state.evidence_ids.append(exc.evidence_id)
+            if subject is not None:
+                services.state.validation_results.append(
+                    browser_validation_result(
+                        subject,
+                        revision=services.state.change_revision,
+                        status=ValidationStatus.NOT_VERIFIED,
+                        summary="Browser locator verification did not complete deterministically.",
+                        evidence_ids=[exc.evidence_id],
+                        details={"failure_kind": "browser_execution"},
+                    )
+                )
+            services.checkpoint()
+            gate_text = f" gate_id={subject.gate_id}" if subject is not None else ""
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"NOT_VERIFIED{gate_text}: {redact_text(str(exc))}",
+                    }
+                ],
+                "is_error": True,
+            }
+        except (ValueError, PermissionError) as exc:
             return {
                 "content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}],
                 "is_error": True,
             }
         except RuntimeError as exc:
-            _record_capability_validation(
-                services,
-                name="browser_runtime",
-                status=ValidationStatus.NOT_VERIFIED,
-                summary=redact_text(str(exc)),
-            )
+            if subject is not None:
+                services.state.validation_results.append(
+                    browser_validation_result(
+                        subject,
+                        revision=services.state.change_revision,
+                        status=ValidationStatus.NOT_VERIFIED,
+                        summary=redact_text(str(exc)),
+                        details={"failure_kind": "browser_runtime"},
+                    )
+                )
+                services.checkpoint()
+            gate_text = f" gate_id={subject.gate_id}" if subject is not None else ""
             return {
-                "content": [{"type": "text", "text": f"NOT_VERIFIED: {redact_text(str(exc))}"}],
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"NOT_VERIFIED{gate_text}: {redact_text(str(exc))}",
+                    }
+                ],
                 "is_error": True,
             }
-        _record_capability_validation(
-            services,
-            name="browser_runtime",
-            status=ValidationStatus.PASS,
-            summary="Playwright Chromium launched and verified locator candidates.",
-        )
         verification_item = services.evidence.get(evidence_id)
         context_ids = verification_item.structured_data.get("context_evidence_ids", [])
+        registered_context_ids: list[str] = []
         if isinstance(context_ids, list):
             for context_id in context_ids:
                 context_id = str(context_id)
+                registered_context_ids.append(context_id)
                 if context_id not in services.state.evidence_ids:
                     services.state.evidence_ids.append(context_id)
         if evidence_id not in services.state.evidence_ids:
             services.state.evidence_ids.append(evidence_id)
+        if subject is None:  # pragma: no cover - assigned before browser execution
+            raise RuntimeError("browser locator verification lost deterministic subject identity")
+        services.state.validation_results.append(
+            browser_validation_result(
+                subject,
+                revision=services.state.change_revision,
+                status=ValidationStatus.PASS,
+                summary="Playwright verified locator candidates for the exact request subject.",
+                evidence_ids=[evidence_id, *registered_context_ids],
+            )
+        )
         services.checkpoint()
         return {
             "content": [
@@ -920,6 +982,7 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
                         {
                             "verification_evidence_id": evidence_id,
                             "candidates": [item.model_dump(mode="json") for item in verified],
+                            "gate_id": subject.gate_id,
                         }
                     )[:16000],
                 }

@@ -21,9 +21,9 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 | Reviewer goal | Recommended path |
 |---|---|
 | **Architecture / principal engineering** | [Architecture](ARCHITECTURE.md) → [Result Contract](RESULT_CONTRACT.md) → [Runtime Control](RUNTIME_CONTROL.md) → [Traceability](TRACEABILITY.md) → [Technical Walkthrough](TECHNICAL_WALKTHROUGH.md) |
-| **Security / red team** | [Security](SECURITY.md) → [Threat Model](THREAT_MODEL.md) → [Supply Chain](SUPPLY_CHAIN.md) → [CI/CD](CI_CD.md) → [MCP](MCP.md) → [Verification Boundaries](VERIFICATION_BOUNDARIES.md) → [Pytest Execution Isolation](PYTEST_EXECUTION_ISOLATION.md) → [Limitations](LIMITATIONS.md) |
-| **QA automation / AI engineering** | [Change Intelligence](CHANGE_INTELLIGENCE.md) → [Skills](SKILLS.md) → [Evaluation](EVALUATION.md) → [Result Contract](RESULT_CONTRACT.md) → [Production Readiness](PRODUCTION_READINESS.md) |
-| **Operator / adopter** | [Setup](SETUP.md) → [Pytest Execution Isolation](PYTEST_EXECUTION_ISOLATION.md) → [Operations](OPERATIONS.md) → [CI/CD](CI_CD.md) → [Troubleshooting](TROUBLESHOOTING.md) → [Runtime Control](RUNTIME_CONTROL.md) → [MCP](MCP.md) |
+| **Security / red team** | [Security](SECURITY.md) → [Threat Model](THREAT_MODEL.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Supply Chain](SUPPLY_CHAIN.md) → [CI/CD](CI_CD.md) → [MCP](MCP.md) → [Verification Boundaries](VERIFICATION_BOUNDARIES.md) → [Pytest Execution Isolation](PYTEST_EXECUTION_ISOLATION.md) → [Limitations](LIMITATIONS.md) |
+| **QA automation / AI engineering** | [Change Intelligence](CHANGE_INTELLIGENCE.md) → [Skills](SKILLS.md) → [Evaluation](EVALUATION.md) → [Result Contract](RESULT_CONTRACT.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Production Readiness](PRODUCTION_READINESS.md) |
+| **Operator / adopter** | [Setup](SETUP.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Pytest Execution Isolation](PYTEST_EXECUTION_ISOLATION.md) → [Operations](OPERATIONS.md) → [CI/CD](CI_CD.md) → [Troubleshooting](TROUBLESHOOTING.md) → [Runtime Control](RUNTIME_CONTROL.md) → [MCP](MCP.md) |
 
 ### Architecture / principal engineering
 
@@ -37,12 +37,13 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
 1. [`SECURITY.md`](SECURITY.md) — deterministic controls and security posture
 2. [`THREAT_MODEL.md`](THREAT_MODEL.md) — threats, abuse cases, residual boundaries
-3. [`SUPPLY_CHAIN.md`](SUPPLY_CHAIN.md) — dependency, build, Action, SBOM, and reproducibility trust boundaries
-4. [`CI_CD.md`](CI_CD.md) — automatic/manual workflow authority, exact-subject gates, repository-setting boundary
-5. [`MCP.md`](MCP.md) — provider identity, action authorization, untrusted remote content
-6. [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md) — evidence ownership across trust domains
-7. [`PYTEST_EXECUTION_ISOLATION.md`](PYTEST_EXECUTION_ISOLATION.md) — fail-closed deployment prerequisites for target-controlled Python
-8. [`LIMITATIONS.md`](LIMITATIONS.md) — explicit design boundaries and non-claims
+3. [`BROWSER_VALIDATION.md`](BROWSER_VALIDATION.md) — exact-subject browser gates, evidence semantics, and URL confidentiality boundary
+4. [`SUPPLY_CHAIN.md`](SUPPLY_CHAIN.md) — dependency, build, Action, SBOM, and reproducibility trust boundaries
+5. [`CI_CD.md`](CI_CD.md) — automatic/manual workflow authority, exact-subject gates, repository-setting boundary
+6. [`MCP.md`](MCP.md) — provider identity, action authorization, untrusted remote content
+7. [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md) — evidence ownership across trust domains
+8. [`PYTEST_EXECUTION_ISOLATION.md`](PYTEST_EXECUTION_ISOLATION.md) — fail-closed deployment prerequisites for target-controlled Python
+9. [`LIMITATIONS.md`](LIMITATIONS.md) — explicit design boundaries and non-claims
 
 ### QA automation / AI engineering
 
@@ -50,17 +51,19 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 2. [`SKILLS.md`](SKILLS.md) — five trusted Claude QA procedures
 3. [`EVALUATION.md`](EVALUATION.md) — deterministic primary and repository-visible sequestered readiness evaluation architecture
 4. [`RESULT_CONTRACT.md`](RESULT_CONTRACT.md) — how evidence becomes a runtime outcome
-5. [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) — production control model
+5. [`BROWSER_VALIDATION.md`](BROWSER_VALIDATION.md) — how browser evidence is subject-bound without overstating page health
+6. [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) — production control model
 
 ### Operator / adopter
 
 1. [`SETUP.md`](SETUP.md) — installation, configuration, credentials, trust roots
-2. [`PYTEST_EXECUTION_ISOLATION.md`](PYTEST_EXECUTION_ISOLATION.md) — deployment containment required before live target pytest execution
-3. [`OPERATIONS.md`](OPERATIONS.md) — operating ladder and artifact handling
-4. [`CI_CD.md`](CI_CD.md) — automatic PR/main gates, manual validation, and repository-governance boundary
-5. [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) — diagnose without weakening controls
-6. [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md) — recovery and mutation mechanics
-7. [`MCP.md`](MCP.md) — optional GitHub/Atlassian integration policy
+2. [`BROWSER_VALIDATION.md`](BROWSER_VALIDATION.md) — browser gate identity, URL sanitation, and evidence non-claims
+3. [`PYTEST_EXECUTION_ISOLATION.md`](PYTEST_EXECUTION_ISOLATION.md) — deployment containment required before live target pytest execution
+4. [`OPERATIONS.md`](OPERATIONS.md) — operating ladder and artifact handling
+5. [`CI_CD.md`](CI_CD.md) — automatic PR/main gates, manual validation, and repository-governance boundary
+6. [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) — diagnose without weakening controls
+7. [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md) — recovery and mutation mechanics
+8. [`MCP.md`](MCP.md) — optional GitHub/Atlassian integration policy
 
 ---
 
@@ -73,6 +76,7 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 | [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md) | How are autonomous mutations, concurrency, rollback, and crash recovery controlled? |
 | [`SECURITY.md`](SECURITY.md) | Which security controls are deterministic rather than prompt-based? |
 | [`THREAT_MODEL.md`](THREAT_MODEL.md) | Which adversarial behaviors does the framework assume and defend against? |
+| [`BROWSER_VALIDATION.md`](BROWSER_VALIDATION.md) | How are browser operations bound to exact subjects without confusing evidence collection with page correctness? |
 | [`SUPPLY_CHAIN.md`](SUPPLY_CHAIN.md) | How are dependency, build, Action, container-base, SBOM, and reproducibility inputs bound and evidenced? |
 | [`CI_CD.md`](CI_CD.md) | How are automatic PR/main gates, manual credentialed validation, exact-subject binding, and repository-setting authority separated? |
 | [`CHANGE_INTELLIGENCE.md`](CHANGE_INTELLIGENCE.md) | How are committed changes, risk, ownership, test impact, and API drift analyzed? |
@@ -95,6 +99,7 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 Model reasoning         ≠ observed evidence
 Configuration           ≠ provider availability
 Unique locator          ≠ semantic correctness
+Browser operation PASS  ≠ page correctness
 Static script checks    ≠ network sandbox
 Minimal subprocess env  ≠ process/network sandbox
 Content hash            ≠ identity/signature
@@ -115,6 +120,7 @@ Every document is subordinate to the same rules:
 8. **Integrity metadata does not override validation.**
 9. **Deployment controls are not simulated by application flags.**
 10. **A stronger model never replaces a missing deterministic control.**
+11. **Evidence collection cannot substitute for a deterministic acceptance condition.**
 
 ## Terminology
 
