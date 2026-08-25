@@ -18,6 +18,7 @@ def _message(**overrides: object) -> SimpleNamespace:
     values: dict[str, object] = {
         "result": "Model advisory summary.",
         "subtype": "success",
+        "is_error": False,
         "total_cost_usd": 0.25,
         "usage": {"input_tokens": 10, "output_tokens": 5},
     }
@@ -30,9 +31,20 @@ def test_sdk_result_boundary_accepts_expected_terminal_shape() -> None:
 
     assert bounded.result == "Model advisory summary."
     assert bounded.subtype == "success"
+    assert bounded.is_error is False
     assert bounded.total_cost_usd == 0.25
     assert bounded.token_usage == 15
     assert bounded.budget_exceeded is False
+
+
+def test_sdk_error_flag_normalizes_success_subtype_to_non_success_terminal_state() -> None:
+    bounded = validate_sdk_result_message(
+        _message(subtype="success", is_error=True),
+        max_cost_usd=0.5,
+    )
+
+    assert bounded.is_error is True
+    assert bounded.subtype == "sdk_error"
 
 
 def test_sdk_result_boundary_accepts_documented_optional_fields() -> None:
@@ -68,6 +80,8 @@ def test_sdk_result_boundary_rejects_invalid_unicode_before_retention() -> None:
     [
         ({"result": 123}, "result_type"),
         ({"subtype": None}, "subtype_type"),
+        ({"is_error": None}, "is_error_type"),
+        ({"is_error": 1}, "is_error_type"),
         ({"subtype": "x" * (MAX_SDK_SUBTYPE_UTF8_BYTES + 1)}, "subtype_bytes"),
         ({"total_cost_usd": float("nan")}, "cost_non_finite"),
         ({"total_cost_usd": float("inf")}, "cost_non_finite"),
