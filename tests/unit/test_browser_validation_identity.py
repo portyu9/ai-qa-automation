@@ -41,6 +41,7 @@ def test_browser_inspection_gate_binds_exact_requested_url_without_persisting_qu
     assert first.gate_id == same.gate_id
     assert first.gate_id != different.gate_id
     assert first.name == "browser_inspection"
+    assert len(first.gate_id.removeprefix("browser_inspection:")) == 64
     assert first.details["requested_host"] == "example.test"
     assert first.details["requested_scheme"] == "https"
     assert "top-secret" not in repr(first.details)
@@ -92,6 +93,7 @@ def test_locator_gate_binds_exact_candidate_request_without_persisting_locator_t
     assert first.gate_id != reordered.gate_id
     assert first.gate_id != changed_model_claim.gate_id
     assert first.gate_id != changed_locator.gate_id
+    assert len(first.gate_id.removeprefix("browser_locator_verification:")) == 64
     assert first.details["candidate_count"] == 2
     assert str(first.details["candidate_request_hash"]).startswith("sha256:")
     assert "Sign in" not in repr(first.details)
