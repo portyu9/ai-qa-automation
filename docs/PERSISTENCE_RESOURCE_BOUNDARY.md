@@ -47,9 +47,13 @@ The regulated audit path applies the same resource discipline before append:
 2. the event-core SHA-256 is computed incrementally from the same compact, sorted-key JSON representation historically used for audit event hashes;
 3. the final record is dry-run sized with the terminating newline included in the 1,000,000-byte line ceiling;
 4. the cumulative 64,000,000-byte log ceiling is checked against the already-open owned regular file before any append;
-5. the final record is streamed through the bounded encoder and flushed with `fsync` before in-memory audit sequence/hash authority advances.
+5. the final record is streamed through bounded descriptor writes that handle short writes and is flushed with `fsync` before in-memory audit sequence/hash authority advances;
+6. if a caught append/flush failure occurs after bytes were written, the descriptor is truncated to its exact pre-append length and `fsync`ed before the store may continue;
+7. if rollback cannot be durably proven, that `EvidenceStore` instance latches regulated audit writes closed rather than appending behind an uncertain tail.
 
-For the same accepted record, event hash bytes and audit-line JSON formatting therefore remain compatible with the prior representation; the implementation changes allocation behavior, not the audit-chain digest contract.
+For the same accepted record, event hash bytes and audit-line JSON formatting therefore remain compatible with the prior representation; the implementation changes allocation and failure-recovery behavior, not the audit-chain digest contract.
+
+A process crash, power loss, or uncatchable termination can still interrupt the append before in-process rollback runs. On restart, strict bounded audit-chain verification rejects an incomplete or malformed tail. The application does not claim filesystem-level atomic append semantics that the host does not provide.
 
 ## Evidence content-hash recovery semantics
 

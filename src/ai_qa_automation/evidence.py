@@ -79,6 +79,17 @@ def _hash_json_bounded(
     return f"sha256:{digest.hexdigest()}"
 
 
+def _write_fd_all(fd: int, content: bytes) -> None:
+    """Write all bytes to an already-owned descriptor, handling short writes."""
+
+    view = memoryview(content)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError(errno.EIO, "regulated audit append made no forward progress")
+        view = view[written:]
+
+
 class EvidenceStore:
     """Append-only evidence registry with hashing, manifests, and optional audit chaining."""
 
@@ -104,6 +115,7 @@ class EvidenceStore:
         self._artifacts: dict[str, ArtifactRecord] = {}
         self._audit_sequence = 0
         self._audit_previous_hash = "GENESIS"
+        self._audit_write_uncertain = False
         self._lock = threading.RLock()
         self._restore_manifest()
         if self.regulated_mode:
@@ -289,6 +301,8 @@ class EvidenceStore:
     def _append_audit_event(self, event_type: str, payload: dict[str, Any]) -> None:
         if not self.regulated_mode:
             return
+        if self._audit_write_uncertain:
+            raise OSError("regulated audit log write state is uncertain")
         path = self._assert_control_file_owned("audit-log.jsonl")
         try:
             json_size_bounded(
@@ -372,8 +386,7 @@ class EvidenceStore:
                 raise ValueError("regulated audit log must remain a regular file")
             if opened.st_size + rendered_bytes > _MAX_EVIDENCE_AUDIT_BYTES:
                 raise ValueError("regulated audit log exceeds persistence size bound")
-            with os.fdopen(fd, "a", encoding="utf-8") as stream:
-                fd = -1
+            try:
                 for chunk in iter_json_text_bounded(
                     record,
                     max_bytes=line_payload_limit,
@@ -383,15 +396,28 @@ class EvidenceStore:
                     default=str,
                     preflight_default=str,
                 ):
-                    stream.write(chunk)
-                stream.write("\n")
-                stream.flush()
-                os.fsync(stream.fileno())
+                    _write_fd_all(fd, chunk.encode("utf-8"))
+                _write_fd_all(fd, b"\n")
+                os.fsync(fd)
+            except BaseException:
+                try:
+                    os.ftruncate(fd, opened.st_size)
+                    os.fsync(fd)
+                    if os.fstat(fd).st_size != opened.st_size:
+                        raise OSError(
+                            errno.EIO,
+                            "regulated audit rollback did not restore the prior length",
+                        )
+                except BaseException as rollback_exc:
+                    self._audit_write_uncertain = True
+                    raise OSError(
+                        "regulated audit append failed and rollback could not be durably proven"
+                    ) from rollback_exc
+                raise
             if opened.st_size == 0:
                 fsync_directory(path.parent)
         finally:
-            if fd >= 0:
-                os.close(fd)
+            os.close(fd)
         self._audit_sequence = next_sequence
         self._audit_previous_hash = event_hash
 
