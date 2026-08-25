@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 _SECRET_PATTERNS = [
     re.compile(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,\"']+"),
@@ -25,6 +26,9 @@ _SECRET_PATTERNS = [
 _SENSITIVE_KEYS = re.compile(
     r"(?i)(authorization|api[_-]?key|token|password|secret|cookie|private[_-]?key)"
 )
+_NETWORK_URL_PATTERN = re.compile(r"(?i)\b(?:https?|wss?)://[^\s<>(){}\"']+")
+_OPAQUE_URL_PATTERN = re.compile(r"(?i)\b(?:data|blob):[^\s<>(){}\"']+")
+_TRAILING_URL_PUNCTUATION = ".,;!?)"
 
 
 def _replacement(match: re.Match[str]) -> str:
@@ -35,10 +39,38 @@ def _replacement(match: re.Match[str]) -> str:
     return "[REDACTED]"
 
 
+def _safe_network_url(match: re.Match[str]) -> str:
+    raw = match.group(0)
+    trailing = ""
+    while raw and raw[-1] in _TRAILING_URL_PUNCTUATION:
+        trailing = raw[-1] + trailing
+        raw = raw[:-1]
+    try:
+        parsed = urlsplit(raw)
+        host = parsed.hostname
+        if not host:
+            return "[REDACTED_URL]" + trailing
+        rendered_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
+        port = parsed.port
+    except ValueError:
+        return "[REDACTED_URL]" + trailing
+    netloc = rendered_host if port is None else f"{rendered_host}:{port}"
+    safe = urlunsplit((parsed.scheme, netloc, parsed.path, "", ""))
+    return safe + trailing
+
+
+def _safe_opaque_url(match: re.Match[str]) -> str:
+    raw = match.group(0)
+    scheme = raw.split(":", 1)[0].casefold()
+    return f"{scheme}:[REDACTED]"
+
+
 def redact_text(value: str) -> str:
     redacted = value
     for pattern in _SECRET_PATTERNS:
         redacted = pattern.sub(_replacement, redacted)
+    redacted = _NETWORK_URL_PATTERN.sub(_safe_network_url, redacted)
+    redacted = _OPAQUE_URL_PATTERN.sub(_safe_opaque_url, redacted)
     return redacted
 
 
