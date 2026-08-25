@@ -193,6 +193,8 @@ async def run_agent(
             k6_external_egress_enforced=cfg.k6_external_egress_enforced,
             state_store=state_store,
             control=control,
+            pytest_process_isolation_enforced=cfg.pytest_process_isolation_enforced,
+            pytest_external_egress_enforced=cfg.pytest_external_egress_enforced,
         )
         internal_server, internal_tool_names = build_internal_mcp_server(services)
 
