@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 
 from ai_qa_automation.redaction import redact_text, sanitize
@@ -15,6 +17,11 @@ def secret_samples() -> list[str]:
         "sk-" + "proj-" + "abcdefghijklmnopqrstuvwxyz1234567890",  # pragma: allowlist secret
         "xox" + "b-" + "1234567890-abcdefghijklmnop",  # pragma: allowlist secret
     ]
+
+
+def redacted_path(path: str) -> str:
+    digest = hashlib.sha256(path.encode("utf-8")).hexdigest()
+    return f"/_redacted_path_sha256/{digest}"
 
 
 @pytest.mark.parametrize("secret", secret_samples())
@@ -33,7 +40,7 @@ def test_authorization_header_and_bearer_token_are_redacted() -> None:
     assert "Authorization: Bearer [REDACTED]" in redacted
 
 
-def test_url_basic_auth_credentials_are_removed_but_host_and_path_remain() -> None:
+def test_url_basic_auth_and_path_are_removed_but_origin_remains() -> None:
     text = (
         "https://automation-user:super-secret-password@example.test/api"  # pragma: allowlist secret
     )
@@ -41,10 +48,11 @@ def test_url_basic_auth_credentials_are_removed_but_host_and_path_remain() -> No
 
     assert "super-secret-password" not in redacted
     assert "automation-user" not in redacted
-    assert redacted == "https://example.test/api"
+    assert "/api" not in redacted
+    assert redacted == f"https://example.test{redacted_path('/api')}"
 
 
-def test_network_url_query_and_fragment_are_removed_even_without_sensitive_key_names() -> None:
+def test_network_url_path_query_and_fragment_are_removed_even_without_sensitive_names() -> None:
     value = "opaque-value-that-must-not-persist"
     text = f"request failed at https://example.test/checkout?session={value}#client-state"
 
@@ -52,19 +60,21 @@ def test_network_url_query_and_fragment_are_removed_even_without_sensitive_key_n
 
     assert value not in redacted
     assert "client-state" not in redacted
-    assert redacted == "request failed at https://example.test/checkout"
+    assert "/checkout" not in redacted
+    assert redacted == f"request failed at https://example.test{redacted_path('/checkout')}"
 
 
-def test_websocket_url_userinfo_query_and_fragment_are_removed() -> None:
+def test_websocket_url_userinfo_path_query_and_fragment_are_removed() -> None:
     text = "wss://" + "user:" + "pass" + "@example.test/socket?cursor=opaque#fragment"
 
     redacted = redact_text(text)
 
-    assert redacted == "wss://example.test/socket"
+    assert redacted == f"wss://example.test{redacted_path('/socket')}"
     assert "user" not in redacted
     assert "pass" not in redacted
     assert "opaque" not in redacted
     assert "fragment" not in redacted
+    assert "/socket" not in redacted
 
 
 @pytest.mark.parametrize(
@@ -80,7 +90,17 @@ def test_opaque_browser_urls_do_not_preserve_embedded_payloads(value: str, expec
 
 def test_network_url_trailing_prose_punctuation_is_preserved() -> None:
     text = "See https://example.test/path?opaque=value), then continue."
-    assert redact_text(text) == "See https://example.test/path), then continue."
+    expected = f"See https://example.test{redacted_path('/path')}), then continue."
+    assert redact_text(text) == expected
+
+
+def test_root_network_url_remains_origin_only() -> None:
+    assert redact_text("https://example.test/") == "https://example.test/"
+
+
+def test_already_redacted_path_marker_is_idempotent() -> None:
+    value = f"https://example.test{redacted_path('/opaque-original')}"
+    assert redact_text(value) == value
 
 
 def test_private_key_block_is_redacted_as_one_secret() -> None:
