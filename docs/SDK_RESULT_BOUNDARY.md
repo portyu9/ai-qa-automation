@@ -18,7 +18,7 @@ The boundary requires:
 - `input_tokens` and `output_tokens` are exact non-negative integers, individually and collectively bounded to 1,000,000,000 tokens;
 - no provider string/numeric/boolean coercion is used to make malformed terminal data look valid.
 
-The result-text limit is a retention/output bound, not a claim that the provider could not allocate a larger object before the framework receives it. It prevents the framework from intentionally retaining, persisting indirectly, or returning an unbounded provider result after receipt.
+UTF-8 byte accounting is incremental and stops as soon as the configured ceiling is crossed; the framework does not materialize a second full encoded copy merely to measure an oversized result. The result-text limit is a framework retention/output bound, not a claim that the provider or SDK could not allocate a larger source object before the framework receives it. It prevents the framework from intentionally retaining, persisting indirectly, or returning an unbounded provider result after receipt.
 
 ## Failure semantics
 
