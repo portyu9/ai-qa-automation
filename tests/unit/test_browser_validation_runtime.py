@@ -223,7 +223,9 @@ async def test_inspect_browser_failure_records_same_gate_not_verified_and_defeat
     monkeypatch.setattr(internal_tools, "BrowserProbe", FailingBrowserProbe)
     response = await tools["inspect_browser"]({"url": url})
 
-    matching = [item for item in services.state.validation_results if item.gate_id == subject.gate_id]
+    matching = [
+        item for item in services.state.validation_results if item.gate_id == subject.gate_id
+    ]
     assert [item.status for item in matching] == [
         ValidationStatus.PASS,
         ValidationStatus.NOT_VERIFIED,
@@ -242,7 +244,7 @@ async def test_inspect_browser_failure_records_same_gate_not_verified_and_defeat
 
 
 @pytest.mark.asyncio
-async def test_locator_verification_tool_persists_semantic_subject_and_context_evidence(
+async def test_locator_verification_tool_persists_exact_subject_and_context_evidence(
     tmp_path: Path,
     fake_sdk: ModuleType,
     monkeypatch: pytest.MonkeyPatch,
