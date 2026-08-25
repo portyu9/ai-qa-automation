@@ -28,6 +28,32 @@ class BoundedSDKResult:
     budget_exceeded: bool
 
 
+def _validate_utf8_bound(value: str, *, label: str, max_utf8_bytes: int) -> None:
+    """Count UTF-8 bytes incrementally without allocating a second encoded copy."""
+
+    total = 0
+    for character in value:
+        codepoint = ord(character)
+        if 0xD800 <= codepoint <= 0xDFFF:
+            raise SDKResultBoundsError(
+                f"{label}_unicode",
+                f"Agent SDK {label} contains invalid Unicode",
+            )
+        if codepoint <= 0x7F:
+            total += 1
+        elif codepoint <= 0x7FF:
+            total += 2
+        elif codepoint <= 0xFFFF:
+            total += 3
+        else:
+            total += 4
+        if total > max_utf8_bytes:
+            raise SDKResultBoundsError(
+                f"{label}_bytes",
+                f"Agent SDK {label} exceeds the deterministic UTF-8 size bound",
+            )
+
+
 def _bounded_text(value: Any, *, label: str, max_utf8_bytes: int, allow_none: bool) -> str:
     if value is None and allow_none:
         return ""
@@ -36,18 +62,7 @@ def _bounded_text(value: Any, *, label: str, max_utf8_bytes: int, allow_none: bo
             f"{label}_type",
             f"Agent SDK {label} must be a string",
         )
-    try:
-        size = len(value.encode("utf-8"))
-    except UnicodeEncodeError as exc:
-        raise SDKResultBoundsError(
-            f"{label}_unicode",
-            f"Agent SDK {label} contains invalid Unicode",
-        ) from exc
-    if size > max_utf8_bytes:
-        raise SDKResultBoundsError(
-            f"{label}_bytes",
-            f"Agent SDK {label} exceeds the deterministic UTF-8 size bound",
-        )
+    _validate_utf8_bound(value, label=label, max_utf8_bytes=max_utf8_bytes)
     return value
 
 
