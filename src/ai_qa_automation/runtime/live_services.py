@@ -6,6 +6,7 @@ from typing import Any
 from ..models import TerminalStatus, ValidationResult, ValidationStatus
 from .internal_tools import RuntimeServices, _pytest_scope, _stable_gate_id
 from .run_control import RuntimeControl
+from .tool_input_bounds import validate_tool_request
 
 
 @dataclass
@@ -56,6 +57,12 @@ class LiveRuntimeServices(RuntimeServices):
     def consume(self, tool_name: str, tool_input: dict[str, Any]) -> None:
         if self.control is None:  # pragma: no cover - guarded by __post_init__
             raise RuntimeError("live runtime services lost RuntimeControl")
+
+        # Defense in depth for direct live-service invocation. Normal SDK execution
+        # is rejected earlier by PreToolUse before request fingerprinting or budget
+        # mutation, but a tool body may never receive an unbounded input even when
+        # invoked outside that hook path.
+        validate_tool_request(tool_name, tool_input)
 
         # PreToolUse already charged the canonical runtime budget. Mirror that
         # authority before any tool-specific fail-closed return so persisted
