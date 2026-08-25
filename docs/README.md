@@ -21,9 +21,9 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 | Reviewer goal | Recommended path |
 |---|---|
 | **Architecture / principal engineering** | [Architecture](ARCHITECTURE.md) → [Result Contract](RESULT_CONTRACT.md) → [Runtime Control](RUNTIME_CONTROL.md) → [Traceability](TRACEABILITY.md) → [Technical Walkthrough](TECHNICAL_WALKTHROUGH.md) |
-| **Security / red team** | [Security](SECURITY.md) → [Threat Model](THREAT_MODEL.md) → [Supply Chain](SUPPLY_CHAIN.md) → [CI/CD](CI_CD.md) → [MCP](MCP.md) → [Verification Boundaries](VERIFICATION_BOUNDARIES.md) → [Limitations](LIMITATIONS.md) |
+| **Security / red team** | [Security](SECURITY.md) → [Threat Model](THREAT_MODEL.md) → [Supply Chain](SUPPLY_CHAIN.md) → [CI/CD](CI_CD.md) → [MCP](MCP.md) → [Verification Boundaries](VERIFICATION_BOUNDARIES.md) → [Pytest Execution Isolation](PYTEST_EXECUTION_ISOLATION.md) → [Limitations](LIMITATIONS.md) |
 | **QA automation / AI engineering** | [Change Intelligence](CHANGE_INTELLIGENCE.md) → [Skills](SKILLS.md) → [Evaluation](EVALUATION.md) → [Result Contract](RESULT_CONTRACT.md) → [Production Readiness](PRODUCTION_READINESS.md) |
-| **Operator / adopter** | [Setup](SETUP.md) → [Operations](OPERATIONS.md) → [CI/CD](CI_CD.md) → [Troubleshooting](TROUBLESHOOTING.md) → [Runtime Control](RUNTIME_CONTROL.md) → [MCP](MCP.md) |
+| **Operator / adopter** | [Setup](SETUP.md) → [Pytest Execution Isolation](PYTEST_EXECUTION_ISOLATION.md) → [Operations](OPERATIONS.md) → [CI/CD](CI_CD.md) → [Troubleshooting](TROUBLESHOOTING.md) → [Runtime Control](RUNTIME_CONTROL.md) → [MCP](MCP.md) |
 
 ### Architecture / principal engineering
 
@@ -41,7 +41,8 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 4. [`CI_CD.md`](CI_CD.md) — automatic/manual workflow authority, exact-subject gates, repository-setting boundary
 5. [`MCP.md`](MCP.md) — provider identity, action authorization, untrusted remote content
 6. [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md) — evidence ownership across trust domains
-7. [`LIMITATIONS.md`](LIMITATIONS.md) — explicit design boundaries and non-claims
+7. [`PYTEST_EXECUTION_ISOLATION.md`](PYTEST_EXECUTION_ISOLATION.md) — fail-closed deployment prerequisites for target-controlled Python
+8. [`LIMITATIONS.md`](LIMITATIONS.md) — explicit design boundaries and non-claims
 
 ### QA automation / AI engineering
 
@@ -54,11 +55,12 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 ### Operator / adopter
 
 1. [`SETUP.md`](SETUP.md) — installation, configuration, credentials, trust roots
-2. [`OPERATIONS.md`](OPERATIONS.md) — operating ladder and artifact handling
-3. [`CI_CD.md`](CI_CD.md) — automatic PR/main gates, manual validation, and repository-governance boundary
-4. [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) — diagnose without weakening controls
-5. [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md) — recovery and mutation mechanics
-6. [`MCP.md`](MCP.md) — optional GitHub/Atlassian integration policy
+2. [`PYTEST_EXECUTION_ISOLATION.md`](PYTEST_EXECUTION_ISOLATION.md) — deployment containment required before live target pytest execution
+3. [`OPERATIONS.md`](OPERATIONS.md) — operating ladder and artifact handling
+4. [`CI_CD.md`](CI_CD.md) — automatic PR/main gates, manual validation, and repository-governance boundary
+5. [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) — diagnose without weakening controls
+6. [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md) — recovery and mutation mechanics
+7. [`MCP.md`](MCP.md) — optional GitHub/Atlassian integration policy
 
 ---
 
@@ -79,6 +81,7 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 | [`MCP.md`](MCP.md) | How are external MCP identity, authorization, and evidence handled? |
 | [`TRACEABILITY.md`](TRACEABILITY.md) | How can a reviewer reconstruct evidence and validate persisted integrity? |
 | [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md) | Which trust domain owns each type of evidence? |
+| [`PYTEST_EXECUTION_ISOLATION.md`](PYTEST_EXECUTION_ISOLATION.md) | What infrastructure must exist before live target-controlled pytest code may execute? |
 | [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) | Which control architecture supports safe production operation? |
 | [`SETUP.md`](SETUP.md) | How is the framework configured without collapsing trust boundaries? |
 | [`OPERATIONS.md`](OPERATIONS.md) | How should runs, artifacts, integrations, and recovery be operated? |
@@ -89,14 +92,15 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 ## Cross-cutting invariants
 
 ```text
-Model reasoning      ≠ observed evidence
-Configuration        ≠ provider availability
-Unique locator       ≠ semantic correctness
-Static script checks ≠ network sandbox
-Content hash         ≠ identity/signature
-Hash-locked package  ≠ publisher trust/availability
-Reproducible wheel   ≠ signed provenance
-Model success        ≠ deterministic SUCCESS
+Model reasoning         ≠ observed evidence
+Configuration           ≠ provider availability
+Unique locator          ≠ semantic correctness
+Static script checks    ≠ network sandbox
+Minimal subprocess env  ≠ process/network sandbox
+Content hash            ≠ identity/signature
+Hash-locked package     ≠ publisher trust/availability
+Reproducible wheel      ≠ signed provenance
+Model success           ≠ deterministic SUCCESS
 ```
 
 Every document is subordinate to the same rules:
