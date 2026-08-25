@@ -181,7 +181,6 @@ def test_first_audit_directory_fsync_failure_latches_store_closed(
         EvidenceStore(tmp_path, "run", regulated_mode=True)
 
 
-
 def test_keyboard_interrupt_after_partial_artifact_audit_write_cleans_artifact(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
