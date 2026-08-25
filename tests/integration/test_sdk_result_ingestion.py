@@ -25,11 +25,13 @@ class FakeResultMessage:
         *,
         result: object = "Model completed without deterministic execution.",
         subtype: object = "success",
+        is_error: object = False,
         total_cost_usd: object = 0.01,
         usage: object = None,
     ) -> None:
         self.result = result
         self.subtype = subtype
+        self.is_error = is_error
         self.total_cost_usd = total_cost_usd
         self.usage = (
             {"input_tokens": 10, "output_tokens": 5} if usage is None else usage
@@ -199,3 +201,28 @@ async def test_reported_sdk_cost_above_runtime_budget_cannot_finish_verified(
     state = _persisted_state(tmp_path, result)
     assert state["cost"] == 0.5001
     assert state["token_usage"] == 15
+
+
+@pytest.mark.asyncio
+async def test_sdk_error_flag_cannot_be_promoted_by_success_subtype(
+    tmp_path: Path,
+    fake_sdk: ModuleType,
+) -> None:
+    result = await _run(tmp_path, [FakeResultMessage(subtype="success", is_error=True)])
+
+    assert result["report"]["terminal_status"] == "FAILURE"
+    assert result["report"]["summary"] == "Agent result subtype: sdk_error"
+    assert FakeClaudeSDKClient.query_count == 1
+
+
+@pytest.mark.asyncio
+async def test_malformed_sdk_error_flag_is_protocol_failure(
+    tmp_path: Path,
+    fake_sdk: ModuleType,
+) -> None:
+    result = await _run(tmp_path, [FakeResultMessage(is_error="false")])
+
+    assert result["report"]["terminal_status"] == "INFRASTRUCTURE_FAILURE"
+    assert result["agent_result"] == ""
+    assert "is_error_type" in result["report"]["summary"]
+    assert FakeClaudeSDKClient.query_count == 1
