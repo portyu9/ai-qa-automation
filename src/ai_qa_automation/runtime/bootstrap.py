@@ -1,17 +1,19 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
 from typing import Any
 
 from ..evidence import EvidenceStore
+from ..fs_authority import read_bytes_confined
+from ..fs_observation import scan_regular_files_confined
 from ..intelligence.change_impact import ChangeImpactAnalyzer
 from ..intelligence.codeowners import CodeownersResolver
 from ..intelligence.contract_drift import OpenAPIContractDriftAnalyzer
 from ..intelligence.repository_profile import RepositoryProfiler
 from ..intelligence.test_impact import TestImpactMapper
-from ..io_safety import read_bytes_bounded, sha256_file_bounded
 from ..models import AgentRunState, EvidenceItem, EvidenceKind, EvidenceNature
 from ..state import StateStore
 from ..tools.repository import RepositoryChangeSet, RepositoryInspector
@@ -47,103 +49,104 @@ def _dependency_inventory(
     max_scan_files: int = 20_000,
     max_file_bytes: int = _MAX_DEPENDENCY_MANIFEST_BYTES,
 ) -> tuple[list[dict[str, Any]], bool]:
-    """Hash dependency manifests with deterministic, bounded filesystem work."""
+    """Hash dependency manifests through bounded descriptor-confined observation."""
+
     for name, value in {
         "max_files": max_files,
         "max_scan_files": max_scan_files,
         "max_file_bytes": max_file_bytes,
     }.items():
-        if type(value) is not int or value < 1:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
             raise ValueError(f"{name} must be a positive integer")
-    rows: list[dict[str, Any]] = []
-    ignored = {".git", ".venv", "venv", "node_modules", "dist", "build", ".tox"}
-    scanned = 0
-    truncated = False
-    stop_scan = False
 
-    for dirpath, dirnames, filenames in os.walk(workspace, topdown=True, followlinks=False):
-        dirnames[:] = sorted(name for name in dirnames if name not in ignored)
-        current_dir = Path(dirpath)
-        for filename in sorted(filenames):
-            if scanned >= max_scan_files or len(rows) >= max_files:
+    workspace = workspace.expanduser().absolute()
+    ignored = {".git", ".venv", "venv", "node_modules", "dist", "build", ".tox"}
+    scan = scan_regular_files_confined(
+        workspace,
+        max_entries=max_scan_files,
+        ignored_names=ignored,
+        label="dependency manifest repository scan",
+    )
+    rows: list[dict[str, Any]] = []
+    truncated = scan.truncated
+
+    ambiguous = {
+        path.as_posix(): "ambiguous-or-non-file"
+        for path in scan.unsafe_paths
+        if path.name in _DEPENDENCY_MANIFESTS
+    }
+    ambiguous.update(
+        {
+            path.as_posix(): "unreadable"
+            for path in scan.unreadable_paths
+            if path.name in _DEPENDENCY_MANIFESTS
+        }
+    )
+    if ambiguous:
+        truncated = True
+        for relative, reason in sorted(ambiguous.items()):
+            if len(rows) >= max_files:
                 truncated = True
-                stop_scan = True
                 break
-            scanned += 1
-            if filename not in _DEPENDENCY_MANIFESTS:
-                continue
-            path = current_dir / filename
-            try:
-                relative = path.relative_to(workspace)
-            except ValueError:
-                continue
-            if path.is_symlink() or not path.is_file():
-                truncated = True
-                rows.append(
-                    {
-                        "path": relative.as_posix(),
-                        "size": None,
-                        "sha256": None,
-                        "hashed": False,
-                        "reason": "ambiguous-or-non-file",
-                    }
-                )
-                continue
-            try:
-                size = path.stat().st_size
-            except OSError:
-                truncated = True
-                rows.append(
-                    {
-                        "path": relative.as_posix(),
-                        "size": None,
-                        "sha256": None,
-                        "hashed": False,
-                        "reason": "unreadable",
-                    }
-                )
-                continue
-            if size > max_file_bytes:
-                truncated = True
-                rows.append(
-                    {
-                        "path": relative.as_posix(),
-                        "size": size,
-                        "sha256": None,
-                        "hashed": False,
-                        "reason": f"file-size-limit:{max_file_bytes}",
-                    }
-                )
-                continue
-            try:
-                digest, read_size = sha256_file_bounded(
-                    path,
-                    max_bytes=max_file_bytes,
-                    label=f"dependency manifest {relative.as_posix()}",
-                )
-            except (OSError, ValueError):
-                truncated = True
-                rows.append(
-                    {
-                        "path": relative.as_posix(),
-                        "size": size,
-                        "sha256": None,
-                        "hashed": False,
-                        "reason": "read-failed-or-grew-during-hash",
-                    }
-                )
-                continue
             rows.append(
                 {
-                    "path": relative.as_posix(),
-                    "size": read_size,
-                    "sha256": digest,
-                    "hashed": True,
-                    "reason": None,
+                    "path": relative,
+                    "size": None,
+                    "sha256": None,
+                    "hashed": False,
+                    "reason": reason,
                 }
             )
-        if stop_scan:
+
+    for observed in scan.files:
+        if observed.path.name not in _DEPENDENCY_MANIFESTS:
+            continue
+        if len(rows) >= max_files:
+            truncated = True
             break
+        relative = observed.path.as_posix()
+        if observed.size > max_file_bytes:
+            truncated = True
+            rows.append(
+                {
+                    "path": relative,
+                    "size": observed.size,
+                    "sha256": None,
+                    "hashed": False,
+                    "reason": f"file-size-limit:{max_file_bytes}",
+                }
+            )
+            continue
+        try:
+            content = read_bytes_confined(
+                workspace,
+                relative,
+                max_bytes=max_file_bytes,
+                label=f"dependency manifest {relative}",
+            )
+        except (OSError, ValueError):
+            truncated = True
+            rows.append(
+                {
+                    "path": relative,
+                    "size": None,
+                    "sha256": None,
+                    "hashed": False,
+                    "reason": "read-failed-or-grew-during-hash",
+                }
+            )
+            continue
+        rows.append(
+            {
+                "path": relative,
+                "size": len(content),
+                "sha256": hashlib.sha256(content).hexdigest(),
+                "hashed": True,
+                "reason": None,
+            }
+        )
+
+    rows.sort(key=lambda item: str(item["path"]))
     return rows, truncated
 
 
@@ -343,18 +346,43 @@ def _contract_drift_reports(
     analyzer = OpenAPIContractDriftAnalyzer()
     reports: list[dict[str, object]] = []
     candidates = [path for path in changed_files if _looks_like_openapi_contract(path)]
+    workspace_root = workspace.expanduser().absolute()
     for relative in candidates[:max_files]:
-        current_path = (workspace / relative).resolve()
         try:
-            current_path.relative_to(workspace)
-        except ValueError:
-            continue
+            current = read_bytes_confined(
+                workspace_root,
+                relative,
+                max_bytes=max_bytes,
+                label=f"current contract {relative}",
+            )
+            current_missing = False
+            current_error: str | None = None
+        except FileNotFoundError:
+            current = b""
+            current_missing = True
+            current_error = None
+        except (OSError, RuntimeError, ValueError) as exc:
+            current = b""
+            current_missing = False
+            current_error = f"current read failed: {type(exc).__name__}"
+
         try:
             baseline = inspector.read_file_at(
                 change_set.merge_base_sha, relative, max_bytes=max_bytes
             )
         except FileNotFoundError:
-            if current_path.is_file() and not current_path.is_symlink():
+            if current_error is not None:
+                reports.append(
+                    {
+                        "path": relative,
+                        "contract_kind": "openapi",
+                        "severity": "NOT_ANALYZED",
+                        "changes": [],
+                        "analyzed": False,
+                        "reason": current_error,
+                    }
+                )
+            elif not current_missing:
                 reports.append(
                     {
                         "path": relative,
@@ -385,7 +413,20 @@ def _contract_drift_reports(
                 }
             )
             continue
-        if not current_path.exists():
+
+        if current_error is not None:
+            reports.append(
+                {
+                    "path": relative,
+                    "contract_kind": "openapi",
+                    "severity": "NOT_ANALYZED",
+                    "changes": [],
+                    "analyzed": False,
+                    "reason": current_error,
+                }
+            )
+            continue
+        if current_missing:
             reports.append(
                 {
                     "path": relative,
@@ -401,38 +442,6 @@ def _contract_drift_reports(
                     ],
                     "analyzed": True,
                     "reason": None,
-                }
-            )
-            continue
-        if current_path.is_symlink() or not current_path.is_file():
-            reports.append(
-                {
-                    "path": relative,
-                    "contract_kind": "openapi",
-                    "severity": "NOT_ANALYZED",
-                    "changes": [],
-                    "analyzed": False,
-                    "reason": "current contract is not a regular file",
-                }
-            )
-            continue
-        try:
-            if current_path.stat().st_size > max_bytes:
-                raise ValueError("current contract exceeds analysis size limit")
-            current = read_bytes_bounded(
-                current_path,
-                max_bytes=max_bytes,
-                label=f"current contract {relative}",
-            )
-        except (OSError, ValueError) as exc:
-            reports.append(
-                {
-                    "path": relative,
-                    "contract_kind": "openapi",
-                    "severity": "NOT_ANALYZED",
-                    "changes": [],
-                    "analyzed": False,
-                    "reason": f"current read failed: {type(exc).__name__}",
                 }
             )
             continue

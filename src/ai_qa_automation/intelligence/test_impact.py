@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-import os
 import re
 from dataclasses import dataclass
+from itertools import chain
 from pathlib import Path, PurePosixPath
+
+from ..fs_authority import read_bytes_confined
+from ..fs_observation import scan_regular_files_confined
 
 _TOKEN = re.compile(r"[A-Za-z0-9_]+")
 _TEST_SUFFIXES = {".py", ".js", ".jsx", ".ts", ".tsx", ".java", ".cs", ".rb", ".go"}
@@ -88,16 +91,16 @@ class TestImpactMapper:
         max_candidates: int = 150,
         max_scan_files: int = 20_000,
     ) -> TestImpactAssessment:
-        if max_test_files < 1:
-            raise ValueError("max_test_files must be at least 1")
-        if max_file_bytes < 1:
-            raise ValueError("max_file_bytes must be at least 1")
-        if max_candidates < 1:
-            raise ValueError("max_candidates must be at least 1")
-        if max_scan_files < 1:
-            raise ValueError("max_scan_files must be at least 1")
+        for name, value in {
+            "max_test_files": max_test_files,
+            "max_file_bytes": max_file_bytes,
+            "max_candidates": max_candidates,
+            "max_scan_files": max_scan_files,
+        }.items():
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"{name} must be a positive integer")
 
-        root = workspace.expanduser().resolve()
+        root = workspace.expanduser().absolute()
         normalized_changes = tuple(
             sorted(
                 {
@@ -120,46 +123,46 @@ class TestImpactMapper:
         change_features = {path: self._features(path) for path in normalized_changes}
         rows: list[TestImpactCandidate] = []
         scanned_tests = 0
-        scanned_files = 0
         truncated = False
 
-        stop_scan = False
-        for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
-            dirnames[:] = sorted(name for name in dirnames if name not in _IGNORED)
-            current_dir = Path(dirpath)
-            for filename in sorted(filenames):
-                if scanned_files >= max_scan_files:
-                    truncated = True
-                    stop_scan = True
-                    break
-                scanned_files += 1
-                path = current_dir / filename
-                try:
-                    relative = path.relative_to(root)
-                except ValueError:
-                    continue
-                if not self._is_test_file(PurePosixPath(relative.as_posix())):
-                    continue
-                if scanned_tests >= max_test_files:
-                    truncated = True
-                    stop_scan = True
-                    break
-                scanned_tests += 1
-                try:
-                    if (
-                        path.is_symlink()
-                        or not path.is_file()
-                        or path.stat().st_size > max_file_bytes
-                    ):
-                        continue
-                    source = path.read_text(encoding="utf-8")
-                except (OSError, UnicodeError):
-                    source = ""
-                candidate = self._score_candidate(relative.as_posix(), source, change_features)
-                if candidate.score > 0:
-                    rows.append(candidate)
-            if stop_scan:
+        scan = scan_regular_files_confined(
+            root,
+            max_entries=max_scan_files,
+            ignored_names=_IGNORED,
+            label="test-impact repository scan",
+        )
+        truncated = scan.truncated or any(
+            self._is_test_file(path)
+            for path in chain(scan.unsafe_paths, scan.unreadable_paths)
+        )
+
+        for observed in scan.files:
+            relative = observed.path
+            if not self._is_test_file(relative):
+                continue
+            if scanned_tests >= max_test_files:
+                truncated = True
                 break
+            scanned_tests += 1
+
+            source = ""
+            if observed.size > max_file_bytes:
+                truncated = True
+            else:
+                try:
+                    raw_source = read_bytes_confined(
+                        root,
+                        relative.as_posix(),
+                        max_bytes=max_file_bytes,
+                        label=f"test-impact source {relative.as_posix()}",
+                    )
+                    source = raw_source.decode("utf-8")
+                except (OSError, UnicodeError, ValueError):
+                    truncated = True
+
+            candidate = self._score_candidate(relative.as_posix(), source, change_features)
+            if candidate.score > 0:
+                rows.append(candidate)
 
         rows.sort(key=lambda item: (-item.score, item.path))
         selected = tuple(rows[:max_candidates])
