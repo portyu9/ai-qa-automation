@@ -569,9 +569,7 @@ class EvidenceStore:
             )
         except JsonSerializationBoundsError as exc:
             if exc.code == "bytes":
-                raise ValueError(
-                    "evidence manifest exceeds persistence size bound"
-                ) from exc
+                raise ValueError("evidence manifest exceeds persistence size bound") from exc
             raise ValueError(
                 f"evidence manifest violates persistence serialization bound: {exc.code}"
             ) from exc
