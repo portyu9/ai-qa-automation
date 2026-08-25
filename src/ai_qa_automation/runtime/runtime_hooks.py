@@ -57,7 +57,6 @@ _VALIDATION_BEARING_TOOLS = {
 
 
 def _input_fingerprint(tool_name: str, tool_input: dict[str, Any]) -> str:
-    validate_tool_request(tool_name, tool_input)
     safe = sanitize(tool_input)
     if not isinstance(safe, dict):  # pragma: no cover - validation guarantees object root
         raise ToolInputBoundsError("root_type", "sanitized tool input must remain a JSON object")
@@ -96,7 +95,7 @@ def _record_unexpected_validation_tool_failure(
         fingerprint = _input_fingerprint(tool_name, tool_input)
     except ToolInputBoundsError as exc:
         fingerprint = hashlib.sha256(
-            f"{tool_name}:invalid-tool-input:{exc.code}".encode("utf-8")
+            f"{tool_name}:invalid-tool-input:{exc.code}".encode()
         ).hexdigest()
     state.validation_results.append(
         ValidationResult(
