@@ -80,6 +80,23 @@ This is a conservative regression signal—not a substitute for application-spec
 
 ---
 
+## Confined repository observation
+
+Repository profiling, test-impact mapping, dependency inventory, and current-workspace OpenAPI/Swagger reads treat the target worktree as **untrusted filesystem state**, not as authority merely because a pathname was previously inspected.
+
+For those change-intelligence paths:
+
+- recursive enumeration requires descriptor-relative, no-follow directory capability and fails closed when that capability is unavailable;
+- symlinks and other non-regular entries are never promoted as regular-file observations, while unreadable or ambiguous entries remain explicit uncertainty;
+- every directory entry actually returned by enumeration consumes the strict scan budget; the scanner does not fetch a hidden `max + 1` sentinel entry;
+- reaching the entry ceiling is conservatively reported as truncated/incomplete, and the directory batch that reaches that ceiling is not partially promoted into the file set;
+- selected test-source, dependency-manifest, and current-contract bytes are re-opened through descriptor-confined bounded reads rather than trusting earlier pathname metadata;
+- identity/type changes during traversal or confined reads fail closed instead of becoming observed content.
+
+This prevents pathname preflight from silently becoming read authority after a parent or final-component swap. It does **not** make target files trusted, guarantee filesystem snapshot isolation, or claim that every recursive reader in the codebase has already migrated to this boundary. In particular, the separate model-facing `_coverage_search()` traversal remains a follow-up boundary and is not covered by this section.
+
+---
+
 ## CODEOWNERS context
 
 The runtime searches conventional CODEOWNERS locations in precedence order and applies last-match-wins behavior for its supported grammar.
@@ -94,6 +111,8 @@ Supported deterministic matching includes common root/directory and `*` / `**` /
 ## Explainable test impact
 
 `TestImpactMapper` uses bounded deterministic signals such as path/component overlap and source references to rank potentially relevant tests.
+
+Test-file enumeration is descriptor-confined. Test source is admitted for textual-reference scoring only after a separate bounded confined read and UTF-8 decode. Oversize, unreadable, invalid-UTF-8, unsafe relevant paths, or scan truncation reduce completeness/confidence instead of being treated as affirmative evidence that no source reference exists.
 
 The map is deliberately **advisory**.
 
@@ -113,6 +132,8 @@ Security, safety, regulatory, smoke, and other mandatory coverage remains protec
 ## OpenAPI / Swagger drift
 
 Changed OpenAPI/Swagger JSON or YAML contracts are compared with the merge-base version when available.
+
+The merge-base document is read from Git object identity. The current worktree document is admitted through a bounded descriptor-confined read; if that current subject becomes a symlink, changes identity/type, disappears, or cannot be read within the boundary, compatibility is not inferred from replacement bytes and the report remains conservatively explicit.
 
 The conservative analyzer detects examples including:
 
@@ -152,6 +173,8 @@ Bootstrap records bounded dependency-manifest metadata across supported ecosyste
 - file size;
 - content hash.
 
+Manifest content is re-opened through the descriptor-confined read boundary before hashing. A successful row binds size and SHA-256 to the bytes actually read. If the file cannot be safely re-read after enumeration, the row is marked unhashed/incomplete and does not retain an earlier size as though it described the failed read subject.
+
 This establishes that the dependency surface changed without executing target package-manager scripts simply to discover manifests.
 
 ---
@@ -170,13 +193,14 @@ That separation preserves three properties:
 
 ## Failure and uncertainty semantics
 
-Analyzers are intentionally bounded by file count, file size, supported syntax, and available Git history.
+Analyzers are intentionally bounded by directory-entry count, file count, file size, supported syntax, filesystem authority capability, and available Git history.
 
 When a boundary prevents reliable analysis, output should remain explicit:
 
 - `NOT_ANALYZED`;
 - low confidence;
 - truncation indicator;
+- unsafe/unreadable filesystem observation;
 - baseline-resolution error;
 - unsupported CODEOWNERS grammar.
 
@@ -193,6 +217,8 @@ When reviewing change intelligence, ask:
 - [ ] Was the baseline supplied by trusted configuration?
 - [ ] Was the merge base resolved immutably?
 - [ ] Are committed and dirty/untracked changes both represented?
+- [ ] Are repository entry/file/byte bounds enforced during observation rather than after materialization?
+- [ ] Are symlink, identity-change, unreadable, and unsupported-platform cases fail-closed or explicitly incomplete?
 - [ ] Are low-confidence/truncated results visibly conservative?
 - [ ] Is CODEOWNERS unsupported syntax surfaced rather than guessed?
 - [ ] Is API drift classification scoped to supported rules?
