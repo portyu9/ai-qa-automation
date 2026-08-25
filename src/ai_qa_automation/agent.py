@@ -292,9 +292,7 @@ async def run_agent(
                                         state.token_usage = bounded_result.token_usage
                                         if bounded_result.budget_exceeded:
                                             state.terminal_status = TerminalStatus.BUDGET_EXCEEDED
-                                            state.terminal_reason = (
-                                                "Agent SDK reported cost above the configured runtime budget"
-                                            )
+                                            state.terminal_reason = "Agent SDK reported cost above the configured runtime budget"
                             if not result_message_seen:
                                 raise SDKResultBoundsError(
                                     "missing_result_message",
@@ -349,7 +347,7 @@ async def run_agent(
                 state.token_usage = 0
                 state.terminal_status = TerminalStatus.INFRASTRUCTURE_FAILURE
                 state.terminal_reason = (
-                    "Agent SDK result violated deterministic ingestion bounds: " f"{exc.code}"
+                    f"Agent SDK result violated deterministic ingestion bounds: {exc.code}"
                 )
                 journal.try_append("sdk_result_denied", reason_code=exc.code)
             else:
