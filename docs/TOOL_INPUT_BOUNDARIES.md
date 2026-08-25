@@ -38,7 +38,9 @@ Several narrow tools intentionally accept JSON text as a string. Those fields re
 - maximum JSON nesting depth of 64, preflighted without invoking the parser;
 - at most 100,000 parsed structural nodes;
 - at most 50,000 entries in one parsed object or array;
-- the same finite-number and bounded-integer rules after parsing.
+- the same finite-number and bounded-integer rules after parsing;
+- duplicate object keys are rejected recursively rather than accepted with last-key-wins semantics;
+- Python JSON extensions `NaN`, `Infinity`, and `-Infinity` are rejected as non-standard numeric constants.
 
 The guarded fields are:
 
@@ -49,7 +51,7 @@ The guarded fields are:
 - `validate_json_contract.instance_json`;
 - `validate_json_contract.schema_json`.
 
-Malformed JSON is denied at the request boundary. Parser recursion cannot become an optimistic or partially verified tool result. Accepted raw JSON fields are not reparsed merely to create a repetition fingerprint; fingerprinting rechecks only the generic bounded request shape.
+Malformed, duplicate-key-ambiguous, or non-standard JSON is denied at the request boundary. Parser recursion cannot become an optimistic or partially verified tool result. In particular, an authority-bearing JSON Schema validation cannot derive a gate subject or `PASS` from a document whose meaning depends on duplicate-key collapse. Accepted raw JSON fields are not reparsed merely to create a repetition fingerprint; fingerprinting rechecks only the generic bounded request shape.
 
 ### Browser candidate bound
 
