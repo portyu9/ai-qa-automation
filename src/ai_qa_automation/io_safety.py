@@ -5,8 +5,13 @@ import hashlib
 import json
 import os
 import stat
+from collections.abc import Callable, Iterator
+from datetime import date, datetime, time
+from decimal import Decimal
+from enum import Enum
 from pathlib import Path
 from typing import Any, BinaryIO
+from uuid import UUID
 
 _READ_CHUNK_BYTES = 1024 * 1024
 
@@ -39,6 +44,263 @@ def _stable_file_signature(value: os.stat_result) -> tuple[int, int, int, int, i
 
 def _stable_directory_signature(value: os.stat_result) -> tuple[int, int, int, int]:
     return value.st_dev, value.st_ino, value.st_mtime_ns, value.st_ctime_ns
+
+
+class JsonSerializationBoundsError(ValueError):
+    """JSON serialization exceeded a deterministic shape or byte ceiling."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+_JSON_SERIALIZATION_MAX_DEPTH = 128
+_JSON_SERIALIZATION_MAX_NODES = 1_000_000
+_JSON_SERIALIZATION_MAX_CONTAINER_ITEMS = 100_000
+_JSON_SERIALIZATION_MAX_INTEGER_BITS = 4096
+
+
+def _json_string_size_bounded(
+    value: str,
+    *,
+    remaining: int,
+    ensure_ascii: bool,
+    label: str,
+) -> int:
+    """Count one encoded JSON string without constructing its escaped copy."""
+
+    if remaining < 2:
+        raise JsonSerializationBoundsError(
+            "bytes", f"{label} exceeds the deterministic JSON byte limit"
+        )
+    total = 2  # opening and closing quotes
+    for character in value:
+        codepoint = ord(character)
+        if 0xD800 <= codepoint <= 0xDFFF:
+            raise JsonSerializationBoundsError("unicode", f"{label} contains invalid Unicode")
+        if character in {'"', "\\"} or character in {"\b", "\f", "\n", "\r", "\t"}:
+            width = 2
+        elif codepoint <= 0x1F:
+            width = 6
+        elif ensure_ascii and codepoint > 0x7F:
+            width = 6 if codepoint <= 0xFFFF else 12
+        elif codepoint <= 0x7F:
+            width = 1
+        elif codepoint <= 0x7FF:
+            width = 2
+        elif codepoint <= 0xFFFF:
+            width = 3
+        else:
+            width = 4
+        total += width
+        if total > remaining:
+            raise JsonSerializationBoundsError(
+                "bytes", f"{label} exceeds the deterministic JSON byte limit"
+            )
+    return total
+
+
+def _preflight_json_serialization(
+    value: Any,
+    *,
+    max_bytes: int,
+    label: str,
+    ensure_ascii: bool,
+    default: Callable[[Any], Any] | None,
+) -> None:
+    """Bound JSON shape and escaped strings before the standard encoder runs."""
+
+    limit = _validated_bound(max_bytes)
+    active: set[int] = set()
+    nodes = 0
+    escaped_string_bytes = 0
+
+    def visit(item: Any, *, depth: int) -> None:
+        nonlocal escaped_string_bytes, nodes
+        if depth > _JSON_SERIALIZATION_MAX_DEPTH:
+            raise JsonSerializationBoundsError(
+                "depth", f"{label} exceeds the deterministic JSON nesting-depth limit"
+            )
+        nodes += 1
+        if nodes > _JSON_SERIALIZATION_MAX_NODES:
+            raise JsonSerializationBoundsError(
+                "nodes", f"{label} exceeds the deterministic JSON structural-node limit"
+            )
+
+        if isinstance(item, str):
+            escaped_string_bytes += _json_string_size_bounded(
+                item,
+                remaining=limit - escaped_string_bytes,
+                ensure_ascii=ensure_ascii,
+                label=label,
+            )
+            return
+        if item is None or isinstance(item, bool):
+            return
+        if isinstance(item, int):
+            if item.bit_length() > _JSON_SERIALIZATION_MAX_INTEGER_BITS:
+                raise JsonSerializationBoundsError(
+                    "integer", f"{label} contains an integer outside the serialization bound"
+                )
+            return
+        if isinstance(item, float):
+            if item != item or item in {float("inf"), float("-inf")}:
+                raise JsonSerializationBoundsError(
+                    "number", f"{label} contains a non-finite JSON number"
+                )
+            return
+        if isinstance(item, dict):
+            if len(item) > _JSON_SERIALIZATION_MAX_CONTAINER_ITEMS:
+                raise JsonSerializationBoundsError(
+                    "container_items", f"{label} contains an oversized JSON object"
+                )
+            identity = id(item)
+            if identity in active:
+                raise JsonSerializationBoundsError(
+                    "cycle", f"{label} contains a circular JSON value"
+                )
+            active.add(identity)
+            try:
+                for key, nested in item.items():
+                    if not isinstance(key, str):
+                        raise JsonSerializationBoundsError(
+                            "dict_key_type", f"{label} contains a non-string JSON object key"
+                        )
+                    escaped_string_bytes += _json_string_size_bounded(
+                        key,
+                        remaining=limit - escaped_string_bytes,
+                        ensure_ascii=ensure_ascii,
+                        label=label,
+                    )
+                    visit(nested, depth=depth + 1)
+            finally:
+                active.remove(identity)
+            return
+        if isinstance(item, (list, tuple)):
+            if len(item) > _JSON_SERIALIZATION_MAX_CONTAINER_ITEMS:
+                raise JsonSerializationBoundsError(
+                    "container_items", f"{label} contains an oversized JSON array"
+                )
+            identity = id(item)
+            if identity in active:
+                raise JsonSerializationBoundsError(
+                    "cycle", f"{label} contains a circular JSON value"
+                )
+            active.add(identity)
+            try:
+                for nested in item:
+                    visit(nested, depth=depth + 1)
+            finally:
+                active.remove(identity)
+            return
+
+        if default is None:
+            raise TypeError(f"Object of type {type(item).__name__} is not JSON serializable")
+        identity = id(item)
+        if identity in active:
+            raise JsonSerializationBoundsError("cycle", f"{label} contains a circular JSON value")
+        active.add(identity)
+        try:
+            rendered = default(item)
+            if rendered is item:
+                raise TypeError(f"JSON default returned the original {type(item).__name__} value")
+            visit(rendered, depth=depth)
+        finally:
+            active.remove(identity)
+
+    visit(value, depth=0)
+
+
+def iter_json_text_bounded(
+    value: Any,
+    *,
+    max_bytes: int,
+    label: str,
+    indent: int | None = None,
+    sort_keys: bool = False,
+    ensure_ascii: bool = False,
+    separators: tuple[str, str] | None = None,
+    default: Callable[[Any], Any] | None = None,
+    preflight_default: Callable[[Any], Any] | None = None,
+) -> Iterator[str]:
+    """Preflight JSON shape, then incrementally enforce the exact byte ceiling."""
+
+    limit = _validated_bound(max_bytes)
+    _preflight_json_serialization(
+        value,
+        max_bytes=limit,
+        label=label,
+        ensure_ascii=ensure_ascii,
+        default=preflight_default if preflight_default is not None else default,
+    )
+    encoder = json.JSONEncoder(
+        ensure_ascii=ensure_ascii,
+        allow_nan=False,
+        indent=indent,
+        sort_keys=sort_keys,
+        separators=separators,
+        default=default,
+    )
+    total = 0
+    try:
+        for chunk in encoder.iterencode(value):
+            encoded = chunk.encode("utf-8")
+            total += len(encoded)
+            if total > limit:
+                raise JsonSerializationBoundsError(
+                    "bytes", f"{label} exceeds the deterministic JSON byte limit"
+                )
+            yield chunk
+    except UnicodeEncodeError as exc:
+        raise JsonSerializationBoundsError("unicode", f"{label} contains invalid Unicode") from exc
+
+
+def json_size_bounded(
+    value: Any,
+    *,
+    max_bytes: int,
+    label: str,
+    indent: int | None = None,
+    sort_keys: bool = False,
+    ensure_ascii: bool = False,
+    separators: tuple[str, str] | None = None,
+    default: Callable[[Any], Any] | None = None,
+    preflight_default: Callable[[Any], Any] | None = None,
+) -> int:
+    """Return exact serialized UTF-8 size without retaining the complete JSON text."""
+
+    total = 0
+    for chunk in iter_json_text_bounded(
+        value,
+        max_bytes=max_bytes,
+        label=label,
+        indent=indent,
+        sort_keys=sort_keys,
+        ensure_ascii=ensure_ascii,
+        separators=separators,
+        default=default,
+        preflight_default=preflight_default,
+    ):
+        total += len(chunk.encode("utf-8"))
+    return total
+
+
+def json_preflight_scalar_default(value: Any) -> Any:
+    """Map deterministic scalar types that Pydantic JSON mode renders as JSON strings/values.
+
+    This helper is intentionally narrow. Mutable/unordered or opaque custom values
+    are not admitted through authority-bearing persistence merely because Pydantic
+    may be able to coerce or stringify them later.
+    """
+
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, datetime):
+        rendered = value.isoformat()
+        return rendered[:-6] + "Z" if rendered.endswith("+00:00") else rendered
+    if isinstance(value, (date, time, Decimal, UUID, Path)):
+        return str(value)
+    raise TypeError(f"unsupported deterministic JSON scalar: {type(value).__name__}")
 
 
 def parse_json_object_strict(text: str, *, label: str) -> dict[str, Any]:
