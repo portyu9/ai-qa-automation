@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from dataclasses import dataclass
@@ -33,6 +34,11 @@ class InputShape:
 
 
 def _utf8_size_bounded(value: str, *, remaining: int, label: str) -> int:
+    if remaining < 0:
+        raise ToolInputBoundsError(
+            "utf8_bytes",
+            f"{label} exceeds the deterministic UTF-8 byte limit",
+        )
     total = 0
     for character in value:
         codepoint = ord(character)
@@ -159,6 +165,26 @@ def validate_tool_input(tool_input: Any) -> InputShape:
     )
 
 
+def tool_input_fingerprint(
+    tool_name: str, tool_input: Any, *, compact: bool = True
+) -> str:
+    """Hash a prevalidated request incrementally without materializing canonical JSON."""
+
+    validate_tool_request(tool_name, tool_input)
+    digest = hashlib.sha256()
+    digest.update(str(tool_name).encode("utf-8"))
+    digest.update(b":")
+    encoder = json.JSONEncoder(
+        sort_keys=True,
+        separators=((",", ":") if compact else (", ", ": ")),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+    for chunk in encoder.iterencode(tool_input):
+        digest.update(chunk.encode("utf-8"))
+    return digest.hexdigest()
+
+
 def _preflight_json_depth(raw: str, *, max_depth: int, label: str) -> None:
     depth = 0
     in_string = False
@@ -206,6 +232,11 @@ def bounded_json_loads(
         raise ToolInputBoundsError(
             "json_depth",
             f"{label} exceeded the parser recursion boundary",
+        ) from exc
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ToolInputBoundsError(
+            "invalid_json",
+            f"{label} is not valid bounded JSON",
         ) from exc
     validate_json_value(
         parsed,
