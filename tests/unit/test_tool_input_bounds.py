@@ -17,6 +17,7 @@ from ai_qa_automation.runtime.live_services import LiveRuntimeServices
 from ai_qa_automation.runtime.run_control import RuntimeControl
 from ai_qa_automation.runtime.tool_input_bounds import (
     MAX_TOOL_INPUT_UTF8_BYTES,
+    MAX_TOOL_NAME_UTF8_BYTES,
     ToolInputBoundsError,
     bounded_json_loads,
     tool_input_fingerprint,
@@ -199,3 +200,10 @@ def test_browser_candidate_limit_handles_prefixed_and_internal_names() -> None:
     for name in ("verify_locator_candidates", "mcp__qa__verify_locator_candidates"):
         with pytest.raises(ToolInputBoundsError, match="20-candidate"):
             validate_tool_request(name, tool_input)
+
+
+def test_tool_name_is_bounded_before_fingerprinting() -> None:
+    oversized_name = "t" * (MAX_TOOL_NAME_UTF8_BYTES + 1)
+
+    with pytest.raises(ToolInputBoundsError, match="tool name"):
+        validate_tool_request(oversized_name, {})
