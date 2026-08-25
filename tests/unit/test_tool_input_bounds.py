@@ -66,6 +66,31 @@ def test_incremental_fingerprint_preserves_pretool_canonical_semantics() -> None
     assert tool_input_fingerprint("tool", safe) == expected
 
 
+def test_protected_json_is_not_reparsed_during_fingerprinting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ai_qa_automation.runtime.tool_input_bounds as bounds
+
+    labels: list[str] = []
+    real_bounded_json_loads = bounds.bounded_json_loads
+
+    def counted(raw: str, *, label: str, **kwargs: Any) -> Any:
+        labels.append(label)
+        return real_bounded_json_loads(raw, label=label, **kwargs)
+
+    monkeypatch.setattr(bounds, "bounded_json_loads", counted)
+    tool_name = "mcp__qa__validate_json_contract"
+    tool_input = {"instance_json": "{}", "schema_json": "{}"}
+
+    validate_tool_request(tool_name, tool_input)
+    runtime_hooks._input_fingerprint(tool_name, tool_input)
+
+    assert labels == [
+        "validate_json_contract.instance_json",
+        "validate_json_contract.schema_json",
+    ]
+
+
 def test_pretool_rejects_oversized_input_before_fingerprint_policy_or_budget(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
