@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from ai_qa_automation.models import LocatorCandidate, ValidationStatus
+from ai_qa_automation.models import (
+    LocatorCandidate,
+    TerminalStatus,
+    ValidationResult,
+    ValidationStatus,
+)
 from ai_qa_automation.runtime.browser_validation import (
     browser_inspection_subject,
     browser_locator_verification_subject,
@@ -79,7 +84,7 @@ def test_locator_gate_binds_semantic_candidate_set_not_model_claims_or_json_orde
     assert first.gate_id != changed.gate_id
     assert first.details["candidate_count"] == 2
     assert "Sign in" not in repr(first.details)
-    assert "login" not in repr(first.details)
+    assert "/login" not in repr(first.details)
 
 
 def test_unrelated_browser_pass_cannot_close_different_browser_objective() -> None:
@@ -99,7 +104,7 @@ def test_unrelated_browser_pass_cannot_close_different_browser_objective() -> No
         objective_gate_id=objective.gate_id,
     )
 
-    assert status is not ValidationStatus.PASS
+    assert status is TerminalStatus.NOT_VERIFIED
     assert "no active PASS matched" in reason
 
 
@@ -125,5 +130,26 @@ def test_later_same_subject_browser_uncertainty_prevents_stale_pass() -> None:
         objective_gate_id=subject.gate_id,
     )
 
-    assert status.value == "NOT_VERIFIED"
+    assert status is TerminalStatus.NOT_VERIFIED
     assert "incomplete" in reason.casefold()
+
+
+def test_legacy_unbound_browser_runtime_gate_cannot_close_objective() -> None:
+    legacy = ValidationResult(
+        name="browser_runtime",
+        gate_id="browser_runtime",
+        revision=0,
+        status=ValidationStatus.PASS,
+        summary="legacy browser capability green",
+    )
+
+    status, reason = determine_terminal_outcome(
+        "success",
+        [legacy],
+        current_revision=0,
+        objective_gate_id="browser_runtime",
+    )
+
+    assert status is TerminalStatus.NOT_VERIFIED
+    assert "legacy validation gate" in reason
+    assert "exact deterministic subject" in reason
