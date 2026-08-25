@@ -75,9 +75,7 @@ def _utf8_bytes_bounded(value: str, *, remaining: int) -> int:
 
 def _bounded_headers(headers: httpx.Headers) -> dict[str, str]:
     total = 0
-    count = 0
-    for name, value in headers.multi_items():
-        count += 1
+    for count, (name, value) in enumerate(headers.multi_items(), start=1):
         if count > _MAX_API_RESPONSE_HEADERS:
             raise _ObservationBoundaryViolation(
                 "header_count",
