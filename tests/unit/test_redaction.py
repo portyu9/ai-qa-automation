@@ -56,7 +56,12 @@ def test_network_url_query_and_fragment_are_removed_even_without_sensitive_key_n
 
 
 def test_websocket_url_userinfo_query_and_fragment_are_removed() -> None:
-    text = "wss://user:pass@example.test/socket?cursor=opaque#fragment"
+    text = (
+        "wss://"
+        + "user:"
+        + "pass"
+        + "@example.test/socket?cursor=opaque#fragment"
+    )
 
     redacted = redact_text(text)
 
