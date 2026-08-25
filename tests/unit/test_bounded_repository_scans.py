@@ -49,6 +49,38 @@ def test_dependency_inventory_refuses_to_hash_oversized_manifest(tmp_path: Path)
     ]
 
 
+def _install_final_component_symlink_swap(
+    *,
+    outside: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_read = bootstrap.read_bytes_confined
+
+    def swap_then_read(
+        root: Path,
+        relative_path: str | Path,
+        *,
+        max_bytes: int,
+        label: str,
+        expected_root_identity: tuple[int, int] | None = None,
+    ) -> bytes:
+        path = root / relative_path
+        path.unlink()
+        try:
+            path.symlink_to(outside)
+        except OSError as exc:  # pragma: no cover - platform/filesystem capability
+            pytest.skip(f"symlink creation unavailable: {exc}")
+        return real_read(
+            root,
+            relative_path,
+            max_bytes=max_bytes,
+            label=label,
+            expected_root_identity=expected_root_identity,
+        )
+
+    monkeypatch.setattr(bootstrap, "read_bytes_confined", swap_then_read)
+
+
 def test_dependency_inventory_fails_closed_on_final_component_symlink_swap(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -57,17 +89,7 @@ def test_dependency_inventory_fails_closed_on_final_component_symlink_swap(
     manifest.write_text("[project]\nname='owned'\n", encoding="utf-8")
     outside = tmp_path / "outside.toml"
     outside.write_text("[project]\nname='untrusted'\n", encoding="utf-8")
-    real_hash = bootstrap.sha256_file_bounded
-
-    def swap_then_hash(path: Path, **kwargs: object) -> tuple[str, int]:
-        path.unlink()
-        try:
-            path.symlink_to(outside)
-        except OSError as exc:  # pragma: no cover - platform/filesystem capability
-            pytest.skip(f"symlink creation unavailable: {exc}")
-        return real_hash(path, **kwargs)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(bootstrap, "sha256_file_bounded", swap_then_hash)
+    _install_final_component_symlink_swap(outside=outside, monkeypatch=monkeypatch)
 
     rows, truncated = bootstrap._dependency_inventory(tmp_path)
 
@@ -75,7 +97,7 @@ def test_dependency_inventory_fails_closed_on_final_component_symlink_swap(
     assert rows == [
         {
             "path": "pyproject.toml",
-            "size": len("[project]\nname='owned'\n"),
+            "size": None,
             "sha256": None,
             "hashed": False,
             "reason": "read-failed-or-grew-during-hash",
@@ -91,15 +113,7 @@ def test_contract_drift_fails_closed_on_final_component_symlink_swap(
     current.write_text('{"openapi":"3.1.0","paths":{}}', encoding="utf-8")
     outside = tmp_path / "outside.json"
     outside.write_text('{"openapi":"3.1.0","paths":{"/evil":{}}}', encoding="utf-8")
-    real_read = bootstrap.read_bytes_bounded
-
-    def swap_then_read(path: Path, **kwargs: object) -> bytes:
-        path.unlink()
-        try:
-            path.symlink_to(outside)
-        except OSError as exc:  # pragma: no cover - platform/filesystem capability
-            pytest.skip(f"symlink creation unavailable: {exc}")
-        return real_read(path, **kwargs)  # type: ignore[arg-type]
+    _install_final_component_symlink_swap(outside=outside, monkeypatch=monkeypatch)
 
     class Inspector:
         @staticmethod
@@ -116,7 +130,6 @@ def test_contract_drift_fails_closed_on_final_component_symlink_swap(
         worktree_files=(),
         changed_files=("openapi.json",),
     )
-    monkeypatch.setattr(bootstrap, "read_bytes_bounded", swap_then_read)
 
     reports = bootstrap._contract_drift_reports(
         workspace=tmp_path,
