@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import math
 import time
@@ -15,6 +16,7 @@ from ..redaction import redact_text, sanitize
 from ..runtime.tool_input_bounds import ToolInputBoundsError, bounded_json_loads
 
 _MAX_API_RESPONSE_BYTES = 5_000_000
+_MAX_API_TIMEOUT_SECONDS = 900
 _MAX_API_RESPONSE_HEADERS = 200
 _MAX_API_RESPONSE_HEADER_BYTES = 64_000
 _API_RAW_CHUNK_BYTES = 64_000
@@ -110,9 +112,11 @@ class ApiProbe:
             isinstance(timeout_seconds, bool)
             or not isinstance(timeout_seconds, (int, float))
             or not math.isfinite(timeout_seconds)
-            or timeout_seconds <= 0
+            or not 0 < timeout_seconds <= _MAX_API_TIMEOUT_SECONDS
         ):
-            raise ValueError("timeout_seconds must be a positive finite number")
+            raise ValueError(
+                f"timeout_seconds must be a positive finite number no greater than {_MAX_API_TIMEOUT_SECONDS}"
+            )
         if (
             isinstance(max_response_bytes, bool)
             or not isinstance(max_response_bytes, int)
@@ -159,6 +163,7 @@ class ApiProbe:
         headers: dict[str, str] = {}
         try:
             async with (
+                asyncio.timeout(self.timeout_seconds),
                 httpx.AsyncClient(
                     timeout=self.timeout_seconds,
                     follow_redirects=False,
@@ -190,8 +195,13 @@ class ApiProbe:
                     if len(chunk) > remaining:
                         truncated = True
                         break
-        except httpx.RequestError as exc:
+        except (httpx.RequestError, TimeoutError) as exc:
             elapsed_ms = (time.monotonic() - started) * 1000
+            error_message = (
+                "API probe exceeded its total timeout budget"
+                if isinstance(exc, TimeoutError)
+                else redact_text(str(exc))
+            )
             item = self.evidence.add(
                 EvidenceItem(
                     run_id=self.evidence.run_id,
@@ -201,12 +211,12 @@ class ApiProbe:
                     summary=f"HTTP transport failure contacting {host}",
                     structured_data={
                         "error_type": type(exc).__name__,
-                        "error": redact_text(str(exc)),
+                        "error": error_message,
                         "elapsed_ms": elapsed_ms,
                     },
                 )
             )
-            raise ApiProbeTransportError(redact_text(str(exc)), item.id) from exc
+            raise ApiProbeTransportError(error_message, item.id) from exc
         except _ObservationBoundaryViolation as exc:
             elapsed_ms = (time.monotonic() - started) * 1000
             item = self.evidence.add(

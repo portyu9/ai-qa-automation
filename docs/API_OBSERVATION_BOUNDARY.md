@@ -23,13 +23,14 @@ objective
 
 ## Request-side invariants
 
-Before HTTP execution, the adapter requires:
+At the `ApiProbe` boundary itself, HTTP execution requires:
 
 - `http` or `https` scheme;
-- an explicitly allowlisted host;
+- an explicitly supplied allowlisted host;
 - an allowlisted HTTP method;
-- redirect following disabled;
-- the runtime's separate network-policy decision to have allowed the request.
+- redirect following disabled.
+
+In the internal agent path, the runtime wrapper separately establishes network/method authorization before it constructs `ApiProbe`. Direct library callers do not inherit that wrapper proof merely by instantiating the adapter; they must supply equivalent trusted authorization context themselves.
 
 `ApiProbe` additionally owns the request's `Accept-Encoding` header and forces it to `identity`, overriding a caller-supplied compression preference. This is a resource-safety invariant, not a claim that the remote server will obey the request.
 
@@ -44,6 +45,8 @@ Transparent decompression is intentionally excluded from the accepted observatio
 5. The configured response-byte ceiling is enforced against those raw bytes.
 
 The adapter reads in bounded chunks. The default retained body ceiling is 100,000 bytes; callers may configure a smaller value or increase it only up to the source-owned hard maximum of 5,000,000 bytes. A bounded extra chunk may establish that additional bytes exist, but retained body bytes never exceed the configured ceiling.
+
+The default request timeout is 10 seconds and is capped by a source-owned maximum of 900 seconds. That value is enforced both through HTTPX operation timeouts and an enclosing `asyncio.timeout`, so a peer cannot extend total probe wall time indefinitely by sending progress just often enough to reset per-read timeouts. Timeout expiry is recorded as `NETWORK_ERROR` evidence and retains the attempt evidence ID.
 
 ## Header boundary
 
@@ -176,6 +179,7 @@ Operators must treat API response evidence as potentially sensitive test data an
 This implementation deliberately does **not** claim that:
 
 - HTTPX/httpcore cannot allocate or parse protocol data before the application receives a response object;
+- the adapter timeout controls DNS/TCP/TLS implementation internals after cancellation beyond requiring the probe coroutine to stop waiting;
 - DNS, TLS, sockets, proxies, firewalls, service meshes, or kernel buffers are bounded by this Python adapter;
 - `Accept-Encoding: identity` forces a remote server to behave correctly — noncompliant encoded responses are rejected instead;
 - body truncation preserves a complete semantic document;

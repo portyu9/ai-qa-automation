@@ -60,7 +60,9 @@ async def test_api_probe_bounds_response_body_and_marks_truncation(tmp_path):
     [
         {"timeout_seconds": 0},
         {"timeout_seconds": math.inf},
+        {"timeout_seconds": 901},
         {"max_response_bytes": 0},
+        {"max_response_bytes": 5_000_001},
     ],
 )
 def test_api_probe_rejects_invalid_resource_bounds(tmp_path, kwargs):

@@ -185,6 +185,56 @@ async def test_api_probe_never_parses_a_truncated_prefix_even_when_prefix_is_val
 
 
 @pytest.mark.asyncio
+async def test_api_probe_exact_body_ceiling_is_complete_not_truncated(tmp_path):
+    payload = b"exactly-16-bytes"
+    assert len(payload) == 16
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=httpx.ByteStream(payload), request=request)
+
+    result = await _probe(tmp_path, "exact-bound", handler, max_response_bytes=16).request(
+        "GET", "https://example.com/data"
+    )
+    assert result.body == payload.decode("utf-8")
+    assert result.truncated is False
+    assert result.utf8_valid is True
+
+
+@pytest.mark.asyncio
+async def test_api_probe_total_timeout_bounds_stalled_body_stream(tmp_path):
+    import asyncio
+
+    from ai_qa_automation.tools.api_testing import ApiProbeTransportError
+
+    class StalledStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            await asyncio.Event().wait()
+            yield b""  # pragma: no cover
+
+        async def aclose(self) -> None:
+            return None
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=StalledStream(), request=request)
+
+    evidence = EvidenceStore(tmp_path, "total-timeout")
+    probe = ApiProbe(
+        evidence,
+        allow_hosts={"example.com"},
+        timeout_seconds=0.02,
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(ApiProbeTransportError, match="total timeout budget") as caught:
+        await probe.request("GET", "https://example.com/data")
+
+    record = evidence.all()[-1]
+    assert caught.value.evidence_id == record.id
+    assert record.kind == EvidenceKind.NETWORK_ERROR
+    assert record.structured_data["error_type"] == "TimeoutError"
+    assert record.structured_data["error"] == "API probe exceeded its total timeout budget"
+
+
+@pytest.mark.asyncio
 async def test_api_probe_invalid_utf8_uses_bounded_digest_diagnostic_and_never_parses_json(tmp_path):
     payload = b'{"value":"\xff"}'
 
