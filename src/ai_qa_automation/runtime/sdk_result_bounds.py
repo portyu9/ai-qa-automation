@@ -136,9 +136,7 @@ def validate_sdk_result_message(message: Any, *, max_cost_usd: float) -> Bounded
         )
 
     input_tokens = _bounded_token_count(usage.get("input_tokens", 0), label="input_tokens")
-    output_tokens = _bounded_token_count(
-        usage.get("output_tokens", 0), label="output_tokens"
-    )
+    output_tokens = _bounded_token_count(usage.get("output_tokens", 0), label="output_tokens")
     token_usage = input_tokens + output_tokens
     if token_usage > MAX_SDK_TOKEN_COUNT:
         raise SDKResultBoundsError(
