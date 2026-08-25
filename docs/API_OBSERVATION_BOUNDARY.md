@@ -57,7 +57,7 @@ After HTTPX has created the response object, `ApiProbe` rejects the observation 
 | Header entries | 200 |
 | Aggregate header-name/value UTF-8 text | 64,000 bytes |
 
-Header counting uses the multi-value representation so duplicate entries still consume count and byte budgets. Invalid Unicode surrogates are rejected. For accepted responses, the returned header mapping is bounded and sanitized; full response headers are not copied into the persisted HTTP-response evidence record by this adapter.
+Header entry count is checked before decoded multi-value materialization. With at most 200 entries admitted, a raw header-byte preflight rejects inputs already above the 64,000-byte ceiling before text decoding; decoded multi-value UTF-8 text is then checked against the same ceiling so duplicate entries still consume count and byte budgets. The sanitized/collapsed mapping returned to callers is checked again after duplicate joining/redaction so representation changes cannot expand it beyond the ceiling. Invalid Unicode surrogates are rejected. Full response headers are not copied into the persisted HTTP-response evidence record by this adapter.
 
 These are **post-transport application limits**. HTTPX/httpcore and the operating system may already have consumed resources to receive and parse protocol metadata before this code can inspect it. Deployment/network-layer header limits remain infrastructure responsibilities.
 

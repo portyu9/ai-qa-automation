@@ -122,6 +122,33 @@ async def test_api_probe_rejects_excessive_aggregate_header_text(tmp_path):
     assert "body" not in record.structured_data
 
 
+def test_header_count_is_rejected_before_multi_item_text_materialization(monkeypatch):
+    from ai_qa_automation.tools import api_testing
+
+    headers = httpx.Headers([(f"x-{index}", "v") for index in range(201)])
+
+    def fail_multi_items(_self):
+        raise AssertionError("multi_items must not run for an over-count header set")
+
+    monkeypatch.setattr(httpx.Headers, "multi_items", fail_multi_items)
+    with pytest.raises(ValueError) as caught:
+        api_testing._bounded_headers(headers)
+
+    assert getattr(caught.value, "code", None) == "header_count"
+
+
+def test_sanitized_collapsed_headers_cannot_expand_past_byte_ceiling():
+    from ai_qa_automation.tools import api_testing
+
+    headers = httpx.Headers([("x", "a" * 319) for _ in range(200)])
+    assert sum(len(name) + len(value) for name, value in headers.raw) == 64_000
+
+    with pytest.raises(ValueError) as caught:
+        api_testing._bounded_headers(headers)
+
+    assert getattr(caught.value, "code", None) == "header_bytes"
+
+
 @pytest.mark.asyncio
 async def test_api_probe_parses_only_complete_strict_json(tmp_path):
     async def handler(request: httpx.Request) -> httpx.Response:

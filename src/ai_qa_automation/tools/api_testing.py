@@ -74,19 +74,47 @@ def _utf8_bytes_bounded(value: str, *, remaining: int) -> int:
 
 
 def _bounded_headers(headers: httpx.Headers) -> dict[str, str]:
-    total = 0
-    for count, (name, value) in enumerate(headers.multi_items(), start=1):
-        if count > _MAX_API_RESPONSE_HEADERS:
+    if len(headers) > _MAX_API_RESPONSE_HEADERS:
+        raise _ObservationBoundaryViolation(
+            "header_count",
+            "API response exceeds the header-count bound",
+        )
+
+    raw_total = 0
+    for name, value in headers.raw:
+        raw_total += len(name) + len(value)
+        if raw_total > _MAX_API_RESPONSE_HEADER_BYTES:
             raise _ObservationBoundaryViolation(
-                "header_count",
-                "API response exceeds the header-count bound",
+                "header_bytes",
+                "API response headers exceed the aggregate text bound",
             )
-        total += _utf8_bytes_bounded(name, remaining=_MAX_API_RESPONSE_HEADER_BYTES - total)
-        total += _utf8_bytes_bounded(value, remaining=_MAX_API_RESPONSE_HEADER_BYTES - total)
+
+    text_total = 0
+    for name, value in headers.multi_items():
+        text_total += _utf8_bytes_bounded(
+            name, remaining=_MAX_API_RESPONSE_HEADER_BYTES - text_total
+        )
+        text_total += _utf8_bytes_bounded(
+            value, remaining=_MAX_API_RESPONSE_HEADER_BYTES - text_total
+        )
+
     sanitized = sanitize(dict(headers))
     if not isinstance(sanitized, dict):  # pragma: no cover - sanitize preserves mappings
         raise TypeError("sanitized API response headers must remain a mapping")
-    return {str(key): str(value) for key, value in sanitized.items()}
+
+    result: dict[str, str] = {}
+    output_total = 0
+    for key, value in sanitized.items():
+        rendered_key = str(key)
+        rendered_value = str(value)
+        output_total += _utf8_bytes_bounded(
+            rendered_key, remaining=_MAX_API_RESPONSE_HEADER_BYTES - output_total
+        )
+        output_total += _utf8_bytes_bounded(
+            rendered_value, remaining=_MAX_API_RESPONSE_HEADER_BYTES - output_total
+        )
+        result[rendered_key] = rendered_value
+    return result
 
 
 def _identity_request_headers(value: Any) -> httpx.Headers:
