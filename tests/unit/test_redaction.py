@@ -24,6 +24,11 @@ def redacted_path(path: str) -> str:
     return f"/_redacted_path_sha256/{digest}"
 
 
+def basic_auth_url(*, username: str, credential: str, suffix: str) -> str:
+    """Build a test-only credential URL without storing one as a source literal."""
+    return "https://" + username + ":" + credential + "@example.test" + suffix
+
+
 @pytest.mark.parametrize("secret", secret_samples())
 def test_known_secret_shapes_are_redacted(secret: str) -> None:
     redacted = redact_text(f"prefix {secret} suffix")
@@ -41,13 +46,13 @@ def test_authorization_header_and_bearer_token_are_redacted() -> None:
 
 
 def test_url_basic_auth_and_path_are_removed_but_origin_remains() -> None:
-    text = (
-        "https://automation-user:super-secret-password@example.test/api"  # pragma: allowlist secret
-    )
+    username = "automation-user"
+    credential = "opaque-credential-value"
+    text = basic_auth_url(username=username, credential=credential, suffix="/api")
     redacted = redact_text(text)
 
-    assert "super-secret-password" not in redacted
-    assert "automation-user" not in redacted
+    assert credential not in redacted
+    assert username not in redacted
     assert "/api" not in redacted
     assert redacted == f"https://example.test{redacted_path('/api')}"
 
@@ -143,12 +148,15 @@ def test_sensitive_key_name_redacts_even_non_secret_looking_value() -> None:
 
 
 def test_sanitization_is_idempotent() -> None:
+    credential_url = basic_auth_url(
+        username="runtime-user",
+        credential="runtime-credential",
+        suffix="/path?session=opaque",
+    )
     value = {
         "authorization": "Bearer abcdefghijklmnop",
         "message": "token=abcdefghijklmnop",
-        "nested": [
-            "https://user:password@example.test/path?session=opaque"
-        ],  # pragma: allowlist secret
+        "nested": [credential_url],
     }
     once = sanitize(value)
     twice = sanitize(once)
