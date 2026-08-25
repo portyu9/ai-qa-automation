@@ -225,7 +225,9 @@ async def test_api_probe_total_timeout_bounds_stalled_body_stream(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_api_probe_invalid_utf8_uses_bounded_digest_diagnostic_and_never_parses_json(tmp_path):
+async def test_api_probe_invalid_utf8_uses_bounded_digest_diagnostic_and_never_parses_json(
+    tmp_path,
+):
     payload = b'{"value":"\xff"}'
 
     async def handler(request: httpx.Request) -> httpx.Response:

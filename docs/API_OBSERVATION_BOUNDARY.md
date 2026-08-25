@@ -46,7 +46,7 @@ Transparent decompression is intentionally excluded from the accepted observatio
 
 The adapter reads in bounded chunks. The default retained body ceiling is 100,000 bytes; callers may configure a smaller value or increase it only up to the source-owned hard maximum of 5,000,000 bytes. A bounded extra chunk may establish that additional bytes exist, but retained body bytes never exceed the configured ceiling.
 
-The default request timeout is 10 seconds and is capped by a source-owned maximum of 900 seconds. That value is enforced both through HTTPX operation timeouts and an enclosing `asyncio.timeout`, so a peer cannot extend total probe wall time indefinitely by sending progress just often enough to reset per-read timeouts. Timeout expiry is recorded as `NETWORK_ERROR` evidence and retains the attempt evidence ID.
+The default network transaction timeout is 10 seconds and is capped by a source-owned maximum of 900 seconds. The HTTP transaction and raw-body streaming phase is enclosed by `asyncio.timeout` in addition to HTTPX operation timeouts, so a peer cannot keep that phase alive indefinitely by sending progress just often enough to reset per-read timeouts. Timeout expiry is recorded as `NETWORK_ERROR` evidence and retains the attempt evidence ID. Bounded UTF-8/JSON interpretation, sanitization, and evidence persistence happen after transport closure and are not claimed to be covered by this async wall-clock timeout.
 
 ## Header boundary
 
