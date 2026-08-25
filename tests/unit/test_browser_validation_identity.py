@@ -21,6 +21,7 @@ def candidate(
     uniqueness_count: int = 0,
     semantic_match: float = 0.0,
     stability_score: float = 0.5,
+    rejected_reason: str | None = None,
 ) -> LocatorCandidate:
     return LocatorCandidate(
         locator=locator,
@@ -28,6 +29,7 @@ def candidate(
         uniqueness_count=uniqueness_count,
         semantic_match=semantic_match,
         stability_score=stability_score,
+        rejected_reason=rejected_reason,
     )
 
 
@@ -45,46 +47,74 @@ def test_browser_inspection_gate_binds_exact_requested_url_without_persisting_qu
     assert "checkout" not in repr(first.details)
 
 
-def test_locator_gate_binds_semantic_candidate_set_not_model_claims_or_json_order() -> None:
+def test_locator_gate_binds_exact_candidate_request_without_persisting_locator_text() -> None:
+    first_candidates = [
+        candidate('[data-testid="login"]', "semantic_css", uniqueness_count=99),
+        candidate('page.get_by_text("Sign in", exact=True)', "exact_text"),
+    ]
     first = browser_locator_verification_subject(
         "https://example.test/login",
         'page.get_by_role("button", name="Sign in")',
-        [
-            candidate('[data-testid="login"]', "semantic_css", uniqueness_count=99),
-            candidate('page.get_by_text("Sign in", exact=True)', "exact_text"),
-        ],
+        first_candidates,
+    )
+    same = browser_locator_verification_subject(
+        "https://example.test/login",
+        'page.get_by_role("button", name="Sign in")',
+        first_candidates,
     )
     reordered = browser_locator_verification_subject(
         "https://example.test/login",
         'page.get_by_role("button", name="Sign in")',
+        list(reversed(first_candidates)),
+    )
+    changed_model_claim = browser_locator_verification_subject(
+        "https://example.test/login",
+        'page.get_by_role("button", name="Sign in")',
         [
-            candidate(
-                'page.get_by_text("Sign in", exact=True)',
-                "exact_text",
-                uniqueness_count=1,
-                semantic_match=1.0,
-                stability_score=1.0,
-            ),
             candidate(
                 '[data-testid="login"]',
                 "semantic_css",
                 uniqueness_count=1,
                 semantic_match=1.0,
                 stability_score=1.0,
+                rejected_reason="model advisory rejection",
             ),
+            candidate('page.get_by_text("Sign in", exact=True)', "exact_text"),
         ],
     )
-    changed = browser_locator_verification_subject(
+    changed_locator = browser_locator_verification_subject(
         "https://example.test/login",
         'page.get_by_role("button", name="Sign in")',
         [candidate('[data-testid="submit"]', "semantic_css")],
     )
 
-    assert first.gate_id == reordered.gate_id
-    assert first.gate_id != changed.gate_id
+    assert first.gate_id == same.gate_id
+    assert first.gate_id != reordered.gate_id
+    assert first.gate_id != changed_model_claim.gate_id
+    assert first.gate_id != changed_locator.gate_id
     assert first.details["candidate_count"] == 2
+    assert str(first.details["candidate_request_hash"]).startswith("sha256:")
     assert "Sign in" not in repr(first.details)
     assert "/login" not in repr(first.details)
+    assert "data-testid" not in repr(first.details)
+
+
+def test_locator_duplicate_request_is_not_conflated_with_single_candidate_request() -> None:
+    item = candidate('page.get_by_test_id("login")', "test_id")
+    single = browser_locator_verification_subject(
+        "https://example.test/login",
+        'page.get_by_role("button", name="Sign in")',
+        [item],
+    )
+    duplicate = browser_locator_verification_subject(
+        "https://example.test/login",
+        'page.get_by_role("button", name="Sign in")',
+        [item, item],
+    )
+
+    assert single.gate_id != duplicate.gate_id
+    assert single.details["candidate_count"] == 1
+    assert duplicate.details["candidate_count"] == 2
 
 
 def test_unrelated_browser_pass_cannot_close_different_browser_objective() -> None:
