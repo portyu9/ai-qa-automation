@@ -112,7 +112,9 @@ def test_ignored_dependency_tree_is_not_scanned(tmp_path: Path) -> None:
     assert all("node_modules" not in candidate.path for candidate in result.candidates)
 
 
-def test_oversized_test_file_is_path_scored_but_marks_observation_incomplete(tmp_path: Path) -> None:
+def test_oversized_test_file_is_path_scored_but_marks_observation_incomplete(
+    tmp_path: Path,
+) -> None:
     write(tmp_path / "tests" / "test_checkout.py", "x" * 128)
 
     result = TestImpactMapper().map(
@@ -190,8 +192,6 @@ def test_symlink_workspace_root_is_rejected(tmp_path: Path) -> None:
         {"max_file_bytes": 1.5},
     ],
 )
-def test_invalid_mapper_work_bounds_are_rejected(
-    tmp_path: Path, kwargs: dict[str, object]
-) -> None:
+def test_invalid_mapper_work_bounds_are_rejected(tmp_path: Path, kwargs: dict[str, object]) -> None:
     with pytest.raises(ValueError):
         TestImpactMapper().map(tmp_path, ["src/checkout.py"], **kwargs)  # type: ignore[arg-type]

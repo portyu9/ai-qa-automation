@@ -164,10 +164,9 @@ def scan_regular_files_confined(
                     dir_fd=directory_fd,
                     follow_symlinks=False,
                 )
-                if (
-                    not stat.S_ISDIR(final_current_child.st_mode)
-                    or _identity(os.fstat(child_fd)) != _identity(final_current_child)
-                ):
+                if not stat.S_ISDIR(final_current_child.st_mode) or _identity(
+                    os.fstat(child_fd)
+                ) != _identity(final_current_child):
                     raise ValueError(f"{label} directory changed identity during traversal")
             finally:
                 os.close(child_fd)

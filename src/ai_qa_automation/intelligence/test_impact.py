@@ -132,8 +132,7 @@ class TestImpactMapper:
             label="test-impact repository scan",
         )
         truncated = scan.truncated or any(
-            self._is_test_file(path)
-            for path in chain(scan.unsafe_paths, scan.unreadable_paths)
+            self._is_test_file(path) for path in chain(scan.unsafe_paths, scan.unreadable_paths)
         )
 
         for observed in scan.files:
