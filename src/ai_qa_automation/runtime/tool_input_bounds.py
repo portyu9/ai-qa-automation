@@ -6,6 +6,7 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
+MAX_TOOL_NAME_UTF8_BYTES = 256
 MAX_TOOL_INPUT_UTF8_BYTES = 2_100_000
 MAX_TOOL_INPUT_NODES = 20_000
 MAX_TOOL_INPUT_DEPTH = 16
@@ -267,8 +268,15 @@ def _internal_tool_name(tool_name: str) -> str:
 def validate_tool_request(tool_name: str, tool_input: Any) -> InputShape:
     """Validate generic request shape plus raw JSON fields before live tool execution."""
 
+    if not isinstance(tool_name, str):
+        raise ToolInputBoundsError("tool_name_type", "tool name must be a string")
+    _utf8_size_bounded(
+        tool_name,
+        remaining=MAX_TOOL_NAME_UTF8_BYTES,
+        label="tool name",
+    )
     shape = validate_tool_input(tool_input)
-    internal_name = _internal_tool_name(str(tool_name))
+    internal_name = _internal_tool_name(tool_name)
     if not isinstance(tool_input, dict):  # pragma: no cover - guaranteed by validate_tool_input
         return shape
     for field in _JSON_FIELDS_BY_TOOL.get(internal_name, ()):
