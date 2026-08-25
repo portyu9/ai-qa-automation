@@ -32,7 +32,7 @@ Inputs containing tuples, arbitrary Python objects, non-string object keys, `NaN
 
 ## Raw JSON-string fields
 
-Several narrow tools intentionally accept JSON text as a string. Those fields receive a second boundary **before** `json.loads()`:
+Several narrow tools intentionally accept JSON text as a string. Those fields receive a second bounded parsing contract. UTF-8 size and lexical nesting depth are preflighted before parser invocation; duplicate-key and numeric-constant semantics are enforced by strict parser hooks before any parsed value is accepted:
 
 - at most 1,000,000 UTF-8 bytes per JSON text field;
 - maximum JSON nesting depth of 64, preflighted without invoking the parser;
