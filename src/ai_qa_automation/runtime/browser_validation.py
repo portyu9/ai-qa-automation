@@ -54,18 +54,15 @@ def browser_locator_verification_subject(
 ) -> BrowserValidationSubject:
     requested_url = str(url)
     original = str(original_locator)
-    candidate_pairs = sorted({(item.strategy, item.locator) for item in candidates})
-    canonical_candidates = [
-        {"strategy": strategy, "locator": locator} for strategy, locator in candidate_pairs
-    ]
+    candidate_request = [item.model_dump(mode="json") for item in candidates]
     payload = {
         "operation": "verify_locator_candidates",
         "url": requested_url,
         "original_locator": original,
-        "candidates": canonical_candidates,
+        "candidates": candidate_request,
     }
     candidate_json = json.dumps(
-        canonical_candidates,
+        candidate_request,
         sort_keys=True,
         separators=(",", ":"),
     )
@@ -76,8 +73,8 @@ def browser_locator_verification_subject(
             "operation": "verify_locator_candidates",
             **_url_metadata(requested_url),
             "original_locator_hash": _sha256_text(original),
-            "candidate_count": len(canonical_candidates),
-            "candidate_set_hash": _sha256_text(candidate_json),
+            "candidate_count": len(candidate_request),
+            "candidate_request_hash": _sha256_text(candidate_json),
         },
     )
 
