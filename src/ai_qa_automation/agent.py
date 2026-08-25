@@ -479,6 +479,7 @@ def run_agent_sync(
 ) -> dict[str, Any]:
     """Run the bounded async agent from synchronous CLI/application entry points."""
 
+    objective = validate_objective(objective)
     return asyncio.run(
         run_agent(
             objective,
