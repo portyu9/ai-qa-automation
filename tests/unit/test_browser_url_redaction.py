@@ -1,0 +1,50 @@
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any, AsyncIterator
+
+import pytest
+
+from ai_qa_automation.evidence import EvidenceStore
+from ai_qa_automation.tools.browser_evidence import BrowserProbe, BrowserProbeExecutionError
+
+
+@pytest.mark.asyncio
+async def test_browser_failure_evidence_strips_arbitrary_query_fragment_and_userinfo(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakePage:
+        url = "https://example.test/start"
+
+        async def goto(self, *_args: Any, **_kwargs: Any) -> None:
+            raise RuntimeError(
+                "navigation failed at "
+                "https://redirect-user:redirect-pass@example.test/next?session=redirect-opaque#state"
+            )
+
+    @asynccontextmanager
+    async def fake_guarded_page(**_kwargs: Any) -> AsyncIterator[FakePage]:
+        yield FakePage()
+
+    evidence = EvidenceStore(tmp_path, "run-browser-url-redaction")
+    probe = BrowserProbe(evidence, allow_hosts={"example.test"})
+    monkeypatch.setattr(probe, "_guarded_page", fake_guarded_page)
+
+    with pytest.raises(BrowserProbeExecutionError) as raised:
+        await probe.inspect(
+            "https://request-user:request-pass@example.test/start?session=request-opaque#client"
+        )
+
+    item = evidence.get(raised.value.evidence_id)
+    rendered = f"{item.source_identifier} {item.structured_data}"
+    assert item.source_identifier == "https://example.test/start"
+    assert "request-user" not in rendered
+    assert "request-pass" not in rendered
+    assert "request-opaque" not in rendered
+    assert "redirect-user" not in rendered
+    assert "redirect-pass" not in rendered
+    assert "redirect-opaque" not in rendered
+    assert "#state" not in rendered
+    assert "https://example.test/next" in rendered
