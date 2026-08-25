@@ -48,6 +48,23 @@ def test_entry_budget_stops_before_materializing_oversized_directory(tmp_path: P
     assert result.files == ()
 
 
+def test_scan_exposes_and_enforces_root_identity(tmp_path: Path) -> None:
+    write(tmp_path / "safe.py", "safe")
+
+    result = scan_regular_files_confined(tmp_path, max_entries=20, label="test scan")
+    current = tmp_path.stat(follow_symlinks=False)
+
+    assert result.root_identity == (current.st_dev, current.st_ino)
+
+    with pytest.raises(ValueError, match="root changed identity since authorization"):
+        scan_regular_files_confined(
+            tmp_path,
+            max_entries=20,
+            label="test scan",
+            expected_root_identity=(current.st_dev, current.st_ino + 1),
+        )
+
+
 def test_symlink_entries_are_never_followed(tmp_path: Path) -> None:
     if os.name == "nt":
         pytest.skip("symlink setup differs on Windows")

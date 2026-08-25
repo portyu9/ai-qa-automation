@@ -57,6 +57,7 @@ class RepositoryProfiler:
         *,
         max_files: int = 20_000,
         max_scan_entries: int = 20_000,
+        expected_root_identity: tuple[int, int] | None = None,
     ) -> RepositoryProfile:
         for name, value in {
             "max_files": max_files,
@@ -87,6 +88,7 @@ class RepositoryProfiler:
             max_entries=max_scan_entries,
             ignored_names=ignored,
             label="repository profile scan",
+            expected_root_identity=expected_root_identity,
         )
         truncated = scan.truncated or bool(scan.unsafe_paths or scan.unreadable_paths)
         scanned_files = 0

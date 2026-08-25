@@ -8,7 +8,7 @@ import pytest
 
 import ai_qa_automation.runtime.bootstrap as bootstrap_module
 from ai_qa_automation.fs_observation import scan_regular_files_confined
-from ai_qa_automation.runtime.bootstrap import _dependency_inventory
+from ai_qa_automation.runtime.bootstrap import _dependency_inventory, bootstrap_runtime_context
 
 
 def write(path: Path, data: bytes) -> None:
@@ -100,6 +100,80 @@ def test_dependency_inventory_parent_swap_cannot_redirect_manifest_read(
             "reason": "read-failed-or-grew-during-hash",
         }
     ]
+
+
+def test_dependency_inventory_root_swap_after_scan_cannot_redirect_manifest_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if os.name == "nt":
+        pytest.skip("descriptor-relative no-follow scan is Unix-only")
+    workspace = tmp_path / "workspace"
+    write(workspace / "package.json", b'{"name":"inside"}')
+
+    real_scan = scan_regular_files_confined
+
+    def scan_then_replace_root(*args: object, **kwargs: object):
+        result = real_scan(*args, **kwargs)
+        workspace.rename(tmp_path / "workspace-original")
+        write(workspace / "package.json", b'{"name":"outside"}')
+        return result
+
+    monkeypatch.setattr(bootstrap_module, "scan_regular_files_confined", scan_then_replace_root)
+
+    rows, truncated = _dependency_inventory(workspace)
+
+    assert truncated is True
+    assert rows == [
+        {
+            "path": "package.json",
+            "size": None,
+            "sha256": None,
+            "hashed": False,
+            "reason": "read-failed-or-grew-during-hash",
+        }
+    ]
+
+
+def test_bootstrap_rejects_workspace_identity_mismatch_before_observation(tmp_path: Path) -> None:
+    current = tmp_path.stat(follow_symlinks=False)
+
+    with pytest.raises(ValueError, match="changed identity since lease acquisition"):
+        bootstrap_runtime_context(
+            workspace=tmp_path,
+            state=None,  # type: ignore[arg-type]
+            evidence=None,  # type: ignore[arg-type]
+            state_store=None,  # type: ignore[arg-type]
+            control=None,  # type: ignore[arg-type]
+            workspace_root_identity=(current.st_dev, current.st_ino + 1),
+        )
+
+
+def test_bootstrap_rejects_root_replacement_during_repository_inspection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    current = workspace.stat(follow_symlinks=False)
+    expected_identity = (current.st_dev, current.st_ino)
+    real_snapshot = bootstrap_module.RepositoryInspector.snapshot
+
+    def snapshot_then_replace(inspector: object):
+        snapshot = real_snapshot(inspector)  # type: ignore[arg-type]
+        workspace.rename(tmp_path / "workspace-original")
+        workspace.mkdir()
+        return snapshot
+
+    monkeypatch.setattr(bootstrap_module.RepositoryInspector, "snapshot", snapshot_then_replace)
+
+    with pytest.raises(ValueError, match="changed identity during repository inspection"):
+        bootstrap_runtime_context(
+            workspace=workspace,
+            state=None,  # type: ignore[arg-type]
+            evidence=None,  # type: ignore[arg-type]
+            state_store=None,  # type: ignore[arg-type]
+            control=None,  # type: ignore[arg-type]
+            workspace_root_identity=expected_identity,
+        )
 
 
 def test_dependency_inventory_scan_limit_counts_directory_entries(tmp_path: Path) -> None:

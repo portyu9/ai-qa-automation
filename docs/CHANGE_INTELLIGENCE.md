@@ -82,7 +82,7 @@ This is a conservative regression signal—not a substitute for application-spec
 
 ## Confined repository observation
 
-Repository profiling, test-impact mapping, dependency inventory, and current-workspace OpenAPI/Swagger reads treat the target worktree as **untrusted filesystem state**, not as authority merely because a pathname was previously inspected.
+Repository profiling, test-impact mapping, dependency inventory, CODEOWNERS resolution, and current-workspace OpenAPI/Swagger reads treat the target worktree as **untrusted filesystem state**, not as authority merely because a pathname was previously inspected.
 
 For those change-intelligence paths:
 
@@ -90,18 +90,20 @@ For those change-intelligence paths:
 - symlinks and other non-regular entries are never promoted as regular-file observations, while unreadable or ambiguous entries remain explicit uncertainty;
 - every directory entry actually returned by enumeration consumes the strict scan budget; the scanner does not fetch a hidden `max + 1` sentinel entry;
 - reaching the entry ceiling is conservatively reported as truncated/incomplete, and the directory batch that reaches that ceiling is not partially promoted into the file set;
-- selected test-source, dependency-manifest, and current-contract bytes are re-opened through descriptor-confined bounded reads rather than trusting earlier pathname metadata;
+- selected test-source, dependency-manifest, CODEOWNERS, and current-contract bytes are opened through descriptor-confined bounded reads rather than trusting earlier pathname metadata;
+- the descriptor-observed scan root identity is carried into later selected-file reads, so replacing the entire workspace-root pathname after enumeration cannot redirect those reads;
+- live bootstrap also compares its observation root against the already-acquired `WorkspaceLease` root identity, then revalidates that identity after repository/baseline inspection;
 - identity/type changes during traversal or confined reads fail closed instead of becoming observed content.
 
-This prevents pathname preflight from silently becoming read authority after a parent or final-component swap. It does **not** make target files trusted, guarantee filesystem snapshot isolation, or claim that every recursive reader in the codebase has already migrated to this boundary. In particular, the separate model-facing `_coverage_search()` traversal remains a follow-up boundary and is not covered by this section.
+This prevents pathname preflight from silently becoming read authority after a parent, final-component, or whole-root swap for the bounded file-observation paths above. It does **not** make target files trusted, guarantee filesystem snapshot isolation, or make Git subprocess `cwd` descriptor-bound. `RepositoryInspector`/Git subprocess identity is therefore still a distinct residual boundary. The separate model-facing `_coverage_search()` traversal also remains a follow-up boundary and is not covered by this section.
 
 ---
 
 ## CODEOWNERS context
 
-The runtime searches conventional CODEOWNERS locations in precedence order and applies last-match-wins behavior for its supported grammar.
+The runtime searches conventional CODEOWNERS locations in precedence order and applies last-match-wins behavior for its supported grammar. The CODEOWNERS workspace root is identity-pinned before the read (or bound to the bootstrap/lease identity supplied by the caller), and each candidate is read through the descriptor-confined boundary. An unsafe higher-precedence candidate is surfaced as uncertainty rather than silently falling through to a lower-precedence file.
 
-Supported deterministic matching includes common root/directory and `*` / `**` / `?` forms. Unsupported syntax is surfaced rather than approximated.
+Supported deterministic matching includes common root/directory and `*` / `**` / `?` forms. Unsupported syntax, invalid UTF-8, unreadable input, and unsafe/oversized file boundaries are surfaced rather than approximated.
 
 > [!NOTE]
 > Ownership is review/routing evidence only. Being a CODEOWNER never grants runtime tool permission.

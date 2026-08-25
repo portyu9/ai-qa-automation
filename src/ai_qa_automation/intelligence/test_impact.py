@@ -90,6 +90,7 @@ class TestImpactMapper:
         max_file_bytes: int = 256_000,
         max_candidates: int = 150,
         max_scan_files: int = 20_000,
+        expected_root_identity: tuple[int, int] | None = None,
     ) -> TestImpactAssessment:
         for name, value in {
             "max_test_files": max_test_files,
@@ -130,6 +131,7 @@ class TestImpactMapper:
             max_entries=max_scan_files,
             ignored_names=_IGNORED,
             label="test-impact repository scan",
+            expected_root_identity=expected_root_identity,
         )
         truncated = scan.truncated or any(
             self._is_test_file(path) for path in chain(scan.unsafe_paths, scan.unreadable_paths)
@@ -154,6 +156,7 @@ class TestImpactMapper:
                         relative.as_posix(),
                         max_bytes=max_file_bytes,
                         label=f"test-impact source {relative.as_posix()}",
+                        expected_root_identity=scan.root_identity,
                     )
                     source = raw_source.decode("utf-8")
                 except (OSError, UnicodeError, ValueError):

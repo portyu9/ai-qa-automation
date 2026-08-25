@@ -22,6 +22,7 @@ class ConfinedFileScan:
     truncated: bool
     unsafe_paths: tuple[PurePosixPath, ...]
     unreadable_paths: tuple[PurePosixPath, ...]
+    root_identity: tuple[int, int]
 
 
 def _identity(value: os.stat_result) -> tuple[int, int]:
@@ -49,6 +50,7 @@ def scan_regular_files_confined(
     max_entries: int,
     ignored_names: set[str] | frozenset[str] = frozenset(),
     label: str,
+    expected_root_identity: tuple[int, int] | None = None,
 ) -> ConfinedFileScan:
     """Enumerate regular files below ``root`` without following filesystem aliases.
 
@@ -185,6 +187,8 @@ def scan_regular_files_confined(
         ):
             raise ValueError(f"{label} root changed identity during scan startup")
         root_identity = _identity(opened_root)
+        if expected_root_identity is not None and root_identity != expected_root_identity:
+            raise ValueError(f"{label} root changed identity since authorization")
 
         visit(root_fd, PurePosixPath())
 
@@ -208,4 +212,5 @@ def scan_regular_files_confined(
         truncated=truncated,
         unsafe_paths=tuple(sorted(unsafe, key=PurePosixPath.as_posix)),
         unreadable_paths=tuple(sorted(unreadable, key=PurePosixPath.as_posix)),
+        root_identity=root_identity,
     )

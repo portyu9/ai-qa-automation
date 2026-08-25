@@ -169,6 +169,34 @@ def test_parent_swap_to_symlink_cannot_redirect_test_source_read(
     assert all("exact_changed_path_reference" not in item.signals for item in result.candidates)
 
 
+def test_workspace_root_swap_after_scan_cannot_redirect_test_source_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if os.name == "nt":
+        pytest.skip("descriptor-relative no-follow scan is Unix-only")
+    workspace = tmp_path / "workspace"
+    write(workspace / "tests" / "test_checkout.py", "def test_checkout():\n    assert True\n")
+
+    real_scan = scan_regular_files_confined
+
+    def scan_then_replace_root(*args: object, **kwargs: object):
+        result = real_scan(*args, **kwargs)
+        workspace.rename(tmp_path / "workspace-original")
+        write(
+            workspace / "tests" / "test_checkout.py",
+            "# src/payments/checkout.py\ndef test_checkout():\n    assert True\n",
+        )
+        return result
+
+    monkeypatch.setattr(test_impact_module, "scan_regular_files_confined", scan_then_replace_root)
+
+    result = TestImpactMapper().map(workspace, ["src/payments/checkout.py"])
+
+    assert result.scan_truncated is True
+    assert result.confidence == 0.35
+    assert all("exact_changed_path_reference" not in item.signals for item in result.candidates)
+
+
 def test_symlink_workspace_root_is_rejected(tmp_path: Path) -> None:
     if os.name == "nt":
         pytest.skip("symlink setup differs on Windows")

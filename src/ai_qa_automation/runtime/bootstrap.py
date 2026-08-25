@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from ..evidence import EvidenceStore
-from ..fs_authority import read_bytes_confined
+from ..fs_authority import pin_directory_identity, read_bytes_confined
 from ..fs_observation import scan_regular_files_confined
 from ..intelligence.change_impact import ChangeImpactAnalyzer
 from ..intelligence.codeowners import CodeownersResolver
@@ -48,6 +48,7 @@ def _dependency_inventory(
     max_files: int = 100,
     max_scan_files: int = 20_000,
     max_file_bytes: int = _MAX_DEPENDENCY_MANIFEST_BYTES,
+    expected_root_identity: tuple[int, int] | None = None,
 ) -> tuple[list[dict[str, Any]], bool]:
     """Hash dependency manifests through bounded descriptor-confined observation."""
 
@@ -66,6 +67,7 @@ def _dependency_inventory(
         max_entries=max_scan_files,
         ignored_names=ignored,
         label="dependency manifest repository scan",
+        expected_root_identity=expected_root_identity,
     )
     rows: list[dict[str, Any]] = []
     truncated = scan.truncated
@@ -123,6 +125,7 @@ def _dependency_inventory(
                 relative,
                 max_bytes=max_file_bytes,
                 label=f"dependency manifest {relative}",
+                expected_root_identity=scan.root_identity,
             )
         except (OSError, ValueError):
             truncated = True
@@ -158,12 +161,27 @@ def bootstrap_runtime_context(
     state_store: StateStore,
     control: RuntimeControl,
     baseline_ref: str | None = None,
+    workspace_root_identity: tuple[int, int] | None = None,
 ) -> str:
     """Capture deterministic repository/change/ownership/contract/dependency context."""
+    workspace = workspace.expanduser().absolute()
+    bootstrap_root_identity = pin_directory_identity(workspace, label="runtime bootstrap workspace")
+    if (
+        workspace_root_identity is not None
+        and bootstrap_root_identity != workspace_root_identity
+    ):
+        raise ValueError("runtime bootstrap workspace changed identity since lease acquisition")
     inspector = RepositoryInspector(workspace)
     if baseline_ref is None:
         baseline_ref = os.environ.get("AI_QA_BASE_REF") or None
     snapshot = inspector.snapshot()
+    if (
+        pin_directory_identity(workspace, label="runtime bootstrap workspace")
+        != bootstrap_root_identity
+    ):
+        raise ValueError(
+            "runtime bootstrap workspace changed identity during repository inspection"
+        )
     state.target_git_sha = snapshot.git_sha
     control.set_workspace_fingerprint(snapshot.fingerprint)
 
@@ -177,6 +195,13 @@ def bootstrap_runtime_context(
             baseline_error = f"{type(exc).__name__}: {str(exc)[:500]}"
         else:
             changed_files = change_set.changed_files
+        if (
+            pin_directory_identity(workspace, label="runtime bootstrap workspace")
+            != bootstrap_root_identity
+        ):
+            raise ValueError(
+                "runtime bootstrap workspace changed identity during baseline inspection"
+            )
 
     impact = ChangeImpactAnalyzer().assess(changed_files)
     impact_item = evidence.add(
@@ -195,7 +220,9 @@ def bootstrap_runtime_context(
         )
     )
 
-    profile = RepositoryProfiler().profile(workspace)
+    profile = RepositoryProfiler().profile(
+        workspace, expected_root_identity=bootstrap_root_identity
+    )
     profile_item = evidence.add(
         EvidenceItem(
             run_id=state.run_id,
@@ -207,7 +234,9 @@ def bootstrap_runtime_context(
         )
     )
 
-    dependencies, dependency_inventory_truncated = _dependency_inventory(workspace)
+    dependencies, dependency_inventory_truncated = _dependency_inventory(
+        workspace, expected_root_identity=bootstrap_root_identity
+    )
     dependency_item = evidence.add(
         EvidenceItem(
             run_id=state.run_id,
@@ -225,7 +254,9 @@ def bootstrap_runtime_context(
         )
     )
 
-    test_impact = TestImpactMapper().map(workspace, changed_files)
+    test_impact = TestImpactMapper().map(
+        workspace, changed_files, expected_root_identity=bootstrap_root_identity
+    )
     test_impact_item = evidence.add(
         EvidenceItem(
             run_id=state.run_id,
@@ -237,7 +268,9 @@ def bootstrap_runtime_context(
         )
     )
 
-    ownership = CodeownersResolver.from_workspace(workspace).resolve(changed_files)
+    ownership = CodeownersResolver.from_workspace(
+        workspace, expected_root_identity=bootstrap_root_identity
+    ).resolve(changed_files)
     ownership_item = evidence.add(
         EvidenceItem(
             run_id=state.run_id,
@@ -258,6 +291,7 @@ def bootstrap_runtime_context(
         inspector=inspector,
         change_set=change_set,
         changed_files=changed_files,
+        expected_root_identity=bootstrap_root_identity,
     )
     contract_item = evidence.add(
         EvidenceItem(
@@ -270,6 +304,14 @@ def bootstrap_runtime_context(
             structured_data={"reports": contract_reports},
         )
     )
+
+    if (
+        pin_directory_identity(workspace, label="runtime bootstrap workspace")
+        != bootstrap_root_identity
+    ):
+        raise ValueError(
+            "runtime bootstrap workspace changed identity before evidence persistence"
+        )
 
     items = (
         impact_item,
@@ -340,6 +382,7 @@ def _contract_drift_reports(
     changed_files: tuple[str, ...],
     max_files: int = 20,
     max_bytes: int = 2_000_000,
+    expected_root_identity: tuple[int, int] | None = None,
 ) -> list[dict[str, object]]:
     if change_set is None:
         return []
@@ -347,6 +390,9 @@ def _contract_drift_reports(
     reports: list[dict[str, object]] = []
     candidates = [path for path in changed_files if _looks_like_openapi_contract(path)]
     workspace_root = workspace.expanduser().absolute()
+    contract_root_identity = expected_root_identity or pin_directory_identity(
+        workspace_root, label="contract drift workspace"
+    )
     for relative in candidates[:max_files]:
         try:
             current = read_bytes_confined(
@@ -354,6 +400,7 @@ def _contract_drift_reports(
                 relative,
                 max_bytes=max_bytes,
                 label=f"current contract {relative}",
+                expected_root_identity=contract_root_identity,
             )
             current_missing = False
             current_error: str | None = None
