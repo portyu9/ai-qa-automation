@@ -56,12 +56,7 @@ def test_network_url_query_and_fragment_are_removed_even_without_sensitive_key_n
 
 
 def test_websocket_url_userinfo_query_and_fragment_are_removed() -> None:
-    text = (
-        "wss://"
-        + "user:"
-        + "pass"
-        + "@example.test/socket?cursor=opaque#fragment"
-    )
+    text = "wss://" + "user:" + "pass" + "@example.test/socket?cursor=opaque#fragment"
 
     redacted = redact_text(text)
 
@@ -131,7 +126,9 @@ def test_sanitization_is_idempotent() -> None:
     value = {
         "authorization": "Bearer abcdefghijklmnop",
         "message": "token=abcdefghijklmnop",
-        "nested": ["https://user:password@example.test/path?session=opaque"],  # pragma: allowlist secret
+        "nested": [
+            "https://user:password@example.test/path?session=opaque"
+        ],  # pragma: allowlist secret
     }
     once = sanitize(value)
     twice = sanitize(once)
