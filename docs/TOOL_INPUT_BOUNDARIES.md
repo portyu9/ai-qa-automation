@@ -28,7 +28,7 @@ A live tool input must be a JSON object composed only of JSON-compatible values.
 
 The aggregate UTF-8 limit measures decoded string/key content, not transport framing or JSON escape expansion. After validation, repetition fingerprints are hashed across encoder chunks rather than first joining the complete canonical request document into one additional string.
 
-Inputs containing tuples, arbitrary Python objects, non-string object keys, `NaN`, or infinities are outside the live JSON contract and are denied. `PreToolUse` does not coerce an unvalidated tool name through `str()`; a non-string name is rejected as untrusted metadata.
+Inputs containing tuples, arbitrary Python objects, non-string object keys, `NaN`, infinities, or Unicode surrogate code points are outside the live JSON/UTF-8 contract and are denied. `PreToolUse` does not coerce an unvalidated tool name through `str()`; a non-string name is rejected as untrusted metadata.
 
 ## Raw JSON-string fields
 
