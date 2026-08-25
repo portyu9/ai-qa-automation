@@ -8,7 +8,7 @@ from typing import Any, cast
 import pytest
 
 import ai_qa_automation.runtime.runtime_hooks as runtime_hooks
-from ai_qa_automation.models import AgentRunState, ValidationStatus
+from ai_qa_automation.models import AgentRunState, TerminalStatus, ValidationStatus
 from ai_qa_automation.policy import PolicyEngine
 from ai_qa_automation.redaction import sanitize
 from ai_qa_automation.runtime.budget import ExecutionBudget
@@ -25,14 +25,14 @@ from ai_qa_automation.runtime.tool_input_bounds import (
 )
 
 
-def make_control(tmp_path: Path) -> RuntimeControl:
+def make_control(tmp_path: Path, *, max_tool_calls: int = 5) -> RuntimeControl:
     workspace = tmp_path / "sut"
     workspace.mkdir(exist_ok=True)
     run_dir = tmp_path / "artifacts" / "run"
     return RuntimeControl(
         workspace=workspace.resolve(),
         budget=ExecutionBudget(
-            max_tool_calls=5,
+            max_tool_calls=max_tool_calls,
             max_network_calls=5,
             max_mutations=2,
             max_wall_seconds=60,
@@ -91,7 +91,7 @@ def test_protected_json_is_not_reparsed_during_fingerprinting(
     ]
 
 
-def test_pretool_rejects_oversized_input_before_fingerprint_policy_or_budget(
+def test_pretool_rejects_oversized_input_after_attempt_charge_before_fingerprint_or_policy(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -124,14 +124,14 @@ def test_pretool_rejects_oversized_input_before_fingerprint_policy_or_budget(
     hook = result["hookSpecificOutput"]
     assert hook["permissionDecision"] == "deny"
     assert hook["permissionDecisionReason"].startswith("tool-input-bounds:")
-    assert control.budget.snapshot().tool_calls == 0
-    assert state.tool_call_count == 0
+    assert control.budget.snapshot().tool_calls == 1
+    assert state.tool_call_count == 1
     journal = control.journal.path.read_text(encoding="utf-8")
     assert oversized[:128] not in journal
     assert "reason_code" in journal
 
 
-def test_pretool_rejects_malformed_json_field_before_budget(tmp_path: Path) -> None:
+def test_pretool_rejects_malformed_json_field_after_attempt_charge(tmp_path: Path) -> None:
     control = make_control(tmp_path)
     policy = PolicyEngine(tmp_path, control.workspace)
 
@@ -146,7 +146,52 @@ def test_pretool_rejects_malformed_json_field_before_budget(tmp_path: Path) -> N
 
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert "not valid bounded JSON" in result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert control.budget.snapshot().tool_calls == 0
+    assert control.budget.snapshot().tool_calls == 1
+
+
+def test_invalid_request_consumes_budget_and_next_request_denies_before_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    control = make_control(tmp_path, max_tool_calls=1)
+    policy = PolicyEngine(tmp_path, control.workspace)
+    state = AgentRunState(objective="bound abusive retries", workspace=str(control.workspace))
+    oversized = "x" * (MAX_TOOL_INPUT_UTF8_BYTES + 1)
+
+    first = runtime_hooks.pretool_policy_output(
+        policy,
+        {
+            "tool_name": "mcp__qa__inspect_repository",
+            "tool_input": {"payload": oversized},
+        },
+        state=state,
+        control=control,
+    )
+    assert first["hookSpecificOutput"]["permissionDecisionReason"].startswith(
+        "tool-input-bounds:"
+    )
+    assert control.budget.snapshot().tool_calls == 1
+
+    monkeypatch.setattr(
+        runtime_hooks,
+        "validate_tool_request",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("validation reached")),
+    )
+    second = runtime_hooks.pretool_policy_output(
+        policy,
+        {
+            "tool_name": "mcp__qa__inspect_repository",
+            "tool_input": {"payload": oversized},
+        },
+        state=state,
+        control=control,
+    )
+
+    hook = second["hookSpecificOutput"]
+    assert hook["permissionDecision"] == "deny"
+    assert hook["permissionDecisionReason"] == "runtime-budget: tool-call budget exhausted"
+    assert state.terminal_status is TerminalStatus.BUDGET_EXCEEDED
+    assert control.budget.snapshot().tool_calls == 1
 
 
 def test_json_depth_is_rejected_before_parser(monkeypatch: pytest.MonkeyPatch) -> None:
