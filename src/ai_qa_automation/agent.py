@@ -28,6 +28,7 @@ from .runtime.sdk_recovery import (
     retry_delay_seconds,
     retry_failure_reason,
 )
+from .runtime.sdk_result_bounds import SDKResultBoundsError, validate_sdk_result_message
 from .runtime.stale_recovery import recover_stale_mutation
 from .runtime.system_prompt import RUNTIME_SYSTEM_PROMPT
 from .runtime.validation_truth import determine_terminal_outcome
@@ -260,6 +261,7 @@ async def run_agent(
         )
         final_text = ""
         result_subtype: str | None = None
+        result_message_seen = False
         last_retry_decision: SDKRetryDecision | None = None
         try:
             with trace_span("ai_qa_automation.agent_run"):
@@ -274,13 +276,28 @@ async def run_agent(
                                     state.iteration += 1
                                     budget.assert_wall_time()
                                     if isinstance(message, ResultMessage):
-                                        final_text = str(message.result or "")
-                                        result_subtype = str(message.subtype)
-                                        state.cost = float(message.total_cost_usd or 0.0)
-                                        usage = message.usage or {}
-                                        state.token_usage = int(usage.get("input_tokens", 0)) + int(
-                                            usage.get("output_tokens", 0)
+                                        if result_message_seen:
+                                            raise SDKResultBoundsError(
+                                                "duplicate_result_message",
+                                                "Agent SDK emitted more than one terminal result message",
+                                            )
+                                        bounded_result = validate_sdk_result_message(
+                                            message,
+                                            max_cost_usd=cfg.max_cost_usd,
                                         )
+                                        result_message_seen = True
+                                        final_text = bounded_result.result
+                                        result_subtype = bounded_result.subtype
+                                        state.cost = bounded_result.total_cost_usd
+                                        state.token_usage = bounded_result.token_usage
+                                        if bounded_result.budget_exceeded:
+                                            state.terminal_status = TerminalStatus.BUDGET_EXCEEDED
+                                            state.terminal_reason = "Agent SDK reported cost above the configured runtime budget"
+                            if not result_message_seen:
+                                raise SDKResultBoundsError(
+                                    "missing_result_message",
+                                    "Agent SDK response ended without a terminal result message",
+                                )
                             break
                         except asyncio.CancelledError:
                             raise
@@ -323,11 +340,22 @@ async def run_agent(
             state.terminal_status = TerminalStatus.BUDGET_EXCEEDED
             state.terminal_reason = "Global execution-time budget exhausted"
         except Exception as exc:
-            state.terminal_status, state.terminal_reason = sdk_exception_outcome(exc)
-            if last_retry_decision is not None:
-                retry_reason = retry_failure_reason(last_retry_decision, exc)
-                if retry_reason is not None:
-                    state.terminal_reason = retry_reason
+            if isinstance(exc, SDKResultBoundsError):
+                final_text = ""
+                result_subtype = None
+                state.cost = 0.0
+                state.token_usage = 0
+                state.terminal_status = TerminalStatus.INFRASTRUCTURE_FAILURE
+                state.terminal_reason = (
+                    f"Agent SDK result violated deterministic ingestion bounds: {exc.code}"
+                )
+                journal.try_append("sdk_result_denied", reason_code=exc.code)
+            else:
+                state.terminal_status, state.terminal_reason = sdk_exception_outcome(exc)
+                if last_retry_decision is not None:
+                    retry_reason = retry_failure_reason(last_retry_decision, exc)
+                    if retry_reason is not None:
+                        state.terminal_reason = retry_reason
         else:
             if state.terminal_status not in {
                 TerminalStatus.BUDGET_EXCEEDED,
