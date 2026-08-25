@@ -5,10 +5,48 @@ import tempfile
 import threading
 from pathlib import Path
 
-from .io_safety import fsync_directory, parse_json_object_strict, read_text_bounded
+from pydantic import BaseModel
+
+from .io_safety import (
+    JsonSerializationBoundsError,
+    fsync_directory,
+    iter_json_text_bounded,
+    json_preflight_scalar_default,
+    parse_json_object_strict,
+    read_text_bounded,
+)
 from .models import AgentRunState
 
 _MAX_STATE_BYTES = 16_000_000
+
+
+class _StateFieldValue:
+    __slots__ = ("model", "name")
+
+    def __init__(self, model: BaseModel, name: str) -> None:
+        self.model = model
+        self.name = name
+
+
+def _state_model_proxy(model: BaseModel) -> dict[str, _StateFieldValue]:
+    return {name: _StateFieldValue(model, name) for name in type(model).model_fields}
+
+
+def _state_json_default(value: object) -> object:
+    if isinstance(value, _StateFieldValue):
+        payload = value.model.model_dump(include={value.name}, mode="json")
+        return payload[value.name]
+    if isinstance(value, BaseModel):
+        return _state_model_proxy(value)
+    raise TypeError(f"unsupported canonical state value: {type(value).__name__}")
+
+
+def _state_json_preflight_default(value: object) -> object:
+    if isinstance(value, _StateFieldValue):
+        return getattr(value.model, value.name)
+    if isinstance(value, BaseModel):
+        return _state_model_proxy(value)
+    return json_preflight_scalar_default(value)
 
 
 class StateStore:
@@ -40,9 +78,7 @@ class StateStore:
     def save(self, state: AgentRunState) -> None:
         with self._lock:
             self._assert_owned()
-            rendered = state.model_dump_json(indent=2)
-            if len(rendered.encode("utf-8")) > _MAX_STATE_BYTES:
-                raise ValueError("canonical state exceeds persistence size bound")
+            payload = _state_model_proxy(state)
             handle, raw_temp = tempfile.mkstemp(
                 dir=self.path.parent,
                 prefix=f".{self.path.name}.",
@@ -52,7 +88,24 @@ class StateStore:
             temp = Path(raw_temp)
             try:
                 with os.fdopen(handle, "w", encoding="utf-8") as stream:
-                    stream.write(rendered)
+                    try:
+                        for chunk in iter_json_text_bounded(
+                            payload,
+                            max_bytes=_MAX_STATE_BYTES,
+                            label="canonical state",
+                            indent=2,
+                            default=_state_json_default,
+                            preflight_default=_state_json_preflight_default,
+                        ):
+                            stream.write(chunk)
+                    except JsonSerializationBoundsError as exc:
+                        if exc.code == "bytes":
+                            raise ValueError(
+                                "canonical state exceeds persistence size bound"
+                            ) from exc
+                        raise ValueError(
+                            f"canonical state violates persistence serialization bound: {exc.code}"
+                        ) from exc
                     stream.flush()
                     os.fsync(stream.fileno())
                 self._assert_owned()
