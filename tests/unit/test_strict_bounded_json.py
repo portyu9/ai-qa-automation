@@ -49,7 +49,18 @@ def test_bounded_json_rejects_duplicate_object_keys_at_any_depth(raw: str) -> No
         bounded_json_loads(raw, label="ambiguous-json")
 
     assert caught.value.code == "duplicate_json_key"
-    assert "duplicate JSON key" in str(caught.value)
+    assert "duplicate JSON object key" in str(caught.value)
+
+
+def test_duplicate_key_denial_does_not_echo_rejected_key() -> None:
+    marker = "private-duplicate-key-marker"
+    raw = f'{{"{marker}":1,"{marker}":2}}'
+
+    with pytest.raises(ToolInputBoundsError) as caught:
+        bounded_json_loads(raw, label="ambiguous-json")
+
+    assert caught.value.code == "duplicate_json_key"
+    assert marker not in str(caught.value)
 
 
 @pytest.mark.parametrize("raw", ["NaN", "Infinity", "-Infinity", '{"value":NaN}'])
@@ -97,7 +108,8 @@ def test_json_contract_request_rejects_ambiguous_schema_before_policy(
     hook = result["hookSpecificOutput"]
     assert hook["permissionDecision"] == "deny"
     assert hook["permissionDecisionReason"].startswith("tool-input-bounds:")
-    assert "duplicate JSON key" in hook["permissionDecisionReason"]
+    assert "duplicate JSON object key" in hook["permissionDecisionReason"]
+    assert "required" not in hook["permissionDecisionReason"]
     assert control.budget.snapshot().tool_calls == 1
     assert state.tool_call_count == 1
 
