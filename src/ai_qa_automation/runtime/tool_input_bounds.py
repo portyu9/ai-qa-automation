@@ -237,14 +237,38 @@ def bounded_json_loads(
     max_depth: int = MAX_JSON_DEPTH,
     max_container_items: int = MAX_JSON_CONTAINER_ITEMS,
 ) -> Any:
-    """Bound raw JSON text before parsing, then validate the parsed structure iteratively."""
+    """Bound and strictly parse JSON text, then validate its structure iteratively."""
 
     if not isinstance(raw, str):
         raise ToolInputBoundsError("json_text_type", f"{label} must be a JSON string")
     _utf8_size_bounded(raw, remaining=max_utf8_bytes, label=label)
     _preflight_json_depth(raw, max_depth=max_depth, label=label)
+
+    def reject_duplicate_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ToolInputBoundsError(
+                    "duplicate_json_key",
+                    f"{label} contains duplicate JSON key: {key}",
+                )
+            result[key] = value
+        return result
+
+    def reject_constant(value: str) -> None:
+        raise ToolInputBoundsError(
+            "non_standard_json_constant",
+            f"{label} contains non-standard JSON numeric constant: {value}",
+        )
+
     try:
-        parsed = json.loads(raw)
+        parsed = json.loads(
+            raw,
+            object_pairs_hook=reject_duplicate_pairs,
+            parse_constant=reject_constant,
+        )
+    except ToolInputBoundsError:
+        raise
     except RecursionError as exc:
         raise ToolInputBoundsError(
             "json_depth",
