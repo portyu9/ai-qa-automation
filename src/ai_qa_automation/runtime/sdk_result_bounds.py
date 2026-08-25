@@ -146,9 +146,10 @@ def validate_sdk_result_message(message: Any, *, max_cost_usd: float) -> Bounded
             "Agent SDK total token usage exceeds the deterministic bound",
         )
 
+    terminal_subtype = subtype if not is_error else "sdk_error"
     return BoundedSDKResult(
         result=result,
-        subtype=subtype,
+        subtype=terminal_subtype,
         is_error=is_error,
         total_cost_usd=cost,
         token_usage=token_usage,
