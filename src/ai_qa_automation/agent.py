@@ -20,6 +20,7 @@ from .runtime.budget import ExecutionBudget
 from .runtime.internal_tools import build_internal_mcp_server
 from .runtime.journal import RunJournal
 from .runtime.live_services import LiveRuntimeServices
+from .runtime.objective_bounds import validate_objective
 from .runtime.run_control import RuntimeControl
 from .runtime.runtime_hooks import build_hooks, build_permission_handler
 from .runtime.sdk_recovery import (
@@ -53,6 +54,7 @@ async def run_agent(
     objective_gate_id: str | None = None,
 ) -> dict[str, Any]:
     """Run one bounded agent session against an exclusively leased target workspace."""
+    objective = validate_objective(objective)
     cfg = settings or Settings()
     workspace = workspace.expanduser().resolve()
     if not workspace.is_dir():
@@ -477,6 +479,7 @@ def run_agent_sync(
 ) -> dict[str, Any]:
     """Run the bounded async agent from synchronous CLI/application entry points."""
 
+    objective = validate_objective(objective)
     return asyncio.run(
         run_agent(
             objective,
