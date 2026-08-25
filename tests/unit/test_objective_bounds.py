@@ -39,6 +39,16 @@ def test_objective_boundary_rejects_invalid_unicode() -> None:
     assert caught.value.code == "objective_unicode"
 
 
+def test_objective_denial_does_not_echo_rejected_content() -> None:
+    marker = "operator-private-marker"
+
+    with pytest.raises(ObjectiveBoundsError) as caught:
+        validate_objective(marker + "x" * MAX_OBJECTIVE_UTF8_BYTES)
+
+    assert caught.value.code == "objective_bytes"
+    assert marker not in str(caught.value)
+
+
 @pytest.mark.parametrize("objective", ["", " ", "\t\n\r"])
 def test_objective_boundary_rejects_empty_or_whitespace_only_text(objective: str) -> None:
     with pytest.raises(ObjectiveBoundsError) as caught:
