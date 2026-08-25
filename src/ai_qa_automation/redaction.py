@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -26,9 +27,10 @@ _SECRET_PATTERNS = [
 _SENSITIVE_KEYS = re.compile(
     r"(?i)(authorization|api[_-]?key|token|password|secret|cookie|private[_-]?key)"
 )
-_NETWORK_URL_PATTERN = re.compile(r"(?i)\b(?:https?|wss?)://[^\s<>(){}\"']+")
-_OPAQUE_URL_PATTERN = re.compile(r"(?i)\b(?:data|blob):[^\s<>(){}\"']+")
+_NETWORK_URL_PATTERN = re.compile(r"(?i)\b(?:https?|wss?)://[^\s<>\"']+")
+_OPAQUE_URL_PATTERN = re.compile(r"(?i)\b(?:data|blob):[^\s<>\"']+")
 _TRAILING_URL_PUNCTUATION = ".,;!?)"
+_REDACTED_PATH_PATTERN = re.compile(r"^/_redacted_path_sha256/[0-9a-f]{64}$")
 
 
 def _replacement(match: re.Match[str]) -> str:
@@ -37,6 +39,13 @@ def _replacement(match: re.Match[str]) -> str:
     if match.lastindex:
         return f"{match.group(1)}[REDACTED]"
     return "[REDACTED]"
+
+
+def _safe_path(path: str) -> str:
+    if path in {"", "/"} or _REDACTED_PATH_PATTERN.fullmatch(path):
+        return path
+    digest = hashlib.sha256(path.encode("utf-8")).hexdigest()
+    return f"/_redacted_path_sha256/{digest}"
 
 
 def _safe_network_url(match: re.Match[str]) -> str:
@@ -55,7 +64,7 @@ def _safe_network_url(match: re.Match[str]) -> str:
     except ValueError:
         return "[REDACTED_URL]" + trailing
     netloc = rendered_host if port is None else f"{rendered_host}:{port}"
-    safe = urlunsplit((parsed.scheme, netloc, parsed.path, "", ""))
+    safe = urlunsplit((parsed.scheme, netloc, _safe_path(parsed.path), "", ""))
     return safe + trailing
 
 
