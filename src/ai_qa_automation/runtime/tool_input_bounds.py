@@ -43,6 +43,11 @@ def _utf8_size_bounded(value: str, *, remaining: int, label: str) -> int:
     total = 0
     for character in value:
         codepoint = ord(character)
+        if 0xD800 <= codepoint <= 0xDFFF:
+            raise ToolInputBoundsError(
+                "invalid_unicode",
+                f"{label} contains a Unicode surrogate outside the UTF-8 contract",
+            )
         if codepoint <= 0x7F:
             total += 1
         elif codepoint <= 0x7FF:
