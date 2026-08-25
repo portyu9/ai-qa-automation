@@ -19,7 +19,7 @@ Every external MCP interaction answers two questions:
 ```mermaid
 flowchart LR
     accTitle: External MCP provider identity and action authorization remain independent gates
-    accDescr: A requested provider must first match an approved vendor identity. Approved providers then pass through deterministic action classification, where reads may be allowed, writes require approval, destructive actions are denied, and only successful reads produce sanitized untrusted evidence.
+    accDescr: A requested provider must first match an approved vendor identity. Approved providers then pass through deterministic action classification, where reads may be allowed, writes require approval, destructive actions are denied, and only bounded successful reads produce sanitized untrusted evidence.
 
     A[Provider requested] --> B{Approved vendor identity?}
     B -->|no| X[DENY]
@@ -28,7 +28,7 @@ flowchart LR
     C -->|write| E[REQUIRE_APPROVAL]
     C -->|destructive| X
     C -->|unknown| E
-    D --> F[Sanitize + persist untrusted evidence]
+    D --> F[Bound + sanitize + persist untrusted evidence]
 ```
 
 ---
@@ -135,9 +135,10 @@ The GitHub resource noun **pull request** is handled explicitly so the noun toke
 
 A successful authorized provider response is:
 
-1. sanitized;
-2. returned to the model as bounded content; and
-3. persisted as **untrusted observed evidence**.
+1. bounded as untrusted JSON before recursive redaction;
+2. sanitized and bounded again;
+3. returned to the model as bounded content; and
+4. persisted as **untrusted observed evidence**.
 
 Remote content cannot redefine:
 
@@ -150,7 +151,43 @@ Remote content cannot redefine:
 
 Configuration alone does not create `AVAILABLE`. Provider availability requires an observed successful interaction.
 
-A failed provider call creates **no synthetic remote evidence**.
+A failed or output-invalid provider call creates **no synthetic remote evidence**.
+
+### Output ingestion boundary
+
+The posttool path applies source-owned ceilings before recursive `sanitize()`, error-flag inspection, canonical serialization, hashing, or evidence registration:
+
+| Boundary | Limit |
+|---|---:|
+| Aggregate UTF-8 bytes across response strings and object keys | 256,000 |
+| Structural nodes | 20,000 |
+| Nesting depth | 24 |
+| Items in one object or array | 10,000 |
+| Canonical serialized JSON | 2,000,000 bytes |
+| Persisted evidence excerpt | 12,000 characters |
+| External failure message | 16,000 UTF-8 bytes |
+| Integer magnitude | 4,096 bits |
+| Floating-point values | finite only |
+| Unicode surrogate code points | rejected |
+
+External response roots must be JSON objects or arrays. If `is_error` is present, it must be a JSON boolean. Arbitrary Python objects, tuples, non-string object keys, scalar roots, non-finite numbers, invalid Unicode, excessive depth, and oversized structures are rejected as `INVALID_RESPONSE` before recursive redaction.
+
+Sanitized output is validated a second time because redaction can expand representation, such as a short URL path becoming a fixed SHA-256 path marker. Canonical JSON is then encoded incrementally: the framework enforces a serialized-byte ceiling, hashes the complete bounded sanitized representation without first joining it into one large string, and retains at most the 12,000-character evidence excerpt.
+
+An output-bound violation:
+
+- sets provider state to `INVALID_RESPONSE`;
+- cannot promote the provider to `AVAILABLE`;
+- registers no successful remote evidence;
+- returns only a small error-shaped replacement with a bounded reason code;
+- counts as a failed tool result for the normal runtime circuit;
+- journals no rejected response bytes.
+
+Recognizable error text cannot bypass the structural boundary. For example, an oversized body containing `HTTP 429` remains `INVALID_RESPONSE`; rate-limit normalization occurs only after the response passes the output contract.
+
+The failure hook likewise does not arbitrarily `str()` external failure metadata. Failure messages must be strings within the 16,000-byte UTF-8 ceiling before provider-health normalization.
+
+This is a **posttool processing boundary**. The SDK/provider may already have materialized transport data before the hook receives it; this control does not claim to cap upstream transport memory.
 
 ---
 
@@ -206,7 +243,7 @@ When adding or updating a provider, review:
 - [ ] exposed tool names and naming conventions;
 - [ ] read/write/destructive classification;
 - [ ] unknown-action fail-closed behavior;
-- [ ] returned-content sanitization;
+- [ ] returned-content resource bounds and sanitization;
 - [ ] provider failure normalization;
 - [ ] target/user configuration inheritance risk;
 - [ ] least-privilege credentials;
@@ -219,6 +256,7 @@ When adding or updating a provider, review:
 - [Setup](SETUP.md)
 - [Security architecture](SECURITY.md)
 - [Threat model](THREAT_MODEL.md)
+- [Tool input boundaries](TOOL_INPUT_BOUNDARIES.md)
 - [Runtime result contract](RESULT_CONTRACT.md)
 - [Production readiness](PRODUCTION_READINESS.md)
 
