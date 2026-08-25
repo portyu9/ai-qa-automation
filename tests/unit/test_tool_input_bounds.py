@@ -167,9 +167,7 @@ def test_invalid_request_consumes_budget_and_next_request_denies_before_validati
         state=state,
         control=control,
     )
-    assert first["hookSpecificOutput"]["permissionDecisionReason"].startswith(
-        "tool-input-bounds:"
-    )
+    assert first["hookSpecificOutput"]["permissionDecisionReason"].startswith("tool-input-bounds:")
     assert control.budget.snapshot().tool_calls == 1
 
     monkeypatch.setattr(
