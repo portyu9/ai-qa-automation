@@ -81,8 +81,8 @@ def _bounded_headers(headers: httpx.Headers) -> dict[str, str]:
         )
 
     raw_total = 0
-    for name, value in headers.raw:
-        raw_total += len(name) + len(value)
+    for raw_name, raw_value in headers.raw:
+        raw_total += len(raw_name) + len(raw_value)
         if raw_total > _MAX_API_RESPONSE_HEADER_BYTES:
             raise _ObservationBoundaryViolation(
                 "header_bytes",
@@ -90,12 +90,12 @@ def _bounded_headers(headers: httpx.Headers) -> dict[str, str]:
             )
 
     text_total = 0
-    for name, value in headers.multi_items():
+    for text_name, text_value in headers.multi_items():
         text_total += _utf8_bytes_bounded(
-            name, remaining=_MAX_API_RESPONSE_HEADER_BYTES - text_total
+            text_name, remaining=_MAX_API_RESPONSE_HEADER_BYTES - text_total
         )
         text_total += _utf8_bytes_bounded(
-            value, remaining=_MAX_API_RESPONSE_HEADER_BYTES - text_total
+            text_value, remaining=_MAX_API_RESPONSE_HEADER_BYTES - text_total
         )
 
     sanitized = sanitize(dict(headers))
