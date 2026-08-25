@@ -25,6 +25,7 @@ class FakeResultMessage:
     def __init__(self) -> None:
         self.result = "Model completed without deterministic execution."
         self.subtype = "success"
+        self.is_error = False
         self.total_cost_usd = 0.01
         self.usage = {"input_tokens": 10, "output_tokens": 5}
 
