@@ -12,7 +12,7 @@ from ai_qa_automation.tools.browser_evidence import BrowserProbe, BrowserProbeEx
 
 
 @pytest.mark.asyncio
-async def test_browser_failure_evidence_strips_arbitrary_query_fragment_and_userinfo(
+async def test_browser_failure_evidence_strips_arbitrary_url_sensitive_components(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -48,12 +48,15 @@ async def test_browser_failure_evidence_strips_arbitrary_query_fragment_and_user
 
     item = evidence.get(raised.value.evidence_id)
     rendered = f"{item.source_identifier} {item.structured_data}"
-    assert item.source_identifier == "https://example.test/start"
+    assert item.source_identifier is not None
+    assert item.source_identifier.startswith("https://example.test/_redacted_path_sha256/")
     assert "request-user" not in rendered
     assert "request-pass" not in rendered
     assert "request-opaque" not in rendered
+    assert "/start" not in rendered
     assert "redirect-user" not in rendered
     assert "redirect-pass" not in rendered
     assert "redirect-opaque" not in rendered
+    assert "/next" not in rendered
     assert "#state" not in rendered
-    assert "https://example.test/next" in rendered
+    assert "https://example.test/_redacted_path_sha256/" in rendered
