@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .internal_tools import RuntimeServices
+from ..models import TerminalStatus, ValidationResult, ValidationStatus
+from .internal_tools import RuntimeServices, _pytest_scope, _stable_gate_id
 from .run_control import RuntimeControl
 
 
@@ -16,16 +17,68 @@ class LiveRuntimeServices(RuntimeServices):
     authority. Canonical RuntimeControl covers internal and external SDK tool
     requests uniformly; this adapter only mirrors that charged request count into
     AgentRunState while preserving standalone RuntimeServices behavior elsewhere.
+
+    Target-controlled pytest code is additionally fail-closed unless trusted
+    deployment infrastructure explicitly asserts both process/filesystem
+    containment and outbound-egress enforcement. These booleans are prerequisite
+    assertions only; they do not implement the isolation themselves.
     """
 
     control: RuntimeControl | None = None
+    pytest_process_isolation_enforced: bool = False
+    pytest_external_egress_enforced: bool = False
 
     def __post_init__(self) -> None:
         super().__post_init__()
         if self.control is None:
             raise ValueError("live runtime services require RuntimeControl")
+        for name, value in {
+            "pytest_process_isolation_enforced": self.pytest_process_isolation_enforced,
+            "pytest_external_egress_enforced": self.pytest_external_egress_enforced,
+        }.items():
+            if not isinstance(value, bool):
+                raise ValueError(f"{name} must be a boolean")
+
+    def pytest_execution_block_reason(self) -> str | None:
+        missing: list[str] = []
+        if not self.pytest_process_isolation_enforced:
+            missing.append("process/filesystem isolation")
+        if not self.pytest_external_egress_enforced:
+            missing.append("outbound-egress enforcement")
+        if not missing:
+            return None
+        return (
+            "pytest target-code execution requires trusted deployment enforcement for "
+            + " and ".join(missing)
+            + "; configuration flags are prerequisite assertions, not sandbox implementations"
+        )
 
     def consume(self, tool_name: str, tool_input: dict[str, Any]) -> None:
+        if tool_name == "run_pytest":
+            reason = self.pytest_execution_block_reason()
+            if reason is not None:
+                pytest_args = [str(item) for item in (tool_input.get("args") or [])]
+                self.state.validation_results.append(
+                    ValidationResult(
+                        name="pytest",
+                        gate_id=_stable_gate_id("pytest", pytest_args),
+                        revision=self.state.change_revision,
+                        status=ValidationStatus.BLOCKED,
+                        summary=reason,
+                        details={
+                            "scope": _pytest_scope(pytest_args),
+                            "args": pytest_args,
+                            "execution_started": False,
+                            "process_isolation_enforced": self.pytest_process_isolation_enforced,
+                            "external_egress_enforced": self.pytest_external_egress_enforced,
+                        },
+                    )
+                )
+                self.state.terminal_status = TerminalStatus.BLOCKED
+                self.state.terminal_reason = reason
+                self.checkpoint()
+                raise PermissionError(reason)
+
         del tool_name, tool_input
         if self.control is None:  # pragma: no cover - guarded by __post_init__
             raise RuntimeError("live runtime services lost RuntimeControl")
