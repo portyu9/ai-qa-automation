@@ -166,14 +166,25 @@ def validate_tool_input(tool_input: Any) -> InputShape:
     )
 
 
-def tool_input_fingerprint(
-    tool_name: str, tool_input: Any, *, compact: bool = True
-) -> str:
-    """Hash a prevalidated request incrementally without materializing canonical JSON."""
+def validate_tool_request_shape(tool_name: str, tool_input: Any) -> InputShape:
+    """Validate the generic request envelope without reparsing embedded JSON text."""
 
-    validate_tool_request(tool_name, tool_input)
+    if not isinstance(tool_name, str):
+        raise ToolInputBoundsError("tool_name_type", "tool name must be a string")
+    _utf8_size_bounded(
+        tool_name,
+        remaining=MAX_TOOL_NAME_UTF8_BYTES,
+        label="tool name",
+    )
+    return validate_tool_input(tool_input)
+
+
+def tool_input_fingerprint(tool_name: str, tool_input: Any, *, compact: bool = True) -> str:
+    """Hash a shape-validated request incrementally without materializing canonical JSON."""
+
+    validate_tool_request_shape(tool_name, tool_input)
     digest = hashlib.sha256()
-    digest.update(str(tool_name).encode("utf-8"))
+    digest.update(tool_name.encode("utf-8"))
     digest.update(b":")
     encoder = json.JSONEncoder(
         sort_keys=True,
@@ -268,14 +279,7 @@ def _internal_tool_name(tool_name: str) -> str:
 def validate_tool_request(tool_name: str, tool_input: Any) -> InputShape:
     """Validate generic request shape plus raw JSON fields before live tool execution."""
 
-    if not isinstance(tool_name, str):
-        raise ToolInputBoundsError("tool_name_type", "tool name must be a string")
-    _utf8_size_bounded(
-        tool_name,
-        remaining=MAX_TOOL_NAME_UTF8_BYTES,
-        label="tool name",
-    )
-    shape = validate_tool_input(tool_input)
+    shape = validate_tool_request_shape(tool_name, tool_input)
     internal_name = _internal_tool_name(tool_name)
     if not isinstance(tool_input, dict):  # pragma: no cover - guaranteed by validate_tool_input
         return shape
