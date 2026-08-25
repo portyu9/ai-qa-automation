@@ -67,15 +67,17 @@ def test_live_pytest_blocks_before_execution_when_deployment_prerequisite_is_mis
     external_egress: bool,
     missing_text: str,
 ) -> None:
-    services, _, store = make_services(
+    services, control, store = make_services(
         tmp_path,
         process_isolation=process_isolation,
         external_egress=external_egress,
     )
+    control.budget.charge_tool()
 
     with pytest.raises(PermissionError, match="pytest target-code execution requires"):
         services.consume("run_pytest", {"args": ["tests/test_checkout.py"]})
 
+    assert services.state.tool_call_count == 1
     assert services.state.terminal_status is TerminalStatus.BLOCKED
     assert services.state.terminal_reason is not None
     assert missing_text in services.state.terminal_reason
@@ -94,6 +96,7 @@ def test_live_pytest_blocks_before_execution_when_deployment_prerequisite_is_mis
     assert validation.gate_id is not None and validation.gate_id.startswith("pytest:")
 
     persisted = store.load()
+    assert persisted.tool_call_count == 1
     assert persisted.terminal_status is TerminalStatus.BLOCKED
     assert persisted.validation_results[0].status is ValidationStatus.BLOCKED
     assert persisted.validation_results[0].details["execution_started"] is False
@@ -125,7 +128,7 @@ def test_live_pytest_isolation_assertions_require_real_booleans(
     tmp_path: Path,
     field: str,
 ) -> None:
-    kwargs: dict[str, object] = {field: 1}
+    kwargs: dict[str, Any] = {field: 1}
     workspace = tmp_path / "sut"
     workspace.mkdir()
     run_dir = tmp_path / "run"
