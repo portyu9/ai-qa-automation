@@ -122,7 +122,7 @@ def test_error_flag_is_not_evaluated_before_output_validation(tmp_path: Path) ->
 def test_normal_success_remains_sanitized_observed_evidence(tmp_path: Path) -> None:
     state = AgentRunState(objective="read issue", workspace=str(tmp_path))
     evidence = EvidenceStore(tmp_path / "artifacts", state.run_id)
-    secret = "github_" + "pat_" + "1234567890abcdefghijklmnopqrstuv"
+    secret = "github_" + "pat_" + "1234567890abcdefghijklmnopqrstuv"  # pragma: allowlist secret
 
     result = posttool_policy_output(
         {
@@ -200,9 +200,7 @@ def test_output_rejection_counts_as_runtime_failure_without_journaling_response(
         {
             "tool_name": "mcp__github__get_issue",
             "tool_input": {},
-            "tool_response": {
-                "body": marker + ("x" * (MAX_EXTERNAL_TOOL_OUTPUT_UTF8_BYTES + 1))
-            },
+            "tool_response": {"body": marker + ("x" * (MAX_EXTERNAL_TOOL_OUTPUT_UTF8_BYTES + 1))},
         },
         state=state,
         control=control,

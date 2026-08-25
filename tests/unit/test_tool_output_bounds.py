@@ -72,5 +72,3 @@ def test_sanitizer_expansion_is_revalidated() -> None:
         prepare_external_tool_output(response)
     assert caught.value.code == "utf8_bytes"
     assert "sanitized external tool output" in str(caught.value)
-
-
