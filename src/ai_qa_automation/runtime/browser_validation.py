@@ -24,7 +24,7 @@ def _sha256_text(value: str) -> str:
 
 def _subject_gate_id(prefix: str, payload: object) -> str:
     rendered = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
-    digest = hashlib.sha256(rendered.encode("utf-8")).hexdigest()[:16]
+    digest = hashlib.sha256(rendered.encode("utf-8")).hexdigest()
     return f"{prefix}:{digest}"
 
 
