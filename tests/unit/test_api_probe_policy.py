@@ -40,7 +40,7 @@ async def test_api_probe_bounds_response_body_and_marks_truncation(tmp_path):
     import httpx
 
     async def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, content=b"x" * 100, request=request)
+        return httpx.Response(200, stream=httpx.ByteStream(b"x" * 100), request=request)
 
     probe = ApiProbe(
         EvidenceStore(tmp_path, "run-bounded"),
@@ -51,6 +51,8 @@ async def test_api_probe_bounds_response_body_and_marks_truncation(tmp_path):
     result = await probe.request("GET", "https://example.com/large")
     assert result.body == "x" * 16
     assert result.truncated is True
+    assert result.json_parsed is False
+    assert result.utf8_valid is True
 
 
 @pytest.mark.parametrize(
@@ -58,7 +60,9 @@ async def test_api_probe_bounds_response_body_and_marks_truncation(tmp_path):
     [
         {"timeout_seconds": 0},
         {"timeout_seconds": math.inf},
+        {"timeout_seconds": 901},
         {"max_response_bytes": 0},
+        {"max_response_bytes": 5_000_001},
     ],
 )
 def test_api_probe_rejects_invalid_resource_bounds(tmp_path, kwargs):

@@ -21,7 +21,7 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 | Reviewer goal | Recommended path |
 |---|---|
 | **Architecture / principal engineering** | [Architecture](ARCHITECTURE.md) → [Result Contract](RESULT_CONTRACT.md) → [Runtime Control](RUNTIME_CONTROL.md) → [Traceability](TRACEABILITY.md) → [Technical Walkthrough](TECHNICAL_WALKTHROUGH.md) |
-| **Security / red team** | [Security](SECURITY.md) → [Threat Model](THREAT_MODEL.md) → [Tool Input Boundaries](TOOL_INPUT_BOUNDARIES.md) → [Objective Input Boundary](OBJECTIVE_INPUT_BOUNDARY.md) → [Agent SDK Result Boundary](SDK_RESULT_BOUNDARY.md) → [Persistence Resource Boundary](PERSISTENCE_RESOURCE_BOUNDARY.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Supply Chain](SUPPLY_CHAIN.md) → [CI/CD](CI_CD.md) → [MCP](MCP.md) → [Verification Boundaries](VERIFICATION_BOUNDARIES.md) → [Pytest Execution Isolation](PYTEST_EXECUTION_ISOLATION.md) → [Limitations](LIMITATIONS.md) |
+| **Security / red team** | [Security](SECURITY.md) → [Threat Model](THREAT_MODEL.md) → [Tool Input Boundaries](TOOL_INPUT_BOUNDARIES.md) → [Objective Input Boundary](OBJECTIVE_INPUT_BOUNDARY.md) → [Agent SDK Result Boundary](SDK_RESULT_BOUNDARY.md) → [Persistence Resource Boundary](PERSISTENCE_RESOURCE_BOUNDARY.md) → [API Observation Boundary](API_OBSERVATION_BOUNDARY.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Supply Chain](SUPPLY_CHAIN.md) → [CI/CD](CI_CD.md) → [MCP](MCP.md) → [Verification Boundaries](VERIFICATION_BOUNDARIES.md) → [Pytest Execution Isolation](PYTEST_EXECUTION_ISOLATION.md) → [Limitations](LIMITATIONS.md) |
 | **QA automation / AI engineering** | [Change Intelligence](CHANGE_INTELLIGENCE.md) → [Skills](SKILLS.md) → [Evaluation](EVALUATION.md) → [Result Contract](RESULT_CONTRACT.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Production Readiness](PRODUCTION_READINESS.md) |
 | **Operator / adopter** | [Setup](SETUP.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Pytest Execution Isolation](PYTEST_EXECUTION_ISOLATION.md) → [Operations](OPERATIONS.md) → [CI/CD](CI_CD.md) → [Troubleshooting](TROUBLESHOOTING.md) → [Runtime Control](RUNTIME_CONTROL.md) → [MCP](MCP.md) |
 
@@ -41,13 +41,14 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 4. [`OBJECTIVE_INPUT_BOUNDARY.md`](OBJECTIVE_INPUT_BOUNDARY.md) — bounded pre-state/pre-provider objective admission and exact-text preservation
 5. [`SDK_RESULT_BOUNDARY.md`](SDK_RESULT_BOUNDARY.md) — bounded provider terminal-result ingestion, error semantics, and cost authority
 6. [`PERSISTENCE_RESOURCE_BOUNDARY.md`](PERSISTENCE_RESOURCE_BOUNDARY.md) — bounded canonical-state/evidence serialization before materialization and durable replacement
-7. [`BROWSER_VALIDATION.md`](BROWSER_VALIDATION.md) — exact-subject browser gates, evidence semantics, and URL confidentiality boundary
-8. [`SUPPLY_CHAIN.md`](SUPPLY_CHAIN.md) — dependency, build, Action, SBOM, and reproducibility trust boundaries
-9. [`CI_CD.md`](CI_CD.md) — automatic/manual workflow authority, exact-subject gates, repository-setting boundary
-10. [`MCP.md`](MCP.md) — provider identity, action authorization, untrusted remote content
-11. [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md) — evidence ownership across trust domains
-12. [`PYTEST_EXECUTION_ISOLATION.md`](PYTEST_EXECUTION_ISOLATION.md) — fail-closed deployment prerequisites for target-controlled Python
-13. [`LIMITATIONS.md`](LIMITATIONS.md) — explicit design boundaries and non-claims
+7. [`API_OBSERVATION_BOUNDARY.md`](API_OBSERVATION_BOUNDARY.md) — raw-byte HTTP observation, compression/header/body bounds, complete-body JSON promotion, and explicit decoding truth
+8. [`BROWSER_VALIDATION.md`](BROWSER_VALIDATION.md) — exact-subject browser gates, evidence semantics, and URL confidentiality boundary
+9. [`SUPPLY_CHAIN.md`](SUPPLY_CHAIN.md) — dependency, build, Action, SBOM, and reproducibility trust boundaries
+10. [`CI_CD.md`](CI_CD.md) — automatic/manual workflow authority, exact-subject gates, repository-setting boundary
+11. [`MCP.md`](MCP.md) — provider identity, action authorization, untrusted remote content
+12. [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md) — evidence ownership across trust domains
+13. [`PYTEST_EXECUTION_ISOLATION.md`](PYTEST_EXECUTION_ISOLATION.md) — fail-closed deployment prerequisites for target-controlled Python
+14. [`LIMITATIONS.md`](LIMITATIONS.md) — explicit design boundaries and non-claims
 
 ### QA automation / AI engineering
 
@@ -84,6 +85,7 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 | [`OBJECTIVE_INPUT_BOUNDARY.md`](OBJECTIVE_INPUT_BOUNDARY.md) | How is the operator objective bounded before state persistence, bootstrap, and provider submission? |
 | [`SDK_RESULT_BOUNDARY.md`](SDK_RESULT_BOUNDARY.md) | How are Agent SDK terminal results bounded before retention, accounting, and terminal truth? |
 | [`PERSISTENCE_RESOURCE_BOUNDARY.md`](PERSISTENCE_RESOURCE_BOUNDARY.md) | How are canonical state and evidence manifests bounded before complete serialization/materialization and durable replacement? |
+| [`API_OBSERVATION_BOUNDARY.md`](API_OBSERVATION_BOUNDARY.md) | How are HTTP response bytes, headers, truncation, decoding, and strict JSON promotion bounded before becoming structured evidence? |
 | [`BROWSER_VALIDATION.md`](BROWSER_VALIDATION.md) | How are browser operations bound to exact subjects without confusing evidence collection with page correctness? |
 | [`SUPPLY_CHAIN.md`](SUPPLY_CHAIN.md) | How are dependency, build, Action, container-base, SBOM, and reproducibility inputs bound and evidenced? |
 | [`CI_CD.md`](CI_CD.md) | How are automatic PR/main gates, manual credentialed validation, exact-subject binding, and repository-setting authority separated? |
@@ -107,6 +109,7 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 Model reasoning         ≠ observed evidence
 Configuration           ≠ provider availability
 Unique locator          ≠ semantic correctness
+API observation         ≠ response correctness
 Browser operation PASS  ≠ page correctness
 Static script checks    ≠ network sandbox
 Minimal subprocess env  ≠ process/network sandbox

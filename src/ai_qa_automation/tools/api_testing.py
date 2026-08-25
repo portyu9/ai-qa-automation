@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import json
+import asyncio
+import hashlib
 import math
 import time
 from dataclasses import dataclass
@@ -12,8 +13,13 @@ import httpx
 from ..evidence import EvidenceStore
 from ..models import EvidenceItem, EvidenceKind
 from ..redaction import redact_text, sanitize
+from ..runtime.tool_input_bounds import ToolInputBoundsError, bounded_json_loads
 
 _MAX_API_RESPONSE_BYTES = 5_000_000
+_MAX_API_TIMEOUT_SECONDS = 900
+_MAX_API_RESPONSE_HEADERS = 200
+_MAX_API_RESPONSE_HEADER_BYTES = 64_000
+_API_RAW_CHUNK_BYTES = 64_000
 
 
 class ApiProbeTransportError(RuntimeError):
@@ -24,14 +30,97 @@ class ApiProbeTransportError(RuntimeError):
         self.evidence_id = evidence_id
 
 
+class _ObservationBoundaryViolation(ValueError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 @dataclass(frozen=True)
 class ApiProbeResult:
-    status_code: int
+    status_code: int | None
     body: Any
     headers: dict[str, str]
     elapsed_ms: float
     evidence_id: str
-    truncated: bool = False
+    truncated: bool | None = False
+    json_parsed: bool = False
+    utf8_valid: bool | None = None
+
+
+def _utf8_bytes_bounded(value: str, *, remaining: int) -> int:
+    total = 0
+    for character in value:
+        codepoint = ord(character)
+        if 0xD800 <= codepoint <= 0xDFFF:
+            raise _ObservationBoundaryViolation(
+                "header_unicode",
+                "API response headers contain invalid Unicode",
+            )
+        if codepoint <= 0x7F:
+            total += 1
+        elif codepoint <= 0x7FF:
+            total += 2
+        elif codepoint <= 0xFFFF:
+            total += 3
+        else:
+            total += 4
+        if total > remaining:
+            raise _ObservationBoundaryViolation(
+                "header_bytes",
+                "API response headers exceed the aggregate text bound",
+            )
+    return total
+
+
+def _bounded_headers(headers: httpx.Headers) -> dict[str, str]:
+    if len(headers) > _MAX_API_RESPONSE_HEADERS:
+        raise _ObservationBoundaryViolation(
+            "header_count",
+            "API response exceeds the header-count bound",
+        )
+
+    raw_total = 0
+    for raw_name, raw_value in headers.raw:
+        raw_total += len(raw_name) + len(raw_value)
+        if raw_total > _MAX_API_RESPONSE_HEADER_BYTES:
+            raise _ObservationBoundaryViolation(
+                "header_bytes",
+                "API response headers exceed the aggregate text bound",
+            )
+
+    text_total = 0
+    for text_name, text_value in headers.multi_items():
+        text_total += _utf8_bytes_bounded(
+            text_name, remaining=_MAX_API_RESPONSE_HEADER_BYTES - text_total
+        )
+        text_total += _utf8_bytes_bounded(
+            text_value, remaining=_MAX_API_RESPONSE_HEADER_BYTES - text_total
+        )
+
+    sanitized = sanitize(dict(headers))
+    if not isinstance(sanitized, dict):  # pragma: no cover - sanitize preserves mappings
+        raise TypeError("sanitized API response headers must remain a mapping")
+
+    result: dict[str, str] = {}
+    output_total = 0
+    for key, value in sanitized.items():
+        rendered_key = str(key)
+        rendered_value = str(value)
+        output_total += _utf8_bytes_bounded(
+            rendered_key, remaining=_MAX_API_RESPONSE_HEADER_BYTES - output_total
+        )
+        output_total += _utf8_bytes_bounded(
+            rendered_value, remaining=_MAX_API_RESPONSE_HEADER_BYTES - output_total
+        )
+        result[rendered_key] = rendered_value
+    return result
+
+
+def _identity_request_headers(value: Any) -> httpx.Headers:
+    headers = httpx.Headers(value)
+    headers["Accept-Encoding"] = "identity"
+    return headers
 
 
 class ApiProbe:
@@ -49,9 +138,11 @@ class ApiProbe:
             isinstance(timeout_seconds, bool)
             or not isinstance(timeout_seconds, (int, float))
             or not math.isfinite(timeout_seconds)
-            or timeout_seconds <= 0
+            or not 0 < timeout_seconds <= _MAX_API_TIMEOUT_SECONDS
         ):
-            raise ValueError("timeout_seconds must be a positive finite number")
+            raise ValueError(
+                f"timeout_seconds must be a positive finite number no greater than {_MAX_API_TIMEOUT_SECONDS}"
+            )
         if (
             isinstance(max_response_bytes, bool)
             or not isinstance(max_response_bytes, int)
@@ -88,13 +179,17 @@ class ApiProbe:
         if kwargs.get("follow_redirects") not in (None, False):
             raise PermissionError("API probe redirects are disabled by adapter policy")
         kwargs.pop("follow_redirects", None)
+        kwargs["headers"] = _identity_request_headers(kwargs.get("headers"))
 
         started = time.monotonic()
         content = bytearray()
         truncated = False
         safe_url = redact_text(url)
+        status_code: int | None = None
+        headers: dict[str, str] = {}
         try:
             async with (
+                asyncio.timeout(self.timeout_seconds),
                 httpx.AsyncClient(
                     timeout=self.timeout_seconds,
                     follow_redirects=False,
@@ -109,8 +204,15 @@ class ApiProbe:
                 ) as response,
             ):
                 status_code = response.status_code
-                headers = sanitize(dict(response.headers))
-                async for chunk in response.aiter_bytes():
+                headers = _bounded_headers(response.headers)
+                content_encoding = response.headers.get("content-encoding", "").strip().casefold()
+                if content_encoding not in {"", "identity"}:
+                    raise _ObservationBoundaryViolation(
+                        "content_encoding",
+                        "API response used a content encoding despite the identity-only request",
+                    )
+                chunk_size = min(_API_RAW_CHUNK_BYTES, self.max_response_bytes + 1)
+                async for chunk in response.aiter_raw(chunk_size=chunk_size):
                     remaining = self.max_response_bytes - len(content)
                     if remaining <= 0:
                         truncated = True
@@ -119,8 +221,13 @@ class ApiProbe:
                     if len(chunk) > remaining:
                         truncated = True
                         break
-        except httpx.RequestError as exc:
+        except (httpx.RequestError, TimeoutError) as exc:
             elapsed_ms = (time.monotonic() - started) * 1000
+            error_message = (
+                "API probe exceeded its total timeout budget"
+                if isinstance(exc, TimeoutError)
+                else redact_text(str(exc))
+            )
             item = self.evidence.add(
                 EvidenceItem(
                     run_id=self.evidence.run_id,
@@ -130,19 +237,66 @@ class ApiProbe:
                     summary=f"HTTP transport failure contacting {host}",
                     structured_data={
                         "error_type": type(exc).__name__,
-                        "error": redact_text(str(exc)),
+                        "error": error_message,
                         "elapsed_ms": elapsed_ms,
                     },
                 )
             )
-            raise ApiProbeTransportError(redact_text(str(exc)), item.id) from exc
+            raise ApiProbeTransportError(error_message, item.id) from exc
+        except _ObservationBoundaryViolation as exc:
+            elapsed_ms = (time.monotonic() - started) * 1000
+            item = self.evidence.add(
+                EvidenceItem(
+                    run_id=self.evidence.run_id,
+                    kind=EvidenceKind.HTTP_RESPONSE,
+                    source="httpx",
+                    source_identifier=f"{normalized_method} {safe_url}",
+                    summary=f"HTTP response observation rejected from {host}",
+                    structured_data={
+                        "status_code": status_code,
+                        "observation_error": exc.code,
+                        "response_body_observed": False,
+                        "elapsed_ms": elapsed_ms,
+                    },
+                )
+            )
+            return ApiProbeResult(
+                status_code=None,
+                body=None,
+                headers={},
+                elapsed_ms=elapsed_ms,
+                evidence_id=item.id,
+                truncated=None,
+                json_parsed=False,
+                utf8_valid=None,
+            )
         elapsed_ms = (time.monotonic() - started) * 1000
+        if status_code is None:  # pragma: no cover - response context always sets it before success
+            raise RuntimeError("API response status was not observed")
 
-        decoded = bytes(content).decode("utf-8", errors="replace")
+        raw_bytes = bytes(content)
         try:
-            raw_body: Any = json.loads(decoded)
-        except ValueError:
-            raw_body = decoded
+            decoded = raw_bytes.decode("utf-8")
+            utf8_valid = True
+            raw_body: Any = decoded
+        except UnicodeDecodeError:
+            utf8_valid = False
+            raw_body = (
+                "<INVALID_UTF8_RESPONSE_BODY "
+                f"bytes={len(raw_bytes)} sha256={hashlib.sha256(raw_bytes).hexdigest()}>"
+            )
+
+        json_parsed = False
+        if not truncated and utf8_valid:
+            try:
+                raw_body = bounded_json_loads(
+                    decoded,
+                    label="API response JSON",
+                    max_utf8_bytes=self.max_response_bytes,
+                )
+                json_parsed = True
+            except ToolInputBoundsError:
+                pass
         body = sanitize(raw_body)
         item = self.evidence.add(
             EvidenceItem(
@@ -156,6 +310,8 @@ class ApiProbe:
                     "body": body,
                     "elapsed_ms": elapsed_ms,
                     "truncated": truncated,
+                    "json_parsed": json_parsed,
+                    "utf8_valid": utf8_valid,
                 },
             )
         )
@@ -166,4 +322,6 @@ class ApiProbe:
             elapsed_ms=elapsed_ms,
             evidence_id=item.id,
             truncated=truncated,
+            json_parsed=json_parsed,
+            utf8_valid=utf8_valid,
         )
