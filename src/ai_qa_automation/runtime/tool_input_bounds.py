@@ -250,7 +250,7 @@ def bounded_json_loads(
             if key in result:
                 raise ToolInputBoundsError(
                     "duplicate_json_key",
-                    f"{label} contains duplicate JSON key: {key}",
+                    f"{label} contains a duplicate JSON object key",
                 )
             result[key] = value
         return result
