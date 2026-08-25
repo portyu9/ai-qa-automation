@@ -32,7 +32,7 @@ def _assert_rejected_observation(
         "response_body_observed": False,
     }
     assert result.headers == {}
-    assert result.truncated is False
+    assert result.truncated is None
     assert result.json_parsed is False
     assert result.utf8_valid is None
 
@@ -244,7 +244,7 @@ async def test_internal_probe_api_preserves_bounded_observation_rejection_sentin
                 headers={},
                 elapsed_ms=1.25,
                 evidence_id="evidence-observation",
-                truncated=False,
+                truncated=None,
                 json_parsed=False,
                 utf8_valid=None,
             )
@@ -278,7 +278,7 @@ async def test_internal_probe_api_preserves_bounded_observation_rejection_sentin
             "observed_status_code": 200,
             "response_body_observed": False,
         },
-        "truncated": False,
+        "truncated": None,
     }
     assert state.evidence_ids == ["evidence-observation"]
     assert checkpoints == [True]

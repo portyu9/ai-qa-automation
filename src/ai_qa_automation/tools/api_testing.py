@@ -41,7 +41,7 @@ class ApiProbeResult:
     headers: dict[str, str]
     elapsed_ms: float
     evidence_id: str
-    truncated: bool = False
+    truncated: bool | None = False
     json_parsed: bool = False
     utf8_valid: bool | None = None
 
@@ -235,6 +235,7 @@ class ApiProbe:
                 headers={},
                 elapsed_ms=elapsed_ms,
                 evidence_id=item.id,
+                truncated=None,
                 json_parsed=False,
                 utf8_valid=None,
             )

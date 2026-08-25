@@ -62,10 +62,11 @@ These are **post-transport application limits**. HTTPX/httpcore and the operatin
 
 A retained prefix is never represented as a complete response.
 
-`ApiProbeResult.truncated` and the persisted `truncated` field describe the raw-body observation:
+`ApiProbeResult.truncated` and the persisted `truncated` field describe the raw-body observation for accepted responses:
 
 - `false` means the raw response body ended within the configured retained-byte ceiling;
-- `true` means additional raw response bytes existed beyond the retained prefix.
+- `true` means additional raw response bytes existed beyond the retained prefix;
+- `null` is reserved for a response rejected before body observation, where completeness was not measured.
 
 When `truncated=true`, the retained text is never parsed as JSON, even when the prefix is syntactically valid JSON such as `true`, `null`, `[]`, or `{}`. This prevents a valid prefix of a larger payload from being promoted into a false structured observation.
 
@@ -130,8 +131,9 @@ For these cases, `ApiProbe`:
 1. persists bounded `HTTP_RESPONSE` evidence containing the observed HTTP status when available, a low-information rejection code, `response_body_observed=false`, and elapsed time;
 2. persists **no rejected response body**;
 3. returns an `ApiProbeResult` whose public HTTP `status_code` is `null`;
-4. returns an empty header mapping;
-5. uses a reserved framework-generated body sentinel:
+4. returns `truncated=null` because body completeness was not observed;
+5. returns an empty header mapping;
+6. uses a reserved framework-generated body sentinel:
 
 ```json
 {
@@ -142,7 +144,7 @@ For these cases, `ApiProbe`:
 }
 ```
 
-The sentinel is framework data, never SUT body content. The real status observed before rejection is carried only as `observed_status_code`; setting the result's HTTP `status_code` to `null` prevents an incomplete observation from masquerading as an accepted HTTP response.
+The sentinel is framework data, never SUT body content. The real status observed before rejection is carried only as `observed_status_code`; setting the result's HTTP `status_code` and `truncated` fields to `null` prevents an unaccepted/unobserved body from masquerading as an accepted complete HTTP response.
 
 The existing internal `probe_api` adapter can therefore retain the evidence ID without adding a second exception path. A normal MCP return envelope means only that the controlled tool completed its policy handling; it is **not** a SUT success and cannot certify terminal `PASS`. Any consumer must treat `__framework_observation__ == "REJECTED"` or `status_code == null` as an unaccepted response observation.
 
