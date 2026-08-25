@@ -36,6 +36,7 @@ from .run_control import (
     RepeatedActionError,
     RuntimeControl,
 )
+from .tool_input_bounds import ToolInputBoundsError, tool_input_fingerprint, validate_tool_request
 from .validation_truth import evaluate_revision_closure
 
 _NETWORK_TOOLS = {
@@ -57,8 +58,9 @@ _VALIDATION_BEARING_TOOLS = {
 
 def _input_fingerprint(tool_name: str, tool_input: dict[str, Any]) -> str:
     safe = sanitize(tool_input)
-    canonical = json.dumps(safe, sort_keys=True, separators=(",", ":"), default=str)
-    return hashlib.sha256(f"{tool_name}:{canonical}".encode()).hexdigest()
+    if not isinstance(safe, dict):  # pragma: no cover - validation guarantees object root
+        raise ToolInputBoundsError("root_type", "sanitized tool input must remain a JSON object")
+    return tool_input_fingerprint(tool_name, safe)
 
 
 def _checkpoint(
@@ -89,7 +91,12 @@ def _record_unexpected_validation_tool_failure(
 ) -> None:
     """Latch unexpected validator execution uncertainty into deterministic lineage."""
 
-    fingerprint = _input_fingerprint(tool_name, tool_input)
+    try:
+        fingerprint = _input_fingerprint(tool_name, tool_input)
+    except ToolInputBoundsError as exc:
+        fingerprint = hashlib.sha256(
+            f"{tool_name}:invalid-tool-input:{exc.code}".encode()
+        ).hexdigest()
     state.validation_results.append(
         ValidationResult(
             name="validation_tool_execution",
@@ -208,14 +215,58 @@ def pretool_policy_output(
     control: RuntimeControl | None = None,
 ) -> dict[str, Any]:
     """Apply the one live request-budget/repetition/policy authority before execution."""
-    tool_name = str(input_data.get("tool_name", ""))
-    tool_input = input_data.get("tool_input") or {}
-    fingerprint = _input_fingerprint(tool_name, tool_input)
+    raw_tool_name = input_data.get("tool_name", "")
+    raw_tool_input = input_data.get("tool_input")
+    tool_input = {} if raw_tool_input is None else raw_tool_input
 
     try:
         if control is not None:
             control.budget.charge_tool()
             _sync_tool_count(state, control)
+    except BudgetExceededError as exc:
+        if state is not None:
+            state.terminal_status = TerminalStatus.BUDGET_EXCEEDED
+            state.terminal_reason = str(exc)
+        if control is not None:
+            control.journal.append(
+                "budget_denied",
+                tool_name_state="unvalidated",
+                reason=str(exc),
+            )
+        _checkpoint(state, state_store, control)
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": f"runtime-budget: {exc}",
+            }
+        }
+
+    try:
+        validate_tool_request(raw_tool_name, tool_input)
+    except ToolInputBoundsError as exc:
+        if control is not None:
+            control.journal.append(
+                "tool_input_denied",
+                reason_code=exc.code,
+            )
+        _checkpoint(state, state_store, control)
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": f"tool-input-bounds: {exc}",
+            }
+        }
+    if not isinstance(raw_tool_name, str):  # pragma: no cover - guarded above
+        raise ToolInputBoundsError("tool_name_type", "tool name must be a string")
+    tool_name = raw_tool_name
+    if not isinstance(tool_input, dict):  # pragma: no cover - guarded above
+        raise ToolInputBoundsError("root_type", "tool input must be a JSON object")
+    fingerprint = _input_fingerprint(tool_name, tool_input)
+
+    try:
+        if control is not None:
             control.register_tool_request(tool_name, fingerprint)
             if tool_name in _NETWORK_TOOLS or tool_name.startswith(
                 ("mcp__github__", "mcp__atlassian__")
@@ -580,6 +631,13 @@ def build_permission_handler(policy: PolicyEngine) -> Any:
         raise RuntimeError("claude-agent-sdk is required for live agent mode") from exc
 
     async def can_use_tool(tool_name: str, tool_input: dict[str, Any], _context: Any) -> Any:
+        try:
+            validate_tool_request(tool_name, tool_input)
+        except ToolInputBoundsError as exc:
+            return PermissionResultDeny(
+                message=f"tool-input-bounds: {exc}",
+                interrupt=False,
+            )
         decision = policy.authorize_tool(tool_name, tool_input)
         if decision.decision.value == "ALLOW":
             return PermissionResultAllow(updated_input=tool_input)
