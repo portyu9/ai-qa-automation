@@ -18,6 +18,7 @@ A live tool input must be a JSON object composed only of JSON-compatible values.
 
 | Boundary | Limit |
 |---|---:|
+| Tool name UTF-8 bytes | 256 |
 | Aggregate UTF-8 bytes across string values and object keys | 2,100,000 |
 | Structural nodes | 20,000 |
 | Nesting depth | 16 |
@@ -25,7 +26,7 @@ A live tool input must be a JSON object composed only of JSON-compatible values.
 | Integer magnitude | 4,096 bits |
 | Floating-point values | finite only |
 
-The aggregate UTF-8 limit measures decoded string/key content, not transport framing or JSON escape expansion. Canonical repetition fingerprints are streamed incrementally after validation instead of materializing one additional full JSON string.
+The aggregate UTF-8 limit measures decoded string/key content, not transport framing or JSON escape expansion. After validation, repetition fingerprints are hashed across encoder chunks rather than first joining the complete canonical request document into one additional string.
 
 Inputs containing tuples, arbitrary Python objects, non-string object keys, `NaN`, or infinities are outside the live JSON contract and are denied.
 
@@ -58,10 +59,10 @@ Locator verification and healing additionally allow at most **20 candidate entri
 
 For the live Agent SDK path, the ordering is:
 
-1. validate request shape and bounded JSON fields;
+1. validate tool-name and request shape plus bounded JSON fields;
 2. deny and journal only the tool name plus a bounded reason code if invalid;
 3. sanitize the accepted input for the repetition fingerprint;
-4. stream the canonical fingerprint hash;
+4. hash the canonical fingerprint incrementally across encoder chunks;
 5. charge tool/network/mutation budgets as applicable;
 6. evaluate deterministic policy;
 7. enter the controlled tool;
