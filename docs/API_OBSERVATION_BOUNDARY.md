@@ -135,21 +135,11 @@ For these cases, `ApiProbe`:
 2. persists **no rejected response body**;
 3. returns an `ApiProbeResult` whose public HTTP `status_code` is `null`;
 4. returns `truncated=null` because body completeness was not observed;
-5. returns an empty header mapping;
-6. uses a reserved framework-generated body sentinel:
+5. returns `body=null` and an empty header mapping.
 
-```json
-{
-  "__framework_observation__": "REJECTED",
-  "reason": "content_encoding",
-  "observed_status_code": 200,
-  "response_body_observed": false
-}
-```
+No framework rejection marker is embedded in the `body` namespace because that namespace is SUT-controlled for accepted responses. This prevents a hostile or coincidental SUT JSON document from colliding with framework metadata. The persisted evidence record is the authority for the low-information rejection reason and any HTTP status observed before rejection.
 
-The sentinel is framework data, never SUT body content. The real status observed before rejection is carried only as `observed_status_code`; setting the result's HTTP `status_code` and `truncated` fields to `null` prevents an unaccepted/unobserved body from masquerading as an accepted complete HTTP response.
-
-The existing internal `probe_api` adapter can therefore retain the evidence ID without adding a second exception path. A normal MCP return envelope means only that the controlled tool completed its policy handling; it is **not** a SUT success and cannot certify terminal `PASS`. Any consumer must treat `__framework_observation__ == "REJECTED"` or `status_code == null` as an unaccepted response observation.
+The existing internal `probe_api` adapter can therefore retain the evidence ID without adding a second exception path. A normal MCP return envelope means only that the controlled tool completed its policy handling; it is **not** a SUT success and cannot certify terminal `PASS`. Within a normal `ApiProbeResult`, `status_code=null` identifies an unaccepted response observation; accepted responses always retain their actual integer HTTP status, even when the SUT body itself contains framework-looking keys or text.
 
 ## Evidence semantics
 
@@ -162,7 +152,7 @@ For an accepted observation, persisted `HTTP_RESPONSE` evidence includes:
 - `utf8_valid`;
 - `json_parsed`.
 
-For a rejected observation, persisted evidence includes the bounded rejection metadata but no response body. The `ApiProbeResult` carries the reserved rejection sentinel and evidence ID so the internal adapter cannot lose the rejection truth.
+For a rejected observation, persisted evidence includes the bounded rejection metadata but no response body. The `ApiProbeResult` carries `status_code=null`, `truncated=null`, `body=null`, and the evidence ID so the internal adapter cannot lose the rejection truth or confuse SUT-controlled body content with framework metadata.
 
 The model-facing internal tool currently exposes status, elapsed time, evidence ID, body representation, and truncation state. `json_parsed` and `utf8_valid` remain explicit in the authoritative `ApiProbeResult`/persisted accepted-response evidence and are not prerequisites for model-side claims of PASS in any case.
 
@@ -187,6 +177,7 @@ This implementation deliberately does **not** claim that:
 - strict JSON parsing proves schema correctness or business correctness;
 - sanitization removes all sensitive information;
 - a normal internal-tool return envelope means the SUT succeeded;
+- SUT-controlled response-body keys can act as framework rejection markers;
 - successful observation grants network/mutation authority or terminal PASS.
 
 The invariant is narrower and stronger: **after a response reaches the application boundary, encoded, oversized, truncated, malformed, ambiguous, or invalidly decoded observations cannot silently masquerade as complete trusted structured evidence.**

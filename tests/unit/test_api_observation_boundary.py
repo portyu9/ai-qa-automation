@@ -18,19 +18,9 @@ def _probe(tmp_path, run_id: str, handler, *, max_response_bytes: int = 100_000)
     )
 
 
-def _assert_rejected_observation(
-    result: ApiProbeResult,
-    *,
-    reason: str,
-    observed_status_code: int = 200,
-) -> None:
+def _assert_rejected_observation(result: ApiProbeResult) -> None:
     assert result.status_code is None
-    assert result.body == {
-        "__framework_observation__": "REJECTED",
-        "reason": reason,
-        "observed_status_code": observed_status_code,
-        "response_body_observed": False,
-    }
+    assert result.body is None
     assert result.headers == {}
     assert result.truncated is None
     assert result.json_parsed is False
@@ -84,7 +74,7 @@ async def test_api_probe_rejects_encoded_response_before_decompression_or_body_r
     )
     result = await probe.request("GET", "https://example.com/data")
 
-    _assert_rejected_observation(result, reason="content_encoding")
+    _assert_rejected_observation(result)
     record = evidence.all()[-1]
     assert result.evidence_id == record.id
     assert record.kind == EvidenceKind.HTTP_RESPONSE
@@ -104,7 +94,7 @@ async def test_api_probe_rejects_excessive_header_count(tmp_path):
     probe = ApiProbe(evidence, allow_hosts={"example.com"}, transport=httpx.MockTransport(handler))
     result = await probe.request("GET", "https://example.com/data")
 
-    _assert_rejected_observation(result, reason="header_count")
+    _assert_rejected_observation(result)
     record = evidence.all()[-1]
     assert record.structured_data["observation_error"] == "header_count"
     assert record.structured_data["response_body_observed"] is False
@@ -125,7 +115,7 @@ async def test_api_probe_rejects_excessive_aggregate_header_text(tmp_path):
     probe = ApiProbe(evidence, allow_hosts={"example.com"}, transport=httpx.MockTransport(handler))
     result = await probe.request("GET", "https://example.com/data")
 
-    _assert_rejected_observation(result, reason="header_bytes")
+    _assert_rejected_observation(result)
     record = evidence.all()[-1]
     assert record.structured_data["observation_error"] == "header_bytes"
     assert record.structured_data["response_body_observed"] is False
@@ -253,7 +243,26 @@ async def test_api_probe_invalid_utf8_uses_bounded_digest_diagnostic_and_never_p
 
 
 @pytest.mark.asyncio
-async def test_internal_probe_api_preserves_bounded_observation_rejection_sentinel(monkeypatch):
+async def test_sut_json_cannot_collide_with_framework_rejection_state(tmp_path):
+    payload = b'{"__framework_observation__":"REJECTED","reason":"content_encoding"}'
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=httpx.ByteStream(payload), request=request)
+
+    result = await _probe(tmp_path, "sut-collision", handler).request(
+        "GET", "https://example.com/data"
+    )
+    assert result.status_code == 200
+    assert result.body == {
+        "__framework_observation__": "REJECTED",
+        "reason": "content_encoding",
+    }
+    assert result.truncated is False
+    assert result.json_parsed is True
+
+
+@pytest.mark.asyncio
+async def test_internal_probe_api_preserves_bounded_observation_rejection_state(monkeypatch):
     import json
     import sys
     from types import SimpleNamespace
@@ -285,12 +294,7 @@ async def test_internal_probe_api_preserves_bounded_observation_rejection_sentin
         async def request(self, _method, _url):
             return ApiProbeResult(
                 status_code=None,
-                body={
-                    "__framework_observation__": "REJECTED",
-                    "reason": "header_count",
-                    "observed_status_code": 200,
-                    "response_body_observed": False,
-                },
+                body=None,
                 headers={},
                 elapsed_ms=1.25,
                 evidence_id="evidence-observation",
@@ -322,12 +326,7 @@ async def test_internal_probe_api_preserves_bounded_observation_rejection_sentin
         "status_code": None,
         "elapsed_ms": 1.25,
         "evidence_id": "evidence-observation",
-        "body": {
-            "__framework_observation__": "REJECTED",
-            "reason": "header_count",
-            "observed_status_code": 200,
-            "response_body_observed": False,
-        },
+        "body": None,
         "truncated": None,
     }
     assert state.evidence_ids == ["evidence-observation"]

@@ -236,12 +236,7 @@ class ApiProbe:
             )
             return ApiProbeResult(
                 status_code=None,
-                body={
-                    "__framework_observation__": "REJECTED",
-                    "reason": exc.code,
-                    "observed_status_code": status_code,
-                    "response_body_observed": False,
-                },
+                body=None,
                 headers={},
                 elapsed_ms=elapsed_ms,
                 evidence_id=item.id,
