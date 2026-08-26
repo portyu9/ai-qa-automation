@@ -13,7 +13,7 @@ _NamespaceObservation = tuple[tuple[str, _MetadataSignature], ...]
 _UNTRACKED_PATH_LIST = ("ls-files", "--others", "--exclude-standard", "-z", "--")
 
 
-class RepositoryNamespaceAuthorityMixin(RepositoryWorktreeMixin):
+class RepositoryNamespaceAuthorityMixin:
     """Bind Git untracked-path enumeration to a stable worktree directory namespace."""
 
     workspace: Path
@@ -28,6 +28,16 @@ class RepositoryNamespaceAuthorityMixin(RepositoryWorktreeMixin):
         label: str,
         expected_root_identity: tuple[int, int] | None = None,
     ) -> ConfinedFileScan:
+        raise NotImplementedError
+
+    def _stat_confined_entry_adapter(
+        self,
+        root: Path,
+        relative_path: str | Path,
+        *,
+        label: str,
+        expected_root_identity: tuple[int, int] | None = None,
+    ) -> os.stat_result:
         raise NotImplementedError
 
     @staticmethod
@@ -134,10 +144,10 @@ class RepositoryNamespaceAuthorityMixin(RepositoryWorktreeMixin):
 
     def _git_path_list(self, *args: str) -> tuple[str, ...]:
         if args != _UNTRACKED_PATH_LIST:
-            return super()._git_path_list(*args)
+            return RepositoryWorktreeMixin._git_path_list(self, *args)
 
         before = self._worktree_namespace_observation()
-        paths = super()._git_path_list(*args)
+        paths = RepositoryWorktreeMixin._git_path_list(self, *args)
         after = self._worktree_namespace_observation()
         if before != after:
             raise RuntimeError("repository worktree namespace changed during untracked enumeration")
