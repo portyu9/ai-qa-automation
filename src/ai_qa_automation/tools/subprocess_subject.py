@@ -105,9 +105,7 @@ def descriptor_bound_cwd(
     """
 
     if not descriptor_relative_authority_supported():
-        raise RuntimeError(
-            f"{label} requires descriptor-relative no-follow filesystem authority"
-        )
+        raise RuntimeError(f"{label} requires descriptor-relative no-follow filesystem authority")
 
     root = root.expanduser().absolute()
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
