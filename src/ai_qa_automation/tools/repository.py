@@ -24,6 +24,7 @@ from .subprocess_subject import active_workspace_authority, descriptor_bound_cwd
 
 _SAFE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@{}~^:+-]{0,255}$")
 _HEX_SHA = re.compile(r"^[0-9a-fA-F]{40,64}$")
+_GIT_MODE = re.compile(r"^[0-7]{6}$")
 _MAX_FINGERPRINT_CHANGED_FILES = 1000
 _MAX_FINGERPRINT_FILE_BYTES = 16_000_000
 _MAX_FINGERPRINT_TOTAL_BYTES = 128_000_000
@@ -242,6 +243,41 @@ class RepositoryInspector:
             changed_files=changed,
         )
 
+    def _blob_oid_at(self, commit_sha: str, path: str) -> str | None:
+        """Resolve one literal path at an immutable commit to its exact blob object ID."""
+        raw = self._git(
+            "ls-tree",
+            "-z",
+            "--full-tree",
+            commit_sha,
+            "--",
+            f":(literal){path}",
+        )
+        if raw is None:  # pragma: no cover - _git without allow_failure raises instead
+            raise RuntimeError("Git tree lookup returned no result")
+        if raw == "":
+            return None
+
+        records = [record for record in raw.split("\0") if record]
+        if len(records) != 1:
+            raise RuntimeError("Git returned an ambiguous tree entry")
+        metadata, separator, returned_path = records[0].partition("\t")
+        if not separator or returned_path != path:
+            raise RuntimeError("Git returned a malformed tree entry")
+        fields = metadata.split()
+        if len(fields) != 3:
+            raise RuntimeError("Git returned a malformed tree entry")
+        mode, object_type, object_id = fields
+        if (
+            not _GIT_MODE.fullmatch(mode)
+            or object_type not in {"blob", "tree", "commit"}
+            or not _HEX_SHA.fullmatch(object_id)
+        ):
+            raise RuntimeError("Git returned a malformed tree entry")
+        if object_type != "blob":
+            raise RuntimeError(f"baseline path is not a Git blob: {path}")
+        return object_id
+
     def read_file_at(
         self, commit_sha: str, relative_path: str, *, max_bytes: int = 2_000_000
     ) -> bytes:
@@ -257,10 +293,13 @@ class RepositoryInspector:
         if not _HEX_SHA.fullmatch(commit_sha):
             raise ValueError("commit_sha must be a full hexadecimal object id")
         path = self._validate_relative_path(relative_path)
-        object_name = f"{commit_sha}:{path}"
-        size_text = self._git("cat-file", "-s", object_name)
-        if size_text is None:
+        blob_oid = self._blob_oid_at(commit_sha, path)
+        if blob_oid is None:
             raise FileNotFoundError(path)
+
+        size_text = self._git("cat-file", "-s", blob_oid)
+        if size_text is None:  # pragma: no cover - _git without allow_failure raises instead
+            raise RuntimeError("Git blob size lookup returned no result")
         try:
             size = int(size_text)
         except ValueError as exc:
@@ -272,12 +311,11 @@ class RepositoryInspector:
         result = self._git_bytes(
             "cat-file",
             "blob",
-            object_name,
+            blob_oid,
             max_stdout_bytes=max(1, size),
-            allow_failure=True,
         )
-        if result is None:
-            raise FileNotFoundError(path)
+        if result is None:  # pragma: no cover - _git_bytes without allow_failure raises instead
+            raise RuntimeError("Git blob read returned no result")
         if len(result) != size:
             raise RuntimeError(
                 "Git returned baseline bytes inconsistent with preflight object size"
