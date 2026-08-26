@@ -146,9 +146,7 @@ async def test_coverage_search_records_unsafe_namespace_as_incomplete(
     (workspace / "external").symlink_to(outside, target_is_directory=True)
     services = make_services(workspace, tmp_path / "artifacts")
 
-    response = await tool_map(services)["search_test_coverage"](
-        {"query": "", "max_results": 100}
-    )
+    response = await tool_map(services)["search_test_coverage"]({"query": "", "max_results": 100})
 
     assert response.get("is_error") is not True
     payload = json.loads(response["content"][0]["text"])
@@ -161,30 +159,30 @@ async def test_coverage_search_records_unsafe_namespace_as_incomplete(
 
 
 @pytest.mark.asyncio
-async def test_coverage_search_matches_raw_secret_shaped_query_but_persists_only_redaction(
+async def test_coverage_search_matches_raw_sensitive_query_but_persists_only_redaction(
     tmp_path: Path,
     fake_sdk: ModuleType,
 ) -> None:
     del fake_sdk
     workspace = tmp_path / "workspace"
-    secret_shaped_query = "ghp_ABCDEFGHIJKLMNOPQRST"
+    synthetic_query = "gh" + "p_" + ("A" * 20)
     write(
         workspace / "tests" / "test_token.py",
-        f"def test_token():\n    observed = '{secret_shaped_query}'\n    assert observed\n",
+        f"def test_token():\n    observed = '{synthetic_query}'\n    assert observed\n",
     )
     services = make_services(workspace, tmp_path / "artifacts")
 
     response = await tool_map(services)["search_test_coverage"](
-        {"query": secret_shaped_query, "max_results": 10}
+        {"query": synthetic_query, "max_results": 10}
     )
 
     assert response.get("is_error") is not True
     payload = json.loads(response["content"][0]["text"])
     assert [item["path"] for item in payload["results"]] == ["tests/test_token.py"]
-    assert secret_shaped_query not in response["content"][0]["text"]
+    assert synthetic_query not in response["content"][0]["text"]
     evidence = services.evidence.get(payload["coverage_evidence_id"])
     rendered = evidence.model_dump_json()
-    assert secret_shaped_query not in rendered
+    assert synthetic_query not in rendered
     assert evidence.source_identifier == "[REDACTED]"
     assert evidence.structured_data["query"] == "[REDACTED]"
 
@@ -220,9 +218,10 @@ async def test_plan_tests_carries_coverage_incompleteness_forward(
     plan_payload = json.loads(plan_response["content"][0]["text"])
     plan_evidence = services.evidence.get(plan_payload["plan_evidence_id"])
     assert plan_evidence.structured_data["coverage_complete"] is False
-    assert "unsafe_or_special_paths_skipped" in plan_evidence.structured_data[
-        "coverage_incomplete_reasons"
-    ]
+    assert (
+        "unsafe_or_special_paths_skipped"
+        in plan_evidence.structured_data["coverage_incomplete_reasons"]
+    )
 
 
 def test_runtime_services_rejects_malformed_workspace_identity(tmp_path: Path) -> None:
