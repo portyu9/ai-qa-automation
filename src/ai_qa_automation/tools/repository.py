@@ -5,11 +5,15 @@ import json
 import re
 import subprocess
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from ..fs_authority import descriptor_relative_authority_supported, pin_directory_identity
 from ..io_safety import open_regular_binary
 from .execution_env import resolve_executable, restricted_subprocess_env, run_bounded_subprocess
+from .subprocess_subject import descriptor_bound_cwd
 
 _SAFE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@{}~^:+-]{0,255}$")
 _HEX_SHA = re.compile(r"^[0-9a-fA-F]{40,64}$")
@@ -17,6 +21,10 @@ _MAX_FINGERPRINT_CHANGED_FILES = 1000
 _MAX_FINGERPRINT_FILE_BYTES = 16_000_000
 _MAX_FINGERPRINT_TOTAL_BYTES = 128_000_000
 _MAX_GIT_TEXT_OUTPUT_BYTES = 8_000_000
+
+
+class RepositorySubjectError(RuntimeError):
+    """Raised when Git inspection cannot remain bound to the authorized workspace subject."""
 
 
 @dataclass(frozen=True)
@@ -58,15 +66,48 @@ class RepositoryChangeSet:
 class RepositoryInspector:
     """Read-only Git/repository inspection with deterministic workspace fingerprints."""
 
-    def __init__(self, workspace: Path, timeout_seconds: int = 20) -> None:
+    def __init__(
+        self,
+        workspace: Path,
+        timeout_seconds: int = 20,
+        *,
+        expected_root_identity: tuple[int, int] | None = None,
+    ) -> None:
         if (
             isinstance(timeout_seconds, bool)
             or not isinstance(timeout_seconds, int)
             or timeout_seconds < 1
         ):
             raise ValueError("repository inspection timeout_seconds must be a positive integer")
+        if expected_root_identity is not None and (
+            not isinstance(expected_root_identity, tuple)
+            or len(expected_root_identity) != 2
+            or any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in expected_root_identity)
+        ):
+            raise ValueError("expected_root_identity must be a pair of non-negative integers")
+
         self.workspace = workspace.expanduser().resolve()
         self.timeout_seconds = timeout_seconds
+        self.workspace_root_identity: tuple[int, int] | None = None
+        if descriptor_relative_authority_supported():
+            try:
+                current_identity = pin_directory_identity(
+                    self.workspace,
+                    label="repository inspection workspace",
+                )
+            except (OSError, RuntimeError, ValueError) as exc:
+                raise RepositorySubjectError(
+                    "repository workspace identity could not be pinned"
+                ) from exc
+            if expected_root_identity is not None and current_identity != expected_root_identity:
+                raise RepositorySubjectError(
+                    "repository workspace changed identity since authorization"
+                )
+            self.workspace_root_identity = current_identity
+        elif expected_root_identity is not None:
+            raise RepositorySubjectError(
+                "authorized repository inspection requires descriptor-bound filesystem authority"
+            )
 
     def snapshot(self) -> RepositorySnapshot:
         try:
@@ -76,6 +117,8 @@ class RepositoryInspector:
                 self._git("status", "--porcelain=v1", "--untracked-files=all", allow_failure=True)
                 or ""
             )
+        except RepositorySubjectError:
+            raise
         except RuntimeError as exc:
             message = str(exc).casefold()
             reason = (
@@ -330,18 +373,38 @@ class RepositoryInspector:
             reasons,
         )
 
+    @contextmanager
+    def _git_cwd(self) -> Iterator[Path]:
+        if self.workspace_root_identity is None:
+            yield self.workspace
+            return
+        try:
+            with descriptor_bound_cwd(
+                self.workspace,
+                expected_root_identity=self.workspace_root_identity,
+                label="Git repository inspection",
+            ) as cwd:
+                yield cwd
+        except RepositorySubjectError:
+            raise
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise RepositorySubjectError(
+                "Git repository subject could not be bound to the authorized workspace"
+            ) from exc
+
     def _git(self, *args: str, allow_failure: bool = False) -> str | None:
         with tempfile.TemporaryDirectory(prefix="aiqa-git-home-") as temp_home:
             env = restricted_subprocess_env(
                 home=Path(temp_home), extra={"GIT_CONFIG_NOSYSTEM": "1"}
             )
-            result = run_bounded_subprocess(
-                ["git", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", *args],
-                cwd=self.workspace,
-                env=env,
-                timeout_seconds=self.timeout_seconds,
-                max_output_bytes=_MAX_GIT_TEXT_OUTPUT_BYTES,
-            )
+            with self._git_cwd() as git_cwd:
+                result = run_bounded_subprocess(
+                    ["git", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", *args],
+                    cwd=git_cwd,
+                    env=env,
+                    timeout_seconds=self.timeout_seconds,
+                    max_output_bytes=_MAX_GIT_TEXT_OUTPUT_BYTES,
+                )
         if result.timed_out:
             raise RuntimeError(f"git command exceeded {self.timeout_seconds}s inspection budget")
         if result.stdout_truncated or result.stderr_truncated:
@@ -362,22 +425,23 @@ class RepositoryInspector:
             )
             git_executable = resolve_executable("git", env=env)
             try:
-                result = subprocess.run(
-                    [
-                        git_executable,
-                        "-c",
-                        "core.fsmonitor=false",
-                        "-c",
-                        "core.untrackedCache=false",
-                        *args,
-                    ],
-                    cwd=self.workspace,
-                    text=False,
-                    capture_output=True,
-                    timeout=self.timeout_seconds,
-                    check=False,
-                    env=env,
-                )
+                with self._git_cwd() as git_cwd:
+                    result = subprocess.run(
+                        [
+                            git_executable,
+                            "-c",
+                            "core.fsmonitor=false",
+                            "-c",
+                            "core.untrackedCache=false",
+                            *args,
+                        ],
+                        cwd=git_cwd,
+                        text=False,
+                        capture_output=True,
+                        timeout=self.timeout_seconds,
+                        check=False,
+                        env=env,
+                    )
             except subprocess.TimeoutExpired as exc:
                 raise RuntimeError(
                     f"git command exceeded {self.timeout_seconds}s inspection budget"
