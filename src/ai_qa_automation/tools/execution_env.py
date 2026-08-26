@@ -42,6 +42,26 @@ class BoundedSubprocessResult:
     timed_out: bool
 
 
+@dataclass(frozen=True)
+class BoundedBinarySubprocessResult:
+    returncode: int
+    stdout: bytes
+    stderr: bytes
+    stdout_truncated: bool
+    stderr_truncated: bool
+    timed_out: bool
+
+
+@dataclass(frozen=True)
+class _BoundedCapture:
+    returncode: int
+    stdout: bytes
+    stderr: bytes
+    stdout_truncated: bool
+    stderr_truncated: bool
+    timed_out: bool
+
+
 class _TailBuffer:
     def __init__(self, limit: int) -> None:
         self.limit = limit
@@ -62,11 +82,18 @@ class _TailBuffer:
     def truncated(self) -> bool:
         return self.total > self.limit
 
+    def bytes(self) -> bytes:
+        return bytes(self.data)
+
     def text(self) -> str:
-        rendered = bytes(self.data).decode("utf-8", errors="replace")
-        if not self.truncated:
-            return rendered
-        return f"...[output truncated to last {self.limit} bytes]...\n{rendered}"
+        return _render_bounded_text(self.bytes(), truncated=self.truncated, limit=self.limit)
+
+
+def _render_bounded_text(data: bytes, *, truncated: bool, limit: int) -> str:
+    rendered = data.decode("utf-8", errors="replace")
+    if not truncated:
+        return rendered
+    return f"...[output truncated to last {limit} bytes]...\n{rendered}"
 
 
 def _assert_executable_file(path: Path, *, env: Mapping[str, str]) -> None:
@@ -206,20 +233,7 @@ def _terminate_process_tree(
         process.kill()
 
 
-def run_bounded_subprocess(
-    command: Sequence[str],
-    *,
-    cwd: Path,
-    env: Mapping[str, str],
-    timeout_seconds: int | float,
-    max_output_bytes: int = _DEFAULT_MAX_OUTPUT_BYTES,
-) -> BoundedSubprocessResult:
-    """Run a subprocess while draining stdout/stderr into bounded in-memory tails.
-
-    The child receives a dedicated process group/session. At completion the adapter
-    attempts to terminate descendants that outlived the direct child, because target
-    test/load code must not keep background execution attached to validation.
-    """
+def _validate_timeout(timeout_seconds: int | float) -> None:
     if (
         isinstance(timeout_seconds, bool)
         or not isinstance(timeout_seconds, (int, float))
@@ -227,12 +241,25 @@ def run_bounded_subprocess(
         or timeout_seconds <= 0
     ):
         raise ValueError("timeout_seconds must be a positive finite number")
-    if (
-        isinstance(max_output_bytes, bool)
-        or not isinstance(max_output_bytes, int)
-        or not 1 <= max_output_bytes <= _MAX_OUTPUT_BYTES
-    ):
-        raise ValueError(f"max_output_bytes must be an integer between 1 and {_MAX_OUTPUT_BYTES}")
+
+
+def _validate_output_bound(value: int, *, name: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= _MAX_OUTPUT_BYTES:
+        raise ValueError(f"{name} must be an integer between 1 and {_MAX_OUTPUT_BYTES}")
+
+
+def _run_bounded_capture(
+    command: Sequence[str],
+    *,
+    cwd: Path,
+    env: Mapping[str, str],
+    timeout_seconds: int | float,
+    max_stdout_bytes: int,
+    max_stderr_bytes: int,
+) -> _BoundedCapture:
+    _validate_timeout(timeout_seconds)
+    _validate_output_bound(max_stdout_bytes, name="max_stdout_bytes")
+    _validate_output_bound(max_stderr_bytes, name="max_stderr_bytes")
     if not command:
         raise ValueError("subprocess command must not be empty")
 
@@ -242,8 +269,8 @@ def run_bounded_subprocess(
         process.wait()
         raise RuntimeError("subprocess pipes were not created")
 
-    stdout_buffer = _TailBuffer(max_output_bytes)
-    stderr_buffer = _TailBuffer(max_output_bytes)
+    stdout_buffer = _TailBuffer(max_stdout_bytes)
+    stderr_buffer = _TailBuffer(max_stderr_bytes)
     stdout_thread = threading.Thread(
         target=_drain_stream,
         args=(process.stdout, stdout_buffer),
@@ -292,13 +319,88 @@ def run_bounded_subprocess(
 
     if process.returncode is None:  # pragma: no cover - wait() contract
         raise RuntimeError("subprocess ended without a return code")
-    return BoundedSubprocessResult(
+    return _BoundedCapture(
         returncode=process.returncode,
-        stdout=stdout_buffer.text(),
-        stderr=stderr_buffer.text(),
+        stdout=stdout_buffer.bytes(),
+        stderr=stderr_buffer.bytes(),
         stdout_truncated=stdout_buffer.truncated,
         stderr_truncated=stderr_buffer.truncated,
         timed_out=timed_out,
+    )
+
+
+def run_bounded_binary_subprocess(
+    command: Sequence[str],
+    *,
+    cwd: Path,
+    env: Mapping[str, str],
+    timeout_seconds: int | float,
+    max_stdout_bytes: int = _DEFAULT_MAX_OUTPUT_BYTES,
+    max_stderr_bytes: int = _DEFAULT_MAX_OUTPUT_BYTES,
+) -> BoundedBinarySubprocessResult:
+    """Run a subprocess with exact bounded byte tails for stdout and stderr.
+
+    Streams are drained concurrently even after either retention limit is exceeded,
+    so the child cannot block on a full pipe while in-memory capture remains bounded.
+    Callers that require complete exact output must fail closed when a truncation flag
+    is set.
+    """
+    captured = _run_bounded_capture(
+        command,
+        cwd=cwd,
+        env=env,
+        timeout_seconds=timeout_seconds,
+        max_stdout_bytes=max_stdout_bytes,
+        max_stderr_bytes=max_stderr_bytes,
+    )
+    return BoundedBinarySubprocessResult(
+        returncode=captured.returncode,
+        stdout=captured.stdout,
+        stderr=captured.stderr,
+        stdout_truncated=captured.stdout_truncated,
+        stderr_truncated=captured.stderr_truncated,
+        timed_out=captured.timed_out,
+    )
+
+
+def run_bounded_subprocess(
+    command: Sequence[str],
+    *,
+    cwd: Path,
+    env: Mapping[str, str],
+    timeout_seconds: int | float,
+    max_output_bytes: int = _DEFAULT_MAX_OUTPUT_BYTES,
+) -> BoundedSubprocessResult:
+    """Run a subprocess while draining stdout/stderr into bounded in-memory tails.
+
+    The child receives a dedicated process group/session. At completion the adapter
+    attempts to terminate descendants that outlived the direct child, because target
+    test/load code must not keep background execution attached to validation.
+    """
+    _validate_output_bound(max_output_bytes, name="max_output_bytes")
+    captured = _run_bounded_capture(
+        command,
+        cwd=cwd,
+        env=env,
+        timeout_seconds=timeout_seconds,
+        max_stdout_bytes=max_output_bytes,
+        max_stderr_bytes=max_output_bytes,
+    )
+    return BoundedSubprocessResult(
+        returncode=captured.returncode,
+        stdout=_render_bounded_text(
+            captured.stdout,
+            truncated=captured.stdout_truncated,
+            limit=max_output_bytes,
+        ),
+        stderr=_render_bounded_text(
+            captured.stderr,
+            truncated=captured.stderr_truncated,
+            limit=max_output_bytes,
+        ),
+        stdout_truncated=captured.stdout_truncated,
+        stderr_truncated=captured.stderr_truncated,
+        timed_out=captured.timed_out,
     )
 
 
