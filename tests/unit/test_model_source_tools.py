@@ -47,7 +47,10 @@ def write(path: Path, content: str) -> None:
 
 
 def make_services(workspace: Path, artifact_root: Path) -> RuntimeServices:
-    state = AgentRunState(objective="exercise confined model-facing tools", workspace=str(workspace))
+    state = AgentRunState(
+        objective="exercise confined model-facing tools",
+        workspace=str(workspace),
+    )
     return RuntimeServices(
         workspace=workspace,
         state=state,
