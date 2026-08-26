@@ -183,12 +183,10 @@ class RepositoryGitAuthorityMixin:
         value = base_ref.strip()
         if _HEX_SHA.fullmatch(value):
             return value.lower()
-        if not value.startswith("refs/") or len(value) > 256:
-            raise ValueError("baseline ref must be a full refs/... name or full object id")
+        if not value or len(value) > 256 or value.startswith("-"):
+            raise ValueError("baseline ref must be a literal ref name or full object id")
         components = value.split("/")
-        if len(components) < 3 or components[0] != "refs":
-            raise ValueError("baseline ref must be a full refs/... name or full object id")
-        for component in components[1:]:
+        for component in components:
             if (
                 not component
                 or component.startswith(".")
@@ -201,8 +199,24 @@ class RepositoryGitAuthorityMixin:
             raise ValueError("baseline ref contains unsupported Git ref syntax")
         return value
 
-    def _baseline_ref_observation(self, safe_ref: str) -> _BaselineRefObservation:
+    @staticmethod
+    def _baseline_ref_candidates(safe_ref: str) -> tuple[str, ...]:
         if _HEX_SHA.fullmatch(safe_ref):
+            return ()
+        if safe_ref.startswith("refs/"):
+            return (safe_ref,)
+        return (
+            safe_ref,
+            f"refs/{safe_ref}",
+            f"refs/tags/{safe_ref}",
+            f"refs/heads/{safe_ref}",
+            f"refs/remotes/{safe_ref}",
+            f"refs/remotes/{safe_ref}/HEAD",
+        )
+
+    def _baseline_ref_observation(self, safe_ref: str) -> _BaselineRefObservation:
+        candidates = self._baseline_ref_candidates(safe_ref)
+        if not candidates:
             return ()
         if self.workspace_root_identity is None or self.git_dir_identity is None:
             raise RuntimeError("baseline ref observation requires a direct authorized repository")
@@ -219,56 +233,35 @@ class RepositoryGitAuthorityMixin:
                 "baseline Git metadata directory could not be observed safely"
             ) from exc
 
+        paths: set[str] = {"packed-refs"}
+        for candidate in candidates:
+            parts = candidate.split("/")
+            paths.add(candidate)
+            for index in range(1, len(parts)):
+                paths.add("/".join(parts[:index]))
+
         rows: list[tuple[str, _MetadataSignature | None]] = [
-            (".git", self._metadata_signature(git_dir)),
-            (
-                "packed-refs",
-                self._stat_git_metadata_signature(
-                    "packed-refs",
-                    label="baseline packed refs",
-                ),
-            ),
+            (".git", self._metadata_signature(git_dir))
         ]
-        parts = safe_ref.split("/")
-        for index in range(1, len(parts)):
-            relative = "/".join(parts[:index])
+        for relative in sorted(paths):
             rows.append(
                 (
                     relative,
                     self._stat_git_metadata_signature(
                         relative,
-                        label=f"baseline ref parent {relative}",
+                        label=f"baseline ref authority {relative}",
                     ),
                 )
             )
-        rows.append(
-            (
-                safe_ref,
-                self._stat_git_metadata_signature(
-                    safe_ref,
-                    label=f"baseline ref {safe_ref}",
-                ),
+
+        for candidate in candidates:
+            loose_ref = self._read_git_metadata_file(
+                candidate,
+                label=f"baseline ref {candidate}",
             )
-        )
-
-        loose_ref = self._read_git_metadata_file(safe_ref, label=f"baseline ref {safe_ref}")
-        if loose_ref is not None and loose_ref.lstrip().startswith(b"ref:"):
-            raise RepositorySubjectError("symbolic baseline refs are not permitted")
+            if loose_ref is not None and loose_ref.lstrip().startswith(b"ref:"):
+                raise RepositorySubjectError("symbolic baseline refs are not permitted")
         return tuple(rows)
-
-    def _resolve_baseline_ref(self, base_ref: str) -> tuple[str, str]:
-        safe_ref = self._validate_baseline_ref(base_ref)
-        before = self._baseline_ref_observation(safe_ref)
-        resolved = self._git("rev-parse", "--verify", f"{safe_ref}^{{commit}}")
-        after = self._baseline_ref_observation(safe_ref)
-        if before != after:
-            raise RuntimeError("baseline ref metadata changed during resolution")
-        if resolved is None or not _HEX_SHA.fullmatch(resolved):
-            raise RuntimeError(f"baseline ref could not be resolved: {safe_ref}")
-        resolved = resolved.lower()
-        if _HEX_SHA.fullmatch(safe_ref) and resolved != safe_ref:
-            raise RuntimeError("baseline object id does not identify that exact commit")
-        return safe_ref, resolved
 
     def _assert_git_metadata_safe(self) -> None:
         if self.git_dir_identity is None:
@@ -433,6 +426,17 @@ class RepositoryGitAuthorityMixin:
                 return None
             raise RuntimeError("target workspace is not a direct Git repository")
         self._validate_git_command(tuple(args))
+
+        observed_ref: str | None = None
+        ref_before: _BaselineRefObservation = ()
+        if len(args) == 3 and args[:2] == ("rev-parse", "--verify"):
+            value = args[2]
+            if value.endswith("^{commit}"):
+                candidate = value[: -len("^{commit}")]
+                if not _HEX_SHA.fullmatch(candidate):
+                    observed_ref = self._validate_baseline_ref(candidate)
+                    ref_before = self._baseline_ref_observation(observed_ref)
+
         with tempfile.TemporaryDirectory(prefix="aiqa-git-home-") as temp_home:
             env = restricted_subprocess_env(
                 home=Path(temp_home),
@@ -480,6 +484,8 @@ class RepositoryGitAuthorityMixin:
         if result.stdout_truncated or result.stderr_truncated:
             raise RuntimeError("git inspection output exceeded bounded capture limit")
         raise_if_git_grafts_reported(result.stderr)
+        if observed_ref is not None and ref_before != self._baseline_ref_observation(observed_ref):
+            raise RuntimeError("baseline ref metadata changed during resolution")
         if result.returncode != 0:
             if allow_failure:
                 return None
