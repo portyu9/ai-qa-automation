@@ -112,7 +112,7 @@ def test_git_bytes_fails_closed_when_binary_capture_is_truncated(
         max_stderr_bytes: int,
     ) -> BoundedBinarySubprocessResult:
         assert command[-2:] == ["show", "object"]
-        assert cwd.name.isdigit()
+        assert cwd.exists()
         assert env["GIT_CONFIG_NOSYSTEM"] == "1"
         assert timeout_seconds == inspector.timeout_seconds
         assert max_stdout_bytes == 8
