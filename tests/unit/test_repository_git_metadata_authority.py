@@ -179,7 +179,7 @@ def test_repository_rejects_legacy_git_grafts_without_warning_dependency(tmp_pat
     head = _git(workspace, "rev-parse", "HEAD")
     (workspace / ".git" / "info" / "grafts").write_text(f"{head}\n", encoding="ascii")
 
-    with pytest.raises(RepositorySubjectError, match="legacy grafts"):
+    with pytest.raises(RepositorySubjectError, match="legacy graft metadata"):
         RepositoryInspector(workspace)
 
 

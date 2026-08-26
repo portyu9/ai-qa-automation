@@ -9,7 +9,7 @@ import pytest
 
 import ai_qa_automation.runtime.journal as journal_module
 import ai_qa_automation.runtime.stale_recovery as stale_recovery_module
-import ai_qa_automation.tools.repository as repository_module
+import ai_qa_automation.tools._repository_worktree as repository_worktree_module
 from ai_qa_automation.evidence import EvidenceStore
 from ai_qa_automation.io_safety import read_bytes_bounded, sha256_file_bounded
 from ai_qa_automation.models import AgentRunState, EvidenceItem, EvidenceKind, EvidenceNature
@@ -262,8 +262,8 @@ def test_repository_fingerprint_fails_closed_when_changed_file_exceeds_byte_boun
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(repository_module, "_MAX_FINGERPRINT_FILE_BYTES", 32)
-    monkeypatch.setattr(repository_module, "_MAX_FINGERPRINT_TOTAL_BYTES", 64)
+    monkeypatch.setattr(repository_worktree_module, "_MAX_FINGERPRINT_FILE_BYTES", 32)
+    monkeypatch.setattr(repository_worktree_module, "_MAX_FINGERPRINT_TOTAL_BYTES", 64)
     target = tmp_path / "tests" / "test_large.py"
     target.parent.mkdir()
     target.write_bytes(b"x" * 33)

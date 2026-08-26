@@ -44,6 +44,9 @@ class RepositoryWorktreeMixin:
     def _assert_workspace_subject_current(self) -> None:
         raise NotImplementedError
 
+    def _tree_entries_at(self, commit_sha: str) -> dict[str, tuple[str, str]]:
+        raise NotImplementedError
+
     def _read_bytes_confined_adapter(
         self,
         root: Path,
@@ -181,7 +184,7 @@ class RepositoryWorktreeMixin:
         *,
         object_format: str,
     ) -> tuple[dict[str, str], tuple[str, ...]]:
-        """Verify only Git-discovered candidates through confined raw bytes and modes."""
+        """Verify bounded tracked worktree subjects through confined raw bytes and modes."""
         changes: dict[str, str] = {}
         reasons: set[str] = set()
         compared_bytes = 0
@@ -301,21 +304,12 @@ class RepositoryWorktreeMixin:
                 code = "M"
             status_codes.setdefault(path, [" ", " "])[0] = code
 
-        unstaged_candidates = set(
-            self._git_path_list(
-                "diff-files",
-                "--name-only",
-                "-z",
-                "--no-ext-diff",
-                "--no-textconv",
-                "--ignore-submodules=all",
-                "--",
-            )
-        )
+        # Git worktree comparison commands such as diff-files and ls-files --modified
+        # can invoke repository-defined clean filters. Treat every stage-zero tracked
+        # path as a bounded raw-byte subject instead; this is more expensive but keeps
+        # repository-controlled content conversion outside the authority boundary.
+        unstaged_candidates = set(index_entries)
         unstaged_candidates.update(flagged_paths)
-        unstaged_candidates.update(
-            path for path, (mode, _oid) in index_entries.items() if mode not in {"100644", "100755"}
-        )
         unstaged_candidates.update(path for path, codes in status_codes.items() if codes[0] == "D")
         raw_changes, raw_reasons = self._raw_worktree_changes(
             unstaged_candidates,

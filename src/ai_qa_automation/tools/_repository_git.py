@@ -175,7 +175,9 @@ class RepositoryGitAuthorityMixin:
 
         grafts = self._read_git_metadata_file("info/grafts", label="legacy Git graft metadata")
         if grafts is not None and grafts.strip():
-            raise RepositorySubjectError("repository Git metadata must not use legacy grafts")
+            raise RepositorySubjectError(
+                "repository Git metadata must not use legacy graft metadata"
+            )
 
         include_section = re.compile(r"^\s*\[\s*include(?:if)?(?:\s|\])", re.IGNORECASE)
         for relative, label in (
@@ -260,15 +262,6 @@ class RepositoryGitAuthorityMixin:
             ("ls-files", "--stage", "-z", "--"),
             ("ls-files", "-v", "-z", "--"),
             ("ls-files", "--others", "--exclude-standard", "-z", "--"),
-            (
-                "diff-files",
-                "--name-only",
-                "-z",
-                "--no-ext-diff",
-                "--no-textconv",
-                "--ignore-submodules=all",
-                "--",
-            ),
         }:
             safe = True
         elif len(args) == 3 and args[:2] == ("rev-parse", "--verify"):

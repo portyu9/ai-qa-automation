@@ -105,6 +105,16 @@ def test_metadata_git_boundary_rejects_content_rendering_commands(tmp_path: Path
         inspector._git("status", "--porcelain=v1")
     with pytest.raises(ValueError, match="unsupported Git inspection command"):
         inspector._git("diff", "--name-only")
+    with pytest.raises(ValueError, match="unsupported Git inspection command"):
+        inspector._git(
+            "diff-files",
+            "--name-only",
+            "-z",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--ignore-submodules=all",
+            "--",
+        )
 
 
 def test_change_set_uses_tree_metadata_without_executing_content_filters(tmp_path: Path) -> None:

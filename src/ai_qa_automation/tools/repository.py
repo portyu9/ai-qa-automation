@@ -19,9 +19,9 @@ from ._repository_common import (
     _HEX_SHA,
     _MAX_GIT_EXACT_STDOUT_BYTES,
     _MAX_GIT_PATHS,
-    RepositoryChangeSet,
-    RepositorySnapshot,
-    RepositorySubjectError,
+    RepositoryChangeSet as RepositoryChangeSet,
+    RepositorySnapshot as RepositorySnapshot,
+    RepositorySubjectError as RepositorySubjectError,
 )
 from ._repository_git import RepositoryGitAuthorityMixin
 from ._repository_worktree import RepositoryWorktreeMixin
