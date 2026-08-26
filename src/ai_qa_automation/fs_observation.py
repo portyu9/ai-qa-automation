@@ -22,6 +22,7 @@ class ConfinedFileScan:
     files: tuple[ObservedRegularFile, ...]
     observed_entries: int
     truncated: bool
+    resource_truncated: bool
     unsafe_paths: tuple[PurePosixPath, ...]
     unreadable_paths: tuple[PurePosixPath, ...]
     root_identity: tuple[int, int]
@@ -61,9 +62,11 @@ def scan_regular_files_confined(
     directory that would exceed the entry budget is not partially published into
     ``files``; the result is marked truncated instead. Unsafe or unreadable entries
     also make the result conservatively incomplete because their skipped contents
-    cannot be proven irrelevant. Recursive descent is capped at a hard directory
-    depth so entry-bounded scans cannot exhaust call-stack or ancestor-descriptor
-    resources.
+    cannot be proven irrelevant. ``resource_truncated`` separately records only
+    budget/depth exhaustion so callers that need namespace metadata can distinguish
+    bounded traversal failure from a safely observed non-regular entry. Recursive
+    descent is capped at a hard directory depth so entry-bounded scans cannot exhaust
+    call-stack or ancestor-descriptor resources.
     """
 
     if isinstance(max_entries, bool) or not isinstance(max_entries, int) or max_entries < 1:
@@ -229,6 +232,7 @@ def scan_regular_files_confined(
         files=tuple(sorted(files, key=lambda item: item.path.as_posix())),
         observed_entries=observed_entries,
         truncated=truncated or bool(unsafe or unreadable),
+        resource_truncated=truncated,
         unsafe_paths=tuple(sorted(unsafe, key=PurePosixPath.as_posix)),
         unreadable_paths=tuple(sorted(unreadable, key=PurePosixPath.as_posix)),
         root_identity=root_identity,
