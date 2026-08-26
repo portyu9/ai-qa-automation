@@ -51,7 +51,9 @@ class RepositoryNamespaceAuthorityMixin:
         except RepositorySubjectError:
             raise
         except (OSError, RuntimeError, ValueError) as exc:
-            raise RuntimeError("repository worktree namespace could not be observed safely") from exc
+            raise RuntimeError(
+                "repository worktree namespace could not be observed safely"
+            ) from exc
 
         if scan.resource_truncated:
             raise RuntimeError("repository worktree namespace exceeded its bounded scan budget")
@@ -59,8 +61,7 @@ class RepositoryNamespaceAuthorityMixin:
             raise RuntimeError("repository worktree namespace contains unreadable paths")
 
         rows: list[tuple[str, _MetadataSignature]] = [
-            (f"dir:{item.path.as_posix()}", item.metadata_signature)
-            for item in scan.directories
+            (f"dir:{item.path.as_posix()}", item.metadata_signature) for item in scan.directories
         ]
         rows.extend(
             (f"ignore:{item.path.as_posix()}", item.metadata_signature)
@@ -92,8 +93,7 @@ class RepositoryNamespaceAuthorityMixin:
             )
 
         rows: list[tuple[str, _MetadataSignature]] = [
-            (f"dir:{item.path.as_posix()}", item.metadata_signature)
-            for item in scan.directories
+            (f"dir:{item.path.as_posix()}", item.metadata_signature) for item in scan.directories
         ]
         rows.extend(
             (f"file:{item.path.as_posix()}", item.metadata_signature) for item in scan.files
