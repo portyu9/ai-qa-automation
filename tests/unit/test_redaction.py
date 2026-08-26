@@ -36,6 +36,14 @@ def test_known_secret_shapes_are_redacted(secret: str) -> None:
     assert "[REDACTED]" in redacted
 
 
+def test_known_secret_shape_is_redacted_inside_underscore_delimited_identifier() -> None:
+    sample = secret_samples()[1]
+    redacted = redact_text(f"prefix_{sample}_suffix")
+
+    assert sample not in redacted
+    assert redacted == "prefix_[REDACTED]_suffix"
+
+
 def test_authorization_header_and_bearer_token_are_redacted() -> None:
     secret = "abcdefghijklmnop"
     text = f"Authorization: Bearer {secret}; second bearer {secret}"
