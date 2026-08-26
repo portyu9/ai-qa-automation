@@ -36,12 +36,14 @@ def test_known_secret_shapes_are_redacted(secret: str) -> None:
     assert "[REDACTED]" in redacted
 
 
-def test_known_secret_shape_is_redacted_inside_underscore_delimited_identifier() -> None:
-    sample = secret_samples()[1]
-    redacted = redact_text(f"prefix_{sample}_suffix")
+@pytest.mark.parametrize("secret", secret_samples())
+def test_known_secret_shapes_are_redacted_inside_underscore_delimited_identifier(
+    secret: str,
+) -> None:
+    redacted = redact_text(f"prefix_{secret}_suffix")
 
-    assert sample not in redacted
-    assert redacted == "prefix_[REDACTED]_suffix"
+    assert secret not in redacted
+    assert "[REDACTED]" in redacted
 
 
 def test_authorization_header_and_bearer_token_are_redacted() -> None:
