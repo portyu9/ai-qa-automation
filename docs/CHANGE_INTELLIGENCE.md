@@ -104,9 +104,10 @@ For those change-intelligence paths:
 - `assume-unchanged` and `skip-worktree` index hints cannot silently hide candidate bytes: flagged paths are forced through the confined raw verification path;
 - untracked discovery is bounded and preserves repository ignore rules while suppressing environment-owned global excludes; overflow remains explicit incomplete evidence;
 - optional Git locks are disabled, raw index bytes are digest-bound and rechecked, replacement objects/lazy fetch are disabled, and legacy graft metadata is rejected;
+- snapshot fingerprinting is bracketed by two complete bounded worktree-status observations; changed-path/status evidence, index digest, observation-completeness reasons, commit identity, and symbolic HEAD must remain stable across the bracket or the snapshot becomes explicitly incomplete;
 - identity/type changes during traversal, confined reads, or the Git subprocess boundary fail closed instead of becoming observed content.
 
-These controls prevent pathname preflight from silently becoming read authority after a parent, final-component, whole-root, or `.git` replacement and prevent repository configuration from turning read-only inspection into arbitrary content-processing execution. They do **not** make target files trusted or provide filesystem snapshot isolation; concurrent target mutation can still make an observation incomplete or cause a fail-closed result. Gitlinks/submodules are conservatively incomplete until nested repository authority is implemented rather than being silently treated as verified clean state.
+These controls prevent pathname preflight from silently becoming read authority after a parent, final-component, whole-root, or `.git` replacement and prevent repository configuration from turning read-only inspection into arbitrary content-processing execution. They do **not** make target files trusted or provide filesystem snapshot isolation. Instead, the inspector defines a bounded observation bracket and fails closed when repository state is observed to change across that bracket; mutation after the final observation point remains outside the captured snapshot. Gitlinks/submodules are conservatively incomplete until nested repository authority is implemented rather than being silently treated as verified clean state.
 
 ---
 
