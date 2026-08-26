@@ -225,9 +225,7 @@ def test_live_services_mirror_control_count_without_double_charging(tmp_path: Pa
         test_runner=cast(Any, object()),
         max_tool_calls=10,
         max_repeated_action=2,
-        workspace_root_identity=pin_directory_identity(
-            tmp_path / "sut", label="test workspace"
-        ),
+        workspace_root_identity=pin_directory_identity(tmp_path / "sut", label="test workspace"),
         control=control,
     )
 
