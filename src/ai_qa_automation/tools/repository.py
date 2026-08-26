@@ -547,7 +547,11 @@ class RepositoryInspector:
         with tempfile.TemporaryDirectory(prefix="aiqa-git-home-") as temp_home:
             env = restricted_subprocess_env(
                 home=Path(temp_home),
-                extra={"GIT_CONFIG_NOSYSTEM": "1", "GIT_NO_REPLACE_OBJECTS": "1"},
+                extra={
+                    "GIT_CONFIG_NOSYSTEM": "1",
+                    "GIT_NO_REPLACE_OBJECTS": "1",
+                    "GIT_OPTIONAL_LOCKS": "0",
+                },
             )
             with self._git_cwd() as git_cwd:
                 result = run_bounded_subprocess(
@@ -588,7 +592,11 @@ class RepositoryInspector:
         with tempfile.TemporaryDirectory(prefix="aiqa-git-home-") as temp_home:
             env = restricted_subprocess_env(
                 home=Path(temp_home),
-                extra={"GIT_CONFIG_NOSYSTEM": "1", "GIT_NO_REPLACE_OBJECTS": "1"},
+                extra={
+                    "GIT_CONFIG_NOSYSTEM": "1",
+                    "GIT_NO_REPLACE_OBJECTS": "1",
+                    "GIT_OPTIONAL_LOCKS": "0",
+                },
             )
             with self._git_cwd() as git_cwd:
                 result = run_bounded_binary_subprocess(
