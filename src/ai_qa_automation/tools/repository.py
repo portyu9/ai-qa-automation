@@ -355,6 +355,9 @@ class RepositoryInspector(RepositoryGitAuthorityMixin, RepositoryWorktreeMixin):
     def change_set(self, base_ref: str) -> RepositoryChangeSet:
         """Resolve an immutable baseline and union committed/worktree change evidence."""
         safe_ref = self._validate_ref(base_ref)
+        bare_hex = all(char in "0123456789abcdefABCDEF" for char in safe_ref)
+        if bare_hex and len(safe_ref) not in {40, 64}:
+            raise ValueError("baseline ref must not be an abbreviated object id")
         head = self._git("rev-parse", "HEAD")
         if head is None:
             raise RuntimeError("target workspace is not a Git repository")
@@ -362,6 +365,9 @@ class RepositoryInspector(RepositoryGitAuthorityMixin, RepositoryWorktreeMixin):
         baseline = self._git("rev-parse", "--verify", f"{safe_ref}^{{commit}}")
         if baseline is None:
             raise RuntimeError(f"baseline ref could not be resolved: {safe_ref}")
+        baseline = self._verify_exact_commit_oid(baseline)
+        if bare_hex and baseline != safe_ref.lower():
+            raise RuntimeError("baseline full object id does not match its requested object id")
         merge_base = self._git("merge-base", baseline, head)
         if merge_base is None:
             raise RuntimeError(f"baseline ref has no merge base with HEAD: {safe_ref}")
