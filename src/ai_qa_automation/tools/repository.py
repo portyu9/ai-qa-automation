@@ -30,7 +30,7 @@ from ._repository_common import (
     RepositorySubjectError as RepositorySubjectError,
 )
 from ._repository_git import RepositoryGitAuthorityMixin
-from ._repository_worktree import RepositoryWorktreeMixin
+from ._repository_namespace import RepositoryNamespaceAuthorityMixin
 from .execution_env import (
     BoundedBinarySubprocessResult,
     BoundedSubprocessResult,
@@ -43,7 +43,7 @@ from .subprocess_subject import (
 )
 
 
-class RepositoryInspector(RepositoryGitAuthorityMixin, RepositoryWorktreeMixin):
+class RepositoryInspector(RepositoryNamespaceAuthorityMixin, RepositoryGitAuthorityMixin):
     """Read-only repository inspection with explicit metadata/worktree authority layers."""
 
     # Ambient authority enters only through these adapters. Keeping them in this public
