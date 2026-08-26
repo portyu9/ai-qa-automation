@@ -427,6 +427,9 @@ class RepositoryInspector(RepositoryGitAuthorityMixin, RepositoryWorktreeMixin):
         if blob_oid is None:
             raise FileNotFoundError(path)
 
+        object_format = self._git("rev-parse", "--show-object-format")
+        if object_format not in {"sha1", "sha256"}:
+            raise RuntimeError("Git returned an unsupported object format")
         size_text = self._git("cat-file", "-s", blob_oid)
         if size_text is None:  # pragma: no cover - _git without allow_failure raises instead
             raise RuntimeError("Git blob size lookup returned no result")
@@ -450,6 +453,8 @@ class RepositoryInspector(RepositoryGitAuthorityMixin, RepositoryWorktreeMixin):
             raise RuntimeError(
                 "Git returned baseline bytes inconsistent with preflight object size"
             )
+        if self._raw_blob_oid(result, object_format) != blob_oid.lower():
+            raise RuntimeError("Git blob content does not match its content-addressed object id")
         return result
 
     def diff(self, *paths: str) -> str:
