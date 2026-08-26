@@ -252,8 +252,7 @@ class RepositoryInspector:
             or not 1 <= max_bytes <= _MAX_GIT_EXACT_STDOUT_BYTES
         ):
             raise ValueError(
-                "max_bytes must be an integer between 1 and "
-                f"{_MAX_GIT_EXACT_STDOUT_BYTES}"
+                f"max_bytes must be an integer between 1 and {_MAX_GIT_EXACT_STDOUT_BYTES}"
             )
         if not _HEX_SHA.fullmatch(commit_sha):
             raise ValueError("commit_sha must be a full hexadecimal object id")
@@ -280,7 +279,9 @@ class RepositoryInspector:
         if result is None:
             raise FileNotFoundError(path)
         if len(result) != size:
-            raise RuntimeError("Git returned baseline bytes inconsistent with preflight object size")
+            raise RuntimeError(
+                "Git returned baseline bytes inconsistent with preflight object size"
+            )
         return result
 
     def diff(self, *paths: str) -> str:
