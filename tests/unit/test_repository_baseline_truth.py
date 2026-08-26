@@ -172,6 +172,8 @@ def test_size_failure_after_blob_presence_remains_repository_failure(
     monkeypatch.setattr(inspector, "_blob_oid_at", lambda *_args: "3" * 40)
 
     def fail_size(*args: str, **kwargs: object) -> str:
+        if args == ("rev-parse", "--show-object-format"):
+            return "sha1"
         raise RuntimeError("synthetic object corruption")
 
     monkeypatch.setattr(inspector, "_git", fail_size)
@@ -186,7 +188,15 @@ def test_content_failure_after_blob_presence_remains_repository_failure(
 ) -> None:
     inspector = RepositoryInspector(tmp_path)
     monkeypatch.setattr(inspector, "_blob_oid_at", lambda *_args: "4" * 40)
-    monkeypatch.setattr(inspector, "_git", lambda *args, **kwargs: "4")
+
+    def git_metadata(*args: str, **kwargs: object) -> str:
+        if args == ("rev-parse", "--show-object-format"):
+            return "sha1"
+        if len(args) == 3 and args[:2] == ("cat-file", "-s"):
+            return "4"
+        raise AssertionError(f"unexpected git metadata command: {args}")
+
+    monkeypatch.setattr(inspector, "_git", git_metadata)
 
     def fail_content(*args: str, **kwargs: object) -> bytes:
         raise RuntimeError("synthetic blob read failure")
