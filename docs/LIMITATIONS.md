@@ -106,6 +106,7 @@ The analyzer is structural and conservative.
 ### Repository baseline refs
 
 - Named change-intelligence baselines are resolved only while the supported loose-ref and `packed-refs` authority paths remain metadata-stable; observed concurrent ref mutation fails closed rather than certifying an alternate merge base.
+- Current `HEAD` resolution separately brackets the direct `.git/HEAD` bytes/metadata and, for symbolic HEAD, the single direct `refs/...` target plus `packed-refs`; stable detached full-object HEAD and stable unborn direct branches remain supported, while nested symbolic ref authority is rejected.
 - Baseline revision expressions and symbolic loose baseline refs are intentionally rejected instead of introducing mutable reflog/range semantics or an unbound second ref hop.
 - Git's reftable ref backend is not yet descriptor-bound by `RepositoryInspector`; repositories exposing `.git/reftable` are therefore rejected rather than treated as verified baseline authority.
 - These controls detect ordinary filesystem-visible mutation through identity/size/time metadata and directory changes; they do not claim protection from privileged filesystem snapshot rollback that can restore metadata outside the process authority boundary.
@@ -180,7 +181,7 @@ The analyzer is structural and conservative.
 
 - Controlled pytest cannot make arbitrary third-party dependencies deterministic.
 - External clocks, queues, networks, databases, caches, datasets, and services can still introduce nondeterminism.
-- Target containers, certificates, test users, credentials, and cleanup remain environment responsibilities.
+- Target containers, certificates, test users, credentials, and cleanup remain target responsibilities.
 - Contradictory same-revision evidence remains visible rather than averaged away.
 
 ### k6
