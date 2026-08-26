@@ -244,11 +244,7 @@ def _validate_timeout(timeout_seconds: int | float) -> None:
 
 
 def _validate_output_bound(value: int, *, name: str) -> None:
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, int)
-        or not 1 <= value <= _MAX_OUTPUT_BYTES
-    ):
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= _MAX_OUTPUT_BYTES:
         raise ValueError(f"{name} must be an integer between 1 and {_MAX_OUTPUT_BYTES}")
 
 
