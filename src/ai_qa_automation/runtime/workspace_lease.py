@@ -14,6 +14,10 @@ from uuid import uuid4
 
 from ..fs_authority import descriptor_relative_authority_supported, pin_directory_identity
 from ..io_safety import fsync_directory, parse_json_object_strict
+from ..tools.subprocess_subject import (
+    bind_active_workspace_authority,
+    clear_active_workspace_authority,
+)
 
 
 class _MSVCRTLocking(Protocol):
@@ -76,6 +80,7 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
         self.lease_id = f"lease-{uuid4().hex[:16]}"
         self._stream: Any | None = None
         self._workspace_lock_fd: int | None = None
+        self._authority_bound = False
         self.previous_metadata: dict[str, Any] | None = None
 
     @property
@@ -285,6 +290,7 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
                 os.close(workspace_lock_fd)
             raise
         locked = False
+        authority_bound = False
         try:
             self._lock_stream(stream)
             locked = True
@@ -327,10 +333,24 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
                 fsync_directory(self.path.parent)
             self._revalidate_lease_root(directory_fd)
             self._revalidate_workspace_root()
+            bind_active_workspace_authority(
+                self.workspace,
+                self._workspace_root_identity,
+                owner=self.lease_id,
+            )
+            authority_bound = self._workspace_root_identity is not None
+            self._authority_bound = authority_bound
             self._stream = stream
             self._workspace_lock_fd = workspace_lock_fd
             return self
         except Exception:
+            if authority_bound:
+                clear_active_workspace_authority(
+                    self.workspace,
+                    self._workspace_root_identity,
+                    owner=self.lease_id,
+                )
+                self._authority_bound = False
             if locked:
                 with suppress(OSError):
                     self._unlock_stream(stream)
@@ -349,6 +369,15 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
         workspace_lock_fd = self._workspace_lock_fd
         self._stream = None
         self._workspace_lock_fd = None
+        authority_cleared = True
+        if self._authority_bound:
+            authority_cleared = clear_active_workspace_authority(
+                self.workspace,
+                self._workspace_root_identity,
+                owner=self.lease_id,
+            )
+            if authority_cleared:
+                self._authority_bound = False
         try:
             if stream is not None:
                 try:
@@ -361,6 +390,8 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
                     self._unlock_workspace_root(workspace_lock_fd)
                 finally:
                     os.close(workspace_lock_fd)
+        if not authority_cleared:
+            raise OSError("active workspace authority is owned by another lease")
 
     def __enter__(self) -> WorkspaceLease:
         return self.acquire()
