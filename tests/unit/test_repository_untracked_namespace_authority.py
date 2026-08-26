@@ -69,6 +69,57 @@ def test_nested_entry_aba_changes_worktree_namespace_observation(tmp_path: Path)
     assert subject.read_text(encoding="utf-8") == "untracked\n"
 
 
+def test_gitignore_in_place_aba_changes_worktree_namespace_observation(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ignore = repo / ".gitignore"
+    ignore.write_text("alpha\n", encoding="utf-8")
+    inspector = RepositoryInspector(repo)
+
+    before = inspector._worktree_namespace_observation()
+    ignore.write_text("bravo\n", encoding="utf-8")
+    ignore.write_text("alpha\n", encoding="utf-8")
+    after = inspector._worktree_namespace_observation()
+
+    assert before != after
+    assert ignore.read_text(encoding="utf-8") == "alpha\n"
+
+
+def test_git_metadata_in_place_aba_changes_git_metadata_observation(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    exclude = repo / ".git" / "info" / "exclude"
+    exclude.write_text("alpha\n", encoding="utf-8")
+    inspector = RepositoryInspector(repo)
+
+    before = inspector._git_metadata_observation()
+    exclude.write_text("bravo\n", encoding="utf-8")
+    exclude.write_text("alpha\n", encoding="utf-8")
+    after = inspector._git_metadata_observation()
+
+    assert before != after
+    assert exclude.read_text(encoding="utf-8") == "alpha\n"
+
+
+def test_git_text_command_rejects_changed_metadata_observation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    inspector = RepositoryInspector(repo)
+    observations = iter(
+        (
+            (("file:config", (1, 2, 3, 4, 5, 6)),),
+            (("file:config", (1, 2, 3, 4, 5, 7)),),
+        )
+    )
+    monkeypatch.setattr(inspector, "_git_metadata_observation", lambda: next(observations))
+
+    with pytest.raises(RuntimeError, match="Git metadata changed"):
+        inspector._git("rev-parse", "--show-object-format")
+
+
 def test_untracked_enumeration_rejects_changed_namespace_observation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -79,8 +130,8 @@ def test_untracked_enumeration_rejects_changed_namespace_observation(
     inspector = RepositoryInspector(repo)
     observations = iter(
         (
-            (("", (1, 2, 3, 4, 5, 6)),),
-            (("", (1, 2, 3, 4, 5, 7)),),
+            (("dir:.", (1, 2, 3, 4, 5, 6)),),
+            (("dir:.", (1, 2, 3, 4, 5, 7)),),
         )
     )
     monkeypatch.setattr(inspector, "_worktree_namespace_observation", lambda: next(observations))
