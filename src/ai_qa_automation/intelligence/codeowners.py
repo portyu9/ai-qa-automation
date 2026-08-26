@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from ..io_safety import read_text_bounded
+from ..fs_authority import pin_directory_identity, read_bytes_confined
 
 _CODEOWNERS_LOCATIONS = (".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS")
 
@@ -56,22 +56,42 @@ class CodeownersResolver:
         self.unsupported_patterns = unsupported_patterns
 
     @classmethod
-    def from_workspace(cls, workspace: Path, *, max_bytes: int = 512_000) -> CodeownersResolver:
-        root = workspace.expanduser().resolve()
+    def from_workspace(
+        cls,
+        workspace: Path,
+        *,
+        max_bytes: int = 512_000,
+        expected_root_identity: tuple[int, int] | None = None,
+    ) -> CodeownersResolver:
+        root = workspace.expanduser().absolute()
+        root_identity = expected_root_identity or pin_directory_identity(
+            root, label="CODEOWNERS workspace"
+        )
         for relative in _CODEOWNERS_LOCATIONS:
-            path = (root / relative).resolve()
             try:
-                path.relative_to(root)
-            except ValueError:
+                raw = read_bytes_confined(
+                    root,
+                    relative,
+                    max_bytes=max_bytes,
+                    label=f"CODEOWNERS {relative}",
+                    expected_root_identity=root_identity,
+                )
+            except FileNotFoundError:
                 continue
-            if path.is_symlink() or not path.is_file():
-                continue
-            try:
-                text = read_text_bounded(path, max_bytes=max_bytes, label="CODEOWNERS")
-            except ValueError:
-                return cls((), source_path=relative, unsupported_patterns=("<file-too-large>",))
-            except (OSError, UnicodeError):
+            except ValueError as exc:
+                if "trusted root" in str(exc):
+                    raise
+                return cls(
+                    (),
+                    source_path=relative,
+                    unsupported_patterns=("<unsafe-or-too-large>",),
+                )
+            except OSError:
                 return cls((), source_path=relative, unsupported_patterns=("<unreadable>",))
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeError:
+                return cls((), source_path=relative, unsupported_patterns=("<invalid-utf8>",))
             rules, unsupported = cls._parse(text)
             return cls(rules, source_path=relative, unsupported_patterns=unsupported)
         return cls((), source_path=None)

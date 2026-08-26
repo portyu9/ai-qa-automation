@@ -179,6 +179,7 @@ async def run_agent(
             evidence=evidence,
             state_store=state_store,
             control=control,
+            workspace_root_identity=lease.workspace_root_identity,
         )
         policy = PolicyEngine(cfg.control_root, workspace, allow_test_writes=cfg.allow_test_writes)
         runner = TestRunner(workspace, evidence, timeout_seconds=cfg.tool_timeout_seconds)
