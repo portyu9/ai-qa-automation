@@ -10,7 +10,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from ..fs_authority import descriptor_relative_authority_supported, pin_directory_identity
+from ..fs_authority import (
+    descriptor_relative_authority_supported,
+    pin_directory_identity,
+    read_bytes_confined,
+)
 from ..io_safety import open_regular_binary
 from .execution_env import resolve_executable, restricted_subprocess_env, run_bounded_subprocess
 from .subprocess_subject import active_workspace_authority, descriptor_bound_cwd
@@ -89,7 +93,10 @@ class RepositoryInspector:
         ):
             raise ValueError("expected_root_identity must be a pair of non-negative integers")
 
-        self.workspace = workspace.expanduser().resolve()
+        # Do not resolve the target after lease acquisition. Resolving here would follow
+        # a replacement symlink before consulting the lease-authority registry and could
+        # silently change both the registry key and the repository subject.
+        self.workspace = workspace.expanduser().absolute()
         self.timeout_seconds = timeout_seconds
         active_identity = active_workspace_authority(self.workspace)
         if (
@@ -280,6 +287,89 @@ class RepositoryInspector:
                 paths.add(raw)
         return tuple(sorted(paths))
 
+    def _read_fingerprint_bytes(
+        self,
+        relative: str,
+        *,
+        max_bytes: int,
+    ) -> tuple[bytes | None, str | None]:
+        """Read one changed-file subject under the same root identity as Git inspection."""
+
+        try:
+            normalized = self._validate_relative_path(relative)
+        except ValueError:
+            return None, "changed-path-outside-workspace"
+
+        if self.workspace_root_identity is not None:
+            try:
+                data = read_bytes_confined(
+                    self.workspace,
+                    normalized,
+                    max_bytes=max_bytes,
+                    label=f"workspace fingerprint subject {normalized}",
+                    expected_root_identity=self.workspace_root_identity,
+                )
+            except FileNotFoundError:
+                return None, "deleted"
+            except OSError:
+                return None, "changed-file-unreadable"
+            except ValueError as exc:
+                message = str(exc).casefold()
+                if "trusted root" in message:
+                    raise RepositorySubjectError(
+                        "workspace fingerprint subject changed root identity during inspection"
+                    ) from exc
+                if "symlink" in message and "parent component" not in message:
+                    return None, "changed-symlink-not-byte-bound"
+                if "must be a regular file" in message:
+                    return None, "changed-non-file-not-byte-bound"
+                if "exceeds" in message and "ingestion limit" in message:
+                    return None, "byte-limit-exceeded"
+                return None, "changed-path-ownership-ambiguous"
+            return data, None
+
+        # Compatibility fallback for platforms without descriptor-relative authority.
+        # Live lease-bound authority is never silently downgraded into this path because
+        # __init__ rejects an authorized identity on such platforms.
+        raw_candidate = self.workspace / normalized
+        if raw_candidate.is_symlink():
+            return None, "changed-symlink-not-byte-bound"
+        candidate = raw_candidate.resolve()
+        try:
+            candidate.relative_to(self.workspace)
+        except ValueError:
+            return None, "changed-path-outside-workspace"
+        if not candidate.exists():
+            return None, "deleted"
+        if not candidate.is_file():
+            return None, "changed-non-file-not-byte-bound"
+        try:
+            size_hint = candidate.stat().st_size
+        except OSError:
+            return None, "changed-file-unreadable"
+        if size_hint > max_bytes:
+            return None, "byte-limit-exceeded"
+        chunks: list[bytes] = []
+        size = 0
+        try:
+            with open_regular_binary(
+                candidate,
+                label=f"workspace fingerprint subject {normalized}",
+            ) as stream:
+                while size <= max_bytes:
+                    chunk = stream.read(min(1024 * 1024, max_bytes + 1 - size))
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    size += len(chunk)
+        except OSError:
+            return None, "changed-file-unreadable"
+        except ValueError:
+            return None, "changed-path-ownership-ambiguous"
+        if size > max_bytes:
+            return None, "byte-limit-exceeded"
+        return b"".join(chunks), None
+
     def _fingerprint(
         self,
         git_sha: str | None,
@@ -299,75 +389,45 @@ class RepositoryInspector:
                     incomplete_reasons.add("quoted-git-path-not-byte-bound")
 
         for relative in changed_files[:_MAX_FINGERPRINT_CHANGED_FILES]:
-            raw_candidate = self.workspace / relative
-            if raw_candidate.is_symlink():
-                file_rows.append({"path": relative, "state": "symlink"})
-                incomplete_reasons.add("changed-symlink-not-byte-bound")
-                continue
-            candidate = raw_candidate.resolve()
-            try:
-                candidate.relative_to(self.workspace)
-            except ValueError:
-                file_rows.append({"path": relative, "state": "outside-workspace"})
-                incomplete_reasons.add("changed-path-outside-workspace")
-                continue
-            if not candidate.exists():
-                file_rows.append({"path": relative, "state": "deleted"})
-                continue
-            if not candidate.is_file():
-                file_rows.append({"path": relative, "state": "non-file"})
-                incomplete_reasons.add("changed-non-file-not-byte-bound")
-                continue
-            try:
-                size_hint = candidate.stat().st_size
-            except OSError:
-                file_rows.append({"path": relative, "state": "unreadable"})
-                incomplete_reasons.add("changed-file-unreadable")
-                continue
-            if size_hint > _MAX_FINGERPRINT_FILE_BYTES:
-                file_rows.append(
-                    {"path": relative, "state": "file-byte-limit-exceeded", "size": size_hint}
-                )
-                incomplete_reasons.add("changed-file-byte-limit-exceeded")
-                continue
-            if total_hashed_bytes + size_hint > _MAX_FINGERPRINT_TOTAL_BYTES:
-                file_rows.append(
-                    {"path": relative, "state": "total-byte-limit-exceeded", "size": size_hint}
-                )
+            remaining_total = _MAX_FINGERPRINT_TOTAL_BYTES - total_hashed_bytes
+            if remaining_total <= 0:
+                file_rows.append({"path": relative, "state": "total-byte-limit-exceeded"})
                 incomplete_reasons.add("changed-total-byte-limit-exceeded")
                 continue
-
-            digest = hashlib.sha256()
-            size = 0
-            exceeded: str | None = None
-            try:
-                with open_regular_binary(
-                    candidate,
-                    label=f"workspace fingerprint subject {relative}",
-                ) as stream:
-                    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                        size += len(chunk)
-                        if size > _MAX_FINGERPRINT_FILE_BYTES:
-                            exceeded = "changed-file-byte-limit-exceeded"
-                            break
-                        if total_hashed_bytes + size > _MAX_FINGERPRINT_TOTAL_BYTES:
-                            exceeded = "changed-total-byte-limit-exceeded"
-                            break
-                        digest.update(chunk)
-            except OSError:
-                file_rows.append({"path": relative, "state": "unreadable"})
-                incomplete_reasons.add("changed-file-unreadable")
+            read_limit = min(_MAX_FINGERPRINT_FILE_BYTES, remaining_total)
+            data, failure = self._read_fingerprint_bytes(relative, max_bytes=read_limit)
+            if failure == "deleted":
+                file_rows.append({"path": relative, "state": "deleted"})
                 continue
-            except ValueError:
-                file_rows.append({"path": relative, "state": "ownership-ambiguous"})
-                incomplete_reasons.add("changed-path-ownership-ambiguous")
+            if failure == "byte-limit-exceeded":
+                reason = (
+                    "changed-total-byte-limit-exceeded"
+                    if read_limit < _MAX_FINGERPRINT_FILE_BYTES
+                    else "changed-file-byte-limit-exceeded"
+                )
+                state = (
+                    "total-byte-limit-exceeded"
+                    if reason == "changed-total-byte-limit-exceeded"
+                    else "file-byte-limit-exceeded"
+                )
+                file_rows.append({"path": relative, "state": state})
+                incomplete_reasons.add(reason)
                 continue
-            if exceeded is not None:
-                file_rows.append({"path": relative, "state": exceeded, "size_read": size})
-                incomplete_reasons.add(exceeded)
+            if failure is not None:
+                file_rows.append({"path": relative, "state": failure})
+                incomplete_reasons.add(failure)
                 continue
+            if data is None:  # pragma: no cover - helper contract
+                raise RuntimeError("fingerprint reader returned neither data nor a failure reason")
+            size = len(data)
             total_hashed_bytes += size
-            file_rows.append({"path": relative, "size": size, "sha256": digest.hexdigest()})
+            file_rows.append(
+                {
+                    "path": relative,
+                    "size": size,
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                }
+            )
         if len(changed_files) > _MAX_FINGERPRINT_CHANGED_FILES:
             file_rows.append({"state": "changed-file-overflow", "count": len(changed_files)})
 
@@ -434,7 +494,7 @@ class RepositoryInspector:
         # preceding object-size gate keeps capture_output bounded.
         with tempfile.TemporaryDirectory(prefix="aiqa-git-home-") as temp_home:
             env = restricted_subprocess_env(
-                home=Path(temp_home), extra={"GIT_CONFIG_NOSYSTEM": "1"}
+                home=Path(temp_home), extra={"GIT_CONFIG_NOSYSTEM": "1")
             )
             git_executable = resolve_executable("git", env=env)
             try:
