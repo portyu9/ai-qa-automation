@@ -34,9 +34,7 @@ class LiveRuntimeServices(RuntimeServices):
         if self.control is None:
             raise ValueError("live runtime services require RuntimeControl")
         if self.workspace_root_identity is None:
-            raise ValueError(
-                "live runtime services require a lease-bound workspace_root_identity"
-            )
+            raise ValueError("live runtime services require a lease-bound workspace_root_identity")
         for name, value in {
             "pytest_process_isolation_enforced": self.pytest_process_isolation_enforced,
             "pytest_external_egress_enforced": self.pytest_external_egress_enforced,
