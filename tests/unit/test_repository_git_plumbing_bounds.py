@@ -4,12 +4,17 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pytest
 
 import ai_qa_automation.tools.repository as repository_module
 from ai_qa_automation.fs_authority import descriptor_relative_authority_supported
+from ai_qa_automation.tools.execution_env import (
+    BoundedBinarySubprocessResult,
+    BoundedSubprocessResult,
+)
 from ai_qa_automation.tools.repository import RepositoryInspector
 
 
@@ -115,6 +120,73 @@ def test_metadata_git_boundary_rejects_content_rendering_commands(tmp_path: Path
             "--ignore-submodules=all",
             "--",
         )
+
+
+def test_git_commands_disable_repository_commit_graph_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_descriptor_authority()
+    workspace = tmp_path / "workspace"
+    _init_repo(workspace)
+    inspector = RepositoryInspector(workspace)
+    text_command: list[str] = []
+    binary_command: list[str] = []
+
+    def capture_text(
+        command: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+        timeout_seconds: int | float,
+        max_output_bytes: int = 2_000_000,
+        pass_fds: Sequence[int] = (),
+    ) -> BoundedSubprocessResult:
+        del cwd, env, timeout_seconds, max_output_bytes
+        assert pass_fds
+        text_command.extend(command)
+        return BoundedSubprocessResult(
+            returncode=0,
+            stdout="a" * 40,
+            stderr="",
+            stdout_truncated=False,
+            stderr_truncated=False,
+            timed_out=False,
+        )
+
+    def capture_binary(
+        command: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+        timeout_seconds: int | float,
+        max_stdout_bytes: int = 2_000_000,
+        max_stderr_bytes: int = 2_000_000,
+        pass_fds: Sequence[int] = (),
+    ) -> BoundedBinarySubprocessResult:
+        del cwd, env, timeout_seconds, max_stdout_bytes, max_stderr_bytes
+        assert pass_fds
+        binary_command.extend(command)
+        return BoundedBinarySubprocessResult(
+            returncode=0,
+            stdout=b"",
+            stderr=b"",
+            stdout_truncated=False,
+            stderr_truncated=False,
+            timed_out=False,
+        )
+
+    monkeypatch.setattr(inspector, "_run_bounded_subprocess_adapter", capture_text)
+    monkeypatch.setattr(inspector, "_run_bounded_binary_subprocess_adapter", capture_binary)
+
+    assert inspector._git("rev-parse", "HEAD") == "a" * 40
+    assert (
+        inspector._git_bytes("cat-file", "blob", "b" * 40, max_stdout_bytes=8) == b""
+    )
+
+    for command in (text_command, binary_command):
+        position = command.index("core.commitGraph=false")
+        assert command[position - 1] == "-c"
 
 
 def test_change_set_uses_tree_metadata_without_executing_content_filters(tmp_path: Path) -> None:
