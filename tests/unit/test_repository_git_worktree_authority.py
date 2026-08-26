@@ -91,13 +91,15 @@ def test_repository_snapshot_does_not_refresh_git_index(tmp_path: Path) -> None:
     tracked = workspace / "tracked.txt"
     index = workspace / ".git" / "index"
 
-    # Force Git to inspect a stale stat entry, then pin the index metadata to an
-    # unmistakably old timestamp. A normal `git status` refreshes/replaces the index;
-    # read-only inspection must not do so.
-    os.utime(tracked, None)
-    old_ns = 946_684_800_000_000_000
-    os.utime(index, ns=(old_ns, old_ns))
+    # Force Git to re-check a cached stat entry with a deterministic timestamp that
+    # cannot equal the just-created index entry. A normal `git status` refreshes the
+    # index in this condition; read-only inspection must not do so.
+    tracked_ns = 1_262_304_000_123_456_789
+    os.utime(tracked, ns=(tracked_ns, tracked_ns))
+    old_index_ns = 946_684_800_000_000_000
+    os.utime(index, ns=(old_index_ns, old_index_ns))
     before = index.stat()
+    before_bytes = index.read_bytes()
 
     snapshot = RepositoryInspector(
         workspace,
@@ -105,7 +107,10 @@ def test_repository_snapshot_does_not_refresh_git_index(tmp_path: Path) -> None:
     ).snapshot()
 
     after = index.stat()
+    after_bytes = index.read_bytes()
     assert snapshot.fingerprint_complete is True
     assert snapshot.changed_files == ()
+    assert after_bytes == before_bytes
     assert after.st_ino == before.st_ino
     assert after.st_mtime_ns == before.st_mtime_ns
+    assert not (workspace / ".git" / "index.lock").exists()
