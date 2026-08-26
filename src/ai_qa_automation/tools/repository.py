@@ -25,12 +25,18 @@ from .subprocess_subject import active_workspace_authority, descriptor_bound_cwd
 _SAFE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@{}~^:+-]{0,255}$")
 _HEX_SHA = re.compile(r"^[0-9a-fA-F]{40,64}$")
 _GIT_MODE = re.compile(r"^[0-7]{6}$")
+_GIT_GRAFT_WARNING = "info/grafts"
 _MAX_FINGERPRINT_CHANGED_FILES = 1000
 _MAX_FINGERPRINT_FILE_BYTES = 16_000_000
 _MAX_FINGERPRINT_TOTAL_BYTES = 128_000_000
 _MAX_GIT_TEXT_OUTPUT_BYTES = 8_000_000
 _MAX_GIT_EXACT_STDOUT_BYTES = 16_000_000
 _MAX_GIT_EXACT_STDERR_BYTES = 256_000
+
+
+def _raise_if_git_grafts_reported(stderr: str) -> None:
+    if _GIT_GRAFT_WARNING in stderr.casefold():
+        raise RuntimeError("Git graft metadata is not permitted during repository inspection")
 
 
 class RepositorySubjectError(RuntimeError):
@@ -551,6 +557,8 @@ class RepositoryInspector:
                         "core.fsmonitor=false",
                         "-c",
                         "core.untrackedCache=false",
+                        "-c",
+                        "advice.graftFileDeprecated=true",
                         *args,
                     ],
                     cwd=git_cwd,
@@ -562,6 +570,7 @@ class RepositoryInspector:
             raise RuntimeError(f"git command exceeded {self.timeout_seconds}s inspection budget")
         if result.stdout_truncated or result.stderr_truncated:
             raise RuntimeError("git inspection output exceeded bounded capture limit")
+        _raise_if_git_grafts_reported(result.stderr)
         if result.returncode != 0:
             if allow_failure:
                 return None
@@ -588,6 +597,8 @@ class RepositoryInspector:
                         "core.fsmonitor=false",
                         "-c",
                         "core.untrackedCache=false",
+                        "-c",
+                        "advice.graftFileDeprecated=true",
                         *args,
                     ],
                     cwd=git_cwd,
@@ -600,9 +611,10 @@ class RepositoryInspector:
             raise RuntimeError(f"git command exceeded {self.timeout_seconds}s inspection budget")
         if result.stdout_truncated or result.stderr_truncated:
             raise RuntimeError("git exact-byte output exceeded bounded capture limit")
+        stderr = result.stderr.decode("utf-8", errors="replace").strip()
+        _raise_if_git_grafts_reported(stderr)
         if result.returncode != 0:
             if allow_failure:
                 return None
-            stderr = result.stderr.decode("utf-8", errors="replace").strip()
             raise RuntimeError(stderr or f"git command failed: {args}")
         return result.stdout
