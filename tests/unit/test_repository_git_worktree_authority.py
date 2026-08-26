@@ -184,7 +184,9 @@ def test_repository_fingerprint_binds_staged_index_content(tmp_path: Path) -> No
     assert first.fingerprint != second.fingerprint
 
 
-def test_clean_large_tracked_file_is_not_ingested_just_to_prove_clean(tmp_path: Path) -> None:
+def test_clean_large_tracked_file_fails_closed_when_raw_verification_exceeds_bound(
+    tmp_path: Path,
+) -> None:
     _require_descriptor_authority()
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -201,9 +203,13 @@ def test_clean_large_tracked_file_is_not_ingested_just_to_prove_clean(tmp_path: 
         expected_root_identity=pin_directory_identity(workspace, label="test workspace"),
     ).snapshot()
 
-    assert snapshot.changed_files == ()
-    assert snapshot.status == ""
-    assert snapshot.fingerprint_complete is True
+    assert snapshot.changed_files == ("large.bin",)
+    assert snapshot.status == " M large.bin"
+    assert snapshot.fingerprint_complete is False
+    assert snapshot.fingerprint_incomplete_reasons == (
+        "changed-file-byte-limit-exceeded",
+        "worktree-file-byte-limit-exceeded",
+    )
 
 
 def test_assume_unchanged_cannot_hide_raw_worktree_mutation(tmp_path: Path) -> None:

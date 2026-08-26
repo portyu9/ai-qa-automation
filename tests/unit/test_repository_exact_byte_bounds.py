@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import ai_qa_automation.tools._repository_common as repository_common_module
 import ai_qa_automation.tools.repository as repository_module
 from ai_qa_automation.fs_authority import descriptor_relative_authority_supported
 from ai_qa_automation.tools.execution_env import BoundedBinarySubprocessResult
@@ -216,7 +217,7 @@ def test_git_bytes_fails_closed_when_binary_capture_is_truncated(
         assert env["GIT_CONFIG_NOSYSTEM"] == "1"
         assert timeout_seconds == inspector.timeout_seconds
         assert max_stdout_bytes == 8
-        assert max_stderr_bytes == repository_module._MAX_GIT_EXACT_STDERR_BYTES
+        assert max_stderr_bytes == repository_common_module._MAX_GIT_EXACT_STDERR_BYTES
         assert pass_fds
         return BoundedBinarySubprocessResult(
             returncode=0,
