@@ -9,6 +9,7 @@ import pytest
 from ai_qa_automation.tools.execution_env import (
     _TailBuffer,
     resolve_executable,
+    run_bounded_binary_subprocess,
     run_bounded_subprocess,
 )
 
@@ -96,3 +97,72 @@ def test_bounded_subprocess_retains_bounded_output_tail(tmp_path: Path) -> None:
     assert result.stdout_truncated is True
     assert len(result.stdout.encode("utf-8")) < 256
     assert result.timed_out is False
+
+
+def test_bounded_binary_subprocess_preserves_exact_non_utf8_output(tmp_path: Path) -> None:
+    script = "import os; os.write(1, bytes((0, 255, 65, 10)))"
+
+    result = run_bounded_binary_subprocess(
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        env=os.environ,
+        timeout_seconds=5,
+        max_stdout_bytes=16,
+        max_stderr_bytes=16,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == b"\x00\xffA\n"
+    assert result.stderr == b""
+    assert result.stdout_truncated is False
+    assert result.stderr_truncated is False
+    assert result.timed_out is False
+
+
+def test_bounded_binary_subprocess_drains_both_streams_with_independent_limits(
+    tmp_path: Path,
+) -> None:
+    script = "import os; os.write(1, b'A' * 1000); os.write(2, b'B' * 1000)"
+
+    result = run_bounded_binary_subprocess(
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        env=os.environ,
+        timeout_seconds=5,
+        max_stdout_bytes=64,
+        max_stderr_bytes=32,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == b"A" * 64
+    assert result.stderr == b"B" * 32
+    assert result.stdout_truncated is True
+    assert result.stderr_truncated is True
+    assert result.timed_out is False
+
+
+@pytest.mark.parametrize(
+    ("stdout_limit", "stderr_limit"),
+    [
+        (True, 16),
+        (0, 16),
+        (16, True),
+        (16, 0),
+        (16_000_001, 16),
+        (16, 16_000_001),
+    ],
+)
+def test_bounded_binary_subprocess_rejects_invalid_capture_limits(
+    tmp_path: Path,
+    stdout_limit: object,
+    stderr_limit: object,
+) -> None:
+    with pytest.raises(ValueError):
+        run_bounded_binary_subprocess(
+            [sys.executable, "-c", "print('ok')"],
+            cwd=tmp_path,
+            env=os.environ,
+            timeout_seconds=5,
+            max_stdout_bytes=stdout_limit,  # type: ignore[arg-type]
+            max_stderr_bytes=stderr_limit,  # type: ignore[arg-type]
+        )
