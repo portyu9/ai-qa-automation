@@ -185,7 +185,7 @@ def test_active_lease_rejects_whole_workspace_symlink_replacement(tmp_path: Path
         lease.release()
 
 
-def test_git_text_command_stays_on_pinned_subject_when_path_swaps_before_spawn(
+def test_git_text_command_fails_closed_when_workspace_path_swaps_before_spawn(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -210,6 +210,7 @@ def test_git_text_command_stays_on_pinned_subject_when_path_swaps_before_spawn(
         env: Mapping[str, str],
         timeout_seconds: int | float,
         max_output_bytes: int = 2_000_000,
+        pass_fds: Sequence[int] = (),
     ) -> BoundedSubprocessResult:
         nonlocal swapped
         if not swapped:
@@ -221,14 +222,15 @@ def test_git_text_command_stays_on_pinned_subject_when_path_swaps_before_spawn(
             env=env,
             timeout_seconds=timeout_seconds,
             max_output_bytes=max_output_bytes,
+            pass_fds=pass_fds,
         )
 
     monkeypatch.setattr(repository_module, "run_bounded_subprocess", swap_then_run)
 
-    observed = inspector._git("rev-parse", "HEAD")
+    with pytest.raises(RepositorySubjectError, match="changed identity"):
+        inspector._git("rev-parse", "HEAD")
 
     assert swapped is True
-    assert observed == original_sha
     assert _git(workspace, "rev-parse", "HEAD") == replacement_sha
 
 
@@ -256,6 +258,7 @@ def test_snapshot_fails_closed_after_one_pinned_git_command_if_path_was_replaced
         env: Mapping[str, str],
         timeout_seconds: int | float,
         max_output_bytes: int = 2_000_000,
+        pass_fds: Sequence[int] = (),
     ) -> BoundedSubprocessResult:
         nonlocal swapped
         if not swapped:
@@ -267,17 +270,18 @@ def test_snapshot_fails_closed_after_one_pinned_git_command_if_path_was_replaced
             env=env,
             timeout_seconds=timeout_seconds,
             max_output_bytes=max_output_bytes,
+            pass_fds=pass_fds,
         )
 
     monkeypatch.setattr(repository_module, "run_bounded_subprocess", swap_then_run)
 
-    with pytest.raises(RepositorySubjectError, match="authorized workspace"):
+    with pytest.raises(RepositorySubjectError, match="changed identity"):
         inspector.snapshot()
 
     assert swapped is True
 
 
-def test_exact_byte_git_read_stays_on_pinned_subject_when_path_swaps_before_spawn(
+def test_exact_byte_git_read_fails_closed_when_workspace_path_swaps_before_spawn(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -285,8 +289,7 @@ def test_exact_byte_git_read_stays_on_pinned_subject_when_path_swaps_before_spaw
     workspace = tmp_path / "workspace"
     replacement = tmp_path / "replacement"
     moved = tmp_path / "authorized-workspace"
-    original_bytes = b"\x00\xfforiginal-bytes\n"
-    original_sha = _init_repo(workspace, relative="payload.bin", data=original_bytes)
+    original_sha = _init_repo(workspace, relative="payload.bin", data=b"\x00\xfforiginal-bytes\n")
     replacement_sha = _init_repo(
         replacement,
         relative="payload.bin",
@@ -308,6 +311,7 @@ def test_exact_byte_git_read_stays_on_pinned_subject_when_path_swaps_before_spaw
         timeout_seconds: int | float,
         max_stdout_bytes: int = 2_000_000,
         max_stderr_bytes: int = 2_000_000,
+        pass_fds: Sequence[int] = (),
     ) -> BoundedBinarySubprocessResult:
         nonlocal swapped
         if not swapped:
@@ -320,14 +324,15 @@ def test_exact_byte_git_read_stays_on_pinned_subject_when_path_swaps_before_spaw
             timeout_seconds=timeout_seconds,
             max_stdout_bytes=max_stdout_bytes,
             max_stderr_bytes=max_stderr_bytes,
+            pass_fds=pass_fds,
         )
 
     monkeypatch.setattr(repository_module, "run_bounded_binary_subprocess", swap_then_run)
 
-    observed = inspector.read_file_at(original_sha, "payload.bin")
+    with pytest.raises(RepositorySubjectError, match="changed identity"):
+        inspector.read_file_at(original_sha, "payload.bin")
 
     assert swapped is True
-    assert observed == original_bytes
     assert _git(workspace, "rev-parse", "HEAD") == replacement_sha
 
 

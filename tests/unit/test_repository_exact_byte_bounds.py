@@ -1,13 +1,61 @@
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pytest
 
+import ai_qa_automation.tools._repository_common as repository_common_module
 import ai_qa_automation.tools.repository as repository_module
+from ai_qa_automation.fs_authority import descriptor_relative_authority_supported
 from ai_qa_automation.tools.execution_env import BoundedBinarySubprocessResult
 from ai_qa_automation.tools.repository import RepositoryInspector
+
+
+def _require_descriptor_authority() -> None:
+    if not descriptor_relative_authority_supported():
+        pytest.skip("descriptor-relative filesystem authority is unavailable")
+
+
+def _git(repo: Path, *args: str) -> str:
+    executable = shutil.which("git")
+    if executable is None:
+        pytest.skip("git executable is unavailable")
+    home = repo.parent / ".aiqa-exact-byte-git-home"
+    home.mkdir(exist_ok=True)
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": str(home),
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_PAGER": "cat",
+        "LANG": os.environ.get("LANG", "C.UTF-8"),
+    }
+    result = subprocess.run(
+        [executable, *args],
+        cwd=repo,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise AssertionError(f"git {' '.join(args)} failed: {result.stderr}")
+    return result.stdout.rstrip("\r\n")
+
+
+def _init_repo(repo: Path) -> None:
+    _require_descriptor_authority()
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.name", "AI QA Test")
+    _git(repo, "config", "user.email", "aiqa@example.invalid")
+    (repo / "tracked.txt").write_text("baseline\n", encoding="utf-8")
+    _git(repo, "add", "--", "tracked.txt")
+    _git(repo, "commit", "-q", "-m", "initial")
 
 
 def test_read_file_at_rejects_requested_limit_over_framework_capture_ceiling(
@@ -43,11 +91,14 @@ def test_read_file_at_rejects_object_larger_than_framework_capture_ceiling(
     blob_oid = "1" * 40
     capture_called = False
 
+    monkeypatch.setattr(inspector, "_verify_exact_commit_oid", lambda value: value)
     monkeypatch.setattr(inspector, "_blob_oid_at", lambda *_args: blob_oid)
 
     def fake_git(*args: str, allow_failure: bool = False) -> str:
-        assert args == ("cat-file", "-s", blob_oid)
         assert allow_failure is False
+        if args == ("rev-parse", "--show-object-format"):
+            return "sha1"
+        assert args == ("cat-file", "-s", blob_oid)
         return str(object_size)
 
     def forbidden_git_bytes(
@@ -91,13 +142,16 @@ def test_read_file_at_binds_capture_limit_to_preflight_size(
 ) -> None:
     inspector = RepositoryInspector(tmp_path)
     commit_sha = "b" * 40
-    blob_oid = "2" * 40
+    blob_oid = inspector._raw_blob_oid(payload, "sha1")
 
+    monkeypatch.setattr(inspector, "_verify_exact_commit_oid", lambda value: value)
     monkeypatch.setattr(inspector, "_blob_oid_at", lambda *_args: blob_oid)
 
     def fake_git(*args: str, allow_failure: bool = False) -> str:
-        assert args == ("cat-file", "-s", blob_oid)
         assert allow_failure is False
+        if args == ("rev-parse", "--show-object-format"):
+            return "sha1"
+        assert args == ("cat-file", "-s", blob_oid)
         return str(size)
 
     def fake_git_bytes(
@@ -121,8 +175,18 @@ def test_read_file_at_rejects_bytes_inconsistent_with_preflight_size(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     inspector = RepositoryInspector(tmp_path)
-    monkeypatch.setattr(inspector, "_blob_oid_at", lambda *_args: "3" * 40)
-    monkeypatch.setattr(inspector, "_git", lambda *args, **kwargs: "4")
+    blob_oid = inspector._raw_blob_oid(b"abcd", "sha1")
+    monkeypatch.setattr(inspector, "_verify_exact_commit_oid", lambda value: value)
+    monkeypatch.setattr(inspector, "_blob_oid_at", lambda *_args: blob_oid)
+
+    def fake_git(*args: str, allow_failure: bool = False) -> str:
+        assert allow_failure is False
+        if args == ("rev-parse", "--show-object-format"):
+            return "sha1"
+        assert args == ("cat-file", "-s", blob_oid)
+        return "4"
+
+    monkeypatch.setattr(inspector, "_git", fake_git)
     monkeypatch.setattr(inspector, "_git_bytes", lambda *args, **kwargs: b"abc")
 
     with pytest.raises(RuntimeError, match="inconsistent with preflight object size"):
@@ -133,7 +197,10 @@ def test_git_bytes_fails_closed_when_binary_capture_is_truncated(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    inspector = RepositoryInspector(tmp_path)
+    workspace = tmp_path / "workspace"
+    _init_repo(workspace)
+    inspector = RepositoryInspector(workspace)
+    object_id = "1" * 40
 
     def truncated_run(
         command: Sequence[str],
@@ -143,13 +210,15 @@ def test_git_bytes_fails_closed_when_binary_capture_is_truncated(
         timeout_seconds: int | float,
         max_stdout_bytes: int,
         max_stderr_bytes: int,
+        pass_fds: Sequence[int] = (),
     ) -> BoundedBinarySubprocessResult:
-        assert command[-3:] == ["cat-file", "blob", "object"]
+        assert command[-3:] == ["cat-file", "blob", object_id]
         assert cwd.exists()
         assert env["GIT_CONFIG_NOSYSTEM"] == "1"
         assert timeout_seconds == inspector.timeout_seconds
         assert max_stdout_bytes == 8
-        assert max_stderr_bytes == repository_module._MAX_GIT_EXACT_STDERR_BYTES
+        assert max_stderr_bytes == repository_common_module._MAX_GIT_EXACT_STDERR_BYTES
+        assert pass_fds
         return BoundedBinarySubprocessResult(
             returncode=0,
             stdout=b"x" * 8,
@@ -162,14 +231,17 @@ def test_git_bytes_fails_closed_when_binary_capture_is_truncated(
     monkeypatch.setattr(repository_module, "run_bounded_binary_subprocess", truncated_run)
 
     with pytest.raises(RuntimeError, match="exact-byte output exceeded bounded capture limit"):
-        inspector._git_bytes("cat-file", "blob", "object", max_stdout_bytes=8)
+        inspector._git_bytes("cat-file", "blob", object_id, max_stdout_bytes=8)
 
 
 def test_git_bytes_fails_closed_on_truncated_stderr_even_for_allowed_git_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    inspector = RepositoryInspector(tmp_path)
+    workspace = tmp_path / "workspace"
+    _init_repo(workspace)
+    inspector = RepositoryInspector(workspace)
+    object_id = "2" * 40
 
     def truncated_failure(
         command: Sequence[str],
@@ -179,8 +251,10 @@ def test_git_bytes_fails_closed_on_truncated_stderr_even_for_allowed_git_failure
         timeout_seconds: int | float,
         max_stdout_bytes: int,
         max_stderr_bytes: int,
+        pass_fds: Sequence[int] = (),
     ) -> BoundedBinarySubprocessResult:
         del command, cwd, env, timeout_seconds, max_stdout_bytes, max_stderr_bytes
+        assert pass_fds
         return BoundedBinarySubprocessResult(
             returncode=1,
             stdout=b"",
@@ -196,7 +270,7 @@ def test_git_bytes_fails_closed_on_truncated_stderr_even_for_allowed_git_failure
         inspector._git_bytes(
             "cat-file",
             "blob",
-            "missing-object",
+            object_id,
             max_stdout_bytes=8,
             allow_failure=True,
         )

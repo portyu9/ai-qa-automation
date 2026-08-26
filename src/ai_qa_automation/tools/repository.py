@@ -2,85 +2,161 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
-import tempfile
-from collections.abc import Iterator
-from contextlib import contextmanager
-from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+import os
+from collections.abc import Mapping, Sequence
+from contextlib import AbstractContextManager
+from pathlib import Path
 
 from ..fs_authority import (
     descriptor_relative_authority_supported,
     pin_directory_identity,
     read_bytes_confined,
+    stat_confined_entry,
 )
-from ..io_safety import open_regular_binary
+from ..fs_observation import ConfinedFileScan, scan_regular_files_confined
+from ._repository_common import (
+    _GIT_MODE,
+    _HEX_SHA,
+    _MAX_GIT_EXACT_STDOUT_BYTES,
+    _MAX_GIT_PATHS,
+)
+from ._repository_common import (
+    RepositoryChangeSet as RepositoryChangeSet,
+)
+from ._repository_common import (
+    RepositorySnapshot as RepositorySnapshot,
+)
+from ._repository_common import (
+    RepositorySubjectError as RepositorySubjectError,
+)
+from ._repository_git import RepositoryGitAuthorityMixin
+from ._repository_worktree import RepositoryWorktreeMixin
 from .execution_env import (
-    restricted_subprocess_env,
+    BoundedBinarySubprocessResult,
+    BoundedSubprocessResult,
     run_bounded_binary_subprocess,
     run_bounded_subprocess,
 )
-from .subprocess_subject import active_workspace_authority, descriptor_bound_cwd
-
-_SAFE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@{}~^:+-]{0,255}$")
-_HEX_SHA = re.compile(r"^[0-9a-fA-F]{40,64}$")
-_GIT_MODE = re.compile(r"^[0-7]{6}$")
-_GIT_GRAFT_WARNING = "info/grafts"
-_MAX_FINGERPRINT_CHANGED_FILES = 1000
-_MAX_FINGERPRINT_FILE_BYTES = 16_000_000
-_MAX_FINGERPRINT_TOTAL_BYTES = 128_000_000
-_MAX_GIT_TEXT_OUTPUT_BYTES = 8_000_000
-_MAX_GIT_EXACT_STDOUT_BYTES = 16_000_000
-_MAX_GIT_EXACT_STDERR_BYTES = 256_000
+from .subprocess_subject import (
+    active_workspace_authority,
+    descriptor_bound_child_directory,
+)
 
 
-def _raise_if_git_grafts_reported(stderr: str) -> None:
-    if _GIT_GRAFT_WARNING in stderr.casefold():
-        raise RuntimeError("Git graft metadata is not permitted during repository inspection")
+class RepositoryInspector(RepositoryGitAuthorityMixin, RepositoryWorktreeMixin):
+    """Read-only repository inspection with explicit metadata/worktree authority layers."""
 
+    # Ambient authority enters only through these adapters. Keeping them in this public
+    # module preserves the existing adversarial monkeypatch seams while private layers
+    # remain deterministic consumers of explicitly supplied capabilities.
+    def _pin_directory_identity_adapter(self, root: Path, *, label: str) -> tuple[int, int]:
+        return pin_directory_identity(root, label=label)
 
-class RepositorySubjectError(RuntimeError):
-    """Raised when Git inspection cannot remain bound to the authorized workspace subject."""
+    def _read_bytes_confined_adapter(
+        self,
+        root: Path,
+        relative_path: str | Path,
+        *,
+        max_bytes: int,
+        label: str,
+        expected_root_identity: tuple[int, int] | None = None,
+    ) -> bytes:
+        return read_bytes_confined(
+            root,
+            relative_path,
+            max_bytes=max_bytes,
+            label=label,
+            expected_root_identity=expected_root_identity,
+        )
 
+    def _stat_confined_entry_adapter(
+        self,
+        root: Path,
+        relative_path: str | Path,
+        *,
+        label: str,
+        expected_root_identity: tuple[int, int] | None = None,
+    ) -> os.stat_result:
+        return stat_confined_entry(
+            root,
+            relative_path,
+            label=label,
+            expected_root_identity=expected_root_identity,
+        )
 
-@dataclass(frozen=True)
-class RepositorySnapshot:
-    workspace: str
-    git_sha: str | None
-    branch: str | None
-    status: str
-    changed_files: tuple[str, ...]
-    fingerprint: str
-    fingerprint_complete: bool
-    fingerprint_incomplete_reasons: tuple[str, ...]
+    def _scan_regular_files_adapter(
+        self,
+        root: Path,
+        *,
+        max_entries: int,
+        ignored_names: set[str] | frozenset[str] = frozenset(),
+        label: str,
+        expected_root_identity: tuple[int, int] | None = None,
+    ) -> ConfinedFileScan:
+        return scan_regular_files_confined(
+            root,
+            max_entries=max_entries,
+            ignored_names=ignored_names,
+            label=label,
+            expected_root_identity=expected_root_identity,
+        )
 
+    def _run_bounded_subprocess_adapter(
+        self,
+        command: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+        timeout_seconds: int | float,
+        max_output_bytes: int = 2_000_000,
+        pass_fds: Sequence[int] = (),
+    ) -> BoundedSubprocessResult:
+        return run_bounded_subprocess(
+            command,
+            cwd=cwd,
+            env=env,
+            timeout_seconds=timeout_seconds,
+            max_output_bytes=max_output_bytes,
+            pass_fds=pass_fds,
+        )
 
-@dataclass(frozen=True)
-class RepositoryChangeSet:
-    """Diff-aware change set anchored to an explicit trusted baseline ref."""
+    def _run_bounded_binary_subprocess_adapter(
+        self,
+        command: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+        timeout_seconds: int | float,
+        max_stdout_bytes: int = 2_000_000,
+        max_stderr_bytes: int = 2_000_000,
+        pass_fds: Sequence[int] = (),
+    ) -> BoundedBinarySubprocessResult:
+        return run_bounded_binary_subprocess(
+            command,
+            cwd=cwd,
+            env=env,
+            timeout_seconds=timeout_seconds,
+            max_stdout_bytes=max_stdout_bytes,
+            max_stderr_bytes=max_stderr_bytes,
+            pass_fds=pass_fds,
+        )
 
-    requested_base_ref: str
-    baseline_sha: str
-    merge_base_sha: str
-    head_sha: str
-    committed_files: tuple[str, ...]
-    worktree_files: tuple[str, ...]
-    changed_files: tuple[str, ...]
-
-    def as_dict(self) -> dict[str, object]:
-        return {
-            "requested_base_ref": self.requested_base_ref,
-            "baseline_sha": self.baseline_sha,
-            "merge_base_sha": self.merge_base_sha,
-            "head_sha": self.head_sha,
-            "committed_files": list(self.committed_files),
-            "worktree_files": list(self.worktree_files),
-            "changed_files": list(self.changed_files),
-        }
-
-
-class RepositoryInspector:
-    """Read-only Git/repository inspection with deterministic workspace fingerprints."""
+    def _descriptor_bound_child_directory_adapter(
+        self,
+        root: Path,
+        child_name: str,
+        *,
+        expected_root_identity: tuple[int, int],
+        expected_child_identity: tuple[int, int] | None = None,
+        label: str,
+    ) -> AbstractContextManager[tuple[Path, Path, tuple[int, int]]]:
+        return descriptor_bound_child_directory(
+            root,
+            child_name,
+            expected_root_identity=expected_root_identity,
+            expected_child_identity=expected_child_identity,
+            label=label,
+        )
 
     def __init__(
         self,
@@ -120,6 +196,7 @@ class RepositoryInspector:
             )
         authorized_identity = expected_root_identity or active_identity
         self.workspace_root_identity: tuple[int, int] | None = None
+        self.git_dir_identity: tuple[int, int] | None = None
         if descriptor_relative_authority_supported():
             try:
                 current_identity = pin_directory_identity(
@@ -135,34 +212,47 @@ class RepositoryInspector:
                     "repository workspace changed identity since authorization"
                 )
             self.workspace_root_identity = current_identity
-        elif authorized_identity is not None:
+            self.git_dir_identity = self._discover_git_dir_identity()
+            if self.git_dir_identity is not None:
+                self._assert_git_metadata_safe()
+        else:
             raise RepositorySubjectError(
-                "authorized repository inspection requires descriptor-bound filesystem authority"
+                "repository inspection requires descriptor-bound filesystem authority"
             )
-
-    def _assert_workspace_subject_current(self) -> None:
-        if self.workspace_root_identity is None:
-            return
-        try:
-            current_identity = pin_directory_identity(
-                self.workspace,
-                label="repository inspection workspace",
-            )
-        except (OSError, RuntimeError, ValueError) as exc:
-            raise RepositorySubjectError(
-                "repository workspace subject could not be revalidated"
-            ) from exc
-        if current_identity != self.workspace_root_identity:
-            raise RepositorySubjectError("repository workspace changed identity during inspection")
 
     def snapshot(self) -> RepositorySnapshot:
+        if self.git_dir_identity is None:
+            fingerprint, complete, reasons = self._fingerprint(None, "", ())
+            return RepositorySnapshot(
+                workspace=str(self.workspace),
+                git_sha=None,
+                branch=None,
+                status="",
+                changed_files=(),
+                fingerprint=fingerprint,
+                fingerprint_complete=complete,
+                fingerprint_incomplete_reasons=reasons,
+            )
         try:
             sha = self._git("rev-parse", "HEAD", allow_failure=True)
-            branch = self._git("branch", "--show-current", allow_failure=True)
-            status = (
-                self._git("status", "--porcelain=v1", "--untracked-files=all", allow_failure=True)
-                or ""
+            if sha is not None:
+                sha = self._verify_exact_commit_oid(sha)
+            branch = self._git("symbolic-ref", "--quiet", "--short", "HEAD", allow_failure=True)
+            object_format = self._git("rev-parse", "--show-object-format")
+            if object_format not in {"sha1", "sha256"}:
+                raise RuntimeError("Git returned an unsupported object format")
+            status, changed, index_digest, observation_reasons = self._worktree_status(
+                sha, object_format
             )
+            final_sha = self._git("rev-parse", "HEAD", allow_failure=True)
+            final_branch = self._git(
+                "symbolic-ref", "--quiet", "--short", "HEAD", allow_failure=True
+            )
+            if final_sha != sha or final_branch != branch:
+                raise RuntimeError("Git HEAD identity changed during repository inspection")
+            if hashlib.sha256(self._read_index_bytes()).hexdigest() != index_digest:
+                raise RuntimeError("Git index changed during repository inspection")
+            self._assert_git_subject_current()
         except RepositorySubjectError:
             raise
         except RuntimeError as exc:
@@ -173,8 +263,38 @@ class RepositoryInspector:
                 else "git-inspection-incomplete"
             )
             return self._incomplete_snapshot(reason)
-        changed = self._changed_paths(status)
-        fingerprint, complete, incomplete_reasons = self._fingerprint(sha, status, changed)
+        fingerprint, complete, incomplete_reasons = self._fingerprint(
+            sha,
+            status,
+            changed,
+            index_digest=index_digest,
+            initial_incomplete_reasons=observation_reasons,
+        )
+        self._assert_git_subject_current()
+        try:
+            (
+                post_status,
+                post_changed,
+                post_index_digest,
+                post_observation_reasons,
+            ) = self._worktree_status(sha, object_format)
+            post_fingerprint_sha = self._git("rev-parse", "HEAD", allow_failure=True)
+            post_fingerprint_branch = self._git(
+                "symbolic-ref", "--quiet", "--short", "HEAD", allow_failure=True
+            )
+            post_fingerprint_index = hashlib.sha256(self._read_index_bytes()).hexdigest()
+        except RuntimeError:
+            return self._incomplete_snapshot("git-inspection-incomplete")
+        if (
+            post_fingerprint_sha != sha
+            or post_fingerprint_branch != branch
+            or post_fingerprint_index != index_digest
+            or post_index_digest != index_digest
+            or post_status != status
+            or post_changed != changed
+            or post_observation_reasons != observation_reasons
+        ):
+            return self._incomplete_snapshot("repository-state-changed-during-inspection")
         return RepositorySnapshot(
             workspace=str(self.workspace),
             git_sha=sha or None,
@@ -204,41 +324,38 @@ class RepositoryInspector:
             fingerprint_incomplete_reasons=(reason,),
         )
 
-    def change_set(self, base_ref: str) -> RepositoryChangeSet:
-        """Resolve a baseline, merge-base it with HEAD, and union committed/worktree changes.
+    def _verify_exact_commit_oid(self, object_id: str) -> str:
+        if not _HEX_SHA.fullmatch(object_id):
+            raise RuntimeError("Git returned an invalid commit object id")
+        resolved = self._git("rev-parse", "--verify", f"{object_id}^{{commit}}")
+        if (
+            resolved is None
+            or not _HEX_SHA.fullmatch(resolved)
+            or resolved.lower() != object_id.lower()
+        ):
+            raise RuntimeError("Git commit subject does not match its requested object id")
+        return resolved.lower()
 
-        The baseline is an explicit trusted runtime input. It is resolved to immutable
-        commit IDs before use so the model or target repository cannot silently move
-        the comparison point during the run.
-        """
+    def change_set(self, base_ref: str) -> RepositoryChangeSet:
+        """Resolve an immutable baseline and union committed/worktree change evidence."""
         safe_ref = self._validate_ref(base_ref)
         head = self._git("rev-parse", "HEAD")
         if head is None:
             raise RuntimeError("target workspace is not a Git repository")
+        head = self._verify_exact_commit_oid(head)
         baseline = self._git("rev-parse", "--verify", f"{safe_ref}^{{commit}}")
         if baseline is None:
             raise RuntimeError(f"baseline ref could not be resolved: {safe_ref}")
         merge_base = self._git("merge-base", baseline, head)
         if merge_base is None:
             raise RuntimeError(f"baseline ref has no merge base with HEAD: {safe_ref}")
-
-        raw_committed = (
-            self._git(
-                "diff",
-                "--name-only",
-                "--diff-filter=ACDMRTUXB",
-                merge_base,
-                head,
-                "--",
-            )
-            or ""
-        )
-        committed = tuple(sorted({line for line in raw_committed.splitlines() if line.strip()}))
+        committed = self._changed_paths_between_trees(merge_base, head)
         worktree_snapshot = self.snapshot()
         if not worktree_snapshot.fingerprint_complete:
             raise RuntimeError("worktree status inspection is incomplete")
+        if worktree_snapshot.git_sha != head:
+            raise RuntimeError("Git HEAD changed during change-set inspection")
         worktree = worktree_snapshot.changed_files
-        changed = tuple(sorted(set(committed) | set(worktree)))
         return RepositoryChangeSet(
             requested_base_ref=safe_ref,
             baseline_sha=baseline,
@@ -246,8 +363,56 @@ class RepositoryInspector:
             head_sha=head,
             committed_files=committed,
             worktree_files=worktree,
-            changed_files=changed,
+            changed_files=tuple(sorted(set(committed) | set(worktree))),
         )
+
+    def _changed_paths_between_trees(self, left: str, right: str) -> tuple[str, ...]:
+        left_entries = self._tree_entries_at(left)
+        right_entries = self._tree_entries_at(right)
+        return tuple(
+            sorted(
+                path
+                for path in set(left_entries) | set(right_entries)
+                if left_entries.get(path) != right_entries.get(path)
+            )
+        )
+
+    def _tree_entries_at(self, commit_sha: str) -> dict[str, tuple[str, str]]:
+        raw = self._git_bytes(
+            "ls-tree",
+            "-r",
+            "-z",
+            "--full-tree",
+            commit_sha,
+            max_stdout_bytes=_MAX_GIT_EXACT_STDOUT_BYTES,
+        )
+        if raw is None:
+            raise RuntimeError("Git tree enumeration returned no result")
+        entries: dict[str, tuple[str, str]] = {}
+        for record in raw.split(b"\0"):
+            if not record:
+                continue
+            metadata, separator, raw_path = record.partition(b"\t")
+            if not separator:
+                raise RuntimeError("Git returned a malformed tree entry")
+            try:
+                fields = metadata.decode("ascii").split()
+                path = self._validate_relative_path(raw_path.decode("utf-8", errors="strict"))
+            except (UnicodeDecodeError, ValueError) as exc:
+                raise RuntimeError("Git returned invalid tree metadata/path") from exc
+            if len(fields) != 3:
+                raise RuntimeError("Git returned a malformed tree entry")
+            mode, object_type, object_id = fields
+            if (
+                not _GIT_MODE.fullmatch(mode)
+                or object_type not in {"blob", "commit"}
+                or not _HEX_SHA.fullmatch(object_id)
+                or path in entries
+                or len(entries) >= _MAX_GIT_PATHS
+            ):
+                raise RuntimeError("Git tree enumeration exceeded bounds or was malformed")
+            entries[path] = (mode, object_id.lower())
+        return entries
 
     def _blob_oid_at(self, commit_sha: str, path: str) -> str | None:
         """Resolve one literal path at an immutable commit to its exact blob object ID."""
@@ -298,11 +463,15 @@ class RepositoryInspector:
             )
         if not _HEX_SHA.fullmatch(commit_sha):
             raise ValueError("commit_sha must be a full hexadecimal object id")
+        commit_sha = self._verify_exact_commit_oid(commit_sha)
         path = self._validate_relative_path(relative_path)
         blob_oid = self._blob_oid_at(commit_sha, path)
         if blob_oid is None:
             raise FileNotFoundError(path)
 
+        object_format = self._git("rev-parse", "--show-object-format")
+        if object_format not in {"sha1", "sha256"}:
+            raise RuntimeError("Git returned an unsupported object format")
         size_text = self._git("cat-file", "-s", blob_oid)
         if size_text is None:  # pragma: no cover - _git without allow_failure raises instead
             raise RuntimeError("Git blob size lookup returned no result")
@@ -326,295 +495,18 @@ class RepositoryInspector:
             raise RuntimeError(
                 "Git returned baseline bytes inconsistent with preflight object size"
             )
+        if self._raw_blob_oid(result, object_format) != blob_oid.lower():
+            raise RuntimeError("Git blob content does not match its content-addressed object id")
         return result
 
     def diff(self, *paths: str) -> str:
-        args = ["diff", "--no-ext-diff", "--no-textconv", "--"]
-        args.extend(paths)
-        return self._git(*args, allow_failure=True) or ""
-
-    @staticmethod
-    def _validate_ref(base_ref: str) -> str:
-        value = base_ref.strip()
-        if not _SAFE_REF.fullmatch(value) or value.startswith("-") or ".." in value:
-            raise ValueError(
-                "baseline ref contains unsupported characters or revision-range syntax"
-            )
-        return value
-
-    @staticmethod
-    def _validate_relative_path(relative_path: str) -> str:
-        raw = relative_path.strip().replace("\\", "/")
-        path = PurePosixPath(raw)
-        if not raw or path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
-            raise ValueError("repository path must be a normalized relative path")
-        return path.as_posix()
-
-    @staticmethod
-    def _changed_paths(status: str) -> tuple[str, ...]:
-        paths: set[str] = set()
-        for line in status.splitlines():
-            if len(line) < 4:
-                continue
-            raw = line[3:].strip()
-            if " -> " in raw:
-                raw = raw.split(" -> ", 1)[1]
-            raw = raw.strip('"')
-            if raw:
-                paths.add(raw)
-        return tuple(sorted(paths))
-
-    def _read_fingerprint_bytes(
-        self,
-        relative: str,
-        *,
-        max_bytes: int,
-    ) -> tuple[bytes | None, str | None]:
-        """Read one changed-file subject under the same root identity as Git inspection."""
-        try:
-            normalized = self._validate_relative_path(relative)
-        except ValueError:
-            return None, "changed-path-outside-workspace"
-
-        if self.workspace_root_identity is not None:
-            try:
-                data = read_bytes_confined(
-                    self.workspace,
-                    normalized,
-                    max_bytes=max_bytes,
-                    label=f"workspace fingerprint subject {normalized}",
-                    expected_root_identity=self.workspace_root_identity,
-                )
-            except FileNotFoundError:
-                self._assert_workspace_subject_current()
-                return None, "deleted"
-            except OSError:
-                self._assert_workspace_subject_current()
-                return None, "changed-file-unreadable"
-            except ValueError as exc:
-                message = str(exc).casefold()
-                if "trusted root" in message:
-                    raise RepositorySubjectError(
-                        "workspace fingerprint subject changed root identity during inspection"
-                    ) from exc
-                if "symlink" in message and "parent component" not in message:
-                    return None, "changed-symlink-not-byte-bound"
-                if "must be a regular file" in message:
-                    return None, "changed-non-file-not-byte-bound"
-                if "exceeds" in message and "ingestion limit" in message:
-                    return None, "byte-limit-exceeded"
-                return None, "changed-path-ownership-ambiguous"
-            return data, None
-
-        # Compatibility fallback for platforms without descriptor-relative authority.
-        # A live authorized identity is never downgraded into this path: __init__ rejects
-        # authorized inspection when descriptor-backed authority is unavailable.
-        raw_candidate = self.workspace / normalized
-        if raw_candidate.is_symlink():
-            return None, "changed-symlink-not-byte-bound"
-        candidate = raw_candidate.resolve()
-        try:
-            candidate.relative_to(self.workspace)
-        except ValueError:
-            return None, "changed-path-outside-workspace"
-        if not candidate.exists():
-            return None, "deleted"
-        if not candidate.is_file():
-            return None, "changed-non-file-not-byte-bound"
-        try:
-            size_hint = candidate.stat().st_size
-        except OSError:
-            return None, "changed-file-unreadable"
-        if size_hint > max_bytes:
-            return None, "byte-limit-exceeded"
-        chunks: list[bytes] = []
-        size = 0
-        try:
-            with open_regular_binary(
-                candidate,
-                label=f"workspace fingerprint subject {normalized}",
-            ) as stream:
-                while size <= max_bytes:
-                    chunk = stream.read(min(1024 * 1024, max_bytes + 1 - size))
-                    if not chunk:
-                        break
-                    chunks.append(chunk)
-                    size += len(chunk)
-        except OSError:
-            return None, "changed-file-unreadable"
-        except ValueError:
-            return None, "changed-path-ownership-ambiguous"
-        if size > max_bytes:
-            return None, "byte-limit-exceeded"
-        return b"".join(chunks), None
-
-    def _fingerprint(
-        self,
-        git_sha: str | None,
-        status: str,
-        changed_files: tuple[str, ...],
-    ) -> tuple[str, bool, tuple[str, ...]]:
-        """Hash Git state plus bounded current bytes and expose proof completeness."""
-        file_rows: list[dict[str, object]] = []
-        incomplete_reasons: set[str] = set()
-        total_hashed_bytes = 0
-        if len(changed_files) > _MAX_FINGERPRINT_CHANGED_FILES:
-            incomplete_reasons.add("changed-file-limit-exceeded")
-        for line in status.splitlines():
-            if len(line) >= 4:
-                raw = line[3:].strip()
-                if raw.startswith('"') or ' -> "' in raw:
-                    incomplete_reasons.add("quoted-git-path-not-byte-bound")
-
-        for relative in changed_files[:_MAX_FINGERPRINT_CHANGED_FILES]:
-            remaining_total = _MAX_FINGERPRINT_TOTAL_BYTES - total_hashed_bytes
-            if remaining_total <= 0:
-                file_rows.append({"path": relative, "state": "total-byte-limit-exceeded"})
-                incomplete_reasons.add("changed-total-byte-limit-exceeded")
-                continue
-            read_limit = min(_MAX_FINGERPRINT_FILE_BYTES, remaining_total)
-            data, failure = self._read_fingerprint_bytes(relative, max_bytes=read_limit)
-            if failure == "deleted":
-                file_rows.append({"path": relative, "state": "deleted"})
-                continue
-            if failure == "byte-limit-exceeded":
-                reason = (
-                    "changed-total-byte-limit-exceeded"
-                    if read_limit < _MAX_FINGERPRINT_FILE_BYTES
-                    else "changed-file-byte-limit-exceeded"
-                )
-                state = (
-                    "total-byte-limit-exceeded"
-                    if reason == "changed-total-byte-limit-exceeded"
-                    else "file-byte-limit-exceeded"
-                )
-                file_rows.append({"path": relative, "state": state})
-                incomplete_reasons.add(reason)
-                continue
-            if failure is not None:
-                file_rows.append({"path": relative, "state": failure})
-                incomplete_reasons.add(failure)
-                continue
-            if data is None:  # pragma: no cover - helper contract
-                raise RuntimeError("fingerprint reader returned neither data nor a failure reason")
-            size = len(data)
-            total_hashed_bytes += size
-            file_rows.append(
-                {
-                    "path": relative,
-                    "size": size,
-                    "sha256": hashlib.sha256(data).hexdigest(),
-                }
-            )
-        if len(changed_files) > _MAX_FINGERPRINT_CHANGED_FILES:
-            file_rows.append({"state": "changed-file-overflow", "count": len(changed_files)})
-
-        reasons = tuple(sorted(incomplete_reasons))
-        payload = {
-            "git_sha": git_sha,
-            "status": status,
-            "files": file_rows,
-            "fingerprint_complete": not reasons,
-            "fingerprint_incomplete_reasons": list(reasons),
-        }
-        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-        return (
-            f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}",
-            not reasons,
-            reasons,
-        )
-
-    @contextmanager
-    def _git_cwd(self) -> Iterator[Path]:
-        if self.workspace_root_identity is None:
-            yield self.workspace
-            return
-        try:
-            with descriptor_bound_cwd(
-                self.workspace,
-                expected_root_identity=self.workspace_root_identity,
-                label="Git repository inspection",
-            ) as cwd:
-                yield cwd
-        except RepositorySubjectError:
-            raise
-        except (OSError, RuntimeError, ValueError) as exc:
-            raise RepositorySubjectError(
-                "Git repository subject could not be bound to the authorized workspace"
-            ) from exc
-
-    def _git(self, *args: str, allow_failure: bool = False) -> str | None:
-        with tempfile.TemporaryDirectory(prefix="aiqa-git-home-") as temp_home:
-            env = restricted_subprocess_env(
-                home=Path(temp_home),
-                extra={"GIT_CONFIG_NOSYSTEM": "1", "GIT_NO_REPLACE_OBJECTS": "1"},
-            )
-            with self._git_cwd() as git_cwd:
-                result = run_bounded_subprocess(
-                    [
-                        "git",
-                        "-c",
-                        "core.fsmonitor=false",
-                        "-c",
-                        "core.untrackedCache=false",
-                        "-c",
-                        "advice.graftFileDeprecated=true",
-                        *args,
-                    ],
-                    cwd=git_cwd,
-                    env=env,
-                    timeout_seconds=self.timeout_seconds,
-                    max_output_bytes=_MAX_GIT_TEXT_OUTPUT_BYTES,
-                )
-        if result.timed_out:
-            raise RuntimeError(f"git command exceeded {self.timeout_seconds}s inspection budget")
-        if result.stdout_truncated or result.stderr_truncated:
-            raise RuntimeError("git inspection output exceeded bounded capture limit")
-        _raise_if_git_grafts_reported(result.stderr)
-        if result.returncode != 0:
-            if allow_failure:
-                return None
-            raise RuntimeError(result.stderr.strip() or f"git command failed: {args}")
-        return result.stdout.rstrip("\r\n")
-
-    def _git_bytes(
-        self,
-        *args: str,
-        max_stdout_bytes: int,
-        allow_failure: bool = False,
-    ) -> bytes | None:
-        """Run one exact-byte Git command with independently bounded output streams."""
-        with tempfile.TemporaryDirectory(prefix="aiqa-git-home-") as temp_home:
-            env = restricted_subprocess_env(
-                home=Path(temp_home),
-                extra={"GIT_CONFIG_NOSYSTEM": "1", "GIT_NO_REPLACE_OBJECTS": "1"},
-            )
-            with self._git_cwd() as git_cwd:
-                result = run_bounded_binary_subprocess(
-                    [
-                        "git",
-                        "-c",
-                        "core.fsmonitor=false",
-                        "-c",
-                        "core.untrackedCache=false",
-                        "-c",
-                        "advice.graftFileDeprecated=true",
-                        *args,
-                    ],
-                    cwd=git_cwd,
-                    env=env,
-                    timeout_seconds=self.timeout_seconds,
-                    max_stdout_bytes=max_stdout_bytes,
-                    max_stderr_bytes=_MAX_GIT_EXACT_STDERR_BYTES,
-                )
-        if result.timed_out:
-            raise RuntimeError(f"git command exceeded {self.timeout_seconds}s inspection budget")
-        if result.stdout_truncated or result.stderr_truncated:
-            raise RuntimeError("git exact-byte output exceeded bounded capture limit")
-        stderr = result.stderr.decode("utf-8", errors="replace").strip()
-        _raise_if_git_grafts_reported(stderr)
-        if result.returncode != 0:
-            if allow_failure:
-                return None
-            raise RuntimeError(stderr or f"git command failed: {args}")
-        return result.stdout
+        """Return a safe status-level change summary without content conversion."""
+        selected = {self._validate_relative_path(path) for path in paths}
+        snapshot = self.snapshot()
+        if not selected:
+            return snapshot.status
+        matching: list[str] = []
+        for line in snapshot.status.splitlines():
+            if len(line) >= 4 and self._parse_status_path(line[3:]) in selected:
+                matching.append(line)
+        return "\n".join(matching)
