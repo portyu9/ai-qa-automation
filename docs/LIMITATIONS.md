@@ -103,6 +103,13 @@ The analyzer is structural and conservative.
 - Unsupported syntax is surfaced rather than guessed.
 - Ownership is review/routing context, not runtime authorization.
 
+### Repository baseline refs
+
+- Named change-intelligence baselines are resolved only while the supported loose-ref and `packed-refs` authority paths remain metadata-stable; observed concurrent ref mutation fails closed rather than certifying an alternate merge base.
+- Baseline revision expressions and symbolic loose baseline refs are intentionally rejected instead of introducing mutable reflog/range semantics or an unbound second ref hop.
+- Git's reftable ref backend is not yet descriptor-bound by `RepositoryInspector`; repositories exposing `.git/reftable` are therefore rejected rather than treated as verified baseline authority.
+- These controls detect ordinary filesystem-visible mutation through identity/size/time metadata and directory changes; they do not claim protection from privileged filesystem snapshot rollback that can restore metadata outside the process authority boundary.
+
 ---
 
 ## Test impact, generation, and classification
@@ -218,62 +225,3 @@ Compliance depends on organization-specific policy, infrastructure, legal interp
 - Telemetry complements but does not replace source evidence and validation lineage.
 - Token/cost values are recorded when supplied by the provider rather than invented as observation.
 - Backend/exporter/storage choices belong to deployment.
-
----
-
-## Container, CI/CD, and reference SUT
-
-### Container / infrastructure
-
-The included Dockerfile defines a non-root control-plane image shape. Deployment decides additional controls such as read-only filesystems, seccomp/AppArmor/SELinux, Kubernetes policy, network policy, secret injection, image signing, quotas, persistent storage, and runtime monitoring.
-
-### CI/CD
-
-The automatic PR/main workflow is read-only, secret-free, revision-bound, and aggregates deterministic quality/evaluation/security/supply-chain/reference-browser checks behind `Required PR Gate`. H-series readiness and credentialed model smoke remain manual-only and separately scoped. Repository workflow logic and a green check do not prove that branch protection is enabled, that a hosted runner is immutable, that secrets exist, or that release/deployment authority was exercised.
-
-See [CI/CD and Repository Governance](CI_CD.md).
-
-### Reference SUT
-
-The FastAPI reference application is intentionally small and deterministic. It makes selected evidence/failure paths reproducible; it is not coverage of every web architecture, auth pattern, data system, distributed failure, or traffic shape.
-
----
-
-## Context / retrieval / configuration
-
-### Context and retrieval
-
-The architecture prefers targeted retrieval and bounded summaries over sending entire repositories/logs/traces to the model. Additional RAG/vector infrastructure should be introduced when justified by a concrete quality/trust benefit; omitting it by default is a scope/trust choice, not a claim such systems are never useful.
-
-### Configuration
-
-- `.env.example` is documentation only; repository `.env` is not auto-loaded.
-- Presence does not imply validity.
-- `AI_QA_BASE_REF` is explicit for merge-base analysis.
-- Enabling write/network authority is a deliberate policy change, not evidence every subsequent action is safe.
-- Configuration fingerprints capture identity of inputs, not correctness of configuration.
-
----
-
-## The non-claim rule
-
-> **Do not turn a strong implementation into a stronger claim than the evidence supports.**
-
-That discipline is part of the framework's quality model, not an apology for it.
-
----
-
-## Related documentation
-
-- [CI/CD and repository governance](CI_CD.md)
-- [Verification boundaries](VERIFICATION_BOUNDARIES.md)
-- [Production readiness](PRODUCTION_READINESS.md)
-- [Security architecture](SECURITY.md)
-- [Setup](SETUP.md)
-- [Troubleshooting](TROUBLESHOOTING.md)
-
----
-
-[← Verification boundaries](VERIFICATION_BOUNDARIES.md) · [Documentation home](README.md)
-
-Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
