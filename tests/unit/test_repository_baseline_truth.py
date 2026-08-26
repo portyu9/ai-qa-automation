@@ -131,6 +131,25 @@ def test_read_file_at_rejects_invalid_commit_as_repository_failure(tmp_path: Pat
         inspector.read_file_at(invalid_commit, "tracked.txt")
 
 
+def test_read_file_at_requires_exact_commit_object_id(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    (repo / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+    commit_sha = _commit(repo)
+    tree_oid = _git(repo, "rev-parse", f"{commit_sha}^{{tree}}")
+
+    inspector = RepositoryInspector(repo)
+
+    with pytest.raises(RuntimeError):
+        inspector.read_file_at(tree_oid, "tracked.txt")
+
+    _git(repo, "tag", "-a", "baseline-tag", "-m", "baseline tag", commit_sha)
+    tag_oid = _git(repo, "rev-parse", "refs/tags/baseline-tag")
+    assert tag_oid != commit_sha
+    with pytest.raises(RuntimeError, match="does not match its requested object id"):
+        inspector.read_file_at(tag_oid, "tracked.txt")
+
+
 def test_read_file_at_rejects_non_blob_tree_entry(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo)
@@ -169,9 +188,12 @@ def test_size_failure_after_blob_presence_remains_repository_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     inspector = RepositoryInspector(tmp_path)
+    commit_id = "a" * 40
     monkeypatch.setattr(inspector, "_blob_oid_at", lambda *_args: "3" * 40)
 
     def fail_size(*args: str, **kwargs: object) -> str:
+        if args == ("rev-parse", "--verify", f"{commit_id}^{{commit}}"):
+            return commit_id
         if args == ("rev-parse", "--show-object-format"):
             return "sha1"
         raise RuntimeError("synthetic object corruption")
@@ -179,7 +201,7 @@ def test_size_failure_after_blob_presence_remains_repository_failure(
     monkeypatch.setattr(inspector, "_git", fail_size)
 
     with pytest.raises(RuntimeError, match="synthetic object corruption"):
-        inspector.read_file_at("a" * 40, "payload.json")
+        inspector.read_file_at(commit_id, "payload.json")
 
 
 def test_content_failure_after_blob_presence_remains_repository_failure(
@@ -187,9 +209,12 @@ def test_content_failure_after_blob_presence_remains_repository_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     inspector = RepositoryInspector(tmp_path)
+    commit_id = "a" * 40
     monkeypatch.setattr(inspector, "_blob_oid_at", lambda *_args: "4" * 40)
 
     def git_metadata(*args: str, **kwargs: object) -> str:
+        if args == ("rev-parse", "--verify", f"{commit_id}^{{commit}}"):
+            return commit_id
         if args == ("rev-parse", "--show-object-format"):
             return "sha1"
         if len(args) == 3 and args[:2] == ("cat-file", "-s"):
@@ -204,7 +229,7 @@ def test_content_failure_after_blob_presence_remains_repository_failure(
     monkeypatch.setattr(inspector, "_git_bytes", fail_content)
 
     with pytest.raises(RuntimeError, match="synthetic blob read failure"):
-        inspector.read_file_at("a" * 40, "payload.json")
+        inspector.read_file_at(commit_id, "payload.json")
 
 
 def test_added_openapi_contract_is_non_breaking_with_real_repository_inspector(

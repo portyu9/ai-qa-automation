@@ -229,6 +229,8 @@ class RepositoryInspector(RepositoryGitAuthorityMixin, RepositoryWorktreeMixin):
             )
         try:
             sha = self._git("rev-parse", "HEAD", allow_failure=True)
+            if sha is not None:
+                sha = self._verify_exact_commit_oid(sha)
             branch = self._git("symbolic-ref", "--quiet", "--short", "HEAD", allow_failure=True)
             object_format = self._git("rev-parse", "--show-object-format")
             if object_format not in {"sha1", "sha256"}:
@@ -296,12 +298,25 @@ class RepositoryInspector(RepositoryGitAuthorityMixin, RepositoryWorktreeMixin):
             fingerprint_incomplete_reasons=(reason,),
         )
 
+    def _verify_exact_commit_oid(self, object_id: str) -> str:
+        if not _HEX_SHA.fullmatch(object_id):
+            raise RuntimeError("Git returned an invalid commit object id")
+        resolved = self._git("rev-parse", "--verify", f"{object_id}^{{commit}}")
+        if (
+            resolved is None
+            or not _HEX_SHA.fullmatch(resolved)
+            or resolved.lower() != object_id.lower()
+        ):
+            raise RuntimeError("Git commit subject does not match its requested object id")
+        return resolved.lower()
+
     def change_set(self, base_ref: str) -> RepositoryChangeSet:
         """Resolve an immutable baseline and union committed/worktree change evidence."""
         safe_ref = self._validate_ref(base_ref)
         head = self._git("rev-parse", "HEAD")
         if head is None:
             raise RuntimeError("target workspace is not a Git repository")
+        head = self._verify_exact_commit_oid(head)
         baseline = self._git("rev-parse", "--verify", f"{safe_ref}^{{commit}}")
         if baseline is None:
             raise RuntimeError(f"baseline ref could not be resolved: {safe_ref}")
@@ -422,6 +437,7 @@ class RepositoryInspector(RepositoryGitAuthorityMixin, RepositoryWorktreeMixin):
             )
         if not _HEX_SHA.fullmatch(commit_sha):
             raise ValueError("commit_sha must be a full hexadecimal object id")
+        commit_sha = self._verify_exact_commit_oid(commit_sha)
         path = self._validate_relative_path(relative_path)
         blob_oid = self._blob_oid_at(commit_sha, path)
         if blob_oid is None:

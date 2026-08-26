@@ -89,3 +89,25 @@ def test_read_file_at_rejects_tampered_tree_under_existing_oid(tmp_path: Path) -
 
     with pytest.raises(RuntimeError):
         RepositoryInspector(repo).read_file_at(commit_sha, "payload.bin")
+
+
+def test_snapshot_rejects_branch_ref_that_points_to_tree_object(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    (repo / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+    _git(repo, "add", "tracked.txt")
+    _git(repo, "commit", "-q", "-m", "baseline")
+    commit_sha = _git(repo, "rev-parse", "HEAD")
+    tree_oid = _git(repo, "rev-parse", f"{commit_sha}^{{tree}}")
+    branch = _git(repo, "symbolic-ref", "--short", "HEAD")
+    ref_path = repo / ".git" / "refs" / "heads" / branch
+    ref_path.write_text(f"{tree_oid}\n", encoding="ascii")
+
+    assert _git(repo, "rev-parse", "HEAD") == tree_oid
+    assert _git(repo, "ls-tree", "-r", tree_oid)
+
+    snapshot = RepositoryInspector(repo).snapshot()
+
+    assert snapshot.git_sha is None
+    assert snapshot.fingerprint_complete is False
+    assert snapshot.fingerprint_incomplete_reasons == ("git-inspection-incomplete",)
