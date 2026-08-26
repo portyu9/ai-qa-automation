@@ -42,7 +42,7 @@ class CoverageMatch:
     matches: tuple[str, ...]
 
     def as_dict(self) -> dict[str, Any]:
-        return {"path": self.path, "matches": list(self.matches)}
+        return {"path": redact_text(self.path), "matches": list(self.matches)}
 
 
 @dataclass(frozen=True)
@@ -72,7 +72,7 @@ class CoverageSearchObservation:
             "unsafe_path_count": self.unsafe_path_count,
             "unreadable_path_count": self.unreadable_path_count,
             "skipped_source_count": self.skipped_source_count,
-            "skipped_source_paths": list(self.skipped_source_paths),
+            "skipped_source_paths": [redact_text(path) for path in self.skipped_source_paths],
             "skipped_source_paths_truncated": self.skipped_source_paths_truncated,
             "root_identity": list(self.root_identity),
         }
