@@ -48,7 +48,7 @@ def test_confined_model_read_rejects_symlinked_final_file(tmp_path: Path) -> Non
     target = tmp_path / "workspace"
     target.mkdir()
     outside = tmp_path / "outside.py"
-    write(outside, "SECRET = 'must not be read'\n")
+    write(outside, "OUTSIDE_MARKER = 'must not be read'\n")
     tests = target / "tests"
     tests.mkdir()
     (tests / "test_external.py").symlink_to(outside)
@@ -63,7 +63,7 @@ def test_confined_model_read_rejects_symlinked_parent(tmp_path: Path) -> None:
     target = tmp_path / "workspace"
     target.mkdir()
     outside = tmp_path / "outside"
-    write(outside / "test_external.py", "SECRET = 'must not be read'\n")
+    write(outside / "test_external.py", "OUTSIDE_MARKER = 'must not be read'\n")
     (target / "tests").symlink_to(outside, target_is_directory=True)
 
     with pytest.raises(ValueError, match="symlinked parent"):
@@ -133,7 +133,7 @@ def test_coverage_search_never_descends_symlink_and_marks_namespace_incomplete(
     target = tmp_path / "workspace"
     target.mkdir()
     outside = tmp_path / "outside"
-    write(outside / "tests" / "test_secret.py", "def test_secret():\n    assert 'secret'\n")
+    write(outside / "tests" / "test_hidden.py", "def test_hidden():\n    assert 'hidden'\n")
     (target / "external-tests").symlink_to(outside, target_is_directory=True)
     write(target / "tests" / "test_safe.py", "def test_safe():\n    assert True\n")
 
