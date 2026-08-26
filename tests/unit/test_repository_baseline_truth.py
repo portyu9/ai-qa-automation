@@ -100,6 +100,24 @@ def test_read_file_at_ignores_git_replacement_objects(tmp_path: Path) -> None:
     assert observed == original
 
 
+def test_change_set_rejects_legacy_git_grafts(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    (repo / "tracked.txt").write_text("baseline\n", encoding="utf-8")
+    baseline_sha = _commit(repo, "baseline")
+    _git(repo, "branch", "baseline", baseline_sha)
+
+    (repo / "tracked.txt").write_text("head\n", encoding="utf-8")
+    head_sha = _commit(repo, "head")
+    _git(repo, "config", "advice.graftFileDeprecated", "false")
+    graft_file = repo / ".git" / "info" / "grafts"
+    graft_file.parent.mkdir(parents=True, exist_ok=True)
+    graft_file.write_text(f"{head_sha}\n", encoding="ascii")
+
+    with pytest.raises(RuntimeError, match="graft metadata"):
+        RepositoryInspector(repo).change_set("baseline")
+
+
 def test_read_file_at_rejects_invalid_commit_as_repository_failure(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo)
