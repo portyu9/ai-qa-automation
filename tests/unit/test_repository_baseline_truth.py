@@ -59,7 +59,7 @@ def test_read_file_at_reports_true_absence_from_valid_commit(tmp_path: Path) -> 
 
     inspector = RepositoryInspector(repo)
 
-    with pytest.raises(FileNotFoundError, match="missing.json"):
+    with pytest.raises(FileNotFoundError, match=r"missing\.json"):
         inspector.read_file_at(commit_sha, "missing.json")
 
 
@@ -112,7 +112,7 @@ def test_blob_lookup_rejects_malformed_or_ambiguous_tree_evidence(
         f"100644 blob {object_id}\tother.json\0",
         f"100644 blob {object_id}\tpayload.json\0100644 blob {'2' * 40}\tpayload.json\0",
         f"100644 mystery {object_id}\tpayload.json\0",
-        f"100644 blob not-a-sha\tpayload.json\0",
+        "100644 blob not-a-sha\tpayload.json\0",
     ]
 
     for raw in malformed:
