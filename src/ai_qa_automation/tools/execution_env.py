@@ -173,10 +173,18 @@ def _spawn_process(
     *,
     cwd: Path,
     env: Mapping[str, str],
+    pass_fds: Sequence[int] = (),
 ) -> subprocess.Popen[bytes]:
     argv = [str(item) for item in command]
     argv[0] = resolve_executable(argv[0], env=env)
+    inherited_fds = tuple(pass_fds)
+    if any(type(fd) is not int or fd < 0 for fd in inherited_fds) or len(set(inherited_fds)) != len(
+        inherited_fds
+    ):
+        raise ValueError("pass_fds must contain unique non-negative integer descriptors")
     if os.name == "nt":
+        if inherited_fds:
+            raise ValueError("explicit descriptor inheritance is unsupported on Windows")
         return subprocess.Popen(
             argv,
             cwd=cwd,
@@ -194,6 +202,7 @@ def _spawn_process(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         start_new_session=True,
+        pass_fds=inherited_fds,
     )
 
 
@@ -256,6 +265,7 @@ def _run_bounded_capture(
     timeout_seconds: int | float,
     max_stdout_bytes: int,
     max_stderr_bytes: int,
+    pass_fds: Sequence[int] = (),
 ) -> _BoundedCapture:
     _validate_timeout(timeout_seconds)
     _validate_output_bound(max_stdout_bytes, name="max_stdout_bytes")
@@ -263,7 +273,7 @@ def _run_bounded_capture(
     if not command:
         raise ValueError("subprocess command must not be empty")
 
-    process = _spawn_process(command, cwd=cwd, env=env)
+    process = _spawn_process(command, cwd=cwd, env=env, pass_fds=pass_fds)
     if process.stdout is None or process.stderr is None:  # pragma: no cover - Popen contract
         _terminate_process_tree(process, env=env)
         process.wait()
@@ -337,6 +347,7 @@ def run_bounded_binary_subprocess(
     timeout_seconds: int | float,
     max_stdout_bytes: int = _DEFAULT_MAX_OUTPUT_BYTES,
     max_stderr_bytes: int = _DEFAULT_MAX_OUTPUT_BYTES,
+    pass_fds: Sequence[int] = (),
 ) -> BoundedBinarySubprocessResult:
     """Run a subprocess with exact bounded byte tails for stdout and stderr.
 
@@ -352,6 +363,7 @@ def run_bounded_binary_subprocess(
         timeout_seconds=timeout_seconds,
         max_stdout_bytes=max_stdout_bytes,
         max_stderr_bytes=max_stderr_bytes,
+        pass_fds=pass_fds,
     )
     return BoundedBinarySubprocessResult(
         returncode=captured.returncode,
@@ -370,6 +382,7 @@ def run_bounded_subprocess(
     env: Mapping[str, str],
     timeout_seconds: int | float,
     max_output_bytes: int = _DEFAULT_MAX_OUTPUT_BYTES,
+    pass_fds: Sequence[int] = (),
 ) -> BoundedSubprocessResult:
     """Run a subprocess while draining stdout/stderr into bounded in-memory tails.
 
@@ -385,6 +398,7 @@ def run_bounded_subprocess(
         timeout_seconds=timeout_seconds,
         max_stdout_bytes=max_output_bytes,
         max_stderr_bytes=max_output_bytes,
+        pass_fds=pass_fds,
     )
     return BoundedSubprocessResult(
         returncode=captured.returncode,

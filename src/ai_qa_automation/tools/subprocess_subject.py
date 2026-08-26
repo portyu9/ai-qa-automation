@@ -128,3 +128,82 @@ def descriptor_bound_cwd(
         yield _descriptor_path(directory_fd, label=label)
     finally:
         os.close(directory_fd)
+
+
+@contextmanager
+def descriptor_bound_child_directory(
+    root: Path,
+    child_name: str,
+    *,
+    expected_root_identity: tuple[int, int],
+    expected_child_identity: tuple[int, int] | None = None,
+    label: str,
+) -> Iterator[tuple[Path, Path, tuple[int, int]]]:
+    """Pin a root and one direct child directory for explicit subprocess inheritance.
+
+    Both descriptors remain non-inheritable in the parent. A caller may deliberately
+    pass the returned descriptor pair to a trusted subprocess; the descriptor-backed
+    paths then bind that child to the exact root/child directory identities even if
+    their ordinary pathnames are renamed or replaced before process execution.
+    """
+
+    if not descriptor_relative_authority_supported():
+        raise RuntimeError(f"{label} requires descriptor-relative no-follow filesystem authority")
+    if (
+        not child_name
+        or child_name in {".", ".."}
+        or Path(child_name).name != child_name
+        or "\x00" in child_name
+    ):
+        raise ValueError(f"{label} child must be one normalized directory name")
+
+    root = root.expanduser().absolute()
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    try:
+        root_fd = os.open(root, flags)
+    except OSError as exc:
+        if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+            raise ValueError(f"{label} root became a symlink or non-directory") from exc
+        raise
+
+    child_fd = -1
+    try:
+        opened_root = os.fstat(root_fd)
+        root_identity = _identity(opened_root)
+        current_root = root.stat(follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(opened_root.st_mode)
+            or not stat.S_ISDIR(current_root.st_mode)
+            or root_identity != _identity(current_root)
+            or root_identity != expected_root_identity
+        ):
+            raise ValueError(f"{label} root changed identity since authorization")
+
+        try:
+            child_fd = os.open(child_name, flags, dir_fd=root_fd)
+        except OSError as exc:
+            if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+                raise ValueError(f"{label} child is a symlink or non-directory") from exc
+            raise
+        opened_child = os.fstat(child_fd)
+        current_child = os.stat(child_name, dir_fd=root_fd, follow_symlinks=False)
+        child_identity = _identity(opened_child)
+        if (
+            not stat.S_ISDIR(opened_child.st_mode)
+            or not stat.S_ISDIR(current_child.st_mode)
+            or child_identity != _identity(current_child)
+            or (expected_child_identity is not None and child_identity != expected_child_identity)
+        ):
+            raise ValueError(f"{label} child changed identity during authority pinning")
+        if os.get_inheritable(root_fd) or os.get_inheritable(child_fd):
+            raise RuntimeError(f"{label} descriptors unexpectedly became inheritable")
+
+        yield (
+            _descriptor_path(root_fd, label=f"{label} root"),
+            _descriptor_path(child_fd, label=f"{label} child"),
+            (root_fd, child_fd),
+        )
+    finally:
+        if child_fd >= 0:
+            os.close(child_fd)
+        os.close(root_fd)

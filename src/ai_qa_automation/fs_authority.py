@@ -247,6 +247,29 @@ def _open_confined_parent(
         os.close(current_fd)
 
 
+def stat_confined_entry(
+    root: Path,
+    relative_path: str | Path,
+    *,
+    label: str,
+    expected_root_identity: tuple[int, int] | None = None,
+) -> os.stat_result:
+    """Return no-follow metadata for one entry below a descriptor-pinned root."""
+
+    with _open_confined_parent(
+        root,
+        relative_path,
+        create_parents=False,
+        label=label,
+        expected_root_identity=expected_root_identity,
+    ) as (parent_fd, name):
+        current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        repeated = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if _stable_file_signature(current) != _stable_file_signature(repeated):
+            raise ValueError(f"{label} changed during confined stat")
+        return repeated
+
+
 def read_bytes_confined(
     root: Path,
     relative_path: str | Path,

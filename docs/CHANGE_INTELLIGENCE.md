@@ -96,13 +96,17 @@ For those change-intelligence paths:
 - the descriptor-observed scan root identity is carried into later selected-file reads, so replacing the entire workspace-root pathname after enumeration cannot redirect those reads;
 - live bootstrap also compares its observation root against the already-acquired `WorkspaceLease` root identity, revalidates after repository/baseline inspection, revalidates again **before** any bootstrap evidence is added to the durable evidence registry, and checks once more after that persistence step;
 - model-facing test-source reads and coverage discovery use the bounded no-follow observation boundary, and incomplete discovery remains explicit rather than becoming omission authority;
-- when descriptor-relative authority is available, `RepositoryInspector` executes Git from a descriptor-bound working directory tied to the pinned workspace identity;
-- every repository-inspection Git invocation explicitly binds the worktree to that working directory with command-line precedence, preventing repository-local `core.worktree` or `core.bare` configuration from redirecting worktree observation;
-- optional Git locks are disabled during inspection so read-only status/diff observation cannot refresh or replace the index as an incidental side effect;
-- Git replacement-object indirection is disabled, and legacy graft metadata is rejected rather than silently changing immutable-object or ancestry truth;
-- identity/type changes during traversal or confined reads fail closed instead of becoming observed content.
+- `RepositoryInspector` requires descriptor-relative authority for Git inspection and binds both the authorized workspace root and its direct `.git` metadata directory to stable identities;
+- the trusted Git subprocess receives only the explicitly selected workspace/`.git` descriptors needed to preserve that subject across process creation; unrelated descriptors retain close-on-exec behavior;
+- Gitfile indirection, `.git`/nested metadata symlinks, common-directory indirection, alternate object stores, and repository-local external configuration includes are rejected rather than becoming authority-bearing metadata;
+- Git execution is restricted to bounded metadata/object/name plumbing. Content-rendering `git status` / worktree diff paths are not used, so repository-configured clean filters, textconv drivers, or external diff programs cannot certify or mutate observation;
+- tracked worktree candidates come from bounded `diff-files --name-only` metadata plus conservative index-flag, staged-delete, and non-regular-index handling; only those candidates are verified through descriptor-confined raw bytes/modes, so large clean tracked files are not ingested merely to prove cleanliness;
+- `assume-unchanged` and `skip-worktree` index hints cannot silently hide candidate bytes: flagged paths are forced through the confined raw verification path;
+- untracked discovery is bounded and preserves repository ignore rules while suppressing environment-owned global excludes; overflow remains explicit incomplete evidence;
+- optional Git locks are disabled, raw index bytes are digest-bound and rechecked, replacement objects/lazy fetch are disabled, and legacy graft metadata is rejected;
+- identity/type changes during traversal, confined reads, or the Git subprocess boundary fail closed instead of becoming observed content.
 
-These controls prevent pathname preflight from silently becoming read authority after a parent, final-component, or whole-root swap and keep Git worktree observation bound to the authorized repository subject. They do **not** make target files trusted or provide filesystem snapshot isolation; concurrent target mutation can still make an observation incomplete or cause a fail-closed result.
+These controls prevent pathname preflight from silently becoming read authority after a parent, final-component, whole-root, or `.git` replacement and prevent repository configuration from turning read-only inspection into arbitrary content-processing execution. They do **not** make target files trusted or provide filesystem snapshot isolation; concurrent target mutation can still make an observation incomplete or cause a fail-closed result. Gitlinks/submodules are conservatively incomplete until nested repository authority is implemented rather than being silently treated as verified clean state.
 
 ---
 
