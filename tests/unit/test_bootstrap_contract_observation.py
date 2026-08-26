@@ -62,9 +62,7 @@ def test_contract_root_swap_before_read_is_rejected(
         pytest.skip("descriptor-relative no-follow read is Unix-only")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    (workspace / "openapi.json").write_text(
-        '{"openapi":"3.1.0","paths":{}}', encoding="utf-8"
-    )
+    (workspace / "openapi.json").write_text('{"openapi":"3.1.0","paths":{}}', encoding="utf-8")
     real_read = bootstrap_module.read_bytes_confined
     swapped = False
 

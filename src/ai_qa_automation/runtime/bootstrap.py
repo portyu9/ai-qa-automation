@@ -166,10 +166,7 @@ def bootstrap_runtime_context(
     """Capture deterministic repository/change/ownership/contract/dependency context."""
     workspace = workspace.expanduser().absolute()
     bootstrap_root_identity = pin_directory_identity(workspace, label="runtime bootstrap workspace")
-    if (
-        workspace_root_identity is not None
-        and bootstrap_root_identity != workspace_root_identity
-    ):
+    if workspace_root_identity is not None and bootstrap_root_identity != workspace_root_identity:
         raise ValueError("runtime bootstrap workspace changed identity since lease acquisition")
     inspector = RepositoryInspector(workspace)
     if baseline_ref is None:
@@ -309,9 +306,7 @@ def bootstrap_runtime_context(
         pin_directory_identity(workspace, label="runtime bootstrap workspace")
         != bootstrap_root_identity
     ):
-        raise ValueError(
-            "runtime bootstrap workspace changed identity before evidence persistence"
-        )
+        raise ValueError("runtime bootstrap workspace changed identity before evidence persistence")
 
     items = (
         impact_item,
