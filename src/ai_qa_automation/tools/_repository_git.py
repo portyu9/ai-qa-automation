@@ -27,6 +27,12 @@ from .execution_env import (
 
 _MetadataSignature = tuple[int, int, int, int, int, int]
 _BaselineRefObservation = tuple[tuple[str, _MetadataSignature | None], ...]
+_HeadRefObservation = tuple[
+    bytes,
+    _MetadataSignature,
+    _MetadataSignature,
+    _BaselineRefObservation,
+]
 
 
 class RepositoryGitAuthorityMixin:
@@ -269,6 +275,65 @@ class RepositoryGitAuthorityMixin:
                 raise RepositorySubjectError("symbolic baseline refs are not permitted")
         return tuple(rows)
 
+    def _head_ref_observation(self) -> _HeadRefObservation:
+        if self.workspace_root_identity is None or self.git_dir_identity is None:
+            raise RuntimeError("Git HEAD observation requires a direct authorized repository")
+        try:
+            git_dir_before = self._stat_confined_entry_adapter(
+                self.workspace,
+                ".git",
+                label="Git HEAD metadata directory",
+                expected_root_identity=self.workspace_root_identity,
+            )
+            head_before = self._stat_git_metadata_signature("HEAD", label="Git HEAD")
+            head_bytes = self._read_git_metadata_file("HEAD", label="Git HEAD")
+            head_after = self._stat_git_metadata_signature("HEAD", label="Git HEAD")
+            git_dir_after = self._stat_confined_entry_adapter(
+                self.workspace,
+                ".git",
+                label="Git HEAD metadata directory",
+                expected_root_identity=self.workspace_root_identity,
+            )
+        except (OSError, ValueError) as exc:
+            raise RepositorySubjectError("Git HEAD metadata could not be observed safely") from exc
+
+        if head_before is None or head_after is None or head_bytes is None:
+            raise RepositorySubjectError("Git HEAD metadata must be one direct regular file")
+        git_dir_before_signature = self._metadata_signature(git_dir_before)
+        git_dir_after_signature = self._metadata_signature(git_dir_after)
+        if (
+            head_before != head_after
+            or git_dir_before_signature != git_dir_after_signature
+        ):
+            raise RuntimeError("Git HEAD metadata changed during confined observation")
+        if not stat.S_ISREG(head_after[2]) or len(head_bytes) != head_after[3]:
+            raise RepositorySubjectError("Git HEAD metadata must be one stable regular file")
+
+        try:
+            raw_text = head_bytes.decode("ascii", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise RepositorySubjectError("Git HEAD metadata is not valid ASCII") from exc
+        value = raw_text.rstrip("\r\n")
+        if raw_text not in {value, f"{value}\n", f"{value}\r\n"} or not value:
+            raise RepositorySubjectError("Git HEAD metadata has unsupported syntax")
+
+        target_observation: _BaselineRefObservation = ()
+        if value.startswith("ref: "):
+            target = value[len("ref: ") :]
+            validated = self._validate_baseline_ref(target)
+            if validated != target or not target.startswith("refs/"):
+                raise RepositorySubjectError("Git HEAD must target one direct full ref")
+            target_observation = self._baseline_ref_observation(target)
+        elif value.startswith("ref:") or not _HEX_SHA.fullmatch(value):
+            raise RepositorySubjectError("Git HEAD metadata has unsupported syntax")
+
+        return (
+            head_bytes,
+            git_dir_after_signature,
+            head_after,
+            target_observation,
+        )
+
     def _assert_git_metadata_safe(self) -> None:
         if self.git_dir_identity is None:
             return
@@ -444,6 +509,13 @@ class RepositoryGitAuthorityMixin:
             raise RuntimeError("target workspace is not a direct Git repository")
         self._validate_git_command(tuple(args))
 
+        head_before: _HeadRefObservation | None = None
+        if args in {
+            ("rev-parse", "HEAD"),
+            ("symbolic-ref", "--quiet", "--short", "HEAD"),
+        }:
+            head_before = self._head_ref_observation()
+
         observed_ref: str | None = None
         ref_before: _BaselineRefObservation = ()
         if len(args) == 3 and args[:2] == ("rev-parse", "--verify"):
@@ -501,6 +573,8 @@ class RepositoryGitAuthorityMixin:
         if result.stdout_truncated or result.stderr_truncated:
             raise RuntimeError("git inspection output exceeded bounded capture limit")
         raise_if_git_grafts_reported(result.stderr)
+        if head_before is not None and head_before != self._head_ref_observation():
+            raise RuntimeError("Git HEAD metadata changed during resolution")
         if observed_ref is not None and ref_before != self._baseline_ref_observation(observed_ref):
             raise RuntimeError("baseline ref metadata changed during resolution")
         if result.returncode != 0:
