@@ -76,6 +76,30 @@ def test_read_file_at_uses_literal_tree_path_for_metacharacters(tmp_path: Path) 
     assert observed == payload
 
 
+def test_read_file_at_ignores_git_replacement_objects(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    original = b"ORIGINAL"
+    replacement = b"REPLACED"
+    assert len(original) == len(replacement)
+
+    (repo / "payload.bin").write_bytes(original)
+    original_commit = _commit(repo, "original")
+    original_blob = _git(repo, "rev-parse", f"{original_commit}:payload.bin")
+
+    (repo / "payload.bin").write_bytes(replacement)
+    replacement_commit = _commit(repo, "replacement")
+    replacement_blob = _git(repo, "rev-parse", f"{replacement_commit}:payload.bin")
+
+    _git(repo, "replace", original_commit, replacement_commit)
+    _git(repo, "replace", original_blob, replacement_blob)
+    assert _git(repo, "show", f"{original_commit}:payload.bin") == replacement.decode()
+
+    observed = RepositoryInspector(repo).read_file_at(original_commit, "payload.bin")
+
+    assert observed == original
+
+
 def test_read_file_at_rejects_invalid_commit_as_repository_failure(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo)
