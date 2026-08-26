@@ -15,14 +15,14 @@ def test_read_file_at_rejects_requested_limit_over_framework_capture_ceiling(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     inspector = RepositoryInspector(tmp_path)
-    git_called = False
+    lookup_called = False
 
-    def forbidden_git(*args: str, **kwargs: object) -> str:
-        nonlocal git_called
-        git_called = True
-        raise AssertionError(f"Git preflight must not run for invalid max_bytes: {args}, {kwargs}")
+    def forbidden_lookup(*args: str, **kwargs: object) -> str:
+        nonlocal lookup_called
+        lookup_called = True
+        raise AssertionError(f"Git lookup must not run for invalid max_bytes: {args}, {kwargs}")
 
-    monkeypatch.setattr(inspector, "_git", forbidden_git)
+    monkeypatch.setattr(inspector, "_blob_oid_at", forbidden_lookup)
 
     with pytest.raises(ValueError, match="max_bytes must be an integer between"):
         inspector.read_file_at(
@@ -31,7 +31,7 @@ def test_read_file_at_rejects_requested_limit_over_framework_capture_ceiling(
             max_bytes=repository_module._MAX_GIT_EXACT_STDOUT_BYTES + 1,
         )
 
-    assert git_called is False
+    assert lookup_called is False
 
 
 def test_read_file_at_rejects_object_larger_than_framework_capture_ceiling(
@@ -40,10 +40,13 @@ def test_read_file_at_rejects_object_larger_than_framework_capture_ceiling(
 ) -> None:
     inspector = RepositoryInspector(tmp_path)
     object_size = repository_module._MAX_GIT_EXACT_STDOUT_BYTES + 1
+    blob_oid = "1" * 40
     capture_called = False
 
+    monkeypatch.setattr(inspector, "_blob_oid_at", lambda *_args: blob_oid)
+
     def fake_git(*args: str, allow_failure: bool = False) -> str:
-        assert args == ("cat-file", "-s", f"{'a' * 40}:payload.bin")
+        assert args == ("cat-file", "-s", blob_oid)
         assert allow_failure is False
         return str(object_size)
 
@@ -88,10 +91,12 @@ def test_read_file_at_binds_capture_limit_to_preflight_size(
 ) -> None:
     inspector = RepositoryInspector(tmp_path)
     commit_sha = "b" * 40
-    object_name = f"{commit_sha}:payload.bin"
+    blob_oid = "2" * 40
+
+    monkeypatch.setattr(inspector, "_blob_oid_at", lambda *_args: blob_oid)
 
     def fake_git(*args: str, allow_failure: bool = False) -> str:
-        assert args == ("cat-file", "-s", object_name)
+        assert args == ("cat-file", "-s", blob_oid)
         assert allow_failure is False
         return str(size)
 
@@ -100,9 +105,9 @@ def test_read_file_at_binds_capture_limit_to_preflight_size(
         max_stdout_bytes: int,
         allow_failure: bool = False,
     ) -> bytes:
-        assert args == ("cat-file", "blob", object_name)
+        assert args == ("cat-file", "blob", blob_oid)
         assert max_stdout_bytes == capture_limit
-        assert allow_failure is True
+        assert allow_failure is False
         return payload
 
     monkeypatch.setattr(inspector, "_git", fake_git)
@@ -116,7 +121,7 @@ def test_read_file_at_rejects_bytes_inconsistent_with_preflight_size(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     inspector = RepositoryInspector(tmp_path)
-
+    monkeypatch.setattr(inspector, "_blob_oid_at", lambda *_args: "3" * 40)
     monkeypatch.setattr(inspector, "_git", lambda *args, **kwargs: "4")
     monkeypatch.setattr(inspector, "_git_bytes", lambda *args, **kwargs: b"abc")
 
