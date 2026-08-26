@@ -141,9 +141,7 @@ class RepositoryInspector:
                 "repository workspace subject could not be revalidated"
             ) from exc
         if current_identity != self.workspace_root_identity:
-            raise RepositorySubjectError(
-                "repository workspace changed identity during inspection"
-            )
+            raise RepositorySubjectError("repository workspace changed identity during inspection")
 
     def snapshot(self) -> RepositorySnapshot:
         try:
