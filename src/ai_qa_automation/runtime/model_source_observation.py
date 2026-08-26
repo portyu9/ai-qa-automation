@@ -153,11 +153,23 @@ def search_test_coverage_confined(
     max_source_bytes: int = _MAX_COVERAGE_SOURCE_BYTES,
     expected_root_identity: tuple[int, int] | None = None,
 ) -> CoverageSearchObservation:
-    if isinstance(max_results, bool) or not isinstance(max_results, int) or not 1 <= max_results <= 200:
+    if (
+        isinstance(max_results, bool)
+        or not isinstance(max_results, int)
+        or not 1 <= max_results <= 200
+    ):
         raise ValueError("max_results must be between 1 and 200")
-    if isinstance(max_scan_entries, bool) or not isinstance(max_scan_entries, int) or max_scan_entries < 1:
+    if (
+        isinstance(max_scan_entries, bool)
+        or not isinstance(max_scan_entries, int)
+        or max_scan_entries < 1
+    ):
         raise ValueError("max_scan_entries must be a positive integer")
-    if isinstance(max_source_bytes, bool) or not isinstance(max_source_bytes, int) or max_source_bytes < 1:
+    if (
+        isinstance(max_source_bytes, bool)
+        or not isinstance(max_source_bytes, int)
+        or max_source_bytes < 1
+    ):
         raise ValueError("max_source_bytes must be a positive integer")
     if len(query) > 200:
         raise ValueError("coverage search query exceeds 200 characters")
