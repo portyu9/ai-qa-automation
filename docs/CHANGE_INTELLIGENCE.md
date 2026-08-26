@@ -95,9 +95,14 @@ For those change-intelligence paths:
 - selected test-source, dependency-manifest, CODEOWNERS, and current-contract bytes are opened through descriptor-confined bounded reads rather than trusting earlier pathname metadata;
 - the descriptor-observed scan root identity is carried into later selected-file reads, so replacing the entire workspace-root pathname after enumeration cannot redirect those reads;
 - live bootstrap also compares its observation root against the already-acquired `WorkspaceLease` root identity, revalidates after repository/baseline inspection, revalidates again **before** any bootstrap evidence is added to the durable evidence registry, and checks once more after that persistence step;
+- model-facing test-source reads and coverage discovery use the bounded no-follow observation boundary, and incomplete discovery remains explicit rather than becoming omission authority;
+- when descriptor-relative authority is available, `RepositoryInspector` executes Git from a descriptor-bound working directory tied to the pinned workspace identity;
+- every repository-inspection Git invocation explicitly binds the worktree to that working directory with command-line precedence, preventing repository-local `core.worktree` or `core.bare` configuration from redirecting worktree observation;
+- optional Git locks are disabled during inspection so read-only status/diff observation cannot refresh or replace the index as an incidental side effect;
+- Git replacement-object indirection is disabled, and legacy graft metadata is rejected rather than silently changing immutable-object or ancestry truth;
 - identity/type changes during traversal or confined reads fail closed instead of becoming observed content.
 
-This prevents pathname preflight from silently becoming read authority after a parent, final-component, or whole-root swap for the bounded file-observation paths above. It does **not** make target files trusted, guarantee filesystem snapshot isolation, or make Git subprocess `cwd` descriptor-bound. `RepositoryInspector`/Git subprocess identity is therefore still a distinct residual boundary. The separate model-facing `_coverage_search()` traversal also remains a follow-up boundary and is not covered by this section.
+These controls prevent pathname preflight from silently becoming read authority after a parent, final-component, or whole-root swap and keep Git worktree observation bound to the authorized repository subject. They do **not** make target files trusted or provide filesystem snapshot isolation; concurrent target mutation can still make an observation incomplete or cause a fail-closed result.
 
 ---
 
