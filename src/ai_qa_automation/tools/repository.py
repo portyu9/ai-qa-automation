@@ -540,7 +540,8 @@ class RepositoryInspector:
     def _git(self, *args: str, allow_failure: bool = False) -> str | None:
         with tempfile.TemporaryDirectory(prefix="aiqa-git-home-") as temp_home:
             env = restricted_subprocess_env(
-                home=Path(temp_home), extra={"GIT_CONFIG_NOSYSTEM": "1"}
+                home=Path(temp_home),
+                extra={"GIT_CONFIG_NOSYSTEM": "1", "GIT_NO_REPLACE_OBJECTS": "1"},
             )
             with self._git_cwd() as git_cwd:
                 result = run_bounded_subprocess(
@@ -576,7 +577,8 @@ class RepositoryInspector:
         """Run one exact-byte Git command with independently bounded output streams."""
         with tempfile.TemporaryDirectory(prefix="aiqa-git-home-") as temp_home:
             env = restricted_subprocess_env(
-                home=Path(temp_home), extra={"GIT_CONFIG_NOSYSTEM": "1"}
+                home=Path(temp_home),
+                extra={"GIT_CONFIG_NOSYSTEM": "1", "GIT_NO_REPLACE_OBJECTS": "1"},
             )
             with self._git_cwd() as git_cwd:
                 result = run_bounded_binary_subprocess(
