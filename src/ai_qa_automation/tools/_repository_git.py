@@ -25,6 +25,9 @@ from .execution_env import (
     restricted_subprocess_env,
 )
 
+_MetadataSignature = tuple[int, int, int, int, int, int]
+_BaselineRefObservation = tuple[tuple[str, _MetadataSignature | None], ...]
+
 
 class RepositoryGitAuthorityMixin:
     workspace: Path
@@ -103,6 +106,17 @@ class RepositoryGitAuthorityMixin:
     ) -> AbstractContextManager[tuple[Path, Path, tuple[int, int]]]:
         raise NotImplementedError
 
+    @staticmethod
+    def _metadata_signature(value: os.stat_result) -> _MetadataSignature:
+        return (
+            value.st_dev,
+            value.st_ino,
+            value.st_mode,
+            value.st_size,
+            value.st_mtime_ns,
+            value.st_ctime_ns,
+        )
+
     def _discover_git_dir_identity(self) -> tuple[int, int] | None:
         if self.workspace_root_identity is None:
             return None
@@ -140,6 +154,121 @@ class RepositoryGitAuthorityMixin:
             return None
         except (OSError, ValueError) as exc:
             raise RepositorySubjectError(f"{label} could not be inspected safely") from exc
+
+    def _stat_git_metadata_signature(
+        self,
+        relative_path: str,
+        *,
+        label: str,
+    ) -> _MetadataSignature | None:
+        if self.git_dir_identity is None:
+            raise RuntimeError("Git metadata observation requires a direct repository")
+        try:
+            observed = self._stat_confined_entry_adapter(
+                self.workspace / ".git",
+                relative_path,
+                label=label,
+                expected_root_identity=self.git_dir_identity,
+            )
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError) as exc:
+            raise RepositorySubjectError(f"{label} could not be observed safely") from exc
+        return self._metadata_signature(observed)
+
+    @staticmethod
+    def _validate_baseline_ref(base_ref: str) -> str:
+        if not isinstance(base_ref, str):
+            raise ValueError("baseline ref must be a string")
+        value = base_ref.strip()
+        if _HEX_SHA.fullmatch(value):
+            return value.lower()
+        if not value.startswith("refs/") or len(value) > 256:
+            raise ValueError("baseline ref must be a full refs/... name or full object id")
+        components = value.split("/")
+        if len(components) < 3 or components[0] != "refs":
+            raise ValueError("baseline ref must be a full refs/... name or full object id")
+        for component in components[1:]:
+            if (
+                not component
+                or component.startswith(".")
+                or component.endswith(".")
+                or component.endswith(".lock")
+                or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._@+-]*", component) is None
+            ):
+                raise ValueError("baseline ref contains unsupported Git ref syntax")
+        if ".." in value or "@{" in value:
+            raise ValueError("baseline ref contains unsupported Git ref syntax")
+        return value
+
+    def _baseline_ref_observation(self, safe_ref: str) -> _BaselineRefObservation:
+        if _HEX_SHA.fullmatch(safe_ref):
+            return ()
+        if self.workspace_root_identity is None or self.git_dir_identity is None:
+            raise RuntimeError("baseline ref observation requires a direct authorized repository")
+
+        try:
+            git_dir = self._stat_confined_entry_adapter(
+                self.workspace,
+                ".git",
+                label="baseline Git metadata directory",
+                expected_root_identity=self.workspace_root_identity,
+            )
+        except (OSError, ValueError) as exc:
+            raise RepositorySubjectError(
+                "baseline Git metadata directory could not be observed safely"
+            ) from exc
+
+        rows: list[tuple[str, _MetadataSignature | None]] = [
+            (".git", self._metadata_signature(git_dir)),
+            (
+                "packed-refs",
+                self._stat_git_metadata_signature(
+                    "packed-refs",
+                    label="baseline packed refs",
+                ),
+            ),
+        ]
+        parts = safe_ref.split("/")
+        for index in range(1, len(parts)):
+            relative = "/".join(parts[:index])
+            rows.append(
+                (
+                    relative,
+                    self._stat_git_metadata_signature(
+                        relative,
+                        label=f"baseline ref parent {relative}",
+                    ),
+                )
+            )
+        rows.append(
+            (
+                safe_ref,
+                self._stat_git_metadata_signature(
+                    safe_ref,
+                    label=f"baseline ref {safe_ref}",
+                ),
+            )
+        )
+
+        loose_ref = self._read_git_metadata_file(safe_ref, label=f"baseline ref {safe_ref}")
+        if loose_ref is not None and loose_ref.lstrip().startswith(b"ref:"):
+            raise RepositorySubjectError("symbolic baseline refs are not permitted")
+        return tuple(rows)
+
+    def _resolve_baseline_ref(self, base_ref: str) -> tuple[str, str]:
+        safe_ref = self._validate_baseline_ref(base_ref)
+        before = self._baseline_ref_observation(safe_ref)
+        resolved = self._git("rev-parse", "--verify", f"{safe_ref}^{{commit}}")
+        after = self._baseline_ref_observation(safe_ref)
+        if before != after:
+            raise RuntimeError("baseline ref metadata changed during resolution")
+        if resolved is None or not _HEX_SHA.fullmatch(resolved):
+            raise RuntimeError(f"baseline ref could not be resolved: {safe_ref}")
+        resolved = resolved.lower()
+        if _HEX_SHA.fullmatch(safe_ref) and resolved != safe_ref:
+            raise RuntimeError("baseline object id does not identify that exact commit")
+        return safe_ref, resolved
 
     def _assert_git_metadata_safe(self) -> None:
         if self.git_dir_identity is None:
