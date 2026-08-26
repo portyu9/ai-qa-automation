@@ -86,9 +86,7 @@ def test_active_workspace_authority_is_owner_bound_and_clearable(tmp_path: Path)
     bind_active_workspace_authority(workspace, identity, owner="lease-one")
     try:
         assert active_workspace_authority(workspace) == identity
-        assert (
-            clear_active_workspace_authority(workspace, identity, owner="lease-two") is False
-        )
+        assert clear_active_workspace_authority(workspace, identity, owner="lease-two") is False
         assert active_workspace_authority(workspace) == identity
         with pytest.raises(RuntimeError, match="conflicting active lease authority"):
             bind_active_workspace_authority(workspace, identity, owner="lease-two")
@@ -129,6 +127,7 @@ def test_workspace_lease_bind_failure_releases_os_locks(
     failed = WorkspaceLease(artifacts, workspace, "run-bind-failure")
 
     with monkeypatch.context() as scoped:
+
         def reject_bind(*args: object, **kwargs: object) -> None:
             raise RuntimeError("synthetic authority publication failure")
 
