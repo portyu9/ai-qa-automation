@@ -18,17 +18,17 @@ _SECRET_PATTERNS = [
     re.compile(_CREDENTIAL_LEFT_BOUNDARY + r"AKIA[0-9A-Z]{16}" + _CREDENTIAL_RIGHT_BOUNDARY),
     re.compile(_CREDENTIAL_LEFT_BOUNDARY + r"ghp_[A-Za-z0-9]{20,}" + _CREDENTIAL_RIGHT_BOUNDARY),
     re.compile(
-        _CREDENTIAL_LEFT_BOUNDARY
-        + r"github_pat_[A-Za-z0-9_]{20,}"
-        + _CREDENTIAL_RIGHT_BOUNDARY
+        _CREDENTIAL_LEFT_BOUNDARY + r"github_pat_[A-Za-z0-9_]{20,}" + _CREDENTIAL_RIGHT_BOUNDARY
     ),
-    re.compile(_CREDENTIAL_LEFT_BOUNDARY + r"sk-ant-[A-Za-z0-9_-]{12,}" + _CREDENTIAL_RIGHT_BOUNDARY),
     re.compile(
-        _CREDENTIAL_LEFT_BOUNDARY
-        + r"sk-(?:proj-)?[A-Za-z0-9_-]{20,}"
-        + _CREDENTIAL_RIGHT_BOUNDARY
+        _CREDENTIAL_LEFT_BOUNDARY + r"sk-ant-[A-Za-z0-9_-]{12,}" + _CREDENTIAL_RIGHT_BOUNDARY
     ),
-    re.compile(_CREDENTIAL_LEFT_BOUNDARY + r"xox[baprs]-[A-Za-z0-9-]{10,}" + _CREDENTIAL_RIGHT_BOUNDARY),
+    re.compile(
+        _CREDENTIAL_LEFT_BOUNDARY + r"sk-(?:proj-)?[A-Za-z0-9_-]{20,}" + _CREDENTIAL_RIGHT_BOUNDARY
+    ),
+    re.compile(
+        _CREDENTIAL_LEFT_BOUNDARY + r"xox[baprs]-[A-Za-z0-9-]{10,}" + _CREDENTIAL_RIGHT_BOUNDARY
+    ),
     re.compile(
         r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
         re.S,
