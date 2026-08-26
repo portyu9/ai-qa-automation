@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -108,6 +109,20 @@ def test_coverage_search_is_sorted_bounded_and_reports_complete(tmp_path: Path) 
     assert all(item.matches for item in observed.results)
     assert observed.root_identity == identity
     assert observed.observed_source_bytes > 0
+
+
+def test_coverage_structured_data_sanitizes_discovered_sensitive_path(tmp_path: Path) -> None:
+    target = tmp_path / "workspace"
+    synthetic_fragment = "gh" + "p_" + ("B" * 20)
+    synthetic_path = f"tests/test_{synthetic_fragment}.py"
+    write(target / synthetic_path, "def test_case():\n    assert True\n")
+
+    observed = search_test_coverage_confined(target, query="")
+    structured = observed.as_structured_data(query="")
+    rendered = json.dumps(structured)
+
+    assert synthetic_fragment not in rendered
+    assert structured["results"][0]["path"] == "tests/test_[REDACTED].py"
 
 
 def test_coverage_search_result_cap_is_explicitly_incomplete(tmp_path: Path) -> None:
