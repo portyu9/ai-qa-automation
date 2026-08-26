@@ -170,7 +170,7 @@ class RepositoryGitAuthorityMixin:
                 label=label,
                 expected_root_identity=self.git_dir_identity,
             )
-        except FileNotFoundError:
+        except (FileNotFoundError, NotADirectoryError):
             return None
         except (OSError, ValueError) as exc:
             raise RepositorySubjectError(f"{label} could not be observed safely") from exc
@@ -255,6 +255,12 @@ class RepositoryGitAuthorityMixin:
             )
 
         for candidate in candidates:
+            signature = self._stat_git_metadata_signature(
+                candidate,
+                label=f"baseline ref {candidate}",
+            )
+            if signature is None or not stat.S_ISREG(signature[2]):
+                continue
             loose_ref = self._read_git_metadata_file(
                 candidate,
                 label=f"baseline ref {candidate}",
