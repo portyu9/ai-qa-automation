@@ -553,6 +553,7 @@ class RepositoryInspector:
                 result = run_bounded_subprocess(
                     [
                         "git",
+                        "--work-tree=.",
                         "-c",
                         "core.fsmonitor=false",
                         "-c",
@@ -593,6 +594,7 @@ class RepositoryInspector:
                 result = run_bounded_binary_subprocess(
                     [
                         "git",
+                        "--work-tree=.",
                         "-c",
                         "core.fsmonitor=false",
                         "-c",
