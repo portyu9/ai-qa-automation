@@ -283,6 +283,16 @@ class RepositoryGitAuthorityMixin:
             )
         if scan.truncated:
             raise RuntimeError("repository Git metadata scan exceeded its bounded entry budget")
+        if (
+            self._stat_git_metadata_signature(
+                "reftable",
+                label="Git reftable ref storage",
+            )
+            is not None
+        ):
+            raise RepositorySubjectError(
+                "repository Git metadata must not use unbound reftable ref storage"
+            )
 
         for relative, label in (
             ("commondir", "Git common-directory indirection"),
