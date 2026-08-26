@@ -3,6 +3,7 @@ from __future__ import annotations
 import errno
 import os
 import stat
+from _thread import RLock
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -10,10 +11,64 @@ from pathlib import Path
 from ..fs_authority import descriptor_relative_authority_supported
 
 _DESCRIPTOR_PATH_ROOTS = (Path("/proc/self/fd"), Path("/dev/fd"))
+_ACTIVE_WORKSPACE_AUTHORITIES_LOCK = RLock()
+_ACTIVE_WORKSPACE_AUTHORITIES: dict[str, tuple[tuple[int, int], str]] = {}
 
 
 def _identity(value: os.stat_result) -> tuple[int, int]:
     return value.st_dev, value.st_ino
+
+
+def _authority_key(root: Path) -> str:
+    return str(root.expanduser().absolute())
+
+
+def bind_active_workspace_authority(
+    root: Path,
+    identity: tuple[int, int] | None,
+    *,
+    owner: str,
+) -> None:
+    """Publish one process-local mirror of the currently held workspace lease authority."""
+
+    if identity is None:
+        return
+    key = _authority_key(root)
+    candidate = (identity, owner)
+    with _ACTIVE_WORKSPACE_AUTHORITIES_LOCK:
+        existing = _ACTIVE_WORKSPACE_AUTHORITIES.get(key)
+        if existing is not None and existing != candidate:
+            raise RuntimeError("workspace already has a conflicting active lease authority")
+        _ACTIVE_WORKSPACE_AUTHORITIES[key] = candidate
+
+
+def active_workspace_authority(root: Path) -> tuple[int, int] | None:
+    """Return the root identity published by the live workspace lease, if one exists."""
+
+    with _ACTIVE_WORKSPACE_AUTHORITIES_LOCK:
+        authority = _ACTIVE_WORKSPACE_AUTHORITIES.get(_authority_key(root))
+        return authority[0] if authority is not None else None
+
+
+def clear_active_workspace_authority(
+    root: Path,
+    identity: tuple[int, int] | None,
+    *,
+    owner: str,
+) -> bool:
+    """Clear only the exact active lease authority owned by this lease instance."""
+
+    if identity is None:
+        return True
+    key = _authority_key(root)
+    with _ACTIVE_WORKSPACE_AUTHORITIES_LOCK:
+        existing = _ACTIVE_WORKSPACE_AUTHORITIES.get(key)
+        if existing is None:
+            return True
+        if existing != (identity, owner):
+            return False
+        del _ACTIVE_WORKSPACE_AUTHORITIES[key]
+        return True
 
 
 def _descriptor_path(directory_fd: int, *, label: str) -> Path:
