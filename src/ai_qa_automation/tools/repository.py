@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import subprocess
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -16,7 +15,11 @@ from ..fs_authority import (
     read_bytes_confined,
 )
 from ..io_safety import open_regular_binary
-from .execution_env import resolve_executable, restricted_subprocess_env, run_bounded_subprocess
+from .execution_env import (
+    restricted_subprocess_env,
+    run_bounded_binary_subprocess,
+    run_bounded_subprocess,
+)
 from .subprocess_subject import active_workspace_authority, descriptor_bound_cwd
 
 _SAFE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@{}~^:+-]{0,255}$")
@@ -25,6 +28,8 @@ _MAX_FINGERPRINT_CHANGED_FILES = 1000
 _MAX_FINGERPRINT_FILE_BYTES = 16_000_000
 _MAX_FINGERPRINT_TOTAL_BYTES = 128_000_000
 _MAX_GIT_TEXT_OUTPUT_BYTES = 8_000_000
+_MAX_GIT_EXACT_STDOUT_BYTES = 16_000_000
+_MAX_GIT_EXACT_STDERR_BYTES = 256_000
 
 
 class RepositorySubjectError(RuntimeError):
@@ -254,15 +259,25 @@ class RepositoryInspector:
             size = int(size_text)
         except ValueError as exc:
             raise RuntimeError("Git returned an invalid object size") from exc
+        if size < 0:
+            raise RuntimeError("Git returned an invalid object size")
         if size > max_bytes:
             raise ValueError(f"baseline file exceeds {max_bytes} byte limit: {path}")
-        result = self._git_bytes("show", object_name, allow_failure=True)
+        if size > _MAX_GIT_EXACT_STDOUT_BYTES:
+            raise ValueError(
+                "baseline file exceeds framework exact-byte capture limit "
+                f"of {_MAX_GIT_EXACT_STDOUT_BYTES} bytes: {path}"
+            )
+        result = self._git_bytes(
+            "show",
+            object_name,
+            max_stdout_bytes=max(1, size),
+            allow_failure=True,
+        )
         if result is None:
             raise FileNotFoundError(path)
-        if len(result) > max_bytes:
-            raise RuntimeError(
-                "Git returned more baseline bytes than the preflight object size allowed"
-            )
+        if len(result) != size:
+            raise RuntimeError("Git returned baseline bytes inconsistent with preflight object size")
         return result
 
     def diff(self, *paths: str) -> str:
@@ -510,37 +525,37 @@ class RepositoryInspector:
             raise RuntimeError(result.stderr.strip() or f"git command failed: {args}")
         return result.stdout.rstrip("\r\n")
 
-    def _git_bytes(self, *args: str, allow_failure: bool = False) -> bytes | None:
-        # This exact-byte path is used after read_file_at() preflights the immutable
-        # Git object's size. Keeping bytes exact avoids UTF-8 replacement while the
-        # preceding object-size gate keeps capture_output bounded.
+    def _git_bytes(
+        self,
+        *args: str,
+        max_stdout_bytes: int,
+        allow_failure: bool = False,
+    ) -> bytes | None:
+        """Run one exact-byte Git command with independently bounded output streams."""
         with tempfile.TemporaryDirectory(prefix="aiqa-git-home-") as temp_home:
             env = restricted_subprocess_env(
                 home=Path(temp_home), extra={"GIT_CONFIG_NOSYSTEM": "1"}
             )
-            git_executable = resolve_executable("git", env=env)
-            try:
-                with self._git_cwd() as git_cwd:
-                    result = subprocess.run(
-                        [
-                            git_executable,
-                            "-c",
-                            "core.fsmonitor=false",
-                            "-c",
-                            "core.untrackedCache=false",
-                            *args,
-                        ],
-                        cwd=git_cwd,
-                        text=False,
-                        capture_output=True,
-                        timeout=self.timeout_seconds,
-                        check=False,
-                        env=env,
-                    )
-            except subprocess.TimeoutExpired as exc:
-                raise RuntimeError(
-                    f"git command exceeded {self.timeout_seconds}s inspection budget"
-                ) from exc
+            with self._git_cwd() as git_cwd:
+                result = run_bounded_binary_subprocess(
+                    [
+                        "git",
+                        "-c",
+                        "core.fsmonitor=false",
+                        "-c",
+                        "core.untrackedCache=false",
+                        *args,
+                    ],
+                    cwd=git_cwd,
+                    env=env,
+                    timeout_seconds=self.timeout_seconds,
+                    max_stdout_bytes=max_stdout_bytes,
+                    max_stderr_bytes=_MAX_GIT_EXACT_STDERR_BYTES,
+                )
+        if result.timed_out:
+            raise RuntimeError(f"git command exceeded {self.timeout_seconds}s inspection budget")
+        if result.stdout_truncated or result.stderr_truncated:
+            raise RuntimeError("git exact-byte output exceeded bounded capture limit")
         if result.returncode != 0:
             if allow_failure:
                 return None
