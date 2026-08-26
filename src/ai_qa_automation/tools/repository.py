@@ -278,11 +278,24 @@ class RepositoryInspector(RepositoryGitAuthorityMixin, RepositoryWorktreeMixin):
                 post_index_digest,
                 post_observation_reasons,
             ) = self._worktree_status(sha, object_format)
+            (
+                post_fingerprint,
+                post_complete,
+                post_incomplete_reasons,
+            ) = self._fingerprint(
+                sha,
+                post_status,
+                post_changed,
+                index_digest=post_index_digest,
+                initial_incomplete_reasons=post_observation_reasons,
+            )
             post_fingerprint_sha = self._git("rev-parse", "HEAD", allow_failure=True)
             post_fingerprint_branch = self._git(
                 "symbolic-ref", "--quiet", "--short", "HEAD", allow_failure=True
             )
             post_fingerprint_index = hashlib.sha256(self._read_index_bytes()).hexdigest()
+        except RepositorySubjectError:
+            raise
         except RuntimeError:
             return self._incomplete_snapshot("git-inspection-incomplete")
         if (
@@ -293,6 +306,9 @@ class RepositoryInspector(RepositoryGitAuthorityMixin, RepositoryWorktreeMixin):
             or post_status != status
             or post_changed != changed
             or post_observation_reasons != observation_reasons
+            or post_fingerprint != fingerprint
+            or post_complete != complete
+            or post_incomplete_reasons != incomplete_reasons
         ):
             return self._incomplete_snapshot("repository-state-changed-during-inspection")
         return RepositorySnapshot(
