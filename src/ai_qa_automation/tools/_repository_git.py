@@ -301,10 +301,7 @@ class RepositoryGitAuthorityMixin:
             raise RepositorySubjectError("Git HEAD metadata must be one direct regular file")
         git_dir_before_signature = self._metadata_signature(git_dir_before)
         git_dir_after_signature = self._metadata_signature(git_dir_after)
-        if (
-            head_before != head_after
-            or git_dir_before_signature != git_dir_after_signature
-        ):
+        if head_before != head_after or git_dir_before_signature != git_dir_after_signature:
             raise RuntimeError("Git HEAD metadata changed during confined observation")
         if not stat.S_ISREG(head_after[2]) or len(head_bytes) != head_after[3]:
             raise RepositorySubjectError("Git HEAD metadata must be one stable regular file")
