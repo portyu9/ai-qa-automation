@@ -187,6 +187,77 @@ def test_git_commands_disable_repository_commit_graph_cache(
         assert command[position - 1] == "-c"
 
 
+def test_snapshot_fails_closed_on_repeated_index_aba_during_stage_enumeration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_descriptor_authority()
+    workspace = tmp_path / "workspace"
+    _init_repo(workspace)
+    tracked = workspace / "tracked.txt"
+    index = workspace / ".git" / "index"
+
+    tracked.write_text("staged-change\n", encoding="utf-8")
+    _git(workspace, "add", "--", "tracked.txt")
+    staged_index = index.read_bytes()
+    tracked.write_text("baseline\n", encoding="utf-8")
+    _git(workspace, "reset", "HEAD", "--", "tracked.txt")
+    clean_index = index.read_bytes()
+    assert clean_index != staged_index
+    index.write_bytes(staged_index)
+
+    inspector = RepositoryInspector(workspace)
+    real_run = repository_module.run_bounded_binary_subprocess
+    stage_calls = 0
+
+    def aba_then_run(
+        command: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+        timeout_seconds: int | float,
+        max_stdout_bytes: int = 2_000_000,
+        max_stderr_bytes: int = 2_000_000,
+        pass_fds: Sequence[int] = (),
+    ) -> BoundedBinarySubprocessResult:
+        nonlocal stage_calls
+        if list(command[-4:]) != ["ls-files", "--stage", "-z", "--"]:
+            return real_run(
+                command,
+                cwd=cwd,
+                env=env,
+                timeout_seconds=timeout_seconds,
+                max_stdout_bytes=max_stdout_bytes,
+                max_stderr_bytes=max_stderr_bytes,
+                pass_fds=pass_fds,
+            )
+        stage_calls += 1
+        index.write_bytes(clean_index)
+        try:
+            return real_run(
+                command,
+                cwd=cwd,
+                env=env,
+                timeout_seconds=timeout_seconds,
+                max_stdout_bytes=max_stdout_bytes,
+                max_stderr_bytes=max_stderr_bytes,
+                pass_fds=pass_fds,
+            )
+        finally:
+            index.write_bytes(staged_index)
+
+    monkeypatch.setattr(repository_module, "run_bounded_binary_subprocess", aba_then_run)
+
+    snapshot = inspector.snapshot()
+
+    assert stage_calls == 1
+    assert snapshot.git_sha is None
+    assert snapshot.changed_files == ()
+    assert snapshot.fingerprint_complete is False
+    assert snapshot.fingerprint_incomplete_reasons == ("git-inspection-incomplete",)
+    assert index.read_bytes() == staged_index
+
+
 def test_change_set_uses_tree_metadata_without_executing_content_filters(tmp_path: Path) -> None:
     _require_descriptor_authority()
     workspace = tmp_path / "workspace"

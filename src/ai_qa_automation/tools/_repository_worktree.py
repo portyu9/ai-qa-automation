@@ -68,6 +68,17 @@ class RepositoryWorktreeMixin:
     ) -> os.stat_result:
         raise NotImplementedError
 
+    @staticmethod
+    def _metadata_signature(value: os.stat_result) -> tuple[int, int, int, int, int, int]:
+        return (
+            value.st_dev,
+            value.st_ino,
+            value.st_mode,
+            value.st_size,
+            value.st_mtime_ns,
+            value.st_ctime_ns,
+        )
+
     def _read_index_bytes(self) -> bytes:
         if self.git_dir_identity is None:
             return b""
@@ -86,6 +97,60 @@ class RepositoryWorktreeMixin:
                 "Git index could not be read through confined metadata authority"
             ) from exc
         return data
+
+    def _index_observation(
+        self,
+    ) -> tuple[bytes, tuple[int, int, int, int, int, int] | None, tuple[int, int, int, int, int, int]]:
+        if self.git_dir_identity is None or self.workspace_root_identity is None:
+            return b"", None, (0, 0, 0, 0, 0, 0)
+        try:
+            git_dir_before = self._stat_confined_entry_adapter(
+                self.workspace,
+                ".git",
+                label="repository Git metadata directory",
+                expected_root_identity=self.workspace_root_identity,
+            )
+            try:
+                index_before = self._stat_confined_entry_adapter(
+                    self.workspace / ".git",
+                    "index",
+                    label="Git index",
+                    expected_root_identity=self.git_dir_identity,
+                )
+            except FileNotFoundError:
+                index_before = None
+            data = self._read_index_bytes()
+            try:
+                index_after = self._stat_confined_entry_adapter(
+                    self.workspace / ".git",
+                    "index",
+                    label="Git index",
+                    expected_root_identity=self.git_dir_identity,
+                )
+            except FileNotFoundError:
+                index_after = None
+            git_dir_after = self._stat_confined_entry_adapter(
+                self.workspace,
+                ".git",
+                label="repository Git metadata directory",
+                expected_root_identity=self.workspace_root_identity,
+            )
+        except (OSError, ValueError) as exc:
+            raise RuntimeError("Git index metadata could not be observed safely") from exc
+
+        before_signature = (
+            None if index_before is None else self._metadata_signature(index_before)
+        )
+        after_signature = None if index_after is None else self._metadata_signature(index_after)
+        git_dir_before_signature = self._metadata_signature(git_dir_before)
+        git_dir_after_signature = self._metadata_signature(git_dir_after)
+        if before_signature != after_signature or git_dir_before_signature != git_dir_after_signature:
+            raise RuntimeError("Git index metadata changed during confined observation")
+        if index_after is None and data:
+            raise RuntimeError("Git index disappeared during confined observation")
+        if index_after is not None and len(data) != index_after.st_size:
+            raise RuntimeError("Git index bytes are inconsistent with observed metadata")
+        return data, after_signature, git_dir_after_signature
 
     def _git_path_list(self, *args: str) -> tuple[str, ...]:
         raw = self._git_bytes(*args, max_stdout_bytes=_MAX_GIT_EXACT_STDOUT_BYTES)
@@ -268,7 +333,7 @@ class RepositoryWorktreeMixin:
         self, head_sha: str | None, object_format: str
     ) -> tuple[str, tuple[str, ...], str, tuple[str, ...]]:
         """Observe index/worktree deltas without content-rendering Git commands."""
-        before_index = self._read_index_bytes()
+        before_index, before_index_signature, before_git_dir_signature = self._index_observation()
         index_bytes = self._git_bytes(
             "ls-files", "--stage", "-z", "--", max_stdout_bytes=_MAX_GIT_EXACT_STDOUT_BYTES
         )
@@ -277,9 +342,6 @@ class RepositoryWorktreeMixin:
         )
         if index_bytes is None or flag_bytes is None:
             raise RuntimeError("Git index inspection returned no result")
-        after_index = self._read_index_bytes()
-        if before_index != after_index:
-            raise RuntimeError("Git index changed during index enumeration")
 
         index_entries, unmerged = self._parse_index_entries(index_bytes)
         head_entries = self._tree_entries_at(head_sha) if head_sha else {}
@@ -323,6 +385,13 @@ class RepositoryWorktreeMixin:
                 codes[1] = code
 
         untracked = self._git_path_list("ls-files", "--others", "--exclude-standard", "-z", "--")
+        after_index, after_index_signature, after_git_dir_signature = self._index_observation()
+        if (
+            before_index != after_index
+            or before_index_signature != after_index_signature
+            or before_git_dir_signature != after_git_dir_signature
+        ):
+            raise RuntimeError("Git index changed during index/worktree enumeration")
         for path in untracked:
             if path not in status_codes:
                 status_codes[path] = ["?", "?"]
