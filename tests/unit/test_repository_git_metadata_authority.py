@@ -155,6 +155,34 @@ def test_repository_rejects_external_git_config_include(tmp_path: Path) -> None:
         RepositoryInspector(workspace)
 
 
+def test_repository_rejects_external_git_worktree_config_include(tmp_path: Path) -> None:
+    _require_descriptor_authority()
+    workspace = tmp_path / "workspace"
+    _init_repo(workspace)
+    _git(workspace, "config", "extensions.worktreeConfig", "true")
+    external = tmp_path / "external-worktree.config"
+    external.write_text("[core]\n\tfilemode = false\n", encoding="utf-8")
+    (workspace / ".git" / "config.worktree").write_text(
+        f"[include]\n\tpath = {external}\n",
+        encoding="utf-8",
+    )
+    assert _git(workspace, "config", "core.filemode") == "false"
+
+    with pytest.raises(RepositorySubjectError, match="external configuration"):
+        RepositoryInspector(workspace)
+
+
+def test_repository_rejects_legacy_git_grafts_without_warning_dependency(tmp_path: Path) -> None:
+    _require_descriptor_authority()
+    workspace = tmp_path / "workspace"
+    _init_repo(workspace)
+    head = _git(workspace, "rev-parse", "HEAD")
+    (workspace / ".git" / "info" / "grafts").write_text(f"{head}\n", encoding="ascii")
+
+    with pytest.raises(RepositorySubjectError, match="legacy grafts"):
+        RepositoryInspector(workspace)
+
+
 def test_repository_rejects_nested_git_metadata_symlink(tmp_path: Path) -> None:
     _require_descriptor_authority()
     workspace = tmp_path / "workspace"

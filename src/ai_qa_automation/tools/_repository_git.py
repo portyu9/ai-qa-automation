@@ -9,12 +9,6 @@ from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 
 from ..fs_observation import ConfinedFileScan
-from .execution_env import (
-    BoundedBinarySubprocessResult,
-    BoundedSubprocessResult,
-    restricted_subprocess_env,
-)
-
 from ._repository_common import (
     _HEX_SHA,
     _MAX_GIT_CONFIG_BYTES,
@@ -24,6 +18,11 @@ from ._repository_common import (
     _SAFE_REF,
     RepositorySubjectError,
     raise_if_git_grafts_reported,
+)
+from .execution_env import (
+    BoundedBinarySubprocessResult,
+    BoundedSubprocessResult,
+    restricted_subprocess_env,
 )
 
 
@@ -174,13 +173,22 @@ class RepositoryGitAuthorityMixin:
                     "repository Git metadata must not redirect to external common/object storage"
                 )
 
-        config = self._read_git_metadata_file("config", label="repository Git config")
-        if config is not None:
+        grafts = self._read_git_metadata_file("info/grafts", label="legacy Git graft metadata")
+        if grafts is not None and grafts.strip():
+            raise RepositorySubjectError("repository Git metadata must not use legacy grafts")
+
+        include_section = re.compile(r"^\s*\[\s*include(?:if)?(?:\s|\])", re.IGNORECASE)
+        for relative, label in (
+            ("config", "repository Git config"),
+            ("config.worktree", "repository Git worktree config"),
+        ):
+            config = self._read_git_metadata_file(relative, label=label)
+            if config is None:
+                continue
             try:
                 text = config.decode("utf-8", errors="strict")
             except UnicodeDecodeError as exc:
-                raise RepositorySubjectError("repository Git config is not valid UTF-8") from exc
-            include_section = re.compile(r"^\s*\[\s*include(?:if)?(?:\s|\])", re.IGNORECASE)
+                raise RepositorySubjectError(f"{label} is not valid UTF-8") from exc
             if any(include_section.search(line) for line in text.splitlines()):
                 raise RepositorySubjectError(
                     "repository Git config must not include external configuration"
@@ -269,30 +277,29 @@ class RepositoryGitAuthorityMixin:
                 _SAFE_REF.fullmatch(value[: -len("^{commit}")])
             )
         elif (
-            len(args) == 3
-            and args[0] == "merge-base"
-            and all(_HEX_SHA.fullmatch(value) for value in args[1:])
-        ):
-            safe = True
-        elif (
-            len(args) == 5
-            and args[:4] == ("ls-tree", "-r", "-z", "--full-tree")
-            and _HEX_SHA.fullmatch(args[4])
-        ):
-            safe = True
-        elif (
-            len(args) == 6
-            and args[:3] == ("ls-tree", "-z", "--full-tree")
-            and _HEX_SHA.fullmatch(args[3])
-            and args[4] == "--"
-            and args[5].startswith(":(literal)")
-        ):
-            safe = True
-        elif (
-            len(args) == 3
-            and args[0] == "cat-file"
-            and args[1] in {"-s", "blob"}
-            and _HEX_SHA.fullmatch(args[2])
+            (
+                len(args) == 3
+                and args[0] == "merge-base"
+                and all(_HEX_SHA.fullmatch(value) for value in args[1:])
+            )
+            or (
+                len(args) == 5
+                and args[:4] == ("ls-tree", "-r", "-z", "--full-tree")
+                and _HEX_SHA.fullmatch(args[4])
+            )
+            or (
+                len(args) == 6
+                and args[:3] == ("ls-tree", "-z", "--full-tree")
+                and _HEX_SHA.fullmatch(args[3])
+                and args[4] == "--"
+                and args[5].startswith(":(literal)")
+            )
+            or (
+                len(args) == 3
+                and args[0] == "cat-file"
+                and args[1] in {"-s", "blob"}
+                and _HEX_SHA.fullmatch(args[2])
+            )
         ):
             safe = True
         if not safe:
