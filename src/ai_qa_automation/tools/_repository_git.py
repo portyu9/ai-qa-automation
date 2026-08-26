@@ -33,9 +33,7 @@ class RepositoryGitAuthorityMixin:
     workspace_root_identity: tuple[int, int] | None
     git_dir_identity: tuple[int, int] | None
 
-    def _pin_directory_identity_adapter(
-        self, root: Path, *, label: str
-    ) -> tuple[int, int]:
+    def _pin_directory_identity_adapter(self, root: Path, *, label: str) -> tuple[int, int]:
         raise NotImplementedError
 
     def _read_bytes_confined_adapter(
@@ -142,9 +140,7 @@ class RepositoryGitAuthorityMixin:
         except FileNotFoundError:
             return None
         except (OSError, ValueError) as exc:
-            raise RepositorySubjectError(
-                f"{label} could not be inspected safely"
-            ) from exc
+            raise RepositorySubjectError(f"{label} could not be inspected safely") from exc
 
     def _assert_git_metadata_safe(self) -> None:
         if self.git_dir_identity is None:

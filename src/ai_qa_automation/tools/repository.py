@@ -43,9 +43,7 @@ class RepositoryInspector(RepositoryGitAuthorityMixin, RepositoryWorktreeMixin):
     # Ambient authority enters only through these adapters. Keeping them in this public
     # module preserves the existing adversarial monkeypatch seams while private layers
     # remain deterministic consumers of explicitly supplied capabilities.
-    def _pin_directory_identity_adapter(
-        self, root: Path, *, label: str
-    ) -> tuple[int, int]:
+    def _pin_directory_identity_adapter(self, root: Path, *, label: str) -> tuple[int, int]:
         return pin_directory_identity(root, label=label)
 
     def _read_bytes_confined_adapter(
@@ -231,9 +229,7 @@ class RepositoryInspector(RepositoryGitAuthorityMixin, RepositoryWorktreeMixin):
             )
         try:
             sha = self._git("rev-parse", "HEAD", allow_failure=True)
-            branch = self._git(
-                "symbolic-ref", "--quiet", "--short", "HEAD", allow_failure=True
-            )
+            branch = self._git("symbolic-ref", "--quiet", "--short", "HEAD", allow_failure=True)
             object_format = self._git("rev-parse", "--show-object-format")
             if object_format not in {"sha1", "sha256"}:
                 raise RuntimeError("Git returned an unsupported object format")
@@ -467,4 +463,3 @@ class RepositoryInspector(RepositoryGitAuthorityMixin, RepositoryWorktreeMixin):
             if len(line) >= 4 and self._parse_status_path(line[3:]) in selected:
                 matching.append(line)
         return "\n".join(matching)
-

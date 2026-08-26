@@ -105,9 +105,7 @@ class RepositoryWorktreeMixin:
             paths.append(decoded)
         return tuple(paths)
 
-    def _parse_index_entries(
-        self, raw: bytes
-    ) -> tuple[dict[str, tuple[str, str]], set[str]]:
+    def _parse_index_entries(self, raw: bytes) -> tuple[dict[str, tuple[str, str]], set[str]]:
         entries: dict[str, tuple[str, str]] = {}
         unmerged: set[str] = set()
         seen_records: set[tuple[str, int]] = set()
@@ -318,9 +316,7 @@ class RepositoryWorktreeMixin:
         unstaged_candidates.update(
             path for path, (mode, _oid) in index_entries.items() if mode not in {"100644", "100755"}
         )
-        unstaged_candidates.update(
-            path for path, codes in status_codes.items() if codes[0] == "D"
-        )
+        unstaged_candidates.update(path for path, codes in status_codes.items() if codes[0] == "D")
         raw_changes, raw_reasons = self._raw_worktree_changes(
             unstaged_candidates,
             index_entries,
@@ -332,9 +328,7 @@ class RepositoryWorktreeMixin:
             if codes != ["U", "U"]:
                 codes[1] = code
 
-        untracked = self._git_path_list(
-            "ls-files", "--others", "--exclude-standard", "-z", "--"
-        )
+        untracked = self._git_path_list("ls-files", "--others", "--exclude-standard", "-z", "--")
         for path in untracked:
             if path not in status_codes:
                 status_codes[path] = ["?", "?"]
