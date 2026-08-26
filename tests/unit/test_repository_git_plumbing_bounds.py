@@ -180,9 +180,7 @@ def test_git_commands_disable_repository_commit_graph_cache(
     monkeypatch.setattr(inspector, "_run_bounded_binary_subprocess_adapter", capture_binary)
 
     assert inspector._git("rev-parse", "HEAD") == "a" * 40
-    assert (
-        inspector._git_bytes("cat-file", "blob", "b" * 40, max_stdout_bytes=8) == b""
-    )
+    assert inspector._git_bytes("cat-file", "blob", "b" * 40, max_stdout_bytes=8) == b""
 
     for command in (text_command, binary_command):
         position = command.index("core.commitGraph=false")
