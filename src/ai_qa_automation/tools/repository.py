@@ -245,9 +245,16 @@ class RepositoryInspector:
     def read_file_at(
         self, commit_sha: str, relative_path: str, *, max_bytes: int = 2_000_000
     ) -> bytes:
-        """Read one bounded tracked file from an immutable commit without checkout."""
-        if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 1:
-            raise ValueError("max_bytes must be a positive integer")
+        """Read one bounded tracked blob from an immutable commit without checkout."""
+        if (
+            isinstance(max_bytes, bool)
+            or not isinstance(max_bytes, int)
+            or not 1 <= max_bytes <= _MAX_GIT_EXACT_STDOUT_BYTES
+        ):
+            raise ValueError(
+                "max_bytes must be an integer between 1 and "
+                f"{_MAX_GIT_EXACT_STDOUT_BYTES}"
+            )
         if not _HEX_SHA.fullmatch(commit_sha):
             raise ValueError("commit_sha must be a full hexadecimal object id")
         path = self._validate_relative_path(relative_path)
@@ -263,13 +270,9 @@ class RepositoryInspector:
             raise RuntimeError("Git returned an invalid object size")
         if size > max_bytes:
             raise ValueError(f"baseline file exceeds {max_bytes} byte limit: {path}")
-        if size > _MAX_GIT_EXACT_STDOUT_BYTES:
-            raise ValueError(
-                "baseline file exceeds framework exact-byte capture limit "
-                f"of {_MAX_GIT_EXACT_STDOUT_BYTES} bytes: {path}"
-            )
         result = self._git_bytes(
-            "show",
+            "cat-file",
+            "blob",
             object_name,
             max_stdout_bytes=max(1, size),
             allow_failure=True,
