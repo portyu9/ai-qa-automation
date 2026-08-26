@@ -196,9 +196,7 @@ def test_truncated_directory_is_signature_checked_before_return(
 
     def mutating_scandir(path: object):
         status = os.fstat(path) if isinstance(path, int) else os.stat(path)
-        return MutatingIterator(
-            real_scandir(path), (status.st_dev, status.st_ino) == root_identity
-        )
+        return MutatingIterator(real_scandir(path), (status.st_dev, status.st_ino) == root_identity)
 
     monkeypatch.setattr(fs_observation.os, "scandir", mutating_scandir)
     monkeypatch.setattr(fs_observation.os, "supports_fd", {*os.supports_fd, mutating_scandir})

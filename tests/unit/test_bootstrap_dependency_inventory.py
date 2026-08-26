@@ -207,9 +207,7 @@ def test_bootstrap_revalidates_root_before_persisting_evidence(
 ) -> None:
     current = tmp_path.stat(follow_symlinks=False)
     root_identity = (current.st_dev, current.st_ino)
-    pin_results = iter(
-        (root_identity, root_identity, (root_identity[0], root_identity[1] + 1))
-    )
+    pin_results = iter((root_identity, root_identity, (root_identity[0], root_identity[1] + 1)))
 
     def next_pin(*args: object, **kwargs: object) -> tuple[int, int]:
         del args, kwargs
@@ -297,17 +295,13 @@ def test_bootstrap_revalidates_root_before_persisting_evidence(
             return FakeProfile()
 
     class FakeTestImpactMapper:
-        def map(
-            self, workspace: Path, changed_files: object, **kwargs: object
-        ) -> FakeTestImpact:
+        def map(self, workspace: Path, changed_files: object, **kwargs: object) -> FakeTestImpact:
             del workspace, changed_files, kwargs
             return FakeTestImpact()
 
     class FakeCodeownersResolver:
         @classmethod
-        def from_workspace(
-            cls, workspace: Path, **kwargs: object
-        ) -> FakeCodeownersResolver:
+        def from_workspace(cls, workspace: Path, **kwargs: object) -> FakeCodeownersResolver:
             del workspace, kwargs
             return cls()
 
