@@ -196,6 +196,7 @@ async def run_agent(
             allow_mutating_api_methods=cfg.allow_mutating_api_methods,
             k6_external_egress_enforced=cfg.k6_external_egress_enforced,
             state_store=state_store,
+            workspace_root_identity=lease.workspace_root_identity,
             control=control,
             pytest_process_isolation_enforced=cfg.pytest_process_isolation_enforced,
             pytest_external_egress_enforced=cfg.pytest_external_egress_enforced,

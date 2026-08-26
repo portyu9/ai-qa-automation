@@ -165,7 +165,7 @@ def test_dependency_inventory_rejects_invalid_bounds(
         _dependency_inventory(tmp_path, **kwargs)  # type: ignore[arg-type]
 
 
-def test_coverage_search_fails_closed_when_scan_budget_is_exhausted(tmp_path: Path) -> None:
+def test_coverage_search_reports_incomplete_when_scan_budget_is_exhausted(tmp_path: Path) -> None:
     (tmp_path / "a.txt").write_text("irrelevant\n", encoding="utf-8")
     tests = tmp_path / "tests"
     tests.mkdir()
@@ -173,16 +173,19 @@ def test_coverage_search_fails_closed_when_scan_budget_is_exhausted(tmp_path: Pa
         "def test_checkout():\n    assert True\n", encoding="utf-8"
     )
 
-    with pytest.raises(ValueError, match="bounded scan limit"):
-        _coverage_search(
-            tmp_path,
-            query="not-present",
-            max_results=10,
-            max_scan_files=1,
-        )
+    observed = _coverage_search(
+        tmp_path,
+        query="not-present",
+        max_results=10,
+        max_scan_files=1,
+    )
+
+    assert observed.complete is False
+    assert "filesystem_scan_incomplete" in observed.incomplete_reasons
+    assert observed.observed_entries == 1
 
 
-def test_coverage_search_result_cap_returns_deterministically_before_scan_exhaustion(
+def test_coverage_search_result_cap_is_deterministic_and_explicitly_incomplete(
     tmp_path: Path,
 ) -> None:
     tests = tmp_path / "tests"
@@ -190,6 +193,8 @@ def test_coverage_search_result_cap_returns_deterministically_before_scan_exhaus
     for name in ("test_a.py", "test_b.py", "test_c.py"):
         (tests / name).write_text("def test_case():\n    assert True\n", encoding="utf-8")
 
-    rows = _coverage_search(tmp_path, query="", max_results=2, max_scan_files=10)
+    observed = _coverage_search(tmp_path, query="", max_results=2, max_scan_files=10)
 
-    assert [row["path"] for row in rows] == ["tests/test_a.py", "tests/test_b.py"]
+    assert [item.path for item in observed.results] == ["tests/test_a.py", "tests/test_b.py"]
+    assert observed.complete is False
+    assert "result_limit_reached" in observed.incomplete_reasons

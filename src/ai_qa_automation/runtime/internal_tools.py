@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -16,7 +15,6 @@ from ..intelligence.prioritization import RegressionPrioritizer
 from ..intelligence.quality_review import review_python_test_source
 from ..intelligence.self_healing import SelfHealingEngine
 from ..intelligence.test_generation import TestGenerationPlanner
-from ..io_safety import read_text_bounded
 from ..models import (
     AgentRunState,
     EvidenceItem,
@@ -45,17 +43,13 @@ from .browser_validation import (
     browser_locator_verification_subject,
     browser_validation_result,
 )
+from .model_source_observation import (
+    CoverageSearchObservation,
+    read_model_source_confined,
+    search_test_coverage_confined,
+)
 
-_MAX_MODEL_SOURCE_BYTES = 1_000_000
 _MAX_MODEL_SOURCE_CHARS = 12_000
-
-
-def _read_bounded_utf8(path: Path, *, max_bytes: int = _MAX_MODEL_SOURCE_BYTES) -> str:
-    return read_text_bounded(
-        path,
-        max_bytes=max_bytes,
-        label="model-facing source file",
-    )
 
 
 def _stable_gate_id(prefix: str, payload: Any) -> str:
@@ -141,81 +135,21 @@ def _pytest_validation_status(exit_code: int) -> ValidationStatus:
     return ValidationStatus.NOT_VERIFIED
 
 
-def _is_test_code_path(path: Path) -> bool:
-    if path.suffix.lower() not in {".py", ".js", ".ts", ".java", ".cs"}:
-        return False
-    parts = {part.lower() for part in path.parts}
-    name = path.name.lower()
-    return (
-        bool(parts & {"tests", "test", "generated_tests"})
-        or name.startswith("test_")
-        or name.endswith("_test.py")
-        or ".spec." in name
-        or ".test." in name
-    )
-
-
 def _coverage_search(
     workspace: Path,
     *,
     query: str,
     max_results: int = 100,
     max_scan_files: int = 5_000,
-) -> list[dict[str, Any]]:
-    if not 1 <= max_results <= 200:
-        raise ValueError("max_results must be between 1 and 200")
-    if max_scan_files < 1:
-        raise ValueError("max_scan_files must be at least 1")
-    if len(query) > 200:
-        raise ValueError("coverage search query exceeds 200 characters")
-    needle = query.casefold().strip()
-    ignored = {
-        ".git",
-        ".venv",
-        "venv",
-        "node_modules",
-        "dist",
-        "build",
-        ".tox",
-        ".pytest_cache",
-        "__pycache__",
-    }
-    rows: list[dict[str, Any]] = []
-    scanned = 0
-    for dirpath, dirnames, filenames in os.walk(workspace, topdown=True, followlinks=False):
-        dirnames[:] = sorted(name for name in dirnames if name not in ignored)
-        current_dir = Path(dirpath)
-        for filename in sorted(filenames):
-            if len(rows) >= max_results:
-                return rows
-            if scanned >= max_scan_files:
-                raise ValueError(
-                    "coverage search exceeded bounded scan limit before completing the query"
-                )
-            scanned += 1
-            path = current_dir / filename
-            try:
-                relative = path.relative_to(workspace)
-            except ValueError:
-                continue
-            if path.is_symlink() or not path.is_file() or not _is_test_code_path(relative):
-                continue
-            if not needle:
-                rows.append({"path": relative.as_posix(), "matches": []})
-                continue
-            try:
-                text = _read_bounded_utf8(path)
-            except (OSError, UnicodeError, ValueError):
-                continue
-            matches: list[str] = []
-            for line_no, line in enumerate(text.splitlines(), 1):
-                if needle in line.casefold():
-                    matches.append(f"{line_no}: {redact_text(line[:240])}")
-                    if len(matches) >= 3:
-                        break
-            if matches or needle in relative.as_posix().casefold():
-                rows.append({"path": relative.as_posix(), "matches": matches})
-    return rows
+    expected_root_identity: tuple[int, int] | None = None,
+) -> CoverageSearchObservation:
+    return search_test_coverage_confined(
+        workspace,
+        query=query,
+        max_results=max_results,
+        max_scan_entries=max_scan_files,
+        expected_root_identity=expected_root_identity,
+    )
 
 
 def _record_patch_safety_validation(
@@ -252,6 +186,7 @@ class RuntimeServices:
     allow_mutating_api_methods: bool = False
     k6_external_egress_enforced: bool = False
     state_store: StateStore | None = None
+    workspace_root_identity: tuple[int, int] | None = None
     _fingerprints: dict[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -268,6 +203,12 @@ class RuntimeServices:
         }.items():
             if not isinstance(value, bool):
                 raise ValueError(f"{name} must be a boolean")
+        if self.workspace_root_identity is not None and (
+            not isinstance(self.workspace_root_identity, tuple)
+            or len(self.workspace_root_identity) != 2
+            or any(type(part) is not int or part < 0 for part in self.workspace_root_identity)
+        ):
+            raise ValueError("workspace_root_identity must be a (device, inode) integer tuple")
 
     def consume(self, tool_name: str, tool_input: dict[str, Any]) -> None:
         if self.state.tool_call_count >= self.max_tool_calls:
@@ -578,8 +519,7 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
                 ],
                 "is_error": True,
             }
-        target = (services.workspace / relative).resolve()
-        if not target.is_file() or target.suffix not in {".py", ".ts", ".js", ".java", ".cs"}:
+        if relative.suffix.lower() not in {".py", ".ts", ".js", ".java", ".cs"}:
             return {
                 "content": [
                     {"type": "text", "text": "DENIED: file is not an approved test-code type"}
@@ -587,14 +527,17 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
                 "is_error": True,
             }
         try:
-            source = _read_bounded_utf8(target)
-        except (OSError, UnicodeError, ValueError) as exc:
+            observed = read_model_source_confined(
+                services.workspace,
+                relative,
+                expected_root_identity=services.workspace_root_identity,
+            )
+        except (OSError, UnicodeError, ValueError, RuntimeError) as exc:
             return {
                 "content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}],
                 "is_error": True,
             }
-        text = redact_text(source[:_MAX_MODEL_SOURCE_CHARS])
-        digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
+        text = redact_text(observed.text[:_MAX_MODEL_SOURCE_CHARS])
         services.state.files_read.append(relative.as_posix())
         services.checkpoint()
         return {
@@ -604,9 +547,10 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
                     "text": json.dumps(
                         {
                             "path": relative.as_posix(),
-                            "sha256": digest,
+                            "sha256": observed.sha256,
                             "content": text,
-                            "truncated": len(source) > _MAX_MODEL_SOURCE_CHARS,
+                            "truncated": len(observed.text) > _MAX_MODEL_SOURCE_CHARS,
+                            "size_bytes": observed.size_bytes,
                         }
                     )[:16000],
                 }
@@ -620,26 +564,33 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
     )
     async def search_test_coverage(args: dict[str, Any]) -> dict[str, Any]:
         services.consume("search_test_coverage", args)
+        raw_query = str(args.get("query", ""))
         try:
-            rows = _coverage_search(
+            observed = _coverage_search(
                 services.workspace,
-                query=str(args.get("query", "")),
+                query=raw_query,
                 max_results=int(args.get("max_results", 100)),
+                expected_root_identity=services.workspace_root_identity,
             )
-        except (ValueError, OSError) as exc:
+        except (ValueError, OSError, RuntimeError) as exc:
             return {
                 "content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}],
                 "is_error": True,
             }
+        redacted_query = redact_text(raw_query)
+        structured = observed.as_structured_data(query=redacted_query)
         item = services.evidence.add(
             EvidenceItem(
                 run_id=services.state.run_id,
                 kind=EvidenceKind.SOURCE_OBSERVATION,
                 nature=EvidenceNature.OBSERVED_FACT,
                 source="repository_test_coverage_search",
-                source_identifier=redact_text(str(args.get("query", ""))),
-                summary=f"Observed {len(rows)} bounded test coverage search result(s)",
-                structured_data={"query": redact_text(str(args.get("query", ""))), "results": rows},
+                source_identifier=redacted_query,
+                summary=(
+                    f"Observed {len(observed.results)} bounded test coverage search result(s); "
+                    f"complete={observed.complete}"
+                ),
+                structured_data=structured,
             )
         )
         services.state.evidence_ids.append(item.id)
@@ -648,7 +599,14 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
             "content": [
                 {
                     "type": "text",
-                    "text": json.dumps({"coverage_evidence_id": item.id, "results": rows})[:16000],
+                    "text": json.dumps(
+                        {
+                            "coverage_evidence_id": item.id,
+                            "results": structured["results"],
+                            "complete": observed.complete,
+                            "incomplete_reasons": list(observed.incomplete_reasons),
+                        }
+                    )[:16000],
                 }
             ]
         }
@@ -729,6 +687,10 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
                 summary="Coverage-aware test-generation plan created",
                 structured_data={
                     "coverage_evidence_id": coverage_evidence.id,
+                    "coverage_complete": coverage_evidence.structured_data.get("complete") is True,
+                    "coverage_incomplete_reasons": coverage_evidence.structured_data.get(
+                        "incomplete_reasons", []
+                    ),
                     "plan": result.model_dump(mode="json"),
                 },
             )
@@ -777,6 +739,7 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
         services.consume("review_python_test", args)
         relative = Path(args["path"])
         decision = services.policy.authorize_path(relative, write=False)
+        services.state.policy_decisions.append(decision)
         if decision.decision.value != "ALLOW":
             return {
                 "content": [
@@ -784,8 +747,7 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
                 ],
                 "is_error": True,
             }
-        target = (services.workspace / relative).resolve()
-        if target.suffix != ".py" or not target.is_file():
+        if relative.suffix.lower() != ".py":
             return {
                 "content": [
                     {
@@ -796,13 +758,17 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
                 "is_error": True,
             }
         try:
-            source = _read_bounded_utf8(target)
-        except (OSError, UnicodeError, ValueError) as exc:
+            observed = read_model_source_confined(
+                services.workspace,
+                relative,
+                expected_root_identity=services.workspace_root_identity,
+            )
+        except (OSError, UnicodeError, ValueError, RuntimeError) as exc:
             return {
                 "content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}],
                 "is_error": True,
             }
-        findings = [item.__dict__ for item in review_python_test_source(source)]
+        findings = [item.__dict__ for item in review_python_test_source(observed.text)]
         return {"content": [{"type": "text", "text": json.dumps({"findings": findings})}]}
 
     @tool(

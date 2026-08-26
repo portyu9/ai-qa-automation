@@ -5,6 +5,7 @@ from typing import Any, cast
 
 import pytest
 
+from ai_qa_automation.fs_authority import pin_directory_identity
 from ai_qa_automation.models import AgentRunState, TerminalStatus, ValidationStatus
 from ai_qa_automation.runtime.budget import ExecutionBudget
 from ai_qa_automation.runtime.journal import RunJournal
@@ -46,6 +47,7 @@ def make_services(
         max_tool_calls=10,
         max_repeated_action=3,
         state_store=store,
+        workspace_root_identity=pin_directory_identity(workspace, label="test workspace"),
         control=control,
         pytest_process_isolation_enforced=process_isolation,
         pytest_external_egress_enforced=external_egress,
@@ -155,6 +157,38 @@ def test_live_pytest_isolation_assertions_require_real_booleans(
             test_runner=cast(Any, object()),
             max_tool_calls=10,
             max_repeated_action=3,
+            workspace_root_identity=pin_directory_identity(workspace, label="test workspace"),
             control=control,
             **kwargs,
+        )
+
+
+def test_live_runtime_requires_lease_bound_workspace_identity(tmp_path: Path) -> None:
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+    run_dir = tmp_path / "run"
+    control = RuntimeControl(
+        workspace=workspace,
+        budget=ExecutionBudget(
+            max_tool_calls=10,
+            max_network_calls=10,
+            max_mutations=3,
+            max_wall_seconds=60,
+        ),
+        journal=RunJournal(run_dir / "journal.jsonl"),
+        metadata_path=run_dir / "runtime.json",
+        lease_id="lease-missing-workspace-identity",
+        max_repeated_action=3,
+    )
+
+    with pytest.raises(ValueError, match="lease-bound workspace_root_identity"):
+        LiveRuntimeServices(
+            workspace=workspace,
+            state=AgentRunState(objective="bounds", workspace=str(workspace)),
+            evidence=cast(Any, object()),
+            policy=cast(Any, object()),
+            test_runner=cast(Any, object()),
+            max_tool_calls=10,
+            max_repeated_action=3,
+            control=control,
         )

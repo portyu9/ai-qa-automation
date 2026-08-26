@@ -5,6 +5,8 @@ import re
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+_CREDENTIAL_LEFT_BOUNDARY = r"(?<![A-Za-z0-9])"
+_CREDENTIAL_RIGHT_BOUNDARY = r"(?![A-Za-z0-9])"
 _SECRET_PATTERNS = [
     re.compile(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,\"']+"),
     re.compile(r"(?i)(\bbearer\s+)[A-Za-z0-9._~+/=-]{8,}"),
@@ -13,12 +15,20 @@ _SECRET_PATTERNS = [
         r"(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)"
     ),
     re.compile(r"(?i)(https?://[^:/\s]+:)[^@/\s]+(@)"),
-    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
-    re.compile(r"\bghp_[A-Za-z0-9]{20,}\b"),
-    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
-    re.compile(r"\bsk-ant-[A-Za-z0-9_-]{12,}\b"),
-    re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b"),
-    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),
+    re.compile(_CREDENTIAL_LEFT_BOUNDARY + r"AKIA[0-9A-Z]{16}" + _CREDENTIAL_RIGHT_BOUNDARY),
+    re.compile(_CREDENTIAL_LEFT_BOUNDARY + r"ghp_[A-Za-z0-9]{20,}" + _CREDENTIAL_RIGHT_BOUNDARY),
+    re.compile(
+        _CREDENTIAL_LEFT_BOUNDARY + r"github_pat_[A-Za-z0-9_]{20,}" + _CREDENTIAL_RIGHT_BOUNDARY
+    ),
+    re.compile(
+        _CREDENTIAL_LEFT_BOUNDARY + r"sk-ant-[A-Za-z0-9_-]{12,}" + _CREDENTIAL_RIGHT_BOUNDARY
+    ),
+    re.compile(
+        _CREDENTIAL_LEFT_BOUNDARY + r"sk-(?:proj-)?[A-Za-z0-9_-]{20,}" + _CREDENTIAL_RIGHT_BOUNDARY
+    ),
+    re.compile(
+        _CREDENTIAL_LEFT_BOUNDARY + r"xox[baprs]-[A-Za-z0-9-]{10,}" + _CREDENTIAL_RIGHT_BOUNDARY
+    ),
     re.compile(
         r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
         re.S,

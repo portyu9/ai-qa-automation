@@ -8,6 +8,7 @@ from typing import Any, cast
 import pytest
 
 import ai_qa_automation.runtime.runtime_hooks as runtime_hooks
+from ai_qa_automation.fs_authority import pin_directory_identity
 from ai_qa_automation.models import AgentRunState, TerminalStatus, ValidationStatus
 from ai_qa_automation.policy import PolicyEngine
 from ai_qa_automation.redaction import sanitize
@@ -53,6 +54,7 @@ def make_live_services(control: RuntimeControl) -> LiveRuntimeServices:
         test_runner=cast(Any, object()),
         max_tool_calls=5,
         max_repeated_action=2,
+        workspace_root_identity=pin_directory_identity(control.workspace, label="test workspace"),
         control=control,
     )
 
