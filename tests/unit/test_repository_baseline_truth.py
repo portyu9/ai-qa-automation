@@ -110,8 +110,7 @@ def test_blob_lookup_rejects_malformed_or_ambiguous_tree_evidence(
     malformed = [
         "not-a-tree-record\0",
         f"100644 blob {object_id}\tother.json\0",
-        f"100644 blob {object_id}\tpayload.json\0"
-        f"100644 blob {'2' * 40}\tpayload.json\0",
+        f"100644 blob {object_id}\tpayload.json\0100644 blob {'2' * 40}\tpayload.json\0",
         f"100644 mystery {object_id}\tpayload.json\0",
         f"100644 blob not-a-sha\tpayload.json\0",
     ]
