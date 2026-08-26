@@ -396,6 +396,7 @@ class RepositoryGitAuthorityMixin:
         if args in {
             ("rev-parse", "HEAD"),
             ("rev-parse", "--show-object-format"),
+            ("rev-parse", "--shared-index-path"),
             ("symbolic-ref", "--quiet", "--short", "HEAD"),
             ("ls-files", "--stage", "-z", "--"),
             ("ls-files", "-v", "-z", "--"),
@@ -519,6 +520,12 @@ class RepositoryGitAuthorityMixin:
                 return None
             raise RuntimeError("target workspace is not a direct Git repository")
         self._validate_git_command(tuple(args))
+        if args and args[0] == "ls-files":
+            shared_index_path = self._git("rev-parse", "--shared-index-path")
+            if shared_index_path:
+                raise RepositorySubjectError(
+                    "Git split-index metadata is not supported by repository inspection"
+                )
         with tempfile.TemporaryDirectory(prefix="aiqa-git-home-") as temp_home:
             env = restricted_subprocess_env(
                 home=Path(temp_home),
