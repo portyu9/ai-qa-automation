@@ -195,7 +195,7 @@ def test_truncated_directory_is_signature_checked_before_return(
             return entry
 
     def mutating_scandir(path: object):
-        status = os.fstat(path) if isinstance(path, int) else os.stat(path)
+        status = os.fstat(path) if isinstance(path, int) else Path(path).stat()  # type: ignore[arg-type]
         return MutatingIterator(real_scandir(path), (status.st_dev, status.st_ino) == root_identity)
 
     monkeypatch.setattr(fs_observation.os, "scandir", mutating_scandir)
@@ -240,7 +240,7 @@ def test_nested_truncation_still_signature_checks_ancestor(
             return entry
 
     def mutating_scandir(path: object):
-        status = os.fstat(path) if isinstance(path, int) else os.stat(path)
+        status = os.fstat(path) if isinstance(path, int) else Path(path).stat()  # type: ignore[arg-type]
         return MutatingIterator(
             real_scandir(path), (status.st_dev, status.st_ino) == child_identity
         )
