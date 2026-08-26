@@ -13,7 +13,7 @@ from pathlib import Path, PurePosixPath
 from ..fs_authority import descriptor_relative_authority_supported, pin_directory_identity
 from ..io_safety import open_regular_binary
 from .execution_env import resolve_executable, restricted_subprocess_env, run_bounded_subprocess
-from .subprocess_subject import descriptor_bound_cwd
+from .subprocess_subject import active_workspace_authority, descriptor_bound_cwd
 
 _SAFE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@{}~^:+-]{0,255}$")
 _HEX_SHA = re.compile(r"^[0-9a-fA-F]{40,64}$")
@@ -82,12 +82,25 @@ class RepositoryInspector:
         if expected_root_identity is not None and (
             not isinstance(expected_root_identity, tuple)
             or len(expected_root_identity) != 2
-            or any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in expected_root_identity)
+            or any(
+                isinstance(value, bool) or not isinstance(value, int) or value < 0
+                for value in expected_root_identity
+            )
         ):
             raise ValueError("expected_root_identity must be a pair of non-negative integers")
 
         self.workspace = workspace.expanduser().resolve()
         self.timeout_seconds = timeout_seconds
+        active_identity = active_workspace_authority(self.workspace)
+        if (
+            expected_root_identity is not None
+            and active_identity is not None
+            and expected_root_identity != active_identity
+        ):
+            raise RepositorySubjectError(
+                "explicit repository authority conflicts with the active workspace lease"
+            )
+        authorized_identity = expected_root_identity or active_identity
         self.workspace_root_identity: tuple[int, int] | None = None
         if descriptor_relative_authority_supported():
             try:
@@ -99,12 +112,12 @@ class RepositoryInspector:
                 raise RepositorySubjectError(
                     "repository workspace identity could not be pinned"
                 ) from exc
-            if expected_root_identity is not None and current_identity != expected_root_identity:
+            if authorized_identity is not None and current_identity != authorized_identity:
                 raise RepositorySubjectError(
                     "repository workspace changed identity since authorization"
                 )
             self.workspace_root_identity = current_identity
-        elif expected_root_identity is not None:
+        elif authorized_identity is not None:
             raise RepositorySubjectError(
                 "authorized repository inspection requires descriptor-bound filesystem authority"
             )
