@@ -100,7 +100,9 @@ class RepositoryWorktreeMixin:
 
     def _index_observation(
         self,
-    ) -> tuple[bytes, tuple[int, int, int, int, int, int] | None, tuple[int, int, int, int, int, int]]:
+    ) -> tuple[
+        bytes, tuple[int, int, int, int, int, int] | None, tuple[int, int, int, int, int, int]
+    ]:
         if self.git_dir_identity is None or self.workspace_root_identity is None:
             return b"", None, (0, 0, 0, 0, 0, 0)
         try:
@@ -138,13 +140,14 @@ class RepositoryWorktreeMixin:
         except (OSError, ValueError) as exc:
             raise RuntimeError("Git index metadata could not be observed safely") from exc
 
-        before_signature = (
-            None if index_before is None else self._metadata_signature(index_before)
-        )
+        before_signature = None if index_before is None else self._metadata_signature(index_before)
         after_signature = None if index_after is None else self._metadata_signature(index_after)
         git_dir_before_signature = self._metadata_signature(git_dir_before)
         git_dir_after_signature = self._metadata_signature(git_dir_after)
-        if before_signature != after_signature or git_dir_before_signature != git_dir_after_signature:
+        if (
+            before_signature != after_signature
+            or git_dir_before_signature != git_dir_after_signature
+        ):
             raise RuntimeError("Git index metadata changed during confined observation")
         if index_after is None and data:
             raise RuntimeError("Git index disappeared during confined observation")
