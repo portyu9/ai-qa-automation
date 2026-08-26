@@ -110,6 +110,12 @@ The analyzer is structural and conservative.
 - Git's reftable ref backend is not yet descriptor-bound by `RepositoryInspector`; repositories exposing `.git/reftable` are therefore rejected rather than treated as verified baseline authority.
 - These controls detect ordinary filesystem-visible mutation through identity/size/time metadata and directory changes; they do not claim protection from privileged filesystem snapshot rollback that can restore metadata outside the process authority boundary.
 
+### Repository index storage
+
+- An active Git split index is not treated as repository observation authority. Before any allowlisted `ls-files` enumeration, `RepositoryInspector` checks `rev-parse --shared-index-path` and rejects a non-empty result rather than trusting mutable `sharedindex.*` bytes that are outside the main-index metadata bracket.
+- The split-index check executes inside the existing worktree index observation bracket, so an ordinary filesystem-visible ABA of the main index used to hide the check invalidates that observation rather than certifying clean state.
+- A stale, unreferenced `sharedindex.*` regular file is not active index authority and does not by itself block inspection.
+
 ---
 
 ## Test impact, generation, and classification
