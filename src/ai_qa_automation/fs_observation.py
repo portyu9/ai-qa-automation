@@ -9,17 +9,26 @@ from pathlib import Path, PurePosixPath
 from .fs_authority import descriptor_relative_authority_supported
 
 _MAX_DIRECTORY_DEPTH = 128
+_MetadataSignature = tuple[int, int, int, int, int, int]
 
 
 @dataclass(frozen=True)
 class ObservedRegularFile:
     path: PurePosixPath
     size: int
+    metadata_signature: _MetadataSignature
+
+
+@dataclass(frozen=True)
+class ObservedDirectory:
+    path: PurePosixPath
+    metadata_signature: _MetadataSignature
 
 
 @dataclass(frozen=True)
 class ConfinedFileScan:
     files: tuple[ObservedRegularFile, ...]
+    directories: tuple[ObservedDirectory, ...]
     observed_entries: int
     truncated: bool
     resource_truncated: bool
@@ -30,6 +39,17 @@ class ConfinedFileScan:
 
 def _identity(value: os.stat_result) -> tuple[int, int]:
     return value.st_dev, value.st_ino
+
+
+def _metadata_signature(value: os.stat_result) -> _MetadataSignature:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_mode,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
 
 
 def _directory_signature(value: os.stat_result) -> tuple[int, int, int, int]:
@@ -58,8 +78,10 @@ def scan_regular_files_confined(
     """Enumerate regular files below ``root`` without following filesystem aliases.
 
     Enumeration is descriptor-relative and budgets every directory entry observed.
-    Each directory is identity- and signature-checked before/after traversal. A
-    directory that would exceed the entry budget is not partially published into
+    Each directory is identity- and signature-checked before/after traversal. Stable
+    file and directory metadata signatures are retained so authority-sensitive callers
+    can compare bounded namespace observations without reopening the scanned tree.
+    A directory that would exceed the entry budget is not partially published into
     ``files``; the result is marked truncated instead. Unsafe or unreadable entries
     also make the result conservatively incomplete because their skipped contents
     cannot be proven irrelevant. ``resource_truncated`` separately records only
@@ -92,6 +114,7 @@ def scan_regular_files_confined(
         raise
 
     files: list[ObservedRegularFile] = []
+    directories: list[ObservedDirectory] = []
     unsafe: list[PurePosixPath] = []
     unreadable: list[PurePosixPath] = []
     observed_entries = 0
@@ -150,7 +173,13 @@ def scan_regular_files_confined(
                 unsafe.append(relative)
                 continue
             if stat.S_ISREG(current.st_mode):
-                files.append(ObservedRegularFile(path=relative, size=current.st_size))
+                files.append(
+                    ObservedRegularFile(
+                        path=relative,
+                        size=current.st_size,
+                        metadata_signature=_metadata_signature(current),
+                    )
+                )
                 continue
             if not stat.S_ISDIR(current.st_mode):
                 unsafe.append(relative)
@@ -195,8 +224,15 @@ def scan_regular_files_confined(
             finally:
                 os.close(child_fd)
 
-        if _directory_signature(os.fstat(directory_fd)) != initial_signature:
+        final_directory = os.fstat(directory_fd)
+        if _directory_signature(final_directory) != initial_signature:
             raise ValueError(f"{label} directory changed during traversal")
+        directories.append(
+            ObservedDirectory(
+                path=relative_parent,
+                metadata_signature=_metadata_signature(final_directory),
+            )
+        )
         return True
 
     try:
@@ -230,6 +266,7 @@ def scan_regular_files_confined(
 
     return ConfinedFileScan(
         files=tuple(sorted(files, key=lambda item: item.path.as_posix())),
+        directories=tuple(sorted(directories, key=lambda item: item.path.as_posix())),
         observed_entries=observed_entries,
         truncated=truncated or bool(unsafe or unreadable),
         resource_truncated=truncated,
