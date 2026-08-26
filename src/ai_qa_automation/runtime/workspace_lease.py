@@ -340,6 +340,7 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             )
             authority_bound = self._workspace_root_identity is not None
             self._authority_bound = authority_bound
+            self._revalidate_workspace_root()
             self._stream = stream
             self._workspace_lock_fd = workspace_lock_fd
             return self
