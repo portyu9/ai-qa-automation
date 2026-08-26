@@ -65,7 +65,9 @@ def test_snapshot_rejects_active_split_index_before_ls_files_execution(
     assert _git(repo, "rev-parse", "--shared-index-path")
 
     def forbidden_binary_git(*args: object, **kwargs: object) -> None:
-        raise AssertionError(f"split index must be rejected before binary Git execution: {args}, {kwargs}")
+        raise AssertionError(
+            f"split index must be rejected before binary Git execution: {args}, {kwargs}"
+        )
 
     monkeypatch.setattr(repository_module, "run_bounded_binary_subprocess", forbidden_binary_git)
 
