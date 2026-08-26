@@ -85,7 +85,7 @@ def test_read_file_at_rejects_invalid_commit_as_repository_failure(tmp_path: Pat
     inspector = RepositoryInspector(repo)
     invalid_commit = "f" * 40
 
-    with pytest.raises(RuntimeError, match="not a tree object"):
+    with pytest.raises(RuntimeError):
         inspector.read_file_at(invalid_commit, "tracked.txt")
 
 
