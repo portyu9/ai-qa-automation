@@ -239,8 +239,11 @@ class RepositoryInspector(RepositoryGitAuthorityMixin, RepositoryWorktreeMixin):
                 sha, object_format
             )
             final_sha = self._git("rev-parse", "HEAD", allow_failure=True)
-            if final_sha != sha:
-                raise RuntimeError("Git HEAD changed during repository inspection")
+            final_branch = self._git(
+                "symbolic-ref", "--quiet", "--short", "HEAD", allow_failure=True
+            )
+            if final_sha != sha or final_branch != branch:
+                raise RuntimeError("Git HEAD identity changed during repository inspection")
             if hashlib.sha256(self._read_index_bytes()).hexdigest() != index_digest:
                 raise RuntimeError("Git index changed during repository inspection")
             self._assert_git_subject_current()
@@ -263,11 +266,28 @@ class RepositoryInspector(RepositoryGitAuthorityMixin, RepositoryWorktreeMixin):
         )
         self._assert_git_subject_current()
         try:
+            (
+                post_status,
+                post_changed,
+                post_index_digest,
+                post_observation_reasons,
+            ) = self._worktree_status(sha, object_format)
             post_fingerprint_sha = self._git("rev-parse", "HEAD", allow_failure=True)
+            post_fingerprint_branch = self._git(
+                "symbolic-ref", "--quiet", "--short", "HEAD", allow_failure=True
+            )
             post_fingerprint_index = hashlib.sha256(self._read_index_bytes()).hexdigest()
         except RuntimeError:
             return self._incomplete_snapshot("git-inspection-incomplete")
-        if post_fingerprint_sha != sha or post_fingerprint_index != index_digest:
+        if (
+            post_fingerprint_sha != sha
+            or post_fingerprint_branch != branch
+            or post_fingerprint_index != index_digest
+            or post_index_digest != index_digest
+            or post_status != status
+            or post_changed != changed
+            or post_observation_reasons != observation_reasons
+        ):
             return self._incomplete_snapshot("repository-state-changed-during-inspection")
         return RepositorySnapshot(
             workspace=str(self.workspace),

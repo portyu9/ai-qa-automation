@@ -165,3 +165,73 @@ def test_gitlink_worktree_state_is_explicitly_incomplete(tmp_path: Path) -> None
     assert snapshot.fingerprint_complete is False
     assert snapshot.changed_files == ("nested",)
     assert "tracked-nonregular-worktree-unverified" in snapshot.fingerprint_incomplete_reasons
+
+
+def test_snapshot_fails_closed_when_tracked_file_changes_after_status_observation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_descriptor_authority()
+    workspace = tmp_path / "workspace"
+    _init_repo(workspace)
+    tracked = workspace / "tracked.txt"
+    inspector = RepositoryInspector(workspace)
+    real_status = inspector._worktree_status
+    calls = 0
+
+    def mutate_after_first_status(
+        head_sha: str | None, object_format: str
+    ) -> tuple[str, tuple[str, ...], str, tuple[str, ...]]:
+        nonlocal calls
+        observed = real_status(head_sha, object_format)
+        calls += 1
+        if calls == 1:
+            tracked.write_text("late-mutation\n", encoding="utf-8")
+        return observed
+
+    monkeypatch.setattr(inspector, "_worktree_status", mutate_after_first_status)
+
+    snapshot = inspector.snapshot()
+
+    assert calls == 2
+    assert snapshot.git_sha is None
+    assert snapshot.fingerprint_complete is False
+    assert snapshot.fingerprint_incomplete_reasons == (
+        "repository-state-changed-during-inspection",
+    )
+
+
+def test_snapshot_fails_closed_when_symbolic_head_changes_without_commit_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_descriptor_authority()
+    workspace = tmp_path / "workspace"
+    _init_repo(workspace)
+    _git(workspace, "branch", "same-commit")
+    original_branch = _git(workspace, "symbolic-ref", "--short", "HEAD")
+    assert original_branch != "same-commit"
+    inspector = RepositoryInspector(workspace)
+    real_status = inspector._worktree_status
+    calls = 0
+
+    def switch_branch_after_first_status(
+        head_sha: str | None, object_format: str
+    ) -> tuple[str, tuple[str, ...], str, tuple[str, ...]]:
+        nonlocal calls
+        observed = real_status(head_sha, object_format)
+        calls += 1
+        if calls == 1:
+            (workspace / ".git" / "HEAD").write_text(
+                "ref: refs/heads/same-commit\n", encoding="ascii"
+            )
+        return observed
+
+    monkeypatch.setattr(inspector, "_worktree_status", switch_branch_after_first_status)
+
+    snapshot = inspector.snapshot()
+
+    assert snapshot.git_sha is None
+    assert snapshot.branch is None
+    assert snapshot.fingerprint_complete is False
+    assert snapshot.fingerprint_incomplete_reasons == ("git-inspection-incomplete",)
