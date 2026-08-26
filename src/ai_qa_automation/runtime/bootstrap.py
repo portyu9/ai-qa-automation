@@ -201,86 +201,76 @@ def bootstrap_runtime_context(
             )
 
     impact = ChangeImpactAnalyzer().assess(changed_files)
-    impact_item = evidence.add(
-        EvidenceItem(
-            run_id=state.run_id,
-            kind=EvidenceKind.SOURCE_OBSERVATION,
-            nature=EvidenceNature.OBSERVED_FACT,
-            source="runtime_bootstrap_change_impact",
-            source_identifier=snapshot.fingerprint,
-            summary=f"Deterministic change impact assessed as {impact.risk.value}",
-            structured_data={
-                "assessment": impact.as_dict(),
-                "baseline": change_set.as_dict() if change_set else None,
-                "baseline_error": baseline_error,
-            },
-        )
+    impact_item = EvidenceItem(
+        run_id=state.run_id,
+        kind=EvidenceKind.SOURCE_OBSERVATION,
+        nature=EvidenceNature.OBSERVED_FACT,
+        source="runtime_bootstrap_change_impact",
+        source_identifier=snapshot.fingerprint,
+        summary=f"Deterministic change impact assessed as {impact.risk.value}",
+        structured_data={
+            "assessment": impact.as_dict(),
+            "baseline": change_set.as_dict() if change_set else None,
+            "baseline_error": baseline_error,
+        },
     )
 
     profile = RepositoryProfiler().profile(
         workspace, expected_root_identity=bootstrap_root_identity
     )
-    profile_item = evidence.add(
-        EvidenceItem(
-            run_id=state.run_id,
-            kind=EvidenceKind.SOURCE_OBSERVATION,
-            nature=EvidenceNature.OBSERVED_FACT,
-            source="runtime_bootstrap_repository_profile",
-            summary="Observed bounded repository technology/test topology",
-            structured_data={"profile": profile.as_dict()},
-        )
+    profile_item = EvidenceItem(
+        run_id=state.run_id,
+        kind=EvidenceKind.SOURCE_OBSERVATION,
+        nature=EvidenceNature.OBSERVED_FACT,
+        source="runtime_bootstrap_repository_profile",
+        summary="Observed bounded repository technology/test topology",
+        structured_data={"profile": profile.as_dict()},
     )
 
     dependencies, dependency_inventory_truncated = _dependency_inventory(
         workspace, expected_root_identity=bootstrap_root_identity
     )
-    dependency_item = evidence.add(
-        EvidenceItem(
-            run_id=state.run_id,
-            kind=EvidenceKind.SOURCE_OBSERVATION,
-            nature=EvidenceNature.OBSERVED_FACT,
-            source="runtime_bootstrap_dependency_inventory",
-            summary=(
-                f"Observed {len(dependencies)} dependency manifest(s)"
-                + (" with bounded/incomplete hashing" if dependency_inventory_truncated else "")
-            ),
-            structured_data={
-                "manifests": dependencies,
-                "truncated": dependency_inventory_truncated,
-            },
-        )
+    dependency_item = EvidenceItem(
+        run_id=state.run_id,
+        kind=EvidenceKind.SOURCE_OBSERVATION,
+        nature=EvidenceNature.OBSERVED_FACT,
+        source="runtime_bootstrap_dependency_inventory",
+        summary=(
+            f"Observed {len(dependencies)} dependency manifest(s)"
+            + (" with bounded/incomplete hashing" if dependency_inventory_truncated else "")
+        ),
+        structured_data={
+            "manifests": dependencies,
+            "truncated": dependency_inventory_truncated,
+        },
     )
 
     test_impact = TestImpactMapper().map(
         workspace, changed_files, expected_root_identity=bootstrap_root_identity
     )
-    test_impact_item = evidence.add(
-        EvidenceItem(
-            run_id=state.run_id,
-            kind=EvidenceKind.SOURCE_OBSERVATION,
-            nature=EvidenceNature.OBSERVED_FACT,
-            source="runtime_bootstrap_test_impact",
-            summary=f"Mapped {len(test_impact.candidates)} deterministic test-impact candidate(s)",
-            structured_data={"test_impact": test_impact.as_dict()},
-        )
+    test_impact_item = EvidenceItem(
+        run_id=state.run_id,
+        kind=EvidenceKind.SOURCE_OBSERVATION,
+        nature=EvidenceNature.OBSERVED_FACT,
+        source="runtime_bootstrap_test_impact",
+        summary=f"Mapped {len(test_impact.candidates)} deterministic test-impact candidate(s)",
+        structured_data={"test_impact": test_impact.as_dict()},
     )
 
     ownership = CodeownersResolver.from_workspace(
         workspace, expected_root_identity=bootstrap_root_identity
     ).resolve(changed_files)
-    ownership_item = evidence.add(
-        EvidenceItem(
-            run_id=state.run_id,
-            kind=EvidenceKind.SOURCE_OBSERVATION,
-            nature=EvidenceNature.OBSERVED_FACT,
-            source="runtime_bootstrap_codeowners",
-            summary=(
-                f"Resolved CODEOWNERS for {len(ownership.ownership_by_file)} changed file(s)"
-                if ownership.source_path
-                else "No CODEOWNERS file observed"
-            ),
-            structured_data={"ownership": ownership.as_dict()},
-        )
+    ownership_item = EvidenceItem(
+        run_id=state.run_id,
+        kind=EvidenceKind.SOURCE_OBSERVATION,
+        nature=EvidenceNature.OBSERVED_FACT,
+        source="runtime_bootstrap_codeowners",
+        summary=(
+            f"Resolved CODEOWNERS for {len(ownership.ownership_by_file)} changed file(s)"
+            if ownership.source_path
+            else "No CODEOWNERS file observed"
+        ),
+        structured_data={"ownership": ownership.as_dict()},
     )
 
     contract_reports = _contract_drift_reports(
@@ -290,16 +280,14 @@ def bootstrap_runtime_context(
         changed_files=changed_files,
         expected_root_identity=bootstrap_root_identity,
     )
-    contract_item = evidence.add(
-        EvidenceItem(
-            run_id=state.run_id,
-            kind=EvidenceKind.SOURCE_OBSERVATION,
-            nature=EvidenceNature.OBSERVED_FACT,
-            source="runtime_bootstrap_contract_drift",
-            source_identifier=change_set.merge_base_sha if change_set else None,
-            summary=f"Evaluated {len(contract_reports)} changed interface contract(s)",
-            structured_data={"reports": contract_reports},
-        )
+    contract_item = EvidenceItem(
+        run_id=state.run_id,
+        kind=EvidenceKind.SOURCE_OBSERVATION,
+        nature=EvidenceNature.OBSERVED_FACT,
+        source="runtime_bootstrap_contract_drift",
+        source_identifier=change_set.merge_base_sha if change_set else None,
+        summary=f"Evaluated {len(contract_reports)} changed interface contract(s)",
+        structured_data={"reports": contract_reports},
     )
 
     if (
@@ -308,7 +296,7 @@ def bootstrap_runtime_context(
     ):
         raise ValueError("runtime bootstrap workspace changed identity before evidence persistence")
 
-    items = (
+    pending_items = (
         impact_item,
         profile_item,
         dependency_item,
@@ -316,6 +304,14 @@ def bootstrap_runtime_context(
         ownership_item,
         contract_item,
     )
+    items = tuple(evidence.add(item) for item in pending_items)
+
+    if (
+        pin_directory_identity(workspace, label="runtime bootstrap workspace")
+        != bootstrap_root_identity
+    ):
+        raise ValueError("runtime bootstrap workspace changed identity during evidence persistence")
+
     for item in items:
         if item.id not in state.evidence_ids:
             state.evidence_ids.append(item.id)

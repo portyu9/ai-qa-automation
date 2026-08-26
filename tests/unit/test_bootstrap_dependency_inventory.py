@@ -200,3 +200,141 @@ def test_dependency_inventory_rejects_invalid_bounds(
 ) -> None:
     with pytest.raises(ValueError):
         _dependency_inventory(tmp_path, **kwargs)  # type: ignore[arg-type]
+
+
+def test_bootstrap_revalidates_root_before_persisting_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    current = tmp_path.stat(follow_symlinks=False)
+    root_identity = (current.st_dev, current.st_ino)
+    pin_results = iter(
+        (root_identity, root_identity, (root_identity[0], root_identity[1] + 1))
+    )
+
+    def next_pin(*args: object, **kwargs: object) -> tuple[int, int]:
+        del args, kwargs
+        return next(pin_results)
+
+    monkeypatch.setattr(bootstrap_module, "pin_directory_identity", next_pin)
+
+    class FakeEvidenceItem:
+        def __init__(self, **kwargs: object) -> None:
+            self.id = str(kwargs["source"])
+
+    class FakeEvidence:
+        def __init__(self) -> None:
+            self.added: list[FakeEvidenceItem] = []
+
+        def add(self, item: FakeEvidenceItem) -> FakeEvidenceItem:
+            self.added.append(item)
+            return item
+
+    class FakeState:
+        def __init__(self) -> None:
+            self.run_id = "run-test"
+            self.evidence_ids: list[str] = []
+            self.target_git_sha: str | None = None
+
+    class FakeJournal:
+        def append(self, *args: object, **kwargs: object) -> None:
+            del args, kwargs
+
+    class FakeControl:
+        def __init__(self) -> None:
+            self.journal = FakeJournal()
+
+        def set_workspace_fingerprint(self, value: str) -> None:
+            del value
+
+        def persist(self) -> None:
+            pass
+
+    class FakeStateStore:
+        def save(self, state: object) -> None:
+            del state
+
+    class FakeRisk:
+        value = "LOW"
+
+    class FakeImpact:
+        def __init__(self) -> None:
+            self.risk = FakeRisk()
+
+        def as_dict(self) -> dict[str, object]:
+            return {}
+
+    class FakeProfile:
+        languages: tuple[str, ...] = ()
+        test_surfaces: tuple[str, ...] = ()
+
+        def as_dict(self) -> dict[str, object]:
+            return {}
+
+    class FakeTestImpact:
+        candidates: tuple[object, ...] = ()
+        confidence = 0.35
+
+        def as_dict(self) -> dict[str, object]:
+            return {}
+
+    class FakeOwnership:
+        def __init__(self) -> None:
+            self.source_path = None
+            self.ownership_by_file: dict[str, tuple[str, ...]] = {}
+            self.unowned_files: tuple[str, ...] = ()
+
+        def as_dict(self) -> dict[str, object]:
+            return {}
+
+    class FakeChangeImpactAnalyzer:
+        def assess(self, changed_files: object) -> FakeImpact:
+            del changed_files
+            return FakeImpact()
+
+    class FakeRepositoryProfiler:
+        def profile(self, workspace: Path, **kwargs: object) -> FakeProfile:
+            del workspace, kwargs
+            return FakeProfile()
+
+    class FakeTestImpactMapper:
+        def map(
+            self, workspace: Path, changed_files: object, **kwargs: object
+        ) -> FakeTestImpact:
+            del workspace, changed_files, kwargs
+            return FakeTestImpact()
+
+    class FakeCodeownersResolver:
+        @classmethod
+        def from_workspace(
+            cls, workspace: Path, **kwargs: object
+        ) -> FakeCodeownersResolver:
+            del workspace, kwargs
+            return cls()
+
+        def resolve(self, changed_files: object) -> FakeOwnership:
+            del changed_files
+            return FakeOwnership()
+
+    evidence = FakeEvidence()
+    monkeypatch.setattr(bootstrap_module, "EvidenceItem", FakeEvidenceItem)
+
+    def fake_dependency_inventory(*args: object, **kwargs: object) -> tuple[list[object], bool]:
+        del args, kwargs
+        return [], False
+
+    monkeypatch.setattr(bootstrap_module, "ChangeImpactAnalyzer", FakeChangeImpactAnalyzer)
+    monkeypatch.setattr(bootstrap_module, "RepositoryProfiler", FakeRepositoryProfiler)
+    monkeypatch.setattr(bootstrap_module, "_dependency_inventory", fake_dependency_inventory)
+    monkeypatch.setattr(bootstrap_module, "TestImpactMapper", FakeTestImpactMapper)
+    monkeypatch.setattr(bootstrap_module, "CodeownersResolver", FakeCodeownersResolver)
+
+    with pytest.raises(ValueError, match="before evidence persistence"):
+        bootstrap_runtime_context(
+            workspace=tmp_path,
+            state=FakeState(),  # type: ignore[arg-type]
+            evidence=evidence,  # type: ignore[arg-type]
+            state_store=FakeStateStore(),  # type: ignore[arg-type]
+            control=FakeControl(),  # type: ignore[arg-type]
+        )
+
+    assert evidence.added == []

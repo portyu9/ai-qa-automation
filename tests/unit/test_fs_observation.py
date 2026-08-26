@@ -252,3 +252,20 @@ def test_nested_truncation_still_signature_checks_ancestor(
 
     with pytest.raises(ValueError, match="directory changed during traversal"):
         scan_regular_files_confined(tmp_path, max_entries=3, label="test scan")
+
+
+def test_directory_depth_is_hard_bounded_and_reported_as_truncated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(fs_observation, "_MAX_DIRECTORY_DEPTH", 2)
+    write(tmp_path / "one" / "two" / "three" / "deep.py")
+    write(tmp_path / "root.py")
+
+    result = scan_regular_files_confined(tmp_path, max_entries=20, label="test scan")
+
+    assert result.truncated is True
+    assert [item.path.as_posix() for item in result.files] == ["root.py"]
+
+
+def test_default_directory_depth_cap_is_resource_bounded() -> None:
+    assert 1 <= fs_observation._MAX_DIRECTORY_DEPTH <= 128

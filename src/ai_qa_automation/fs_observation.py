@@ -8,6 +8,8 @@ from pathlib import Path, PurePosixPath
 
 from .fs_authority import descriptor_relative_authority_supported
 
+_MAX_DIRECTORY_DEPTH = 128
+
 
 @dataclass(frozen=True)
 class ObservedRegularFile:
@@ -57,7 +59,9 @@ def scan_regular_files_confined(
     Enumeration is descriptor-relative and budgets every directory entry observed.
     Each directory is identity- and signature-checked before/after traversal. A
     directory that would exceed the entry budget is not partially published into
-    ``files``; the result is marked truncated instead.
+    ``files``; the result is marked truncated instead. Recursive descent is capped
+    at a hard directory depth so entry-bounded scans cannot exhaust call-stack or
+    ancestor-descriptor resources.
     """
 
     if isinstance(max_entries, bool) or not isinstance(max_entries, int) or max_entries < 1:
@@ -89,7 +93,7 @@ def scan_regular_files_confined(
     truncated = False
     visited_directories: set[tuple[int, int]] = set()
 
-    def visit(directory_fd: int, relative_parent: PurePosixPath) -> bool:
+    def visit(directory_fd: int, relative_parent: PurePosixPath, depth: int) -> bool:
         nonlocal observed_entries, truncated
 
         opened_directory = os.fstat(directory_fd)
@@ -148,6 +152,9 @@ def scan_regular_files_confined(
                 continue
             if name in ignored:
                 continue
+            if depth >= _MAX_DIRECTORY_DEPTH:
+                truncated = True
+                continue
 
             try:
                 child_fd = os.open(name, directory_flags, dir_fd=directory_fd)
@@ -166,7 +173,7 @@ def scan_regular_files_confined(
                     or _identity(opened_child) != _identity(current_child)
                 ):
                     raise ValueError(f"{label} directory changed identity during traversal")
-                child_complete = visit(child_fd, relative)
+                child_complete = visit(child_fd, relative, depth + 1)
                 final_current_child = os.stat(
                     name,
                     dir_fd=directory_fd,
@@ -200,7 +207,7 @@ def scan_regular_files_confined(
         if expected_root_identity is not None and root_identity != expected_root_identity:
             raise ValueError(f"{label} root changed identity since authorization")
 
-        visit(root_fd, PurePosixPath())
+        visit(root_fd, PurePosixPath(), 0)
 
         final_opened_root = os.fstat(root_fd)
         try:

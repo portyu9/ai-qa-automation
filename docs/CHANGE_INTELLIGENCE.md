@@ -90,9 +90,11 @@ For those change-intelligence paths:
 - symlinks and other non-regular entries are never promoted as regular-file observations, while unreadable or ambiguous entries remain explicit uncertainty;
 - every directory entry actually returned by enumeration consumes the strict scan budget; the scanner does not fetch a hidden `max + 1` sentinel entry;
 - reaching the entry ceiling is conservatively reported as truncated/incomplete, and the directory batch that reaches that ceiling is not partially promoted into the file set;
+- entry-budget truncation still closes the active iterator and verifies the current directory plus every traversed ancestor remained stable before returning partial observations;
+- recursive descent has a hard 128-directory depth cap; deeper subtrees are not opened and instead make the scan explicitly truncated, bounding Python call-stack and ancestor-descriptor consumption independently of the entry budget;
 - selected test-source, dependency-manifest, CODEOWNERS, and current-contract bytes are opened through descriptor-confined bounded reads rather than trusting earlier pathname metadata;
 - the descriptor-observed scan root identity is carried into later selected-file reads, so replacing the entire workspace-root pathname after enumeration cannot redirect those reads;
-- live bootstrap also compares its observation root against the already-acquired `WorkspaceLease` root identity, then revalidates that identity after repository/baseline inspection;
+- live bootstrap also compares its observation root against the already-acquired `WorkspaceLease` root identity, revalidates after repository/baseline inspection, revalidates again **before** any bootstrap evidence is added to the durable evidence registry, and checks once more after that persistence step;
 - identity/type changes during traversal or confined reads fail closed instead of becoming observed content.
 
 This prevents pathname preflight from silently becoming read authority after a parent, final-component, or whole-root swap for the bounded file-observation paths above. It does **not** make target files trusted, guarantee filesystem snapshot isolation, or make Git subprocess `cwd` descriptor-bound. `RepositoryInspector`/Git subprocess identity is therefore still a distinct residual boundary. The separate model-facing `_coverage_search()` traversal also remains a follow-up boundary and is not covered by this section.
@@ -195,7 +197,7 @@ That separation preserves three properties:
 
 ## Failure and uncertainty semantics
 
-Analyzers are intentionally bounded by directory-entry count, file count, file size, supported syntax, filesystem authority capability, and available Git history.
+Analyzers are intentionally bounded by directory-entry count, directory depth, file count, file size, supported syntax, filesystem authority capability, and available Git history.
 
 When a boundary prevents reliable analysis, output should remain explicit:
 
