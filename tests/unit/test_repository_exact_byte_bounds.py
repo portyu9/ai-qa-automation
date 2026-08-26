@@ -10,38 +10,66 @@ from ai_qa_automation.tools.execution_env import BoundedBinarySubprocessResult
 from ai_qa_automation.tools.repository import RepositoryInspector
 
 
-def test_read_file_at_rejects_object_over_framework_capture_ceiling(
+def test_read_file_at_rejects_requested_limit_over_framework_capture_ceiling(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     inspector = RepositoryInspector(tmp_path)
-    oversized = repository_module._MAX_GIT_EXACT_STDOUT_BYTES + 1
-    show_called = False
+    git_called = False
+
+    def forbidden_git(*args: str, **kwargs: object) -> str:
+        nonlocal git_called
+        git_called = True
+        raise AssertionError(f"Git preflight must not run for invalid max_bytes: {args}, {kwargs}")
+
+    monkeypatch.setattr(inspector, "_git", forbidden_git)
+
+    with pytest.raises(ValueError, match="max_bytes must be an integer between"):
+        inspector.read_file_at(
+            "a" * 40,
+            "payload.bin",
+            max_bytes=repository_module._MAX_GIT_EXACT_STDOUT_BYTES + 1,
+        )
+
+    assert git_called is False
+
+
+def test_read_file_at_rejects_object_larger_than_framework_capture_ceiling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inspector = RepositoryInspector(tmp_path)
+    object_size = repository_module._MAX_GIT_EXACT_STDOUT_BYTES + 1
+    capture_called = False
 
     def fake_git(*args: str, allow_failure: bool = False) -> str:
         assert args == ("cat-file", "-s", f"{'a' * 40}:payload.bin")
         assert allow_failure is False
-        return str(oversized)
+        return str(object_size)
 
     def forbidden_git_bytes(
         *args: str,
         max_stdout_bytes: int,
         allow_failure: bool = False,
     ) -> bytes:
-        nonlocal show_called
-        show_called = True
+        nonlocal capture_called
+        capture_called = True
         raise AssertionError(
-            f"git show must not run after oversized preflight: {args}, "
+            f"Git blob capture must not run after oversized preflight: {args}, "
             f"{max_stdout_bytes}, {allow_failure}"
         )
 
     monkeypatch.setattr(inspector, "_git", fake_git)
     monkeypatch.setattr(inspector, "_git_bytes", forbidden_git_bytes)
 
-    with pytest.raises(ValueError, match="framework exact-byte capture limit"):
-        inspector.read_file_at("a" * 40, "payload.bin", max_bytes=oversized)
+    with pytest.raises(ValueError, match="baseline file exceeds"):
+        inspector.read_file_at(
+            "a" * 40,
+            "payload.bin",
+            max_bytes=repository_module._MAX_GIT_EXACT_STDOUT_BYTES,
+        )
 
-    assert show_called is False
+    assert capture_called is False
 
 
 @pytest.mark.parametrize(
@@ -72,7 +100,7 @@ def test_read_file_at_binds_capture_limit_to_preflight_size(
         max_stdout_bytes: int,
         allow_failure: bool = False,
     ) -> bytes:
-        assert args == ("show", object_name)
+        assert args == ("cat-file", "blob", object_name)
         assert max_stdout_bytes == capture_limit
         assert allow_failure is True
         return payload
@@ -111,7 +139,7 @@ def test_git_bytes_fails_closed_when_binary_capture_is_truncated(
         max_stdout_bytes: int,
         max_stderr_bytes: int,
     ) -> BoundedBinarySubprocessResult:
-        assert command[-2:] == ["show", "object"]
+        assert command[-3:] == ["cat-file", "blob", "object"]
         assert cwd.exists()
         assert env["GIT_CONFIG_NOSYSTEM"] == "1"
         assert timeout_seconds == inspector.timeout_seconds
@@ -129,7 +157,7 @@ def test_git_bytes_fails_closed_when_binary_capture_is_truncated(
     monkeypatch.setattr(repository_module, "run_bounded_binary_subprocess", truncated_run)
 
     with pytest.raises(RuntimeError, match="exact-byte output exceeded bounded capture limit"):
-        inspector._git_bytes("show", "object", max_stdout_bytes=8)
+        inspector._git_bytes("cat-file", "blob", "object", max_stdout_bytes=8)
 
 
 def test_git_bytes_fails_closed_on_truncated_stderr_even_for_allowed_git_failure(
@@ -161,7 +189,8 @@ def test_git_bytes_fails_closed_on_truncated_stderr_even_for_allowed_git_failure
 
     with pytest.raises(RuntimeError, match="exact-byte output exceeded bounded capture limit"):
         inspector._git_bytes(
-            "show",
+            "cat-file",
+            "blob",
             "missing-object",
             max_stdout_bytes=8,
             allow_failure=True,
