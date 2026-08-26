@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -16,7 +15,6 @@ from ..intelligence.prioritization import RegressionPrioritizer
 from ..intelligence.quality_review import review_python_test_source
 from ..intelligence.self_healing import SelfHealingEngine
 from ..intelligence.test_generation import TestGenerationPlanner
-from ..io_safety import read_text_bounded
 from ..models import (
     AgentRunState,
     EvidenceItem,
@@ -51,16 +49,7 @@ from .model_source_observation import (
     search_test_coverage_confined,
 )
 
-_MAX_MODEL_SOURCE_BYTES = 1_000_000
 _MAX_MODEL_SOURCE_CHARS = 12_000
-
-
-def _read_bounded_utf8(path: Path, *, max_bytes: int = _MAX_MODEL_SOURCE_BYTES) -> str:
-    return read_text_bounded(
-        path,
-        max_bytes=max_bytes,
-        label="model-facing source file",
-    )
 
 
 def _stable_gate_id(prefix: str, payload: Any) -> str:
@@ -144,20 +133,6 @@ def _pytest_validation_status(exit_code: int) -> ValidationStatus:
     if exit_code == 1:
         return ValidationStatus.FAIL
     return ValidationStatus.NOT_VERIFIED
-
-
-def _is_test_code_path(path: Path) -> bool:
-    if path.suffix.lower() not in {".py", ".js", ".ts", ".java", ".cs"}:
-        return False
-    parts = {part.lower() for part in path.parts}
-    name = path.name.lower()
-    return (
-        bool(parts & {"tests", "test", "generated_tests"})
-        or name.startswith("test_")
-        or name.endswith("_test.py")
-        or ".spec." in name
-        or ".test." in name
-    )
 
 
 def _coverage_search(
@@ -589,11 +564,11 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
     )
     async def search_test_coverage(args: dict[str, Any]) -> dict[str, Any]:
         services.consume("search_test_coverage", args)
-        query = redact_text(str(args.get("query", "")))
+        raw_query = str(args.get("query", ""))
         try:
             observed = _coverage_search(
                 services.workspace,
-                query=query,
+                query=raw_query,
                 max_results=int(args.get("max_results", 100)),
                 expected_root_identity=services.workspace_root_identity,
             )
@@ -602,14 +577,15 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
                 "content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}],
                 "is_error": True,
             }
-        structured = observed.as_structured_data(query=query)
+        redacted_query = redact_text(raw_query)
+        structured = observed.as_structured_data(query=redacted_query)
         item = services.evidence.add(
             EvidenceItem(
                 run_id=services.state.run_id,
                 kind=EvidenceKind.SOURCE_OBSERVATION,
                 nature=EvidenceNature.OBSERVED_FACT,
                 source="repository_test_coverage_search",
-                source_identifier=query,
+                source_identifier=redacted_query,
                 summary=(
                     f"Observed {len(observed.results)} bounded test coverage search result(s); "
                     f"complete={observed.complete}"
