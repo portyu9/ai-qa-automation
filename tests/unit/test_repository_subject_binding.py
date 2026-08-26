@@ -10,8 +10,8 @@ from typing import Any
 
 import pytest
 
-import ai_qa_automation.tools.repository as repository_module
 import ai_qa_automation.runtime.workspace_lease as workspace_lease_module
+import ai_qa_automation.tools.repository as repository_module
 from ai_qa_automation.fs_authority import (
     descriptor_relative_authority_supported,
     pin_directory_identity,
