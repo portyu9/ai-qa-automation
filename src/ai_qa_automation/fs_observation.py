@@ -59,9 +59,11 @@ def scan_regular_files_confined(
     Enumeration is descriptor-relative and budgets every directory entry observed.
     Each directory is identity- and signature-checked before/after traversal. A
     directory that would exceed the entry budget is not partially published into
-    ``files``; the result is marked truncated instead. Recursive descent is capped
-    at a hard directory depth so entry-bounded scans cannot exhaust call-stack or
-    ancestor-descriptor resources.
+    ``files``; the result is marked truncated instead. Unsafe or unreadable entries
+    also make the result conservatively incomplete because their skipped contents
+    cannot be proven irrelevant. Recursive descent is capped at a hard directory
+    depth so entry-bounded scans cannot exhaust call-stack or ancestor-descriptor
+    resources.
     """
 
     if isinstance(max_entries, bool) or not isinstance(max_entries, int) or max_entries < 1:
@@ -226,7 +228,7 @@ def scan_regular_files_confined(
     return ConfinedFileScan(
         files=tuple(sorted(files, key=lambda item: item.path.as_posix())),
         observed_entries=observed_entries,
-        truncated=truncated,
+        truncated=truncated or bool(unsafe or unreadable),
         unsafe_paths=tuple(sorted(unsafe, key=PurePosixPath.as_posix)),
         unreadable_paths=tuple(sorted(unreadable, key=PurePosixPath.as_posix)),
         root_identity=root_identity,

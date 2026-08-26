@@ -65,7 +65,7 @@ def test_scan_exposes_and_enforces_root_identity(tmp_path: Path) -> None:
         )
 
 
-def test_symlink_entries_are_never_followed(tmp_path: Path) -> None:
+def test_symlink_entries_are_never_followed_and_mark_scan_incomplete(tmp_path: Path) -> None:
     if os.name == "nt":
         pytest.skip("symlink setup differs on Windows")
     outside = tmp_path.parent / f"{tmp_path.name}-outside"
@@ -81,7 +81,7 @@ def test_symlink_entries_are_never_followed(tmp_path: Path) -> None:
 
     assert [item.path.as_posix() for item in result.files] == ["safe.py"]
     assert [path.as_posix() for path in result.unsafe_paths] == ["external"]
-    assert result.truncated is False
+    assert result.truncated is True
 
 
 def test_symlink_root_is_rejected_without_resolving_alias(tmp_path: Path) -> None:
