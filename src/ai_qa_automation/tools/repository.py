@@ -5,11 +5,19 @@ import json
 import re
 import subprocess
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from ..fs_authority import (
+    descriptor_relative_authority_supported,
+    pin_directory_identity,
+    read_bytes_confined,
+)
 from ..io_safety import open_regular_binary
 from .execution_env import resolve_executable, restricted_subprocess_env, run_bounded_subprocess
+from .subprocess_subject import active_workspace_authority, descriptor_bound_cwd
 
 _SAFE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@{}~^:+-]{0,255}$")
 _HEX_SHA = re.compile(r"^[0-9a-fA-F]{40,64}$")
@@ -17,6 +25,10 @@ _MAX_FINGERPRINT_CHANGED_FILES = 1000
 _MAX_FINGERPRINT_FILE_BYTES = 16_000_000
 _MAX_FINGERPRINT_TOTAL_BYTES = 128_000_000
 _MAX_GIT_TEXT_OUTPUT_BYTES = 8_000_000
+
+
+class RepositorySubjectError(RuntimeError):
+    """Raised when Git inspection cannot remain bound to the authorized workspace subject."""
 
 
 @dataclass(frozen=True)
@@ -58,15 +70,78 @@ class RepositoryChangeSet:
 class RepositoryInspector:
     """Read-only Git/repository inspection with deterministic workspace fingerprints."""
 
-    def __init__(self, workspace: Path, timeout_seconds: int = 20) -> None:
+    def __init__(
+        self,
+        workspace: Path,
+        timeout_seconds: int = 20,
+        *,
+        expected_root_identity: tuple[int, int] | None = None,
+    ) -> None:
         if (
             isinstance(timeout_seconds, bool)
             or not isinstance(timeout_seconds, int)
             or timeout_seconds < 1
         ):
             raise ValueError("repository inspection timeout_seconds must be a positive integer")
-        self.workspace = workspace.expanduser().resolve()
+        if expected_root_identity is not None and (
+            not isinstance(expected_root_identity, tuple)
+            or len(expected_root_identity) != 2
+            or any(
+                isinstance(value, bool) or not isinstance(value, int) or value < 0
+                for value in expected_root_identity
+            )
+        ):
+            raise ValueError("expected_root_identity must be a pair of non-negative integers")
+
+        # Resolving after lease acquisition could follow a replacement symlink before
+        # the active lease-authority lookup and silently change the repository subject.
+        self.workspace = workspace.expanduser().absolute()
         self.timeout_seconds = timeout_seconds
+        active_identity = active_workspace_authority(self.workspace)
+        if (
+            expected_root_identity is not None
+            and active_identity is not None
+            and expected_root_identity != active_identity
+        ):
+            raise RepositorySubjectError(
+                "explicit repository authority conflicts with the active workspace lease"
+            )
+        authorized_identity = expected_root_identity or active_identity
+        self.workspace_root_identity: tuple[int, int] | None = None
+        if descriptor_relative_authority_supported():
+            try:
+                current_identity = pin_directory_identity(
+                    self.workspace,
+                    label="repository inspection workspace",
+                )
+            except (OSError, RuntimeError, ValueError) as exc:
+                raise RepositorySubjectError(
+                    "repository workspace identity could not be pinned"
+                ) from exc
+            if authorized_identity is not None and current_identity != authorized_identity:
+                raise RepositorySubjectError(
+                    "repository workspace changed identity since authorization"
+                )
+            self.workspace_root_identity = current_identity
+        elif authorized_identity is not None:
+            raise RepositorySubjectError(
+                "authorized repository inspection requires descriptor-bound filesystem authority"
+            )
+
+    def _assert_workspace_subject_current(self) -> None:
+        if self.workspace_root_identity is None:
+            return
+        try:
+            current_identity = pin_directory_identity(
+                self.workspace,
+                label="repository inspection workspace",
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise RepositorySubjectError(
+                "repository workspace subject could not be revalidated"
+            ) from exc
+        if current_identity != self.workspace_root_identity:
+            raise RepositorySubjectError("repository workspace changed identity during inspection")
 
     def snapshot(self) -> RepositorySnapshot:
         try:
@@ -76,6 +151,8 @@ class RepositoryInspector:
                 self._git("status", "--porcelain=v1", "--untracked-files=all", allow_failure=True)
                 or ""
             )
+        except RepositorySubjectError:
+            raise
         except RuntimeError as exc:
             message = str(exc).casefold()
             reason = (
@@ -224,6 +301,90 @@ class RepositoryInspector:
                 paths.add(raw)
         return tuple(sorted(paths))
 
+    def _read_fingerprint_bytes(
+        self,
+        relative: str,
+        *,
+        max_bytes: int,
+    ) -> tuple[bytes | None, str | None]:
+        """Read one changed-file subject under the same root identity as Git inspection."""
+        try:
+            normalized = self._validate_relative_path(relative)
+        except ValueError:
+            return None, "changed-path-outside-workspace"
+
+        if self.workspace_root_identity is not None:
+            try:
+                data = read_bytes_confined(
+                    self.workspace,
+                    normalized,
+                    max_bytes=max_bytes,
+                    label=f"workspace fingerprint subject {normalized}",
+                    expected_root_identity=self.workspace_root_identity,
+                )
+            except FileNotFoundError:
+                self._assert_workspace_subject_current()
+                return None, "deleted"
+            except OSError:
+                self._assert_workspace_subject_current()
+                return None, "changed-file-unreadable"
+            except ValueError as exc:
+                message = str(exc).casefold()
+                if "trusted root" in message:
+                    raise RepositorySubjectError(
+                        "workspace fingerprint subject changed root identity during inspection"
+                    ) from exc
+                if "symlink" in message and "parent component" not in message:
+                    return None, "changed-symlink-not-byte-bound"
+                if "must be a regular file" in message:
+                    return None, "changed-non-file-not-byte-bound"
+                if "exceeds" in message and "ingestion limit" in message:
+                    return None, "byte-limit-exceeded"
+                return None, "changed-path-ownership-ambiguous"
+            return data, None
+
+        # Compatibility fallback for platforms without descriptor-relative authority.
+        # A live authorized identity is never downgraded into this path: __init__ rejects
+        # authorized inspection when descriptor-backed authority is unavailable.
+        raw_candidate = self.workspace / normalized
+        if raw_candidate.is_symlink():
+            return None, "changed-symlink-not-byte-bound"
+        candidate = raw_candidate.resolve()
+        try:
+            candidate.relative_to(self.workspace)
+        except ValueError:
+            return None, "changed-path-outside-workspace"
+        if not candidate.exists():
+            return None, "deleted"
+        if not candidate.is_file():
+            return None, "changed-non-file-not-byte-bound"
+        try:
+            size_hint = candidate.stat().st_size
+        except OSError:
+            return None, "changed-file-unreadable"
+        if size_hint > max_bytes:
+            return None, "byte-limit-exceeded"
+        chunks: list[bytes] = []
+        size = 0
+        try:
+            with open_regular_binary(
+                candidate,
+                label=f"workspace fingerprint subject {normalized}",
+            ) as stream:
+                while size <= max_bytes:
+                    chunk = stream.read(min(1024 * 1024, max_bytes + 1 - size))
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    size += len(chunk)
+        except OSError:
+            return None, "changed-file-unreadable"
+        except ValueError:
+            return None, "changed-path-ownership-ambiguous"
+        if size > max_bytes:
+            return None, "byte-limit-exceeded"
+        return b"".join(chunks), None
+
     def _fingerprint(
         self,
         git_sha: str | None,
@@ -243,75 +404,45 @@ class RepositoryInspector:
                     incomplete_reasons.add("quoted-git-path-not-byte-bound")
 
         for relative in changed_files[:_MAX_FINGERPRINT_CHANGED_FILES]:
-            raw_candidate = self.workspace / relative
-            if raw_candidate.is_symlink():
-                file_rows.append({"path": relative, "state": "symlink"})
-                incomplete_reasons.add("changed-symlink-not-byte-bound")
-                continue
-            candidate = raw_candidate.resolve()
-            try:
-                candidate.relative_to(self.workspace)
-            except ValueError:
-                file_rows.append({"path": relative, "state": "outside-workspace"})
-                incomplete_reasons.add("changed-path-outside-workspace")
-                continue
-            if not candidate.exists():
-                file_rows.append({"path": relative, "state": "deleted"})
-                continue
-            if not candidate.is_file():
-                file_rows.append({"path": relative, "state": "non-file"})
-                incomplete_reasons.add("changed-non-file-not-byte-bound")
-                continue
-            try:
-                size_hint = candidate.stat().st_size
-            except OSError:
-                file_rows.append({"path": relative, "state": "unreadable"})
-                incomplete_reasons.add("changed-file-unreadable")
-                continue
-            if size_hint > _MAX_FINGERPRINT_FILE_BYTES:
-                file_rows.append(
-                    {"path": relative, "state": "file-byte-limit-exceeded", "size": size_hint}
-                )
-                incomplete_reasons.add("changed-file-byte-limit-exceeded")
-                continue
-            if total_hashed_bytes + size_hint > _MAX_FINGERPRINT_TOTAL_BYTES:
-                file_rows.append(
-                    {"path": relative, "state": "total-byte-limit-exceeded", "size": size_hint}
-                )
+            remaining_total = _MAX_FINGERPRINT_TOTAL_BYTES - total_hashed_bytes
+            if remaining_total <= 0:
+                file_rows.append({"path": relative, "state": "total-byte-limit-exceeded"})
                 incomplete_reasons.add("changed-total-byte-limit-exceeded")
                 continue
-
-            digest = hashlib.sha256()
-            size = 0
-            exceeded: str | None = None
-            try:
-                with open_regular_binary(
-                    candidate,
-                    label=f"workspace fingerprint subject {relative}",
-                ) as stream:
-                    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                        size += len(chunk)
-                        if size > _MAX_FINGERPRINT_FILE_BYTES:
-                            exceeded = "changed-file-byte-limit-exceeded"
-                            break
-                        if total_hashed_bytes + size > _MAX_FINGERPRINT_TOTAL_BYTES:
-                            exceeded = "changed-total-byte-limit-exceeded"
-                            break
-                        digest.update(chunk)
-            except OSError:
-                file_rows.append({"path": relative, "state": "unreadable"})
-                incomplete_reasons.add("changed-file-unreadable")
+            read_limit = min(_MAX_FINGERPRINT_FILE_BYTES, remaining_total)
+            data, failure = self._read_fingerprint_bytes(relative, max_bytes=read_limit)
+            if failure == "deleted":
+                file_rows.append({"path": relative, "state": "deleted"})
                 continue
-            except ValueError:
-                file_rows.append({"path": relative, "state": "ownership-ambiguous"})
-                incomplete_reasons.add("changed-path-ownership-ambiguous")
+            if failure == "byte-limit-exceeded":
+                reason = (
+                    "changed-total-byte-limit-exceeded"
+                    if read_limit < _MAX_FINGERPRINT_FILE_BYTES
+                    else "changed-file-byte-limit-exceeded"
+                )
+                state = (
+                    "total-byte-limit-exceeded"
+                    if reason == "changed-total-byte-limit-exceeded"
+                    else "file-byte-limit-exceeded"
+                )
+                file_rows.append({"path": relative, "state": state})
+                incomplete_reasons.add(reason)
                 continue
-            if exceeded is not None:
-                file_rows.append({"path": relative, "state": exceeded, "size_read": size})
-                incomplete_reasons.add(exceeded)
+            if failure is not None:
+                file_rows.append({"path": relative, "state": failure})
+                incomplete_reasons.add(failure)
                 continue
+            if data is None:  # pragma: no cover - helper contract
+                raise RuntimeError("fingerprint reader returned neither data nor a failure reason")
+            size = len(data)
             total_hashed_bytes += size
-            file_rows.append({"path": relative, "size": size, "sha256": digest.hexdigest()})
+            file_rows.append(
+                {
+                    "path": relative,
+                    "size": size,
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                }
+            )
         if len(changed_files) > _MAX_FINGERPRINT_CHANGED_FILES:
             file_rows.append({"state": "changed-file-overflow", "count": len(changed_files)})
 
@@ -330,18 +461,45 @@ class RepositoryInspector:
             reasons,
         )
 
+    @contextmanager
+    def _git_cwd(self) -> Iterator[Path]:
+        if self.workspace_root_identity is None:
+            yield self.workspace
+            return
+        try:
+            with descriptor_bound_cwd(
+                self.workspace,
+                expected_root_identity=self.workspace_root_identity,
+                label="Git repository inspection",
+            ) as cwd:
+                yield cwd
+        except RepositorySubjectError:
+            raise
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise RepositorySubjectError(
+                "Git repository subject could not be bound to the authorized workspace"
+            ) from exc
+
     def _git(self, *args: str, allow_failure: bool = False) -> str | None:
         with tempfile.TemporaryDirectory(prefix="aiqa-git-home-") as temp_home:
             env = restricted_subprocess_env(
                 home=Path(temp_home), extra={"GIT_CONFIG_NOSYSTEM": "1"}
             )
-            result = run_bounded_subprocess(
-                ["git", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", *args],
-                cwd=self.workspace,
-                env=env,
-                timeout_seconds=self.timeout_seconds,
-                max_output_bytes=_MAX_GIT_TEXT_OUTPUT_BYTES,
-            )
+            with self._git_cwd() as git_cwd:
+                result = run_bounded_subprocess(
+                    [
+                        "git",
+                        "-c",
+                        "core.fsmonitor=false",
+                        "-c",
+                        "core.untrackedCache=false",
+                        *args,
+                    ],
+                    cwd=git_cwd,
+                    env=env,
+                    timeout_seconds=self.timeout_seconds,
+                    max_output_bytes=_MAX_GIT_TEXT_OUTPUT_BYTES,
+                )
         if result.timed_out:
             raise RuntimeError(f"git command exceeded {self.timeout_seconds}s inspection budget")
         if result.stdout_truncated or result.stderr_truncated:
@@ -362,22 +520,23 @@ class RepositoryInspector:
             )
             git_executable = resolve_executable("git", env=env)
             try:
-                result = subprocess.run(
-                    [
-                        git_executable,
-                        "-c",
-                        "core.fsmonitor=false",
-                        "-c",
-                        "core.untrackedCache=false",
-                        *args,
-                    ],
-                    cwd=self.workspace,
-                    text=False,
-                    capture_output=True,
-                    timeout=self.timeout_seconds,
-                    check=False,
-                    env=env,
-                )
+                with self._git_cwd() as git_cwd:
+                    result = subprocess.run(
+                        [
+                            git_executable,
+                            "-c",
+                            "core.fsmonitor=false",
+                            "-c",
+                            "core.untrackedCache=false",
+                            *args,
+                        ],
+                        cwd=git_cwd,
+                        text=False,
+                        capture_output=True,
+                        timeout=self.timeout_seconds,
+                        check=False,
+                        env=env,
+                    )
             except subprocess.TimeoutExpired as exc:
                 raise RuntimeError(
                     f"git command exceeded {self.timeout_seconds}s inspection budget"
