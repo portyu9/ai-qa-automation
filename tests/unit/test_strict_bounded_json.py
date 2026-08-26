@@ -6,6 +6,7 @@ from typing import Any, cast
 import pytest
 
 import ai_qa_automation.runtime.runtime_hooks as runtime_hooks
+from ai_qa_automation.fs_authority import pin_directory_identity
 from ai_qa_automation.models import AgentRunState
 from ai_qa_automation.policy import PolicyEngine
 from ai_qa_automation.runtime.budget import ExecutionBudget
@@ -128,6 +129,7 @@ def test_live_service_defense_in_depth_rejects_ambiguous_json_before_accounting(
         test_runner=cast(Any, object()),
         max_tool_calls=5,
         max_repeated_action=2,
+        workspace_root_identity=pin_directory_identity(control.workspace, label="test workspace"),
         control=control,
     )
 

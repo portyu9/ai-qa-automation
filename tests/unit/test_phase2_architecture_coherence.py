@@ -5,6 +5,7 @@ from typing import Any, cast
 
 import pytest
 
+from ai_qa_automation.fs_authority import pin_directory_identity
 from ai_qa_automation.models import (
     AgentRunState,
     TerminalStatus,
@@ -224,6 +225,9 @@ def test_live_services_mirror_control_count_without_double_charging(tmp_path: Pa
         test_runner=cast(Any, object()),
         max_tool_calls=10,
         max_repeated_action=2,
+        workspace_root_identity=pin_directory_identity(
+            tmp_path / "sut", label="test workspace"
+        ),
         control=control,
     )
 
