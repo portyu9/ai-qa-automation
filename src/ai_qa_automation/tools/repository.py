@@ -128,6 +128,23 @@ class RepositoryInspector:
                 "authorized repository inspection requires descriptor-bound filesystem authority"
             )
 
+    def _assert_workspace_subject_current(self) -> None:
+        if self.workspace_root_identity is None:
+            return
+        try:
+            current_identity = pin_directory_identity(
+                self.workspace,
+                label="repository inspection workspace",
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise RepositorySubjectError(
+                "repository workspace subject could not be revalidated"
+            ) from exc
+        if current_identity != self.workspace_root_identity:
+            raise RepositorySubjectError(
+                "repository workspace changed identity during inspection"
+            )
+
     def snapshot(self) -> RepositorySnapshot:
         try:
             sha = self._git("rev-parse", "HEAD", allow_failure=True)
@@ -308,8 +325,10 @@ class RepositoryInspector:
                     expected_root_identity=self.workspace_root_identity,
                 )
             except FileNotFoundError:
+                self._assert_workspace_subject_current()
                 return None, "deleted"
             except OSError:
+                self._assert_workspace_subject_current()
                 return None, "changed-file-unreadable"
             except ValueError as exc:
                 message = str(exc).casefold()
