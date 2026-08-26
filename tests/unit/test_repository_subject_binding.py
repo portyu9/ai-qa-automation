@@ -6,7 +6,6 @@ import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -17,7 +16,10 @@ from ai_qa_automation.fs_authority import (
     pin_directory_identity,
 )
 from ai_qa_automation.runtime.workspace_lease import WorkspaceLease
-from ai_qa_automation.tools.execution_env import BoundedSubprocessResult
+from ai_qa_automation.tools.execution_env import (
+    BoundedBinarySubprocessResult,
+    BoundedSubprocessResult,
+)
 from ai_qa_automation.tools.repository import RepositoryInspector, RepositorySubjectError
 from ai_qa_automation.tools.subprocess_subject import (
     active_workspace_authority,
@@ -295,17 +297,32 @@ def test_exact_byte_git_read_stays_on_pinned_subject_when_path_swaps_before_spaw
         workspace,
         expected_root_identity=pin_directory_identity(workspace, label="test workspace"),
     )
-    real_run = subprocess.run
+    real_run = repository_module.run_bounded_binary_subprocess
     swapped = False
 
-    def swap_then_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[Any]:
+    def swap_then_run(
+        command: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+        timeout_seconds: int | float,
+        max_stdout_bytes: int = 2_000_000,
+        max_stderr_bytes: int = 2_000_000,
+    ) -> BoundedBinarySubprocessResult:
         nonlocal swapped
         if not swapped:
             _swap_workspace(workspace, replacement, moved)
             swapped = True
-        return real_run(*args, **kwargs)
+        return real_run(
+            command,
+            cwd=cwd,
+            env=env,
+            timeout_seconds=timeout_seconds,
+            max_stdout_bytes=max_stdout_bytes,
+            max_stderr_bytes=max_stderr_bytes,
+        )
 
-    monkeypatch.setattr(repository_module.subprocess, "run", swap_then_run)
+    monkeypatch.setattr(repository_module, "run_bounded_binary_subprocess", swap_then_run)
 
     observed = inspector.read_file_at(original_sha, "payload.bin")
 
