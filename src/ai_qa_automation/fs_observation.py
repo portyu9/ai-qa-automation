@@ -109,6 +109,7 @@ def scan_regular_files_confined(
                 f"{label} requires descriptor-based directory enumeration on this platform"
             ) from exc
 
+        budget_exhausted = False
         with entries:
             for entry in entries:
                 observed_entries += 1
@@ -120,7 +121,13 @@ def scan_regular_files_confined(
                 names.append(name)
                 if observed_entries >= max_entries:
                     truncated = True
-                    return False
+                    budget_exhausted = True
+                    break
+
+        if budget_exhausted:
+            if _directory_signature(os.fstat(directory_fd)) != initial_signature:
+                raise ValueError(f"{label} directory changed during traversal")
+            return False
 
         for name in sorted(names):
             relative = relative_parent / name
@@ -159,8 +166,7 @@ def scan_regular_files_confined(
                     or _identity(opened_child) != _identity(current_child)
                 ):
                     raise ValueError(f"{label} directory changed identity during traversal")
-                if not visit(child_fd, relative):
-                    return False
+                child_complete = visit(child_fd, relative)
                 final_current_child = os.stat(
                     name,
                     dir_fd=directory_fd,
@@ -170,6 +176,10 @@ def scan_regular_files_confined(
                     os.fstat(child_fd)
                 ) != _identity(final_current_child):
                     raise ValueError(f"{label} directory changed identity during traversal")
+                if not child_complete:
+                    if _directory_signature(os.fstat(directory_fd)) != initial_signature:
+                        raise ValueError(f"{label} directory changed during traversal")
+                    return False
             finally:
                 os.close(child_fd)
 

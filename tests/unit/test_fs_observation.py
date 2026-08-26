@@ -160,3 +160,95 @@ def test_entry_budget_never_fetches_a_hidden_sentinel_beyond_limit(
     assert result.observed_entries == 2
     assert next_calls == 2
     assert result.truncated is True
+
+
+def test_truncated_directory_is_signature_checked_before_return(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for index in range(4):
+        write(tmp_path / f"file-{index}.txt")
+
+    real_scandir = fs_observation.os.scandir
+    root_identity = (tmp_path.stat().st_dev, tmp_path.stat().st_ino)
+
+    class MutatingIterator:
+        def __init__(self, inner: object, mutate: bool) -> None:
+            self.inner = inner
+            self.mutate = mutate
+            self.calls = 0
+
+        def __enter__(self):
+            self.inner.__enter__()  # type: ignore[attr-defined]
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> object:
+            return self.inner.__exit__(exc_type, exc, tb)  # type: ignore[attr-defined]
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            entry = next(self.inner)  # type: ignore[arg-type]
+            self.calls += 1
+            if self.mutate and self.calls == 2:
+                write(tmp_path / "late.txt")
+            return entry
+
+    def mutating_scandir(path: object):
+        status = os.fstat(path) if isinstance(path, int) else os.stat(path)
+        return MutatingIterator(
+            real_scandir(path), (status.st_dev, status.st_ino) == root_identity
+        )
+
+    monkeypatch.setattr(fs_observation.os, "scandir", mutating_scandir)
+    monkeypatch.setattr(fs_observation.os, "supports_fd", {*os.supports_fd, mutating_scandir})
+
+    with pytest.raises(ValueError, match="directory changed during traversal"):
+        scan_regular_files_confined(tmp_path, max_entries=2, label="test scan")
+
+
+def test_nested_truncation_still_signature_checks_ancestor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    child = tmp_path / "child"
+    for index in range(4):
+        write(child / f"file-{index}.txt")
+
+    real_scandir = fs_observation.os.scandir
+    child_status = child.stat()
+    child_identity = (child_status.st_dev, child_status.st_ino)
+
+    class MutatingIterator:
+        def __init__(self, inner: object, mutate: bool) -> None:
+            self.inner = inner
+            self.mutate = mutate
+            self.calls = 0
+
+        def __enter__(self):
+            self.inner.__enter__()  # type: ignore[attr-defined]
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> object:
+            return self.inner.__exit__(exc_type, exc, tb)  # type: ignore[attr-defined]
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            entry = next(self.inner)  # type: ignore[arg-type]
+            self.calls += 1
+            if self.mutate and self.calls == 2:
+                write(tmp_path / "late-root.txt")
+            return entry
+
+    def mutating_scandir(path: object):
+        status = os.fstat(path) if isinstance(path, int) else os.stat(path)
+        return MutatingIterator(
+            real_scandir(path), (status.st_dev, status.st_ino) == child_identity
+        )
+
+    monkeypatch.setattr(fs_observation.os, "scandir", mutating_scandir)
+    monkeypatch.setattr(fs_observation.os, "supports_fd", {*os.supports_fd, mutating_scandir})
+
+    with pytest.raises(ValueError, match="directory changed during traversal"):
+        scan_regular_files_confined(tmp_path, max_entries=3, label="test scan")
