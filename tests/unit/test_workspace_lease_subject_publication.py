@@ -39,14 +39,14 @@ def test_workspace_lease_revalidates_root_after_authority_publication(
         workspace.rename(moved)
         replacement.rename(workspace)
 
-    monkeypatch.setattr(
-        workspace_lease_module,
-        "bind_active_workspace_authority",
-        bind_then_replace,
-    )
-
-    with pytest.raises(OSError, match="target workspace"):
-        lease.acquire()
+    with monkeypatch.context() as scoped:
+        scoped.setattr(
+            workspace_lease_module,
+            "bind_active_workspace_authority",
+            bind_then_replace,
+        )
+        with pytest.raises(OSError, match="target workspace"):
+            lease.acquire()
 
     assert active_workspace_authority(workspace) is None
 
