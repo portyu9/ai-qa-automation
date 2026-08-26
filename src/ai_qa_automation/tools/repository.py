@@ -93,9 +93,8 @@ class RepositoryInspector:
         ):
             raise ValueError("expected_root_identity must be a pair of non-negative integers")
 
-        # Do not resolve the target after lease acquisition. Resolving here would follow
-        # a replacement symlink before consulting the lease-authority registry and could
-        # silently change both the registry key and the repository subject.
+        # Resolving after lease acquisition could follow a replacement symlink before
+        # the active lease-authority lookup and silently change the repository subject.
         self.workspace = workspace.expanduser().absolute()
         self.timeout_seconds = timeout_seconds
         active_identity = active_workspace_authority(self.workspace)
@@ -294,7 +293,6 @@ class RepositoryInspector:
         max_bytes: int,
     ) -> tuple[bytes | None, str | None]:
         """Read one changed-file subject under the same root identity as Git inspection."""
-
         try:
             normalized = self._validate_relative_path(relative)
         except ValueError:
@@ -329,8 +327,8 @@ class RepositoryInspector:
             return data, None
 
         # Compatibility fallback for platforms without descriptor-relative authority.
-        # Live lease-bound authority is never silently downgraded into this path because
-        # __init__ rejects an authorized identity on such platforms.
+        # A live authorized identity is never downgraded into this path: __init__ rejects
+        # authorized inspection when descriptor-backed authority is unavailable.
         raw_candidate = self.workspace / normalized
         if raw_candidate.is_symlink():
             return None, "changed-symlink-not-byte-bound"
@@ -472,7 +470,14 @@ class RepositoryInspector:
             )
             with self._git_cwd() as git_cwd:
                 result = run_bounded_subprocess(
-                    ["git", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", *args],
+                    [
+                        "git",
+                        "-c",
+                        "core.fsmonitor=false",
+                        "-c",
+                        "core.untrackedCache=false",
+                        *args,
+                    ],
                     cwd=git_cwd,
                     env=env,
                     timeout_seconds=self.timeout_seconds,
@@ -494,7 +499,7 @@ class RepositoryInspector:
         # preceding object-size gate keeps capture_output bounded.
         with tempfile.TemporaryDirectory(prefix="aiqa-git-home-") as temp_home:
             env = restricted_subprocess_env(
-                home=Path(temp_home), extra={"GIT_CONFIG_NOSYSTEM": "1")
+                home=Path(temp_home), extra={"GIT_CONFIG_NOSYSTEM": "1"}
             )
             git_executable = resolve_executable("git", env=env)
             try:
