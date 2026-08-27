@@ -193,9 +193,7 @@ class RepositoryNamespaceAuthorityMixin:
         previous_ref = False
         for line in packed_refs.splitlines():
             if not line:
-                raise RepositorySubjectError(
-                    "packed refs are malformed while proving unborn HEAD"
-                )
+                raise RepositorySubjectError("packed refs are malformed while proving unborn HEAD")
             if line.startswith(b"#"):
                 previous_ref = False
                 continue
@@ -224,9 +222,7 @@ class RepositoryNamespaceAuthorityMixin:
                 or not ref_name.startswith(b"refs/")
                 or any(byte in b" \t\x00" for byte in ref_name)
             ):
-                raise RepositorySubjectError(
-                    "packed refs are malformed while proving unborn HEAD"
-                )
+                raise RepositorySubjectError("packed refs are malformed while proving unborn HEAD")
             previous_ref = True
 
     def _git(self, *args: str, allow_failure: bool = False) -> str | None:
