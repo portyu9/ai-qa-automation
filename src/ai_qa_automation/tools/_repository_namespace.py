@@ -17,6 +17,7 @@ _MetadataSignature = tuple[int, int, int, int, int, int]
 _NamespaceObservation = tuple[tuple[str, _MetadataSignature], ...]
 _GitMetadataObservation = tuple[tuple[str, _MetadataSignature], ...]
 _UNTRACKED_PATH_LIST = ("ls-files", "--others", "--exclude-standard", "-z", "--")
+_HEAD_RESOLUTION = ("rev-parse", "HEAD")
 _SPLIT_INDEX_PROBE = ("rev-parse", "--shared-index-path")
 _NESTED_GIT_INDIRECTION_PATHS = {
     ("commondir",),
@@ -155,6 +156,12 @@ class RepositoryNamespaceAuthorityMixin:
                     *args,
                     allow_failure=allow_failure,
                 )
+                if args == _HEAD_RESOLUTION and allow_failure and result is None:
+                    head_observation = RepositoryGitAuthorityMixin._head_ref_observation(authority)
+                    if not head_observation[0].startswith(b"ref: "):
+                        raise RepositorySubjectError(
+                            "detached Git HEAD could not be resolved as an exact commit"
+                        )
         except Exception as exc:
             original_error = exc
             raise
