@@ -45,6 +45,12 @@ class RepositoryNamespaceAuthorityMixin:
         raise NotImplementedError
 
     @staticmethod
+    def _validate_git_command(args: tuple[str, ...]) -> None:
+        if args == _SPLIT_INDEX_PROBE:
+            raise ValueError("split-index probe must be resolved from confined index bytes")
+        RepositoryGitAuthorityMixin._validate_git_command(args)
+
+    @staticmethod
     def _nested_git_relative_parts(path: Path) -> tuple[str, ...] | None:
         parts = path.parts
         try:
