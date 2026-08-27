@@ -28,6 +28,9 @@ def test_repository_build_authority_is_static() -> None:
     assert result["result"] == "PASS"
     assert result["build_backend"] == "hatchling.build"
     assert result["build_requirements"] == ["hatchling==1.32.0"]
+    assert result["project_name"] == "ai-qa-automation"
+    assert result["project_scripts"] == {"ai-qa": "ai_qa_automation.cli:app"}
+    assert result["project_entry_points"] is False
     assert result["project_file_inputs"] == {
         "readme": "README.md",
         "license": {"file": "LICENSE"},
@@ -92,6 +95,60 @@ def test_build_authority_rejects_code_version_source(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ValueError, match="Hatch authority"):
+        build_authority.verify_build_authority(root)
+
+
+def test_build_authority_rejects_distribution_name_collision(tmp_path: Path) -> None:
+    root = _copy_build_inputs(tmp_path)
+    path = root / "pyproject.toml"
+    text = path.read_text(encoding="utf-8").replace(
+        'name = "ai-qa-automation"',
+        'name = "pip-audit"',
+        1,
+    )
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="distribution name"):
+        build_authority.verify_build_authority(root)
+
+
+def test_build_authority_rejects_additional_console_script(tmp_path: Path) -> None:
+    root = _copy_build_inputs(tmp_path)
+    path = root / "pyproject.toml"
+    text = path.read_text(encoding="utf-8").replace(
+        'ai-qa = "ai_qa_automation.cli:app"\n',
+        'ai-qa = "ai_qa_automation.cli:app"\ndocker = "ai_qa_automation.cli:app"\n',
+        1,
+    )
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="console-script authority"):
+        build_authority.verify_build_authority(root)
+
+
+def test_build_authority_rejects_gui_script_authority(tmp_path: Path) -> None:
+    root = _copy_build_inputs(tmp_path)
+    path = root / "pyproject.toml"
+    path.write_text(
+        path.read_text(encoding="utf-8")
+        + '\n[project.gui-scripts]\nrogue = "ai_qa_automation.cli:app"\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="gui-scripts"):
+        build_authority.verify_build_authority(root)
+
+
+def test_build_authority_rejects_project_entry_point_authority(tmp_path: Path) -> None:
+    root = _copy_build_inputs(tmp_path)
+    path = root / "pyproject.toml"
+    path.write_text(
+        path.read_text(encoding="utf-8")
+        + '\n[project.entry-points.hatch]\nrogue = "ai_qa_automation.cli:app"\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="entry-points"):
         build_authority.verify_build_authority(root)
 
 
