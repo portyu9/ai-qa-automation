@@ -51,7 +51,7 @@ EDITABLE_INSTALL_RE = re.compile(
 )
 HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
 BASE_IMAGE_RE = re.compile(r"^python:3\.11\.16-slim@sha256:[0-9a-f]{64}$")
-EXPECTED_DOCKERFILE_BLOB_SHA = "cb343dd763dc17ce3f22179d1e94e1618b3cde38"
+EXPECTED_DOCKERFILE_BLOB_SHA = "cb343dd763dc17ce3f22179d1e94e1618b3cde38"  # pragma: allowlist secret
 
 
 @dataclass(frozen=True)
