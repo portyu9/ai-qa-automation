@@ -91,7 +91,10 @@ def test_stale_recovery_state_checkpoint_failure_keeps_runtime_pending_after_res
         },
     }
     runtime_path = prior_run / "runtime.json"
-    runtime_path.write_text(json.dumps(runtime, indent=2, sort_keys=True), encoding="utf-8")
+    runtime_path.write_text(
+        json.dumps(runtime, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
 
     state_path = prior_run / "state.json"
     prior_state = AgentRunState(
@@ -130,7 +133,9 @@ def test_stale_recovery_state_checkpoint_failure_keeps_runtime_pending_after_res
     )
 
     assert result["status"] == "BLOCKED"
-    assert "canonical validation lineage could not be durably reconciled" in str(result["reason"])
+    assert "canonical validation lineage could not be durably reconciled" in str(
+        result["reason"]
+    )
     assert target.read_bytes() == original
     assert backup.is_file()
 
