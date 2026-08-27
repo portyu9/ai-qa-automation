@@ -68,9 +68,7 @@ def test_git_blob_read_rejects_content_address_mismatch(
     monkeypatch.setattr(
         build_manifest,
         "_git",
-        lambda *args, **kwargs: "sha1"
-        if args == ("rev-parse", "--show-object-format")
-        else "4",
+        lambda *args, **kwargs: "sha1" if args == ("rev-parse", "--show-object-format") else "4",
     )
     monkeypatch.setattr(build_manifest, "_git_blob_oid", lambda *args, **kwargs: "0" * 40)
     monkeypatch.setattr(build_manifest, "_run_git_bytes", lambda *args, **kwargs: b"evil")
