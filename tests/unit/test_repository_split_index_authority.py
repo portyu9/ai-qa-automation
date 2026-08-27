@@ -60,11 +60,19 @@ def _enable_split_index(repo: Path) -> None:
     assert _git(repo, "rev-parse", "--shared-index-path")
 
 
-def test_inspector_observes_active_split_index_path(tmp_path: Path) -> None:
+def test_inspector_detects_active_split_index_without_text_git_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo)
     _enable_split_index(repo)
     inspector = RepositoryInspector(repo)
+
+    def forbidden_text_git(*args: object, **kwargs: object) -> None:
+        raise AssertionError(f"split-index detection must not execute text Git: {args}, {kwargs}")
+
+    monkeypatch.setattr(repository_module, "run_bounded_subprocess", forbidden_text_git)
 
     assert inspector._git("rev-parse", "--shared-index-path")
 
