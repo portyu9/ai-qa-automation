@@ -6,12 +6,12 @@ import json
 import os
 import platform
 import re
-import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
 
 from ai_qa_automation.io_safety import fsync_directory, read_bytes_bounded, sha256_file_bounded
+from ai_qa_automation.tools.execution_env import run_bounded_binary_subprocess
 
 SOURCE_DATE_EPOCH = "315532800"
 MAX_WHEEL_BYTES = 64 * 1024 * 1024
@@ -19,6 +19,10 @@ MAX_SBOM_BYTES = 8 * 1024 * 1024
 MAX_SOURCE_INPUT_BYTES = 1024 * 1024
 MAX_LOCK_BYTES = 1024 * 1024
 MAX_MANIFEST_BYTES = 1024 * 1024
+MAX_GIT_TEXT_OUTPUT_BYTES = 1024 * 1024
+MAX_GIT_STDERR_BYTES = 256 * 1024
+MAX_GIT_TREE_ENTRY_BYTES = 16 * 1024
+GIT_TIMEOUT_SECONDS = 30
 HEX_OID_RE = re.compile(r"^[0-9a-f]+$")
 OBJECT_FORMAT_LENGTHS = {"sha1": 40, "sha256": 64}
 LOCK_NAMES = (
@@ -28,6 +32,10 @@ LOCK_NAMES = (
     "dev-py313.lock",
     "runtime-py311.lock",
 )
+
+
+class _GitCommandError(RuntimeError):
+    pass
 
 
 def _sha256(path: Path, *, max_bytes: int, label: str) -> tuple[str, int]:
@@ -50,16 +58,100 @@ def _git_environment() -> dict[str, str]:
     }
 
 
+def _run_git_bytes(
+    *args: str,
+    cwd: Path | None = None,
+    max_stdout_bytes: int,
+) -> bytes:
+    try:
+        result = run_bounded_binary_subprocess(
+            ["git", *args],
+            cwd=cwd or Path.cwd(),
+            env=_git_environment(),
+            timeout_seconds=GIT_TIMEOUT_SECONDS,
+            max_stdout_bytes=max_stdout_bytes,
+            max_stderr_bytes=MAX_GIT_STDERR_BYTES,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise _GitCommandError("Git build-provenance subprocess could not be executed safely") from exc
+    if result.timed_out:
+        raise _GitCommandError("Git build-provenance subprocess exceeded its time budget")
+    if result.stdout_truncated or result.stderr_truncated:
+        raise _GitCommandError("Git build-provenance subprocess exceeded its output budget")
+    if result.returncode != 0:
+        raise _GitCommandError(
+            f"Git build-provenance subprocess failed with exit code {result.returncode}"
+        )
+    return result.stdout
+
+
 def _git(*args: str, cwd: Path | None = None) -> str:
-    result = subprocess.run(
-        ["git", *args],
-        check=True,
-        capture_output=True,
-        text=True,
+    raw = _run_git_bytes(
+        *args,
         cwd=cwd,
-        env=_git_environment(),
+        max_stdout_bytes=MAX_GIT_TEXT_OUTPUT_BYTES,
     )
-    return result.stdout.strip()
+    try:
+        return raw.decode("utf-8", errors="strict").strip()
+    except UnicodeDecodeError as exc:
+        raise ValueError("Git build-provenance output is not valid UTF-8") from exc
+
+
+def _git_blob_oid(
+    root: Path,
+    *,
+    source_sha: str,
+    relative_path: str,
+    object_format: str,
+    label: str,
+) -> str:
+    expected_length = OBJECT_FORMAT_LENGTHS.get(object_format)
+    if expected_length is None:
+        raise ValueError(f"unsupported Git object format for build provenance: {object_format}")
+    try:
+        raw = _run_git_bytes(
+            "ls-tree",
+            "-z",
+            "--full-tree",
+            source_sha,
+            "--",
+            f":(literal){relative_path}",
+            cwd=root,
+            max_stdout_bytes=MAX_GIT_TREE_ENTRY_BYTES,
+        )
+    except _GitCommandError as exc:
+        raise ValueError(f"{label} could not be resolved in the expected source commit") from exc
+    records = [record for record in raw.split(b"\0") if record]
+    if len(records) != 1:
+        raise ValueError(f"{label} is not one unambiguous file in the expected source commit")
+    metadata, separator, raw_path = records[0].partition(b"\t")
+    if not separator:
+        raise ValueError(f"{label} has malformed tree metadata in the expected source commit")
+    try:
+        returned_path = raw_path.decode("utf-8", errors="strict")
+        fields = metadata.decode("ascii", errors="strict").split()
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"{label} has invalid tree metadata in the expected source commit") from exc
+    if returned_path != relative_path or len(fields) != 3:
+        raise ValueError(f"{label} has ambiguous tree metadata in the expected source commit")
+    mode, object_type, object_id = fields
+    if (
+        mode not in {"100644", "100755"}
+        or object_type != "blob"
+        or len(object_id) != expected_length
+        or not HEX_OID_RE.fullmatch(object_id)
+    ):
+        raise ValueError(f"{label} is not a regular content-addressed blob in the expected source commit")
+    return object_id
+
+
+def _raw_blob_oid(data: bytes, object_format: str) -> str:
+    header = f"blob {len(data)}\0".encode("ascii")
+    if object_format == "sha1":
+        return hashlib.sha1(header + data, usedforsecurity=False).hexdigest()
+    if object_format == "sha256":
+        return hashlib.sha256(header + data).hexdigest()
+    raise ValueError(f"unsupported Git object format for build provenance: {object_format}")
 
 
 def _git_blob_bytes(
@@ -70,28 +162,37 @@ def _git_blob_bytes(
     max_bytes: int,
     label: str,
 ) -> bytes:
-    object_spec = f"{source_sha}:{relative_path}"
     try:
-        size_text = _git("cat-file", "-s", object_spec, cwd=root)
+        object_format = _git("rev-parse", "--show-object-format", cwd=root)
+        blob_oid = _git_blob_oid(
+            root,
+            source_sha=source_sha,
+            relative_path=relative_path,
+            object_format=object_format,
+            label=label,
+        )
+        size_text = _git("cat-file", "-s", blob_oid, cwd=root)
         size = int(size_text)
-    except (subprocess.CalledProcessError, ValueError) as exc:
+    except (_GitCommandError, ValueError) as exc:
         raise ValueError(f"{label} is not an available blob in the expected source commit") from exc
     if size < 0 or size > max_bytes:
         raise ValueError(f"{label} exceeds {max_bytes} byte source-object limit")
 
     try:
-        result = subprocess.run(
-            ["git", "cat-file", "blob", object_spec],
-            check=True,
-            capture_output=True,
+        content = _run_git_bytes(
+            "cat-file",
+            "blob",
+            blob_oid,
             cwd=root,
-            env=_git_environment(),
+            max_stdout_bytes=max(1, size),
         )
-    except subprocess.CalledProcessError as exc:
+    except _GitCommandError as exc:
         raise ValueError(f"{label} could not be read from the expected source commit") from exc
-    if len(result.stdout) != size:
+    if len(content) != size:
         raise ValueError(f"{label} source-object size changed during observation")
-    return result.stdout
+    if _raw_blob_oid(content, object_format) != blob_oid:
+        raise ValueError(f"{label} source-object bytes do not match their Git object identity")
+    return content
 
 
 def _read_bound_source_input(
@@ -133,10 +234,12 @@ def _resolve_expected_source(root: Path, expected_source_sha: str) -> str:
             "rev-parse", "--verify", f"{expected_source_sha}^{{commit}}", cwd=root
         )
         resolved_tree = _git("rev-parse", "--verify", f"{expected_source_sha}^{{tree}}", cwd=root)
-    except subprocess.CalledProcessError as exc:
+    except _GitCommandError as exc:
         raise ValueError("expected source SHA does not resolve to an available commit") from exc
     if resolved_commit != expected_source_sha:
         raise ValueError("expected source SHA did not resolve to itself as a commit")
+    if len(resolved_tree) != expected_length or not HEX_OID_RE.fullmatch(resolved_tree):
+        raise ValueError("expected source SHA resolved to an invalid original tree object ID")
     return resolved_tree
 
 
