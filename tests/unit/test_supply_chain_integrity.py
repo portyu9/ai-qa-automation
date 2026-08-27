@@ -249,6 +249,28 @@ def test_build_manifest_output_rejects_symlink_target(tmp_path: Path) -> None:
     assert external.read_text(encoding="utf-8") == "untouched\n"
 
 
+def test_build_manifest_resolves_exact_current_source_subject() -> None:
+    current = build_manifest._git("rev-parse", "--verify", "HEAD")
+
+    tree = build_manifest._resolve_expected_source(current)
+
+    assert tree == build_manifest._git("rev-parse", "--verify", "HEAD^{tree}")
+    build_manifest._assert_expected_source_current(current)
+
+
+def test_build_manifest_rejects_revision_expression_as_expected_source() -> None:
+    with pytest.raises(ValueError, match="lowercase full object ID"):
+        build_manifest._resolve_expected_source("HEAD")
+
+
+def test_build_manifest_rejects_current_subject_mismatch() -> None:
+    current = build_manifest._git("rev-parse", "--verify", "HEAD")
+    wrong = ("0" if current[0] != "0" else "1") + current[1:]
+
+    with pytest.raises(ValueError, match="does not match the explicit expected source SHA"):
+        build_manifest._assert_expected_source_current(wrong)
+
+
 @pytest.mark.parametrize(
     "command",
     [
@@ -288,12 +310,29 @@ def test_build_manifest_requires_two_byte_identical_wheels(
         encoding="utf-8",
     )
     monkeypatch.setenv("SOURCE_DATE_EPOCH", "315532800")
+    expected_source_sha = build_manifest._git("rev-parse", "--verify", "HEAD")
 
-    manifest = generate_manifest(ROOT, wheel_a, wheel_b, sbom)
+    manifest = generate_manifest(
+        ROOT,
+        wheel_a,
+        wheel_b,
+        sbom,
+        expected_source_sha=expected_source_sha,
+    )
 
+    assert manifest["source"]["commit_sha"] == expected_source_sha
+    assert manifest["source"]["tree_sha"] == build_manifest._git(
+        "rev-parse", "--verify", "HEAD^{tree}"
+    )
     assert manifest["build"]["two_builds_byte_identical"] is True
     assert manifest["identity"] == {"signed": False, "status": "NOT_PROVIDED"}
 
     wheel_b.write_bytes(b"different-wheel")
     with pytest.raises(ValueError, match="different SHA-256"):
-        generate_manifest(ROOT, wheel_a, wheel_b, sbom)
+        generate_manifest(
+            ROOT,
+            wheel_a,
+            wheel_b,
+            sbom,
+            expected_source_sha=expected_source_sha,
+        )
