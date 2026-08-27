@@ -28,6 +28,7 @@ from ..redaction import sanitize
 from ..state import StateStore
 from ..tools.repository import RepositoryInspector
 from .budget import BudgetExceededError
+from .mutation_lineage import reconcile_rolled_back_mutation
 from .run_control import (
     CircuitOpenError,
     MutationPendingError,
@@ -125,43 +126,13 @@ def _reconcile_rolled_back_mutation(
     pending: PendingMutation | None,
     rolled_back_path: str | None,
 ) -> None:
-    """Reconcile state only when the rolled-back attempt actually advanced revision state.
-
-    A later mutation of a path may fail before it records a new revision. In that
-    case an earlier committed occurrence of the same path must remain in history.
-    When an attempted mutation did advance the revision, the revision remains
-    monotonic but receives an explicit NOT_VERIFIED transaction gate so reverted
-    bytes can never be cosmetically closed by later test evidence in the same run.
-    """
+    """Compatibility adapter for the shared rollback-lineage authority."""
     if state is None or pending is None or not rolled_back_path:
         return
-    revision_before = pending.change_revision_before
-    if revision_before is None or state.change_revision <= revision_before:
-        return
-    for index in range(len(state.files_modified) - 1, -1, -1):
-        if state.files_modified[index] == rolled_back_path:
-            state.files_modified.pop(index)
-            break
-    state.observations.append(
-        f"Rolled back mutation revision {state.change_revision} for {rolled_back_path}; "
-        "modified-file accounting was reconciled while revision history remained monotonic."
-    )
-    state.validation_results.append(
-        ValidationResult(
-            name="mutation_transaction",
-            gate_id=f"mutation_transaction:{rolled_back_path}",
-            revision=state.change_revision,
-            status=ValidationStatus.NOT_VERIFIED,
-            summary=(
-                "Mutation bytes were rolled back after the tool failed; this attempted revision "
-                "cannot certify persisted target bytes."
-            ),
-            details={
-                "path": rolled_back_path,
-                "scope": "rolled_back_mutation",
-                "change_revision_before": revision_before,
-            },
-        )
+    reconcile_rolled_back_mutation(
+        state,
+        relative_path=rolled_back_path,
+        change_revision_before=pending.change_revision_before,
     )
 
 

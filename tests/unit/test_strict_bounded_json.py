@@ -18,6 +18,7 @@ from ai_qa_automation.runtime.tool_input_bounds import (
     bounded_json_loads,
     validate_tool_request,
 )
+from ai_qa_automation.state import StateStore
 
 
 def _control(tmp_path: Path) -> RuntimeControl:
@@ -121,6 +122,8 @@ def test_live_service_defense_in_depth_rejects_ambiguous_json_before_accounting(
 ) -> None:
     control = _control(tmp_path)
     state = AgentRunState(objective="validate JSON contract", workspace=str(control.workspace))
+    state_store = StateStore(control.metadata_path.parent / "state.json")
+    state_store.save(state)
     services = LiveRuntimeServices(
         workspace=control.workspace,
         state=state,
@@ -129,6 +132,7 @@ def test_live_service_defense_in_depth_rejects_ambiguous_json_before_accounting(
         test_runner=cast(Any, object()),
         max_tool_calls=5,
         max_repeated_action=2,
+        state_store=state_store,
         workspace_root_identity=pin_directory_identity(control.workspace, label="test workspace"),
         control=control,
     )

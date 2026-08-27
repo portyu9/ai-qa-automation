@@ -5,6 +5,7 @@ import json
 import os
 import tempfile
 from _thread import RLock
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -64,6 +65,16 @@ class RuntimeControl:
     open_circuits: set[str] = field(default_factory=set)
     repeated_action_counts: dict[str, int] = field(default_factory=dict)
     pending_mutation: PendingMutation | None = None
+    rollback_lineage_before_close: Callable[[PendingMutation], None] | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
+    rollback_lineage_after_close: Callable[[PendingMutation], None] | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
     _lock: RLock = field(default_factory=RLock, init=False, repr=False, compare=False)
     _workspace_identity: tuple[int, int] | None = field(
         default=None,
@@ -308,12 +319,23 @@ class RuntimeControl:
             self._target(pending.relative_path)
             self._assert_workspace_identity()
             backup: Path | None = None
+            rollback_data: bytes | None = None
             if pending.existed:
-                backup, data = self._validated_rollback_backup(pending)
+                backup, rollback_data = self._validated_rollback_backup(pending)
+
+            # Canonical lineage must be durably poisoned before rollback can alter
+            # target bytes or clear the runtime transaction. A callback failure leaves
+            # both target bytes and pending recovery authority untouched.
+            if self.rollback_lineage_before_close is not None:
+                self.rollback_lineage_before_close(pending)
+
+            if pending.existed:
+                if rollback_data is None:  # pragma: no cover - guarded by backup validation
+                    raise RuntimeError("pending rollback bytes are unavailable")
                 atomic_write_bytes_confined(
                     self.workspace,
                     pending.relative_path,
-                    data,
+                    rollback_data,
                     create_parents=True,
                     create_only=False,
                     label="mutation rollback target",
@@ -356,6 +378,13 @@ class RuntimeControl:
                         "mutation rollback closure failed and pending root authority could not be restored"
                     ) from bind_exc
                 raise
+
+            # Runtime pending authority is now durably closed. Reconcile canonical
+            # file accounting before rollback backup disposal or terminal reporting.
+            # A callback failure remains fail-closed because the pre-close checkpoint
+            # already persisted NOT_VERIFIED lineage.
+            if self.rollback_lineage_after_close is not None:
+                self.rollback_lineage_after_close(pending)
 
             cleanup_failed = False
             if backup is not None:

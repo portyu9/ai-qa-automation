@@ -14,7 +14,11 @@ from ai_qa_automation.models import (
 )
 from ai_qa_automation.policy import PolicyEngine
 from ai_qa_automation.runtime.budget import ExecutionBudget
-from ai_qa_automation.runtime.internal_tools import RuntimeServices, _change_revision_closed
+from ai_qa_automation.runtime.internal_tools import (
+    RuntimeServices,
+    _change_revision_closed,
+    _require_closed_revision_before_mutation,
+)
 from ai_qa_automation.runtime.journal import RunJournal
 from ai_qa_automation.runtime.live_services import LiveRuntimeServices
 from ai_qa_automation.runtime.run_control import RepeatedActionError, RuntimeControl
@@ -24,6 +28,7 @@ from ai_qa_automation.runtime.validation_truth import (
     determine_terminal_outcome,
     evaluate_revision_closure,
 )
+from ai_qa_automation.state import StateStore
 
 
 def validation(
@@ -147,7 +152,9 @@ def test_changed_revision_requires_one_exact_subject_and_both_pytest_scopes() ->
     assert no_regression.code == "incomplete_pytest_closure"
 
 
-def test_legacy_internal_mutation_precheck_conforms_to_shared_closure(tmp_path: Path) -> None:
+def test_internal_mutation_precheck_uses_shared_revision_closure_authority(
+    tmp_path: Path,
+) -> None:
     state = AgentRunState(objective="mutation closure", workspace=str(tmp_path), change_revision=1)
     services = RuntimeServices(
         workspace=tmp_path,
@@ -159,6 +166,14 @@ def test_legacy_internal_mutation_precheck_conforms_to_shared_closure(tmp_path: 
         max_repeated_action=3,
     )
 
+    future_lineage = [
+        *changed_revision_checks(),
+        validation(
+            "json_schema",
+            gate_id="json_schema:future",
+            revision=2,
+        ),
+    ]
     scenarios = [
         changed_revision_checks(),
         changed_revision_checks()[:-1],
@@ -172,11 +187,28 @@ def test_legacy_internal_mutation_precheck_conforms_to_shared_closure(tmp_path: 
                 details={"scope": "targeted"},
             ),
         ],
+        future_lineage,
     ]
     for checks in scenarios:
         state.validation_results = checks
         expected = evaluate_revision_closure(checks, current_revision=1).closed
         assert _change_revision_closed(services.state) is expected
+
+    state.validation_results = future_lineage
+    closure = evaluate_revision_closure(state.validation_results, current_revision=1)
+    assert closure.closed is False
+    assert closure.code == "future_validation_revision"
+    reason = _require_closed_revision_before_mutation(services)
+    assert reason is not None
+    assert "change revision 1 is not closed" in reason
+
+    state.change_revision = 0
+    state.validation_results = [validation("pytest", gate_id="pytest:future", revision=1)]
+    unchanged_closure = evaluate_revision_closure(state.validation_results, current_revision=0)
+    assert unchanged_closure.closed is False
+    assert unchanged_closure.code == "future_validation_revision"
+    assert _change_revision_closed(state) is False
+    assert _require_closed_revision_before_mutation(services) is not None
 
 
 def make_control(tmp_path: Path, *, max_repeated_action: int = 2) -> RuntimeControl:
@@ -217,6 +249,8 @@ def test_live_repetition_authority_is_content_sensitive_and_persisted(tmp_path: 
 def test_live_services_mirror_control_count_without_double_charging(tmp_path: Path) -> None:
     control = make_control(tmp_path)
     state = AgentRunState(objective="count all live tool requests", workspace=str(tmp_path / "sut"))
+    state_store = StateStore(control.metadata_path.parent / "state.json")
+    state_store.save(state)
     services = LiveRuntimeServices(
         workspace=tmp_path / "sut",
         state=state,
@@ -225,6 +259,7 @@ def test_live_services_mirror_control_count_without_double_charging(tmp_path: Pa
         test_runner=cast(Any, object()),
         max_tool_calls=10,
         max_repeated_action=2,
+        state_store=state_store,
         workspace_root_identity=pin_directory_identity(tmp_path / "sut", label="test workspace"),
         control=control,
     )

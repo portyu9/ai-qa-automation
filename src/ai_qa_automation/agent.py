@@ -20,6 +20,7 @@ from .runtime.budget import ExecutionBudget
 from .runtime.internal_tools import build_internal_mcp_server
 from .runtime.journal import RunJournal
 from .runtime.live_services import LiveRuntimeServices
+from .runtime.mutation_lineage import reconcile_rolled_back_mutation
 from .runtime.objective_bounds import validate_objective
 from .runtime.run_control import RuntimeControl
 from .runtime.runtime_hooks import build_hooks, build_permission_handler
@@ -374,27 +375,8 @@ async def run_agent(
                 )
         finally:
             if control.pending_mutation is not None:
-                pending = control.pending_mutation
                 try:
-                    if state.terminal_status == TerminalStatus.SUCCESS:
-                        state.terminal_status = TerminalStatus.NOT_VERIFIED
-                        state.terminal_reason = (
-                            "Terminal evaluation encountered an unresolved mutation transaction; "
-                            "verified commit authority exists only in PostToolUse closure."
-                        )
-                    rolled_back = control.rollback_pending_mutation(
-                        reason="run ended with an unresolved mutation transaction"
-                    )
-                    if rolled_back:
-                        revision_before = pending.change_revision_before
-                        if revision_before is None or state.change_revision > revision_before:
-                            _remove_latest_modified_path(state, rolled_back)
-                        state.observations.append(
-                            f"Unresolved mutation rolled back before terminal report: {rolled_back}"
-                        )
-                    control.set_workspace_fingerprint(
-                        RepositoryInspector(workspace).snapshot().fingerprint
-                    )
+                    _rollback_unresolved_mutation(state, control, workspace)
                 except (OSError, RuntimeError) as rollback_exc:
                     state.terminal_status = TerminalStatus.INFRASTRUCTURE_FAILURE
                     state.terminal_reason = (
@@ -429,6 +411,37 @@ async def run_agent(
         lease.release()
 
     return _final_response(state, agent_result=final_text)
+
+
+def _rollback_unresolved_mutation(
+    state: AgentRunState,
+    control: RuntimeControl,
+    workspace: Path,
+) -> None:
+    """Rollback terminally unresolved mutation bytes and poison that revision's closure."""
+
+    pending = control.pending_mutation
+    if pending is None:
+        return
+    if state.terminal_status == TerminalStatus.SUCCESS:
+        state.terminal_status = TerminalStatus.NOT_VERIFIED
+        state.terminal_reason = (
+            "Terminal evaluation encountered an unresolved mutation transaction; "
+            "verified commit authority exists only in PostToolUse closure."
+        )
+    rolled_back = control.rollback_pending_mutation(
+        reason="run ended with an unresolved mutation transaction"
+    )
+    if rolled_back:
+        reconcile_rolled_back_mutation(
+            state,
+            relative_path=rolled_back,
+            change_revision_before=pending.change_revision_before,
+        )
+        state.observations.append(
+            f"Unresolved mutation rolled back before terminal report: {rolled_back}"
+        )
+    control.set_workspace_fingerprint(RepositoryInspector(workspace).snapshot().fingerprint)
 
 
 def validate_runtime_roots(
@@ -527,13 +540,6 @@ def _final_response(
         ),
         "agent_result": agent_result,
     }
-
-
-def _remove_latest_modified_path(state: AgentRunState, path: str) -> None:
-    for index in range(len(state.files_modified) - 1, -1, -1):
-        if state.files_modified[index] == path:
-            state.files_modified.pop(index)
-            break
 
 
 def sdk_exception_outcome(exc: BaseException) -> tuple[TerminalStatus, str]:

@@ -7,8 +7,10 @@ from pathlib import Path
 import pytest
 
 from ai_qa_automation.fs_authority import descriptor_relative_authority_supported
+from ai_qa_automation.models import AgentRunState
 from ai_qa_automation.runtime.journal import RunJournal
 from ai_qa_automation.runtime.stale_recovery import recover_stale_mutation
+from ai_qa_automation.state import StateStore
 
 
 def _write_pending_runtime(
@@ -36,11 +38,19 @@ def _write_pending_runtime(
             "existed": True,
             "backup_path": str(backup.resolve()),
             "original_sha256": hashlib.sha256(original).hexdigest(),
+            "change_revision_before": 0,
         },
     }
     (prior_run / "runtime.json").write_text(
         json.dumps(payload, indent=2, sort_keys=True),
         encoding="utf-8",
+    )
+    StateStore(prior_run / "state.json").save(
+        AgentRunState(
+            run_id=prior_run.name,
+            objective="workspace-root recovery fixture",
+            workspace=str(workspace.resolve()),
+        )
     )
 
 

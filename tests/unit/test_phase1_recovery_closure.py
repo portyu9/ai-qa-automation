@@ -7,8 +7,10 @@ from pathlib import Path
 import pytest
 
 import ai_qa_automation.runtime.stale_recovery as stale_recovery_module
+from ai_qa_automation.models import AgentRunState
 from ai_qa_automation.runtime.journal import RunJournal
 from ai_qa_automation.runtime.stale_recovery import recover_stale_mutation
+from ai_qa_automation.state import StateStore
 
 
 def test_failed_stale_recovery_close_retains_authority_but_requires_reconciliation(
@@ -45,9 +47,17 @@ def test_failed_stale_recovery_close_retains_authority_but_requires_reconciliati
             "existed": True,
             "backup_path": str(backup.resolve()),
             "original_sha256": hashlib.sha256(original).hexdigest(),
+            "change_revision_before": 0,
         },
     }
     runtime_path.write_text(json.dumps(runtime_payload), encoding="utf-8")
+    StateStore(prior_run / "state.json").save(
+        AgentRunState(
+            run_id="run-old",
+            objective="stale recovery closure fixture",
+            workspace=str(workspace.resolve()),
+        )
+    )
 
     def fail_runtime_close(_path: Path, _payload: dict[str, object]) -> None:
         raise OSError("simulated durable metadata failure")

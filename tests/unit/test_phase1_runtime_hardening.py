@@ -234,9 +234,17 @@ def test_stale_recovery_retains_backup_until_runtime_closure_is_durable(
             "existed": True,
             "backup_path": str(backup.resolve()),
             "original_sha256": hashlib.sha256(original).hexdigest(),
+            "change_revision_before": 0,
         },
     }
     runtime_path.write_text(json.dumps(runtime_payload), encoding="utf-8")
+    StateStore(prior_run / "state.json").save(
+        AgentRunState(
+            run_id="run-old",
+            objective="stale recovery durability fixture",
+            workspace=str(workspace.resolve()),
+        )
+    )
 
     def fail_runtime_close(_path: Path, _payload: dict[str, object]) -> None:
         raise OSError("simulated durable metadata failure")

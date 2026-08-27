@@ -15,7 +15,9 @@ from ..fs_authority import (
     unlink_file_confined,
 )
 from ..io_safety import read_json_object_bounded
+from ..state import StateStore
 from .journal import RunJournal, validate_runtime_journal_binding
+from .mutation_lineage import reconcile_rolled_back_mutation
 from .run_control import atomic_write_json
 
 _MAX_RUNTIME_METADATA_BYTES = 2_000_000
@@ -227,6 +229,45 @@ def recover_stale_mutation(
             "reason": f"prior runtime journal authority is invalid: {journal_binding['reason']}",
         }
 
+    change_revision_before = pending.get("change_revision_before")
+    if type(change_revision_before) is not int or change_revision_before < 0:
+        return {
+            "status": "BLOCKED",
+            "reason": "prior pending mutation change_revision_before authority is invalid",
+        }
+    state_path = prior_run_dir / "state.json"
+    try:
+        prior_state_store = StateStore(state_path)
+        prior_state = prior_state_store.load()
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        return {
+            "status": "BLOCKED",
+            "reason": f"prior canonical state could not be verified: {type(exc).__name__}",
+        }
+    if prior_state.run_id != previous_run_id:
+        return {
+            "status": "BLOCKED",
+            "reason": "prior canonical state run_id does not match lease authority",
+        }
+    if Path(prior_state.workspace).expanduser().resolve() != workspace:
+        return {
+            "status": "BLOCKED",
+            "reason": "prior canonical state workspace does not match lease workspace",
+        }
+    if prior_state.change_revision < change_revision_before:
+        return {
+            "status": "BLOCKED",
+            "reason": "prior canonical change revision is behind pending mutation authority",
+        }
+    if prior_state.change_revision > change_revision_before + 1:
+        return {
+            "status": "BLOCKED",
+            "reason": (
+                "prior canonical change revision is more than one revision ahead of pending "
+                "mutation authority"
+            ),
+        }
+
     if not current_workspace_fingerprint_complete:
         reasons = ", ".join(current_workspace_fingerprint_reasons) or "unspecified"
         return {
@@ -388,6 +429,27 @@ def recover_stale_mutation(
             "reason": (
                 "stale mutation bytes were restored but prior journal authority became invalid; "
                 "rollback authority was retained and manual reconciliation is required"
+            ),
+        }
+
+    # Canonical state must reflect the restored bytes before runtime pending
+    # authority can be closed. This prevents a prior run from retaining SUCCESS or
+    # a closed validation revision for bytes that stale recovery has reverted.
+    reconcile_rolled_back_mutation(
+        prior_state,
+        relative_path=relative_path,
+        change_revision_before=change_revision_before,
+    )
+    try:
+        prior_state_store.save(prior_state)
+    except (OSError, RuntimeError, ValueError):
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": previous_run_id,
+            "reason": (
+                "stale mutation bytes were restored but prior canonical validation lineage could "
+                "not be durably reconciled; rollback authority was retained and manual "
+                "reconciliation is required"
             ),
         }
 

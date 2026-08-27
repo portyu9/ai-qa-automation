@@ -48,6 +48,7 @@ from .model_source_observation import (
     read_model_source_confined,
     search_test_coverage_confined,
 )
+from .validation_truth import evaluate_revision_closure
 
 _MAX_MODEL_SOURCE_CHARS = 12_000
 
@@ -85,37 +86,11 @@ def _pytest_scope(args: list[str]) -> str:
 
 
 def _change_revision_closed(state: AgentRunState) -> bool:
-    """Require exact mutation-subject closure before another mutation begins."""
-    if state.change_revision == 0:
-        return True
-    current = [item for item in state.validation_results if item.revision == state.change_revision]
-    if not current or any(item.status != ValidationStatus.PASS for item in current):
-        return False
-    patch_paths = {
-        str(item.details.get("path") or "")
-        for item in current
-        if item.name == "test_patch_safety"
-        and item.status == ValidationStatus.PASS
-        and str(item.details.get("path") or "")
-    }
-    if len(patch_paths) != 1:
-        return False
-    mutation_path = next(iter(patch_paths))
-    targeted = any(
-        item.name == "pytest"
-        and item.status == ValidationStatus.PASS
-        and item.details.get("scope") == "targeted"
-        and item.details.get("mutation_target_bound") is True
-        and item.details.get("mutation_target") == mutation_path
-        for item in current
-    )
-    regression = any(
-        item.name == "pytest"
-        and item.status == ValidationStatus.PASS
-        and item.details.get("scope") == "regression"
-        for item in current
-    )
-    return targeted and regression
+    """Use the shared revision-closure authority before another mutation begins."""
+    return evaluate_revision_closure(
+        state.validation_results,
+        current_revision=state.change_revision,
+    ).closed
 
 
 def _require_closed_revision_before_mutation(services: RuntimeServices) -> str | None:

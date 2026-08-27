@@ -38,7 +38,7 @@ Trusted artifact storage remains a deployment-owned control-plane boundary. Repo
 stateDiagram-v2
     direction LR
     accTitle: Autonomous mutation transaction and crash-recovery state machine
-    accDescr: A mutation starts only from an owned baseline. Exact-path patch safety, exact-path-bound targeted pytest, and full regression must pass before commit. Failed or incomplete proof rolls back. A crashed transaction is automatically recovered only when workspace root identity, fingerprint, paths, and backup integrity remain provable; otherwise the runtime blocks for manual review.
+    accDescr: A mutation starts only from an owned baseline. Exact-path patch safety, exact-path-bound targeted pytest, and full regression must pass before commit. Failed or incomplete proof enters rollback only after an advanced revision is durably marked NOT_VERIFIED. A crashed transaction is automatically recovered only when workspace root identity, fingerprint, canonical state lineage, paths, and backup integrity remain provable; otherwise the runtime blocks for manual review.
 
     [*] --> Baseline: owned lease + root identity + fingerprint
 
@@ -46,28 +46,32 @@ stateDiagram-v2
     Baseline --> Pending: authorized mutation + owned rollback snapshot
 
     Pending --> PatchSafe: exact-path patch-safety PASS
-    Pending --> Rollback: tool failure / terminal path without closure
+    Pending --> RollbackIntent: tool failure / terminal path without closure
 
     PatchSafe --> Targeted: exact-path-bound pytest PASS
-    PatchSafe --> Rollback: patch-safety FAIL / incomplete
+    PatchSafe --> RollbackIntent: patch-safety FAIL / incomplete
 
     Targeted --> Regression: full-regression pytest PASS
-    Targeted --> Rollback: targeted pytest FAIL / unrelated target / incomplete
+    Targeted --> RollbackIntent: targeted pytest FAIL / unrelated target / incomplete
 
     Regression --> Committed: revision deterministically closed
-    Regression --> Rollback: regression FAIL / incomplete
+    Regression --> RollbackIntent: regression FAIL / incomplete
 
-    Rollback --> Baseline: prior bytes restored / new file removed
+    RollbackIntent --> Rollback: advanced revision durably marked NOT_VERIFIED
+    Rollback --> Baseline: prior bytes restored / runtime pending closed / state reconciled
+    RollbackIntent --> IntegrityFailure: state checkpoint cannot be made durable
     Rollback --> IntegrityFailure: restoration ownership/integrity cannot be guaranteed
 
     Pending --> Crashed: process exit
     PatchSafe --> Crashed
     Targeted --> Crashed
     Regression --> Crashed
+    RollbackIntent --> Crashed
+    Rollback --> Crashed
 
-    Crashed --> Recovered: exact root identity + fingerprint + owned paths + verified backup
-    Recovered --> Baseline: stale mutation reverted before new bootstrap
-    Crashed --> ManualReview: replacement workspace / newer work / path ambiguity / integrity ambiguity
+    Crashed --> Recovered: exact root identity + fingerprint + state lineage + owned paths + verified backup
+    Recovered --> Baseline: stale mutation reverted and state reconciled before runtime closure
+    Crashed --> ManualReview: replacement workspace / newer work / revision gap / path ambiguity / integrity ambiguity
 
     classDef active fill:#ddf4ff,stroke:#0969da,color:#24292f,stroke-width:2px
     classDef verified fill:#dafbe1,stroke:#1a7f37,color:#24292f,stroke-width:2px
@@ -76,13 +80,13 @@ stateDiagram-v2
 
     class Baseline,Pending active
     class PatchSafe,Targeted,Regression,Committed verified
-    class Rollback,Crashed,Recovered recovery
+    class RollbackIntent,Rollback,Crashed,Recovered recovery
     class Blocked,IntegrityFailure,ManualReview blocked
 ```
 
 **State key:** blue = actively controlled transaction · green = deterministic proof/closure · purple = recovery path · red = fail-closed/manual intervention. State names remain explicit so color is supplementary.
 
-The state machine is asymmetric by design: preserving newer human work or a replacement workspace is more important than automatically cleaning an older agent transaction.
+The state machine is asymmetric by design: preserving newer human work or a replacement workspace is more important than automatically cleaning an older agent transaction. A rollback also cannot erase deterministic lineage for the candidate bytes it invalidated.
 
 ## Mutation preparation
 
@@ -101,22 +105,29 @@ Before a write, the runtime:
 9. rejects a symlinked rollback directory;
 10. snapshots existing bytes when the target already exists;
 11. bounds rollback snapshot size and records SHA-256;
-12. persists pending-mutation metadata, including root authority, before the candidate revision is trusted.
+12. records the canonical `change_revision_before` in pending authority; and
+13. persists pending-mutation metadata, including root authority, before the candidate revision is trusted.
 
 New files are tracked as absent-before-mutation so rollback removes them rather than manufacturing previous content.
 
 ### Transaction durability ordering
 
-`runtime.json` is the crash-recovery authority for whether a mutation is still pending. The runtime therefore orders transaction transitions conservatively:
+`state.json` owns canonical validation/revision truth; `runtime.json` owns crash-recovery transaction state. Neither may outrun the other in a way that can certify bytes that no longer exist.
 
-- **prepare:** rollback bytes are created, then pending metadata is durably persisted before the mutation tool may execute;
-- **commit:** rollback ownership/hash is verified, then pending metadata is durably cleared **before** the rollback snapshot is discarded;
-- **rollback:** original bytes are restored (or an unverified new file is removed), then pending metadata is durably cleared **before** rollback-snapshot cleanup;
-- if metadata persistence fails during commit, the transaction remains pending and rollback bytes are preserved;
-- if metadata persistence fails after rollback bytes have been restored, the transaction remains conservatively pending with its backup intact so recovery cannot infer a clean closure;
-- lifecycle journal augmentation occurs after an already-durable commit/rollback transition and cannot resurrect pending state or undo restored bytes.
+The runtime therefore orders transaction transitions conservatively:
 
-This ordering intentionally prefers an orphaned cleanup artifact over the unsafe opposite state: deleted rollback bytes while durable metadata still says a mutation is pending.
+- **prepare:** rollback bytes are created, then pending metadata—including `change_revision_before`—is durably persisted before the mutation tool may execute;
+- **commit:** exact-path deterministic closure is evaluated from the shared revision-closure authority, rollback ownership/hash is verified, then pending metadata is durably cleared **before** the rollback snapshot is discarded;
+- **rollback with an advanced revision:** a current-revision `mutation_transaction=NOT_VERIFIED` rollback-intent gate is durably persisted in `state.json` **before** target bytes are restored or runtime pending authority can be cleared;
+- after that pre-close checkpoint, original bytes are restored (or an unverified new file is removed), workspace-root identity is revalidated, and `runtime.json.pending_mutation` is durably cleared;
+- only after runtime closure does canonical file accounting move from rollback-intent to rolled-back state; the same current revision remains monotonic and non-PASS;
+- if the pre-close state checkpoint fails, **no rollback write occurs** and durable runtime pending/backup authority remains intact;
+- if the post-close state checkpoint fails, runtime pending may already be closed, but the earlier durable `NOT_VERIFIED` gate still prevents stale validation lineage from certifying the reverted bytes; rollback backup cleanup is not reached;
+- if the candidate never advanced `change_revision`, no new validation gate is needed: rollback returns the workspace to the same canonical revision while runtime pending authority protects the transaction until closure;
+- if runtime metadata persistence fails during commit or rollback closure, pending authority is rebound/preserved and rollback material remains available; and
+- lifecycle journal augmentation occurs after an already-durable commit/rollback transition and cannot resurrect pending state, undo restored bytes, or manufacture validation closure.
+
+This ordering intentionally prefers retained pending authority, a durable `NOT_VERIFIED` gate, or an orphaned cleanup artifact over the unsafe opposite states: reverted bytes with stale PASS lineage, or deleted rollback bytes while durable metadata still says a mutation is pending.
 
 ### Live-language closure boundary
 
@@ -127,13 +138,15 @@ The reusable safe patcher can validate Python/JavaScript/TypeScript test artifac
 
 ## Exact-path revision closure
 
-Mutation commit is independent from model completion.
+Mutation commit and authorization for the next autonomous mutation use the same deterministic closure authority as terminal/recovery truth. Model completion is not an alternate authority.
 
 The current `change_revision` must contain:
 
 - patch-safety `PASS` bound to the exact changed path;
 - targeted pytest `PASS` explicitly selecting that same pending path; and
 - full-regression pytest `PASS`.
+
+Validation lineage ahead of canonical `change_revision`, conflicting same-revision truth, failed/incomplete current-revision checks, or ambiguous patch subjects fail closed rather than being filtered out by a separate mutation precheck.
 
 For example, a targeted selector such as:
 
@@ -169,7 +182,7 @@ If any integrity check fails, the pending transaction is preserved and the frame
 
 A process can terminate before in-process cleanup executes. The next workspace owner can inspect the prior lease and recover a stale mutation, but recovery is intentionally **not** a weaker alternate write path.
 
-Recovery validates the complete ownership chain before touching the target.
+Recovery validates the complete ownership and lineage chain before touching the target.
 
 ### Prior run ownership
 
@@ -177,17 +190,20 @@ Recovery validates the complete ownership chain before touching the target.
 - run-directory components are not symlinks;
 - prior `journal.jsonl` ownership is checked before recovery mutation;
 - `runtime.json` is a regular non-symlink file;
+- canonical `state.json` must load under its strict schema/JSON bounds;
+- prior state `run_id` and workspace must match lease/runtime authority; and
 - runtime workspace exactly matches the newly leased workspace.
 
 ### Workspace-state ownership
 
-- pending mutation metadata is structurally usable;
+- pending mutation metadata is structurally usable and carries an integer `change_revision_before`;
+- canonical `change_revision` may equal `change_revision_before` (prepared but not advanced) or exactly `change_revision_before + 1` (one candidate revision advanced); a larger gap is incoherent and blocks before any target write;
 - persisted post-mutation fingerprint exists;
 - current workspace fingerprint exactly matches it;
 - on platforms that can enforce descriptor-relative filesystem authority, persisted `workspace_root_identity` is mandatory rather than optional legacy metadata; and
 - current `(device, inode)` identity must exactly match that persisted authority before rollback and again before recovery closure.
 
-A fingerprint mismatch means newer human/out-of-band work may exist. A root-identity mismatch means the same pathname may now designate a replacement workspace. Either condition blocks automatic rollback.
+A fingerprint mismatch means newer human/out-of-band work may exist. A root-identity mismatch means the same pathname may now designate a replacement workspace. An impossible revision gap means pending runtime authority cannot be safely mapped to canonical validation lineage. Any of these conditions blocks automatic rollback.
 
 ### Target ownership
 
@@ -207,7 +223,7 @@ For a file that existed before mutation:
 - backup is a regular file;
 - content hash equals the recorded original digest.
 
-Only after every applicable condition is satisfied does recovery restore bytes and clear the transaction.
+Only after every applicable condition is satisfied does recovery restore bytes. If the prior mutation advanced the canonical revision, stale recovery then durably reconciles that prior run's `state.json` to `NOT_VERIFIED`/rolled-back lineage **before** clearing `runtime.json.pending_mutation`. A state-persistence failure therefore retains runtime pending and backup authority rather than certifying a clean recovery transition.
 
 ## Independent execution budgets
 
@@ -234,14 +250,14 @@ A later successful invocation resets the circuit. A broken provider/tool therefo
 
 | Record | Purpose | Ownership rule |
 |---|---|---|
-| `state.json` | canonical QA decision/evidence state | recovery/attestation reject ambiguous symlink ownership; trusted artifact storage remains deployment-owned |
-| `runtime.json` | lease, workspace-root identity, fingerprint, budgets, circuits, mutation metadata, journal head | stale recovery requires owned metadata plus root/fingerprint subject binding; writes/restores are size-bounded |
+| `state.json` | canonical QA decision/evidence state, including rollback-intent/rolled-back validation lineage | recovery/attestation reject ambiguous symlink ownership; rollback cannot clear runtime authority ahead of required canonical lineage persistence; trusted artifact storage remains deployment-owned |
+| `runtime.json` | lease, workspace-root identity, fingerprint, budgets, circuits, mutation metadata, journal head | stale recovery requires owned metadata plus root/fingerprint/state-revision subject binding; writes/restores are size-bounded |
 | `journal.jsonl` | append-only hash-chained lifecycle/tool events | journal rejects pre-existing and post-init symlink substitution and byte-bounds records |
 | `evidence-manifest.json` | evidence/artifact identities and hashes | evidence store rejects symlink control-file substitution, strict-JSON ambiguity, cross-run records, and bounded-registry violations |
 | `rollback/` | temporary authoritative prior bytes | directory + backup ownership, size, and hashes are revalidated |
 | `.leases/*.lock` | cross-process workspace ownership | lease-directory/file identities are revalidated; POSIX-capable runtimes additionally lock the target workspace inode |
 
-Keeping these concerns separate prevents process recovery metadata from becoming test evidence or a QA conclusion.
+Keeping these concerns separate prevents process recovery metadata from becoming test evidence or a QA conclusion while still requiring their authority-bearing transitions to remain coherent.
 
 ## Recovery inspection
 
@@ -249,7 +265,7 @@ Keeping these concerns separate prevents process recovery metadata from becoming
 ai-qa recover artifacts/run-<id>
 ```
 
-Recovery inspection uses the same subject-bound closure rule as live terminal evaluation. A changed revision is closed only when one exact patch target has patch-safety PASS, targeted pytest is bound to that target, regression passed, and no pending mutation remains.
+Recovery inspection uses the same subject-bound closure rule as live terminal evaluation and mutation authorization. A changed revision is closed only when one exact patch target has patch-safety PASS, targeted pytest is bound to that target, regression passed, no non-PASS current-revision transaction gate remains, and no pending mutation remains.
 
 The inspection path also rejects symlinked run/state/runtime/journal control paths and, where descriptor-relative identity is available, requires persisted workspace-root identity to match the current workspace before declaring the run recoverable. Recreating byte-equivalent content at the same pathname is not sufficient subject identity.
 
@@ -266,6 +282,10 @@ It does not replay or reconstruct hidden Claude conversational state; it decides
 | Target path has traversal/symlink ambiguity | `BLOCKED` |
 | Rollback directory/backup ownership is ambiguous | mutation or recovery refused |
 | Prior crash journal/target path is ambiguous | stale recovery blocked |
+| Pending revision authority and canonical revision have an impossible gap | rollback/recovery blocked before target write |
+| Live pre-rollback canonical state checkpoint fails | no rollback write; pending/backup authority retained |
+| Live post-rollback state reconciliation fails | durable `NOT_VERIFIED` lineage retained; no PASS claim |
+| Stale-recovery state reconciliation fails after restore | restored bytes coexist with retained pending/backup authority; recovery remains blocked for manual reconciliation |
 | Budget exhausted | `BUDGET_EXCEEDED` |
 | Tool circuit open | tool action denied |
 | Revision cannot close | rollback before terminal report |
