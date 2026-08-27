@@ -210,12 +210,13 @@ jobs:
       - name: Build wheel twice from fresh source trees
         env:
           SOURCE_DATE_EPOCH: "315532800"
+          GIT_NO_REPLACE_OBJECTS: "1"
         run: |
           set -euo pipefail
           rm -rf /tmp/aiqa-build-a /tmp/aiqa-build-b
           mkdir -p /tmp/aiqa-build-a /tmp/aiqa-build-b artifacts/ci/wheel-a artifacts/ci/wheel-b
-          git archive --format=tar "$GITHUB_SHA" | tar -xf - -C /tmp/aiqa-build-a
-          git archive --format=tar "$GITHUB_SHA" | tar -xf - -C /tmp/aiqa-build-b
+          git --no-replace-objects archive --format=tar "$GITHUB_SHA" | tar -xf - -C /tmp/aiqa-build-a
+          git --no-replace-objects archive --format=tar "$GITHUB_SHA" | tar -xf - -C /tmp/aiqa-build-b
           python -m pip wheel --no-deps --no-build-isolation /tmp/aiqa-build-a --wheel-dir artifacts/ci/wheel-a
           python -m pip wheel --no-deps --no-build-isolation /tmp/aiqa-build-b --wheel-dir artifacts/ci/wheel-b
           mapfile -t wheel_a < <(find artifacts/ci/wheel-a -maxdepth 1 -type f -name '*.whl' -print)
