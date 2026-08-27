@@ -5,6 +5,7 @@ from typing import Any
 
 from ..models import TerminalStatus, ValidationResult, ValidationStatus
 from .internal_tools import RuntimeServices, _pytest_scope, _stable_gate_id
+from .mutation_lineage import build_rollback_lineage_checkpoints
 from .run_control import RuntimeControl
 from .tool_input_bounds import validate_tool_request
 
@@ -41,6 +42,13 @@ class LiveRuntimeServices(RuntimeServices):
         }.items():
             if not isinstance(value, bool):
                 raise ValueError(f"{name} must be a boolean")
+
+        before_close, after_close = build_rollback_lineage_checkpoints(
+            self.state,
+            self.state_store,
+        )
+        self.control.rollback_lineage_before_close = before_close
+        self.control.rollback_lineage_after_close = after_close
 
     def pytest_execution_block_reason(self) -> str | None:
         missing: list[str] = []
