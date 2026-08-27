@@ -16,6 +16,11 @@ _MetadataSignature = tuple[int, int, int, int, int, int]
 _NamespaceObservation = tuple[tuple[str, _MetadataSignature], ...]
 _GitMetadataObservation = tuple[tuple[str, _MetadataSignature], ...]
 _UNTRACKED_PATH_LIST = ("ls-files", "--others", "--exclude-standard", "-z", "--")
+_NESTED_GIT_INDIRECTION_PATHS = {
+    ("commondir",),
+    ("objects", "info", "alternates"),
+    ("objects", "info", "http-alternates"),
+}
 
 
 class RepositoryNamespaceAuthorityMixin:
@@ -31,10 +36,22 @@ class RepositoryNamespaceAuthorityMixin:
         *,
         max_entries: int,
         ignored_names: set[str] | frozenset[str] = frozenset(),
+        ignored_root_names: set[str] | frozenset[str] = frozenset(),
         label: str,
         expected_root_identity: tuple[int, int] | None = None,
     ) -> ConfinedFileScan:
         raise NotImplementedError
+
+    @staticmethod
+    def _nested_git_relative_parts(path: Path) -> tuple[str, ...] | None:
+        parts = path.parts
+        try:
+            marker = parts.index(".git")
+        except ValueError:
+            return None
+        if marker == 0:
+            return None
+        return parts[marker + 1 :]
 
     def _worktree_namespace_observation(self) -> _NamespaceObservation:
         expected = self.workspace_root_identity
@@ -44,7 +61,7 @@ class RepositoryNamespaceAuthorityMixin:
             scan = self._scan_regular_files_adapter(
                 self.workspace,
                 max_entries=_MAX_GIT_PATHS,
-                ignored_names={".git"},
+                ignored_root_names={".git"},
                 label="repository worktree namespace",
                 expected_root_identity=expected,
             )
@@ -60,13 +77,27 @@ class RepositoryNamespaceAuthorityMixin:
         if scan.unreadable_paths:
             raise RuntimeError("repository worktree namespace contains unreadable paths")
 
+        nested_gitfiles = tuple(item.path for item in scan.files if item.path.name == ".git")
+        if nested_gitfiles:
+            raise RepositorySubjectError(
+                "nested Git gitfile authority is not supported by repository inspection"
+            )
+        if any(".git" in path.parts for path in scan.unsafe_paths):
+            raise RepositorySubjectError(
+                "nested Git metadata contains unsupported filesystem aliases"
+            )
+        for item in scan.files:
+            nested_relative = self._nested_git_relative_parts(Path(item.path.as_posix()))
+            if nested_relative in _NESTED_GIT_INDIRECTION_PATHS:
+                raise RepositorySubjectError(
+                    "nested Git metadata contains unsupported external indirection"
+                )
+
         rows: list[tuple[str, _MetadataSignature]] = [
             (f"dir:{item.path.as_posix()}", item.metadata_signature) for item in scan.directories
         ]
         rows.extend(
-            (f"ignore:{item.path.as_posix()}", item.metadata_signature)
-            for item in scan.files
-            if item.path.name == ".gitignore"
+            (f"file:{item.path.as_posix()}", item.metadata_signature) for item in scan.files
         )
         return tuple(sorted(rows))
 
@@ -103,16 +134,25 @@ class RepositoryNamespaceAuthorityMixin:
     def _git(self, *args: str, allow_failure: bool = False) -> str | None:
         authority = cast(RepositoryGitAuthorityMixin, self)
         before = self._git_metadata_observation()
+        original_error: Exception | None = None
         try:
             result = RepositoryGitAuthorityMixin._git(
                 authority,
                 *args,
                 allow_failure=allow_failure,
             )
+        except Exception as exc:
+            original_error = exc
+            raise
         finally:
-            after = self._git_metadata_observation()
-            if before != after:
-                raise RuntimeError("repository Git metadata changed during Git inspection")
+            try:
+                after = self._git_metadata_observation()
+            except Exception:
+                if original_error is None:
+                    raise
+            else:
+                if before != after and original_error is None:
+                    raise RuntimeError("repository Git metadata changed during Git inspection")
         return result
 
     def _git_bytes(
@@ -123,6 +163,7 @@ class RepositoryNamespaceAuthorityMixin:
     ) -> bytes | None:
         authority = cast(RepositoryGitAuthorityMixin, self)
         before = self._git_metadata_observation()
+        original_error: Exception | None = None
         try:
             result = RepositoryGitAuthorityMixin._git_bytes(
                 authority,
@@ -130,10 +171,18 @@ class RepositoryNamespaceAuthorityMixin:
                 max_stdout_bytes=max_stdout_bytes,
                 allow_failure=allow_failure,
             )
+        except Exception as exc:
+            original_error = exc
+            raise
         finally:
-            after = self._git_metadata_observation()
-            if before != after:
-                raise RuntimeError("repository Git metadata changed during Git inspection")
+            try:
+                after = self._git_metadata_observation()
+            except Exception:
+                if original_error is None:
+                    raise
+            else:
+                if before != after and original_error is None:
+                    raise RuntimeError("repository Git metadata changed during Git inspection")
         return result
 
     def _git_path_list(self, *args: str) -> tuple[str, ...]:
