@@ -24,6 +24,7 @@ from ai_qa_automation.runtime.tool_input_bounds import (
     tool_input_fingerprint,
     validate_tool_request,
 )
+from ai_qa_automation.state import StateStore
 
 
 def make_control(tmp_path: Path, *, max_tool_calls: int = 5) -> RuntimeControl:
@@ -46,6 +47,8 @@ def make_control(tmp_path: Path, *, max_tool_calls: int = 5) -> RuntimeControl:
 
 def make_live_services(control: RuntimeControl) -> LiveRuntimeServices:
     state = AgentRunState(objective="bound tool input", workspace=str(control.workspace))
+    state_store = StateStore(control.metadata_path.parent / "state.json")
+    state_store.save(state)
     return LiveRuntimeServices(
         workspace=control.workspace,
         state=state,
@@ -54,6 +57,7 @@ def make_live_services(control: RuntimeControl) -> LiveRuntimeServices:
         test_runner=cast(Any, object()),
         max_tool_calls=5,
         max_repeated_action=2,
+        state_store=state_store,
         workspace_root_identity=pin_directory_identity(control.workspace, label="test workspace"),
         control=control,
     )
