@@ -6,8 +6,8 @@ on:
       - opened
       - reopened
       - synchronize
-      - labeled
-      - unlabeled
+      - ready_for_review
+      - converted_to_draft
 
 permissions:
   contents: read
@@ -46,17 +46,11 @@ jobs:
           sender = event.get("sender")
           actor = sender.get("login") if isinstance(sender, dict) else None
           action = event.get("action")
-          label = event.get("label")
-          label_name = label.get("name") if isinstance(label, dict) else None
           repository_owner = os.environ["REPOSITORY_OWNER"]
 
-          if action != "labeled":
+          if action != "ready_for_review":
               raise SystemExit(
                   f"exact head {head_sha} is not owner-authorized: latest trusted event is {action!r}"
-              )
-          if label_name != "merge-authorized":
-              raise SystemExit(
-                  f"exact head {head_sha} is not owner-authorized: unexpected label {label_name!r}"
               )
           if actor != repository_owner:
               raise SystemExit(
