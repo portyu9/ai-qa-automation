@@ -201,6 +201,53 @@ def test_snapshot_fails_closed_when_tracked_file_changes_after_status_observatio
     )
 
 
+def test_snapshot_fails_closed_when_changed_bytes_change_without_status_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_descriptor_authority()
+    workspace = tmp_path / "workspace"
+    _init_repo(workspace)
+    tracked = workspace / "tracked.txt"
+    tracked.write_text("first-modified-value\n", encoding="utf-8")
+    inspector = RepositoryInspector(workspace)
+    real_fingerprint = inspector._fingerprint
+    fingerprint_calls = 0
+
+    def mutate_after_first_fingerprint(
+        git_sha: str | None,
+        status: str,
+        changed_files: tuple[str, ...],
+        *,
+        index_digest: str | None = None,
+        initial_incomplete_reasons: tuple[str, ...] = (),
+    ) -> tuple[str, bool, tuple[str, ...]]:
+        nonlocal fingerprint_calls
+        observed = real_fingerprint(
+            git_sha,
+            status,
+            changed_files,
+            index_digest=index_digest,
+            initial_incomplete_reasons=initial_incomplete_reasons,
+        )
+        fingerprint_calls += 1
+        if fingerprint_calls == 1:
+            tracked.write_text("second-modified-value\n", encoding="utf-8")
+        return observed
+
+    monkeypatch.setattr(inspector, "_fingerprint", mutate_after_first_fingerprint)
+
+    snapshot = inspector.snapshot()
+
+    assert fingerprint_calls == 2
+    assert snapshot.git_sha is None
+    assert snapshot.changed_files == ()
+    assert snapshot.fingerprint_complete is False
+    assert snapshot.fingerprint_incomplete_reasons == (
+        "repository-state-changed-during-inspection",
+    )
+
+
 def test_snapshot_fails_closed_when_symbolic_head_changes_without_commit_change(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

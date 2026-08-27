@@ -30,6 +30,7 @@ from ._repository_common import (
     RepositorySubjectError as RepositorySubjectError,
 )
 from ._repository_git import RepositoryGitAuthorityMixin
+from ._repository_namespace import RepositoryNamespaceAuthorityMixin
 from ._repository_worktree import RepositoryWorktreeMixin
 from .execution_env import (
     BoundedBinarySubprocessResult,
@@ -43,7 +44,11 @@ from .subprocess_subject import (
 )
 
 
-class RepositoryInspector(RepositoryGitAuthorityMixin, RepositoryWorktreeMixin):
+class RepositoryInspector(
+    RepositoryNamespaceAuthorityMixin,
+    RepositoryGitAuthorityMixin,
+    RepositoryWorktreeMixin,
+):
     """Read-only repository inspection with explicit metadata/worktree authority layers."""
 
     # Ambient authority enters only through these adapters. Keeping them in this public
@@ -90,6 +95,7 @@ class RepositoryInspector(RepositoryGitAuthorityMixin, RepositoryWorktreeMixin):
         *,
         max_entries: int,
         ignored_names: set[str] | frozenset[str] = frozenset(),
+        ignored_root_names: set[str] | frozenset[str] = frozenset(),
         label: str,
         expected_root_identity: tuple[int, int] | None = None,
     ) -> ConfinedFileScan:
@@ -97,6 +103,7 @@ class RepositoryInspector(RepositoryGitAuthorityMixin, RepositoryWorktreeMixin):
             root,
             max_entries=max_entries,
             ignored_names=ignored_names,
+            ignored_root_names=ignored_root_names,
             label=label,
             expected_root_identity=expected_root_identity,
         )
@@ -278,11 +285,24 @@ class RepositoryInspector(RepositoryGitAuthorityMixin, RepositoryWorktreeMixin):
                 post_index_digest,
                 post_observation_reasons,
             ) = self._worktree_status(sha, object_format)
+            (
+                post_fingerprint,
+                post_complete,
+                post_incomplete_reasons,
+            ) = self._fingerprint(
+                sha,
+                post_status,
+                post_changed,
+                index_digest=post_index_digest,
+                initial_incomplete_reasons=post_observation_reasons,
+            )
             post_fingerprint_sha = self._git("rev-parse", "HEAD", allow_failure=True)
             post_fingerprint_branch = self._git(
                 "symbolic-ref", "--quiet", "--short", "HEAD", allow_failure=True
             )
             post_fingerprint_index = hashlib.sha256(self._read_index_bytes()).hexdigest()
+        except RepositorySubjectError:
+            raise
         except RuntimeError:
             return self._incomplete_snapshot("git-inspection-incomplete")
         if (
@@ -293,6 +313,9 @@ class RepositoryInspector(RepositoryGitAuthorityMixin, RepositoryWorktreeMixin):
             or post_status != status
             or post_changed != changed
             or post_observation_reasons != observation_reasons
+            or post_fingerprint != fingerprint
+            or post_complete != complete
+            or post_incomplete_reasons != incomplete_reasons
         ):
             return self._incomplete_snapshot("repository-state-changed-during-inspection")
         return RepositorySnapshot(
@@ -339,6 +362,9 @@ class RepositoryInspector(RepositoryGitAuthorityMixin, RepositoryWorktreeMixin):
     def change_set(self, base_ref: str) -> RepositoryChangeSet:
         """Resolve an immutable baseline and union committed/worktree change evidence."""
         safe_ref = self._validate_ref(base_ref)
+        bare_hex = all(char in "0123456789abcdefABCDEF" for char in safe_ref)
+        if bare_hex and len(safe_ref) not in {40, 64}:
+            raise ValueError("baseline ref must not be an abbreviated object id")
         head = self._git("rev-parse", "HEAD")
         if head is None:
             raise RuntimeError("target workspace is not a Git repository")
@@ -346,6 +372,9 @@ class RepositoryInspector(RepositoryGitAuthorityMixin, RepositoryWorktreeMixin):
         baseline = self._git("rev-parse", "--verify", f"{safe_ref}^{{commit}}")
         if baseline is None:
             raise RuntimeError(f"baseline ref could not be resolved: {safe_ref}")
+        baseline = self._verify_exact_commit_oid(baseline)
+        if bare_hex and baseline != safe_ref.lower():
+            raise RuntimeError("baseline full object id does not match its requested object id")
         merge_base = self._git("merge-base", baseline, head)
         if merge_base is None:
             raise RuntimeError(f"baseline ref has no merge base with HEAD: {safe_ref}")

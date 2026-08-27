@@ -25,6 +25,15 @@ from .execution_env import (
     restricted_subprocess_env,
 )
 
+_MetadataSignature = tuple[int, int, int, int, int, int]
+_BaselineRefObservation = tuple[tuple[str, _MetadataSignature | None], ...]
+_HeadRefObservation = tuple[
+    bytes,
+    _MetadataSignature,
+    _MetadataSignature,
+    _BaselineRefObservation,
+]
+
 
 class RepositoryGitAuthorityMixin:
     workspace: Path
@@ -103,6 +112,17 @@ class RepositoryGitAuthorityMixin:
     ) -> AbstractContextManager[tuple[Path, Path, tuple[int, int]]]:
         raise NotImplementedError
 
+    @staticmethod
+    def _metadata_signature(value: os.stat_result) -> _MetadataSignature:
+        return (
+            value.st_dev,
+            value.st_ino,
+            value.st_mode,
+            value.st_size,
+            value.st_mtime_ns,
+            value.st_ctime_ns,
+        )
+
     def _discover_git_dir_identity(self) -> tuple[int, int] | None:
         if self.workspace_root_identity is None:
             return None
@@ -141,6 +161,176 @@ class RepositoryGitAuthorityMixin:
         except (OSError, ValueError) as exc:
             raise RepositorySubjectError(f"{label} could not be inspected safely") from exc
 
+    def _stat_git_metadata_signature(
+        self,
+        relative_path: str,
+        *,
+        label: str,
+    ) -> _MetadataSignature | None:
+        if self.git_dir_identity is None:
+            raise RuntimeError("Git metadata observation requires a direct repository")
+        try:
+            observed = self._stat_confined_entry_adapter(
+                self.workspace / ".git",
+                relative_path,
+                label=label,
+                expected_root_identity=self.git_dir_identity,
+            )
+        except (FileNotFoundError, NotADirectoryError):
+            return None
+        except (OSError, ValueError) as exc:
+            raise RepositorySubjectError(f"{label} could not be observed safely") from exc
+        return self._metadata_signature(observed)
+
+    @staticmethod
+    def _validate_baseline_ref(base_ref: str) -> str:
+        if not isinstance(base_ref, str):
+            raise ValueError("baseline ref must be a string")
+        value = base_ref.strip()
+        if _HEX_SHA.fullmatch(value):
+            return value.lower()
+        if not value or len(value) > 256 or value.startswith("-"):
+            raise ValueError("baseline ref must be a literal ref name or full object id")
+        components = value.split("/")
+        for component in components:
+            if (
+                not component
+                or component.startswith(".")
+                or component.endswith(".")
+                or component.endswith(".lock")
+                or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._@+-]*", component) is None
+            ):
+                raise ValueError("baseline ref contains unsupported Git ref syntax")
+        if ".." in value or "@{" in value:
+            raise ValueError("baseline ref contains unsupported Git ref syntax")
+        return value
+
+    @staticmethod
+    def _baseline_ref_candidates(safe_ref: str) -> tuple[str, ...]:
+        if _HEX_SHA.fullmatch(safe_ref):
+            return ()
+        if safe_ref.startswith("refs/"):
+            return (safe_ref,)
+        return (
+            safe_ref,
+            f"refs/{safe_ref}",
+            f"refs/tags/{safe_ref}",
+            f"refs/heads/{safe_ref}",
+            f"refs/remotes/{safe_ref}",
+            f"refs/remotes/{safe_ref}/HEAD",
+        )
+
+    def _baseline_ref_observation(self, safe_ref: str) -> _BaselineRefObservation:
+        candidates = self._baseline_ref_candidates(safe_ref)
+        if not candidates:
+            return ()
+        if self.workspace_root_identity is None or self.git_dir_identity is None:
+            raise RuntimeError("baseline ref observation requires a direct authorized repository")
+
+        try:
+            git_dir = self._stat_confined_entry_adapter(
+                self.workspace,
+                ".git",
+                label="baseline Git metadata directory",
+                expected_root_identity=self.workspace_root_identity,
+            )
+        except (OSError, ValueError) as exc:
+            raise RepositorySubjectError(
+                "baseline Git metadata directory could not be observed safely"
+            ) from exc
+
+        paths: set[str] = {"packed-refs"}
+        for candidate in candidates:
+            parts = candidate.split("/")
+            paths.add(candidate)
+            for index in range(1, len(parts)):
+                paths.add("/".join(parts[:index]))
+
+        rows: list[tuple[str, _MetadataSignature | None]] = [
+            (".git", self._metadata_signature(git_dir))
+        ]
+        for relative in sorted(paths):
+            rows.append(
+                (
+                    relative,
+                    self._stat_git_metadata_signature(
+                        relative,
+                        label=f"baseline ref authority {relative}",
+                    ),
+                )
+            )
+
+        for candidate in candidates:
+            signature = self._stat_git_metadata_signature(
+                candidate,
+                label=f"baseline ref {candidate}",
+            )
+            if signature is None or not stat.S_ISREG(signature[2]):
+                continue
+            loose_ref = self._read_git_metadata_file(
+                candidate,
+                label=f"baseline ref {candidate}",
+            )
+            if loose_ref is not None and loose_ref.lstrip().startswith(b"ref:"):
+                raise RepositorySubjectError("symbolic baseline refs are not permitted")
+        return tuple(rows)
+
+    def _head_ref_observation(self) -> _HeadRefObservation:
+        if self.workspace_root_identity is None or self.git_dir_identity is None:
+            raise RuntimeError("Git HEAD observation requires a direct authorized repository")
+        try:
+            git_dir_before = self._stat_confined_entry_adapter(
+                self.workspace,
+                ".git",
+                label="Git HEAD metadata directory",
+                expected_root_identity=self.workspace_root_identity,
+            )
+            head_before = self._stat_git_metadata_signature("HEAD", label="Git HEAD")
+            head_bytes = self._read_git_metadata_file("HEAD", label="Git HEAD")
+            head_after = self._stat_git_metadata_signature("HEAD", label="Git HEAD")
+            git_dir_after = self._stat_confined_entry_adapter(
+                self.workspace,
+                ".git",
+                label="Git HEAD metadata directory",
+                expected_root_identity=self.workspace_root_identity,
+            )
+        except (OSError, ValueError) as exc:
+            raise RepositorySubjectError("Git HEAD metadata could not be observed safely") from exc
+
+        if head_before is None or head_after is None or head_bytes is None:
+            raise RepositorySubjectError("Git HEAD metadata must be one direct regular file")
+        git_dir_before_signature = self._metadata_signature(git_dir_before)
+        git_dir_after_signature = self._metadata_signature(git_dir_after)
+        if head_before != head_after or git_dir_before_signature != git_dir_after_signature:
+            raise RuntimeError("Git HEAD metadata changed during confined observation")
+        if not stat.S_ISREG(head_after[2]) or len(head_bytes) != head_after[3]:
+            raise RepositorySubjectError("Git HEAD metadata must be one stable regular file")
+
+        try:
+            raw_text = head_bytes.decode("ascii", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise RepositorySubjectError("Git HEAD metadata is not valid ASCII") from exc
+        value = raw_text.rstrip("\r\n")
+        if raw_text not in {value, f"{value}\n", f"{value}\r\n"} or not value:
+            raise RepositorySubjectError("Git HEAD metadata has unsupported syntax")
+
+        target_observation: _BaselineRefObservation = ()
+        if value.startswith("ref: "):
+            target = value[len("ref: ") :]
+            validated = self._validate_baseline_ref(target)
+            if validated != target or not target.startswith("refs/"):
+                raise RepositorySubjectError("Git HEAD must target one direct full ref")
+            target_observation = self._baseline_ref_observation(target)
+        elif value.startswith("ref:") or not _HEX_SHA.fullmatch(value):
+            raise RepositorySubjectError("Git HEAD metadata has unsupported syntax")
+
+        return (
+            head_bytes,
+            git_dir_after_signature,
+            head_after,
+            target_observation,
+        )
+
     def _assert_git_metadata_safe(self) -> None:
         if self.git_dir_identity is None:
             return
@@ -161,6 +351,16 @@ class RepositoryGitAuthorityMixin:
             )
         if scan.truncated:
             raise RuntimeError("repository Git metadata scan exceeded its bounded entry budget")
+        if (
+            self._stat_git_metadata_signature(
+                "reftable",
+                label="Git reftable ref storage",
+            )
+            is not None
+        ):
+            raise RepositorySubjectError(
+                "repository Git metadata must not use unbound reftable ref storage"
+            )
 
         for relative, label in (
             ("commondir", "Git common-directory indirection"),
@@ -258,6 +458,7 @@ class RepositoryGitAuthorityMixin:
         if args in {
             ("rev-parse", "HEAD"),
             ("rev-parse", "--show-object-format"),
+            ("rev-parse", "--shared-index-path"),
             ("symbolic-ref", "--quiet", "--short", "HEAD"),
             ("ls-files", "--stage", "-z", "--"),
             ("ls-files", "-v", "-z", "--"),
@@ -304,6 +505,24 @@ class RepositoryGitAuthorityMixin:
                 return None
             raise RuntimeError("target workspace is not a direct Git repository")
         self._validate_git_command(tuple(args))
+
+        head_before: _HeadRefObservation | None = None
+        if args in {
+            ("rev-parse", "HEAD"),
+            ("symbolic-ref", "--quiet", "--short", "HEAD"),
+        }:
+            head_before = self._head_ref_observation()
+
+        observed_ref: str | None = None
+        ref_before: _BaselineRefObservation = ()
+        if len(args) == 3 and args[:2] == ("rev-parse", "--verify"):
+            value = args[2]
+            if value.endswith("^{commit}"):
+                candidate = value[: -len("^{commit}")]
+                if not _HEX_SHA.fullmatch(candidate):
+                    observed_ref = self._validate_baseline_ref(candidate)
+                    ref_before = self._baseline_ref_observation(observed_ref)
+
         with tempfile.TemporaryDirectory(prefix="aiqa-git-home-") as temp_home:
             env = restricted_subprocess_env(
                 home=Path(temp_home),
@@ -351,6 +570,10 @@ class RepositoryGitAuthorityMixin:
         if result.stdout_truncated or result.stderr_truncated:
             raise RuntimeError("git inspection output exceeded bounded capture limit")
         raise_if_git_grafts_reported(result.stderr)
+        if head_before is not None and head_before != self._head_ref_observation():
+            raise RuntimeError("Git HEAD metadata changed during resolution")
+        if observed_ref is not None and ref_before != self._baseline_ref_observation(observed_ref):
+            raise RuntimeError("baseline ref metadata changed during resolution")
         if result.returncode != 0:
             if allow_failure:
                 return None
@@ -368,6 +591,12 @@ class RepositoryGitAuthorityMixin:
                 return None
             raise RuntimeError("target workspace is not a direct Git repository")
         self._validate_git_command(tuple(args))
+        if args and args[0] == "ls-files":
+            shared_index_path = self._git("rev-parse", "--shared-index-path")
+            if shared_index_path:
+                raise RepositorySubjectError(
+                    "Git split-index metadata is not supported by repository inspection"
+                )
         with tempfile.TemporaryDirectory(prefix="aiqa-git-home-") as temp_home:
             env = restricted_subprocess_env(
                 home=Path(temp_home),

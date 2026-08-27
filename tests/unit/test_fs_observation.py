@@ -33,6 +33,27 @@ def test_confined_scan_is_sorted_and_does_not_descend_ignored_directories(tmp_pa
     assert result.observed_entries == 4
 
 
+def test_root_only_ignore_does_not_hide_nested_same_name(tmp_path: Path) -> None:
+    write(tmp_path / ".git" / "root-metadata", "root")
+    write(tmp_path / "nested" / ".git" / "HEAD", "nested")
+    write(tmp_path / "visible.txt", "visible")
+
+    result = scan_regular_files_confined(
+        tmp_path,
+        max_entries=20,
+        ignored_root_names={".git"},
+        label="test scan",
+    )
+
+    assert [item.path.as_posix() for item in result.files] == [
+        "nested/.git/HEAD",
+        "visible.txt",
+    ]
+    assert ".git" not in {item.path.as_posix() for item in result.directories}
+    assert "nested/.git" in {item.path.as_posix() for item in result.directories}
+    assert result.truncated is False
+
+
 def test_entry_budget_stops_before_materializing_oversized_directory(tmp_path: Path) -> None:
     for index in range(6):
         write(tmp_path / f"file-{index}.txt")
@@ -111,13 +132,15 @@ def test_invalid_entry_bound_is_rejected(tmp_path: Path, value: object) -> None:
         scan_regular_files_confined(tmp_path, max_entries=value, label="test scan")  # type: ignore[arg-type]
 
 
-def test_invalid_ignored_name_is_rejected(tmp_path: Path) -> None:
+@pytest.mark.parametrize("argument", ["ignored_names", "ignored_root_names"])
+def test_invalid_ignored_name_is_rejected(tmp_path: Path, argument: str) -> None:
+    kwargs = {argument: {"nested/path"}}
     with pytest.raises(ValueError, match="direct entry names"):
         scan_regular_files_confined(
             tmp_path,
             max_entries=10,
-            ignored_names={"nested/path"},
             label="test scan",
+            **kwargs,  # type: ignore[arg-type]
         )
 
 

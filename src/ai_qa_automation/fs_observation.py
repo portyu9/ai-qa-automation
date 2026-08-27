@@ -9,19 +9,29 @@ from pathlib import Path, PurePosixPath
 from .fs_authority import descriptor_relative_authority_supported
 
 _MAX_DIRECTORY_DEPTH = 128
+_MetadataSignature = tuple[int, int, int, int, int, int]
 
 
 @dataclass(frozen=True)
 class ObservedRegularFile:
     path: PurePosixPath
     size: int
+    metadata_signature: _MetadataSignature
+
+
+@dataclass(frozen=True)
+class ObservedDirectory:
+    path: PurePosixPath
+    metadata_signature: _MetadataSignature
 
 
 @dataclass(frozen=True)
 class ConfinedFileScan:
     files: tuple[ObservedRegularFile, ...]
+    directories: tuple[ObservedDirectory, ...]
     observed_entries: int
     truncated: bool
+    resource_truncated: bool
     unsafe_paths: tuple[PurePosixPath, ...]
     unreadable_paths: tuple[PurePosixPath, ...]
     root_identity: tuple[int, int]
@@ -29,6 +39,17 @@ class ConfinedFileScan:
 
 def _identity(value: os.stat_result) -> tuple[int, int]:
     return value.st_dev, value.st_ino
+
+
+def _metadata_signature(value: os.stat_result) -> _MetadataSignature:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_mode,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
 
 
 def _directory_signature(value: os.stat_result) -> tuple[int, int, int, int]:
@@ -51,19 +72,26 @@ def scan_regular_files_confined(
     *,
     max_entries: int,
     ignored_names: set[str] | frozenset[str] = frozenset(),
+    ignored_root_names: set[str] | frozenset[str] = frozenset(),
     label: str,
     expected_root_identity: tuple[int, int] | None = None,
 ) -> ConfinedFileScan:
     """Enumerate regular files below ``root`` without following filesystem aliases.
 
     Enumeration is descriptor-relative and budgets every directory entry observed.
-    Each directory is identity- and signature-checked before/after traversal. A
-    directory that would exceed the entry budget is not partially published into
+    Each directory is identity- and signature-checked before/after traversal. Stable
+    file and directory metadata signatures are retained so authority-sensitive callers
+    can compare bounded namespace observations without reopening the scanned tree.
+    ``ignored_names`` applies recursively, while ``ignored_root_names`` excludes only
+    direct root directories so callers can retain nested names as observation subjects.
+    A directory that would exceed the entry budget is not partially published into
     ``files``; the result is marked truncated instead. Unsafe or unreadable entries
     also make the result conservatively incomplete because their skipped contents
-    cannot be proven irrelevant. Recursive descent is capped at a hard directory
-    depth so entry-bounded scans cannot exhaust call-stack or ancestor-descriptor
-    resources.
+    cannot be proven irrelevant. ``resource_truncated`` separately records only
+    budget/depth exhaustion so callers that need namespace metadata can distinguish
+    bounded traversal failure from a safely observed non-regular entry. Recursive
+    descent is capped at a hard directory depth so entry-bounded scans cannot exhaust
+    call-stack or ancestor-descriptor resources.
     """
 
     if isinstance(max_entries, bool) or not isinstance(max_entries, int) or max_entries < 1:
@@ -71,6 +99,7 @@ def scan_regular_files_confined(
     if not isinstance(label, str) or not label.strip():
         raise ValueError("label must be a non-empty string")
     ignored = _validated_ignored_names(ignored_names)
+    ignored_root = _validated_ignored_names(ignored_root_names)
     if not descriptor_relative_authority_supported() or os.scandir not in os.supports_fd:
         raise RuntimeError(
             f"{label} requires descriptor-relative no-follow directory enumeration on this platform"
@@ -89,6 +118,7 @@ def scan_regular_files_confined(
         raise
 
     files: list[ObservedRegularFile] = []
+    directories: list[ObservedDirectory] = []
     unsafe: list[PurePosixPath] = []
     unreadable: list[PurePosixPath] = []
     observed_entries = 0
@@ -147,12 +177,18 @@ def scan_regular_files_confined(
                 unsafe.append(relative)
                 continue
             if stat.S_ISREG(current.st_mode):
-                files.append(ObservedRegularFile(path=relative, size=current.st_size))
+                files.append(
+                    ObservedRegularFile(
+                        path=relative,
+                        size=current.st_size,
+                        metadata_signature=_metadata_signature(current),
+                    )
+                )
                 continue
             if not stat.S_ISDIR(current.st_mode):
                 unsafe.append(relative)
                 continue
-            if name in ignored:
+            if name in ignored or (depth == 0 and name in ignored_root):
                 continue
             if depth >= _MAX_DIRECTORY_DEPTH:
                 truncated = True
@@ -192,8 +228,15 @@ def scan_regular_files_confined(
             finally:
                 os.close(child_fd)
 
-        if _directory_signature(os.fstat(directory_fd)) != initial_signature:
+        final_directory = os.fstat(directory_fd)
+        if _directory_signature(final_directory) != initial_signature:
             raise ValueError(f"{label} directory changed during traversal")
+        directories.append(
+            ObservedDirectory(
+                path=relative_parent,
+                metadata_signature=_metadata_signature(final_directory),
+            )
+        )
         return True
 
     try:
@@ -227,8 +270,10 @@ def scan_regular_files_confined(
 
     return ConfinedFileScan(
         files=tuple(sorted(files, key=lambda item: item.path.as_posix())),
+        directories=tuple(sorted(directories, key=lambda item: item.path.as_posix())),
         observed_entries=observed_entries,
         truncated=truncated or bool(unsafe or unreadable),
+        resource_truncated=truncated,
         unsafe_paths=tuple(sorted(unsafe, key=PurePosixPath.as_posix)),
         unreadable_paths=tuple(sorted(unreadable, key=PurePosixPath.as_posix)),
         root_identity=root_identity,

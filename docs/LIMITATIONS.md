@@ -103,6 +103,29 @@ The analyzer is structural and conservative.
 - Unsupported syntax is surfaced rather than guessed.
 - Ownership is review/routing context, not runtime authorization.
 
+### Repository baseline refs
+
+- Named change-intelligence baselines are resolved only while the supported loose-ref and `packed-refs` authority paths remain metadata-stable; observed concurrent ref mutation fails closed rather than certifying an alternate merge base.
+- Current `HEAD` resolution separately brackets the direct `.git/HEAD` bytes/metadata and, for symbolic HEAD, the single direct `refs/...` target plus `packed-refs`; stable detached full-object HEAD and stable unborn direct branches remain supported, while nested symbolic ref authority is rejected.
+- A failed current `HEAD` resolution is treated as unborn only when the confined `HEAD` is symbolic and its direct target is provably absent from loose refs and bounded, structurally valid `packed-refs`. Unresolved detached HEAD, malformed existing symbolic targets, and malformed packed-ref authority fail closed instead of becoming a clean unborn snapshot.
+- Baseline revision expressions, bare abbreviated object IDs, and symbolic loose baseline refs are intentionally rejected instead of introducing mutable/ambiguous revision semantics or an unbound second ref hop. Bare full object IDs must resolve to exactly the supplied object ID; hexadecimal ref names remain available through an explicit `refs/...` name.
+- Git's reftable ref backend is not yet descriptor-bound by `RepositoryInspector`; repositories exposing `.git/reftable` are therefore rejected rather than treated as verified baseline authority.
+- These controls detect ordinary filesystem-visible mutation through identity/size/time metadata and directory changes; they do not claim protection from privileged filesystem snapshot rollback that can restore metadata outside the process authority boundary.
+
+### Repository worktree and Git metadata authority
+
+- Every allowlisted Git text/binary read is bracketed by a bounded descriptor-confined metadata observation of the direct `.git` tree. Ordinary filesystem-visible changes to repository-local refs, config, ignore metadata, packs/objects, indexes, or their parent directories therefore invalidate the read rather than being silently accepted as stable authority.
+- Untracked-file enumeration is additionally bracketed by a bounded metadata observation of the worktree namespace. Only the authorized workspace's direct `.git` directory is excluded; nested `.git` directories remain observation subjects, so nested-repository state cannot disappear behind a recursive name ignore.
+- A nested repository whose `.git` metadata remains local can be observed as part of that namespace. Nested `.git` gitfiles, filesystem aliases, `commondir`, and object-alternate indirections are rejected because they would expand observation authority outside the bounded workspace tree.
+- Worktree and Git-metadata scans are entry/depth bounded. Resource exhaustion, unreadable authority-bearing paths, or incomplete Git-metadata traversal fail closed rather than certifying an incomplete namespace. The worktree namespace token records metadata rather than file-content hashes; ordinary in-place content rewrites are detected through filesystem time/size metadata, not through a claim of privileged-snapshot resistance.
+
+### Repository index storage
+
+- An active Git split index is not treated as repository observation authority. `RepositoryInspector` reads the already confined main-index bytes, validates the index checksum and supported version/framing, and rejects the mandatory lowercase `link` extension before executing any allowlisted `ls-files` command.
+- Split-index detection supports Git index versions 2 through 4 and both SHA-1 and SHA-256 index checksums. Malformed headers, entries, path compression, checksums, or extension framing cannot become affirmative clean-state evidence.
+- Split-index detection deliberately does **not** execute `git rev-parse --shared-index-path`: Git may update active `sharedindex.*` modification metadata while reading split-index state, so using that command as an observation probe would mutate the very metadata being bracketed.
+- A stale, unreferenced `sharedindex.*` regular file is not active index authority and does not by itself block inspection when the confined main index has no `link` extension.
+
 ---
 
 ## Test impact, generation, and classification
