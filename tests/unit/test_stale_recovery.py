@@ -6,8 +6,17 @@ from pathlib import Path
 
 import pytest
 
+from ai_qa_automation.models import (
+    AgentRunState,
+    TerminalStatus,
+    ValidationResult,
+    ValidationStatus,
+)
 from ai_qa_automation.runtime.journal import RunJournal
+from ai_qa_automation.runtime.recovery import inspect_recovery
 from ai_qa_automation.runtime.stale_recovery import recover_stale_mutation
+from ai_qa_automation.runtime.validation_truth import evaluate_revision_closure
+from ai_qa_automation.state import StateStore
 
 
 def write_runtime(
@@ -19,6 +28,11 @@ def write_runtime(
     path.parent.mkdir(parents=True, exist_ok=True)
     rendered = dict(payload)
     pending = rendered.get("pending_mutation")
+    if isinstance(pending, dict) and pending:
+        normalized_pending = dict(pending)
+        normalized_pending.setdefault("change_revision_before", 0)
+        rendered["pending_mutation"] = normalized_pending
+        pending = normalized_pending
     if bind_journal and isinstance(pending, dict) and pending:
         journal = RunJournal(path.parent / "journal.jsonl")
         if journal.event_count == 0:
@@ -26,6 +40,16 @@ def write_runtime(
         rendered["journal_event_count"] = journal.event_count
         rendered["journal_head_hash"] = journal.head_hash
     path.write_text(json.dumps(rendered, indent=2, sort_keys=True), encoding="utf-8")
+    if isinstance(pending, dict) and pending:
+        workspace = rendered.get("workspace")
+        if isinstance(workspace, str):
+            StateStore(path.parent / "state.json").save(
+                AgentRunState(
+                    run_id=path.parent.name,
+                    objective="stale recovery fixture",
+                    workspace=workspace,
+                )
+            )
 
 
 def stale_runtime_payload(
@@ -49,6 +73,7 @@ def stale_runtime_payload(
             "existed": existed,
             "backup_path": backup_path,
             "original_sha256": original_sha256,
+            "change_revision_before": 0,
         },
     }
 
@@ -61,6 +86,39 @@ def recover(artifact_root: Path, workspace: Path, *, fingerprint: str = "fp") ->
         current_workspace_fingerprint=fingerprint,
         recovering_run_id="run-new",
     )
+
+
+def _closed_revision_checks(path: str) -> list[ValidationResult]:
+    return [
+        ValidationResult(
+            name="test_patch_safety",
+            gate_id=f"test_patch_safety:{path}",
+            revision=1,
+            status=ValidationStatus.PASS,
+            summary="patch safety passed",
+            details={"path": path},
+        ),
+        ValidationResult(
+            name="pytest",
+            gate_id="pytest:targeted",
+            revision=1,
+            status=ValidationStatus.PASS,
+            summary="targeted pytest passed",
+            details={
+                "scope": "targeted",
+                "mutation_target_bound": True,
+                "mutation_target": path,
+            },
+        ),
+        ValidationResult(
+            name="pytest",
+            gate_id="pytest:regression",
+            revision=1,
+            status=ValidationStatus.PASS,
+            summary="full regression passed",
+            details={"scope": "regression"},
+        ),
+    ]
 
 
 def test_stale_existing_file_mutation_is_restored_when_fingerprint_matches(tmp_path: Path) -> None:
@@ -104,6 +162,70 @@ def test_stale_existing_file_mutation_is_restored_when_fingerprint_matches(tmp_p
     journal = RunJournal(prior_run / "journal.jsonl")
     assert metadata["journal_event_count"] == journal.event_count
     assert metadata["journal_head_hash"] == journal.head_hash
+
+
+def test_stale_recovery_invalidates_prior_closed_revision_and_success(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+    relative_path = "tests/test_checkout.py"
+    target = workspace / relative_path
+    target.parent.mkdir(parents=True)
+    target.write_text("mutated\n", encoding="utf-8")
+
+    prior_run = artifact_root / "run-old"
+    backup = prior_run / "rollback" / "checkout.bin"
+    backup.parent.mkdir(parents=True)
+    original = b"original\n"
+    backup.write_bytes(original)
+    write_runtime(
+        prior_run / "runtime.json",
+        stale_runtime_payload(
+            workspace,
+            relative_path=relative_path,
+            existed=True,
+            backup_path=str(backup.resolve()),
+            original_sha256=hashlib.sha256(original).hexdigest(),
+            fingerprint="fp-after-mutation",
+        ),
+    )
+    prior_state = AgentRunState(
+        run_id="run-old",
+        objective="crashed validated mutation",
+        workspace=str(workspace),
+        change_revision=1,
+        terminal_status=TerminalStatus.SUCCESS,
+        files_modified=[relative_path],
+        validation_results=_closed_revision_checks(relative_path),
+    )
+    StateStore(prior_run / "state.json").save(prior_state)
+    assert evaluate_revision_closure(
+        prior_state.validation_results,
+        current_revision=prior_state.change_revision,
+    ).closed is True
+
+    result = recover(artifact_root, workspace, fingerprint="fp-after-mutation")
+
+    assert result["status"] == "RECOVERED"
+    assert target.read_bytes() == original
+    recovered_state = StateStore(prior_run / "state.json").load()
+    assert recovered_state.change_revision == 1
+    assert recovered_state.files_modified == []
+    assert recovered_state.terminal_status is TerminalStatus.NOT_VERIFIED
+    rollback_gate = recovered_state.validation_results[-1]
+    assert rollback_gate.gate_id == f"mutation_transaction:{relative_path}"
+    assert rollback_gate.revision == 1
+    assert rollback_gate.status is ValidationStatus.NOT_VERIFIED
+    closure = evaluate_revision_closure(
+        recovered_state.validation_results,
+        current_revision=recovered_state.change_revision,
+    )
+    assert closure.closed is False
+    assert closure.code == "incomplete_revision_validation"
+    inspection = inspect_recovery(prior_run)
+    assert inspection["recoverable"] is True
+    assert inspection["revision_closed"] is False
+    assert inspection["resume_policy"] == "manual-review-required-before-new-session"
 
 
 def test_operator_edit_after_crash_blocks_automatic_rollback(tmp_path: Path) -> None:
