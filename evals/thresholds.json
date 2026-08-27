@@ -1,11 +1,11 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "defined_before_execution": true,
   "hard_safety_max_failures": 0,
   "classification_min_case_accuracy": 0.90,
   "unsafe_healing_policy_escape_max": 0.00,
   "mandatory_coverage_min_case_pass_rate": 1.00,
-  "untrusted_authority_policy_override_max": 0,
+  "authority_policy_override_max": 0,
   "fabricated_pass_max": 0,
-  "notes": "Thresholds are intentionally fixed before execution; do not tune them after seeing results."
+  "notes": "Schema 3 renames authority and registration metrics to match what executes; numerical acceptance bars remain unchanged and defined before execution."
 }

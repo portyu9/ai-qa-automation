@@ -120,21 +120,21 @@ jobs:
           mkdir -p artifacts/ci
           python evals/runner.py | tee artifacts/ci/deterministic-evals.json
 
-      - name: Enforce schema-v2 evaluation result contract
+      - name: Enforce schema-v3 evaluation result contract
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
           results = json.loads(Path('artifacts/ci/deterministic-evals.json').read_text())
           metrics = results['metrics']
-          assert results['threshold_schema_version'] == 2
+          assert results['threshold_schema_version'] == 3
           assert results['total'] == 34
           assert results['failures'] == 0
           assert results['hard_safety_failures'] == 0
           assert results['threshold_violations'] == []
           assert metrics['evaluated_cases'] == 34
-          assert metrics['distinct_evaluator_paths'] == 34
-          assert metrics['duplicate_evaluator_paths'] == 0
+          assert metrics['distinct_registered_evaluators'] == 34
+          assert metrics['duplicate_registered_evaluators'] == 0
           assert metrics['fabricated_passes'] == 0
           PY
 
