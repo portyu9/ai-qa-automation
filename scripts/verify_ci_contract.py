@@ -32,6 +32,7 @@ MERMAID_VALIDATION_ARTIFACT = "artifacts/ci/mermaid-validation.json"
 MERMAID_RENDER_COMMAND = f"python scripts/validate_mermaid.py | tee {MERMAID_VALIDATION_ARTIFACT}"
 DOCUMENTATION_STEP_NAME = "Verify documentation authority contract"
 MERMAID_STEP_NAME = "Render Mermaid documentation with digest-pinned official CLI"
+REPRODUCIBLE_BUILD_STEP_NAME = "Build wheel twice from fresh source trees"
 SUPPLY_CHAIN_UPLOAD_STEP_NAME = "Upload supply-chain evidence"
 REQUIRED_GATE_STEP_NAME = "Require every automatic gate to succeed"
 SUPPLY_CHAIN_ARTIFACTS = (
@@ -287,6 +288,40 @@ def _require_exact_script_step(job: str, *, step_name: str, command: str) -> Non
         raise ValueError(f"{step_name} must be the exact reviewed fail-closed script step")
 
 
+def _require_exact_reproducible_build_step(job: str) -> None:
+    step = _semantic_text(_step_block(job, REPRODUCIBLE_BUILD_STEP_NAME)).strip("\n")
+    expected = "\n".join(
+        (
+            f"      - name: {REPRODUCIBLE_BUILD_STEP_NAME}",
+            "        env:",
+            '          SOURCE_DATE_EPOCH: "315532800"',
+            "        run: |",
+            "          set -euo pipefail",
+            "          rm -rf /tmp/aiqa-build-a /tmp/aiqa-build-b",
+            "          mkdir -p /tmp/aiqa-build-a /tmp/aiqa-build-b artifacts/ci/wheel-a artifacts/ci/wheel-b",
+            '          git archive --format=tar "$GITHUB_SHA" | tar -xf - -C /tmp/aiqa-build-a',
+            '          git archive --format=tar "$GITHUB_SHA" | tar -xf - -C /tmp/aiqa-build-b',
+            "          python -m pip wheel --no-deps --no-build-isolation /tmp/aiqa-build-a --wheel-dir artifacts/ci/wheel-a",
+            "          python -m pip wheel --no-deps --no-build-isolation /tmp/aiqa-build-b --wheel-dir artifacts/ci/wheel-b",
+            "          mapfile -t wheel_a < <(find artifacts/ci/wheel-a -maxdepth 1 -type f -name '*.whl' -print)",
+            "          mapfile -t wheel_b < <(find artifacts/ci/wheel-b -maxdepth 1 -type f -name '*.whl' -print)",
+            '          test "${#wheel_a[@]}" -eq 1',
+            '          test "${#wheel_b[@]}" -eq 1',
+            "          python scripts/generate_build_manifest.py \\",
+            '            --wheel-a "${wheel_a[0]}" \\",
+            '            --wheel-b "${wheel_b[0]}" \\",
+            "            --sbom artifacts/ci/runtime-sbom.cdx.json \\",
+            '            --expected-source-sha "$GITHUB_SHA" \\",
+            "            --output artifacts/ci/build-manifest.json",
+            '          sha256sum "${wheel_a[0]}" artifacts/ci/runtime-sbom.cdx.json artifacts/ci/build-manifest.json > artifacts/ci/build-checksums.sha256',
+        )
+    )
+    if step != expected:
+        raise ValueError(
+            "reproducible wheel build must be the exact reviewed event-subject-bound step"
+        )
+
+
 def _require_exact_supply_chain_upload_step(job: str) -> None:
     step = _semantic_text(_step_block(job, SUPPLY_CHAIN_UPLOAD_STEP_NAME)).strip("\n")
     artifact_lines = tuple(f"            {artifact}" for artifact in SUPPLY_CHAIN_ARTIFACTS)
@@ -414,6 +449,7 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
         step_name=MERMAID_STEP_NAME,
         command=MERMAID_RENDER_COMMAND,
     )
+    _require_exact_reproducible_build_step(supply_chain_raw)
     _require_exact_supply_chain_upload_step(supply_chain_raw)
     if supply_chain.count(DOCUMENTATION_INTEGRITY_COMMAND) != 1:
         raise ValueError(
@@ -442,6 +478,7 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
         "required_gate": "Required PR Gate",
         "documentation_integrity": "required-via-supply-chain",
         "mermaid_render": "required-via-supply-chain",
+        "build_provenance_subject": "github.sha",
         "supply_chain_evidence": "pinned-upload-action",
         "permissions": "contents:read",
         "secrets": False,
