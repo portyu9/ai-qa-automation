@@ -259,6 +259,14 @@ def recover_stale_mutation(
             "status": "BLOCKED",
             "reason": "prior canonical change revision is behind pending mutation authority",
         }
+    if prior_state.change_revision > change_revision_before + 1:
+        return {
+            "status": "BLOCKED",
+            "reason": (
+                "prior canonical change revision is more than one revision ahead of pending "
+                "mutation authority"
+            ),
+        }
 
     if not current_workspace_fingerprint_complete:
         reasons = ", ".join(current_workspace_fingerprint_reasons) or "unspecified"
