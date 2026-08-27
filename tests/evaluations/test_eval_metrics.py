@@ -13,7 +13,7 @@ THRESHOLDS = {
     "classification_min_case_accuracy": 0.90,
     "unsafe_healing_policy_escape_max": 0.0,
     "mandatory_coverage_min_case_pass_rate": 1.0,
-    "authority_policy_override_max": 0,
+    "direct_authorization_policy_override_max": 0,
     "fabricated_pass_max": 0,
     "notes": "Fixed before execution.",
 }
@@ -56,7 +56,7 @@ def test_governed_eval_families_emit_case_scoped_metrics() -> None:
     assert metrics["classification_case_accuracy"] == 1.0
     assert metrics["unsafe_healing_policy_escape_rate"] == 0.0
     assert metrics["mandatory_coverage_case_pass_rate"] == 1.0
-    assert metrics["authority_policy_overrides"] == 0
+    assert metrics["direct_authorization_policy_overrides"] == 0
     assert metrics["fabricated_passes"] == 0
     assert violations == []
 
@@ -69,7 +69,7 @@ def test_missing_governed_eval_families_fail_closed() -> None:
     assert "classification_cases_missing" in violations
     assert "unsafe_healing_policy_cases_missing" in violations
     assert "mandatory_coverage_cases_missing" in violations
-    assert "authority_policy_cases_missing" in violations
+    assert "direct_authorization_policy_cases_missing" in violations
 
 
 def test_duplicate_registered_evaluators_fail_closed_even_when_results_are_green() -> None:

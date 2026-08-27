@@ -5,7 +5,7 @@
   "classification_min_case_accuracy": 0.90,
   "unsafe_healing_policy_escape_max": 0.00,
   "mandatory_coverage_min_case_pass_rate": 1.00,
-  "authority_policy_override_max": 0,
+  "direct_authorization_policy_override_max": 0,
   "fabricated_pass_max": 0,
-  "notes": "Schema 3 renames authority and registration metrics to match what executes; numerical acceptance bars remain unchanged and defined before execution."
+  "notes": "Schema 3 renames direct-authorization and registration metrics to match what executes; numerical acceptance bars remain unchanged and defined before execution."
 }
