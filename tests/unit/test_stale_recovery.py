@@ -199,10 +199,13 @@ def test_stale_recovery_invalidates_prior_closed_revision_and_success(tmp_path: 
         validation_results=_closed_revision_checks(relative_path),
     )
     StateStore(prior_run / "state.json").save(prior_state)
-    assert evaluate_revision_closure(
-        prior_state.validation_results,
-        current_revision=prior_state.change_revision,
-    ).closed is True
+    assert (
+        evaluate_revision_closure(
+            prior_state.validation_results,
+            current_revision=prior_state.change_revision,
+        ).closed
+        is True
+    )
 
     result = recover(artifact_root, workspace, fingerprint="fp-after-mutation")
 
