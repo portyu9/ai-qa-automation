@@ -221,24 +221,25 @@ jobs:
       - name: Build wheel twice from fresh source trees
         env:
           SOURCE_DATE_EPOCH: "315532800"
-          GIT_NO_REPLACE_OBJECTS: "1"
-          GIT_CONFIG_NOSYSTEM: "1"
-          GIT_CONFIG_GLOBAL: /dev/null
-          GIT_ATTR_NOSYSTEM: "1"
         run: |
           set -euo pipefail
           test -n "${RUNTIME_SBOM_SHA256:-}"
           read -r observed_sbom_sha256 _ < <(/usr/bin/sha256sum artifacts/ci/runtime-sbom.cdx.json)
           test "$observed_sbom_sha256" = "$RUNTIME_SBOM_SHA256"
-          test ! -s .git/info/attributes
-          rm -rf /tmp/aiqa-build-a /tmp/aiqa-build-b
-          mkdir -p /tmp/aiqa-build-a /tmp/aiqa-build-b artifacts/ci/wheel-a artifacts/ci/wheel-b
-          git --no-replace-objects -c core.attributesFile=/dev/null archive --format=tar "$GITHUB_SHA" | tar -xf - -C /tmp/aiqa-build-a
-          test ! -s .git/info/attributes
-          git --no-replace-objects -c core.attributesFile=/dev/null archive --format=tar "$GITHUB_SHA" | tar -xf - -C /tmp/aiqa-build-b
-          test ! -s .git/info/attributes
-          python -m pip wheel --no-deps --no-build-isolation /tmp/aiqa-build-a --wheel-dir artifacts/ci/wheel-a
-          python -m pip wheel --no-deps --no-build-isolation /tmp/aiqa-build-b --wheel-dir artifacts/ci/wheel-b
+          build_a="$(mktemp -d "$RUNNER_TEMP/aiqa-build-a.XXXXXX")"
+          build_b="$(mktemp -d "$RUNNER_TEMP/aiqa-build-b.XXXXXX")"
+          git_view="$(mktemp -d "$RUNNER_TEMP/aiqa-git-view.XXXXXX")"
+          git_template="$(mktemp -d "$RUNNER_TEMP/aiqa-git-template.XXXXXX")"
+          trap 'rm -rf "$build_a" "$build_b" "$git_view" "$git_template"' EXIT
+          mkdir -p artifacts/ci/wheel-a artifacts/ci/wheel-b
+          git_clean_env=(env -i PATH="$PATH" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0)
+          git_object_format="$("${git_clean_env[@]}" /usr/bin/git rev-parse --show-object-format)"
+          git_object_directory="$(cd "$("${git_clean_env[@]}" /usr/bin/git rev-parse --git-path objects)" && pwd -P)"
+          "${git_clean_env[@]}" /usr/bin/git init --bare --object-format="$git_object_format" --template="$git_template" "$git_view" > /dev/null
+          "${git_clean_env[@]}" GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$GITHUB_SHA" | env -i PATH="$PATH" /usr/bin/tar -xf - -C "$build_a"
+          "${git_clean_env[@]}" GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$GITHUB_SHA" | env -i PATH="$PATH" /usr/bin/tar -xf - -C "$build_b"
+          python -m pip wheel --no-deps --no-build-isolation "$build_a" --wheel-dir artifacts/ci/wheel-a
+          python -m pip wheel --no-deps --no-build-isolation "$build_b" --wheel-dir artifacts/ci/wheel-b
           read -r observed_sbom_sha256 _ < <(/usr/bin/sha256sum artifacts/ci/runtime-sbom.cdx.json)
           test "$observed_sbom_sha256" = "$RUNTIME_SBOM_SHA256"
           mapfile -t wheel_a < <(find artifacts/ci/wheel-a -maxdepth 1 -type f -name '*.whl' -print)
