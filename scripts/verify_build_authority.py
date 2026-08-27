@@ -30,6 +30,9 @@ EXPECTED_PROJECT_FILE_INPUTS = {
     "readme": "README.md",
     "license": {"file": "LICENSE"},
 }
+EXPECTED_PROJECT_NAME = "ai-qa-automation"
+EXPECTED_PROJECT_SCRIPTS = {"ai-qa": "ai_qa_automation.cli:app"}
+FORBIDDEN_PROJECT_ENTRY_POINT_KEYS = ("gui-scripts", "entry-points")
 
 
 def _identity(value: os.stat_result) -> tuple[int, int]:
@@ -305,6 +308,11 @@ def verify_build_authority(root: Path) -> dict[str, Any]:
     project = pyproject.get("project")
     if not isinstance(project, dict):
         raise ValueError("pyproject.toml must contain a project table")
+    if project.get("name") != EXPECTED_PROJECT_NAME:
+        raise ValueError(
+            "project distribution name must remain ai-qa-automation so project installation "
+            "cannot replace an unrelated locked distribution"
+        )
     version = project.get("version")
     if not isinstance(version, str) or not version.strip():
         raise ValueError("project version must remain static repository metadata")
@@ -315,6 +323,15 @@ def verify_build_authority(root: Path) -> dict[str, Any]:
             raise ValueError(f"project {key} build input differs from the reviewed repository path")
     if "license-files" in project:
         raise ValueError("project license-files may not expand automatic build file authority")
+    if project.get("scripts") != EXPECTED_PROJECT_SCRIPTS:
+        raise ValueError(
+            "project console-script authority must remain exactly the reviewed ai-qa entry point"
+        )
+    for key in FORBIDDEN_PROJECT_ENTRY_POINT_KEYS:
+        if key in project:
+            raise ValueError(
+                f"project {key} may not expand automatic executable or plugin authority"
+            )
 
     tool = pyproject.get("tool", {})
     if not isinstance(tool, dict):
@@ -335,10 +352,13 @@ def verify_build_authority(root: Path) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "result": "PASS",
-        "claim": "project build configuration, file inputs, source tree, and installed Hatch plugin surface contain no unreviewed external execution or filesystem authority",
+        "claim": "project build configuration, installation metadata, file inputs, source tree, and installed Hatch plugin surface contain no unreviewed external execution or filesystem authority",
         "pyproject_sha256": digest,
         "build_backend": "hatchling.build",
         "build_requirements": ["hatchling==1.32.0"],
+        "project_name": EXPECTED_PROJECT_NAME,
+        "project_scripts": EXPECTED_PROJECT_SCRIPTS,
+        "project_entry_points": False,
         "project_file_inputs": EXPECTED_PROJECT_FILE_INPUTS,
         "build_source_root": str(EXPECTED_BUILD_SOURCE_ROOT),
         "build_source_entries": build_source_entries,
@@ -347,9 +367,9 @@ def verify_build_authority(root: Path) -> dict[str, Any]:
         "source_execution_extensions": False,
         "installed_hatch_entry_points": list(installed_hatch_entry_points),
         "limitations": [
-            "This verifier constrains repository build configuration, declared file inputs, the selected package tree, and installed Hatch plugin entry points; it does not attest the hosted Python interpreter or dependency package bytes beyond the repository's separate hash-lock controls.",
+            "This verifier constrains repository build configuration, project distribution/executable metadata, declared file inputs, the selected package tree, and installed Hatch plugin entry points; it does not attest the hosted Python interpreter or dependency package bytes beyond the repository's separate hash-lock controls.",
             "The filesystem checks reject symlinks and special nodes during bounded observation; they do not create a privileged immutable filesystem snapshot after verification.",
-            "A future legitimate build hook, Hatch plugin, dynamic metadata source, custom builder, backend change, additional file-valued metadata input, or package symlink requires an explicit policy revision rather than implicit authority expansion.",
+            "A future legitimate build hook, Hatch plugin, dynamic metadata source, custom builder, backend change, distribution-name change, project executable/entry-point change, additional file-valued metadata input, or package symlink requires an explicit policy revision rather than implicit authority expansion.",
         ],
     }
 
