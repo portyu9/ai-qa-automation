@@ -2,6 +2,7 @@ name: CI — ƳƤ AI QA Automation Framework
 
 # Designed and engineered by Ƴunior Ƥortal (ƳƤ).
 # Automatic gates are read-only, secret-free, and bound to the exact GitHub event subject.
+# Owner-authorized workflow_dispatch is a dormant trusted-main path until external Actions Policy is active.
 on:
   pull_request:
     branches: [main]
@@ -9,17 +10,41 @@ on:
   push:
     branches: [main]
   merge_group:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number whose exact current subject is being validated
+        required: true
+        type: string
+      expected_head_sha:
+        description: Exact current pull request head SHA
+        required: true
+        type: string
+      expected_base_sha:
+        description: Exact current main/base SHA
+        required: true
+        type: string
+      expected_merge_sha:
+        description: Exact current prospective merge SHA to execute and validate
+        required: true
+        type: string
+      authorized:
+        description: Publish Trusted PR Gate after exact-subject validation
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: ai-qa-ci-${{ github.event.pull_request.number || github.ref }}
+  group: ai-qa-ci-${{ github.event.pull_request.number || inputs.pr_number || github.ref }}
   cancel-in-progress: true
 
 env:
   PYTHONUNBUFFERED: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_merge_sha || github.sha }}
 
 jobs:
   quality:
@@ -37,14 +62,14 @@ jobs:
             lock-file: requirements/dev-py313.lock
             evidence-suffix: py313
     steps:
-      - name: Checkout exact event subject
+      - name: Checkout exact validation subject
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.CI_SUBJECT_SHA }}
           persist-credentials: false
 
       - name: Verify exact source revision
-        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+        run: test "$(git rev-parse HEAD)" = "$CI_SUBJECT_SHA"
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
@@ -92,14 +117,14 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Checkout exact event subject
+      - name: Checkout exact validation subject
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.CI_SUBJECT_SHA }}
           persist-credentials: false
 
       - name: Verify exact source revision
-        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+        run: test "$(git rev-parse HEAD)" = "$CI_SUBJECT_SHA"
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
@@ -152,15 +177,15 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - name: Checkout exact event subject
+      - name: Checkout exact validation subject
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.CI_SUBJECT_SHA }}
           persist-credentials: false
           fetch-depth: 1
 
       - name: Verify exact source revision
-        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+        run: test "$(git rev-parse HEAD)" = "$CI_SUBJECT_SHA"
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
@@ -233,8 +258,8 @@ jobs:
           git_object_format="$("${git_clean_env[@]}" /usr/bin/git rev-parse --show-object-format)"
           git_object_directory="$(cd "$("${git_clean_env[@]}" /usr/bin/git rev-parse --git-path objects)" && pwd -P)"
           "${git_clean_env[@]}" /usr/bin/git init --bare --object-format="$git_object_format" --template="$git_template" "$git_view" > /dev/null
-          "${git_clean_env[@]}" GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$GITHUB_SHA" | env -i PATH="$PATH" /usr/bin/tar -xf - -C "$build_a"
-          "${git_clean_env[@]}" GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$GITHUB_SHA" | env -i PATH="$PATH" /usr/bin/tar -xf - -C "$build_b"
+          "${git_clean_env[@]}" GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$CI_SUBJECT_SHA" | env -i PATH="$PATH" /usr/bin/tar -xf - -C "$build_a"
+          "${git_clean_env[@]}" GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$CI_SUBJECT_SHA" | env -i PATH="$PATH" /usr/bin/tar -xf - -C "$build_b"
           python scripts/verify_build_authority.py --root "$build_a" > artifacts/ci/build-authority-archive-a.json
           python -m pip wheel --no-deps --no-build-isolation "$build_a" --wheel-dir artifacts/ci/wheel-a
           python scripts/verify_build_authority.py --root "$build_b" > artifacts/ci/build-authority-archive-b.json
@@ -250,7 +275,7 @@ jobs:
             --wheel-a "${wheel_a[0]}" \
             --wheel-b "${wheel_b[0]}" \
             --sbom artifacts/ci/runtime-sbom.cdx.json \
-            --expected-source-sha "$GITHUB_SHA" \
+            --expected-source-sha "$CI_SUBJECT_SHA" \
             --output artifacts/ci/build-manifest.json
           read -r observed_sbom_sha256 _ < <(/usr/bin/sha256sum artifacts/ci/runtime-sbom.cdx.json)
           test "$observed_sbom_sha256" = "$RUNTIME_SBOM_SHA256"
@@ -259,7 +284,7 @@ jobs:
       - name: Build and inspect digest-pinned runtime container
         run: |
           set -euo pipefail
-          image="ai-qa-ci:${{ github.sha }}"
+          image="ai-qa-ci:${CI_SUBJECT_SHA}"
           git_view="$(mktemp -d "$RUNNER_TEMP/aiqa-container-git-view.XXXXXX")"
           git_template="$(mktemp -d "$RUNNER_TEMP/aiqa-container-git-template.XXXXXX")"
           trap 'rm -rf "$git_view" "$git_template"' EXIT
@@ -267,7 +292,7 @@ jobs:
           git_object_format="$("${git_clean_env[@]}" /usr/bin/git rev-parse --show-object-format)"
           git_object_directory="$(cd "$("${git_clean_env[@]}" /usr/bin/git rev-parse --git-path objects)" && pwd -P)"
           "${git_clean_env[@]}" /usr/bin/git init --bare --object-format="$git_object_format" --template="$git_template" "$git_view" > /dev/null
-          "${git_clean_env[@]}" GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$GITHUB_SHA" | docker build --tag "$image" -
+          "${git_clean_env[@]}" GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$CI_SUBJECT_SHA" | docker build --tag "$image" -
           test "$(docker image inspect --format '{{.Config.User}}' "$image")" = 'aiqa'
           docker run --rm "$image" doctor
           docker run --rm -i --entrypoint python "$image" - <<'PY'
@@ -309,15 +334,15 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - name: Checkout exact event subject
+      - name: Checkout exact validation subject
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.CI_SUBJECT_SHA }}
           persist-credentials: false
           fetch-depth: 1
 
       - name: Verify exact source revision
-        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+        run: test "$(git rev-parse HEAD)" = "$CI_SUBJECT_SHA"
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
@@ -367,14 +392,14 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
-      - name: Checkout exact event subject
+      - name: Checkout exact validation subject
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.CI_SUBJECT_SHA }}
           persist-credentials: false
 
       - name: Verify exact source revision
-        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+        run: test "$(git rev-parse HEAD)" = "$CI_SUBJECT_SHA"
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
@@ -435,3 +460,37 @@ jobs:
           test "${{ needs.supply-chain.result }}" = "success"
           test "${{ needs.security.result }}" = "success"
           test "${{ needs.browser-reference-sut.result }}" = "success"
+
+  trusted-status:
+    name: Trusted PR Gate Reporter
+    if: ${{ always() && github.event_name == 'workflow_dispatch' }}
+    needs:
+      - required-gate
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout trusted workflow revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify trusted workflow revision
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Publish exact-subject trusted status
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python scripts/trusted_pr_control.py report \
+            --pr-number "${{ inputs.pr_number }}" \
+            --expected-head-sha "${{ inputs.expected_head_sha }}" \
+            --expected-base-sha "${{ inputs.expected_base_sha }}" \
+            --expected-merge-sha "${{ inputs.expected_merge_sha }}" \
+            --authorized "${{ inputs.authorized }}" \
+            --job-results-json '{"validation":"${{ needs.required-gate.result }}"}' \
+            --target-url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
