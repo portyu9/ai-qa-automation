@@ -238,8 +238,11 @@ jobs:
           "${git_clean_env[@]}" /usr/bin/git init --bare --object-format="$git_object_format" --template="$git_template" "$git_view" > /dev/null
           "${git_clean_env[@]}" GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$GITHUB_SHA" | env -i PATH="$PATH" /usr/bin/tar -xf - -C "$build_a"
           "${git_clean_env[@]}" GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$GITHUB_SHA" | env -i PATH="$PATH" /usr/bin/tar -xf - -C "$build_b"
+          python scripts/verify_build_authority.py --root "$build_a" > artifacts/ci/build-authority-archive-a.json
           python -m pip wheel --no-deps --no-build-isolation "$build_a" --wheel-dir artifacts/ci/wheel-a
+          python scripts/verify_build_authority.py --root "$build_b" > artifacts/ci/build-authority-archive-b.json
           python -m pip wheel --no-deps --no-build-isolation "$build_b" --wheel-dir artifacts/ci/wheel-b
+          cmp -s artifacts/ci/build-authority-archive-a.json artifacts/ci/build-authority-archive-b.json
           read -r observed_sbom_sha256 _ < <(/usr/bin/sha256sum artifacts/ci/runtime-sbom.cdx.json)
           test "$observed_sbom_sha256" = "$RUNTIME_SBOM_SHA256"
           mapfile -t wheel_a < <(find artifacts/ci/wheel-a -maxdepth 1 -type f -name '*.whl' -print)
@@ -283,6 +286,8 @@ jobs:
           name: supply-chain-evidence
           path: |
             artifacts/ci/build-authority-verification.json
+            artifacts/ci/build-authority-archive-a.json
+            artifacts/ci/build-authority-archive-b.json
             artifacts/ci/supply-chain-verification.json
             artifacts/ci/ci-contract-verification.json
             artifacts/ci/documentation-integrity.json
