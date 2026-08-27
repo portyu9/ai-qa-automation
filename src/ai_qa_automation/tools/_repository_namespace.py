@@ -17,6 +17,7 @@ _MetadataSignature = tuple[int, int, int, int, int, int]
 _NamespaceObservation = tuple[tuple[str, _MetadataSignature], ...]
 _GitMetadataObservation = tuple[tuple[str, _MetadataSignature], ...]
 _UNTRACKED_PATH_LIST = ("ls-files", "--others", "--exclude-standard", "-z", "--")
+_SPLIT_INDEX_PROBE = ("rev-parse", "--shared-index-path")
 _NESTED_GIT_INDIRECTION_PATHS = {
     ("commondir",),
     ("objects", "info", "alternates"),
@@ -134,14 +135,19 @@ class RepositoryNamespaceAuthorityMixin:
 
     def _git(self, *args: str, allow_failure: bool = False) -> str | None:
         authority = cast(RepositoryGitAuthorityMixin, self)
+        worktree = cast(RepositoryWorktreeMixin, self)
         before = self._git_metadata_observation()
         original_error: Exception | None = None
         try:
-            result = RepositoryGitAuthorityMixin._git(
-                authority,
-                *args,
-                allow_failure=allow_failure,
-            )
+            if args == _SPLIT_INDEX_PROBE:
+                index_bytes = RepositoryWorktreeMixin._read_index_bytes(worktree)
+                result = "confined-split-index" if git_index_has_split_link(index_bytes) else ""
+            else:
+                result = RepositoryGitAuthorityMixin._git(
+                    authority,
+                    *args,
+                    allow_failure=allow_failure,
+                )
         except Exception as exc:
             original_error = exc
             raise
