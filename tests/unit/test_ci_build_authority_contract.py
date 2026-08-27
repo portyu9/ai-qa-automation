@@ -33,13 +33,34 @@ def test_repository_ci_contract_exposes_build_and_sbom_authority() -> None:
     result = ci_contract.verify_ci_contract(ROOT)
     automatic = result["workflows"]["automatic"]
 
-    assert automatic["prebuild_authority"] == "static-before-project-install"
+    assert automatic["prebuild_authority"] == (
+        "exact-lock-and-build-authority-before-automatic-installs"
+    )
+    assert automatic["dependency_install_count"] == 5
+    assert automatic["dependency_install_authority"] == (
+        "exact-reviewed-locks-preinstall-and-postinstall-revalidated"
+    )
     assert automatic["project_install_count"] == 5
     assert automatic["project_install_authority"] == "immediate-static-revalidation"
     assert automatic["archive_build_authority"] == "verified-and-matched-before-wheel-builds"
     assert automatic["build_provenance_subject"] == "github.sha/isolated-git-view"
     assert automatic["archive_attribute_authority"] == "versioned-tree-only"
     assert automatic["sbom_lineage"] == "parent-digest-bound-and-bracketed"
+
+
+def test_every_automatic_dependency_install_is_authority_bracketed() -> None:
+    text = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    lines = ci_contract._semantic_text(text).splitlines()
+    indices = [
+        index
+        for index, line in enumerate(lines)
+        if line.startswith(ci_contract.AUTOMATIC_DEPENDENCY_INSTALL_PREFIX)
+    ]
+
+    assert len(indices) == 5
+    for index in indices:
+        assert lines[index - 1] == ci_contract.BUILD_AUTHORITY_REVALIDATION_COMMAND
+        assert lines[index + 1] == ci_contract.BUILD_AUTHORITY_REVALIDATION_COMMAND
 
 
 def test_every_automatic_project_install_is_immediately_build_authority_guarded() -> None:
@@ -66,6 +87,35 @@ def test_reproducible_archives_are_build_authority_verified_before_wheels() -> N
     ) in step
 
 
+def test_ci_contract_rejects_removed_dependency_preinstall_guard(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = _ci_path(root)
+    text = path.read_text(encoding="utf-8")
+    marker = ci_contract.BUILD_AUTHORITY_REVALIDATION_COMMAND + "\n"
+    dependency_index = text.index(ci_contract.AUTOMATIC_DEPENDENCY_INSTALL_PREFIX)
+    guard_index = text.rfind(marker, 0, dependency_index)
+    assert guard_index >= 0
+    text = text[:guard_index] + text[guard_index + len(marker) :]
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="every automatic dependency install"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_rejects_removed_dependency_postinstall_guard(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = _ci_path(root)
+    text = path.read_text(encoding="utf-8")
+    dependency_index = text.index(ci_contract.AUTOMATIC_DEPENDENCY_INSTALL_PREFIX)
+    guard = "\n" + ci_contract.BUILD_AUTHORITY_REVALIDATION_COMMAND
+    guard_index = text.index(guard, dependency_index)
+    text = text[:guard_index] + text[guard_index + len(guard) :]
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="every automatic dependency install"):
+        ci_contract.verify_ci_contract(root)
+
+
 def test_ci_contract_rejects_unguarded_non_supply_chain_project_install(
     tmp_path: Path,
 ) -> None:
@@ -85,7 +135,7 @@ def test_ci_contract_rejects_unguarded_non_supply_chain_project_install(
     )
     path.write_text(text, encoding="utf-8")
 
-    with pytest.raises(ValueError, match="every automatic project install"):
+    with pytest.raises(ValueError, match="every automatic dependency install"):
         ci_contract.verify_ci_contract(root)
 
 
@@ -103,7 +153,7 @@ def test_ci_contract_rejects_removed_prebuild_authority_step(tmp_path: Path) -> 
         ci_contract.verify_ci_contract(root)
 
 
-def test_ci_contract_rejects_removed_supply_chain_preinstall_revalidation(tmp_path: Path) -> None:
+def test_ci_contract_rejects_removed_supply_chain_prelock_revalidation(tmp_path: Path) -> None:
     root = _copy_workflows(tmp_path)
     path = _ci_path(root)
     text = path.read_text(encoding="utf-8")
@@ -117,7 +167,7 @@ def test_ci_contract_rejects_removed_supply_chain_preinstall_revalidation(tmp_pa
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="every automatic project install"):
+    with pytest.raises(ValueError, match="every automatic dependency install"):
         ci_contract.verify_ci_contract(root)
 
 
@@ -144,7 +194,7 @@ def test_ci_contract_rejects_supply_chain_build_authority_after_project_install(
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="every automatic project install"):
+    with pytest.raises(ValueError, match="every automatic dependency install"):
         ci_contract.verify_ci_contract(root)
 
 
