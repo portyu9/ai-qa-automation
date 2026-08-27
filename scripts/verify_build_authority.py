@@ -5,6 +5,7 @@ import json
 import os
 import stat
 import tomllib
+from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any
 
@@ -94,6 +95,21 @@ def _parse_pyproject(content: bytes) -> dict[str, Any]:
     return parsed
 
 
+def _installed_hatch_entry_points() -> tuple[str, ...]:
+    try:
+        entry_points = importlib_metadata.entry_points(group="hatch")
+    except Exception as exc:
+        raise RuntimeError("installed Hatch plugin metadata could not be inspected safely") from exc
+
+    observed = tuple(sorted(f"{entry_point.name}={entry_point.value}" for entry_point in entry_points))
+    if observed:
+        raise ValueError(
+            "installed third-party Hatch entry points are forbidden in the automatic build "
+            f"environment: {list(observed)}"
+        )
+    return observed
+
+
 def verify_build_authority(root: Path) -> dict[str, Any]:
     root = root.resolve()
     content, digest = _read_pyproject(root / "pyproject.toml")
@@ -126,18 +142,21 @@ def verify_build_authority(root: Path) -> dict[str, Any]:
             "configuration are forbidden"
         )
 
+    installed_hatch_entry_points = _installed_hatch_entry_points()
+
     return {
         "schema_version": 1,
         "result": "PASS",
-        "claim": "project build configuration is static and contains no source-execution extension points",
+        "claim": "project build configuration and installed Hatch plugin surface are static and contain no unreviewed source-execution extension points",
         "pyproject_sha256": digest,
         "build_backend": "hatchling.build",
         "build_requirements": ["hatchling==1.32.0"],
         "dynamic_metadata": False,
         "source_execution_extensions": False,
+        "installed_hatch_entry_points": list(installed_hatch_entry_points),
         "limitations": [
-            "This verifier constrains repository build configuration; it does not attest the hosted Python interpreter or Hatchling package bytes beyond the repository's separate hash-lock controls.",
-            "A future legitimate build hook, dynamic metadata source, custom builder, or backend change requires an explicit policy revision rather than implicit authority expansion.",
+            "This verifier constrains repository build configuration and installed Hatch plugin entry points; it does not attest the hosted Python interpreter or dependency package bytes beyond the repository's separate hash-lock controls.",
+            "A future legitimate build hook, Hatch plugin, dynamic metadata source, custom builder, or backend change requires an explicit policy revision rather than implicit authority expansion.",
         ],
     }
 
