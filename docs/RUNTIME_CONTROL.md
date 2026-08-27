@@ -283,8 +283,9 @@ It does not replay or reconstruct hidden Claude conversational state; it decides
 | Rollback directory/backup ownership is ambiguous | mutation or recovery refused |
 | Prior crash journal/target path is ambiguous | stale recovery blocked |
 | Pending revision authority and canonical revision have an impossible gap | rollback/recovery blocked before target write |
-| Pre-rollback canonical state checkpoint fails | no rollback write; pending/backup authority retained |
-| Post-rollback state reconciliation fails | durable `NOT_VERIFIED` lineage retained; no PASS claim |
+| Live pre-rollback canonical state checkpoint fails | no rollback write; pending/backup authority retained |
+| Live post-rollback state reconciliation fails | durable `NOT_VERIFIED` lineage retained; no PASS claim |
+| Stale-recovery state reconciliation fails after restore | restored bytes coexist with retained pending/backup authority; recovery remains blocked for manual reconciliation |
 | Budget exhausted | `BUDGET_EXCEEDED` |
 | Tool circuit open | tool action denied |
 | Revision cannot close | rollback before terminal report |
