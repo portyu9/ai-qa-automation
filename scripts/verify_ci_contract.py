@@ -621,7 +621,9 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
             raise ValueError(f"{name}: Required PR Gate does not depend on {job}")
 
     if _git_blob_sha1(text) != EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA:
-        raise ValueError("ci.yml bytes differ from the exact reviewed automatic workflow definition")
+        raise ValueError(
+            "ci.yml bytes differ from the exact reviewed automatic workflow definition"
+        )
 
     return {
         "triggers": sorted(expected_triggers),
