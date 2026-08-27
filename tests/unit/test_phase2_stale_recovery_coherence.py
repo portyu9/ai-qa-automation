@@ -19,22 +19,28 @@ def test_rollback_lineage_reconciliation_is_idempotent() -> None:
         files_modified=[path, path],
     )
 
-    assert reconcile_rolled_back_mutation(
-        state,
-        relative_path=path,
-        change_revision_before=1,
-    ) is True
+    assert (
+        reconcile_rolled_back_mutation(
+            state,
+            relative_path=path,
+            change_revision_before=1,
+        )
+        is True
+    )
     first_observations = list(state.observations)
     first_validations = list(state.validation_results)
     assert state.files_modified == [path]
     assert state.terminal_status is TerminalStatus.NOT_VERIFIED
     assert first_validations[-1].status is ValidationStatus.NOT_VERIFIED
 
-    assert reconcile_rolled_back_mutation(
-        state,
-        relative_path=path,
-        change_revision_before=1,
-    ) is True
+    assert (
+        reconcile_rolled_back_mutation(
+            state,
+            relative_path=path,
+            change_revision_before=1,
+        )
+        is True
+    )
     assert state.files_modified == [path]
     assert state.observations == first_observations
     assert state.validation_results == first_validations
