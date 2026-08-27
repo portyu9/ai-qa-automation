@@ -18,7 +18,7 @@ The repository separates supply-chain subjects instead of treating â€œthe buildâ
 | Python application/runtime graph | `requirements/runtime-py311.lock` | exact versions + accepted SHA-256 package hashes |
 | Development/verification graphs | `requirements/dev-py311.lock`, `requirements/dev-py313.lock` | exact interpreter-specific verification environments |
 | Python build backend graph | `requirements/build-py311.lock` + `hatchling==1.32.0` | isolated backend dependency graph, separate from runtime |
-| Project build configuration | exact static `pyproject.toml` build/Hatch configuration | pre-build `build-authority-verification.json` |
+| Project build configuration + Hatch plugin surface | exact static `pyproject.toml` build/Hatch configuration + no installed `hatch` entry points | pre-build `build-authority-verification.json` |
 | Container base | `requirements/base-image.lock` | exact `python:3.11.16-slim` OCI digest used by every Docker stage |
 
 The dependency lock files are repository-owned resolution snapshots derived from declared project constraints, then committed and reviewed. Runtime installation uses `pip --require-hashes`; direct URL/VCS/editable requirements, non-exact pins, missing hashes, unexpected lock files, and non-SHA-256 hash directives are rejected by `scripts/verify_supply_chain.py`.
@@ -68,9 +68,9 @@ No container-image byte-for-byte reproducibility claim is made. The Docker build
 
 ## Pre-build project authority
 
-A pinned build backend is not sufficient if repository build configuration can introduce source-execution extension points. Hatch supports build hooks and other plugin surfaces that can execute logic during a build, so automatic CI treats `pyproject.toml` build configuration as authority that must be validated **before** any project build occurs.
+A pinned build backend is not sufficient if repository build configuration or an installed Hatch plugin can introduce source-execution extension points. Hatch supports build hooks and plugin surfaces that can execute logic during a build, so automatic CI treats both `pyproject.toml` build configuration and installed `hatch` entry points as authority that must be validated **before** any project build occurs.
 
-`scripts/verify_build_authority.py` is intentionally standard-library-only so the supply-chain job can execute it immediately after Python setup, before `pip install .` or another project build. It reads `pyproject.toml` through bounded no-follow ingestion and requires:
+`scripts/verify_build_authority.py` is intentionally standard-library-only so automatic jobs can execute it after Python setup without first importing or installing project code. It reads `pyproject.toml` through bounded no-follow ingestion and requires:
 
 - `[build-system]` to be exactly `requires = ["hatchling==1.32.0"]` plus `build-backend = "hatchling.build"`;
 - no `backend-path` or additional build-system authority;
@@ -78,9 +78,11 @@ A pinned build backend is not sufficient if repository build configuration can i
 - `[tool.hatch]` to contain only the reviewed wheel package selection `packages = ["src/ai_qa_automation"]`;
 - therefore no custom Hatch build hooks, metadata hooks, version sources, custom builders, or other Hatch extension configuration.
 
-The supply-chain job emits `build-authority-verification.json` before installing the project, installs the hash-locked verification graph, then re-runs the same authority verifier immediately before the project build. A future legitimate need for a hook, dynamic metadata source, custom backend, backend path, or other build extension requires an explicit policy change rather than silently gaining execution authority.
+The verifier also inspects installed distribution metadata with `importlib.metadata.entry_points(group="hatch")` and fails closed if any such entry point exists. It does not load or execute plugin code while performing this inspection. The supply-chain job emits `build-authority-verification.json` before installing the verification graph, then re-runs the same verifier after the hash-locked graph is installed and immediately before the project build. The other automatic project-install paths likewise revalidate build authority immediately before `pip install --no-deps --no-build-isolation .`.
 
-This control constrains repository configuration; it does not independently attest the hosted Python bootstrap or Hatchling package bytes. Those remain covered only by the separate exact-version/hash-lock and hosted-runner trust boundaries described here.
+A future legitimate need for a hook, installed Hatch plugin, dynamic metadata source, custom backend, backend path, or other build extension requires an explicit policy change rather than silently gaining execution authority.
+
+This control constrains repository configuration and rejects installed Hatch plugin entry-point authority. It does not independently attest the hosted Python bootstrap or dependency package bytes. Those remain covered only by the separate exact-version/hash-lock and hosted-runner trust boundaries described here.
 
 ---
 
@@ -124,7 +126,7 @@ The initial Python interpreter and `pip` process are supplied by the GitHub-host
 
 The lock verifier rejects symlink substitution, lock-file identity changes, requirements-directory replacement, and entry exhaustion instead of falling back to weaker pathname enumeration when the required descriptor-relative primitives are unavailable.
 
-`scripts/verify_build_authority.py` is the earlier pre-build boundary for executable project-build configuration. `scripts/verify_ci_contract.py` separately requires that this pre-build verifier run before project installation, be re-run immediately before the supply-chain project build, and have its evidence uploaded by the required supply-chain job.
+`scripts/verify_build_authority.py` is the earlier pre-build boundary for executable project-build configuration and installed Hatch plugin metadata. `scripts/verify_ci_contract.py` separately requires the evidence-producing pre-build verifier, immediate build-authority revalidation before every automatic project install, and upload of the supply-chain build-authority evidence.
 
 These verifiers emit machine-readable JSON statements about repository invariants. Their `PASS` states only that the corresponding deterministic checks passed; it does not certify external package availability, publisher identity, hosted-runner immutability, bootstrap-tool identity, or release signing.
 
@@ -132,7 +134,7 @@ These verifiers emit machine-readable JSON statements about repository invariant
 
 ## Reproducible wheel evidence
 
-The permanent supply-chain CI job builds the project wheel twice from independently extracted archives of the exact GitHub event subject. The reviewed step uses `git --no-replace-objects archive --format=tar "$GITHUB_SHA"` for both source trees, exports `GIT_NO_REPLACE_OBJECTS=1`, and fixes `SOURCE_DATE_EPOCH`. This prevents a local Git replacement ref from making the same textual commit ID resolve to replacement object content during the build. Both builds still execute inside one CI job and therefore share the same hosted runner and installed build environment; the evidence establishes same-environment repeatability, not cross-runner or cross-operating-system reproducibility.
+The permanent supply-chain CI job builds the project wheel twice from independently extracted archives of the exact GitHub event subject. The reviewed step uses `git --no-replace-objects -c core.attributesFile=/dev/null archive --format=tar "$GITHUB_SHA"` for both source trees, exports `GIT_NO_REPLACE_OBJECTS=1`, disables system/global Git configuration and system attributes, and fixes `SOURCE_DATE_EPOCH`. It also requires `.git/info/attributes` to remain empty before, between, and after the archive operations. These controls prevent replacement refs or ambient system/global/repository-local Git attribute sources from silently rewriting the archive subject; committed `.gitattributes` in the exact event tree remains source-controlled authority. Both builds still execute inside one CI job and therefore share the same hosted runner and installed build environment; the evidence establishes same-environment repeatability, not cross-runner or cross-operating-system reproducibility.
 
 `scripts/generate_build_manifest.py` requires an explicit `--expected-source-sha` and refuses to emit its manifest unless:
 
@@ -143,15 +145,15 @@ The permanent supply-chain CI job builds the project wheel twice from independen
 5. both fresh-tree builds produce one wheel with the same artifact name and identical SHA-256 digest/size;
 6. the tracked checkout is clean around source-input observation;
 7. the expected source-date epoch is active; and
-8. the CycloneDX runtime SBOM is structurally present.
+8. the CycloneDX runtime SBOM is structurally present and its observed digest matches the parent CI-owned `RUNTIME_SBOM_SHA256` value.
 
 The manifest's Git subprocesses disable system/global Git configuration, replacement refs, optional Git locks, and lazy fetching. Fixed source-input paths are read from the expected commit with bounded blob-size checks before content ingestion. The worktree bytes used to derive manifest input digests must then exactly equal those expected-commit blob bytes; a clean-status heuristic alone is not accepted as source authority.
 
-The manifest generator binds parsed SBOM metadata and the SBOM digest to one bounded no-follow byte observation. In addition, the parent CI workflow computes the runtime-SBOM SHA-256 immediately after the hash-locked audit, exports that digest through the GitHub step environment, and requires the same digest before wheel builds, after both wheel builds, and after manifest generation. Consequently, later build activity cannot silently substitute a different SBOM and have that replacement accepted as the earlier audit subject.
+The manifest generator binds parsed SBOM metadata and the SBOM digest to one bounded no-follow byte observation. In addition, the parent CI workflow computes the runtime-SBOM SHA-256 immediately after the hash-locked audit, exports that digest through the GitHub step environment, and requires the same digest before wheel builds, after both wheel builds, and after manifest generation. The manifest itself must also accept that parent-owned digest. Consequently, later build activity cannot silently substitute a different SBOM and have that replacement accepted as the earlier audit subject.
 
 Manifest persistence rejects ambiguous symlink ownership and uses atomic replacement plus directory fsync.
 
-`scripts/verify_ci_contract.py` freezes the pre-build authority, runtime-SBOM digest export, reproducible-build shell block, supply-chain evidence set, and their safety-critical ordering. Replacing `$GITHUB_SHA` with mutable `HEAD`, re-enabling Git replacement objects, removing the SBOM lineage checks, moving project installation ahead of build-authority validation, or removing required evidence causes deterministic CI-contract failure.
+`scripts/verify_ci_contract.py` freezes the pre-build authority, immediate automatic-project-install guards, runtime-SBOM digest export, archive attribute isolation, reproducible-build shell block, supply-chain evidence set, and their safety-critical ordering. Replacing `$GITHUB_SHA` with mutable `HEAD`, re-enabling Git replacement objects, reintroducing ambient archive attributes, removing the SBOM lineage checks, moving project installation ahead of build-authority validation, or removing required evidence causes deterministic CI-contract failure.
 
 The resulting unsigned manifest records:
 
@@ -191,11 +193,11 @@ Vulnerability results are time-sensitive observations. A green audit at one revi
 | Claim | What proves it | What does **not** prove it |
 |---|---|---|
 | Accepted Python package candidates are constrained | exact lock pins + `--require-hashes` | package-index availability, publisher trust, or bootstrap-installer identity |
-| Project build configuration has no reviewed source-execution extension | pre-build static authority verifier + exact CI ordering | general proof that all future build systems are safe |
+| Project build authority excludes unreviewed source-execution extensions | pre-build static configuration check + installed `hatch` entry-point denial + immediate automatic-install guards | general proof that all future build systems are safe or package bytes are independently attested |
 | Build backend graph is repository-bound | exact `hatchling==1.32.0` + build lock | build publisher identity |
 | Container base subject is fixed | OCI digest in `base-image.lock` and Dockerfile | byte-identical rebuilt container image |
-| Wheel is repeatable for the exact CI event subject and recorded inputs | two no-replace `$GITHUB_SHA` archives + expected-commit-bound manifest inputs + identical wheel SHA-256 in one CI environment | signer/publisher identity or cross-environment reproducibility |
-| Runtime Python SBOM remained the audited subject through wheel generation | post-audit SHA-256 exported before builds + digest checks around later build/manifest activity | OS/container/provider coverage or permanent vulnerability status |
+| Wheel is repeatable for the exact CI event subject and recorded inputs | two attribute-isolated/no-replace `$GITHUB_SHA` archives + expected-commit-bound manifest inputs + identical wheel SHA-256 in one CI environment | signer/publisher identity or cross-environment reproducibility |
+| Runtime Python SBOM remained the audited subject through wheel generation | post-audit SHA-256 exported before builds + digest checks around later build/manifest activity + manifest acceptance of the parent-owned digest | OS/container/provider coverage or permanent vulnerability status |
 | GitHub Actions are source-revision pinned | exact reviewed Action commit SHAs | immutable hosted runner OS/image |
 | Artifact identity is signed | **not provided by repository CI** | SHA-256, SBOM, or reproducibility alone |
 
@@ -208,7 +210,7 @@ A dependency, Action, build-backend/configuration, interpreter, or container-bas
 1. verify official provenance of the proposed upstream subject;
 2. resolve/regenerate the affected candidate lock or digest material deliberately from the declared repository constraints, recording the interpreter and resolver/tooling used for the update;
 3. review graph additions/removals and authority changes rather than treating generated comments as authority;
-4. explicitly review any proposed change to build backend/configuration or source-execution extension points;
+4. explicitly review any proposed change to build backend/configuration, installed Hatch plugin surface, or source-execution extension points;
 5. run the pre-build authority verifier, deterministic repository verifiers, and adversarial tests;
 6. run applicable vulnerability/secret/static scans;
 7. reproduce the project wheel and regenerate the runtime SBOM;
