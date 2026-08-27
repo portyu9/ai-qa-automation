@@ -34,6 +34,8 @@ class LiveRuntimeServices(RuntimeServices):
         super().__post_init__()
         if self.control is None:
             raise ValueError("live runtime services require RuntimeControl")
+        if self.state_store is None:
+            raise ValueError("live runtime services require durable StateStore authority")
         if self.workspace_root_identity is None:
             raise ValueError("live runtime services require a lease-bound workspace_root_identity")
         for name, value in {
