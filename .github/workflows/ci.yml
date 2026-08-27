@@ -50,8 +50,6 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: ${{ matrix.python-version }}
-          cache: pip
-          cache-dependency-path: ${{ matrix.lock-file }}
 
       - name: Install hash-locked development graph
         run: |
@@ -107,8 +105,6 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.11.16"
-          cache: pip
-          cache-dependency-path: requirements/dev-py311.lock
 
       - name: Install hash-locked project environment
         run: |
@@ -170,8 +166,6 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.11.16"
-          cache: pip
-          cache-dependency-path: requirements/dev-py311.lock
 
       - name: Verify static project build authority
         run: |
@@ -329,8 +323,6 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.11.16"
-          cache: pip
-          cache-dependency-path: requirements/dev-py311.lock
 
       - name: Install hash-locked security environment
         run: |
@@ -388,8 +380,6 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.11.16"
-          cache: pip
-          cache-dependency-path: requirements/dev-py311.lock
 
       - name: Install hash-locked project environment
         run: |
