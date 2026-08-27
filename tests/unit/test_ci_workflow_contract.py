@@ -29,7 +29,10 @@ def test_repository_ci_contract_is_self_consistent() -> None:
         result["workflows"]["automatic"]["documentation_integrity"] == "required-via-supply-chain"
     )
     assert result["workflows"]["automatic"]["mermaid_render"] == "required-via-supply-chain"
-    assert result["workflows"]["automatic"]["build_provenance_subject"] == "github.sha"
+    assert (
+        result["workflows"]["automatic"]["build_provenance_subject"]
+        == "github.sha/no-replace-objects"
+    )
     assert result["workflows"]["automatic"]["supply_chain_evidence"] == "pinned-upload-action"
     assert result["workflows"]["automatic"]["secrets"] is False
     assert result["workflows"]["manual"]["credentialed_model"] == "manual-only"
@@ -163,8 +166,36 @@ def test_ci_contract_rejects_mutable_head_for_reproducible_archive(tmp_path: Pat
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "ci.yml"
     text = path.read_text(encoding="utf-8").replace(
-        'git archive --format=tar "$GITHUB_SHA" | tar -xf - -C /tmp/aiqa-build-a',
+        'git --no-replace-objects archive --format=tar "$GITHUB_SHA" | tar -xf - -C /tmp/aiqa-build-a',
         "git archive --format=tar HEAD | tar -xf - -C /tmp/aiqa-build-a",
+        1,
+    )
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="exact reviewed event-subject-bound step"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_rejects_reenabled_replace_objects_for_archive(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "ci.yml"
+    text = path.read_text(encoding="utf-8").replace(
+        'git --no-replace-objects archive --format=tar "$GITHUB_SHA"',
+        'git archive --format=tar "$GITHUB_SHA"',
+        1,
+    )
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="exact reviewed event-subject-bound step"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_rejects_removed_no_replace_environment(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "ci.yml"
+    text = path.read_text(encoding="utf-8").replace(
+        '          GIT_NO_REPLACE_OBJECTS: "1"\n',
+        "",
         1,
     )
     path.write_text(text, encoding="utf-8")
