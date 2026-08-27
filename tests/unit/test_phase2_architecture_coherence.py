@@ -28,6 +28,7 @@ from ai_qa_automation.runtime.validation_truth import (
     determine_terminal_outcome,
     evaluate_revision_closure,
 )
+from ai_qa_automation.state import StateStore
 
 
 def validation(
@@ -248,6 +249,8 @@ def test_live_repetition_authority_is_content_sensitive_and_persisted(tmp_path: 
 def test_live_services_mirror_control_count_without_double_charging(tmp_path: Path) -> None:
     control = make_control(tmp_path)
     state = AgentRunState(objective="count all live tool requests", workspace=str(tmp_path / "sut"))
+    state_store = StateStore(control.metadata_path.parent / "state.json")
+    state_store.save(state)
     services = LiveRuntimeServices(
         workspace=tmp_path / "sut",
         state=state,
@@ -256,6 +259,7 @@ def test_live_services_mirror_control_count_without_double_charging(tmp_path: Pa
         test_runner=cast(Any, object()),
         max_tool_calls=10,
         max_repeated_action=2,
+        state_store=state_store,
         workspace_root_identity=pin_directory_identity(tmp_path / "sut", label="test workspace"),
         control=control,
     )
