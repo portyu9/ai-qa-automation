@@ -45,9 +45,7 @@ def test_every_automatic_project_install_is_immediately_build_authority_guarded(
     text = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     semantic = ci_contract._semantic_text(text)
     project_install = ci_contract.AUTOMATIC_PROJECT_INSTALL_COMMAND
-    guarded_install = (
-        ci_contract.BUILD_AUTHORITY_REVALIDATION_COMMAND + "\n" + project_install
-    )
+    guarded_install = ci_contract.BUILD_AUTHORITY_REVALIDATION_COMMAND + "\n" + project_install
 
     assert semantic.count(project_install) == 5
     assert semantic.count(guarded_install) == 5
