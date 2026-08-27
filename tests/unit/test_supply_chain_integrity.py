@@ -358,6 +358,8 @@ def test_build_manifest_requires_two_byte_identical_wheels(
         encoding="utf-8",
     )
     monkeypatch.setenv("SOURCE_DATE_EPOCH", "315532800")
+    expected_sbom_sha256 = hashlib.sha256(sbom.read_bytes()).hexdigest()
+    monkeypatch.setenv("RUNTIME_SBOM_SHA256", expected_sbom_sha256)
     expected_source_sha = build_manifest._git("rev-parse", "--verify", "HEAD", cwd=ROOT)
 
     manifest = generate_manifest(
@@ -373,8 +375,20 @@ def test_build_manifest_requires_two_byte_identical_wheels(
         "rev-parse", "--verify", "HEAD^{tree}", cwd=ROOT
     )
     assert manifest["build"]["two_builds_byte_identical"] is True
+    assert manifest["sbom"]["sha256"] == expected_sbom_sha256
     assert manifest["identity"] == {"signed": False, "status": "NOT_PROVIDED"}
 
+    monkeypatch.setenv("RUNTIME_SBOM_SHA256", SHA256_ZERO)
+    with pytest.raises(ValueError, match="parent-owned expected digest"):
+        generate_manifest(
+            ROOT,
+            wheel_a,
+            wheel_b,
+            sbom,
+            expected_source_sha=expected_source_sha,
+        )
+
+    monkeypatch.setenv("RUNTIME_SBOM_SHA256", expected_sbom_sha256)
     wheel_b.write_bytes(b"different-wheel")
     with pytest.raises(ValueError, match="different SHA-256"):
         generate_manifest(
