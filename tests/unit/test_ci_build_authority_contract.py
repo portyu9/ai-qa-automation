@@ -36,6 +36,7 @@ def test_repository_ci_contract_exposes_build_and_sbom_authority() -> None:
     assert automatic["prebuild_authority"] == "static-before-project-install"
     assert automatic["project_install_count"] == 5
     assert automatic["project_install_authority"] == "immediate-static-revalidation"
+    assert automatic["archive_build_authority"] == "verified-and-matched-before-wheel-builds"
     assert automatic["build_provenance_subject"] == "github.sha/isolated-git-view"
     assert automatic["archive_attribute_authority"] == "versioned-tree-only"
     assert automatic["sbom_lineage"] == "parent-digest-bound-and-bracketed"
@@ -49,6 +50,20 @@ def test_every_automatic_project_install_is_immediately_build_authority_guarded(
 
     assert semantic.count(project_install) == 5
     assert semantic.count(guarded_install) == 5
+
+
+def test_reproducible_archives_are_build_authority_verified_before_wheels() -> None:
+    text = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    step = ci_contract._step_block(
+        ci_contract._job_block(text, "supply-chain"),
+        ci_contract.REPRODUCIBLE_BUILD_STEP_NAME,
+    )
+
+    assert step.count("python scripts/verify_build_authority.py --root") == 2
+    assert (
+        "cmp -s artifacts/ci/build-authority-archive-a.json "
+        "artifacts/ci/build-authority-archive-b.json"
+    ) in step
 
 
 def test_ci_contract_rejects_unguarded_non_supply_chain_project_install(
@@ -133,6 +148,34 @@ def test_ci_contract_rejects_supply_chain_build_authority_after_project_install(
         ci_contract.verify_ci_contract(root)
 
 
+def test_ci_contract_rejects_removed_archive_build_authority_guard(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = _ci_path(root)
+    text = path.read_text(encoding="utf-8").replace(
+        '          python scripts/verify_build_authority.py --root "$build_a" > artifacts/ci/build-authority-archive-a.json\n',
+        "",
+        1,
+    )
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="exact reviewed event-subject-bound step"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_rejects_unmatched_archive_build_authority_evidence(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = _ci_path(root)
+    text = path.read_text(encoding="utf-8").replace(
+        "          cmp -s artifacts/ci/build-authority-archive-a.json artifacts/ci/build-authority-archive-b.json\n",
+        "",
+        1,
+    )
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="exact reviewed event-subject-bound step"):
+        ci_contract.verify_ci_contract(root)
+
+
 def test_ci_contract_rejects_missing_sbom_digest_export(tmp_path: Path) -> None:
     root = _copy_workflows(tmp_path)
     path = _ci_path(root)
@@ -171,6 +214,19 @@ def test_ci_contract_rejects_missing_build_authority_evidence_upload(tmp_path: P
         "",
         1,
     )
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="exact reviewed pinned action step"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_rejects_missing_archive_build_authority_evidence_upload(
+    tmp_path: Path,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = _ci_path(root)
+    artifact = ci_contract.ARCHIVE_BUILD_AUTHORITY_ARTIFACTS[0]
+    text = path.read_text(encoding="utf-8").replace(f"            {artifact}\n", "", 1)
     path.write_text(text, encoding="utf-8")
 
     with pytest.raises(ValueError, match="exact reviewed pinned action step"):
