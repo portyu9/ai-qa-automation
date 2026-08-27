@@ -21,6 +21,7 @@ from ai_qa_automation.runtime.runtime_hooks import (
     pretool_policy_output,
 )
 from ai_qa_automation.runtime.stale_recovery import recover_stale_mutation
+from ai_qa_automation.state import StateStore
 from ai_qa_automation.tools.repository import RepositoryInspector
 
 
@@ -305,10 +306,18 @@ def test_incomplete_fingerprint_blocks_real_stale_pending_mutation(tmp_path: Pat
                     "existed": False,
                     "backup_path": None,
                     "original_sha256": None,
+                    "change_revision_before": 0,
                 },
             }
         ),
         encoding="utf-8",
+    )
+    StateStore(prior_run / "state.json").save(
+        AgentRunState(
+            run_id="run-old",
+            objective="incomplete fingerprint recovery fixture",
+            workspace=str(workspace.resolve()),
+        )
     )
 
     result = recover_stale_mutation(
