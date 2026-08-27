@@ -134,10 +134,18 @@ def test_stale_recovery_rejects_coercive_existed_flag_before_touching_target(
                     "existed": "false",
                     "backup_path": str(backup),
                     "original_sha256": hashlib.sha256(backup_content).hexdigest(),
+                    "change_revision_before": 0,
                 },
             }
         ),
         encoding="utf-8",
+    )
+    StateStore(prior_run / "state.json").save(
+        AgentRunState(
+            run_id="run-old",
+            objective="coercive pending metadata fixture",
+            workspace=str(workspace.resolve()),
+        )
     )
 
     result = recover_stale_mutation(
