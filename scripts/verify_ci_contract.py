@@ -547,15 +547,19 @@ def _verify_automatic_checkout_binding(text: str, *, name: str) -> int:
         raise ValueError(
             f"{name}: checkout count must be exactly {expected_total} including trusted reporter"
         )
-    if semantic.count("ref: ${{ env.CI_SUBJECT_SHA }}") != EXPECTED_AUTOMATIC_SUBJECT_CHECKOUT_COUNT:
-        raise ValueError(
-            f"{name}: every validation checkout must bind to env.CI_SUBJECT_SHA"
-        )
+    if (
+        semantic.count("ref: ${{ env.CI_SUBJECT_SHA }}")
+        != EXPECTED_AUTOMATIC_SUBJECT_CHECKOUT_COUNT
+    ):
+        raise ValueError(f"{name}: every validation checkout must bind to env.CI_SUBJECT_SHA")
     if semantic.count("ref: ${{ github.sha }}") != 1:
         raise ValueError(f"{name}: trusted reporter must be the sole github.sha checkout")
     if semantic.count("persist-credentials: false") != checkout_count:
         raise ValueError(f"{name}: every checkout must disable persisted credentials")
-    if semantic.count('test "$(git rev-parse HEAD)" = "$CI_SUBJECT_SHA"') != EXPECTED_AUTOMATIC_SUBJECT_CHECKOUT_COUNT:
+    if (
+        semantic.count('test "$(git rev-parse HEAD)" = "$CI_SUBJECT_SHA"')
+        != EXPECTED_AUTOMATIC_SUBJECT_CHECKOUT_COUNT
+    ):
         raise ValueError(f"{name}: every validation checkout must verify CI_SUBJECT_SHA")
     if semantic.count('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"') != 1:
         raise ValueError(f"{name}: trusted reporter must verify its main workflow revision")
@@ -644,7 +648,9 @@ def _verify_dispatch_contract(text: str) -> None:
         )
     )
     if on_block != expected:
-        raise ValueError("ci.yml: trigger/owner-dispatch input contract differs from reviewed definition")
+        raise ValueError(
+            "ci.yml: trigger/owner-dispatch input contract differs from reviewed definition"
+        )
     env_block = _semantic_text(_top_level_block(text, "env"))
     expected_subject = (
         "  CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' "
@@ -676,7 +682,7 @@ def _verify_trusted_status_job(text: str) -> dict[str, Any]:
         '            --expected-base-sha "${{ inputs.expected_base_sha }}" \\',
         '            --expected-merge-sha "${{ inputs.expected_merge_sha }}" \\',
         '            --authorized "${{ inputs.authorized }}" \\',
-        "            --job-results-json '{\"validation\":\"${{ needs.required-gate.result }}\"}' \\",
+        '            --job-results-json \'{"validation":"${{ needs.required-gate.result }}"}\' \\',
         '            --target-url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"',
     )
     for fragment in required_fragments:
@@ -725,9 +731,7 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
     if semantic.count("${{ secrets.GITHUB_TOKEN }}") != 1:
         raise ValueError(f"{name}: trusted reporter must be the sole GITHUB_TOKEN secret consumer")
     if CACHE_CONFIGURATION_RE.search(semantic):
-        raise ValueError(
-            f"{name}: dependency caching is forbidden before reviewed lock authority"
-        )
+        raise ValueError(f"{name}: dependency caching is forbidden before reviewed lock authority")
     if "ubuntu-latest" in semantic:
         raise ValueError(f"{name}: moving ubuntu-latest runner label is forbidden")
     if '"3.11.16"' not in semantic or '"3.13.15"' not in semantic:
