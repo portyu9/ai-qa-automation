@@ -36,8 +36,9 @@ def test_repository_ci_contract_exposes_build_and_sbom_authority() -> None:
     assert automatic["prebuild_authority"] == "static-before-project-install"
     assert automatic["project_install_count"] == 5
     assert automatic["project_install_authority"] == "immediate-static-revalidation"
-    assert automatic["build_provenance_subject"] == "github.sha/no-replace-objects"
-    assert automatic["sbom_lineage"] == "sha256-bracketed-across-wheel-builds"
+    assert automatic["build_provenance_subject"] == "github.sha/isolated-git-view"
+    assert automatic["archive_attribute_authority"] == "versioned-tree-only"
+    assert automatic["sbom_lineage"] == "parent-digest-bound-and-bracketed"
 
 
 def test_every_automatic_project_install_is_immediately_build_authority_guarded() -> None:
