@@ -23,9 +23,7 @@ def test_verifier_reports_exact_reviewed_definition_authority() -> None:
     ci_result = ci_contract.verify_ci_contract(ROOT)
     supply_chain_result = supply_chain.verify_repository(ROOT)
 
-    assert ci_result["workflows"]["automatic"]["workflow_definition"] == (
-        "exact-reviewed-git-blob"
-    )
+    assert ci_result["workflows"]["automatic"]["workflow_definition"] == ("exact-reviewed-git-blob")
     assert supply_chain_result["dockerfile_authority"] == "exact-reviewed-git-blob"
 
 
