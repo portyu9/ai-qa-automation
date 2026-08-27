@@ -1,5 +1,5 @@
-from pathlib import Path
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -34,8 +34,7 @@ def test_ci_contract_rejects_playwright_privileged_browser_bootstrap(tmp_path: P
     text = text.replace(
         marker,
         "      - name: Reinstall browser runtime\n"
-        "        run: python -m playwright install --with-deps chromium\n\n"
-        + marker,
+        "        run: python -m playwright install --with-deps chromium\n\n" + marker,
         1,
     )
     path.write_text(text, encoding="utf-8")
