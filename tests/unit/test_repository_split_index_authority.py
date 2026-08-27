@@ -9,6 +9,7 @@ import pytest
 
 import ai_qa_automation.tools.repository as repository_module
 from ai_qa_automation.fs_authority import descriptor_relative_authority_supported
+from ai_qa_automation.tools._repository_git import RepositoryGitAuthorityMixin
 from ai_qa_automation.tools.repository import RepositoryInspector, RepositorySubjectError
 
 
@@ -75,6 +76,15 @@ def test_inspector_detects_active_split_index_without_text_git_execution(
     monkeypatch.setattr(repository_module, "run_bounded_subprocess", forbidden_text_git)
 
     assert inspector._git("rev-parse", "--shared-index-path")
+
+
+def test_lower_git_layer_cannot_delegate_split_index_probe(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    inspector = RepositoryInspector(repo)
+
+    with pytest.raises(ValueError, match="confined index bytes"):
+        RepositoryGitAuthorityMixin._git(inspector, "rev-parse", "--shared-index-path")
 
 
 def test_ls_files_rejects_active_split_index_before_binary_execution(
