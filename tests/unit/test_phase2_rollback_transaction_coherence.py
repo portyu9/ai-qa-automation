@@ -100,10 +100,13 @@ def _live_pending_run(
     state.terminal_status = TerminalStatus.SUCCESS
     state.terminal_reason = "validated candidate"
     store.save(state)
-    assert evaluate_revision_closure(
-        state.validation_results,
-        current_revision=state.change_revision,
-    ).closed is True
+    assert (
+        evaluate_revision_closure(
+            state.validation_results,
+            current_revision=state.change_revision,
+        ).closed
+        is True
+    )
     return control, store, state, target, backup, relative_path
 
 
@@ -128,10 +131,13 @@ def test_preclose_state_failure_preserves_candidate_and_pending_authority(
     assert isinstance(runtime["pending_mutation"], dict)
     persisted = StateStore(store.path).load()
     assert persisted.terminal_status is TerminalStatus.SUCCESS
-    assert evaluate_revision_closure(
-        persisted.validation_results,
-        current_revision=persisted.change_revision,
-    ).closed is True
+    assert (
+        evaluate_revision_closure(
+            persisted.validation_results,
+            current_revision=persisted.change_revision,
+        ).closed
+        is True
+    )
     assert state.terminal_status is TerminalStatus.NOT_VERIFIED
 
 
