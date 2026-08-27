@@ -30,11 +30,11 @@ The automatic workflow runs these repository-owned gates:
 
 - CPython 3.11.16 and 3.13.15 hash-locked quality/full deterministic pytest lanes;
 - the fixed 34-case primary deterministic control evaluation;
-- supply-chain verification, deterministic documentation authority verification, official digest-pinned Mermaid CLI rendering of the public Markdown corpus, runtime dependency audit, CycloneDX SBOM generation, same-environment wheel repeatability, and runtime-container inspection;
+- supply-chain verification, deterministic documentation authority verification, official digest-pinned Mermaid CLI rendering of the public Markdown corpus, runtime dependency audit, CycloneDX SBOM generation, exact-event-subject same-environment wheel repeatability, and runtime-container inspection;
 - Bandit, hash-bound dependency audit, and secret scanning;
 - deterministic Playwright reference-SUT execution.
 
-Each automatic job verifies the exact GitHub event revision before installing or executing project code.
+Each automatic job verifies the exact GitHub event revision before installing or executing project code. The reproducible-wheel step additionally archives the event subject itself rather than mutable `HEAD`: both source trees come from `git --no-replace-objects archive "$GITHUB_SHA"`, replacement refs are disabled, and the build manifest must receive the same `$GITHUB_SHA` as its explicit expected source.
 
 The documentation verifier is an explicit required step in the supply-chain job rather than an indirect consequence of the pytest suite. It validates bounded public-document ingestion, local links and anchors, documentation navigation, Mermaid accessibility metadata, prohibited project-progress headings, setup-snippet policy, and selected implementation-coupled README facts. The exact Claude Agent SDK pin, default model identifier, and internal QA-tool count are derived from bounded repository source inputs. The Skill claim is derived from the literal `ClaudeAgentOptions.skills` runtime allowlist and is accepted only when that allowlist matches the safely inspected `.claude/skills` directory set exactly. The resulting `documentation-integrity.json` is persisted with the revision-bound supply-chain evidence.
 
@@ -97,10 +97,11 @@ The verifier fails closed unless repository workflow definitions preserve the in
 - exact supported Python patch versions and hash-required dependency installation;
 - no editable/live dependency-resolution shortcuts in CI;
 - the documentation verifier and Mermaid renderer as exact reviewed, unconditional script steps in the required supply-chain job;
+- the reproducible-wheel block as an exact reviewed event-subject-bound step: fixed source-date epoch, replacement objects disabled, both archives from `$GITHUB_SHA`, and the manifest's explicit expected source equal to `$GITHUB_SHA`;
 - the supply-chain evidence step as the exact reviewed immutable `actions/upload-artifact` invocation, including the complete expected path set, `if-no-files-found: error`, and bounded retention;
 - the stable `Required PR Gate`, `if: always()`, complete dependency set, and an exact fail-closed result-check script for every required job.
 
-Adversarial unit tests cover trigger-comment spoofing, write permission, secret introduction, automatic-trigger leakage into the manual workflow, unexpected workflow files, symlinked workflow paths/directories, directory exhaustion, unbound checkout, removal or short-circuiting of documentation/Mermaid execution, fail-open documentation step conditions, removed/disabled/no-op evidence upload behavior, missing aggregate dependencies, corrupted or short-circuited aggregate result checks, a fail-open aggregate condition, and the credentialed model job's environment/main-ref/step-local-secret scope.
+Adversarial unit tests cover trigger-comment spoofing, write permission, secret introduction, automatic-trigger leakage into the manual workflow, unexpected workflow files, symlinked workflow paths/directories, directory exhaustion, unbound checkout, mutable-`HEAD` reproducible archives, re-enabled Git replacement objects, removal of the no-replace environment, a build manifest subject derived from mutable `HEAD`, removal or short-circuiting of documentation/Mermaid execution, fail-open documentation step conditions, removed/disabled/no-op evidence upload behavior, missing aggregate dependencies, corrupted or short-circuited aggregate result checks, a fail-open aggregate condition, and the credentialed model job's environment/main-ref/step-local-secret scope.
 
 The automatic supply-chain job emits `ci-contract-verification.json` and `documentation-integrity.json` with the other revision-bound supply-chain evidence. Its upload step deliberately uses `if: always()` so failure diagnostics can survive a red job. Consequently, an uploaded artifact or a successful upload step is **not** proof that the supply-chain job passed or that every listed evidence file existed; closure requires the supply-chain job itself, and then the aggregate `Required PR Gate`, to succeed for the exact subject.
 
@@ -115,6 +116,7 @@ Workflow code continues the Phase 4 supply-chain contract:
 - CPython versions are exact patch versions;
 - Python dependency graphs are hash locked;
 - project installation occurs only after the locked graph and uses `--no-deps --no-build-isolation`;
+- reproducible source archives name the exact GitHub event object and explicitly disable replacement-object rewriting;
 - the runner family is `ubuntu-24.04`, not `ubuntu-latest`.
 
 `ubuntu-24.04` is still a hosted-runner family label, not an immutable runner-image digest. GitHub's tool cache, bootstrap `pip`, runner image, network availability, external package infrastructure, and container-registry availability remain platform boundaries rather than repository-certified facts.
@@ -163,7 +165,7 @@ A green automatic CI run is not a release signature, deployment approval, or pro
 
 ## What green proves
 
-A successful automatic run proves that the repository-controlled automatic jobs completed successfully for the exact GitHub event subject they each verified. When the supply-chain job succeeds, the documentation verifier also proves its bounded structural invariants and selected source-derived README facts—including exact agreement between the runtime Skill allowlist and trusted Skill directory inventory—for that checked-out subject, while the pinned Mermaid CLI parsed/rendered every Mermaid block discovered in the bounded public Markdown corpus and emitted its machine-readable render report.
+A successful automatic run proves that the repository-controlled automatic jobs completed successfully for the exact GitHub event subject they each verified. A successful supply-chain run additionally proves that the reproducible wheel archives named that event subject with replacement-object rewriting disabled, the manifest accepted the same explicit source subject, and the manifest's recorded Dockerfile/pyproject/lock bytes matched blobs in that exact commit. When the supply-chain job succeeds, the documentation verifier also proves its bounded structural invariants and selected source-derived README facts—including exact agreement between the runtime Skill allowlist and trusted Skill directory inventory—for that checked-out subject, while the pinned Mermaid CLI parsed/rendered every Mermaid block discovered in the bounded public Markdown corpus and emitted its machine-readable render report.
 
 Artifact presence by itself is diagnostic evidence, not terminal authority. In particular, a failure-path `if: always()` upload may contain only the evidence produced before a job failed. A green claim therefore depends on the exact-subject job conclusions and aggregate gate, not merely on an artifact being downloadable.
 
@@ -178,7 +180,7 @@ It does **not** by itself prove:
 - external provider credentials/services were available;
 - release signing, publishing, deployment, or production validation occurred.
 
-That distinction prevents historical, partial, artifact-only, or wrong-subject evidence from becoming merge/release authority it does not possess.
+That distinction prevents historical, partial, artifact-only, replacement-object-retargeted, or wrong-subject evidence from becoming merge/release authority it does not possess.
 
 ---
 
