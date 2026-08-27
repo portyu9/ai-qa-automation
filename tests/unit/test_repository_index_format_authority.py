@@ -61,6 +61,15 @@ def _index_bytes(repo: Path) -> bytes:
     return (repo / ".git" / "index").read_bytes()
 
 
+def _force_index_version(repo: Path, version: int) -> None:
+    if version == 3:
+        # Git writes v3 only when an extended index flag is needed; merely
+        # requesting --index-version=3 may legitimately remain on v2.
+        _git(repo, "update-index", "--skip-worktree", "alpha.txt")
+        return
+    _git(repo, "update-index", f"--index-version={version}")
+
+
 @pytest.mark.parametrize("version", [2, 3, 4])
 def test_split_index_link_is_detected_across_supported_index_versions(
     tmp_path: Path,
@@ -68,13 +77,18 @@ def test_split_index_link_is_detected_across_supported_index_versions(
 ) -> None:
     repo = tmp_path / f"repo-v{version}"
     _init_repo(repo)
-    _git(repo, "update-index", f"--index-version={version}")
+    _force_index_version(repo, version)
 
     normal = _index_bytes(repo)
     assert int.from_bytes(normal[4:8], "big") == version
     assert git_index_has_split_link(normal) is False
 
     _git(repo, "update-index", "--split-index")
+    if version == 3:
+        # Split-index consolidation can move the extended entry into the shared
+        # index and collapse the main index to v2. Reapplying the flag creates a
+        # genuine v3 main split index with both an extended entry and link extension.
+        _git(repo, "update-index", "--skip-worktree", "alpha.txt")
     split = _index_bytes(repo)
 
     assert int.from_bytes(split[4:8], "big") == version
