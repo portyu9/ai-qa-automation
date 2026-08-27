@@ -57,6 +57,7 @@ class BrowserProbe:
         *,
         allow_hosts: set[str],
         timeout_ms: int = 15_000,
+        use_system_chrome: bool = False,
     ) -> None:
         if (
             isinstance(timeout_ms, bool)
@@ -64,9 +65,21 @@ class BrowserProbe:
             or not 1 <= timeout_ms <= 120_000
         ):
             raise ValueError("browser timeout_ms must be an integer between 1 and 120000")
+        if not isinstance(use_system_chrome, bool):
+            raise ValueError("use_system_chrome must be a boolean")
         self.evidence = evidence
         self.allow_hosts = {str(host).strip().lower() for host in allow_hosts if str(host).strip()}
         self.timeout_ms = timeout_ms
+        self.use_system_chrome = use_system_chrome
+
+    def _launch_options(self) -> dict[str, Any]:
+        options: dict[str, Any] = {
+            "headless": True,
+            "args": ["--no-proxy-server"],
+        }
+        if self.use_system_chrome:
+            options["channel"] = "chrome"
+        return options
 
     def _url_allowed(self, url: str) -> bool:
         parsed = urlparse(url)
@@ -109,13 +122,12 @@ class BrowserProbe:
 
         async with async_playwright() as playwright:
             try:
-                browser = await playwright.chromium.launch(
-                    headless=True, args=["--no-proxy-server"]
-                )
+                browser = await playwright.chromium.launch(**self._launch_options())
             except Exception as exc:
                 if "Executable doesn't exist" in str(exc):
+                    runtime = "system Chrome" if self.use_system_chrome else "Playwright Chromium"
                     raise RuntimeError(
-                        "Playwright Chromium runtime is not installed; browser validation is NOT_VERIFIED"
+                        f"{runtime} runtime is not available; browser validation is NOT_VERIFIED"
                     ) from exc
                 raise
             context = None
