@@ -24,6 +24,7 @@ MAX_GIT_STDERR_BYTES = 256 * 1024
 MAX_GIT_TREE_ENTRY_BYTES = 16 * 1024
 GIT_TIMEOUT_SECONDS = 30
 HEX_OID_RE = re.compile(r"^[0-9a-f]+$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 OBJECT_FORMAT_LENGTHS = {"sha1": 40, "sha256": 64}
 LOCK_NAMES = (
     "base-image.lock",
@@ -73,7 +74,9 @@ def _run_git_bytes(
             max_stderr_bytes=MAX_GIT_STDERR_BYTES,
         )
     except (OSError, RuntimeError, ValueError) as exc:
-        raise _GitCommandError("Git build-provenance subprocess could not be executed safely") from exc
+        raise _GitCommandError(
+            "Git build-provenance subprocess could not be executed safely"
+        ) from exc
     if result.timed_out:
         raise _GitCommandError("Git build-provenance subprocess exceeded its time budget")
     if result.stdout_truncated or result.stderr_truncated:
@@ -131,7 +134,9 @@ def _git_blob_oid(
         returned_path = raw_path.decode("utf-8", errors="strict")
         fields = metadata.decode("ascii", errors="strict").split()
     except UnicodeDecodeError as exc:
-        raise ValueError(f"{label} has invalid tree metadata in the expected source commit") from exc
+        raise ValueError(
+            f"{label} has invalid tree metadata in the expected source commit"
+        ) from exc
     if returned_path != relative_path or len(fields) != 3:
         raise ValueError(f"{label} has ambiguous tree metadata in the expected source commit")
     mode, object_type, object_id = fields
@@ -141,7 +146,9 @@ def _git_blob_oid(
         or len(object_id) != expected_length
         or not HEX_OID_RE.fullmatch(object_id)
     ):
-        raise ValueError(f"{label} is not a regular content-addressed blob in the expected source commit")
+        raise ValueError(
+            f"{label} is not a regular content-addressed blob in the expected source commit"
+        )
     return object_id
 
 
@@ -292,6 +299,13 @@ def _load_sbom(path: Path) -> tuple[dict[str, Any], str]:
     return data, digest
 
 
+def _expected_sbom_sha256() -> str:
+    expected = os.environ.get("RUNTIME_SBOM_SHA256", "")
+    if not SHA256_RE.fullmatch(expected):
+        raise ValueError("RUNTIME_SBOM_SHA256 must be a lowercase SHA-256 digest")
+    return expected
+
+
 def _load_lock_inputs(root: Path, *, expected_source_sha: str) -> tuple[dict[str, str], str]:
     lock_digests: dict[str, str] = {}
     base_image: str | None = None
@@ -332,6 +346,7 @@ def generate_manifest(
     wheel_a = wheel_a.absolute()
     wheel_b = wheel_b.absolute()
     sbom = sbom.absolute()
+    expected_sbom_sha256 = _expected_sbom_sha256()
 
     expected_tree_sha = _resolve_expected_source(root, expected_source_sha)
     _assert_expected_source_current(root, expected_source_sha)
@@ -353,6 +368,8 @@ def generate_manifest(
     _assert_expected_source_current(root, expected_source_sha)
 
     sbom_data, sbom_digest = _load_sbom(sbom)
+    if sbom_digest != expected_sbom_sha256:
+        raise ValueError("runtime CycloneDX SBOM does not match the parent-owned expected digest")
     lock_digests, base_image = _load_lock_inputs(root, expected_source_sha=expected_source_sha)
     _, dockerfile_digest = _read_bound_source_input(
         root,
