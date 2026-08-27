@@ -12,7 +12,7 @@ from evals.holdout_runner import READINESS_EVALUATORS, load_readiness_scenarios
 from evals.runner import PRIMARY_EVALUATORS, load_primary_scenarios
 
 
-def test_all_34_primary_cases_have_unique_ids_and_execution_paths() -> None:
+def test_all_34_primary_cases_have_unique_registered_evaluators() -> None:
     scenarios = load_primary_scenarios()
 
     assert len(scenarios) == 34
@@ -168,7 +168,7 @@ def test_primary_catalog_rejects_directory_swap_after_open(
         load_primary_scenarios(directory)
 
 
-def test_repository_visible_readiness_cases_are_sequestered_and_distinct() -> None:
+def test_repository_visible_readiness_cases_have_unique_registered_evaluators() -> None:
     scenarios = load_readiness_scenarios()
 
     assert len(scenarios) == 6

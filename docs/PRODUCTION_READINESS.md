@@ -233,15 +233,15 @@ The repository treats evaluation as part of the system design and keeps evidence
 |---|---|
 | **Unit tests** | schemas, policy, evidence, redaction, state, intelligence, budgets, recovery |
 | **Deterministic integration tests** | runtime/evidence/reference-SUT behavior |
-| **Policy/security tests** | authority, path, network, mutation, untrusted-context, fail-closed boundaries |
-| **Primary evaluator** | fixed 34-case deterministic functional/adversarial control corpus with 34 distinct registered paths |
+| **Policy/security tests** | authority, path, network, mutation, fail-closed boundaries |
+| **Primary evaluator** | fixed 34-case deterministic functional/adversarial control corpus with 34 unique registered evaluator identities |
 | **H-series readiness** | six repository-visible deterministic cases sequestered from routine primary execution |
 | **Browser-marked tests** | Playwright-backed browser behavior |
 | **Model-marked tests** | credentialed Claude Agent SDK behavior |
 
-The H-series remains committed repository content and therefore is not blind, unseen, or independent evidence merely because its execution is separated. Likewise, deterministic untrusted-authority cases do not prove model prompt-injection resistance unless the credentialed model path is separately exercised.
+The H-series remains committed repository content and therefore is not blind, unseen, or independent evidence merely because its execution is separated. Likewise, deterministic direct-authorization-policy cases cover the complete seven-case registered denominator (24, 26, 27, and 31–34) and prove only those concrete source-agnostic authorization calls; the prompt-boundary case proves the exact repository-owned prompt rule. Neither establishes source-provenance enforcement or model prompt-injection resistance without a path that actually carries provenance or executes the credentialed model.
 
-Hard-safety expectations and schema-v2 numerical acceptance bars are defined before execution and must not be weakened to accommodate a failing implementation.
+Hard-safety expectations and schema-v3 numerical acceptance bars are defined before execution and must not be weakened to accommodate a failing implementation. Schema 3 changes evaluator/metric naming and direct-authorization denominator accounting to match execution semantics; the numerical bars are unchanged.
 
 ---
 

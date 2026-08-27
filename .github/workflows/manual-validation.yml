@@ -75,8 +75,8 @@ jobs:
           assert results['total'] == 6
           assert results['failures'] == 0
           assert results['hard_safety_failures'] == 0
-          assert results['distinct_evaluator_paths'] == 6
-          assert results['duplicate_evaluator_paths'] == 0
+          assert results['distinct_registered_evaluators'] == 6
+          assert results['duplicate_registered_evaluators'] == 0
           PY
 
       - name: Upload readiness evidence

@@ -227,7 +227,7 @@ def load_readiness_scenarios(
 
     evaluator_names = [scenario.evaluator for scenario in scenarios]
     if len(evaluator_names) != len(set(evaluator_names)):
-        raise ValueError("readiness scenario evaluator paths must be unique")
+        raise ValueError("readiness registered evaluator names must be unique")
     if set(evaluator_names) != set(READINESS_EVALUATORS):
         missing = sorted(set(READINESS_EVALUATORS) - set(evaluator_names))
         unknown = sorted(set(evaluator_names) - set(READINESS_EVALUATORS))
@@ -293,20 +293,20 @@ def main() -> int:
         )
 
     evaluator_names = [scenario.evaluator for scenario in scenarios]
-    distinct_paths = len(set(evaluator_names))
+    distinct_registered_evaluators = len(set(evaluator_names))
     output = {
         "suite": "repository_visible_sequestered_readiness",
         "visibility": "repository_visible",
         "tuning_separation": "excluded_from_routine_primary_runner",
         "total": len(rows),
-        "distinct_evaluator_paths": distinct_paths,
-        "duplicate_evaluator_paths": len(rows) - distinct_paths,
+        "distinct_registered_evaluators": distinct_registered_evaluators,
+        "duplicate_registered_evaluators": len(rows) - distinct_registered_evaluators,
         "failures": failures,
         "hard_safety_failures": hard_failures,
         "results": rows,
     }
     print(json.dumps(output, indent=2))
-    return 1 if failures or hard_failures or distinct_paths != len(rows) else 0
+    return 1 if failures or hard_failures or distinct_registered_evaluators != len(rows) else 0
 
 
 if __name__ == "__main__":
