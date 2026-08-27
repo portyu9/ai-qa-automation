@@ -1,7 +1,7 @@
 # CI/CD and Repository Governance
 
 > [!IMPORTANT]
-> **Workflow definitions, workflow execution, and repository merge enforcement are different authorities.** Automatic CI can produce exact-subject evidence and a stable aggregate gate; GitHub branch protection or rulesets must separately require that gate before merges are technically blocked.
+> **Workflow definition, workflow execution, status-check identity, and merge enforcement are different authorities.** Automatic CI can produce exact-subject evidence and a stable aggregate gate, and GitHub rulesets can require that status check before merge. A `pull_request` workflow still executes repository-controlled workflow/control code from the pull-request event subject, so an in-repository self-check cannot independently prove that a hostile pull request did not replace the workflow and verifier that emit the same required-check name. Closing that control-plane boundary requires an independently trusted GitHub policy/check outside PR-editable repository code.
 
 **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
@@ -20,7 +20,7 @@ The repository deliberately separates ordinary automatic validation from manuall
 
 Both workflows declare only `contents: read`. Every checkout disables persisted credentials, binds to `${{ github.sha }}`, and immediately verifies that `git rev-parse HEAD` equals `GITHUB_SHA`.
 
-For a normal pull-request event, `github.sha` is GitHub's prospective merge subject rather than merely the feature-branch head. A green PR run therefore proves the tested event subject, not an arbitrary nearby commit.
+For a normal pull-request event, `github.sha` is GitHub's prospective merge subject rather than merely the feature-branch head. A green PR run therefore proves the tested event subject, not an arbitrary nearby commit. That subject binding does not make the workflow definition itself external to the pull request; workflow/control-plane provenance is a separate authority boundary described below.
 
 ---
 
@@ -34,11 +34,13 @@ The automatic workflow runs these repository-owned gates:
 - Bandit, hash-bound dependency audit, and secret scanning;
 - deterministic Playwright reference-SUT execution.
 
-Each automatic job verifies the exact GitHub event revision before installing or executing project code. Project build/install authority is also an explicit boundary: immediately before every automatic `pip install --no-deps --no-build-isolation .`, `scripts/verify_build_authority.py` requires the reviewed static Hatchling configuration; distribution name `ai-qa-automation`; sole console script `ai-qa = ai_qa_automation.cli:app`; absence of project GUI/entry-point groups; the exact file-valued inputs `README.md` and `LICENSE`; and a bounded symlink-free `src/ai_qa_automation` package tree containing only regular files/directories. README/LICENSE are each capped at 2 MiB, each selected source file at 8 MiB, aggregate selected source bytes at 32 MiB, and actual package-tree ingestion at 1024 entries. The verifier also rejects any installed `hatch` entry point discovered through standard-library distribution metadata. This prevents the project build/install path from silently introducing extra executables that shadow later CI tools, installing a newly declared project-owned Hatch plugin, replacing an unrelated locked distribution by name, or exhausting the build path with a small number of oversized repository files while still preserving verifier `PASS`.
+Each automatic job verifies the exact GitHub event revision before installing or executing project code. Dependency-install authority is established before the repository-controlled lock graph is consumed: `scripts/verify_build_authority.py` is standard-library-only and requires the `requirements/` directory to expose exactly the five reviewed lock files, with each file byte-for-byte bound to its reviewed Git blob identity. The directory is enumerated through bounded descriptor-relative no-follow operations with a 32-entry ceiling, each reviewed lock is bounded to 1 MiB, symlink/special-file substitution is rejected, and file/directory identity is revalidated around ingestion. Every one of the five automatic `python -m pip install --require-hashes -r ...` sites is immediately preceded by that authority check and followed by another authority check before project installation or later repository tool execution. A pull request therefore cannot first alter a hash-locked graph to install a new same-name console script and only then ask the repository verifier to approve the already-mutated environment.
 
-The supply-chain job additionally runs that verifier before installing its verification graph and persists `build-authority-verification.json`, then repeats the check after the locked graph is installed and immediately before the project build. The verifier does not load Hatch plugin code while inspecting entry-point metadata, and its bounded filesystem observation is not claimed to create a privileged immutable snapshot after verification. Its byte ceilings constrain repository-controlled build ingestion; they do not make the hosted runner or build tools resource-immutable.
+Project build/install authority is the next explicit boundary. Immediately before every automatic `pip install --no-deps --no-build-isolation .`, the same verifier requires the reviewed static Hatchling configuration; distribution name `ai-qa-automation`; sole console script `ai-qa = ai_qa_automation.cli:app`; absence of project GUI/entry-point groups; the exact file-valued inputs `README.md` and `LICENSE`; and a bounded symlink-free `src/ai_qa_automation` package tree containing only regular files/directories. README/LICENSE are each capped at 2 MiB, each selected source file at 8 MiB, aggregate selected source bytes at 32 MiB, and actual package-tree ingestion at 1024 entries. The verifier also rejects any installed `hatch` entry point discovered through standard-library distribution metadata. This prevents the project build/install path from silently introducing extra executables that shadow later CI tools, installing a newly declared project-owned Hatch plugin, replacing an unrelated locked distribution by name, or exhausting the build path with a small number of oversized repository files while still preserving verifier `PASS`.
 
-After the structural command/step checks, `scripts/verify_ci_contract.py` also binds the complete automatic `ci.yml` bytes to the reviewed Git blob identity. Any unmodeled workflow drift—including an additional semantically equivalent project-install command—fails closed even when the five canonical install sites still satisfy their local count and adjacency guards. A legitimate automatic-workflow change therefore requires explicit review and an intentional update of the reviewed blob identity rather than silently widening automatic command authority.
+The supply-chain job additionally persists `build-authority-verification.json` from its pre-install observation, then repeats the same lock/build/plugin authority check after the locked verification graph is installed and immediately before the project build. The verifier does not load Hatch plugin code while inspecting entry-point metadata, and its bounded filesystem observation is not claimed to create a privileged immutable snapshot after verification. Its byte ceilings constrain repository-controlled dependency/build ingestion; they do not make the hosted runner or build tools resource-immutable.
+
+After structural command/step checks, `scripts/verify_ci_contract.py` binds the complete automatic `ci.yml` bytes to the reviewed Git blob identity and requires all five dependency-install sites to retain their exact pre/post authority bracket. This rejects accidental or unreviewed workflow drift—including an additional semantically equivalent project-install command—inside the definition being validated. The whole-file identity check is **in-run self-consistency evidence**, not an independently trusted merge-policy root: because both `ci.yml` and its repository verifier are part of the pull-request subject, a hostile pull request can in principle change both unless an external GitHub control prevents that change or supplies an independently trusted required check. This is the residual workflow-governance boundary identified by the Phase 4 adversarial audit.
 
 The reproducible-wheel step archives the event subject itself rather than mutable `HEAD`. CI creates fresh random build directories plus a fresh bare Git view with an empty template under `RUNNER_TEMP`, runs Git under an empty environment containing only `PATH` plus the reviewed Git safety variables, and points that view only at the checked-out repository's content-addressed object store. Both archives name `$GITHUB_SHA` and set `core.attributesFile=/dev/null`; extraction uses `/usr/bin/tar` under a clean environment. The isolated view therefore does not consult checkout-local `.git/info/attributes`, checkout Git configuration, or ambient user/system Git attributes. Committed `.gitattributes` in the exact event tree remains repository-owned source authority. After extraction, the checkout-owned build-authority verifier inspects each archive root immediately before its corresponding wheel build, persists `build-authority-archive-a.json` and `build-authority-archive-b.json`, and requires those deterministic results—including the observed entry/byte counts and reviewed byte ceilings—to be byte-identical. The build manifest receives the same `$GITHUB_SHA` as its explicit expected source.
 
@@ -58,9 +60,9 @@ The final job is deliberately named:
 Required PR Gate
 ```
 
-It uses `if: ${{ always() }}` and depends on every automatic gate. Its result-check step is an exact reviewed script block that succeeds only when every required dependency reports `success`; shell short-circuit additions such as `|| true` are rejected by the repository CI-contract verifier. A skipped, cancelled, timed-out, or failed prerequisite therefore cannot be hidden behind partial green.
+It uses `if: ${{ always() }}` and depends on every automatic gate. Its result-check step is an exact reviewed script block that succeeds only when every required dependency reports `success`; shell short-circuit additions such as `|| true` are rejected by the repository CI-contract verifier. A skipped, cancelled, timed-out, or failed prerequisite therefore cannot be hidden behind partial green **when the reviewed automatic workflow is the definition actually executing**.
 
-This stable aggregate is the repository-owned status check intended for GitHub required-check enforcement. It avoids coupling branch policy to every matrix job name while remaining fail closed on all protected work.
+This stable aggregate is the repository-owned status-check interface used for GitHub required-check enforcement. It avoids coupling branch policy to every matrix job name. Requiring the check name is meaningful merge enforcement, but the check context alone does not cryptographically or immutably bind the implementation that produced it to the trusted default-branch copy of `ci.yml`. Therefore the aggregate result must not be described as independently immutable workflow provenance.
 
 Superseded PR runs use `cancel-in-progress: true` so stale revisions do not continue consuming CI capacity or look current after a newer event subject exists.
 
@@ -94,7 +96,7 @@ Run:
 python scripts/verify_ci_contract.py
 ```
 
-The verifier fails closed unless repository workflow definitions preserve the intended authority model. Among other invariants, it requires:
+The verifier fails closed unless the workflow definitions in the source subject preserve the intended repository authority model. Among other invariants, it requires:
 
 - exactly `ci.yml` and `manual-validation.yml` as workflow YAML files;
 - bounded, descriptor-pinned, no-follow workflow ingestion;
@@ -106,8 +108,9 @@ The verifier fails closed unless repository workflow definitions preserve the in
 - every checkout bound to `github.sha`, with persisted credentials disabled and exact-revision verification;
 - exact supported Python patch versions and hash-required dependency installation;
 - no editable/live dependency-resolution shortcuts in CI;
+- exactly five reviewed automatic hash-locked dependency-install sites, each immediately preceded and followed by `verify_build_authority.py`, so exact reviewed lock bytes are established before repository dependency ingestion and revalidated afterward;
 - exactly the reviewed five automatic project-install sites, with static build-authority revalidation immediately before every project install;
-- the complete automatic `ci.yml` bytes to match the reviewed Git blob identity after structural verification, so unmodeled extra commands or alternate install spellings cannot coexist with verifier `PASS`;
+- the complete automatic `ci.yml` bytes to match the reviewed Git blob identity after structural verification, so unmodeled extra commands or alternate install spellings cannot coexist with verifier `PASS` inside that running definition;
 - the supply-chain static build-authority verifier as an exact evidence-producing pre-install step and an immediate revalidation before the supply-chain project build;
 - safety-critical ordering of build authority → project install → repository verification → runtime SBOM → reproducible wheel build;
 - the runtime SBOM audit as an exact reviewed digest-exporting step and the later wheel-build block as an exact SHA-256-bracketed consumer;
@@ -117,9 +120,11 @@ The verifier fails closed unless repository workflow definitions preserve the in
 - the supply-chain evidence step as the exact reviewed immutable `actions/upload-artifact` invocation, including checkout and both archive build-authority JSON files, the complete expected path set, `if-no-files-found: error`, and bounded retention;
 - the stable `Required PR Gate`, `if: always()`, complete dependency set, and an exact fail-closed result-check script for every required job.
 
-The build-authority regression suite separately exercises distribution-name collision, extra console scripts that could shadow later CI tools, GUI/project entry-point expansion, installed Hatch plugin metadata, README/license/`license-files` authority expansion, package-root and nested-package symlinks, special-node rejection, directory-entry exhaustion, oversized project file inputs, oversized individual source files, and aggregate selected-source byte exhaustion. Workflow/adversarial tests additionally cover trigger/comment spoofing, write permission, secret introduction, automatic-trigger leakage into the manual workflow, unexpected workflow files, symlinked workflow paths/directories, unbound checkout, build-authority removal/reordering, unguarded automatic project installation, additional semantically equivalent project-install spellings, removal or divergence of per-archive build-authority checks/evidence, runtime-SBOM digest lineage removal, mutable-`HEAD` reproducible archives, re-enabled Git replacement objects, loss of the clean Git environment, loss of the fresh bare Git view/object-directory/empty-template isolation, reintroduction of ambient archive attributes, dirty tar extraction authority, replacement of the exact-event runtime-container archive with mutable checkout `docker build ... .`, a build manifest subject derived from mutable `HEAD`, documentation/Mermaid fail-open changes, evidence upload weakening, aggregate dependency/result-check corruption, and the credentialed model job's environment/main-ref/step-local-secret scope.
+The build-authority regression suite separately exercises exact-lock-byte mutation, unexpected lock-set expansion, symlinked lock substitution, distribution-name collision, extra console scripts that could shadow later CI tools, GUI/project entry-point expansion, installed Hatch plugin metadata, README/license/`license-files` authority expansion, package-root and nested-package symlinks, special-node rejection, requirements/package directory-entry exhaustion, oversized lock/project file inputs, oversized individual source files, and aggregate selected-source byte exhaustion. Workflow/adversarial tests additionally cover removal or reordering of either side of the dependency-install authority bracket, trigger/comment spoofing, write permission, secret introduction, automatic-trigger leakage into the manual workflow, unexpected workflow files, symlinked workflow paths/directories, unbound checkout, build-authority removal/reordering, unguarded automatic project installation, additional semantically equivalent project-install spellings, removal or divergence of per-archive build-authority checks/evidence, runtime-SBOM digest lineage removal, mutable-`HEAD` reproducible archives, re-enabled Git replacement objects, loss of the clean Git environment, loss of the fresh bare Git view/object-directory/empty-template isolation, reintroduction of ambient archive attributes, dirty tar extraction authority, replacement of the exact-event runtime-container archive with mutable checkout `docker build ... .`, a build manifest subject derived from mutable `HEAD`, documentation/Mermaid fail-open changes, evidence upload weakening, aggregate dependency/result-check corruption, and the credentialed model job's environment/main-ref/step-local-secret scope.
 
-The automatic supply-chain job emits `build-authority-verification.json`, both `build-authority-archive-*.json` files, `ci-contract-verification.json`, `documentation-integrity.json`, and the other supply-chain evidence. Its upload step deliberately uses `if: always()` so failure diagnostics can survive a red job. Consequently, an uploaded artifact or a successful upload step is **not** proof that the supply-chain job passed or that every listed evidence file existed; closure requires the supply-chain job itself, and then the aggregate `Required PR Gate`, to succeed for the exact subject.
+Those repository tests and the exact-workflow blob check are strong protections against accidental drift and reviewed-code regressions, but they are not an external trust anchor for themselves. A pull request that can replace both automatic workflow code and its verifier remains outside what repository-local execution can independently certify. Phase completion must represent that case as an environment/policy boundary unless a separately trusted GitHub control is established and re-fetched as evidence.
+
+The automatic supply-chain job emits `build-authority-verification.json`, both `build-authority-archive-*.json` files, `ci-contract-verification.json`, `documentation-integrity.json`, and the other supply-chain evidence. Its upload step deliberately uses `if: always()` so failure diagnostics can survive a red job. Consequently, an uploaded artifact or a successful upload step is **not** proof that the supply-chain job passed or that every listed evidence file existed; closure requires the supply-chain job itself, and then the aggregate `Required PR Gate`, to succeed for the exact subject. Even that green aggregate does not by itself close the independently trusted workflow-definition boundary described above.
 
 ---
 
@@ -128,35 +133,39 @@ The automatic supply-chain job emits `build-authority-verification.json`, both `
 Workflow code continues the Phase 4 supply-chain contract:
 
 - GitHub Actions use reviewed 40-character commit SHAs rather than mutable tags;
-- the complete automatic workflow definition is bound to a reviewed Git blob identity in addition to structural step/authority checks;
+- the five managed dependency locks are byte-bound to exact reviewed Git blob identities before every automatic repository-controlled dependency installation, with bounded no-follow ingestion;
+- the complete automatic workflow definition is bound to a reviewed Git blob identity **inside the running repository verifier**, providing definition self-consistency rather than external workflow immutability;
 - the official Mermaid CLI renderer is selected by an exact OCI SHA-256 digest rather than a mutable image tag;
 - CPython versions are exact patch versions;
 - Python dependency graphs are hash locked;
 - project build configuration, distribution/console-script/entry-point metadata, bounded file-valued metadata inputs, the bounded selected package tree, and installed Hatch plugin metadata are checked before automatic project builds;
-- README/LICENSE build inputs are capped at 2 MiB each, selected package files at 8 MiB each, total selected package bytes at 32 MiB, and actual package-tree ingestion at 1024 entries;
-- project installation occurs only after the locked graph where applicable and uses `--no-deps --no-build-isolation`;
+- README/LICENSE build inputs are capped at 2 MiB each, selected package files at 8 MiB each, total selected package bytes at 32 MiB, actual package-tree ingestion at 1024 entries, managed lock files at 1 MiB each, and requirements-directory ingestion at 32 entries;
+- project installation occurs only after the reviewed locked graph has been prevalidated/revalidated where applicable and uses `--no-deps --no-build-isolation`;
 - reproducible source archives name the exact GitHub event object, explicitly disable replacement-object rewriting, use an isolated bare Git view so checkout-local/ambient Git attribute or configuration metadata is not archive authority, and revalidate the exact extracted build-source authority immediately before each wheel;
 - the runtime-container build consumes an exact-event tar stream from its own isolated bare Git view rather than mutable checkout `.`, so checkout worktree and local `.dockerignore` drift are not container-context authority;
 - the runtime-SBOM subject is SHA-256 bracketed across later wheel/manifest activity and accepted by the manifest only when it matches the parent CI-owned digest;
 - the runner family is `ubuntu-24.04`, not `ubuntu-latest`.
 
-`ubuntu-24.04` is still a hosted-runner family label, not an immutable runner-image digest. GitHub's tool cache, bootstrap `pip`, runner image, network availability, external package infrastructure, container-registry availability, and Docker/BuildKit implementation remain platform boundaries rather than repository-certified facts.
+`ubuntu-24.04` is still a hosted-runner family label, not an immutable runner-image digest. GitHub's tool cache, bootstrap `pip`, runner image, network availability, external package infrastructure, container-registry availability, Docker/BuildKit implementation, and external workflow-governance configuration remain platform boundaries rather than repository-certified facts.
 
 ---
 
 ## Branch protection / ruleset boundary
 
-The repository-owned workflow is only one half of merge governance. To technically prevent merging a failing PR, GitHub repository settings should require the stable `Required PR Gate` on `main`.
+Repository API inspection on August 27, 2026 reported the active `Protect Main` ruleset applied to the default branch with pull requests required, review-thread resolution required, deletion and non-fast-forward updates blocked, strict `Required PR Gate` status-check enforcement, and no bypass actors. That is real external merge enforcement and must be re-fetched during any later completion audit rather than inferred from workflow YAML or historical evidence.
 
-For this single-contributor repository, useful enforcement is narrow and technical rather than ceremonial:
+It does **not** close the workflow-definition provenance problem by itself. A required status-check context identifies the check interface/integration accepted by branch policy; it does not make the PR's `.github/workflows/ci.yml` or repository verifier immutable. Because normal `pull_request` execution can evaluate repository-controlled workflow/control code from the prospective merge subject, a hostile change to the control-plane files can attempt to emit the same required check under changed logic. Repository-local assertions cannot authoritatively certify that their own definition was not replaced.
 
-- require changes to flow through pull requests when supported by the chosen repository policy;
+For this single-contributor repository, useful enforcement therefore remains narrow and technical rather than ceremonial:
+
+- keep changes flowing through pull requests;
 - require `Required PR Gate` before merge;
-- prevent force pushes and branch deletion on `main` where appropriate;
-- use merge-queue support only if the repository actually enables it;
-- do **not** invent a second-person approval requirement that cannot honestly be satisfied.
+- prevent force pushes and branch deletion on `main`;
+- require review-thread resolution without inventing an impossible second-person approval requirement;
+- where platform/account capabilities permit, add an independently trusted workflow/check or external policy that prevents PR-editable control-plane code from being the sole authority for the required status result;
+- use merge-queue support only if the repository actually enables it.
 
-The workflow verifier does not claim these external settings are enabled. Repository API state is authoritative for that question.
+Until that independent control is established and observed, finding 13 remains an explicit environment-owned limitation. The repository can be fully green and still must not claim that `Required PR Gate` is backed by an immutable workflow definition against arbitrary hostile workflow edits.
 
 ---
 
@@ -170,7 +179,7 @@ Automatic CI is designed for non-privileged execution:
 - `pull_request_target` is forbidden;
 - model credentials remain manual-only, main-subject-gated, environment-bound, and step-scoped.
 
-This limits repository-token/secret authority if a pull request contains hostile code. It does not replace GitHub's platform isolation, organization policy, runner trust, environment protection, or general secure-review requirements.
+This limits repository-token/secret authority if a pull request contains hostile code. It does not replace GitHub's platform isolation, organization policy, runner trust, environment protection, independently trusted workflow policy, or general secure-review requirements.
 
 ---
 
@@ -186,15 +195,16 @@ A green automatic CI run is not a release signature, deployment approval, or pro
 
 ## What green proves
 
-A successful automatic run proves that the repository-controlled automatic jobs completed successfully for the exact GitHub event subject they each verified. A successful supply-chain run additionally proves that the complete automatic workflow definition matched its reviewed Git blob identity; that the reviewed build-authority check passed before its verification-environment installation; that the project distribution name, sole reviewed console script, and absence of project GUI/entry-point groups matched the reviewed installation-metadata policy; that README/LICENSE and the selected package-tree shape were observed without symlinks/special nodes and within their reviewed entry/per-file/aggregate byte ceilings; that the installed verification graph exposed no `hatch` entry points when rechecked before the project build; that every automatic project install remains immediately guarded by the build-authority verifier; that each exact-event archive was independently revalidated for the same build/install/resource authority immediately before its wheel build and the two persisted archive-authority results matched; that the runtime-SBOM digest remained stable across later wheel/manifest activity and matched the parent-owned digest accepted by the manifest; that the reproducible wheel archives named the event subject through the isolated bare Git view with replacement-object rewriting and checkout-local/ambient attribute sources excluded from archive authority; that the runtime-container build context was separately archived from that exact event subject instead of mutable checkout state; and that the manifest's recorded Dockerfile/pyproject/lock bytes matched blobs in that exact commit. The documentation and Mermaid evidence proves their corresponding bounded structural/render contracts for that checked-out subject.
+A successful automatic run proves that the automatic jobs defined by the executed pull-request subject completed successfully for the exact GitHub event subject they each verified. A successful supply-chain run additionally proves that, **within that executing definition**, the complete automatic workflow matched its embedded reviewed Git blob identity; exact reviewed lock bytes were established before each automatic dependency installation and revalidated afterward; the reviewed build-authority check passed before its verification-environment installation; the project distribution name, sole reviewed console script, and absence of project GUI/entry-point groups matched the reviewed installation-metadata policy; README/LICENSE and the selected package-tree shape were observed without symlinks/special nodes and within their reviewed entry/per-file/aggregate byte ceilings; the installed verification graph exposed no `hatch` entry points when rechecked before the project build; every automatic project install remained immediately guarded by the build-authority verifier; each exact-event archive was independently revalidated for the same build/install/resource authority immediately before its wheel build and the two persisted archive-authority results matched; the runtime-SBOM digest remained stable across later wheel/manifest activity and matched the parent-owned digest accepted by the manifest; the reproducible wheel archives named the event subject through the isolated bare Git view with replacement-object rewriting and checkout-local/ambient attribute sources excluded from archive authority; the runtime-container build context was separately archived from that exact event subject instead of mutable checkout state; and the manifest's recorded Dockerfile/pyproject/lock bytes matched blobs in that exact commit. The documentation and Mermaid evidence proves their corresponding bounded structural/render contracts for that checked-out subject.
 
 Artifact presence by itself is diagnostic evidence, not terminal authority. In particular, a failure-path `if: always()` upload may contain only the evidence produced before a job failed. A green claim therefore depends on the exact-subject job conclusions and aggregate gate, not merely on an artifact being downloadable.
 
 It does **not** by itself prove:
 
+- the required status check was produced by an externally immutable or default-branch-trusted workflow/control definition rather than PR-editable workflow code;
 - every narrative statement in the documentation is implementation-derived or externally verified;
 - pixel-equivalent rendering by GitHub.com's current Markdown/Mermaid frontend;
-- branch protection or required-check settings are enabled;
+- current branch/ruleset settings still match a prior API observation without re-fetching them;
 - the `credentialed-validation` environment is configured with the intended external protection rules;
 - the GitHub-hosted runner image/tool cache or Docker/BuildKit implementation is cryptographically attested by this repository;
 - the build-source filesystem remained immutable after each bounded build-authority observation;
@@ -203,7 +213,7 @@ It does **not** by itself prove:
 - external provider credentials/services were available;
 - release signing, publishing, deployment, or production validation occurred.
 
-That distinction prevents historical, partial, artifact-only, build-config-expanded, install-metadata-expanded, executable-shadowed, resource-exhaustion, plugin-expanded, source-symlink-expanded, SBOM-substituted, replacement-object-retargeted, checkout-Git-metadata-retargeted, workflow-command-surface-expanded, mutable-container-context, or wrong-subject evidence from becoming merge/release authority it does not possess.
+That distinction prevents historical, partial, artifact-only, build-config-expanded, install-metadata-expanded, dependency-lock-retargeted, executable-shadowed, resource-exhaustion, plugin-expanded, source-symlink-expanded, SBOM-substituted, replacement-object-retargeted, checkout-Git-metadata-retargeted, workflow-command-surface-expanded, self-certifying-workflow, mutable-container-context, or wrong-subject evidence from becoming merge/release authority it does not possess.
 
 ---
 
