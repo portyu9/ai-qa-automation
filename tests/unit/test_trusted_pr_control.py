@@ -46,7 +46,7 @@ def _event_payload(*, action: str = "synchronize") -> dict[str, Any]:
 
 class FakeApi:
     current_payload: Mapping[str, Any] = _pull_request_payload()
-    instances: list["FakeApi"] = []
+    instances: list[FakeApi] = []
 
     def __init__(self, *, repository: str, token: str) -> None:
         self.repository = repository
@@ -297,6 +297,24 @@ def test_owner_authorized_failed_validation_posts_failure(monkeypatch: pytest.Mo
 
     assert result["result"] == "FAILURE"
     assert FakeApi.instances[0].statuses[0]["state"] == "failure"
+
+
+def test_direct_report_rejects_unknown_validation_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(control, "GitHubApi", FakeApi)
+
+    with pytest.raises(ValueError, match="invalid terminal result"):
+        control.report_authorized_result(
+            repository=REPOSITORY,
+            token="token",
+            actor="portyu9",
+            repository_owner="portyu9",
+            expected=_subject(),
+            authorized=True,
+            job_results={"validation": "green"},
+            target_url=RUN_URL,
+        )
+
+    assert FakeApi.instances[0].statuses == []
 
 
 def test_job_result_contract_rejects_extra_or_unknown_results() -> None:
