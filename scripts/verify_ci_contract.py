@@ -290,6 +290,7 @@ def _require_exact_script_step(job: str, *, step_name: str, command: str) -> Non
 
 def _require_exact_reproducible_build_step(job: str) -> None:
     step = _semantic_text(_step_block(job, REPRODUCIBLE_BUILD_STEP_NAME)).strip("\n")
+    continuation = chr(92)
     expected = "\n".join(
         (
             f"      - name: {REPRODUCIBLE_BUILD_STEP_NAME}",
@@ -308,11 +309,11 @@ def _require_exact_reproducible_build_step(job: str) -> None:
             "          mapfile -t wheel_b < <(find artifacts/ci/wheel-b -maxdepth 1 -type f -name '*.whl' -print)",
             '          test "${#wheel_a[@]}" -eq 1',
             '          test "${#wheel_b[@]}" -eq 1',
-            "          python scripts/generate_build_manifest.py \\",
-            '            --wheel-a "${wheel_a[0]}" \\",
-            '            --wheel-b "${wheel_b[0]}" \\",
-            "            --sbom artifacts/ci/runtime-sbom.cdx.json \\",
-            '            --expected-source-sha "$GITHUB_SHA" \\",
+            f"          python scripts/generate_build_manifest.py {continuation}",
+            f'            --wheel-a "${{wheel_a[0]}}" {continuation}',
+            f'            --wheel-b "${{wheel_b[0]}}" {continuation}',
+            f"            --sbom artifacts/ci/runtime-sbom.cdx.json {continuation}",
+            f'            --expected-source-sha "$GITHUB_SHA" {continuation}',
             "            --output artifacts/ci/build-manifest.json",
             '          sha256sum "${wheel_a[0]}" artifacts/ci/runtime-sbom.cdx.json artifacts/ci/build-manifest.json > artifacts/ci/build-checksums.sha256',
         )
