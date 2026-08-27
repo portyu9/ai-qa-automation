@@ -147,7 +147,9 @@ class GitHubApi:
             raise ValueError("commit-status description exceeds GitHub's 140-character limit")
         expected_target_prefix = f"https://github.com/{self.repository}/actions/runs/"
         if not target_url.startswith(expected_target_prefix):
-            raise ValueError("commit-status target URL must identify a workflow run in this repository")
+            raise ValueError(
+                "commit-status target URL must identify a workflow run in this repository"
+            )
         self.post_json(
             f"/repos/{self.repository}/statuses/{sha}",
             {
@@ -300,10 +302,19 @@ def _parse_bool(value: str) -> bool:
     raise ValueError("boolean workflow input must be exactly 'true' or 'false'")
 
 
-def dispatch_from_event(*, event_path: Path, token: str) -> dict[str, Any]:
+def dispatch_from_event(
+    *,
+    event_path: Path,
+    token: str,
+    expected_repository: str,
+) -> dict[str, Any]:
+    if not REPOSITORY_RE.fullmatch(expected_repository):
+        raise ValueError("trusted GITHUB_REPOSITORY identity is invalid")
     event = _read_json_file_bounded(event_path, max_bytes=MAX_EVENT_BYTES)
     repository, event_identity = subject_from_target_event(event)
-    api = GitHubApi(repository=repository, token=token)
+    if repository != expected_repository:
+        raise ValueError("event repository does not match trusted GITHUB_REPOSITORY")
+    api = GitHubApi(repository=expected_repository, token=token)
     current = subject_from_pull_request(api.fetch_pull_request(event_identity.number))
     if (
         current.number != event_identity.number
@@ -314,7 +325,7 @@ def dispatch_from_event(*, event_path: Path, token: str) -> dict[str, Any]:
     api.dispatch_validation(current)
     return {
         "result": "DISPATCHED",
-        "repository": repository,
+        "repository": expected_repository,
         "subject": current.as_dispatch_inputs(authorized=False),
         "workflow": TRUSTED_VALIDATION_WORKFLOW,
         "ref": TRUSTED_VALIDATION_REF,
@@ -399,7 +410,11 @@ def main() -> None:
     args = _parser().parse_args()
     token = os.environ.get("GITHUB_TOKEN", "")
     if args.command == "dispatch":
-        result = dispatch_from_event(event_path=args.event_path, token=token)
+        result = dispatch_from_event(
+            event_path=args.event_path,
+            token=token,
+            expected_repository=os.environ.get("GITHUB_REPOSITORY", ""),
+        )
     else:
         repository = os.environ.get("GITHUB_REPOSITORY", "")
         actor = os.environ.get("GITHUB_ACTOR", "")
