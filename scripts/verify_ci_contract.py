@@ -32,6 +32,10 @@ BUILD_AUTHORITY_REVALIDATION_COMMAND = (
     "          python scripts/verify_build_authority.py > /dev/null"
 )
 BUILD_AUTHORITY_ARTIFACT = "artifacts/ci/build-authority-verification.json"
+ARCHIVE_BUILD_AUTHORITY_ARTIFACTS = (
+    "artifacts/ci/build-authority-archive-a.json",
+    "artifacts/ci/build-authority-archive-b.json",
+)
 BUILD_AUTHORITY_COMMAND = (
     f"python scripts/verify_build_authority.py | tee {BUILD_AUTHORITY_ARTIFACT}"
 )
@@ -52,6 +56,7 @@ SUPPLY_CHAIN_UPLOAD_STEP_NAME = "Upload supply-chain evidence"
 REQUIRED_GATE_STEP_NAME = "Require every automatic gate to succeed"
 SUPPLY_CHAIN_ARTIFACTS = (
     BUILD_AUTHORITY_ARTIFACT,
+    *ARCHIVE_BUILD_AUTHORITY_ARTIFACTS,
     "artifacts/ci/supply-chain-verification.json",
     "artifacts/ci/ci-contract-verification.json",
     DOCUMENTATION_INTEGRITY_ARTIFACT,
@@ -389,8 +394,11 @@ def _require_exact_reproducible_build_step(job: str) -> None:
             '          "${git_clean_env[@]}" /usr/bin/git init --bare --object-format="$git_object_format" --template="$git_template" "$git_view" > /dev/null',
             '          "${git_clean_env[@]}" GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$GITHUB_SHA" | env -i PATH="$PATH" /usr/bin/tar -xf - -C "$build_a"',
             '          "${git_clean_env[@]}" GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$GITHUB_SHA" | env -i PATH="$PATH" /usr/bin/tar -xf - -C "$build_b"',
+            '          python scripts/verify_build_authority.py --root "$build_a" > artifacts/ci/build-authority-archive-a.json',
             '          python -m pip wheel --no-deps --no-build-isolation "$build_a" --wheel-dir artifacts/ci/wheel-a',
+            '          python scripts/verify_build_authority.py --root "$build_b" > artifacts/ci/build-authority-archive-b.json',
             '          python -m pip wheel --no-deps --no-build-isolation "$build_b" --wheel-dir artifacts/ci/wheel-b',
+            "          cmp -s artifacts/ci/build-authority-archive-a.json artifacts/ci/build-authority-archive-b.json",
             "          read -r observed_sbom_sha256 _ < <(/usr/bin/sha256sum artifacts/ci/runtime-sbom.cdx.json)",
             '          test "$observed_sbom_sha256" = "$RUNTIME_SBOM_SHA256"',
             "          mapfile -t wheel_a < <(find artifacts/ci/wheel-a -maxdepth 1 -type f -name '*.whl' -print)",
@@ -612,6 +620,7 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
         "prebuild_authority": "static-before-project-install",
         "project_install_count": project_install_count,
         "project_install_authority": "immediate-static-revalidation",
+        "archive_build_authority": "verified-and-matched-before-wheel-builds",
         "documentation_integrity": "required-via-supply-chain",
         "mermaid_render": "required-via-supply-chain",
         "build_provenance_subject": "github.sha/isolated-git-view",
