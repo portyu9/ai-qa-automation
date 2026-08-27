@@ -277,7 +277,7 @@ Full regression must also pass at the same revision.
 
 ### Rollback transaction ordering
 
-If a pending mutation advanced canonical `change_revision`, rollback is coordinated across `state.json` and `runtime.json` rather than treating runtime metadata as the only authority:
+If a pending mutation advanced canonical `change_revision`, live rollback is coordinated across `state.json` and `runtime.json` rather than treating runtime metadata as the only authority:
 
 1. verify pending `change_revision_before` is coherent with the canonical revision;
 2. persist a current-revision `NOT_VERIFIED` rollback gate to `state.json`;
@@ -288,7 +288,7 @@ A failure at step 2 leaves candidate bytes and pending recovery authority untouc
 
 ### Recovery
 
-Stale recovery applies the same ownership and lineage philosophy:
+Stale recovery applies the same ownership and lineage philosophy but retains runtime pending authority as its pre-state-checkpoint safety boundary:
 
 - prior run confined beneath trusted artifact root;
 - runtime/journal/rollback ownership is non-symlink;
@@ -298,7 +298,7 @@ Stale recovery applies the same ownership and lineage philosophy:
 - backup bytes match original SHA-256;
 - pending `change_revision_before` is present and coherent with canonical `state.json`.
 
-For an advanced mutation, canonical `change_revision` must be exactly `change_revision_before + 1`; impossible gaps block before any recovery write. Recoverable advanced revisions persist the same `NOT_VERIFIED` rollback lineage before target restoration and runtime closure.
+For an advanced mutation, canonical `change_revision` must be exactly `change_revision_before + 1`; impossible gaps block before any recovery write. After every ownership/fingerprint/revision check succeeds, stale recovery may restore/remove target bytes while `runtime.json.pending_mutation` and rollback backup authority remain durable. It then persists the prior run's current-revision `NOT_VERIFIED`/rolled-back lineage and only after that checkpoint may it clear pending runtime authority. If the state save fails, restored bytes remain paired with pending runtime/backup authority and recovery is not represented as clean.
 
 `runtime/recovery.py` uses the same exact-path closure standard, so recovery inspection cannot be weaker than terminal truth.
 
@@ -392,7 +392,7 @@ journal.jsonl           → runtime chronology
 rollback/               → pending transaction recovery bytes
 ```
 
-This separation prevents lease ownership, recovery metadata, or conversational state from becoming QA evidence by proximity. Mutation rollback is the deliberate coordination point: runtime pending authority cannot be cleared after an advanced revision until canonical QA state has first durably recorded that rollback is `NOT_VERIFIED`.
+This separation prevents lease ownership, recovery metadata, or conversational state from becoming QA evidence by proximity. Mutation rollback is the deliberate coordination point: live rollback cannot clear runtime pending authority after an advanced revision until canonical QA state has first durably recorded rollback intent; stale recovery may restore under still-durable pending authority but cannot clear that authority until canonical rolled-back lineage is durable.
 
 ---
 
