@@ -39,19 +39,88 @@ def _read_hashed_bytes(path: Path, *, max_bytes: int, label: str) -> tuple[bytes
     return content, hashlib.sha256(content).hexdigest()
 
 
-def _git(*args: str) -> str:
+def _git_environment() -> dict[str, str]:
+    return {
+        "PATH": os.environ.get("PATH", ""),
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_NO_LAZY_FETCH": "1",
+    }
+
+
+def _git(*args: str, cwd: Path | None = None) -> str:
     result = subprocess.run(
         ["git", *args],
         check=True,
         capture_output=True,
         text=True,
-        env={"PATH": os.environ.get("PATH", "")},
+        cwd=cwd,
+        env=_git_environment(),
     )
     return result.stdout.strip()
 
 
-def _resolve_expected_source(expected_source_sha: str) -> str:
-    object_format = _git("rev-parse", "--show-object-format")
+def _git_blob_bytes(
+    root: Path,
+    *,
+    source_sha: str,
+    relative_path: str,
+    max_bytes: int,
+    label: str,
+) -> bytes:
+    object_spec = f"{source_sha}:{relative_path}"
+    try:
+        size_text = _git("cat-file", "-s", object_spec, cwd=root)
+        size = int(size_text)
+    except (subprocess.CalledProcessError, ValueError) as exc:
+        raise ValueError(f"{label} is not an available blob in the expected source commit") from exc
+    if size < 0 or size > max_bytes:
+        raise ValueError(f"{label} exceeds {max_bytes} byte source-object limit")
+
+    try:
+        result = subprocess.run(
+            ["git", "cat-file", "blob", object_spec],
+            check=True,
+            capture_output=True,
+            cwd=root,
+            env=_git_environment(),
+        )
+    except subprocess.CalledProcessError as exc:
+        raise ValueError(f"{label} could not be read from the expected source commit") from exc
+    if len(result.stdout) != size:
+        raise ValueError(f"{label} source-object size changed during observation")
+    return result.stdout
+
+
+def _read_bound_source_input(
+    root: Path,
+    *,
+    source_sha: str,
+    relative_path: str,
+    max_bytes: int,
+    label: str,
+) -> tuple[bytes, str]:
+    observed, observed_digest = _read_hashed_bytes(
+        root / relative_path,
+        max_bytes=max_bytes,
+        label=label,
+    )
+    expected = _git_blob_bytes(
+        root,
+        source_sha=source_sha,
+        relative_path=relative_path,
+        max_bytes=max_bytes,
+        label=label,
+    )
+    if observed != expected:
+        raise ValueError(f"{label} does not match the explicit expected source commit")
+    return observed, observed_digest
+
+
+def _resolve_expected_source(root: Path, expected_source_sha: str) -> str:
+    object_format = _git("rev-parse", "--show-object-format", cwd=root)
     expected_length = OBJECT_FORMAT_LENGTHS.get(object_format)
     if expected_length is None:
         raise ValueError(f"unsupported Git object format for build provenance: {object_format}")
@@ -60,8 +129,10 @@ def _resolve_expected_source(expected_source_sha: str) -> str:
             "expected source SHA must be a lowercase full object ID for the repository object format"
         )
     try:
-        resolved_commit = _git("rev-parse", "--verify", f"{expected_source_sha}^{{commit}}")
-        resolved_tree = _git("rev-parse", "--verify", f"{expected_source_sha}^{{tree}}")
+        resolved_commit = _git(
+            "rev-parse", "--verify", f"{expected_source_sha}^{{commit}}", cwd=root
+        )
+        resolved_tree = _git("rev-parse", "--verify", f"{expected_source_sha}^{{tree}}", cwd=root)
     except subprocess.CalledProcessError as exc:
         raise ValueError("expected source SHA does not resolve to an available commit") from exc
     if resolved_commit != expected_source_sha:
@@ -69,8 +140,8 @@ def _resolve_expected_source(expected_source_sha: str) -> str:
     return resolved_tree
 
 
-def _assert_expected_source_current(expected_source_sha: str) -> None:
-    current = _git("rev-parse", "--verify", "HEAD")
+def _assert_expected_source_current(root: Path, expected_source_sha: str) -> None:
+    current = _git("rev-parse", "--verify", "HEAD", cwd=root)
     if current != expected_source_sha:
         raise ValueError(
             "current Git subject does not match the explicit expected source SHA; "
@@ -118,13 +189,15 @@ def _load_sbom(path: Path) -> tuple[dict[str, Any], str]:
     return data, digest
 
 
-def _load_lock_inputs(root: Path) -> tuple[dict[str, str], str]:
+def _load_lock_inputs(root: Path, *, expected_source_sha: str) -> tuple[dict[str, str], str]:
     lock_digests: dict[str, str] = {}
     base_image: str | None = None
     for name in LOCK_NAMES:
         limit = 256 if name == "base-image.lock" else MAX_LOCK_BYTES
-        content, digest = _read_hashed_bytes(
-            root / "requirements" / name,
+        content, digest = _read_bound_source_input(
+            root,
+            source_sha=expected_source_sha,
+            relative_path=f"requirements/{name}",
             max_bytes=limit,
             label=f"supply-chain lock {name}",
         )
@@ -139,8 +212,8 @@ def _load_lock_inputs(root: Path) -> tuple[dict[str, str], str]:
     return lock_digests, base_image
 
 
-def _assert_tracked_worktree_clean() -> None:
-    if _git("status", "--porcelain", "--untracked-files=no"):
+def _assert_tracked_worktree_clean(root: Path) -> None:
+    if _git("status", "--porcelain", "--untracked-files=no", cwd=root):
         raise ValueError("tracked worktree is dirty; build provenance would be ambiguous")
 
 
@@ -157,8 +230,8 @@ def generate_manifest(
     wheel_b = wheel_b.absolute()
     sbom = sbom.absolute()
 
-    expected_tree_sha = _resolve_expected_source(expected_source_sha)
-    _assert_expected_source_current(expected_source_sha)
+    expected_tree_sha = _resolve_expected_source(root, expected_source_sha)
+    _assert_expected_source_current(root, expected_source_sha)
 
     digest_a, wheel_a_size = _sha256(
         wheel_a, max_bytes=MAX_WHEEL_BYTES, label="first reproducible wheel"
@@ -173,22 +246,30 @@ def generate_manifest(
     if os.environ.get("SOURCE_DATE_EPOCH") != SOURCE_DATE_EPOCH:
         raise ValueError(f"SOURCE_DATE_EPOCH must equal {SOURCE_DATE_EPOCH}")
 
-    _assert_tracked_worktree_clean()
-    _assert_expected_source_current(expected_source_sha)
+    _assert_tracked_worktree_clean(root)
+    _assert_expected_source_current(root, expected_source_sha)
 
     sbom_data, sbom_digest = _load_sbom(sbom)
-    lock_digests, base_image = _load_lock_inputs(root)
-    dockerfile_digest, _ = _sha256(
-        root / "Dockerfile", max_bytes=MAX_SOURCE_INPUT_BYTES, label="Dockerfile"
+    lock_digests, base_image = _load_lock_inputs(root, expected_source_sha=expected_source_sha)
+    _, dockerfile_digest = _read_bound_source_input(
+        root,
+        source_sha=expected_source_sha,
+        relative_path="Dockerfile",
+        max_bytes=MAX_SOURCE_INPUT_BYTES,
+        label="Dockerfile",
     )
-    pyproject_digest, _ = _sha256(
-        root / "pyproject.toml", max_bytes=MAX_SOURCE_INPUT_BYTES, label="pyproject.toml"
+    _, pyproject_digest = _read_bound_source_input(
+        root,
+        source_sha=expected_source_sha,
+        relative_path="pyproject.toml",
+        max_bytes=MAX_SOURCE_INPUT_BYTES,
+        label="pyproject.toml",
     )
 
-    # A tracked source subject changing during observation must not yield a manifest whose
-    # recorded provenance silently follows mutable HEAD rather than the caller-owned subject.
-    _assert_tracked_worktree_clean()
-    _assert_expected_source_current(expected_source_sha)
+    # Neither mutable Git metadata nor hidden worktree changes may silently retarget
+    # recorded provenance away from the caller-owned event subject.
+    _assert_tracked_worktree_clean(root)
+    _assert_expected_source_current(root, expected_source_sha)
 
     return {
         "schema_version": 1,
