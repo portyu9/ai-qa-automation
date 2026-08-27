@@ -7,9 +7,10 @@ import re
 import stat
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 API_ROOT = "https://api.github.com"
 API_VERSION = "2026-03-10"
@@ -89,7 +90,7 @@ class GitHubApi:
             },
         )
         try:
-            with urllib.request.urlopen(request, timeout=15) as response:  # noqa: S310
+            with urllib.request.urlopen(request, timeout=15) as response:
                 data = response.read(MAX_API_RESPONSE_BYTES + 1)
         except urllib.error.HTTPError as exc:
             detail = exc.read(4096).decode("utf-8", errors="replace")
