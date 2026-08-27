@@ -28,7 +28,7 @@ AUTOMATIC_REQUIRED_JOBS = (
 EXPECTED_AUTOMATIC_PROJECT_INSTALL_COUNT = 5
 EXPECTED_AUTOMATIC_DEPENDENCY_INSTALL_COUNT = 5
 EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = (
-    "c24613e07023adc6086b795983a6e65196555022"  # pragma: allowlist secret
+    "cc77a987cebf7b53e3cd466a4b844dbd6e1d7591"  # pragma: allowlist secret
 )
 AUTOMATIC_PROJECT_INSTALL_COMMAND = (
     "          python -m pip install --no-deps --no-build-isolation ."
@@ -59,6 +59,8 @@ MERMAID_STEP_NAME = "Render Mermaid documentation with digest-pinned official CL
 RUNTIME_SBOM_STEP_NAME = "Audit hash-locked runtime graph and emit CycloneDX SBOM"
 REPRODUCIBLE_BUILD_STEP_NAME = "Build wheel twice from fresh source trees"
 SUPPLY_CHAIN_UPLOAD_STEP_NAME = "Upload supply-chain evidence"
+HOSTED_BROWSER_STEP_NAME = "Verify hosted Chrome runtime"
+HOSTED_BROWSER_EXECUTABLE = "/usr/bin/google-chrome"
 REQUIRED_GATE_STEP_NAME = "Require every automatic gate to succeed"
 SUPPLY_CHAIN_ARTIFACTS = (
     BUILD_AUTHORITY_ARTIFACT,
@@ -357,6 +359,22 @@ def _require_exact_verification_install_step(job: str) -> None:
         )
 
 
+def _require_exact_hosted_browser_step(job: str) -> None:
+    step = _semantic_text(_step_block(job, HOSTED_BROWSER_STEP_NAME)).strip("\n")
+    expected = "\n".join(
+        (
+            f"      - name: {HOSTED_BROWSER_STEP_NAME}",
+            "        run: |",
+            f"          test -x {HOSTED_BROWSER_EXECUTABLE}",
+            f"          {HOSTED_BROWSER_EXECUTABLE} --version",
+        )
+    )
+    if step != expected:
+        raise ValueError(
+            "automatic browser validation must use the exact reviewed hosted Chrome observation step"
+        )
+
+
 def _require_exact_runtime_sbom_step(job: str) -> None:
     step = _semantic_text(_step_block(job, RUNTIME_SBOM_STEP_NAME)).strip("\n")
     expected = "\n".join(
@@ -579,6 +597,10 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
         "ANTHROPIC_API_KEY",
         "${{ inputs.",
         "continue-on-error: true",
+        "playwright install",
+        "sudo ",
+        "apt-get ",
+        "apt install ",
     ):
         if forbidden in semantic:
             raise ValueError(f"{name}: forbidden automatic-CI authority token: {forbidden}")
@@ -640,6 +662,9 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
             f"{name}: Mermaid render command must not appear outside its reviewed step"
         )
 
+    browser_reference_raw = _job_block(text, "browser-reference-sut")
+    _require_exact_hosted_browser_step(browser_reference_raw)
+
     required_gate_raw = _job_block(text, "required-gate")
     required_gate = _semantic_text(required_gate_raw)
     if "    name: Required PR Gate" not in required_gate:
@@ -667,6 +692,7 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
         "project_install_count": project_install_count,
         "project_install_authority": "immediate-static-revalidation",
         "workflow_definition": "exact-reviewed-git-blob",
+        "browser_runtime_authority": "hosted-system-chrome-observed-without-automatic-installer",
         "archive_build_authority": "verified-and-matched-before-wheel-builds",
         "documentation_integrity": "required-via-supply-chain",
         "mermaid_render": "required-via-supply-chain",
@@ -728,9 +754,9 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
         },
         "actions": actions,
         "limitations": [
-            "Repository workflow validation does not prove GitHub branch protection or required-check settings are enabled.",
+            "Repository workflow validation is in-subject self-consistency evidence and does not independently attest workflow provenance when a source subject can change both workflow and verifier.",
             "A green pull_request run validates GitHub's event SHA, which is normally the prospective merge subject rather than the PR head commit alone.",
-            "Credential existence, environment protection, hosted-runner identity, and external service availability remain environment-owned facts.",
+            "Credential existence, environment protection, hosted-runner/browser identity, and external service availability remain environment-owned facts.",
         ],
     }
 
