@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -25,6 +26,7 @@ def test_repository_build_authority_is_static() -> None:
     assert result["build_requirements"] == ["hatchling==1.32.0"]
     assert result["dynamic_metadata"] is False
     assert result["source_execution_extensions"] is False
+    assert result["installed_hatch_entry_points"] == []
     assert len(result["pyproject_sha256"]) == 64
 
 
@@ -94,6 +96,20 @@ def test_build_authority_rejects_dynamic_metadata(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="version must remain static"):
         build_authority.verify_build_authority(root)
+
+
+def test_build_authority_rejects_installed_hatch_plugin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rogue = SimpleNamespace(name="rogue", value="rogue_plugin.hooks")
+    monkeypatch.setattr(
+        build_authority.importlib_metadata,
+        "entry_points",
+        lambda **kwargs: [rogue] if kwargs == {"group": "hatch"} else [],
+    )
+
+    with pytest.raises(ValueError, match="third-party Hatch entry points are forbidden"):
+        build_authority.verify_build_authority(ROOT)
 
 
 def test_build_authority_rejects_symlinked_pyproject(tmp_path: Path) -> None:
