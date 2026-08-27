@@ -4,39 +4,22 @@ import argparse
 import json
 import os
 import re
-import stat
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 API_ROOT = "https://api.github.com"
 API_VERSION = "2026-03-10"
 EXPECTED_BASE_REF = "main"
-TRUSTED_VALIDATION_REF = "main"
-TRUSTED_VALIDATION_WORKFLOW = "trusted-pr-validation.yml"
+EXPECTED_WORKFLOW_EVENT = "workflow_dispatch"
+EXPECTED_WORKFLOW_REF = "refs/heads/main"
 TRUSTED_STATUS_CONTEXT = "Trusted PR Gate"
 MAX_API_RESPONSE_BYTES = 1024 * 1024
-MAX_EVENT_BYTES = 1024 * 1024
 FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-AUTOMATIC_PR_ACTIONS = {
-    "edited",
-    "opened",
-    "ready_for_review",
-    "reopened",
-    "synchronize",
-}
 TERMINAL_JOB_RESULTS = {"cancelled", "failure", "skipped", "success"}
-
-
-@dataclass(frozen=True)
-class PullRequestEventIdentity:
-    number: int
-    head_sha: str
-    base_sha: str
 
 
 @dataclass(frozen=True)
@@ -45,15 +28,6 @@ class PullRequestSubject:
     head_sha: str
     base_sha: str
     merge_sha: str
-
-    def as_dispatch_inputs(self, *, authorized: bool) -> dict[str, str]:
-        return {
-            "pr_number": str(self.number),
-            "expected_head_sha": self.head_sha,
-            "expected_base_sha": self.base_sha,
-            "expected_merge_sha": self.merge_sha,
-            "authorized": "true" if authorized else "false",
-        }
 
 
 class GitHubApi:
@@ -124,15 +98,6 @@ class GitHubApi:
             raise ValueError("pull-request number must be positive")
         return self.get_json(f"/repos/{self.repository}/pulls/{number}")
 
-    def dispatch_validation(self, subject: PullRequestSubject) -> Mapping[str, Any] | None:
-        return self.post_json(
-            f"/repos/{self.repository}/actions/workflows/{TRUSTED_VALIDATION_WORKFLOW}/dispatches",
-            {
-                "ref": TRUSTED_VALIDATION_REF,
-                "inputs": subject.as_dispatch_inputs(authorized=False),
-            },
-        )
-
     def post_status(
         self,
         *,
@@ -146,10 +111,12 @@ class GitHubApi:
             raise ValueError("invalid GitHub commit-status state")
         if len(description) > 140:
             raise ValueError("commit-status description exceeds GitHub's 140-character limit")
-        expected_target_prefix = f"https://github.com/{self.repository}/actions/runs/"
-        if not target_url.startswith(expected_target_prefix):
+        target_pattern = re.compile(
+            rf"^https://github\.com/{re.escape(self.repository)}/actions/runs/[1-9][0-9]*$"
+        )
+        if target_pattern.fullmatch(target_url) is None:
             raise ValueError(
-                "commit-status target URL must identify a workflow run in this repository"
+                "commit-status target URL must identify one workflow run in this repository"
             )
         self.post_json(
             f"/repos/{self.repository}/statuses/{sha}",
@@ -194,81 +161,13 @@ def subject_from_pull_request(payload: Mapping[str, Any]) -> PullRequestSubject:
     base = _mapping(payload.get("base"), label="pull-request base")
     if base.get("ref") != EXPECTED_BASE_REF:
         raise ValueError(f"pull request must target {EXPECTED_BASE_REF!r}")
-    if payload.get("mergeable") is False:
-        raise ValueError("pull request is currently not mergeable")
+    if payload.get("mergeable") is not True:
+        raise ValueError("pull request must be currently and definitively mergeable")
     return PullRequestSubject(
         number=number,
         head_sha=_require_sha(head.get("sha"), label="pull-request head SHA"),
         base_sha=_require_sha(base.get("sha"), label="pull-request base SHA"),
         merge_sha=_require_sha(payload.get("merge_commit_sha"), label="pull-request merge SHA"),
-    )
-
-
-def _file_signature(value: os.stat_result) -> tuple[int, int, int, int, int]:
-    return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns
-
-
-def _read_json_file_bounded(path: Path, *, max_bytes: int) -> Mapping[str, Any]:
-    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
-    if not getattr(os, "O_NOFOLLOW", 0):
-        raise RuntimeError("trusted event ingestion requires O_NOFOLLOW")
-    try:
-        fd = os.open(path, flags)
-    except OSError as exc:
-        raise ValueError(f"unable to open trusted event payload safely: {path}") from exc
-    try:
-        before = os.fstat(fd)
-        if not stat.S_ISREG(before.st_mode):
-            raise ValueError(f"{path} must be a regular non-symlink file")
-        if before.st_size > max_bytes:
-            raise ValueError(f"{path} exceeds {max_bytes} byte ingestion limit")
-        chunks: list[bytes] = []
-        total = 0
-        while total <= max_bytes:
-            chunk = os.read(fd, min(64 * 1024, max_bytes + 1 - total))
-            if not chunk:
-                break
-            chunks.append(chunk)
-            total += len(chunk)
-        if total > max_bytes:
-            raise ValueError(f"{path} exceeds {max_bytes} byte ingestion limit")
-        after = os.fstat(fd)
-        current = path.stat(follow_symlinks=False)
-        if (
-            _file_signature(before) != _file_signature(after)
-            or before.st_dev != current.st_dev
-            or before.st_ino != current.st_ino
-            or not stat.S_ISREG(current.st_mode)
-        ):
-            raise ValueError(f"{path} changed identity or content during ingestion")
-    finally:
-        os.close(fd)
-    parsed = json.loads(b"".join(chunks))
-    if not isinstance(parsed, dict):
-        raise ValueError(f"{path} must contain a JSON object")
-    return parsed
-
-
-def subject_from_target_event(event: Mapping[str, Any]) -> tuple[str, PullRequestEventIdentity]:
-    action = event.get("action")
-    if action not in AUTOMATIC_PR_ACTIONS:
-        raise ValueError(f"unsupported pull_request_target action: {action!r}")
-    repository = _mapping(event.get("repository"), label="event repository")
-    repository_name = repository.get("full_name")
-    if not isinstance(repository_name, str) or REPOSITORY_RE.fullmatch(repository_name) is None:
-        raise ValueError("event repository full_name is invalid")
-    pull_request = _mapping(event.get("pull_request"), label="event pull request")
-    if pull_request.get("state") != "open":
-        raise ValueError("event pull request must remain open")
-    number = _require_positive_int(pull_request.get("number"), label="pull-request number")
-    head = _mapping(pull_request.get("head"), label="pull-request head")
-    base = _mapping(pull_request.get("base"), label="pull-request base")
-    if base.get("ref") != EXPECTED_BASE_REF:
-        raise ValueError(f"pull request must target {EXPECTED_BASE_REF!r}")
-    return repository_name, PullRequestEventIdentity(
-        number=number,
-        head_sha=_require_sha(head.get("sha"), label="event head SHA"),
-        base_sha=_require_sha(base.get("sha"), label="event base SHA"),
     )
 
 
@@ -303,57 +202,39 @@ def _parse_bool(value: str) -> bool:
     raise ValueError("boolean workflow input must be exactly 'true' or 'false'")
 
 
-def dispatch_from_event(
-    *,
-    event_path: Path,
-    token: str,
-    expected_repository: str,
-) -> dict[str, Any]:
-    if not REPOSITORY_RE.fullmatch(expected_repository):
-        raise ValueError("trusted GITHUB_REPOSITORY identity is invalid")
-    event = _read_json_file_bounded(event_path, max_bytes=MAX_EVENT_BYTES)
-    repository, event_identity = subject_from_target_event(event)
-    if repository != expected_repository:
-        raise ValueError("event repository does not match trusted GITHUB_REPOSITORY")
-    api = GitHubApi(repository=expected_repository, token=token)
-    current = subject_from_pull_request(api.fetch_pull_request(event_identity.number))
-    if (
-        current.number != event_identity.number
-        or current.head_sha != event_identity.head_sha
-        or current.base_sha != event_identity.base_sha
-    ):
-        raise ValueError("pull-request head/base changed between event delivery and dispatch")
-    api.dispatch_validation(current)
-    return {
-        "result": "DISPATCHED",
-        "repository": expected_repository,
-        "subject": current.as_dispatch_inputs(authorized=False),
-        "workflow": TRUSTED_VALIDATION_WORKFLOW,
-        "ref": TRUSTED_VALIDATION_REF,
-    }
-
-
 def report_authorized_result(
     *,
     repository: str,
     token: str,
     actor: str,
     repository_owner: str,
+    workflow_event: str,
+    workflow_ref: str,
     expected: PullRequestSubject,
     authorized: bool,
     job_results: Mapping[str, str],
     target_url: str,
 ) -> dict[str, Any]:
+    if workflow_event != EXPECTED_WORKFLOW_EVENT:
+        raise PermissionError("trusted status publication requires workflow_dispatch")
+    if workflow_ref != EXPECTED_WORKFLOW_REF:
+        raise PermissionError("trusted status publication requires refs/heads/main")
+    if not repository_owner or actor != repository_owner:
+        raise PermissionError("trusted merge authorization must be dispatched by repository owner")
+
     api = GitHubApi(repository=repository, token=token)
     current = verify_current_subject(expected, api.fetch_pull_request(expected.number))
     if not authorized:
         return {
             "result": "DIAGNOSTIC_ONLY",
             "status_posted": False,
-            "subject": current.as_dispatch_inputs(authorized=False),
+            "subject": {
+                "pr_number": str(current.number),
+                "expected_head_sha": current.head_sha,
+                "expected_base_sha": current.base_sha,
+                "expected_merge_sha": current.merge_sha,
+            },
         }
-    if not repository_owner or actor != repository_owner:
-        raise PermissionError("trusted merge authorization must be dispatched by repository owner")
     if set(job_results) != {"validation"}:
         raise ValueError("trusted validation results must contain exactly the validation job")
     validation_result = job_results["validation"]
@@ -390,47 +271,34 @@ def _subject_from_args(args: argparse.Namespace) -> PullRequestSubject:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Trusted PR control-plane helper")
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    dispatch = subparsers.add_parser("dispatch", help="dispatch trusted main-ref PR validation")
-    dispatch.add_argument("--event-path", type=Path, required=True)
-
-    report = subparsers.add_parser("report", help="publish owner-authorized terminal PR status")
-    report.add_argument("--pr-number", required=True)
-    report.add_argument("--expected-head-sha", required=True)
-    report.add_argument("--expected-base-sha", required=True)
-    report.add_argument("--expected-merge-sha", required=True)
-    report.add_argument("--authorized", required=True)
-    report.add_argument("--job-results-json", required=True)
-    report.add_argument("--target-url", required=True)
+    parser = argparse.ArgumentParser(description="Trusted PR status reporter")
+    parser.add_argument("--pr-number", required=True)
+    parser.add_argument("--expected-head-sha", required=True)
+    parser.add_argument("--expected-base-sha", required=True)
+    parser.add_argument("--expected-merge-sha", required=True)
+    parser.add_argument("--authorized", required=True)
+    parser.add_argument("--job-results-json", required=True)
+    parser.add_argument("--target-url", required=True)
     return parser
 
 
 def main() -> None:
     args = _parser().parse_args()
-    token = os.environ.get("GITHUB_TOKEN", "")
-    if args.command == "dispatch":
-        result = dispatch_from_event(
-            event_path=args.event_path,
-            token=token,
-            expected_repository=os.environ.get("GITHUB_REPOSITORY", ""),
-        )
-    else:
-        repository = os.environ.get("GITHUB_REPOSITORY", "")
-        actor = os.environ.get("GITHUB_ACTOR", "")
-        repository_owner = os.environ.get("GITHUB_REPOSITORY_OWNER", "")
-        result = report_authorized_result(
-            repository=repository,
-            token=token,
-            actor=actor,
-            repository_owner=repository_owner,
-            expected=_subject_from_args(args),
-            authorized=_parse_bool(args.authorized),
-            job_results=parse_job_results(args.job_results_json),
-            target_url=args.target_url,
-        )
+    result = report_authorized_result(
+        repository=os.environ.get("GITHUB_REPOSITORY", ""),
+        token=os.environ.get("GITHUB_TOKEN", ""),
+        actor=os.environ.get("GITHUB_ACTOR", ""),
+        repository_owner=os.environ.get("GITHUB_REPOSITORY_OWNER", ""),
+        workflow_event=os.environ.get("GITHUB_EVENT_NAME", ""),
+        workflow_ref=os.environ.get("GITHUB_REF", ""),
+        expected=_subject_from_args(args),
+        authorized=_parse_bool(args.authorized),
+        job_results=parse_job_results(args.job_results_json),
+        target_url=args.target_url,
+    )
     print(json.dumps(result, indent=2, sort_keys=True))
+    if result["result"] == "FAILURE":
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
