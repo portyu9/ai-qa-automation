@@ -8,6 +8,7 @@ from ._repository_common import (
     _MAX_GIT_METADATA_SCAN_ENTRIES,
     _MAX_GIT_PATHS,
     RepositorySubjectError,
+    git_index_has_split_link,
 )
 from ._repository_git import RepositoryGitAuthorityMixin
 from ._repository_worktree import RepositoryWorktreeMixin
@@ -162,9 +163,16 @@ class RepositoryNamespaceAuthorityMixin:
         allow_failure: bool = False,
     ) -> bytes | None:
         authority = cast(RepositoryGitAuthorityMixin, self)
+        worktree = cast(RepositoryWorktreeMixin, self)
         before = self._git_metadata_observation()
         original_error: Exception | None = None
         try:
+            if args and args[0] == "ls-files":
+                index_bytes = RepositoryWorktreeMixin._read_index_bytes(worktree)
+                if git_index_has_split_link(index_bytes):
+                    raise RepositorySubjectError(
+                        "Git split-index metadata is not supported by repository inspection"
+                    )
             result = RepositoryGitAuthorityMixin._git_bytes(
                 authority,
                 *args,
