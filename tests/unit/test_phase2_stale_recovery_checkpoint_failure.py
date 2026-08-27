@@ -133,9 +133,7 @@ def test_stale_recovery_state_checkpoint_failure_keeps_runtime_pending_after_res
     )
 
     assert result["status"] == "BLOCKED"
-    assert "canonical validation lineage could not be durably reconciled" in str(
-        result["reason"]
-    )
+    assert "canonical validation lineage could not be durably reconciled" in str(result["reason"])
     assert target.read_bytes() == original
     assert backup.is_file()
 
