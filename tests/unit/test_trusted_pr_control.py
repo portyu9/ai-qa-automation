@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, ClassVar
 
 import pytest
 
@@ -50,7 +51,7 @@ def _event_payload(
 
 class FakeApi:
     current_payload: Mapping[str, Any] = _pull_request_payload()
-    instances: list[FakeApi] = []
+    instances: ClassVar[list[FakeApi]] = []
 
     def __init__(self, *, repository: str, token: str) -> None:
         self.repository = repository
