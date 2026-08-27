@@ -27,6 +27,44 @@ def test_verifier_reports_exact_reviewed_definition_authority() -> None:
     assert supply_chain_result["dockerfile_authority"] == "exact-reviewed-git-blob"
 
 
+def test_runtime_container_build_context_is_exact_event_archive() -> None:
+    ci_text = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    exact_archive_build = (
+        '          "${git_clean_env[@]}" GIT_DIR="$git_view" '
+        'GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git '
+        '-c core.attributesFile=/dev/null archive --format=tar "$GITHUB_SHA" '
+        '| docker build --tag "$image" -'
+    )
+
+    assert 'docker build --tag "$image" .' not in ci_text
+    assert ci_text.count(exact_archive_build) == 1
+    assert ci_text.count('git_view="$(mktemp -d "$RUNNER_TEMP/aiqa-container-git-view.XXXXXX")"') == 1
+    assert ci_text.count('git_template="$(mktemp -d "$RUNNER_TEMP/aiqa-container-git-template.XXXXXX")"') == 1
+
+
+def test_ci_contract_rejects_mutable_checkout_container_context(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    workflow_dir = root / ".github" / "workflows"
+    workflow_dir.parent.mkdir(parents=True)
+    shutil.copytree(ROOT / ".github" / "workflows", workflow_dir)
+    path = workflow_dir / "ci.yml"
+    text = path.read_text(encoding="utf-8")
+    exact_archive_build = (
+        '          "${git_clean_env[@]}" GIT_DIR="$git_view" '
+        'GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git '
+        '-c core.attributesFile=/dev/null archive --format=tar "$GITHUB_SHA" '
+        '| docker build --tag "$image" -'
+    )
+    assert exact_archive_build in text
+    path.write_text(
+        text.replace(exact_archive_build, '          docker build --tag "$image" .', 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="exact reviewed automatic workflow definition"):
+        ci_contract.verify_ci_contract(root)
+
+
 @pytest.mark.parametrize(
     "extra_command",
     [
