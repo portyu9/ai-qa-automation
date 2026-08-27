@@ -95,6 +95,7 @@ class RepositoryInspector(
         *,
         max_entries: int,
         ignored_names: set[str] | frozenset[str] = frozenset(),
+        ignored_root_names: set[str] | frozenset[str] = frozenset(),
         label: str,
         expected_root_identity: tuple[int, int] | None = None,
     ) -> ConfinedFileScan:
@@ -102,6 +103,7 @@ class RepositoryInspector(
             root,
             max_entries=max_entries,
             ignored_names=ignored_names,
+            ignored_root_names=ignored_root_names,
             label=label,
             expected_root_identity=expected_root_identity,
         )
