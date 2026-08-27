@@ -35,11 +35,15 @@ def _pull_request_payload(
     }
 
 
-def _event_payload(*, action: str = "synchronize") -> dict[str, Any]:
+def _event_payload(
+    *,
+    action: str = "synchronize",
+    repository: str = REPOSITORY,
+) -> dict[str, Any]:
     pull_request = _pull_request_payload(merge_sha="not-yet-materialized", mergeable=None)
     return {
         "action": action,
-        "repository": {"full_name": REPOSITORY},
+        "repository": {"full_name": repository},
         "pull_request": pull_request,
     }
 
@@ -149,7 +153,11 @@ def test_dispatch_refetches_current_subject_before_main_ref_dispatch(
     event_path.write_text(json.dumps(_event_payload()), encoding="utf-8")
     monkeypatch.setattr(control, "GitHubApi", FakeApi)
 
-    result = control.dispatch_from_event(event_path=event_path, token="token")
+    result = control.dispatch_from_event(
+        event_path=event_path,
+        token="token",
+        expected_repository=REPOSITORY,
+    )
 
     assert result["result"] == "DISPATCHED"
     assert result["ref"] == "main"
@@ -157,6 +165,27 @@ def test_dispatch_refetches_current_subject_before_main_ref_dispatch(
     assert result["subject"] == _subject().as_dispatch_inputs(authorized=False)
     assert len(FakeApi.instances) == 1
     assert FakeApi.instances[0].dispatched == [_subject()]
+
+
+def test_dispatch_rejects_event_repository_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    event_path = tmp_path / "event.json"
+    event_path.write_text(
+        json.dumps(_event_payload(repository="attacker/other-repo")),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(control, "GitHubApi", FakeApi)
+
+    with pytest.raises(ValueError, match="does not match trusted GITHUB_REPOSITORY"):
+        control.dispatch_from_event(
+            event_path=event_path,
+            token="token",
+            expected_repository=REPOSITORY,
+        )
+
+    assert FakeApi.instances == []
 
 
 def test_dispatch_rejects_event_to_api_head_race(
@@ -169,7 +198,11 @@ def test_dispatch_rejects_event_to_api_head_race(
     monkeypatch.setattr(control, "GitHubApi", FakeApi)
 
     with pytest.raises(ValueError, match="changed between event delivery and dispatch"):
-        control.dispatch_from_event(event_path=event_path, token="token")
+        control.dispatch_from_event(
+            event_path=event_path,
+            token="token",
+            expected_repository=REPOSITORY,
+        )
 
     assert FakeApi.instances[0].dispatched == []
 
