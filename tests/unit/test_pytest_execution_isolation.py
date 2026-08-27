@@ -147,16 +147,20 @@ def test_live_pytest_isolation_assertions_require_real_booleans(
         lease_id="lease-pytest-isolation-bool",
         max_repeated_action=3,
     )
+    state = AgentRunState(objective="bounds", workspace=str(workspace))
+    state_store = StateStore(run_dir / "state.json")
+    state_store.save(state)
 
     with pytest.raises(ValueError, match=field):
         LiveRuntimeServices(
             workspace=workspace,
-            state=AgentRunState(objective="bounds", workspace=str(workspace)),
+            state=state,
             evidence=cast(Any, object()),
             policy=cast(Any, object()),
             test_runner=cast(Any, object()),
             max_tool_calls=10,
             max_repeated_action=3,
+            state_store=state_store,
             workspace_root_identity=pin_directory_identity(workspace, label="test workspace"),
             control=control,
             **kwargs,
@@ -180,15 +184,19 @@ def test_live_runtime_requires_lease_bound_workspace_identity(tmp_path: Path) ->
         lease_id="lease-missing-workspace-identity",
         max_repeated_action=3,
     )
+    state = AgentRunState(objective="bounds", workspace=str(workspace))
+    state_store = StateStore(run_dir / "state.json")
+    state_store.save(state)
 
     with pytest.raises(ValueError, match="lease-bound workspace_root_identity"):
         LiveRuntimeServices(
             workspace=workspace,
-            state=AgentRunState(objective="bounds", workspace=str(workspace)),
+            state=state,
             evidence=cast(Any, object()),
             policy=cast(Any, object()),
             test_runner=cast(Any, object()),
             max_tool_calls=10,
             max_repeated_action=3,
+            state_store=state_store,
             control=control,
         )
