@@ -38,6 +38,17 @@ def _rollback_gate_index(
     return None
 
 
+def _assert_pending_revision_coherent(
+    state: AgentRunState,
+    *,
+    change_revision_before: int,
+) -> None:
+    if state.change_revision != change_revision_before + 1:
+        raise RuntimeError(
+            "pending mutation revision lineage is incoherent with canonical change revision"
+        )
+
+
 def invalidate_pending_mutation_lineage(
     state: AgentRunState,
     *,
@@ -50,10 +61,10 @@ def invalidate_pending_mutation_lineage(
         return False
     if state.change_revision <= change_revision_before:
         return False
-    if state.change_revision != change_revision_before + 1:
-        raise RuntimeError(
-            "pending mutation revision lineage is incoherent with canonical change revision"
-        )
+    _assert_pending_revision_coherent(
+        state,
+        change_revision_before=change_revision_before,
+    )
 
     gate_id = f"mutation_transaction:{relative_path}"
     if _rollback_gate_index(
@@ -110,6 +121,10 @@ def reconcile_rolled_back_mutation(
         return False
     if state.change_revision <= change_revision_before:
         return False
+    _assert_pending_revision_coherent(
+        state,
+        change_revision_before=change_revision_before,
+    )
 
     gate_id = f"mutation_transaction:{relative_path}"
     already_reconciled = _rollback_gate_index(
@@ -163,7 +178,7 @@ def reconcile_rolled_back_mutation(
 
 def build_rollback_lineage_checkpoints(
     state: AgentRunState,
-    state_store: StateStore | None,
+    state_store: StateStore,
 ) -> tuple[Callable[[PendingMutation], None], Callable[[PendingMutation], None]]:
     """Bind live rollback to durable canonical validation lineage.
 
@@ -179,7 +194,7 @@ def build_rollback_lineage_checkpoints(
             relative_path=pending.relative_path,
             change_revision_before=pending.change_revision_before,
         )
-        if advanced and state_store is not None:
+        if advanced:
             state_store.save(state)
 
     def after_close(pending: PendingMutation) -> None:
@@ -188,7 +203,7 @@ def build_rollback_lineage_checkpoints(
             relative_path=pending.relative_path,
             change_revision_before=pending.change_revision_before,
         )
-        if reconciled and state_store is not None:
+        if reconciled:
             state_store.save(state)
 
     return before_close, after_close
