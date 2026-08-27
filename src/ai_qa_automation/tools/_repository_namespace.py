@@ -138,6 +138,7 @@ class RepositoryNamespaceAuthorityMixin:
         worktree = cast(RepositoryWorktreeMixin, self)
         before = self._git_metadata_observation()
         original_error: Exception | None = None
+        result: str | None
         try:
             if args == _SPLIT_INDEX_PROBE:
                 index_bytes = RepositoryWorktreeMixin._read_index_bytes(worktree)
