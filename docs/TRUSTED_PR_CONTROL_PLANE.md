@@ -44,4 +44,4 @@ Trusted and credentialed workflows must not restore dependency caches that untru
 - fail-closed failure status for an owner-authorized validation that does not succeed; and
 - repository-bound `Trusted PR Gate` target URLs.
 
-The workflow dispatcher, trusted validator, reporter wiring, repository Actions Policy, and ruleset transition are **not yet implemented or active**. Until all of those are in place and adversarially exercised, finding 13 remains blocked and PR #43 remains unmerged.
+The workflow dispatcher, trusted validator, reporter wiring, repository Actions Policy, and ruleset transition are **not yet implemented or active**. The current helper/tests are implementation scaffolding only, and even a green ordinary `pull_request` run validates the code under the existing vulnerable control plane rather than proving the new trust model. Until all missing controls are in place and adversarially exercised, finding 13 remains blocked and PR #43 remains unmerged.
