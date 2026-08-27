@@ -27,8 +27,9 @@ AUTOMATIC_REQUIRED_JOBS = (
 )
 EXPECTED_AUTOMATIC_PROJECT_INSTALL_COUNT = 5
 EXPECTED_AUTOMATIC_DEPENDENCY_INSTALL_COUNT = 5
+EXPECTED_AUTOMATIC_SUBJECT_CHECKOUT_COUNT = 5
 EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = (
-    "abf088777fce94d27d18203721989acdb4507ab8"  # pragma: allowlist secret
+    "c3cc332d658b52e691a4ebba2d087c3b7e8683b9"  # pragma: allowlist secret
 )
 AUTOMATIC_PROJECT_INSTALL_COMMAND = (
     "          python -m pip install --no-deps --no-build-isolation ."
@@ -62,6 +63,8 @@ SUPPLY_CHAIN_UPLOAD_STEP_NAME = "Upload supply-chain evidence"
 HOSTED_BROWSER_STEP_NAME = "Verify hosted Chrome runtime"
 HOSTED_BROWSER_EXECUTABLE = "/usr/bin/google-chrome"
 REQUIRED_GATE_STEP_NAME = "Require every automatic gate to succeed"
+TRUSTED_STATUS_JOB_ID = "trusted-status"
+TRUSTED_STATUS_STEP_NAME = "Publish exact-subject trusted status"
 SUPPLY_CHAIN_ARTIFACTS = (
     BUILD_AUTHORITY_ARTIFACT,
     *ARCHIVE_BUILD_AUTHORITY_ARTIFACTS,
@@ -424,8 +427,8 @@ def _require_exact_reproducible_build_step(job: str) -> None:
             '          git_object_format="$("${git_clean_env[@]}" /usr/bin/git rev-parse --show-object-format)"',
             '          git_object_directory="$(cd "$("${git_clean_env[@]}" /usr/bin/git rev-parse --git-path objects)" && pwd -P)"',
             '          "${git_clean_env[@]}" /usr/bin/git init --bare --object-format="$git_object_format" --template="$git_template" "$git_view" > /dev/null',
-            '          "${git_clean_env[@]}" GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$GITHUB_SHA" | env -i PATH="$PATH" /usr/bin/tar -xf - -C "$build_a"',
-            '          "${git_clean_env[@]}" GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$GITHUB_SHA" | env -i PATH="$PATH" /usr/bin/tar -xf - -C "$build_b"',
+            '          "${git_clean_env[@]}" GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$CI_SUBJECT_SHA" | env -i PATH="$PATH" /usr/bin/tar -xf - -C "$build_a"',
+            '          "${git_clean_env[@]}" GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$CI_SUBJECT_SHA" | env -i PATH="$PATH" /usr/bin/tar -xf - -C "$build_b"',
             '          python scripts/verify_build_authority.py --root "$build_a" > artifacts/ci/build-authority-archive-a.json',
             '          python -m pip wheel --no-deps --no-build-isolation "$build_a" --wheel-dir artifacts/ci/wheel-a',
             '          python scripts/verify_build_authority.py --root "$build_b" > artifacts/ci/build-authority-archive-b.json',
@@ -441,7 +444,7 @@ def _require_exact_reproducible_build_step(job: str) -> None:
             f'            --wheel-a "${{wheel_a[0]}}" {continuation}',
             f'            --wheel-b "${{wheel_b[0]}}" {continuation}',
             f"            --sbom artifacts/ci/runtime-sbom.cdx.json {continuation}",
-            f'            --expected-source-sha "$GITHUB_SHA" {continuation}',
+            f'            --expected-source-sha "$CI_SUBJECT_SHA" {continuation}',
             "            --output artifacts/ci/build-manifest.json",
             "          read -r observed_sbom_sha256 _ < <(/usr/bin/sha256sum artifacts/ci/runtime-sbom.cdx.json)",
             '          test "$observed_sbom_sha256" = "$RUNTIME_SBOM_SHA256"',
@@ -450,7 +453,7 @@ def _require_exact_reproducible_build_step(job: str) -> None:
     )
     if step != expected:
         raise ValueError(
-            "reproducible wheel build must be the exact reviewed event-subject-bound step"
+            "reproducible wheel build must be the exact reviewed validation-subject-bound step"
         )
 
 
@@ -513,15 +516,13 @@ def _verify_action_revisions(workflows: dict[str, str]) -> dict[str, str]:
     return observed
 
 
-def _verify_read_only_permissions(text: str, *, name: str) -> None:
+def _verify_top_level_read_only_permissions(text: str, *, name: str) -> None:
     permissions = _permissions(_top_level_block(text, "permissions"))
     if permissions != {"contents": "read"}:
         raise ValueError(f"{name}: workflow permissions must be exactly contents: read")
-    if WRITE_PERMISSION_RE.search(_semantic_text(text)):
-        raise ValueError(f"{name}: workflow requests write permission")
 
 
-def _verify_checkout_binding(text: str, *, name: str) -> int:
+def _verify_event_checkout_binding(text: str, *, name: str) -> int:
     semantic = _semantic_text(text)
     checkout = f"uses: actions/checkout@{EXPECTED_ACTION_SHAS['actions/checkout']}"
     checkout_count = semantic.count(checkout)
@@ -534,6 +535,30 @@ def _verify_checkout_binding(text: str, *, name: str) -> int:
     exact_check = 'test "$(git rev-parse HEAD)" = "$GITHUB_SHA"'
     if semantic.count(exact_check) != checkout_count:
         raise ValueError(f"{name}: every checkout must verify the exact GitHub event revision")
+    return checkout_count
+
+
+def _verify_automatic_checkout_binding(text: str, *, name: str) -> int:
+    semantic = _semantic_text(text)
+    checkout = f"uses: actions/checkout@{EXPECTED_ACTION_SHAS['actions/checkout']}"
+    checkout_count = semantic.count(checkout)
+    expected_total = EXPECTED_AUTOMATIC_SUBJECT_CHECKOUT_COUNT + 1
+    if checkout_count != expected_total:
+        raise ValueError(
+            f"{name}: checkout count must be exactly {expected_total} including trusted reporter"
+        )
+    if semantic.count("ref: ${{ env.CI_SUBJECT_SHA }}") != EXPECTED_AUTOMATIC_SUBJECT_CHECKOUT_COUNT:
+        raise ValueError(
+            f"{name}: every validation checkout must bind to env.CI_SUBJECT_SHA"
+        )
+    if semantic.count("ref: ${{ github.sha }}") != 1:
+        raise ValueError(f"{name}: trusted reporter must be the sole github.sha checkout")
+    if semantic.count("persist-credentials: false") != checkout_count:
+        raise ValueError(f"{name}: every checkout must disable persisted credentials")
+    if semantic.count('test "$(git rev-parse HEAD)" = "$CI_SUBJECT_SHA"') != EXPECTED_AUTOMATIC_SUBJECT_CHECKOUT_COUNT:
+        raise ValueError(f"{name}: every validation checkout must verify CI_SUBJECT_SHA")
+    if semantic.count('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"') != 1:
+        raise ValueError(f"{name}: trusted reporter must verify its main workflow revision")
     return checkout_count
 
 
@@ -582,32 +607,126 @@ def _verify_project_install_authority(text: str, *, name: str) -> int:
     return len(install_indices)
 
 
+def _verify_dispatch_contract(text: str) -> None:
+    on_block = _semantic_text(_top_level_block(text, "on")).strip("\n")
+    expected = "\n".join(
+        (
+            "on:",
+            "  pull_request:",
+            "    branches: [main]",
+            "    types: [opened, synchronize, reopened, ready_for_review]",
+            "  push:",
+            "    branches: [main]",
+            "  merge_group:",
+            "  workflow_dispatch:",
+            "    inputs:",
+            "      pr_number:",
+            "        description: Pull request number whose exact current subject is being validated",
+            "        required: true",
+            "        type: string",
+            "      expected_head_sha:",
+            "        description: Exact current pull request head SHA",
+            "        required: true",
+            "        type: string",
+            "      expected_base_sha:",
+            "        description: Exact current main/base SHA",
+            "        required: true",
+            "        type: string",
+            "      expected_merge_sha:",
+            "        description: Exact current prospective merge SHA to execute and validate",
+            "        required: true",
+            "        type: string",
+            "      authorized:",
+            "        description: Publish Trusted PR Gate after exact-subject validation",
+            "        required: true",
+            "        default: false",
+            "        type: boolean",
+        )
+    )
+    if on_block != expected:
+        raise ValueError("ci.yml: trigger/owner-dispatch input contract differs from reviewed definition")
+    env_block = _semantic_text(_top_level_block(text, "env"))
+    expected_subject = (
+        "  CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' "
+        "&& inputs.expected_merge_sha || github.sha }}"
+    )
+    if expected_subject not in env_block:
+        raise ValueError("ci.yml: CI_SUBJECT_SHA must select only dispatch merge SHA or github.sha")
+
+
+def _verify_trusted_status_job(text: str) -> dict[str, Any]:
+    job = _semantic_text(_job_block(text, TRUSTED_STATUS_JOB_ID)).strip("\n")
+    required_fragments = (
+        "  trusted-status:",
+        "    name: Trusted PR Gate Reporter",
+        "    if: ${{ always() && github.event_name == 'workflow_dispatch' }}",
+        "      - required-gate",
+        "    permissions:\n      contents: read\n      pull-requests: read\n      statuses: write",
+        "      - name: Checkout trusted workflow revision",
+        f"        uses: actions/checkout@{EXPECTED_ACTION_SHAS['actions/checkout']} # v7",
+        "          ref: ${{ github.sha }}",
+        "          persist-credentials: false",
+        "      - name: Verify trusted workflow revision",
+        '        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"',
+        f"      - name: {TRUSTED_STATUS_STEP_NAME}",
+        "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+        "          python scripts/trusted_pr_control.py report \\",
+        '            --pr-number "${{ inputs.pr_number }}" \\',
+        '            --expected-head-sha "${{ inputs.expected_head_sha }}" \\',
+        '            --expected-base-sha "${{ inputs.expected_base_sha }}" \\',
+        '            --expected-merge-sha "${{ inputs.expected_merge_sha }}" \\',
+        '            --authorized "${{ inputs.authorized }}" \\',
+        "            --job-results-json '{\"validation\":\"${{ needs.required-gate.result }}\"}' \\",
+        '            --target-url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"',
+    )
+    for fragment in required_fragments:
+        if fragment not in job:
+            raise ValueError(f"ci.yml: trusted reporter is missing reviewed fragment: {fragment}")
+    if job.count("statuses: write") != 1:
+        raise ValueError("ci.yml: trusted reporter must own exactly one statuses: write permission")
+    if "actions: write" in job or "contents: write" in job or "pull-requests: write" in job:
+        raise ValueError("ci.yml: trusted reporter requests unreviewed write authority")
+    return {
+        "job": "Trusted PR Gate Reporter",
+        "status_context": "Trusted PR Gate",
+        "authorization": "owner-workflow-dispatch-only",
+        "subject_revalidation": "exact-current-pr-head-base-merge",
+        "write_authority": "statuses:write-only",
+    }
+
+
 def _verify_automatic_workflow(text: str) -> dict[str, Any]:
     name = "ci.yml"
     semantic = _semantic_text(text)
-    expected_triggers = {"pull_request", "push", "merge_group"}
+    expected_triggers = {"pull_request", "push", "merge_group", "workflow_dispatch"}
     triggers = _top_level_keys(_top_level_block(text, "on"))
     if triggers != expected_triggers:
         raise ValueError(
-            f"{name}: automatic trigger set must be exactly {sorted(expected_triggers)}, "
+            f"{name}: trigger set must be exactly {sorted(expected_triggers)}, "
             f"got {sorted(triggers)}"
         )
+    _verify_dispatch_contract(text)
+    trusted_status_raw = _job_block(text, TRUSTED_STATUS_JOB_ID)
+    semantic_without_trusted_status = semantic.replace(_semantic_text(trusted_status_raw), "")
     for forbidden in (
         "pull_request_target:",
         "${{ secrets.",
         "ANTHROPIC_API_KEY",
-        "${{ inputs.",
         "continue-on-error: true",
         "playwright install",
         "sudo ",
         "apt-get ",
         "apt install ",
     ):
-        if forbidden in semantic:
-            raise ValueError(f"{name}: forbidden automatic-CI authority token: {forbidden}")
+        if forbidden in semantic_without_trusted_status:
+            raise ValueError(f"{name}: forbidden validation authority token: {forbidden}")
+    if WRITE_PERMISSION_RE.search(semantic_without_trusted_status):
+        raise ValueError(f"{name}: write permission is forbidden outside trusted reporter")
+    if semantic.count("${{ secrets.GITHUB_TOKEN }}") != 1:
+        raise ValueError(f"{name}: trusted reporter must be the sole GITHUB_TOKEN secret consumer")
     if CACHE_CONFIGURATION_RE.search(semantic):
         raise ValueError(
-            f"{name}: automatic dependency caching is forbidden before reviewed lock authority"
+            f"{name}: dependency caching is forbidden before reviewed lock authority"
         )
     if "ubuntu-latest" in semantic:
         raise ValueError(f"{name}: moving ubuntu-latest runner label is forbidden")
@@ -618,11 +737,12 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
     if "pip install --upgrade" in semantic or " --editable" in semantic or " -e ." in semantic:
         raise ValueError(f"{name}: live/editable dependency installation is forbidden")
     if "cancel-in-progress: true" not in _top_level_block(text, "concurrency"):
-        raise ValueError(f"{name}: stale PR executions must be cancelled on superseding revisions")
-    _verify_read_only_permissions(text, name=name)
-    checkout_count = _verify_checkout_binding(text, name=name)
+        raise ValueError(f"{name}: stale executions must be cancelled on superseding revisions")
+    _verify_top_level_read_only_permissions(text, name=name)
+    checkout_count = _verify_automatic_checkout_binding(text, name=name)
     dependency_install_count = _verify_dependency_install_authority(text, name=name)
     project_install_count = _verify_project_install_authority(text, name=name)
+    trusted_status = _verify_trusted_status_job(text)
 
     supply_chain_raw = _job_block(text, "supply-chain")
     supply_chain = _semantic_text(supply_chain_raw)
@@ -683,15 +803,16 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
 
     if _git_blob_sha1(text) != EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA:
         raise ValueError(
-            "ci.yml bytes differ from the exact reviewed automatic workflow definition"
+            "ci.yml bytes differ from the exact reviewed automatic/trusted workflow definition"
         )
 
     return {
         "triggers": sorted(expected_triggers),
-        "subject": "github.sha",
+        "subject": "github.sha-or-owner-dispatch-exact-merge-sha",
         "checkout_count": checkout_count,
         "required_gate": "Required PR Gate",
-        "prebuild_authority": "exact-lock-and-build-authority-before-automatic-installs",
+        "trusted_status": trusted_status,
+        "prebuild_authority": "exact-lock-and-build-authority-before-validation-installs",
         "dependency_install_count": dependency_install_count,
         "dependency_install_authority": "exact-reviewed-locks-preinstall-and-postinstall-revalidated",
         "project_install_count": project_install_count,
@@ -702,12 +823,13 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
         "archive_build_authority": "verified-and-matched-before-wheel-builds",
         "documentation_integrity": "required-via-supply-chain",
         "mermaid_render": "required-via-supply-chain",
-        "build_provenance_subject": "github.sha/isolated-git-view",
+        "build_provenance_subject": "CI_SUBJECT_SHA/isolated-git-view",
         "archive_attribute_authority": "versioned-tree-only",
         "sbom_lineage": "parent-digest-bound-and-bracketed",
         "supply_chain_evidence": "pinned-upload-action",
-        "permissions": "contents:read",
-        "secrets": False,
+        "permissions": "validation=contents:read;trusted-reporter=statuses:write",
+        "secrets": "GITHUB_TOKEN-only-in-trusted-reporter",
+        "external_policy_required": True,
     }
 
 
@@ -731,13 +853,18 @@ def _verify_manual_workflow(text: str) -> dict[str, Any]:
         raise ValueError(f"{name}: hash-required dependency installation is required")
     if "pip install --upgrade" in semantic or " --editable" in semantic or " -e ." in semantic:
         raise ValueError(f"{name}: live/editable dependency installation is forbidden")
-    _verify_read_only_permissions(text, name=name)
-    checkout_count = _verify_checkout_binding(text, name=name)
+    if CACHE_CONFIGURATION_RE.search(semantic):
+        raise ValueError(f"{name}: trusted/manual workflow dependency caching is forbidden")
+    _verify_top_level_read_only_permissions(text, name=name)
+    if WRITE_PERMISSION_RE.search(semantic):
+        raise ValueError(f"{name}: workflow requests write permission")
+    checkout_count = _verify_event_checkout_binding(text, name=name)
     return {
         "trigger": "workflow_dispatch",
         "subject": "github.sha",
         "checkout_count": checkout_count,
         "permissions": "contents:read",
+        "setup_python_cache": False,
         "credentialed_model": "manual-only",
         "holdout": "manual-separated",
     }
@@ -760,9 +887,10 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
         },
         "actions": actions,
         "limitations": [
-            "Repository workflow validation is in-subject self-consistency evidence and does not independently attest workflow provenance when a source subject can change both workflow and verifier.",
+            "Ordinary pull_request validation remains in-subject self-consistency evidence; it is not independent merge authority until external repository Actions Policy prevents pull_request workflow execution.",
+            "The owner workflow_dispatch path is designed to execute the exact supplied prospective merge subject from a trusted main workflow definition and revalidate current PR identity before posting Trusted PR Gate; repository code cannot attest that the required external Actions Policy or ruleset transition is active.",
             "A green pull_request run validates GitHub's event SHA, which is normally the prospective merge subject rather than the PR head commit alone.",
-            "Credential existence, environment protection, hosted-runner/browser identity, and external service availability remain environment-owned facts.",
+            "Credential existence, environment protection, hosted-runner/browser identity, Actions Policy state, ruleset state, and external service availability remain environment-owned facts.",
         ],
     }
 
