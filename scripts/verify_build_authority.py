@@ -57,9 +57,7 @@ def _read_pyproject(path: Path) -> tuple[bytes, str]:
             chunks.append(chunk)
             total += len(chunk)
         if total > MAX_PYPROJECT_BYTES:
-            raise ValueError(
-                f"pyproject.toml exceeds {MAX_PYPROJECT_BYTES} byte ingestion limit"
-            )
+            raise ValueError(f"pyproject.toml exceeds {MAX_PYPROJECT_BYTES} byte ingestion limit")
         final = os.fstat(fd)
         final_signature = (
             final.st_dev,
