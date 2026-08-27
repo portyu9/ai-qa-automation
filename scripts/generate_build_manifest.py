@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -18,6 +19,8 @@ MAX_SBOM_BYTES = 8 * 1024 * 1024
 MAX_SOURCE_INPUT_BYTES = 1024 * 1024
 MAX_LOCK_BYTES = 1024 * 1024
 MAX_MANIFEST_BYTES = 1024 * 1024
+HEX_OID_RE = re.compile(r"^[0-9a-f]+$")
+OBJECT_FORMAT_LENGTHS = {"sha1": 40, "sha256": 64}
 LOCK_NAMES = (
     "base-image.lock",
     "build-py311.lock",
@@ -45,6 +48,34 @@ def _git(*args: str) -> str:
         env={"PATH": os.environ.get("PATH", "")},
     )
     return result.stdout.strip()
+
+
+def _resolve_expected_source(expected_source_sha: str) -> str:
+    object_format = _git("rev-parse", "--show-object-format")
+    expected_length = OBJECT_FORMAT_LENGTHS.get(object_format)
+    if expected_length is None:
+        raise ValueError(f"unsupported Git object format for build provenance: {object_format}")
+    if len(expected_source_sha) != expected_length or not HEX_OID_RE.fullmatch(expected_source_sha):
+        raise ValueError(
+            "expected source SHA must be a lowercase full object ID for the repository object format"
+        )
+    try:
+        resolved_commit = _git("rev-parse", "--verify", f"{expected_source_sha}^{{commit}}")
+        resolved_tree = _git("rev-parse", "--verify", f"{expected_source_sha}^{{tree}}")
+    except subprocess.CalledProcessError as exc:
+        raise ValueError("expected source SHA does not resolve to an available commit") from exc
+    if resolved_commit != expected_source_sha:
+        raise ValueError("expected source SHA did not resolve to itself as a commit")
+    return resolved_tree
+
+
+def _assert_expected_source_current(expected_source_sha: str) -> None:
+    current = _git("rev-parse", "--verify", "HEAD")
+    if current != expected_source_sha:
+        raise ValueError(
+            "current Git subject does not match the explicit expected source SHA; "
+            "build provenance is ambiguous"
+        )
 
 
 def _parse_json_object(text: str, *, label: str) -> dict[str, Any]:
@@ -113,11 +144,21 @@ def _assert_tracked_worktree_clean() -> None:
         raise ValueError("tracked worktree is dirty; build provenance would be ambiguous")
 
 
-def generate_manifest(root: Path, wheel_a: Path, wheel_b: Path, sbom: Path) -> dict[str, Any]:
+def generate_manifest(
+    root: Path,
+    wheel_a: Path,
+    wheel_b: Path,
+    sbom: Path,
+    *,
+    expected_source_sha: str,
+) -> dict[str, Any]:
     root = root.resolve()
     wheel_a = wheel_a.absolute()
     wheel_b = wheel_b.absolute()
     sbom = sbom.absolute()
+
+    expected_tree_sha = _resolve_expected_source(expected_source_sha)
+    _assert_expected_source_current(expected_source_sha)
 
     digest_a, wheel_a_size = _sha256(
         wheel_a, max_bytes=MAX_WHEEL_BYTES, label="first reproducible wheel"
@@ -133,6 +174,7 @@ def generate_manifest(root: Path, wheel_a: Path, wheel_b: Path, sbom: Path) -> d
         raise ValueError(f"SOURCE_DATE_EPOCH must equal {SOURCE_DATE_EPOCH}")
 
     _assert_tracked_worktree_clean()
+    _assert_expected_source_current(expected_source_sha)
 
     sbom_data, sbom_digest = _load_sbom(sbom)
     lock_digests, base_image = _load_lock_inputs(root)
@@ -143,16 +185,17 @@ def generate_manifest(root: Path, wheel_a: Path, wheel_b: Path, sbom: Path) -> d
         root / "pyproject.toml", max_bytes=MAX_SOURCE_INPUT_BYTES, label="pyproject.toml"
     )
 
-    # A tracked source input changing during observation must not yield a manifest whose
-    # individual digests came from different revisions of the checkout.
+    # A tracked source subject changing during observation must not yield a manifest whose
+    # recorded provenance silently follows mutable HEAD rather than the caller-owned subject.
     _assert_tracked_worktree_clean()
+    _assert_expected_source_current(expected_source_sha)
 
     return {
         "schema_version": 1,
         "kind": "unsigned_reproducible_build_manifest",
         "source": {
-            "commit_sha": _git("rev-parse", "HEAD"),
-            "tree_sha": _git("rev-parse", "HEAD^{tree}"),
+            "commit_sha": expected_source_sha,
+            "tree_sha": expected_tree_sha,
             "tracked_worktree_clean": True,
         },
         "build": {
@@ -233,11 +276,18 @@ def main() -> None:
     parser.add_argument("--wheel-a", type=Path, required=True)
     parser.add_argument("--wheel-b", type=Path, required=True)
     parser.add_argument("--sbom", type=Path, required=True)
+    parser.add_argument("--expected-source-sha", required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parents[1]
-    manifest = generate_manifest(root, args.wheel_a, args.wheel_b, args.sbom)
+    manifest = generate_manifest(
+        root,
+        args.wheel_a,
+        args.wheel_b,
+        args.sbom,
+        expected_source_sha=args.expected_source_sha,
+    )
     _write_manifest(args.output, manifest)
     print(json.dumps(manifest, indent=2, sort_keys=True))
 
