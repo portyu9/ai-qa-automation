@@ -11,7 +11,10 @@ from pathlib import Path
 from typing import Any
 
 MAX_PYPROJECT_BYTES = 256 * 1024
+MAX_PROJECT_FILE_INPUT_BYTES = 2 * 1024 * 1024
 MAX_BUILD_SOURCE_ENTRIES = 1024
+MAX_BUILD_SOURCE_FILE_BYTES = 8 * 1024 * 1024
+MAX_BUILD_SOURCE_TOTAL_BYTES = 32 * 1024 * 1024
 EXPECTED_BUILD_SYSTEM = {
     "requires": ["hatchling==1.32.0"],
     "build-backend": "hatchling.build",
@@ -104,7 +107,7 @@ def _parse_pyproject(content: bytes) -> dict[str, Any]:
     return parsed
 
 
-def _assert_regular_file(path: Path, *, label: str) -> None:
+def _assert_regular_file(path: Path, *, label: str, max_bytes: int) -> None:
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     if not nofollow:
         raise RuntimeError("pre-build authority verification requires no-follow file open")
@@ -117,6 +120,8 @@ def _assert_regular_file(path: Path, *, label: str) -> None:
         opened = os.fstat(fd)
         if not stat.S_ISREG(opened.st_mode):
             raise ValueError(f"{label} must be a regular non-symlink build input")
+        if opened.st_size < 0 or opened.st_size > max_bytes:
+            raise ValueError(f"{label} exceeds {max_bytes} byte build-input limit")
         initial = _file_signature(opened)
         try:
             current = path.stat(follow_symlinks=False)
@@ -175,14 +180,15 @@ def _relative_open(name: str, directory_fd: int, *, directory: bool) -> int:
         raise ValueError("build source entry changed identity or became a symlink") from exc
 
 
-def _assert_regular_source_tree(path: Path) -> int:
+def _assert_regular_source_tree(path: Path) -> tuple[int, int]:
     root_fd = _open_directory_nofollow(path, label=str(EXPECTED_BUILD_SOURCE_ROOT))
     root_opened = os.fstat(root_fd)
     root_signature = _directory_signature(root_opened)
     observed_entries = 0
+    observed_bytes = 0
 
     def scan(directory_fd: int, relative: Path) -> None:
-        nonlocal observed_entries
+        nonlocal observed_entries, observed_bytes
         try:
             entries = os.scandir(directory_fd)
         except (TypeError, NotImplementedError, OSError) as exc:
@@ -209,6 +215,17 @@ def _assert_regular_source_tree(path: Path) -> int:
             if stat.S_ISLNK(before.st_mode):
                 raise ValueError(f"build source symlink is forbidden: {entry_label}")
             if stat.S_ISREG(before.st_mode):
+                if before.st_size < 0 or before.st_size > MAX_BUILD_SOURCE_FILE_BYTES:
+                    raise ValueError(
+                        f"build source file exceeds {MAX_BUILD_SOURCE_FILE_BYTES} byte limit: "
+                        f"{entry_label}"
+                    )
+                observed_bytes += before.st_size
+                if observed_bytes > MAX_BUILD_SOURCE_TOTAL_BYTES:
+                    raise ValueError(
+                        "build source tree exceeds "
+                        f"{MAX_BUILD_SOURCE_TOTAL_BYTES} total byte ingestion limit"
+                    )
                 file_fd = _relative_open(name, directory_fd, directory=False)
                 try:
                     opened = os.fstat(file_fd)
@@ -273,7 +290,7 @@ def _assert_regular_source_tree(path: Path) -> int:
             raise ValueError("build source root changed during verification")
     finally:
         os.close(root_fd)
-    return observed_entries
+    return observed_entries, observed_bytes
 
 
 def _installed_hatch_entry_points() -> tuple[str, ...]:
@@ -344,9 +361,19 @@ def verify_build_authority(root: Path) -> dict[str, Any]:
             "configuration are forbidden"
         )
 
-    _assert_regular_file(root / "README.md", label="project readme")
-    _assert_regular_file(root / "LICENSE", label="project license")
-    build_source_entries = _assert_regular_source_tree(root / EXPECTED_BUILD_SOURCE_ROOT)
+    _assert_regular_file(
+        root / "README.md",
+        label="project readme",
+        max_bytes=MAX_PROJECT_FILE_INPUT_BYTES,
+    )
+    _assert_regular_file(
+        root / "LICENSE",
+        label="project license",
+        max_bytes=MAX_PROJECT_FILE_INPUT_BYTES,
+    )
+    build_source_entries, build_source_bytes = _assert_regular_source_tree(
+        root / EXPECTED_BUILD_SOURCE_ROOT
+    )
     installed_hatch_entry_points = _installed_hatch_entry_points()
 
     return {
@@ -360,16 +387,20 @@ def verify_build_authority(root: Path) -> dict[str, Any]:
         "project_scripts": EXPECTED_PROJECT_SCRIPTS,
         "project_entry_points": False,
         "project_file_inputs": EXPECTED_PROJECT_FILE_INPUTS,
+        "project_file_input_max_bytes": MAX_PROJECT_FILE_INPUT_BYTES,
         "build_source_root": str(EXPECTED_BUILD_SOURCE_ROOT),
         "build_source_entries": build_source_entries,
+        "build_source_bytes": build_source_bytes,
+        "build_source_max_file_bytes": MAX_BUILD_SOURCE_FILE_BYTES,
+        "build_source_max_total_bytes": MAX_BUILD_SOURCE_TOTAL_BYTES,
         "build_source_symlinks": False,
         "dynamic_metadata": False,
         "source_execution_extensions": False,
         "installed_hatch_entry_points": list(installed_hatch_entry_points),
         "limitations": [
-            "This verifier constrains repository build configuration, project distribution/executable metadata, declared file inputs, the selected package tree, and installed Hatch plugin entry points; it does not attest the hosted Python interpreter or dependency package bytes beyond the repository's separate hash-lock controls.",
+            "This verifier constrains repository build configuration, project distribution/executable metadata, declared file inputs, selected package-tree entry/byte volume, and installed Hatch plugin entry points; it does not attest the hosted Python interpreter or dependency package bytes beyond the repository's separate hash-lock controls.",
             "The filesystem checks reject symlinks and special nodes during bounded observation; they do not create a privileged immutable filesystem snapshot after verification.",
-            "A future legitimate build hook, Hatch plugin, dynamic metadata source, custom builder, backend change, distribution-name change, project executable/entry-point change, additional file-valued metadata input, or package symlink requires an explicit policy revision rather than implicit authority expansion.",
+            "A future legitimate build hook, Hatch plugin, dynamic metadata source, custom builder, backend change, distribution-name change, project executable/entry-point change, larger build-input budget, additional file-valued metadata input, or package symlink requires an explicit policy revision rather than implicit authority expansion.",
         ],
     }
 
