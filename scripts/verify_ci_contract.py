@@ -28,7 +28,7 @@ AUTOMATIC_REQUIRED_JOBS = (
 EXPECTED_AUTOMATIC_PROJECT_INSTALL_COUNT = 5
 EXPECTED_AUTOMATIC_DEPENDENCY_INSTALL_COUNT = 5
 EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = (
-    "cc77a987cebf7b53e3cd466a4b844dbd6e1d7591"  # pragma: allowlist secret
+    "abf088777fce94d27d18203721989acdb4507ab8"  # pragma: allowlist secret
 )
 AUTOMATIC_PROJECT_INSTALL_COMMAND = (
     "          python -m pip install --no-deps --no-build-isolation ."
@@ -78,6 +78,7 @@ SUPPLY_CHAIN_ARTIFACTS = (
 ACTION_RE = re.compile(r"^\s*uses:\s*([^@\s]+)@([^\s#]+)", re.MULTILINE)
 HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
 WRITE_PERMISSION_RE = re.compile(r"^\s+[A-Za-z0-9_-]+:\s*write\s*$", re.MULTILINE)
+CACHE_CONFIGURATION_RE = re.compile(r"^\s+cache(?:-dependency-path)?:", re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -604,6 +605,10 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
     ):
         if forbidden in semantic:
             raise ValueError(f"{name}: forbidden automatic-CI authority token: {forbidden}")
+    if CACHE_CONFIGURATION_RE.search(semantic):
+        raise ValueError(
+            f"{name}: automatic dependency caching is forbidden before reviewed lock authority"
+        )
     if "ubuntu-latest" in semantic:
         raise ValueError(f"{name}: moving ubuntu-latest runner label is forbidden")
     if '"3.11.16"' not in semantic or '"3.13.15"' not in semantic:
@@ -692,6 +697,7 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
         "project_install_count": project_install_count,
         "project_install_authority": "immediate-static-revalidation",
         "workflow_definition": "exact-reviewed-git-blob",
+        "setup_python_cache": False,
         "browser_runtime_authority": "hosted-system-chrome-observed-without-automatic-installer",
         "archive_build_authority": "verified-and-matched-before-wheel-builds",
         "documentation_integrity": "required-via-supply-chain",
