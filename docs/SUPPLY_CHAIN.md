@@ -20,6 +20,7 @@ The repository separates supply-chain subjects instead of treating “the build�
 | Python build backend graph | `requirements/build-py311.lock` + `hatchling==1.32.0` | isolated backend dependency graph, separate from runtime |
 | Project build configuration + file/source authority + Hatch plugin surface | exact static `pyproject.toml` build/Hatch configuration + fixed `README.md`/`LICENSE` inputs + bounded symlink-free `src/ai_qa_automation` tree + no installed `hatch` entry points | checkout and per-archive build-authority JSON evidence |
 | Container base | `requirements/base-image.lock` | exact `python:3.11.16-slim` OCI digest used by every Docker stage |
+| Container runtime-composition definition | exact reviewed `Dockerfile` Git blob identity | deterministic denial of any unreviewed Dockerfile byte/instruction drift |
 
 The dependency lock files are repository-owned resolution snapshots derived from declared project constraints, then committed and reviewed. Runtime installation uses `pip --require-hashes`; direct URL/VCS/editable requirements, non-exact pins, missing hashes, unexpected lock files, and non-SHA-256 hash directives are rejected by `scripts/verify_supply_chain.py`.
 
@@ -62,6 +63,8 @@ The runtime stage:
 - runs as the non-root `aiqa` user;
 - is checked to exclude Hatchling and the build-only packages named by repository policy.
 
+`scripts/verify_supply_chain.py` binds the complete bounded-read `Dockerfile` text to the reviewed Git blob identity before accepting its runtime-composition checks. Any added or changed Docker instruction—including an extra `apt`, `curl`, `pip`, `ADD`, or other unmodeled installation/network path—fails closed even if the required hash-lock tokens remain present. A legitimate Dockerfile change therefore requires an explicit authority review and an intentional update of the reviewed blob identity.
+
 No container-image byte-for-byte reproducibility claim is made. The Docker build verifies a digest-pinned base and runtime composition; repeatability evidence currently applies to the Python wheel.
 
 ---
@@ -100,7 +103,7 @@ Permanent CI does not use floating GitHub Action tags. The reviewed Action revis
 - `actions/setup-python`;
 - `actions/upload-artifact`.
 
-The Ruff pre-commit mirror is likewise pinned to an exact repository commit rather than `v0.16.2` as a mutable ref. The public commit SHA literals carry narrow `detect-secrets` inline allowlist annotations because they are intentionally committed provenance identifiers, not credentials.
+The Ruff pre-commit mirror is likewise pinned to an exact repository commit rather than `v0.16.2` as a mutable ref. The public commit SHA literals carry narrow `detect-secrets` inline allowlist annotations because they are intentionally committed provenance identifiers, not credentials. The reviewed automatic-workflow and Dockerfile Git blob identifiers use the same narrow annotation for the same reason.
 
 CI also names exact CPython patch releases (`3.11.16`, `3.13.15`) and uses the `ubuntu-24.04` runner family rather than `ubuntu-latest`.
 
@@ -124,15 +127,16 @@ The initial Python interpreter and `pip` process are supplied by the GitHub-host
 - declared runtime/dev/build dependencies to be represented by their corresponding locks;
 - build-only packages to remain outside the runtime graph;
 - Docker stages to match `base-image.lock` exactly;
+- the complete `Dockerfile` bytes to match the exact reviewed Git blob identity before runtime-composition `PASS`;
 - hash-required Docker dependency installation;
 - no live `pip install --upgrade` or editable CI install path;
 - exact Python patch versions in permanent CI;
 - only the reviewed immutable GitHub Action commits;
 - only the reviewed immutable pre-commit revision.
 
-The lock verifier rejects symlink substitution, lock-file identity changes, requirements-directory replacement, and entry exhaustion instead of falling back to weaker pathname enumeration when the required descriptor-relative primitives are unavailable.
+The lock verifier rejects symlink substitution, lock-file identity changes, requirements-directory replacement, and entry exhaustion instead of falling back to weaker pathname enumeration when the required descriptor-relative primitives are unavailable. Exact Dockerfile identity additionally rejects arbitrary extra Docker instructions that narrower token checks do not enumerate.
 
-`scripts/verify_build_authority.py` is the earlier pre-build boundary for executable project-build configuration, file-valued project metadata, selected package-tree filesystem authority, and installed Hatch plugin metadata; it is also reused against each extracted reproducible-build root. `scripts/verify_ci_contract.py` separately requires the evidence-producing checkout verifier, immediate build-authority revalidation before every automatic project install, per-archive source verification before wheel creation, matching archive-authority evidence, and upload of all three build-authority evidence files.
+`scripts/verify_build_authority.py` is the earlier pre-build boundary for executable project-build configuration, file-valued project metadata, selected package-tree filesystem authority, and installed Hatch plugin metadata; it is also reused against each extracted reproducible-build root. `scripts/verify_ci_contract.py` separately requires the evidence-producing checkout verifier, immediate build-authority revalidation before every automatic project install, the complete automatic `ci.yml` bytes to match their reviewed Git blob identity, per-archive source verification before wheel creation, matching archive-authority evidence, and upload of all three build-authority evidence files.
 
 These verifiers emit machine-readable JSON statements about repository invariants. Their `PASS` states only that the corresponding deterministic checks passed; it does not certify external package availability, publisher identity, hosted-runner immutability, bootstrap-tool identity, post-observation filesystem immutability, or release signing.
 
@@ -163,7 +167,7 @@ The manifest generator binds parsed SBOM metadata and the SBOM digest to one bou
 
 Manifest persistence rejects ambiguous symlink ownership and uses atomic replacement plus directory fsync.
 
-`scripts/verify_ci_contract.py` freezes the pre-build authority, immediate automatic-project-install guards, runtime-SBOM digest export, isolated bare-Git archive construction, per-archive build-authority checks and matching persisted evidence, reproducible-build shell block, supply-chain evidence set, and their safety-critical ordering. Replacing `$GITHUB_SHA` with mutable `HEAD`, re-enabling Git replacement objects, removing the clean Git environment, fresh Git view/object-directory/empty-template controls, reintroducing ambient archive attributes, allowing dirty tar extraction authority, removing either archive verification or its equality/evidence requirement, removing the SBOM lineage checks, moving project installation ahead of build-authority validation, or removing required evidence causes deterministic CI-contract failure.
+`scripts/verify_ci_contract.py` freezes the complete automatic-workflow Git blob identity in addition to the pre-build authority, immediate automatic-project-install guards, runtime-SBOM digest export, isolated bare-Git archive construction, per-archive build-authority checks and matching persisted evidence, reproducible-build shell block, supply-chain evidence set, and their safety-critical ordering. Replacing `$GITHUB_SHA` with mutable `HEAD`, re-enabling Git replacement objects, removing the clean Git environment, fresh Git view/object-directory/empty-template controls, reintroducing ambient archive attributes, allowing dirty tar extraction authority, removing either archive verification or its equality/evidence requirement, removing the SBOM lineage checks, moving project installation ahead of build-authority validation, adding an alternate unreviewed project-install command, or removing required evidence causes deterministic CI-contract failure.
 
 The resulting unsigned manifest records:
 
@@ -206,6 +210,8 @@ Vulnerability results are time-sensitive observations. A green audit at one revi
 | Project build authority excludes unreviewed execution/filesystem expansion | exact static configuration + fixed README/LICENSE authority + bounded no-follow symlink-free selected package-tree observation on checkout and both extracted build roots + installed `hatch` entry-point denial + immediate automatic-install guards | post-observation immutable filesystem state, general proof that all future build systems are safe, or independent package-byte attestation |
 | Build backend graph is repository-bound | exact `hatchling==1.32.0` + build lock | build publisher identity |
 | Container base subject is fixed | OCI digest in `base-image.lock` and Dockerfile | byte-identical rebuilt container image |
+| Container runtime-composition definition is the reviewed subject | exact Dockerfile Git blob identity + existing digest/hash-lock/non-root composition checks | byte-identical rebuilt image, registry identity, or proof that a future Dockerfile change is safe without review |
+| Automatic CI command surface is the reviewed subject | exact `ci.yml` Git blob identity + structural trigger/permission/step guards | GitHub branch-protection state or hosted-runner immutability |
 | Wheel is repeatable for the exact CI event subject and recorded inputs | two fresh-bare-view/no-replace `$GITHUB_SHA` archives with versioned-tree-only attribute authority + per-archive build-authority evidence + expected-commit-bound manifest inputs + identical wheel SHA-256 in one CI environment | signer/publisher identity, runner-binary attestation, privileged object-store immutability, or cross-environment reproducibility |
 | Runtime Python SBOM remained the audited subject through wheel generation | post-audit SHA-256 exported before builds + digest checks around later build/manifest activity + manifest acceptance of the parent-owned digest | OS/container/provider coverage or permanent vulnerability status |
 | GitHub Actions are source-revision pinned | exact reviewed Action commit SHAs | immutable hosted runner OS/image |
@@ -215,17 +221,18 @@ Vulnerability results are time-sensitive observations. A green audit at one revi
 
 ## Updating supply-chain authority
 
-A dependency, Action, build-backend/configuration, interpreter, or container-base update is a controlled engineering change—not a background resolver event. The update should:
+A dependency, Action, build-backend/configuration, interpreter, automatic-workflow definition, Dockerfile, or container-base update is a controlled engineering change—not a background resolver event. The update should:
 
 1. verify official provenance of the proposed upstream subject;
 2. resolve/regenerate the affected candidate lock or digest material deliberately from the declared repository constraints, recording the interpreter and resolver/tooling used for the update;
 3. review graph additions/removals and authority changes rather than treating generated comments as authority;
-4. explicitly review any proposed change to build backend/configuration, file-valued project inputs, selected package-tree shape/symlink policy, installed Hatch plugin surface, or source-execution extension points;
-5. run the pre-build authority verifier against the checkout and reproducible-build roots, deterministic repository verifiers, and adversarial tests;
-6. run applicable vulnerability/secret/static scans;
-7. reproduce the project wheel and regenerate the runtime SBOM;
-8. build and inspect the final runtime container;
-9. bind completion evidence to the exact source revision before merge.
+4. explicitly review any proposed change to build backend/configuration, file-valued project inputs, selected package-tree shape/symlink policy, installed Hatch plugin surface, source-execution extension points, automatic CI command surface, or Docker runtime-composition instructions;
+5. update the reviewed workflow/Dockerfile Git blob identity only after that authority review when those definitions legitimately change;
+6. run the pre-build authority verifier against the checkout and reproducible-build roots, deterministic repository verifiers, and adversarial tests;
+7. run applicable vulnerability/secret/static scans;
+8. reproduce the project wheel and regenerate the runtime SBOM;
+9. build and inspect the final runtime container;
+10. bind completion evidence to the exact source revision before merge.
 
 A lock refresh is not claimed to reproduce an old resolver decision indefinitely: package-index metadata and available distributions can evolve. The committed reviewed lock is the build/install authority until a deliberately reviewed replacement supersedes it.
 
