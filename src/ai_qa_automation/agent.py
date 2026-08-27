@@ -20,13 +20,10 @@ from .runtime.budget import ExecutionBudget
 from .runtime.internal_tools import build_internal_mcp_server
 from .runtime.journal import RunJournal
 from .runtime.live_services import LiveRuntimeServices
+from .runtime.mutation_lineage import reconcile_rolled_back_mutation
 from .runtime.objective_bounds import validate_objective
 from .runtime.run_control import RuntimeControl
-from .runtime.runtime_hooks import (
-    _reconcile_rolled_back_mutation,
-    build_hooks,
-    build_permission_handler,
-)
+from .runtime.runtime_hooks import build_hooks, build_permission_handler
 from .runtime.sdk_recovery import (
     SDKRetryDecision,
     retry_decision,
@@ -435,8 +432,12 @@ def _rollback_unresolved_mutation(
     rolled_back = control.rollback_pending_mutation(
         reason="run ended with an unresolved mutation transaction"
     )
-    _reconcile_rolled_back_mutation(state, pending, rolled_back)
     if rolled_back:
+        reconcile_rolled_back_mutation(
+            state,
+            relative_path=rolled_back,
+            change_revision_before=pending.change_revision_before,
+        )
         state.observations.append(
             f"Unresolved mutation rolled back before terminal report: {rolled_back}"
         )
