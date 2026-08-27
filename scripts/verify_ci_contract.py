@@ -11,7 +11,11 @@ from typing import Any
 
 MAX_WORKFLOW_BYTES = 256 * 1024
 MAX_WORKFLOW_ENTRIES = 16
-EXPECTED_WORKFLOW_NAMES = {"ci.yml", "manual-validation.yml"}
+EXPECTED_WORKFLOW_NAMES = {
+    "ci.yml",
+    "manual-validation.yml",
+    "trusted-merge-authorization.yml",
+}
 EXPECTED_ACTION_SHAS = {
     "actions/checkout": "3d3c42e5aac5ba805825da76410c181273ba90b1",  # pragma: allowlist secret
     "actions/setup-python": "5fda3b95a4ea91299a34e894583c3862153e4b97",  # pragma: allowlist secret
