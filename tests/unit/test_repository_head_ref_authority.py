@@ -172,6 +172,58 @@ def test_snapshot_rejects_unresolved_detached_head(
         RepositoryInspector(repo).snapshot()
 
 
+def test_snapshot_rejects_malformed_existing_symbolic_head_target(tmp_path: Path) -> None:
+    _require_descriptor_authority()
+    repo = tmp_path / "repo-malformed-loose"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="ascii")
+    target = repo / ".git" / "refs" / "heads" / "main"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("not-an-object\n", encoding="ascii")
+
+    with pytest.raises(RepositorySubjectError, match="target exists"):
+        RepositoryInspector(repo).snapshot()
+
+
+def test_snapshot_rejects_malformed_packed_refs_for_unresolved_head(tmp_path: Path) -> None:
+    _require_descriptor_authority()
+    repo = tmp_path / "repo-malformed-packed"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="ascii")
+    (repo / ".git" / "packed-refs").write_text(
+        "not-an-object refs/heads/other\n",
+        encoding="ascii",
+    )
+
+    with pytest.raises(RepositorySubjectError, match="packed refs are malformed"):
+        RepositoryInspector(repo).snapshot()
+
+
+def test_snapshot_accepts_unborn_symbolic_head_with_unrelated_packed_ref(tmp_path: Path) -> None:
+    _require_descriptor_authority()
+    repo = tmp_path / "repo-unborn-packed"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    probe = repo / "probe.txt"
+    probe.write_text("object\n", encoding="utf-8")
+    object_id = _git(repo, "hash-object", "-w", "probe.txt")
+    probe.unlink()
+    (repo / ".git" / "packed-refs").write_text(
+        f"# pack-refs with: peeled fully-peeled sorted\n{object_id} refs/heads/other\n",
+        encoding="ascii",
+    )
+    (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="ascii")
+
+    snapshot = RepositoryInspector(repo).snapshot()
+
+    assert snapshot.git_sha is None
+    assert snapshot.branch == "main"
+    assert snapshot.changed_files == ()
+    assert snapshot.fingerprint_complete is True
+
+
 def test_snapshot_accepts_stable_detached_head(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _root, _baseline, actual, _fake = _init_same_tree_divergent_ancestry(repo)
