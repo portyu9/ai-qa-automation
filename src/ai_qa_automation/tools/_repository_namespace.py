@@ -19,6 +19,7 @@ _GitMetadataObservation = tuple[tuple[str, _MetadataSignature], ...]
 _UNTRACKED_PATH_LIST = ("ls-files", "--others", "--exclude-standard", "-z", "--")
 _HEAD_RESOLUTION = ("rev-parse", "HEAD")
 _SPLIT_INDEX_PROBE = ("rev-parse", "--shared-index-path")
+_HEX_BYTES = frozenset(b"0123456789abcdefABCDEF")
 _NESTED_GIT_INDIRECTION_PATHS = {
     ("commondir",),
     ("objects", "info", "alternates"),
@@ -140,6 +141,94 @@ class RepositoryNamespaceAuthorityMixin:
         )
         return tuple(sorted(rows))
 
+    def _assert_failed_head_is_unborn(
+        self,
+        authority: RepositoryGitAuthorityMixin,
+        head_bytes: bytes,
+    ) -> None:
+        """Allow unresolved HEAD only when its direct symbolic target is provably absent."""
+        try:
+            value = head_bytes.decode("ascii", errors="strict").rstrip("\r\n")
+        except UnicodeDecodeError as exc:  # pragma: no cover - validated by head observation
+            raise RepositorySubjectError("Git HEAD metadata is not valid ASCII") from exc
+        if not value.startswith("ref: "):
+            raise RepositorySubjectError(
+                "detached Git HEAD could not be resolved as an exact commit"
+            )
+        target = value[len("ref: ") :]
+
+        loose_signature = RepositoryGitAuthorityMixin._stat_git_metadata_signature(
+            authority,
+            target,
+            label=f"unresolved Git HEAD target {target}",
+        )
+        if loose_signature is not None:
+            raise RepositorySubjectError(
+                "symbolic Git HEAD target exists but could not be resolved"
+            )
+
+        packed_refs = RepositoryGitAuthorityMixin._read_git_metadata_file(
+            authority,
+            "packed-refs",
+            label="packed refs for unresolved Git HEAD",
+        )
+        if packed_refs is None:
+            return
+
+        object_format = RepositoryGitAuthorityMixin._git(
+            authority,
+            "rev-parse",
+            "--show-object-format",
+        )
+        if object_format == "sha1":
+            oid_length = 40
+        elif object_format == "sha256":
+            oid_length = 64
+        else:
+            raise RepositorySubjectError(
+                "Git object format is unsupported while proving unborn HEAD"
+            )
+
+        target_bytes = target.encode("ascii")
+        previous_ref = False
+        for line in packed_refs.splitlines():
+            if not line:
+                raise RepositorySubjectError(
+                    "packed refs are malformed while proving unborn HEAD"
+                )
+            if line.startswith(b"#"):
+                previous_ref = False
+                continue
+            if line.startswith(b"^"):
+                peeled = line[1:]
+                if (
+                    not previous_ref
+                    or len(peeled) != oid_length
+                    or any(byte not in _HEX_BYTES for byte in peeled)
+                ):
+                    raise RepositorySubjectError(
+                        "packed refs are malformed while proving unborn HEAD"
+                    )
+                previous_ref = False
+                continue
+
+            oid, separator, ref_name = line.partition(b" ")
+            if ref_name == target_bytes:
+                raise RepositorySubjectError(
+                    "symbolic Git HEAD target exists but could not be resolved"
+                )
+            if (
+                not separator
+                or len(oid) != oid_length
+                or any(byte not in _HEX_BYTES for byte in oid)
+                or not ref_name.startswith(b"refs/")
+                or any(byte in b" \t\x00" for byte in ref_name)
+            ):
+                raise RepositorySubjectError(
+                    "packed refs are malformed while proving unborn HEAD"
+                )
+            previous_ref = True
+
     def _git(self, *args: str, allow_failure: bool = False) -> str | None:
         authority = cast(RepositoryGitAuthorityMixin, self)
         worktree = cast(RepositoryWorktreeMixin, self)
@@ -158,10 +247,7 @@ class RepositoryNamespaceAuthorityMixin:
                 )
                 if args == _HEAD_RESOLUTION and allow_failure and result is None:
                     head_observation = RepositoryGitAuthorityMixin._head_ref_observation(authority)
-                    if not head_observation[0].startswith(b"ref: "):
-                        raise RepositorySubjectError(
-                            "detached Git HEAD could not be resolved as an exact commit"
-                        )
+                    self._assert_failed_head_is_unborn(authority, head_observation[0])
         except Exception as exc:
             original_error = exc
             raise
