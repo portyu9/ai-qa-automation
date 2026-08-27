@@ -183,9 +183,9 @@ Automatic stale rollback requires:
 - original rollback-byte hash integrity;
 - pending mutation revision provenance that is coherent with canonical `state.json` lineage.
 
-For a mutation that advanced canonical state, persisted `change_revision` must be exactly one greater than the pending transaction's `change_revision_before`. A larger or otherwise impossible gap is blocked before recovery writes. When that advanced revision is recoverable, stale recovery persists the same current-revision `NOT_VERIFIED` rollback lineage before restoring/removing target bytes and clearing pending runtime authority.
+For a mutation that advanced canonical state, persisted `change_revision` must be exactly one greater than the pending transaction's `change_revision_before`. A larger or otherwise impossible gap is blocked before recovery writes. Once all ownership, fingerprint, backup, and revision checks pass, stale recovery may restore/remove target bytes **while durable `runtime.json.pending_mutation` and rollback backup authority remain intact**. It then persists the prior run's current-revision `NOT_VERIFIED`/rolled-back lineage and only after that durable state checkpoint may it clear pending runtime authority.
 
-If a human or another process changed the workspace after the crash, newer work is preserved and automatic restoration stops. If the canonical rollback-lineage checkpoint cannot be persisted, automatic restoration also stops with pending recovery authority intact.
+If a human or another process changed the workspace after the crash, newer work is preserved and automatic restoration stops. If canonical rollback-lineage persistence fails after restoration, recovery closure stops: restored bytes coexist with retained pending runtime/backup authority, so the prior run cannot be represented as clean or closed.
 
 Recovery inspection uses the same exact-path targeted-validation standard as terminal truth. It starts a **new** model session from persisted evidence when appropriate; it does not reconstruct hidden Claude conversation state.
 
