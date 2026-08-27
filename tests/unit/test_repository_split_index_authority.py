@@ -55,14 +55,53 @@ def _init_repo(repo: Path) -> None:
     _git(repo, "commit", "-q", "-m", "initial")
 
 
+def _enable_split_index(repo: Path) -> None:
+    _git(repo, "update-index", "--split-index")
+    assert _git(repo, "rev-parse", "--shared-index-path")
+
+
+def test_inspector_observes_active_split_index_path(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _enable_split_index(repo)
+    inspector = RepositoryInspector(repo)
+
+    assert inspector._git("rev-parse", "--shared-index-path")
+
+
+def test_ls_files_rejects_active_split_index_before_binary_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _enable_split_index(repo)
+    inspector = RepositoryInspector(repo)
+
+    def forbidden_binary_git(*args: object, **kwargs: object) -> None:
+        raise AssertionError(
+            f"split index must be rejected before binary Git execution: {args}, {kwargs}"
+        )
+
+    monkeypatch.setattr(repository_module, "run_bounded_binary_subprocess", forbidden_binary_git)
+
+    with pytest.raises(RepositorySubjectError, match="split-index"):
+        inspector._git_bytes(
+            "ls-files",
+            "--stage",
+            "-z",
+            "--",
+            max_stdout_bytes=16_000_000,
+        )
+
+
 def test_snapshot_rejects_active_split_index_before_ls_files_execution(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo)
-    _git(repo, "update-index", "--split-index")
-    assert _git(repo, "rev-parse", "--shared-index-path")
+    _enable_split_index(repo)
 
     def forbidden_binary_git(*args: object, **kwargs: object) -> None:
         raise AssertionError(
