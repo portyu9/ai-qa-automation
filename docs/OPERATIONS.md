@@ -161,6 +161,8 @@ A `-k`-only run or targeted test of a different file is diagnostic evidence, not
 
 Model completion does not commit a mutation.
 
+Live rollback is also coordinated across the two durable authority records. If a mutation advanced `change_revision`, `state.json` receives a current-revision `NOT_VERIFIED` rollback gate **before** target bytes may be restored or `runtime.json.pending_mutation` may be cleared. Runtime closure then restores/removes the target and clears pending authority; a final state checkpoint reconciles modified-file accounting. A pre-close state-save failure therefore leaves the candidate bytes and pending recovery authority untouched, while a post-close state-save failure still leaves durable `NOT_VERIFIED` lineage rather than stale SUCCESS.
+
 ---
 
 ## Crash recovery
@@ -178,9 +180,12 @@ Automatic stale rollback requires:
 - exact post-mutation fingerprint match;
 - non-traversing, non-symlink pending target path;
 - owned non-symlink rollback directory/path;
-- original rollback-byte hash integrity.
+- original rollback-byte hash integrity;
+- pending mutation revision provenance that is coherent with canonical `state.json` lineage.
 
-If a human or another process changed the workspace after the crash, newer work is preserved and automatic restoration stops.
+For a mutation that advanced canonical state, persisted `change_revision` must be exactly one greater than the pending transaction's `change_revision_before`. A larger or otherwise impossible gap is blocked before recovery writes. When that advanced revision is recoverable, stale recovery persists the same current-revision `NOT_VERIFIED` rollback lineage before restoring/removing target bytes and clearing pending runtime authority.
+
+If a human or another process changed the workspace after the crash, newer work is preserved and automatic restoration stops. If the canonical rollback-lineage checkpoint cannot be persisted, automatic restoration also stops with pending recovery authority intact.
 
 Recovery inspection uses the same exact-path targeted-validation standard as terminal truth. It starts a **new** model session from persisted evidence when appropriate; it does not reconstruct hidden Claude conversation state.
 
