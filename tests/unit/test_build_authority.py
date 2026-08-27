@@ -17,6 +17,7 @@ def _copy_build_inputs(tmp_path: Path) -> Path:
     shutil.copyfile(ROOT / "pyproject.toml", root / "pyproject.toml")
     shutil.copyfile(ROOT / "README.md", root / "README.md")
     shutil.copyfile(ROOT / "LICENSE", root / "LICENSE")
+    shutil.copytree(ROOT / "requirements", root / "requirements")
     (root / "src").mkdir()
     shutil.copytree(ROOT / "src" / "ai_qa_automation", root / "src" / "ai_qa_automation")
     return root
@@ -31,6 +32,7 @@ def test_repository_build_authority_is_static() -> None:
     assert result["project_name"] == "ai-qa-automation"
     assert result["project_scripts"] == {"ai-qa": "ai_qa_automation.cli:app"}
     assert result["project_entry_points"] is False
+    assert result["reviewed_lock_blobs"] == build_authority.EXPECTED_LOCK_BLOB_SHAS
     assert result["project_file_inputs"] == {
         "readme": "README.md",
         "license": {"file": "LICENSE"},
@@ -209,6 +211,35 @@ def test_build_authority_rejects_license_files_expansion(tmp_path: Path) -> None
     path.write_text(text, encoding="utf-8")
 
     with pytest.raises(ValueError, match="license-files"):
+        build_authority.verify_build_authority(root)
+
+
+def test_build_authority_rejects_modified_reviewed_lock(tmp_path: Path) -> None:
+    root = _copy_build_inputs(tmp_path)
+    lock = root / "requirements" / "dev-py311.lock"
+    lock.write_text(lock.read_text(encoding="utf-8") + "\n# unauthorized drift\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="exact reviewed automatic-install authority"):
+        build_authority.verify_build_authority(root)
+
+
+def test_build_authority_rejects_additional_lock_file(tmp_path: Path) -> None:
+    root = _copy_build_inputs(tmp_path)
+    (root / "requirements" / "rogue.lock").write_text("rogue==1\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="dependency lock set differs"):
+        build_authority.verify_build_authority(root)
+
+
+def test_build_authority_rejects_symlinked_reviewed_lock(tmp_path: Path) -> None:
+    root = _copy_build_inputs(tmp_path)
+    lock = root / "requirements" / "runtime-py311.lock"
+    external = tmp_path / "external.lock"
+    shutil.copyfile(lock, external)
+    lock.unlink()
+    lock.symlink_to(external)
+
+    with pytest.raises(ValueError, match="regular non-symlink"):
         build_authority.verify_build_authority(root)
 
 
