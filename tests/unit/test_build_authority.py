@@ -184,7 +184,9 @@ def test_build_authority_rejects_symlinked_readme(tmp_path: Path) -> None:
     readme.unlink()
     readme.symlink_to(external)
 
-    with pytest.raises(ValueError, match="project readme must be a regular non-symlink build input"):
+    with pytest.raises(
+        ValueError, match="project readme must be a regular non-symlink build input"
+    ):
         build_authority.verify_build_authority(root)
 
 
@@ -196,7 +198,9 @@ def test_build_authority_rejects_symlinked_license(tmp_path: Path) -> None:
     license_path.unlink()
     license_path.symlink_to(external)
 
-    with pytest.raises(ValueError, match="project license must be a regular non-symlink build input"):
+    with pytest.raises(
+        ValueError, match="project license must be a regular non-symlink build input"
+    ):
         build_authority.verify_build_authority(root)
 
 
