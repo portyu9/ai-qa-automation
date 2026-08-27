@@ -242,7 +242,9 @@ def _verify_reviewed_lock_authority(root: Path) -> dict[str, str]:
             try:
                 file_fd = _relative_open(name, directory_fd, directory=False)
             except ValueError as exc:
-                raise ValueError(f"{label} could not be opened without following a symlink") from exc
+                raise ValueError(
+                    f"{label} could not be opened without following a symlink"
+                ) from exc
             try:
                 opened = os.fstat(file_fd)
                 current = _relative_stat(name, directory_fd)
@@ -279,7 +281,9 @@ def _verify_reviewed_lock_authority(root: Path) -> dict[str, str]:
             or _identity(final_opened_directory) != _identity(final_current_directory)
             or _directory_signature(final_opened_directory) != initial_signature
         ):
-            raise ValueError("requirements directory changed during dependency authority verification")
+            raise ValueError(
+                "requirements directory changed during dependency authority verification"
+            )
         return observed_blobs
     finally:
         os.close(directory_fd)
@@ -513,7 +517,9 @@ def verify_build_authority(root: Path) -> dict[str, Any]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Verify project build and automatic-install authority")
+    parser = argparse.ArgumentParser(
+        description="Verify project build and automatic-install authority"
+    )
     parser.add_argument(
         "--root",
         type=Path,
