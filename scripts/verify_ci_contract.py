@@ -348,7 +348,7 @@ def _require_exact_runtime_sbom_step(job: str) -> None:
             "          assert data.get('components')",
             "          PY",
             "          read -r runtime_sbom_sha256 _ < <(/usr/bin/sha256sum artifacts/ci/runtime-sbom.cdx.json)",
-            "          printf 'RUNTIME_SBOM_SHA256=%s\\n' \"$runtime_sbom_sha256\" >> \"$GITHUB_ENV\"",
+            '          printf \'RUNTIME_SBOM_SHA256=%s\\n\' "$runtime_sbom_sha256" >> "$GITHUB_ENV"',
         )
     )
     if step != expected:
