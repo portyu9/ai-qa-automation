@@ -39,8 +39,7 @@ def test_runtime_container_build_context_is_exact_event_archive() -> None:
     assert 'docker build --tag "$image" .' not in ci_text
     assert ci_text.count(exact_archive_build) == 1
     assert (
-        ci_text.count('git_view="$(mktemp -d "$RUNNER_TEMP/aiqa-container-git-view.XXXXXX")"')
-        == 1
+        ci_text.count('git_view="$(mktemp -d "$RUNNER_TEMP/aiqa-container-git-view.XXXXXX")"') == 1
     )
     assert (
         ci_text.count(
