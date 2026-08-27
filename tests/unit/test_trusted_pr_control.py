@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import json
+import sys
 from collections.abc import Mapping
-from pathlib import Path
 from typing import Any, ClassVar
 
 import pytest
@@ -36,19 +35,6 @@ def _pull_request_payload(
     }
 
 
-def _event_payload(
-    *,
-    action: str = "synchronize",
-    repository: str = REPOSITORY,
-) -> dict[str, Any]:
-    pull_request = _pull_request_payload(merge_sha="not-yet-materialized", mergeable=None)
-    return {
-        "action": action,
-        "repository": {"full_name": repository},
-        "pull_request": pull_request,
-    }
-
-
 class FakeApi:
     current_payload: Mapping[str, Any] = _pull_request_payload()
     instances: ClassVar[list[FakeApi]] = []
@@ -56,16 +42,12 @@ class FakeApi:
     def __init__(self, *, repository: str, token: str) -> None:
         self.repository = repository
         self.token = token
-        self.dispatched: list[control.PullRequestSubject] = []
         self.statuses: list[dict[str, str]] = []
         type(self).instances.append(self)
 
     def fetch_pull_request(self, number: int) -> Mapping[str, Any]:
         assert number == 43
         return type(self).current_payload
-
-    def dispatch_validation(self, subject: control.PullRequestSubject) -> None:
-        self.dispatched.append(subject)
 
     def post_status(
         self,
@@ -100,166 +82,125 @@ def _subject() -> control.PullRequestSubject:
     )
 
 
-def test_subject_requires_open_main_mergeable_exact_subject() -> None:
+def _report(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    actor: str = "portyu9",
+    repository_owner: str = "portyu9",
+    workflow_event: str = "workflow_dispatch",
+    workflow_ref: str = "refs/heads/main",
+    authorized: bool = True,
+    job_result: str = "success",
+) -> dict[str, Any]:
+    monkeypatch.setattr(control, "GitHubApi", FakeApi)
+    return control.report_authorized_result(
+        repository=REPOSITORY,
+        token="token",
+        actor=actor,
+        repository_owner=repository_owner,
+        workflow_event=workflow_event,
+        workflow_ref=workflow_ref,
+        expected=_subject(),
+        authorized=authorized,
+        job_results={"validation": job_result},
+        target_url=RUN_URL,
+    )
+
+
+def test_subject_requires_open_main_definitively_mergeable_exact_subject() -> None:
     assert control.subject_from_pull_request(_pull_request_payload()) == _subject()
 
     with pytest.raises(ValueError, match="remain open"):
         control.subject_from_pull_request(_pull_request_payload(state="closed"))
     with pytest.raises(ValueError, match="target 'main'"):
         control.subject_from_pull_request(_pull_request_payload(base_ref="release"))
-    with pytest.raises(ValueError, match="not mergeable"):
+    with pytest.raises(ValueError, match="definitively mergeable"):
         control.subject_from_pull_request(_pull_request_payload(mergeable=False))
+    with pytest.raises(ValueError, match="definitively mergeable"):
+        control.subject_from_pull_request(_pull_request_payload(mergeable=None))
     with pytest.raises(ValueError, match="merge SHA"):
         control.subject_from_pull_request(_pull_request_payload(merge_sha="short"))
 
 
-def test_target_event_does_not_trust_event_merge_subject() -> None:
-    repository, identity = control.subject_from_target_event(_event_payload())
-    assert repository == REPOSITORY
-    assert identity == control.PullRequestEventIdentity(
-        number=43,
-        head_sha=HEAD_SHA,
-        base_sha=BASE_SHA,
-    )
-
-
-def test_target_event_rejects_unreviewed_action() -> None:
-    with pytest.raises(ValueError, match="unsupported pull_request_target action"):
-        control.subject_from_target_event(_event_payload(action="closed"))
-
-
-def test_bounded_event_ingestion_rejects_symlink(tmp_path: Path) -> None:
-    target = tmp_path / "target.json"
-    target.write_text(json.dumps(_event_payload()), encoding="utf-8")
-    link = tmp_path / "event.json"
-    link.symlink_to(target)
-
-    with pytest.raises(ValueError, match="open trusted event payload safely"):
-        control._read_json_file_bounded(link, max_bytes=control.MAX_EVENT_BYTES)
-
-
-def test_bounded_event_ingestion_enforces_limit(tmp_path: Path) -> None:
-    event_path = tmp_path / "event.json"
-    event_path.write_bytes(b"{" + b" " * 32 + b"}")
-
-    with pytest.raises(ValueError, match="ingestion limit"):
-        control._read_json_file_bounded(event_path, max_bytes=8)
-
-
-def test_dispatch_refetches_current_subject_before_main_ref_dispatch(
+def test_report_requires_workflow_dispatch_before_api_access(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
-    event_path = tmp_path / "event.json"
-    event_path.write_text(json.dumps(_event_payload()), encoding="utf-8")
     monkeypatch.setattr(control, "GitHubApi", FakeApi)
-
-    result = control.dispatch_from_event(
-        event_path=event_path,
-        token="token",
-        expected_repository=REPOSITORY,
-    )
-
-    assert result["result"] == "DISPATCHED"
-    assert result["ref"] == "main"
-    assert result["workflow"] == "trusted-pr-validation.yml"
-    assert result["subject"] == _subject().as_dispatch_inputs(authorized=False)
-    assert len(FakeApi.instances) == 1
-    assert FakeApi.instances[0].dispatched == [_subject()]
-
-
-def test_dispatch_rejects_event_repository_mismatch(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    event_path = tmp_path / "event.json"
-    event_path.write_text(
-        json.dumps(_event_payload(repository="attacker/other-repo")),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(control, "GitHubApi", FakeApi)
-
-    with pytest.raises(ValueError, match="does not match trusted GITHUB_REPOSITORY"):
-        control.dispatch_from_event(
-            event_path=event_path,
+    with pytest.raises(PermissionError, match="workflow_dispatch"):
+        control.report_authorized_result(
+            repository=REPOSITORY,
             token="token",
-            expected_repository=REPOSITORY,
+            actor="portyu9",
+            repository_owner="portyu9",
+            workflow_event="pull_request",
+            workflow_ref="refs/heads/main",
+            expected=_subject(),
+            authorized=True,
+            job_results={"validation": "success"},
+            target_url=RUN_URL,
         )
-
     assert FakeApi.instances == []
 
 
-def test_dispatch_rejects_event_to_api_head_race(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    event_path = tmp_path / "event.json"
-    event_path.write_text(json.dumps(_event_payload()), encoding="utf-8")
-    FakeApi.current_payload = _pull_request_payload(head_sha=OTHER_SHA)
+def test_report_requires_main_ref_before_api_access(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(control, "GitHubApi", FakeApi)
-
-    with pytest.raises(ValueError, match="changed between event delivery and dispatch"):
-        control.dispatch_from_event(
-            event_path=event_path,
+    with pytest.raises(PermissionError, match="refs/heads/main"):
+        control.report_authorized_result(
+            repository=REPOSITORY,
             token="token",
-            expected_repository=REPOSITORY,
+            actor="portyu9",
+            repository_owner="portyu9",
+            workflow_event="workflow_dispatch",
+            workflow_ref="refs/heads/feature",
+            expected=_subject(),
+            authorized=True,
+            job_results={"validation": "success"},
+            target_url=RUN_URL,
         )
+    assert FakeApi.instances == []
 
-    assert FakeApi.instances[0].dispatched == []
+
+def test_non_owner_cannot_report_even_diagnostic(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(control, "GitHubApi", FakeApi)
+    with pytest.raises(PermissionError, match="repository owner"):
+        control.report_authorized_result(
+            repository=REPOSITORY,
+            token="token",
+            actor="contributor",
+            repository_owner="portyu9",
+            workflow_event="workflow_dispatch",
+            workflow_ref="refs/heads/main",
+            expected=_subject(),
+            authorized=False,
+            job_results={"validation": "success"},
+            target_url=RUN_URL,
+        )
+    assert FakeApi.instances == []
 
 
-def test_actual_dispatch_method_pins_workflow_and_main_ref(monkeypatch: pytest.MonkeyPatch) -> None:
-    api = control.GitHubApi(repository=REPOSITORY, token="token")
-    observed: dict[str, Any] = {}
+def test_diagnostic_owner_run_refetches_subject_without_posting_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = _report(monkeypatch, authorized=False)
 
-    def _post_json(path: str, payload: Mapping[str, Any]) -> None:
-        observed["path"] = path
-        observed["payload"] = payload
-
-    monkeypatch.setattr(api, "post_json", _post_json)
-    api.dispatch_validation(_subject())
-
-    assert observed == {
-        "path": f"/repos/{REPOSITORY}/actions/workflows/trusted-pr-validation.yml/dispatches",
-        "payload": {
-            "ref": "main",
-            "inputs": _subject().as_dispatch_inputs(authorized=False),
+    assert result == {
+        "result": "DIAGNOSTIC_ONLY",
+        "status_posted": False,
+        "subject": {
+            "pr_number": "43",
+            "expected_head_sha": HEAD_SHA,
+            "expected_base_sha": BASE_SHA,
+            "expected_merge_sha": MERGE_SHA,
         },
     }
-
-
-def test_diagnostic_run_never_posts_merge_status(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(control, "GitHubApi", FakeApi)
-
-    result = control.report_authorized_result(
-        repository=REPOSITORY,
-        token="token",
-        actor="attacker",
-        repository_owner="portyu9",
-        expected=_subject(),
-        authorized=False,
-        job_results={"validation": "success"},
-        target_url=RUN_URL,
-    )
-
-    assert result["result"] == "DIAGNOSTIC_ONLY"
-    assert result["status_posted"] is False
+    assert len(FakeApi.instances) == 1
     assert FakeApi.instances[0].statuses == []
 
 
-def test_owner_authorized_success_posts_exact_head_status(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(control, "GitHubApi", FakeApi)
-
-    result = control.report_authorized_result(
-        repository=REPOSITORY,
-        token="token",
-        actor="portyu9",
-        repository_owner="portyu9",
-        expected=_subject(),
-        authorized=True,
-        job_results={"validation": "success"},
-        target_url=RUN_URL,
-    )
+def test_owner_authorized_success_posts_exact_current_head_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = _report(monkeypatch)
 
     assert result == {
         "result": "SUCCESS",
@@ -278,24 +219,6 @@ def test_owner_authorized_success_posts_exact_head_status(monkeypatch: pytest.Mo
     ]
 
 
-def test_non_owner_cannot_authorize_status(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(control, "GitHubApi", FakeApi)
-
-    with pytest.raises(PermissionError, match="repository owner"):
-        control.report_authorized_result(
-            repository=REPOSITORY,
-            token="token",
-            actor="contributor",
-            repository_owner="portyu9",
-            expected=_subject(),
-            authorized=True,
-            job_results={"validation": "success"},
-            target_url=RUN_URL,
-        )
-
-    assert FakeApi.instances[0].statuses == []
-
-
 def test_stale_subject_cannot_post_status(monkeypatch: pytest.MonkeyPatch) -> None:
     FakeApi.current_payload = _pull_request_payload(merge_sha=OTHER_SHA)
     monkeypatch.setattr(control, "GitHubApi", FakeApi)
@@ -306,48 +229,39 @@ def test_stale_subject_cannot_post_status(monkeypatch: pytest.MonkeyPatch) -> No
             token="token",
             actor="portyu9",
             repository_owner="portyu9",
+            workflow_event="workflow_dispatch",
+            workflow_ref="refs/heads/main",
             expected=_subject(),
             authorized=True,
             job_results={"validation": "success"},
             target_url=RUN_URL,
         )
-
     assert FakeApi.instances[0].statuses == []
 
 
 def test_owner_authorized_failed_validation_posts_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(control, "GitHubApi", FakeApi)
-
-    result = control.report_authorized_result(
-        repository=REPOSITORY,
-        token="token",
-        actor="portyu9",
-        repository_owner="portyu9",
-        expected=_subject(),
-        authorized=True,
-        job_results={"validation": "cancelled"},
-        target_url=RUN_URL,
-    )
+    result = _report(monkeypatch, job_result="cancelled")
 
     assert result["result"] == "FAILURE"
+    assert result["validation_result"] == "cancelled"
     assert FakeApi.instances[0].statuses[0]["state"] == "failure"
 
 
 def test_direct_report_rejects_unknown_validation_result(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(control, "GitHubApi", FakeApi)
-
     with pytest.raises(ValueError, match="invalid terminal result"):
         control.report_authorized_result(
             repository=REPOSITORY,
             token="token",
             actor="portyu9",
             repository_owner="portyu9",
+            workflow_event="workflow_dispatch",
+            workflow_ref="refs/heads/main",
             expected=_subject(),
             authorized=True,
             job_results={"validation": "green"},
             target_url=RUN_URL,
         )
-
     assert FakeApi.instances[0].statuses == []
 
 
@@ -359,12 +273,71 @@ def test_job_result_contract_rejects_extra_or_unknown_results() -> None:
         control.parse_job_results('{"validation":"green"}')
 
 
-def test_status_target_url_is_repository_bound() -> None:
+def test_status_target_url_must_be_exact_repository_run_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     api = control.GitHubApi(repository=REPOSITORY, token="token")
-    with pytest.raises(ValueError, match="workflow run in this repository"):
-        api.post_status(
-            sha=HEAD_SHA,
-            state="success",
-            description="ok",
-            target_url="https://example.com/forged",
-        )
+    monkeypatch.setattr(api, "post_json", lambda *_args, **_kwargs: None)
+
+    api.post_status(
+        sha=HEAD_SHA,
+        state="success",
+        description="ok",
+        target_url=RUN_URL,
+    )
+    for invalid in (
+        "https://example.com/forged",
+        f"{RUN_URL}/extra",
+        f"https://github.com/{REPOSITORY}/actions/runs/0",
+        f"https://github.com/{REPOSITORY}/actions/runs/not-a-number",
+    ):
+        with pytest.raises(ValueError, match="one workflow run"):
+            api.post_status(
+                sha=HEAD_SHA,
+                state="success",
+                description="ok",
+                target_url=invalid,
+            )
+
+
+def test_main_exits_nonzero_after_publishing_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        control,
+        "report_authorized_result",
+        lambda **_kwargs: {"result": "FAILURE", "status_posted": True},
+    )
+    monkeypatch.setenv("GITHUB_REPOSITORY", REPOSITORY)
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    monkeypatch.setenv("GITHUB_ACTOR", "portyu9")
+    monkeypatch.setenv("GITHUB_REPOSITORY_OWNER", "portyu9")
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_dispatch")
+    monkeypatch.setenv("GITHUB_REF", "refs/heads/main")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "trusted_pr_control.py",
+            "--pr-number",
+            "43",
+            "--expected-head-sha",
+            HEAD_SHA,
+            "--expected-base-sha",
+            BASE_SHA,
+            "--expected-merge-sha",
+            MERGE_SHA,
+            "--authorized",
+            "true",
+            "--job-results-json",
+            '{"validation":"failure"}',
+            "--target-url",
+            RUN_URL,
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        control.main()
+    assert exc_info.value.code == 1
+    assert '"result": "FAILURE"' in capsys.readouterr().out
