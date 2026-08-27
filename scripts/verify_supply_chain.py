@@ -396,7 +396,9 @@ def _verify_docker(root: Path, base_text: str) -> str:
 
     docker = _read_regular_text(root / "Dockerfile", max_bytes=64 * 1024)
     if _git_blob_sha1(docker) != EXPECTED_DOCKERFILE_BLOB_SHA:
-        raise ValueError("Dockerfile bytes differ from the exact reviewed runtime-composition definition")
+        raise ValueError(
+            "Dockerfile bytes differ from the exact reviewed runtime-composition definition"
+        )
     from_subjects = FROM_RE.findall(docker)
     if from_subjects != [base_text, base_text]:
         raise ValueError("every Docker stage must use the exact subject in base-image.lock")
