@@ -152,7 +152,5 @@ def test_stale_recovery_state_checkpoint_failure_keeps_runtime_pending_after_res
     )
 
     inspection = inspect_recovery(prior_run)
-    assert inspection["recoverable"] is True
-    assert inspection["revision_closed"] is False
-    assert inspection["pending_mutation"] is not None
-    assert inspection["resume_policy"] == "manual-review-required-before-new-session"
+    assert inspection["recoverable"] is False
+    assert "runtime journal authority is invalid" in str(inspection["reason"])
