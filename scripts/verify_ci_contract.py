@@ -381,7 +381,7 @@ def _require_exact_reproducible_build_step(job: str) -> None:
             '          build_b="$(mktemp -d "$RUNNER_TEMP/aiqa-build-b.XXXXXX")"',
             '          git_view="$(mktemp -d "$RUNNER_TEMP/aiqa-git-view.XXXXXX")"',
             '          git_template="$(mktemp -d "$RUNNER_TEMP/aiqa-git-template.XXXXXX")"',
-            "          trap 'rm -rf \"$build_a\" \"$build_b\" \"$git_view\" \"$git_template\"' EXIT",
+            '          trap \'rm -rf "$build_a" "$build_b" "$git_view" "$git_template"\' EXIT',
             "          mkdir -p artifacts/ci/wheel-a artifacts/ci/wheel-b",
             '          git_clean_env=(env -i PATH="$PATH" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0)',
             '          git_object_format="$("${git_clean_env[@]}" /usr/bin/git rev-parse --show-object-format)"',
