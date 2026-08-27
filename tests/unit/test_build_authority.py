@@ -35,8 +35,12 @@ def test_repository_build_authority_is_static() -> None:
         "readme": "README.md",
         "license": {"file": "LICENSE"},
     }
+    assert result["project_file_input_max_bytes"] == build_authority.MAX_PROJECT_FILE_INPUT_BYTES
     assert result["build_source_root"] == "src/ai_qa_automation"
     assert result["build_source_entries"] > 0
+    assert result["build_source_bytes"] > 0
+    assert result["build_source_max_file_bytes"] == build_authority.MAX_BUILD_SOURCE_FILE_BYTES
+    assert result["build_source_max_total_bytes"] == build_authority.MAX_BUILD_SOURCE_TOTAL_BYTES
     assert result["build_source_symlinks"] is False
     assert result["dynamic_metadata"] is False
     assert result["source_execution_extensions"] is False
@@ -282,6 +286,40 @@ def test_build_authority_rejects_symlink_inside_package_tree(tmp_path: Path) -> 
     victim.symlink_to(external)
 
     with pytest.raises(ValueError, match="build source symlink is forbidden"):
+        build_authority.verify_build_authority(root)
+
+
+def test_build_authority_enforces_project_file_input_byte_bound(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_build_inputs(tmp_path)
+    monkeypatch.setattr(build_authority, "MAX_PROJECT_FILE_INPUT_BYTES", 1)
+
+    with pytest.raises(ValueError, match="project readme exceeds 1 byte build-input limit"):
+        build_authority.verify_build_authority(root)
+
+
+def test_build_authority_enforces_source_file_byte_bound(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_build_inputs(tmp_path)
+    monkeypatch.setattr(build_authority, "MAX_BUILD_SOURCE_FILE_BYTES", 1)
+
+    with pytest.raises(ValueError, match="build source file exceeds 1 byte limit"):
+        build_authority.verify_build_authority(root)
+
+
+def test_build_authority_enforces_source_total_byte_bound(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_build_inputs(tmp_path)
+    monkeypatch.setattr(build_authority, "MAX_BUILD_SOURCE_FILE_BYTES", 1024 * 1024 * 1024)
+    monkeypatch.setattr(build_authority, "MAX_BUILD_SOURCE_TOTAL_BYTES", 1)
+
+    with pytest.raises(ValueError, match="total byte ingestion limit"):
         build_authority.verify_build_authority(root)
 
 
