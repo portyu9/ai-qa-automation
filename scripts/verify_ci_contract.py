@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import errno
+import hashlib
 import json
 import os
 import re
@@ -25,6 +26,7 @@ AUTOMATIC_REQUIRED_JOBS = (
     "browser-reference-sut",
 )
 EXPECTED_AUTOMATIC_PROJECT_INSTALL_COUNT = 5
+EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = "efdda1a163c7eb76f3f2d4df2837670a1e868cf3"
 AUTOMATIC_PROJECT_INSTALL_COMMAND = (
     "          python -m pip install --no-deps --no-build-isolation ."
 )
@@ -88,6 +90,12 @@ def _file_signature(value: os.stat_result) -> tuple[int, int, int, int, int]:
 
 def _directory_signature(value: os.stat_result) -> tuple[int, int, int, int]:
     return value.st_dev, value.st_ino, value.st_mtime_ns, value.st_ctime_ns
+
+
+def _git_blob_sha1(text: str) -> str:
+    content = text.encode("utf-8")
+    header = f"blob {len(content)}\0".encode()
+    return hashlib.sha1(header + content, usedforsecurity=False).hexdigest()
 
 
 def _read_fd_bounded(fd: int, *, label: str) -> bytes:
@@ -612,6 +620,9 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
         if f"      - {job}\n" not in required_gate:
             raise ValueError(f"{name}: Required PR Gate does not depend on {job}")
 
+    if _git_blob_sha1(text) != EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA:
+        raise ValueError("ci.yml bytes differ from the exact reviewed automatic workflow definition")
+
     return {
         "triggers": sorted(expected_triggers),
         "subject": "github.sha",
@@ -620,6 +631,7 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
         "prebuild_authority": "static-before-project-install",
         "project_install_count": project_install_count,
         "project_install_authority": "immediate-static-revalidation",
+        "workflow_definition": "exact-reviewed-git-blob",
         "archive_build_authority": "verified-and-matched-before-wheel-builds",
         "documentation_integrity": "required-via-supply-chain",
         "mermaid_render": "required-via-supply-chain",
