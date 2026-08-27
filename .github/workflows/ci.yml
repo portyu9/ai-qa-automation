@@ -56,6 +56,7 @@ jobs:
       - name: Install hash-locked development graph
         run: |
           test "$(python -c 'import platform; print(platform.python_version())')" = "${{ matrix.python-version }}"
+          python scripts/verify_build_authority.py > /dev/null
           python -m pip install --require-hashes -r "${{ matrix.lock-file }}"
           python scripts/verify_build_authority.py > /dev/null
           python -m pip install --no-deps --no-build-isolation .
@@ -111,6 +112,7 @@ jobs:
 
       - name: Install hash-locked project environment
         run: |
+          python scripts/verify_build_authority.py > /dev/null
           python -m pip install --require-hashes -r requirements/dev-py311.lock
           python scripts/verify_build_authority.py > /dev/null
           python -m pip install --no-deps --no-build-isolation .
@@ -179,6 +181,7 @@ jobs:
 
       - name: Install hash-locked verification environment
         run: |
+          python scripts/verify_build_authority.py > /dev/null
           python -m pip install --require-hashes -r requirements/dev-py311.lock
           python scripts/verify_build_authority.py > /dev/null
           python -m pip install --no-deps --no-build-isolation .
@@ -331,6 +334,7 @@ jobs:
 
       - name: Install hash-locked security environment
         run: |
+          python scripts/verify_build_authority.py > /dev/null
           python -m pip install --require-hashes -r requirements/dev-py311.lock
           python scripts/verify_build_authority.py > /dev/null
           python -m pip install --no-deps --no-build-isolation .
@@ -389,6 +393,7 @@ jobs:
 
       - name: Install hash-locked project environment
         run: |
+          python scripts/verify_build_authority.py > /dev/null
           python -m pip install --require-hashes -r requirements/dev-py311.lock
           python scripts/verify_build_authority.py > /dev/null
           python -m pip install --no-deps --no-build-isolation .
