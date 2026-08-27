@@ -26,7 +26,7 @@ AUTOMATIC_REQUIRED_JOBS = (
     "browser-reference-sut",
 )
 EXPECTED_AUTOMATIC_PROJECT_INSTALL_COUNT = 5
-EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = "efdda1a163c7eb76f3f2d4df2837670a1e868cf3"
+EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = "efdda1a163c7eb76f3f2d4df2837670a1e868cf3"  # pragma: allowlist secret
 AUTOMATIC_PROJECT_INSTALL_COMMAND = (
     "          python -m pip install --no-deps --no-build-isolation ."
 )
