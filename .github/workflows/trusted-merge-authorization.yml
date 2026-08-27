@@ -1,0 +1,67 @@
+name: Trusted Merge Authorization
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - labeled
+      - unlabeled
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trusted-merge-authorization-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  trusted-merge-authorization:
+    name: Trusted Merge Authorization
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require owner authorization for exact PR head
+        env:
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
+          pull_request = event.get("pull_request")
+          if not isinstance(pull_request, dict):
+              raise SystemExit("trusted merge authorization requires a pull-request event payload")
+
+          head = pull_request.get("head")
+          if not isinstance(head, dict):
+              raise SystemExit("pull-request head metadata is missing")
+          head_sha = head.get("sha")
+          if not isinstance(head_sha, str) or len(head_sha) != 40:
+              raise SystemExit("pull-request head SHA is not a full Git object ID")
+
+          sender = event.get("sender")
+          actor = sender.get("login") if isinstance(sender, dict) else None
+          action = event.get("action")
+          label = event.get("label")
+          label_name = label.get("name") if isinstance(label, dict) else None
+          repository_owner = os.environ["REPOSITORY_OWNER"]
+
+          if action != "labeled":
+              raise SystemExit(
+                  f"exact head {head_sha} is not owner-authorized: latest trusted event is {action!r}"
+              )
+          if label_name != "merge-authorized":
+              raise SystemExit(
+                  f"exact head {head_sha} is not owner-authorized: unexpected label {label_name!r}"
+              )
+          if actor != repository_owner:
+              raise SystemExit(
+                  f"exact head {head_sha} is not owner-authorized by repository owner"
+              )
+
+          print(f"trusted owner authorization accepted for exact PR head {head_sha}")
+          PY
