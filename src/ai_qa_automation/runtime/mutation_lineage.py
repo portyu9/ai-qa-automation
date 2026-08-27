@@ -67,22 +67,28 @@ def invalidate_pending_mutation_lineage(
     )
 
     gate_id = f"mutation_transaction:{relative_path}"
-    if _rollback_gate_index(
-        state,
-        gate_id=gate_id,
-        relative_path=relative_path,
-        change_revision_before=change_revision_before,
-        scope="rolled_back_mutation",
-    ) is not None:
+    if (
+        _rollback_gate_index(
+            state,
+            gate_id=gate_id,
+            relative_path=relative_path,
+            change_revision_before=change_revision_before,
+            scope="rolled_back_mutation",
+        )
+        is not None
+    ):
         _downgrade_success_after_rollback(state)
         return True
-    if _rollback_gate_index(
-        state,
-        gate_id=gate_id,
-        relative_path=relative_path,
-        change_revision_before=change_revision_before,
-        scope="rollback_pending",
-    ) is None:
+    if (
+        _rollback_gate_index(
+            state,
+            gate_id=gate_id,
+            relative_path=relative_path,
+            change_revision_before=change_revision_before,
+            scope="rollback_pending",
+        )
+        is None
+    ):
         state.validation_results.append(
             ValidationResult(
                 name="mutation_transaction",
