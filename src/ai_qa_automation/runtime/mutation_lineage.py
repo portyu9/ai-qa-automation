@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from ..models import AgentRunState, TerminalStatus, ValidationResult, ValidationStatus
 from ..state import StateStore
-from .run_control import RuntimeControl
+from .run_control import PendingMutation
 
 
 def _downgrade_success_after_rollback(state: AgentRunState) -> None:
@@ -42,7 +44,7 @@ def invalidate_pending_mutation_lineage(
     relative_path: str,
     change_revision_before: int | None,
 ) -> bool:
-    """Persistently poison an advanced revision before rollback may clear runtime authority."""
+    """Poison an advanced revision before rollback may clear runtime authority."""
 
     if not relative_path or change_revision_before is None:
         return False
@@ -159,40 +161,34 @@ def reconcile_rolled_back_mutation(
     return True
 
 
-def rollback_pending_mutation_with_lineage(
+def build_rollback_lineage_checkpoints(
     state: AgentRunState,
     state_store: StateStore | None,
-    control: RuntimeControl,
-    *,
-    reason: str,
-) -> str | None:
-    """Rollback target bytes without allowing runtime closure to outrun canonical lineage."""
+) -> tuple[Callable[[PendingMutation], None], Callable[[PendingMutation], None]]:
+    """Bind live rollback to durable canonical validation lineage.
 
-    pending = control.pending_mutation
-    if pending is None:
-        return None
+    The pre-close callback runs before target bytes are restored or runtime pending
+    authority is cleared. The post-close callback reconciles file accounting after
+    runtime closure. If the second save fails, the first persisted NOT_VERIFIED gate
+    still prevents stale PASS lineage from certifying the reverted bytes.
+    """
 
-    advanced = invalidate_pending_mutation_lineage(
-        state,
-        relative_path=pending.relative_path,
-        change_revision_before=pending.change_revision_before,
-    )
-    if advanced and state_store is not None:
-        # This checkpoint is deliberately before RuntimeControl clears durable
-        # pending authority. If it fails, no rollback write is attempted and the
-        # recovery transaction remains authoritative in runtime.json.
-        state_store.save(state)
-
-    rolled_back = control.rollback_pending_mutation(reason=reason)
-    if rolled_back:
-        reconcile_rolled_back_mutation(
+    def before_close(pending: PendingMutation) -> None:
+        advanced = invalidate_pending_mutation_lineage(
             state,
-            relative_path=rolled_back,
+            relative_path=pending.relative_path,
             change_revision_before=pending.change_revision_before,
         )
-        if state_store is not None:
-            # Failure here is conservative: the pre-close checkpoint already
-            # persisted NOT_VERIFIED, so stale PASS lineage cannot be resurrected
-            # even though runtime pending authority has now been closed.
+        if advanced and state_store is not None:
             state_store.save(state)
-    return rolled_back
+
+    def after_close(pending: PendingMutation) -> None:
+        reconciled = reconcile_rolled_back_mutation(
+            state,
+            relative_path=pending.relative_path,
+            change_revision_before=pending.change_revision_before,
+        )
+        if reconciled and state_store is not None:
+            state_store.save(state)
+
+    return before_close, after_close
