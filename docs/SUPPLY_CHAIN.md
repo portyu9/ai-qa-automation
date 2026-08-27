@@ -111,25 +111,32 @@ The verifier emits a machine-readable JSON statement about these repository inva
 
 ## Reproducible wheel evidence
 
-The permanent supply-chain CI job builds the project wheel twice from two independently extracted `git archive` trees of the same checked-out revision with the fixed `SOURCE_DATE_EPOCH`. Both builds run inside one CI job and therefore share the same hosted runner and installed build environment; the evidence establishes same-environment repeatability, not cross-runner or cross-operating-system reproducibility.
+The permanent supply-chain CI job builds the project wheel twice from independently extracted archives of the exact GitHub event subject. The reviewed step uses `git --no-replace-objects archive --format=tar "$GITHUB_SHA"` for both source trees, exports `GIT_NO_REPLACE_OBJECTS=1`, and fixes `SOURCE_DATE_EPOCH`. This prevents a local Git replacement ref from making the same textual commit ID resolve to replacement object content during the build. Both builds still execute inside one CI job and therefore share the same hosted runner and installed build environment; the evidence establishes same-environment repeatability, not cross-runner or cross-operating-system reproducibility.
 
-`scripts/generate_build_manifest.py` refuses to emit its manifest unless:
+`scripts/generate_build_manifest.py` requires an explicit `--expected-source-sha` and refuses to emit its manifest unless:
 
-1. both builds produce one wheel with the same artifact name;
-2. the two wheel SHA-256 digests are identical;
-3. the tracked checkout is clean before and after source-input observation;
-4. the expected source-date epoch is active;
-5. the CycloneDX runtime SBOM is structurally present.
+1. the expected source is a lowercase full object ID of the repository's actual Git object format and resolves to itself as an available commit;
+2. the corresponding original tree resolves with replacement objects disabled;
+3. current `HEAD` equals that explicit expected source before and after tracked source-input observation;
+4. the observed `Dockerfile`, `pyproject.toml`, and all five lock files byte-match the blobs stored in that exact expected commit;
+5. both fresh-tree builds produce one wheel with the same artifact name and identical SHA-256 digest/size;
+6. the tracked checkout is clean around source-input observation;
+7. the expected source-date epoch is active; and
+8. the CycloneDX runtime SBOM is structurally present.
 
-The manifest generator binds parsed SBOM metadata and the SBOM digest to the same bounded no-follow byte observation. The container-base text and its recorded lock digest are likewise derived from one observed byte sequence rather than independent pathname reads. Manifest persistence rejects ambiguous symlink ownership and uses atomic replacement plus directory fsync.
+The manifest's Git subprocesses disable system/global Git configuration, replacement refs, optional Git locks, and lazy fetching. Fixed source-input paths are read from the expected commit with bounded blob-size checks before content ingestion. The worktree bytes used to derive manifest input digests must then exactly equal those expected-commit blob bytes; a clean-status heuristic alone is not accepted as source authority.
+
+The manifest generator also binds parsed SBOM metadata and the SBOM digest to the same bounded no-follow byte observation. Manifest persistence rejects ambiguous symlink ownership and uses atomic replacement plus directory fsync.
+
+`scripts/verify_ci_contract.py` freezes the reproducible-build shell block as an exact reviewed step. Replacing `$GITHUB_SHA` with mutable `HEAD`, re-enabling Git replacement objects, removing `GIT_NO_REPLACE_OBJECTS`, or deriving the manifest subject from a later `git rev-parse HEAD` causes deterministic CI-contract failure.
 
 The resulting unsigned manifest records:
 
-- exact Git commit and tree SHA;
+- exact Git event-subject commit and original tree SHA;
 - Python version and source-date epoch;
 - wheel name, size, and SHA-256;
-- Dockerfile and `pyproject.toml` SHA-256;
-- every committed lock-file SHA-256;
+- Dockerfile and `pyproject.toml` SHA-256, each byte-bound to the expected commit;
+- every committed lock-file SHA-256, each byte-bound to the expected commit;
 - exact container base subject;
 - CycloneDX format/spec/component count and SBOM SHA-256;
 - `signed: false` / `NOT_PROVIDED` identity state.
@@ -161,7 +168,7 @@ Vulnerability results are time-sensitive observations. A green audit at one revi
 | Accepted Python package candidates are constrained | exact lock pins + `--require-hashes` | package-index availability, publisher trust, or bootstrap-installer identity |
 | Build backend is repository-bound | exact `hatchling==1.32.0` + build lock | build publisher identity |
 | Container base subject is fixed | OCI digest in `base-image.lock` and Dockerfile | byte-identical rebuilt container image |
-| Wheel is reproducible for the recorded build inputs | two fresh-tree builds with identical SHA-256 in one CI environment | signer/publisher identity or cross-environment reproducibility |
+| Wheel is repeatable for the exact CI event subject and recorded inputs | two no-replace `$GITHUB_SHA` archives + expected-commit-bound manifest inputs + identical wheel SHA-256 in one CI environment | signer/publisher identity or cross-environment reproducibility |
 | Runtime Python SBOM was emitted | CycloneDX output from the runtime lock audit | OS/container/provider coverage |
 | GitHub Actions are source-revision pinned | exact reviewed Action commit SHAs | immutable hosted runner OS/image |
 | Artifact identity is signed | **not provided by repository CI** | SHA-256, SBOM, or reproducibility alone |
