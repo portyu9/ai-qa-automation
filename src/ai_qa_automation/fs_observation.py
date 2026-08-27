@@ -72,6 +72,7 @@ def scan_regular_files_confined(
     *,
     max_entries: int,
     ignored_names: set[str] | frozenset[str] = frozenset(),
+    ignored_root_names: set[str] | frozenset[str] = frozenset(),
     label: str,
     expected_root_identity: tuple[int, int] | None = None,
 ) -> ConfinedFileScan:
@@ -81,6 +82,8 @@ def scan_regular_files_confined(
     Each directory is identity- and signature-checked before/after traversal. Stable
     file and directory metadata signatures are retained so authority-sensitive callers
     can compare bounded namespace observations without reopening the scanned tree.
+    ``ignored_names`` applies recursively, while ``ignored_root_names`` excludes only
+    direct root directories so callers can retain nested names as observation subjects.
     A directory that would exceed the entry budget is not partially published into
     ``files``; the result is marked truncated instead. Unsafe or unreadable entries
     also make the result conservatively incomplete because their skipped contents
@@ -96,6 +99,7 @@ def scan_regular_files_confined(
     if not isinstance(label, str) or not label.strip():
         raise ValueError("label must be a non-empty string")
     ignored = _validated_ignored_names(ignored_names)
+    ignored_root = _validated_ignored_names(ignored_root_names)
     if not descriptor_relative_authority_supported() or os.scandir not in os.supports_fd:
         raise RuntimeError(
             f"{label} requires descriptor-relative no-follow directory enumeration on this platform"
@@ -184,7 +188,7 @@ def scan_regular_files_confined(
             if not stat.S_ISDIR(current.st_mode):
                 unsafe.append(relative)
                 continue
-            if name in ignored:
+            if name in ignored or (depth == 0 and name in ignored_root):
                 continue
             if depth >= _MAX_DIRECTORY_DEPTH:
                 truncated = True
