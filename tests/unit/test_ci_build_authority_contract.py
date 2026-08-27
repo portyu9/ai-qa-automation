@@ -34,6 +34,8 @@ def test_repository_ci_contract_exposes_build_and_sbom_authority() -> None:
     automatic = result["workflows"]["automatic"]
 
     assert automatic["prebuild_authority"] == "static-before-project-install"
+    assert automatic["project_install_count"] == 5
+    assert automatic["project_install_authority"] == "immediate-static-revalidation"
     assert automatic["build_provenance_subject"] == "github.sha/no-replace-objects"
     assert automatic["sbom_lineage"] == "sha256-bracketed-across-wheel-builds"
 
@@ -41,13 +43,36 @@ def test_repository_ci_contract_exposes_build_and_sbom_authority() -> None:
 def test_every_automatic_project_install_is_immediately_build_authority_guarded() -> None:
     text = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     semantic = ci_contract._semantic_text(text)
-    project_install = "          python -m pip install --no-deps --no-build-isolation ."
+    project_install = ci_contract.AUTOMATIC_PROJECT_INSTALL_COMMAND
     guarded_install = (
-        "          python scripts/verify_build_authority.py > /dev/null\n" + project_install
+        ci_contract.BUILD_AUTHORITY_REVALIDATION_COMMAND + "\n" + project_install
     )
 
     assert semantic.count(project_install) == 5
     assert semantic.count(guarded_install) == 5
+
+
+def test_ci_contract_rejects_unguarded_non_supply_chain_project_install(
+    tmp_path: Path,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = _ci_path(root)
+    text = path.read_text(encoding="utf-8")
+    guarded_install = (
+        ci_contract.BUILD_AUTHORITY_REVALIDATION_COMMAND
+        + "\n"
+        + ci_contract.AUTOMATIC_PROJECT_INSTALL_COMMAND
+    )
+    assert text.count(guarded_install) == 5
+    text = text.replace(
+        guarded_install,
+        ci_contract.AUTOMATIC_PROJECT_INSTALL_COMMAND,
+        1,
+    )
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="every automatic project install"):
+        ci_contract.verify_ci_contract(root)
 
 
 def test_ci_contract_rejects_removed_prebuild_authority_step(tmp_path: Path) -> None:
@@ -78,7 +103,7 @@ def test_ci_contract_rejects_removed_supply_chain_preinstall_revalidation(tmp_pa
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="revalidate static build authority"):
+    with pytest.raises(ValueError, match="every automatic project install"):
         ci_contract.verify_ci_contract(root)
 
 
@@ -105,7 +130,7 @@ def test_ci_contract_rejects_supply_chain_build_authority_after_project_install(
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="revalidate static build authority"):
+    with pytest.raises(ValueError, match="every automatic project install"):
         ci_contract.verify_ci_contract(root)
 
 

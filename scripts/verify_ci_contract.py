@@ -24,6 +24,13 @@ AUTOMATIC_REQUIRED_JOBS = (
     "security",
     "browser-reference-sut",
 )
+EXPECTED_AUTOMATIC_PROJECT_INSTALL_COUNT = 5
+AUTOMATIC_PROJECT_INSTALL_COMMAND = (
+    "          python -m pip install --no-deps --no-build-isolation ."
+)
+BUILD_AUTHORITY_REVALIDATION_COMMAND = (
+    "          python scripts/verify_build_authority.py > /dev/null"
+)
 BUILD_AUTHORITY_ARTIFACT = "artifacts/ci/build-authority-verification.json"
 BUILD_AUTHORITY_COMMAND = (
     f"python scripts/verify_build_authority.py | tee {BUILD_AUTHORITY_ARTIFACT}"
@@ -321,8 +328,8 @@ def _require_exact_verification_install_step(job: str) -> None:
             f"      - name: {VERIFICATION_INSTALL_STEP_NAME}",
             "        run: |",
             "          python -m pip install --require-hashes -r requirements/dev-py311.lock",
-            "          python scripts/verify_build_authority.py > /dev/null",
-            "          python -m pip install --no-deps --no-build-isolation .",
+            BUILD_AUTHORITY_REVALIDATION_COMMAND,
+            AUTOMATIC_PROJECT_INSTALL_COMMAND,
             "          python -m pip check",
         )
     )
@@ -366,15 +373,21 @@ def _require_exact_reproducible_build_step(job: str) -> None:
             "        env:",
             '          SOURCE_DATE_EPOCH: "315532800"',
             '          GIT_NO_REPLACE_OBJECTS: "1"',
+            '          GIT_CONFIG_NOSYSTEM: "1"',
+            "          GIT_CONFIG_GLOBAL: /dev/null",
+            '          GIT_ATTR_NOSYSTEM: "1"',
             "        run: |",
             "          set -euo pipefail",
             '          test -n "${RUNTIME_SBOM_SHA256:-}"',
             "          read -r observed_sbom_sha256 _ < <(/usr/bin/sha256sum artifacts/ci/runtime-sbom.cdx.json)",
             '          test "$observed_sbom_sha256" = "$RUNTIME_SBOM_SHA256"',
+            "          test ! -s .git/info/attributes",
             "          rm -rf /tmp/aiqa-build-a /tmp/aiqa-build-b",
             "          mkdir -p /tmp/aiqa-build-a /tmp/aiqa-build-b artifacts/ci/wheel-a artifacts/ci/wheel-b",
-            '          git --no-replace-objects archive --format=tar "$GITHUB_SHA" | tar -xf - -C /tmp/aiqa-build-a',
-            '          git --no-replace-objects archive --format=tar "$GITHUB_SHA" | tar -xf - -C /tmp/aiqa-build-b',
+            '          git --no-replace-objects -c core.attributesFile=/dev/null archive --format=tar "$GITHUB_SHA" | tar -xf - -C /tmp/aiqa-build-a',
+            "          test ! -s .git/info/attributes",
+            '          git --no-replace-objects -c core.attributesFile=/dev/null archive --format=tar "$GITHUB_SHA" | tar -xf - -C /tmp/aiqa-build-b',
+            "          test ! -s .git/info/attributes",
             "          python -m pip wheel --no-deps --no-build-isolation /tmp/aiqa-build-a --wheel-dir artifacts/ci/wheel-a",
             "          python -m pip wheel --no-deps --no-build-isolation /tmp/aiqa-build-b --wheel-dir artifacts/ci/wheel-b",
             "          read -r observed_sbom_sha256 _ < <(/usr/bin/sha256sum artifacts/ci/runtime-sbom.cdx.json)",
@@ -483,6 +496,26 @@ def _verify_checkout_binding(text: str, *, name: str) -> int:
     return checkout_count
 
 
+def _verify_project_install_authority(text: str, *, name: str) -> int:
+    semantic_lines = _semantic_text(text).splitlines()
+    install_indices = [
+        index
+        for index, line in enumerate(semantic_lines)
+        if line == AUTOMATIC_PROJECT_INSTALL_COMMAND
+    ]
+    if len(install_indices) != EXPECTED_AUTOMATIC_PROJECT_INSTALL_COUNT:
+        raise ValueError(
+            f"{name}: automatic project install count differs from the reviewed contract"
+        )
+    for index in install_indices:
+        if index == 0 or semantic_lines[index - 1] != BUILD_AUTHORITY_REVALIDATION_COMMAND:
+            raise ValueError(
+                f"{name}: every automatic project install must be immediately guarded by "
+                "static build authority verification"
+            )
+    return len(install_indices)
+
+
 def _verify_automatic_workflow(text: str) -> dict[str, Any]:
     name = "ci.yml"
     semantic = _semantic_text(text)
@@ -514,6 +547,7 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
         raise ValueError(f"{name}: stale PR executions must be cancelled on superseding revisions")
     _verify_read_only_permissions(text, name=name)
     checkout_count = _verify_checkout_binding(text, name=name)
+    project_install_count = _verify_project_install_authority(text, name=name)
 
     supply_chain_raw = _job_block(text, "supply-chain")
     supply_chain = _semantic_text(supply_chain_raw)
@@ -575,6 +609,8 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
         "checkout_count": checkout_count,
         "required_gate": "Required PR Gate",
         "prebuild_authority": "static-before-project-install",
+        "project_install_count": project_install_count,
+        "project_install_authority": "immediate-static-revalidation",
         "documentation_integrity": "required-via-supply-chain",
         "mermaid_render": "required-via-supply-chain",
         "build_provenance_subject": "github.sha/no-replace-objects",
