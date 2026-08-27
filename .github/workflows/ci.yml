@@ -398,7 +398,11 @@ jobs:
           python scripts/verify_build_authority.py > /dev/null
           python -m pip install --no-deps --no-build-isolation .
           python -m pip check
-          python -m playwright install --with-deps chromium
+
+      - name: Verify hosted Chrome runtime
+        run: |
+          test -x /usr/bin/google-chrome
+          /usr/bin/google-chrome --version
 
       - name: Start deterministic reference SUT
         run: |
