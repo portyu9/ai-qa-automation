@@ -70,8 +70,13 @@ def test_ci_contract_rejects_removed_supply_chain_preinstall_revalidation(tmp_pa
     text = path.read_text(encoding="utf-8")
     job = ci_contract._job_block(text, "supply-chain")
     step = ci_contract._step_block(job, ci_contract.VERIFICATION_INSTALL_STEP_NAME)
-    mutated = step.replace("          python scripts/verify_build_authority.py > /dev/null\n", "", 1)
-    path.write_text(_replace_supply_chain_step(text, ci_contract.VERIFICATION_INSTALL_STEP_NAME, mutated), encoding="utf-8")
+    mutated = step.replace(
+        "          python scripts/verify_build_authority.py > /dev/null\n", "", 1
+    )
+    path.write_text(
+        _replace_supply_chain_step(text, ci_contract.VERIFICATION_INSTALL_STEP_NAME, mutated),
+        encoding="utf-8",
+    )
 
     with pytest.raises(ValueError, match="revalidate static build authority"):
         ci_contract.verify_ci_contract(root)
@@ -95,7 +100,10 @@ def test_ci_contract_rejects_supply_chain_build_authority_after_project_install(
     )
     assert original in step
     mutated = step.replace(original, replacement, 1)
-    path.write_text(_replace_supply_chain_step(text, ci_contract.VERIFICATION_INSTALL_STEP_NAME, mutated), encoding="utf-8")
+    path.write_text(
+        _replace_supply_chain_step(text, ci_contract.VERIFICATION_INSTALL_STEP_NAME, mutated),
+        encoding="utf-8",
+    )
 
     with pytest.raises(ValueError, match="revalidate static build authority"):
         ci_contract.verify_ci_contract(root)
@@ -105,7 +113,7 @@ def test_ci_contract_rejects_missing_sbom_digest_export(tmp_path: Path) -> None:
     root = _copy_workflows(tmp_path)
     path = _ci_path(root)
     text = path.read_text(encoding="utf-8").replace(
-        "          printf 'RUNTIME_SBOM_SHA256=%s\\n' \"$runtime_sbom_sha256\" >> \"$GITHUB_ENV\"\n",
+        '          printf \'RUNTIME_SBOM_SHA256=%s\\n\' "$runtime_sbom_sha256" >> "$GITHUB_ENV"\n',
         "",
         1,
     )
@@ -121,7 +129,7 @@ def test_ci_contract_rejects_removed_prebuild_sbom_lineage_check(tmp_path: Path)
     text = path.read_text(encoding="utf-8")
     marker = (
         "          read -r observed_sbom_sha256 _ < <(/usr/bin/sha256sum artifacts/ci/runtime-sbom.cdx.json)\n"
-        "          test \"$observed_sbom_sha256\" = \"$RUNTIME_SBOM_SHA256\"\n"
+        '          test "$observed_sbom_sha256" = "$RUNTIME_SBOM_SHA256"\n'
     )
     assert text.count(marker) == 3
     text = text.replace(marker, "", 1)
