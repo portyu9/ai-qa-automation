@@ -169,16 +169,22 @@ jobs:
           cache: pip
           cache-dependency-path: requirements/dev-py311.lock
 
+      - name: Verify static project build authority
+        run: |
+          set -o pipefail
+          mkdir -p artifacts/ci
+          python scripts/verify_build_authority.py | tee artifacts/ci/build-authority-verification.json
+
       - name: Install hash-locked verification environment
         run: |
           python -m pip install --require-hashes -r requirements/dev-py311.lock
+          python scripts/verify_build_authority.py > /dev/null
           python -m pip install --no-deps --no-build-isolation .
           python -m pip check
 
       - name: Verify repository supply-chain invariants
         run: |
           set -o pipefail
-          mkdir -p artifacts/ci
           python scripts/verify_supply_chain.py | tee artifacts/ci/supply-chain-verification.json
 
       - name: Verify CI authority contract
@@ -198,6 +204,7 @@ jobs:
 
       - name: Audit hash-locked runtime graph and emit CycloneDX SBOM
         run: |
+          set -euo pipefail
           pip-audit --require-hashes -r requirements/runtime-py311.lock --format cyclonedx-json --output artifacts/ci/runtime-sbom.cdx.json
           python - <<'PY'
           import json
@@ -206,6 +213,8 @@ jobs:
           assert data['bomFormat'] == 'CycloneDX'
           assert data.get('components')
           PY
+          read -r runtime_sbom_sha256 _ < <(/usr/bin/sha256sum artifacts/ci/runtime-sbom.cdx.json)
+          printf 'RUNTIME_SBOM_SHA256=%s\n' "$runtime_sbom_sha256" >> "$GITHUB_ENV"
 
       - name: Build wheel twice from fresh source trees
         env:
@@ -213,12 +222,17 @@ jobs:
           GIT_NO_REPLACE_OBJECTS: "1"
         run: |
           set -euo pipefail
+          test -n "${RUNTIME_SBOM_SHA256:-}"
+          read -r observed_sbom_sha256 _ < <(/usr/bin/sha256sum artifacts/ci/runtime-sbom.cdx.json)
+          test "$observed_sbom_sha256" = "$RUNTIME_SBOM_SHA256"
           rm -rf /tmp/aiqa-build-a /tmp/aiqa-build-b
           mkdir -p /tmp/aiqa-build-a /tmp/aiqa-build-b artifacts/ci/wheel-a artifacts/ci/wheel-b
           git --no-replace-objects archive --format=tar "$GITHUB_SHA" | tar -xf - -C /tmp/aiqa-build-a
           git --no-replace-objects archive --format=tar "$GITHUB_SHA" | tar -xf - -C /tmp/aiqa-build-b
           python -m pip wheel --no-deps --no-build-isolation /tmp/aiqa-build-a --wheel-dir artifacts/ci/wheel-a
           python -m pip wheel --no-deps --no-build-isolation /tmp/aiqa-build-b --wheel-dir artifacts/ci/wheel-b
+          read -r observed_sbom_sha256 _ < <(/usr/bin/sha256sum artifacts/ci/runtime-sbom.cdx.json)
+          test "$observed_sbom_sha256" = "$RUNTIME_SBOM_SHA256"
           mapfile -t wheel_a < <(find artifacts/ci/wheel-a -maxdepth 1 -type f -name '*.whl' -print)
           mapfile -t wheel_b < <(find artifacts/ci/wheel-b -maxdepth 1 -type f -name '*.whl' -print)
           test "${#wheel_a[@]}" -eq 1
@@ -229,6 +243,8 @@ jobs:
             --sbom artifacts/ci/runtime-sbom.cdx.json \
             --expected-source-sha "$GITHUB_SHA" \
             --output artifacts/ci/build-manifest.json
+          read -r observed_sbom_sha256 _ < <(/usr/bin/sha256sum artifacts/ci/runtime-sbom.cdx.json)
+          test "$observed_sbom_sha256" = "$RUNTIME_SBOM_SHA256"
           sha256sum "${wheel_a[0]}" artifacts/ci/runtime-sbom.cdx.json artifacts/ci/build-manifest.json > artifacts/ci/build-checksums.sha256
 
       - name: Build and inspect digest-pinned runtime container
@@ -257,6 +273,7 @@ jobs:
         with:
           name: supply-chain-evidence
           path: |
+            artifacts/ci/build-authority-verification.json
             artifacts/ci/supply-chain-verification.json
             artifacts/ci/ci-contract-verification.json
             artifacts/ci/documentation-integrity.json
