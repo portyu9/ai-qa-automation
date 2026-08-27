@@ -26,12 +26,14 @@ AUTOMATIC_REQUIRED_JOBS = (
     "browser-reference-sut",
 )
 EXPECTED_AUTOMATIC_PROJECT_INSTALL_COUNT = 5
+EXPECTED_AUTOMATIC_DEPENDENCY_INSTALL_COUNT = 5
 EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = (
-    "d083ff06b9697a7c7f87706902d20ed4eefef659"  # pragma: allowlist secret
+    "c24613e07023adc6086b795983a6e65196555022"  # pragma: allowlist secret
 )
 AUTOMATIC_PROJECT_INSTALL_COMMAND = (
     "          python -m pip install --no-deps --no-build-isolation ."
 )
+AUTOMATIC_DEPENDENCY_INSTALL_PREFIX = "          python -m pip install --require-hashes -r "
 BUILD_AUTHORITY_REVALIDATION_COMMAND = (
     "          python scripts/verify_build_authority.py > /dev/null"
 )
@@ -342,6 +344,7 @@ def _require_exact_verification_install_step(job: str) -> None:
         (
             f"      - name: {VERIFICATION_INSTALL_STEP_NAME}",
             "        run: |",
+            BUILD_AUTHORITY_REVALIDATION_COMMAND,
             "          python -m pip install --require-hashes -r requirements/dev-py311.lock",
             BUILD_AUTHORITY_REVALIDATION_COMMAND,
             AUTOMATIC_PROJECT_INSTALL_COMMAND,
@@ -350,7 +353,7 @@ def _require_exact_verification_install_step(job: str) -> None:
     )
     if step != expected:
         raise ValueError(
-            "supply-chain project installation must revalidate static build authority immediately before the project build"
+            "supply-chain dependency installation must verify exact reviewed lock authority before installation and revalidate build authority before the project build"
         )
 
 
@@ -515,6 +518,31 @@ def _verify_checkout_binding(text: str, *, name: str) -> int:
     return checkout_count
 
 
+def _verify_dependency_install_authority(text: str, *, name: str) -> int:
+    semantic_lines = _semantic_text(text).splitlines()
+    install_indices = [
+        index
+        for index, line in enumerate(semantic_lines)
+        if line.startswith(AUTOMATIC_DEPENDENCY_INSTALL_PREFIX)
+    ]
+    if len(install_indices) != EXPECTED_AUTOMATIC_DEPENDENCY_INSTALL_COUNT:
+        raise ValueError(
+            f"{name}: automatic dependency install count differs from the reviewed contract"
+        )
+    for index in install_indices:
+        if (
+            index == 0
+            or index + 1 >= len(semantic_lines)
+            or semantic_lines[index - 1] != BUILD_AUTHORITY_REVALIDATION_COMMAND
+            or semantic_lines[index + 1] != BUILD_AUTHORITY_REVALIDATION_COMMAND
+        ):
+            raise ValueError(
+                f"{name}: every automatic dependency install must be immediately bracketed by "
+                "exact reviewed-lock/build authority verification"
+            )
+    return len(install_indices)
+
+
 def _verify_project_install_authority(text: str, *, name: str) -> int:
     semantic_lines = _semantic_text(text).splitlines()
     install_indices = [
@@ -566,6 +594,7 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
         raise ValueError(f"{name}: stale PR executions must be cancelled on superseding revisions")
     _verify_read_only_permissions(text, name=name)
     checkout_count = _verify_checkout_binding(text, name=name)
+    dependency_install_count = _verify_dependency_install_authority(text, name=name)
     project_install_count = _verify_project_install_authority(text, name=name)
 
     supply_chain_raw = _job_block(text, "supply-chain")
@@ -632,7 +661,9 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
         "subject": "github.sha",
         "checkout_count": checkout_count,
         "required_gate": "Required PR Gate",
-        "prebuild_authority": "static-before-project-install",
+        "prebuild_authority": "exact-lock-and-build-authority-before-automatic-installs",
+        "dependency_install_count": dependency_install_count,
+        "dependency_install_authority": "exact-reviewed-locks-preinstall-and-postinstall-revalidated",
         "project_install_count": project_install_count,
         "project_install_authority": "immediate-static-revalidation",
         "workflow_definition": "exact-reviewed-git-blob",
