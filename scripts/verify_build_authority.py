@@ -117,7 +117,9 @@ def _assert_regular_file(path: Path, *, label: str) -> None:
         try:
             current = path.stat(follow_symlinks=False)
         except OSError as exc:
-            raise ValueError(f"{label} changed identity during build-authority verification") from exc
+            raise ValueError(
+                f"{label} changed identity during build-authority verification"
+            ) from exc
         if not stat.S_ISREG(current.st_mode) or _identity(current) != _identity(opened):
             raise ValueError(f"{label} changed identity during build-authority verification")
         final = os.fstat(fd)
@@ -183,17 +185,21 @@ def _assert_regular_source_tree(path: Path) -> int:
             raise RuntimeError(
                 "pre-build source verification requires descriptor-based directory enumeration"
             ) from exc
+
+        names: list[str] = []
         with entries:
-            names = sorted(entry.name for entry in entries)
-        for name in names:
-            if Path(name).name != name or name in {".", ".."}:
-                raise ValueError("build source tree contains an invalid entry name")
-            observed_entries += 1
-            if observed_entries > MAX_BUILD_SOURCE_ENTRIES:
-                raise ValueError(
-                    "build source tree exceeds "
-                    f"{MAX_BUILD_SOURCE_ENTRIES} entry ingestion limit"
-                )
+            for entry in entries:
+                observed_entries += 1
+                if observed_entries > MAX_BUILD_SOURCE_ENTRIES:
+                    raise ValueError(
+                        f"build source tree exceeds {MAX_BUILD_SOURCE_ENTRIES} entry ingestion limit"
+                    )
+                name = entry.name
+                if Path(name).name != name or name in {".", ".."}:
+                    raise ValueError("build source tree contains an invalid entry name")
+                names.append(name)
+
+        for name in sorted(names):
             entry_label = str(relative / name)
             before = _relative_stat(name, directory_fd)
             if stat.S_ISLNK(before.st_mode):
@@ -209,7 +215,9 @@ def _assert_regular_source_tree(path: Path) -> int:
                         or _identity(opened) != _identity(current)
                         or _file_signature(opened) != _file_signature(before)
                     ):
-                        raise ValueError(f"build source file changed during verification: {entry_label}")
+                        raise ValueError(
+                            f"build source file changed during verification: {entry_label}"
+                        )
                 finally:
                     os.close(file_fd)
                 continue
@@ -246,7 +254,9 @@ def _assert_regular_source_tree(path: Path) -> int:
 
     try:
         current_root = path.stat(follow_symlinks=False)
-        if not stat.S_ISDIR(current_root.st_mode) or _identity(current_root) != _identity(root_opened):
+        if not stat.S_ISDIR(current_root.st_mode) or _identity(current_root) != _identity(
+            root_opened
+        ):
             raise ValueError("build source root changed identity during verification")
         scan(root_fd, EXPECTED_BUILD_SOURCE_ROOT)
         final_opened = os.fstat(root_fd)
