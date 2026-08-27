@@ -24,18 +24,27 @@ AUTOMATIC_REQUIRED_JOBS = (
     "security",
     "browser-reference-sut",
 )
+BUILD_AUTHORITY_ARTIFACT = "artifacts/ci/build-authority-verification.json"
+BUILD_AUTHORITY_COMMAND = (
+    f"python scripts/verify_build_authority.py | tee {BUILD_AUTHORITY_ARTIFACT}"
+)
 DOCUMENTATION_INTEGRITY_ARTIFACT = "artifacts/ci/documentation-integrity.json"
 DOCUMENTATION_INTEGRITY_COMMAND = (
     f"python scripts/verify_docs.py | tee {DOCUMENTATION_INTEGRITY_ARTIFACT}"
 )
 MERMAID_VALIDATION_ARTIFACT = "artifacts/ci/mermaid-validation.json"
 MERMAID_RENDER_COMMAND = f"python scripts/validate_mermaid.py | tee {MERMAID_VALIDATION_ARTIFACT}"
+BUILD_AUTHORITY_STEP_NAME = "Verify static project build authority"
+VERIFICATION_INSTALL_STEP_NAME = "Install hash-locked verification environment"
+SUPPLY_CHAIN_VERIFY_STEP_NAME = "Verify repository supply-chain invariants"
 DOCUMENTATION_STEP_NAME = "Verify documentation authority contract"
 MERMAID_STEP_NAME = "Render Mermaid documentation with digest-pinned official CLI"
+RUNTIME_SBOM_STEP_NAME = "Audit hash-locked runtime graph and emit CycloneDX SBOM"
 REPRODUCIBLE_BUILD_STEP_NAME = "Build wheel twice from fresh source trees"
 SUPPLY_CHAIN_UPLOAD_STEP_NAME = "Upload supply-chain evidence"
 REQUIRED_GATE_STEP_NAME = "Require every automatic gate to succeed"
 SUPPLY_CHAIN_ARTIFACTS = (
+    BUILD_AUTHORITY_ARTIFACT,
     "artifacts/ci/supply-chain-verification.json",
     "artifacts/ci/ci-contract-verification.json",
     DOCUMENTATION_INTEGRITY_ARTIFACT,
@@ -288,6 +297,66 @@ def _require_exact_script_step(job: str, *, step_name: str, command: str) -> Non
         raise ValueError(f"{step_name} must be the exact reviewed fail-closed script step")
 
 
+def _require_exact_build_authority_step(job: str) -> None:
+    step = _semantic_text(_step_block(job, BUILD_AUTHORITY_STEP_NAME)).strip("\n")
+    expected = "\n".join(
+        (
+            f"      - name: {BUILD_AUTHORITY_STEP_NAME}",
+            "        run: |",
+            "          set -o pipefail",
+            "          mkdir -p artifacts/ci",
+            f"          {BUILD_AUTHORITY_COMMAND}",
+        )
+    )
+    if step != expected:
+        raise ValueError(
+            "static project build authority must be the exact reviewed pre-install step"
+        )
+
+
+def _require_exact_verification_install_step(job: str) -> None:
+    step = _semantic_text(_step_block(job, VERIFICATION_INSTALL_STEP_NAME)).strip("\n")
+    expected = "\n".join(
+        (
+            f"      - name: {VERIFICATION_INSTALL_STEP_NAME}",
+            "        run: |",
+            "          python -m pip install --require-hashes -r requirements/dev-py311.lock",
+            "          python scripts/verify_build_authority.py > /dev/null",
+            "          python -m pip install --no-deps --no-build-isolation .",
+            "          python -m pip check",
+        )
+    )
+    if step != expected:
+        raise ValueError(
+            "supply-chain project installation must revalidate static build authority immediately before the project build"
+        )
+
+
+def _require_exact_runtime_sbom_step(job: str) -> None:
+    step = _semantic_text(_step_block(job, RUNTIME_SBOM_STEP_NAME)).strip("\n")
+    expected = "\n".join(
+        (
+            f"      - name: {RUNTIME_SBOM_STEP_NAME}",
+            "        run: |",
+            "          set -euo pipefail",
+            "          pip-audit --require-hashes -r requirements/runtime-py311.lock --format cyclonedx-json --output artifacts/ci/runtime-sbom.cdx.json",
+            "          python - <<'PY'",
+            "          import json",
+            "          from pathlib import Path",
+            "          data = json.loads(Path('artifacts/ci/runtime-sbom.cdx.json').read_text())",
+            "          assert data['bomFormat'] == 'CycloneDX'",
+            "          assert data.get('components')",
+            "          PY",
+            "          read -r runtime_sbom_sha256 _ < <(/usr/bin/sha256sum artifacts/ci/runtime-sbom.cdx.json)",
+            "          printf 'RUNTIME_SBOM_SHA256=%s\\n' \"$runtime_sbom_sha256\" >> \"$GITHUB_ENV\"",
+        )
+    )
+    if step != expected:
+        raise ValueError(
+            "runtime SBOM audit must be the exact reviewed digest-exporting evidence step"
+        )
+
+
 def _require_exact_reproducible_build_step(job: str) -> None:
     step = _semantic_text(_step_block(job, REPRODUCIBLE_BUILD_STEP_NAME)).strip("\n")
     continuation = chr(92)
@@ -299,12 +368,17 @@ def _require_exact_reproducible_build_step(job: str) -> None:
             '          GIT_NO_REPLACE_OBJECTS: "1"',
             "        run: |",
             "          set -euo pipefail",
+            '          test -n "${RUNTIME_SBOM_SHA256:-}"',
+            "          read -r observed_sbom_sha256 _ < <(/usr/bin/sha256sum artifacts/ci/runtime-sbom.cdx.json)",
+            '          test "$observed_sbom_sha256" = "$RUNTIME_SBOM_SHA256"',
             "          rm -rf /tmp/aiqa-build-a /tmp/aiqa-build-b",
             "          mkdir -p /tmp/aiqa-build-a /tmp/aiqa-build-b artifacts/ci/wheel-a artifacts/ci/wheel-b",
             '          git --no-replace-objects archive --format=tar "$GITHUB_SHA" | tar -xf - -C /tmp/aiqa-build-a',
             '          git --no-replace-objects archive --format=tar "$GITHUB_SHA" | tar -xf - -C /tmp/aiqa-build-b',
             "          python -m pip wheel --no-deps --no-build-isolation /tmp/aiqa-build-a --wheel-dir artifacts/ci/wheel-a",
             "          python -m pip wheel --no-deps --no-build-isolation /tmp/aiqa-build-b --wheel-dir artifacts/ci/wheel-b",
+            "          read -r observed_sbom_sha256 _ < <(/usr/bin/sha256sum artifacts/ci/runtime-sbom.cdx.json)",
+            '          test "$observed_sbom_sha256" = "$RUNTIME_SBOM_SHA256"',
             "          mapfile -t wheel_a < <(find artifacts/ci/wheel-a -maxdepth 1 -type f -name '*.whl' -print)",
             "          mapfile -t wheel_b < <(find artifacts/ci/wheel-b -maxdepth 1 -type f -name '*.whl' -print)",
             '          test "${#wheel_a[@]}" -eq 1',
@@ -315,6 +389,8 @@ def _require_exact_reproducible_build_step(job: str) -> None:
             f"            --sbom artifacts/ci/runtime-sbom.cdx.json {continuation}",
             f'            --expected-source-sha "$GITHUB_SHA" {continuation}',
             "            --output artifacts/ci/build-manifest.json",
+            "          read -r observed_sbom_sha256 _ < <(/usr/bin/sha256sum artifacts/ci/runtime-sbom.cdx.json)",
+            '          test "$observed_sbom_sha256" = "$RUNTIME_SBOM_SHA256"',
             '          sha256sum "${wheel_a[0]}" artifacts/ci/runtime-sbom.cdx.json artifacts/ci/build-manifest.json > artifacts/ci/build-checksums.sha256',
         )
     )
@@ -441,6 +517,8 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
 
     supply_chain_raw = _job_block(text, "supply-chain")
     supply_chain = _semantic_text(supply_chain_raw)
+    _require_exact_build_authority_step(supply_chain_raw)
+    _require_exact_verification_install_step(supply_chain_raw)
     _require_exact_script_step(
         supply_chain_raw,
         step_name=DOCUMENTATION_STEP_NAME,
@@ -451,8 +529,26 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
         step_name=MERMAID_STEP_NAME,
         command=MERMAID_RENDER_COMMAND,
     )
+    _require_exact_runtime_sbom_step(supply_chain_raw)
     _require_exact_reproducible_build_step(supply_chain_raw)
     _require_exact_supply_chain_upload_step(supply_chain_raw)
+
+    ordered_steps = (
+        BUILD_AUTHORITY_STEP_NAME,
+        VERIFICATION_INSTALL_STEP_NAME,
+        SUPPLY_CHAIN_VERIFY_STEP_NAME,
+        RUNTIME_SBOM_STEP_NAME,
+        REPRODUCIBLE_BUILD_STEP_NAME,
+    )
+    positions = [supply_chain.index(f"      - name: {step_name}") for step_name in ordered_steps]
+    if positions != sorted(positions):
+        raise ValueError(
+            "supply-chain build authority, installation, verification, SBOM, and build steps are out of reviewed order"
+        )
+    if supply_chain.count(BUILD_AUTHORITY_COMMAND) != 1:
+        raise ValueError(
+            f"{name}: build-authority evidence command must appear exactly once in its reviewed step"
+        )
     if supply_chain.count(DOCUMENTATION_INTEGRITY_COMMAND) != 1:
         raise ValueError(
             f"{name}: documentation integrity command must not appear outside its reviewed step"
@@ -478,9 +574,11 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
         "subject": "github.sha",
         "checkout_count": checkout_count,
         "required_gate": "Required PR Gate",
+        "prebuild_authority": "static-before-project-install",
         "documentation_integrity": "required-via-supply-chain",
         "mermaid_render": "required-via-supply-chain",
         "build_provenance_subject": "github.sha/no-replace-objects",
+        "sbom_lineage": "sha256-bracketed-across-wheel-builds",
         "supply_chain_evidence": "pinned-upload-action",
         "permissions": "contents:read",
         "secrets": False,
