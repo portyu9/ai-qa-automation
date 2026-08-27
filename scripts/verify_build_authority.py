@@ -15,6 +15,8 @@ MAX_PROJECT_FILE_INPUT_BYTES = 2 * 1024 * 1024
 MAX_BUILD_SOURCE_ENTRIES = 1024
 MAX_BUILD_SOURCE_FILE_BYTES = 8 * 1024 * 1024
 MAX_BUILD_SOURCE_TOTAL_BYTES = 32 * 1024 * 1024
+MAX_REQUIREMENTS_ENTRIES = 32
+MAX_LOCK_BYTES = 1024 * 1024
 EXPECTED_BUILD_SYSTEM = {
     "requires": ["hatchling==1.32.0"],
     "build-backend": "hatchling.build",
@@ -36,6 +38,13 @@ EXPECTED_PROJECT_FILE_INPUTS = {
 EXPECTED_PROJECT_NAME = "ai-qa-automation"
 EXPECTED_PROJECT_SCRIPTS = {"ai-qa": "ai_qa_automation.cli:app"}
 FORBIDDEN_PROJECT_ENTRY_POINT_KEYS = ("gui-scripts", "entry-points")
+EXPECTED_LOCK_BLOB_SHAS = {
+    "base-image.lock": "ba4fdd5d0944e5cefe925743d21d661f2eed0d7d",  # pragma: allowlist secret
+    "build-py311.lock": "3b7da9eed4eaede5653c54133cf15da9ee06390e",  # pragma: allowlist secret
+    "dev-py311.lock": "d34c0fafd46403aeb93877d19fa03628278375c4",  # pragma: allowlist secret
+    "dev-py313.lock": "154dc600a2ff24766da3267ceb047751f02cd33c",  # pragma: allowlist secret
+    "runtime-py311.lock": "ae2856b5bde92b398454081058f6082af915b532",  # pragma: allowlist secret
+}
 
 
 def _identity(value: os.stat_result) -> tuple[int, int]:
@@ -48,6 +57,25 @@ def _file_signature(value: os.stat_result) -> tuple[int, int, int, int, int]:
 
 def _directory_signature(value: os.stat_result) -> tuple[int, int, int, int]:
     return value.st_dev, value.st_ino, value.st_mtime_ns, value.st_ctime_ns
+
+
+def _git_blob_sha1(content: bytes) -> str:
+    header = f"blob {len(content)}\0".encode("ascii")
+    return hashlib.sha1(header + content, usedforsecurity=False).hexdigest()
+
+
+def _read_fd_bounded(fd: int, *, max_bytes: int, label: str) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while total <= max_bytes:
+        chunk = os.read(fd, min(64 * 1024, max_bytes + 1 - total))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+    if total > max_bytes:
+        raise ValueError(f"{label} exceeds {max_bytes} byte ingestion limit")
+    return b"".join(chunks)
 
 
 def _read_pyproject(path: Path) -> tuple[bytes, str]:
@@ -68,20 +96,10 @@ def _read_pyproject(path: Path) -> tuple[bytes, str]:
         if not stat.S_ISREG(opened.st_mode):
             raise ValueError("pyproject.toml must be a regular non-symlink file")
         initial = _file_signature(opened)
-        chunks: list[bytes] = []
-        total = 0
-        while total <= MAX_PYPROJECT_BYTES:
-            chunk = os.read(fd, min(64 * 1024, MAX_PYPROJECT_BYTES + 1 - total))
-            if not chunk:
-                break
-            chunks.append(chunk)
-            total += len(chunk)
-        if total > MAX_PYPROJECT_BYTES:
-            raise ValueError(f"pyproject.toml exceeds {MAX_PYPROJECT_BYTES} byte ingestion limit")
+        content = _read_fd_bounded(fd, max_bytes=MAX_PYPROJECT_BYTES, label="pyproject.toml")
         final = os.fstat(fd)
         if _file_signature(final) != initial or not stat.S_ISREG(final.st_mode):
             raise ValueError("pyproject.toml changed during pre-build authority verification")
-        content = b"".join(chunks)
     finally:
         os.close(fd)
 
@@ -178,6 +196,93 @@ def _relative_open(name: str, directory_fd: int, *, directory: bool) -> int:
         ) from exc
     except OSError as exc:
         raise ValueError("build source entry changed identity or became a symlink") from exc
+
+
+def _verify_reviewed_lock_authority(root: Path) -> dict[str, str]:
+    requirements = root / "requirements"
+    directory_fd = _open_directory_nofollow(requirements, label="requirements")
+    opened_directory = os.fstat(directory_fd)
+    initial_signature = _directory_signature(opened_directory)
+    observed_names: set[str] = set()
+    observed_entries = 0
+
+    try:
+        try:
+            entries = os.scandir(directory_fd)
+        except (TypeError, NotImplementedError, OSError) as exc:
+            raise RuntimeError(
+                "dependency authority verification requires descriptor-based directory enumeration"
+            ) from exc
+        with entries:
+            for entry in entries:
+                observed_entries += 1
+                if observed_entries > MAX_REQUIREMENTS_ENTRIES:
+                    raise ValueError(
+                        f"requirements directory exceeds {MAX_REQUIREMENTS_ENTRIES} entry ingestion limit"
+                    )
+                name = entry.name
+                if name.endswith(".lock"):
+                    if Path(name).name != name or name in {".", ".."}:
+                        raise ValueError("requirements directory contains an invalid lock filename")
+                    observed_names.add(name)
+
+        if observed_names != set(EXPECTED_LOCK_BLOB_SHAS):
+            raise ValueError(
+                "dependency lock set differs from the exact reviewed automatic-install authority"
+            )
+
+        observed_blobs: dict[str, str] = {}
+        for name, expected_blob in sorted(EXPECTED_LOCK_BLOB_SHAS.items()):
+            label = f"reviewed dependency lock {name}"
+            before = _relative_stat(name, directory_fd)
+            if not stat.S_ISREG(before.st_mode):
+                raise ValueError(f"{label} must be a regular non-symlink file")
+            if before.st_size < 0 or before.st_size > MAX_LOCK_BYTES:
+                raise ValueError(f"{label} exceeds {MAX_LOCK_BYTES} byte ingestion limit")
+            try:
+                file_fd = _relative_open(name, directory_fd, directory=False)
+            except ValueError as exc:
+                raise ValueError(f"{label} could not be opened without following a symlink") from exc
+            try:
+                opened = os.fstat(file_fd)
+                current = _relative_stat(name, directory_fd)
+                if (
+                    not stat.S_ISREG(opened.st_mode)
+                    or not stat.S_ISREG(current.st_mode)
+                    or _identity(opened) != _identity(current)
+                    or _file_signature(opened) != _file_signature(before)
+                ):
+                    raise ValueError(f"{label} changed identity before ingestion")
+                initial_file_signature = _file_signature(opened)
+                content = _read_fd_bounded(file_fd, max_bytes=MAX_LOCK_BYTES, label=label)
+                final_opened = os.fstat(file_fd)
+                final_current = _relative_stat(name, directory_fd)
+                if (
+                    _file_signature(final_opened) != initial_file_signature
+                    or _identity(final_opened) != _identity(final_current)
+                    or not stat.S_ISREG(final_current.st_mode)
+                ):
+                    raise ValueError(f"{label} changed during ingestion")
+            finally:
+                os.close(file_fd)
+            observed_blob = _git_blob_sha1(content)
+            if observed_blob != expected_blob:
+                raise ValueError(
+                    f"{label} bytes differ from the exact reviewed automatic-install authority"
+                )
+            observed_blobs[name] = observed_blob
+
+        final_opened_directory = os.fstat(directory_fd)
+        final_current_directory = requirements.stat(follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(final_current_directory.st_mode)
+            or _identity(final_opened_directory) != _identity(final_current_directory)
+            or _directory_signature(final_opened_directory) != initial_signature
+        ):
+            raise ValueError("requirements directory changed during dependency authority verification")
+        return observed_blobs
+    finally:
+        os.close(directory_fd)
 
 
 def _assert_regular_source_tree(path: Path) -> tuple[int, int]:
@@ -361,6 +466,7 @@ def verify_build_authority(root: Path) -> dict[str, Any]:
             "configuration are forbidden"
         )
 
+    reviewed_lock_blobs = _verify_reviewed_lock_authority(root)
     _assert_regular_file(
         root / "README.md",
         label="project readme",
@@ -379,13 +485,14 @@ def verify_build_authority(root: Path) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "result": "PASS",
-        "claim": "project build configuration, installation metadata, file inputs, source tree, and installed Hatch plugin surface contain no unreviewed external execution or filesystem authority",
+        "claim": "project build/install configuration, exact reviewed dependency locks, file inputs, source tree, and installed Hatch plugin surface contain no unreviewed automatic execution or filesystem authority",
         "pyproject_sha256": digest,
         "build_backend": "hatchling.build",
         "build_requirements": ["hatchling==1.32.0"],
         "project_name": EXPECTED_PROJECT_NAME,
         "project_scripts": EXPECTED_PROJECT_SCRIPTS,
         "project_entry_points": False,
+        "reviewed_lock_blobs": reviewed_lock_blobs,
         "project_file_inputs": EXPECTED_PROJECT_FILE_INPUTS,
         "project_file_input_max_bytes": MAX_PROJECT_FILE_INPUT_BYTES,
         "build_source_root": str(EXPECTED_BUILD_SOURCE_ROOT),
@@ -398,15 +505,15 @@ def verify_build_authority(root: Path) -> dict[str, Any]:
         "source_execution_extensions": False,
         "installed_hatch_entry_points": list(installed_hatch_entry_points),
         "limitations": [
-            "This verifier constrains repository build configuration, project distribution/executable metadata, declared file inputs, selected package-tree entry/byte volume, and installed Hatch plugin entry points; it does not attest the hosted Python interpreter or dependency package bytes beyond the repository's separate hash-lock controls.",
+            "This verifier constrains the exact reviewed automatic-install lock bytes, repository build configuration, project distribution/executable metadata, declared file inputs, selected package-tree entry/byte volume, and installed Hatch plugin entry points; it does not attest the hosted Python interpreter or the publisher identity of the already reviewed hash-locked packages.",
             "The filesystem checks reject symlinks and special nodes during bounded observation; they do not create a privileged immutable filesystem snapshot after verification.",
-            "A future legitimate build hook, Hatch plugin, dynamic metadata source, custom builder, backend change, distribution-name change, project executable/entry-point change, larger build-input budget, additional file-valued metadata input, or package symlink requires an explicit policy revision rather than implicit authority expansion.",
+            "A legitimate dependency-lock change, build hook, Hatch plugin, dynamic metadata source, custom builder, backend change, distribution-name change, project executable/entry-point change, larger build-input budget, additional file-valued metadata input, or package symlink requires an explicit policy revision rather than implicit authority expansion.",
         ],
     }
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Verify project build authority")
+    parser = argparse.ArgumentParser(description="Verify project build and automatic-install authority")
     parser.add_argument(
         "--root",
         type=Path,
