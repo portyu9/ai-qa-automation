@@ -101,7 +101,9 @@ def _installed_hatch_entry_points() -> tuple[str, ...]:
     except Exception as exc:
         raise RuntimeError("installed Hatch plugin metadata could not be inspected safely") from exc
 
-    observed = tuple(sorted(f"{entry_point.name}={entry_point.value}" for entry_point in entry_points))
+    observed = tuple(
+        sorted(f"{entry_point.name}={entry_point.value}" for entry_point in entry_points)
+    )
     if observed:
         raise ValueError(
             "installed third-party Hatch entry points are forbidden in the automatic build "
