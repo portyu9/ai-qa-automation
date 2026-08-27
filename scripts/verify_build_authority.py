@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
@@ -354,8 +355,15 @@ def verify_build_authority(root: Path) -> dict[str, Any]:
 
 
 def main() -> None:
-    root = Path(__file__).resolve().parents[1]
-    print(json.dumps(verify_build_authority(root), indent=2, sort_keys=True))
+    parser = argparse.ArgumentParser(description="Verify project build authority")
+    parser.add_argument(
+        "--root",
+        type=Path,
+        default=Path(__file__).resolve().parents[1],
+        help="project source root to verify",
+    )
+    args = parser.parse_args()
+    print(json.dumps(verify_build_authority(args.root), indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":
