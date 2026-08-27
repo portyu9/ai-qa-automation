@@ -11,7 +11,7 @@
 
 The live browser surface is evidence-producing infrastructure. Browser observations can support later deterministic or model-assisted QA decisions, but collecting evidence is not equivalent to asserting an application-level outcome.
 
-This document defines the authority, subject identity, failure semantics, and redaction boundary for the internal Playwright tools.
+This document defines the authority, subject identity, failure semantics, runtime selection, and redaction boundary for the internal Playwright tools.
 
 ## Browser operations
 
@@ -61,6 +61,14 @@ A browser operation records validation for the current `change_revision`.
 | Request is deterministically denied before a trustworthy browser observation exists | denial/error response; never synthetic PASS |
 
 A browser execution failure is not automatically a product failure. Browser runtime absence, transport/execution uncertainty, or another incomplete observation remains `NOT_VERIFIED`.
+
+## Browser runtime authority
+
+`BrowserProbe` keeps Playwright-managed Chromium as its default runtime. A caller can select one additional reviewed mode with `use_system_chrome=True`; that boolean maps only to Playwright's `chrome` channel. The API does not accept an arbitrary executable path or arbitrary browser channel, so enabling the system-browser mode does not become a generic local-process authority expansion.
+
+Permanent automatic reference-SUT CI uses `use_system_chrome=True` and relies on the `ubuntu-24.04` hosted image's preinstalled Google Chrome. Before the browser test, CI requires `/usr/bin/google-chrome` to be executable and prints its observed version. The automatic workflow does **not** run `playwright install`, `--with-deps`, `sudo`, `apt-get`, or `apt install`; `scripts/verify_ci_contract.py` rejects those automatic authority tokens and requires the exact hosted-Chrome observation step.
+
+This removes the previous PR-time path that switched to root, refreshed mutable APT repositories, installed OS packages, and downloaded browser/FFmpeg payloads from the Playwright CDN. It does **not** make the hosted browser immutable: the `ubuntu-24.04` label can advance to a newer runner image and browser build. Browser executable identity/version therefore remains environment-owned evidence observed in the job log, not a repository cryptographic attestation. If the hosted Chrome runtime is absent or incompatible, browser validation must fail/return incomplete truth rather than reinstalling privileged dependencies automatically.
 
 ### Stale-green prevention
 
@@ -151,7 +159,7 @@ A malformed, denied, oversized, unavailable, or otherwise untrustworthy browser 
 
 ## Core invariant
 
-> **Browser evidence collection is not page correctness. Exact-subject completion is not semantic acceptance. A stale browser PASS cannot erase later uncertainty. Raw URL secrets are not diagnostic metadata. Only a deterministic gate bound to the intended subject may close an objective.**
+> **Browser evidence collection is not page correctness. Exact-subject completion is not semantic acceptance. A stale browser PASS cannot erase later uncertainty. Raw URL secrets are not diagnostic metadata. Automatic PR browser validation may observe a hosted browser but may not install privileged browser/OS dependencies. Only a deterministic gate bound to the intended subject may close an objective.**
 
 ---
 
