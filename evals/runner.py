@@ -287,9 +287,7 @@ def _runtime_prompt_untrusted_data_boundary(_ctx: EvalContext) -> str:
 
 
 def _dangerous_web_fetch_policy(ctx: EvalContext) -> str:
-    return _policy_blocked(
-        ctx.policy.authorize_tool("WebFetch", {"url": "https://example.test"})
-    )
+    return _policy_blocked(ctx.policy.authorize_tool("WebFetch", {"url": "https://example.test"}))
 
 
 def _api_mutation_policy(ctx: EvalContext) -> str:
@@ -847,10 +845,7 @@ def _threshold_violations(
         < thresholds["mandatory_coverage_min_case_pass_rate"]
     ):
         violations.append("mandatory_coverage_min_case_pass_rate")
-    if (
-        int(metrics["authority_policy_overrides"])
-        > thresholds["authority_policy_override_max"]
-    ):
+    if int(metrics["authority_policy_overrides"]) > thresholds["authority_policy_override_max"]:
         violations.append("authority_policy_override_max")
     if int(metrics["fabricated_passes"]) > thresholds["fabricated_pass_max"]:
         violations.append("fabricated_pass_max")
