@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import re
+import stat
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -27,6 +28,14 @@ AUTOMATIC_PR_ACTIONS = {
     "reopened",
     "synchronize",
 }
+TERMINAL_JOB_RESULTS = {"cancelled", "failure", "skipped", "success"}
+
+
+@dataclass(frozen=True)
+class PullRequestEventIdentity:
+    number: int
+    head_sha: str
+    base_sha: str
 
 
 @dataclass(frozen=True)
@@ -136,6 +145,9 @@ class GitHubApi:
             raise ValueError("invalid GitHub commit-status state")
         if len(description) > 140:
             raise ValueError("commit-status description exceeds GitHub's 140-character limit")
+        expected_target_prefix = f"https://github.com/{self.repository}/actions/runs/"
+        if not target_url.startswith(expected_target_prefix):
+            raise ValueError("commit-status target URL must identify a workflow run in this repository")
         self.post_json(
             f"/repos/{self.repository}/statuses/{sha}",
             {
@@ -189,38 +201,52 @@ def subject_from_pull_request(payload: Mapping[str, Any]) -> PullRequestSubject:
     )
 
 
+def _file_signature(value: os.stat_result) -> tuple[int, int, int, int, int]:
+    return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns
+
+
 def _read_json_file_bounded(path: Path, *, max_bytes: int) -> Mapping[str, Any]:
-    before = path.stat(follow_symlinks=False)
-    if path.is_symlink() or not path.is_file():
-        raise ValueError(f"{path} must be a regular non-symlink file")
-    if before.st_size > max_bytes:
-        raise ValueError(f"{path} exceeds {max_bytes} byte ingestion limit")
-    with path.open("rb") as handle:
-        raw = handle.read(max_bytes + 1)
-    after = path.stat(follow_symlinks=False)
-    if len(raw) > max_bytes:
-        raise ValueError(f"{path} exceeds {max_bytes} byte ingestion limit")
-    if (
-        before.st_dev,
-        before.st_ino,
-        before.st_size,
-        before.st_mtime_ns,
-        before.st_ctime_ns,
-    ) != (
-        after.st_dev,
-        after.st_ino,
-        after.st_size,
-        after.st_mtime_ns,
-        after.st_ctime_ns,
-    ):
-        raise ValueError(f"{path} changed during ingestion")
-    parsed = json.loads(raw)
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    if not getattr(os, "O_NOFOLLOW", 0):
+        raise RuntimeError("trusted event ingestion requires O_NOFOLLOW")
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError(f"unable to open trusted event payload safely: {path}") from exc
+    try:
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError(f"{path} must be a regular non-symlink file")
+        if before.st_size > max_bytes:
+            raise ValueError(f"{path} exceeds {max_bytes} byte ingestion limit")
+        chunks: list[bytes] = []
+        total = 0
+        while total <= max_bytes:
+            chunk = os.read(fd, min(64 * 1024, max_bytes + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+        if total > max_bytes:
+            raise ValueError(f"{path} exceeds {max_bytes} byte ingestion limit")
+        after = os.fstat(fd)
+        current = path.stat(follow_symlinks=False)
+        if (
+            _file_signature(before) != _file_signature(after)
+            or before.st_dev != current.st_dev
+            or before.st_ino != current.st_ino
+            or not stat.S_ISREG(current.st_mode)
+        ):
+            raise ValueError(f"{path} changed identity or content during ingestion")
+    finally:
+        os.close(fd)
+    parsed = json.loads(b"".join(chunks))
     if not isinstance(parsed, dict):
         raise ValueError(f"{path} must contain a JSON object")
     return parsed
 
 
-def subject_from_target_event(event: Mapping[str, Any]) -> tuple[str, PullRequestSubject]:
+def subject_from_target_event(event: Mapping[str, Any]) -> tuple[str, PullRequestEventIdentity]:
     action = event.get("action")
     if action not in AUTOMATIC_PR_ACTIONS:
         raise ValueError(f"unsupported pull_request_target action: {action!r}")
@@ -229,8 +255,18 @@ def subject_from_target_event(event: Mapping[str, Any]) -> tuple[str, PullReques
     if not isinstance(repository_name, str) or REPOSITORY_RE.fullmatch(repository_name) is None:
         raise ValueError("event repository full_name is invalid")
     pull_request = _mapping(event.get("pull_request"), label="event pull request")
-    event_subject = subject_from_pull_request(pull_request)
-    return repository_name, event_subject
+    if pull_request.get("state") != "open":
+        raise ValueError("event pull request must remain open")
+    number = _require_positive_int(pull_request.get("number"), label="pull-request number")
+    head = _mapping(pull_request.get("head"), label="pull-request head")
+    base = _mapping(pull_request.get("base"), label="pull-request base")
+    if base.get("ref") != EXPECTED_BASE_REF:
+        raise ValueError(f"pull request must target {EXPECTED_BASE_REF!r}")
+    return repository_name, PullRequestEventIdentity(
+        number=number,
+        head_sha=_require_sha(head.get("sha"), label="event head SHA"),
+        base_sha=_require_sha(base.get("sha"), label="event base SHA"),
+    )
 
 
 def verify_current_subject(
@@ -251,7 +287,7 @@ def parse_job_results(raw: str) -> dict[str, str]:
     if not isinstance(parsed, dict) or set(parsed) != {"validation"}:
         raise ValueError("trusted validation results must contain exactly the validation job")
     result = parsed["validation"]
-    if result not in {"cancelled", "failure", "skipped", "success"}:
+    if result not in TERMINAL_JOB_RESULTS:
         raise ValueError("trusted validation job has an invalid terminal result")
     return {"validation": result}
 
@@ -266,10 +302,14 @@ def _parse_bool(value: str) -> bool:
 
 def dispatch_from_event(*, event_path: Path, token: str) -> dict[str, Any]:
     event = _read_json_file_bounded(event_path, max_bytes=MAX_EVENT_BYTES)
-    repository, event_subject = subject_from_target_event(event)
+    repository, event_identity = subject_from_target_event(event)
     api = GitHubApi(repository=repository, token=token)
-    current = subject_from_pull_request(api.fetch_pull_request(event_subject.number))
-    if current.head_sha != event_subject.head_sha or current.base_sha != event_subject.base_sha:
+    current = subject_from_pull_request(api.fetch_pull_request(event_identity.number))
+    if (
+        current.number != event_identity.number
+        or current.head_sha != event_identity.head_sha
+        or current.base_sha != event_identity.base_sha
+    ):
         raise ValueError("pull-request head/base changed between event delivery and dispatch")
     api.dispatch_validation(current)
     return {
@@ -300,11 +340,13 @@ def report_authorized_result(
             "status_posted": False,
             "subject": current.as_dispatch_inputs(authorized=False),
         }
-    if actor != repository_owner:
+    if not repository_owner or actor != repository_owner:
         raise PermissionError("trusted merge authorization must be dispatched by repository owner")
     if set(job_results) != {"validation"}:
         raise ValueError("trusted validation results must contain exactly the validation job")
     validation_result = job_results["validation"]
+    if validation_result not in TERMINAL_JOB_RESULTS:
+        raise ValueError("trusted validation job has an invalid terminal result")
     if validation_result == "success":
         state = "success"
         description = "Owner-authorized exact-subject validation passed"
