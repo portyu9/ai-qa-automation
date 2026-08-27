@@ -11,7 +11,7 @@ import pytest
 import ai_qa_automation.tools.repository as repository_module
 from ai_qa_automation.fs_authority import descriptor_relative_authority_supported
 from ai_qa_automation.tools.execution_env import BoundedSubprocessResult
-from ai_qa_automation.tools.repository import RepositoryInspector
+from ai_qa_automation.tools.repository import RepositoryInspector, RepositorySubjectError
 
 
 def _require_descriptor_authority() -> None:
@@ -145,6 +145,31 @@ def test_change_set_fails_closed_on_current_head_ref_aba(
     assert head_calls == 1
     assert actual_ref.read_bytes() == original
     assert _git(repo, "rev-parse", "HEAD") == actual
+
+
+@pytest.mark.parametrize(
+    ("object_format", "detached_head"),
+    [
+        ("sha1", "0" * 64),
+        ("sha256", "0" * 40),
+    ],
+)
+def test_snapshot_rejects_unresolved_detached_head(
+    tmp_path: Path,
+    object_format: str,
+    detached_head: str,
+) -> None:
+    _require_descriptor_authority()
+    repo = tmp_path / f"repo-{object_format}"
+    repo.mkdir()
+    try:
+        _git(repo, "init", "-q", f"--object-format={object_format}")
+    except AssertionError as exc:
+        pytest.skip(f"installed Git does not support {object_format} repositories: {exc}")
+    (repo / ".git" / "HEAD").write_text(f"{detached_head}\n", encoding="ascii")
+
+    with pytest.raises(RepositorySubjectError, match="detached Git HEAD"):
+        RepositoryInspector(repo).snapshot()
 
 
 def test_snapshot_accepts_stable_detached_head(tmp_path: Path) -> None:
