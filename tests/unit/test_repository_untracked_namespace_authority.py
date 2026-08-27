@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from ai_qa_automation.fs_authority import descriptor_relative_authority_supported
-from ai_qa_automation.tools.repository import RepositoryInspector
+from ai_qa_automation.tools.repository import RepositoryInspector, RepositorySubjectError
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -85,6 +85,69 @@ def test_gitignore_in_place_aba_changes_worktree_namespace_observation(tmp_path:
     assert ignore.read_text(encoding="utf-8") == "alpha\n"
 
 
+def test_nested_git_directory_metadata_is_bound_by_worktree_observation(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    nested = repo / "nested"
+    nested.mkdir()
+    _git(nested, "init", "-q")
+    head = nested / ".git" / "HEAD"
+    original = head.read_bytes()
+    inspector = RepositoryInspector(repo)
+
+    before = inspector._worktree_namespace_observation()
+    assert any(path == "file:nested/.git/HEAD" for path, _signature in before)
+    head.write_bytes(b"ref: refs/heads/transient\n")
+    head.write_bytes(original)
+    after = inspector._worktree_namespace_observation()
+
+    assert before != after
+    assert head.read_bytes() == original
+
+
+def test_nested_gitfile_authority_is_rejected(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    nested = repo / "nested"
+    nested.mkdir()
+    external = tmp_path / "external-git-dir"
+    external.mkdir()
+    (nested / ".git").write_text(f"gitdir: {external}\n", encoding="utf-8")
+    inspector = RepositoryInspector(repo)
+
+    with pytest.raises(RepositorySubjectError, match="gitfile"):
+        inspector._worktree_namespace_observation()
+
+
+def test_nested_git_symlink_authority_is_rejected(tmp_path: Path) -> None:
+    if os.name == "nt":
+        pytest.skip("symlink setup differs on Windows")
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    nested = repo / "nested"
+    nested.mkdir()
+    external = tmp_path / "external-git-dir"
+    external.mkdir()
+    (nested / ".git").symlink_to(external, target_is_directory=True)
+    inspector = RepositoryInspector(repo)
+
+    with pytest.raises(RepositorySubjectError, match="filesystem aliases"):
+        inspector._worktree_namespace_observation()
+
+
+def test_nested_git_common_directory_indirection_is_rejected(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    nested = repo / "nested"
+    nested.mkdir()
+    _git(nested, "init", "-q")
+    (nested / ".git" / "commondir").write_text("../../external-common\n", encoding="utf-8")
+    inspector = RepositoryInspector(repo)
+
+    with pytest.raises(RepositorySubjectError, match="external indirection"):
+        inspector._worktree_namespace_observation()
+
+
 def test_git_metadata_in_place_aba_changes_git_metadata_observation(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo)
@@ -118,6 +181,25 @@ def test_git_text_command_rejects_changed_metadata_observation(
 
     with pytest.raises(RuntimeError, match="Git metadata changed"):
         inspector._git("rev-parse", "--show-object-format")
+
+
+def test_git_wrapper_preserves_inner_failure_when_metadata_also_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    inspector = RepositoryInspector(repo)
+    observations = iter(
+        (
+            (("file:config", (1, 2, 3, 4, 5, 6)),),
+            (("file:config", (1, 2, 3, 4, 5, 7)),),
+        )
+    )
+    monkeypatch.setattr(inspector, "_git_metadata_observation", lambda: next(observations))
+
+    with pytest.raises(ValueError, match="unsupported Git inspection command"):
+        inspector._git("status")
 
 
 def test_untracked_enumeration_rejects_changed_namespace_observation(
