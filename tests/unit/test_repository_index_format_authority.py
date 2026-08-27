@@ -70,13 +70,15 @@ def _force_index_version(repo: Path, version: int) -> None:
     _git(repo, "update-index", f"--index-version={version}")
 
 
+@pytest.mark.parametrize("object_format", ["sha1", "sha256"])
 @pytest.mark.parametrize("version", [2, 3, 4])
-def test_split_index_link_is_detected_across_supported_index_versions(
+def test_split_index_link_is_detected_across_supported_index_formats(
     tmp_path: Path,
+    object_format: str,
     version: int,
 ) -> None:
-    repo = tmp_path / f"repo-v{version}"
-    _init_repo(repo)
+    repo = tmp_path / f"repo-{object_format}-v{version}"
+    _init_repo(repo, object_format=object_format)
     _force_index_version(repo, version)
 
     normal = _index_bytes(repo)
@@ -92,20 +94,6 @@ def test_split_index_link_is_detected_across_supported_index_versions(
     split = _index_bytes(repo)
 
     assert int.from_bytes(split[4:8], "big") == version
-    assert git_index_has_split_link(split) is True
-
-
-def test_split_index_link_is_detected_in_sha256_repository(tmp_path: Path) -> None:
-    repo = tmp_path / "repo-sha256"
-    _init_repo(repo, object_format="sha256")
-    _git(repo, "update-index", "--index-version=4")
-
-    normal = _index_bytes(repo)
-    assert git_index_has_split_link(normal) is False
-
-    _git(repo, "update-index", "--split-index")
-    split = _index_bytes(repo)
-
     assert git_index_has_split_link(split) is True
 
 
