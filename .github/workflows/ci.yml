@@ -263,7 +263,14 @@ jobs:
         run: |
           set -euo pipefail
           image="ai-qa-ci:${{ github.sha }}"
-          docker build --tag "$image" .
+          git_view="$(mktemp -d "$RUNNER_TEMP/aiqa-container-git-view.XXXXXX")"
+          git_template="$(mktemp -d "$RUNNER_TEMP/aiqa-container-git-template.XXXXXX")"
+          trap 'rm -rf "$git_view" "$git_template"' EXIT
+          git_clean_env=(env -i PATH="$PATH" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0)
+          git_object_format="$("${git_clean_env[@]}" /usr/bin/git rev-parse --show-object-format)"
+          git_object_directory="$(cd "$("${git_clean_env[@]}" /usr/bin/git rev-parse --git-path objects)" && pwd -P)"
+          "${git_clean_env[@]}" /usr/bin/git init --bare --object-format="$git_object_format" --template="$git_template" "$git_view" > /dev/null
+          "${git_clean_env[@]}" GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$GITHUB_SHA" | docker build --tag "$image" -
           test "$(docker image inspect --format '{{.Config.User}}' "$image")" = 'aiqa'
           docker run --rm "$image" doctor
           docker run --rm -i --entrypoint python "$image" - <<'PY'
