@@ -5,6 +5,7 @@ from typing import Any
 
 from ..models import TerminalStatus, ValidationResult, ValidationStatus
 from .internal_tools import RuntimeServices, _pytest_scope, _stable_gate_id
+from .k6_authority import k6_gate_payload, k6_persisted_subject
 from .mutation_lineage import build_rollback_lineage_checkpoints
 from .run_control import RuntimeControl
 from .tool_input_bounds import validate_tool_request
@@ -123,15 +124,14 @@ class LiveRuntimeServices(RuntimeServices):
                 raise PermissionError(reason)
 
         if tool_name == "run_k6":
+            try:
+                gate_payload = k6_gate_payload(tool_input)
+            except ValueError:
+                # The canonical attempt was already charged. Persist that accounting,
+                # but do not manufacture a validation gate for an invalid subject.
+                self.checkpoint()
+                raise
             reason = self.k6_execution_block_reason()
-            gate_payload = {
-                "script": str(tool_input["script"]),
-                "target_url": str(tool_input["target_url"]),
-                "environment": str(tool_input["environment"]),
-                "max_p95_ms": float(tool_input["max_p95_ms"]),
-                "max_error_rate": float(tool_input["max_error_rate"]),
-                "min_request_rate": float(tool_input["min_request_rate"]),
-            }
             self.state.validation_results.append(
                 ValidationResult(
                     name="k6",
@@ -140,7 +140,7 @@ class LiveRuntimeServices(RuntimeServices):
                     status=ValidationStatus.BLOCKED,
                     summary=reason,
                     details={
-                        **gate_payload,
+                        **k6_persisted_subject(gate_payload),
                         "execution_started": False,
                         "process_isolation_enforced": False,
                         "external_egress_enforced": self.k6_external_egress_enforced,
