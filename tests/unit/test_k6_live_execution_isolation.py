@@ -147,8 +147,8 @@ def test_live_k6_persists_minimized_subject_but_hashes_exact_subject(tmp_path: P
     assert validation.gate_id == _stable_gate_id("k6", subject)
     persisted_subject = k6_persisted_subject(subject)
     assert validation.details["target_url"] == persisted_subject["target_url"]
-    assert validation.details["script_sha256"] == persisted_subject["script_sha256"]
-    assert validation.details["environment_sha256"] == persisted_subject["environment_sha256"]
+    assert "script" not in validation.details
+    assert "environment" not in validation.details
     rendered = store.path.read_text(encoding="utf-8")
     assert "super-secret-script-value" not in rendered
     assert "super-secret-password" not in rendered
