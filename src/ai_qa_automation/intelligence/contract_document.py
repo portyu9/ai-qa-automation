@@ -149,6 +149,15 @@ def _load_yaml(text: str) -> Any:
         list("-+0123456789"),
     )
 
+    def construct_json_bool(loader: Any, node: Any) -> bool:
+        value = str(loader.construct_scalar(node))
+        normalized = value.casefold()
+        if normalized == "true":
+            return True
+        if normalized == "false":
+            return False
+        raise ValueError("contract YAML contains an invalid explicit boolean")
+
     def construct_json_int(loader: Any, node: Any) -> int:
         value = str(loader.construct_scalar(node)).replace("_", "")
         try:
@@ -183,6 +192,7 @@ def _load_yaml(text: str) -> Any:
             raise ValueError("contract YAML contains an oversized array")
         return [loader.construct_object(child, deep=deep) for child in node.value]
 
+    loader_class.add_constructor(_YAML_BOOL_TAG, construct_json_bool)
     loader_class.add_constructor(_YAML_INT_TAG, construct_json_int)
     loader_class.add_constructor(_YAML_FLOAT_TAG, construct_json_float)
     loader_class.add_constructor(
