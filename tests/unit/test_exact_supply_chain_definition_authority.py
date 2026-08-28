@@ -27,12 +27,12 @@ def test_verifier_reports_exact_reviewed_definition_authority() -> None:
     assert supply_chain_result["dockerfile_authority"] == "exact-reviewed-git-blob"
 
 
-def test_runtime_container_build_context_is_exact_event_archive() -> None:
+def test_runtime_container_build_context_is_exact_validation_subject_archive() -> None:
     ci_text = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     exact_archive_build = (
         '          "${git_clean_env[@]}" GIT_DIR="$git_view" '
         'GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git '
-        '-c core.attributesFile=/dev/null archive --format=tar "$GITHUB_SHA" '
+        '-c core.attributesFile=/dev/null archive --format=tar "$CI_SUBJECT_SHA" '
         '| docker build --tag "$image" -'
     )
 
@@ -59,7 +59,7 @@ def test_ci_contract_rejects_mutable_checkout_container_context(tmp_path: Path) 
     exact_archive_build = (
         '          "${git_clean_env[@]}" GIT_DIR="$git_view" '
         'GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git '
-        '-c core.attributesFile=/dev/null archive --format=tar "$GITHUB_SHA" '
+        '-c core.attributesFile=/dev/null archive --format=tar "$CI_SUBJECT_SHA" '
         '| docker build --tag "$image" -'
     )
     assert exact_archive_build in text
@@ -68,7 +68,7 @@ def test_ci_contract_rejects_mutable_checkout_container_context(tmp_path: Path) 
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="exact reviewed automatic workflow definition"):
+    with pytest.raises(ValueError, match="exact reviewed automatic/trusted workflow definition"):
         ci_contract.verify_ci_contract(root)
 
 
@@ -94,7 +94,7 @@ def test_ci_contract_rejects_additional_equivalent_project_install(
     assert marker in text
     path.write_text(text.replace(marker, f"{marker}\n{extra_command}", 1), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="exact reviewed automatic workflow definition"):
+    with pytest.raises(ValueError, match="exact reviewed automatic/trusted workflow definition"):
         ci_contract.verify_ci_contract(root)
 
 
