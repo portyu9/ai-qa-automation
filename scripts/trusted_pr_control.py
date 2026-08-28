@@ -217,8 +217,12 @@ def fetch_stable_current_subject(
     for attempt in range(MERGEABILITY_READ_ATTEMPTS):
         payload = api.fetch_pull_request(expected.number)
         _verify_current_identity(expected, payload)
-        mergeable = payload.get("mergeable")
-        merge_sha = payload.get("merge_commit_sha")
+        if "mergeable" not in payload:
+            raise ValueError("pull-request mergeable field is required")
+        if "merge_commit_sha" not in payload:
+            raise ValueError("pull-request merge SHA field is required")
+        mergeable = payload["mergeable"]
+        merge_sha = payload["merge_commit_sha"]
 
         if mergeable is True and isinstance(merge_sha, str):
             _require_sha(merge_sha, label="pull-request merge SHA")
