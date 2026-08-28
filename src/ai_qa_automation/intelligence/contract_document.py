@@ -13,6 +13,7 @@ _MAX_CONTRACT_INTEGER_BITS = 4096
 _MAX_YAML_TOKENS = 200_000
 _MAX_YAML_ALIASES = 1024
 _MAX_YAML_ANCHORS = 1024
+_YAML_MERGE_TAG = "tag:yaml.org,2002:merge"
 
 
 def _preflight_json_nesting(text: str) -> None:
@@ -118,9 +119,12 @@ def _load_yaml(text: str) -> Any:
     loader_class: Any = type("StrictOpenAPIContractLoader", (yaml_module.SafeLoader,), {})
 
     def construct_mapping(loader: Any, node: Any, deep: bool = False) -> dict[str, Any]:
-        loader.flatten_mapping(node)
+        if len(node.value) > _MAX_CONTRACT_CONTAINER_ITEMS:
+            raise ValueError("contract YAML contains an oversized object")
         result: dict[str, Any] = {}
         for key_node, value_node in node.value:
+            if getattr(key_node, "tag", None) == _YAML_MERGE_TAG:
+                raise ValueError("contract YAML merge keys are not supported by bounded analysis")
             key = loader.construct_object(key_node, deep=deep)
             if not isinstance(key, str):
                 raise ValueError("contract YAML mapping keys must be strings")
@@ -129,9 +133,18 @@ def _load_yaml(text: str) -> Any:
             result[key] = loader.construct_object(value_node, deep=deep)
         return result
 
+    def construct_sequence(loader: Any, node: Any, deep: bool = False) -> list[Any]:
+        if len(node.value) > _MAX_CONTRACT_CONTAINER_ITEMS:
+            raise ValueError("contract YAML contains an oversized array")
+        return [loader.construct_object(child, deep=deep) for child in node.value]
+
     loader_class.add_constructor(
         yaml_module.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
         construct_mapping,
+    )
+    loader_class.add_constructor(
+        yaml_module.resolver.BaseResolver.DEFAULT_SEQUENCE_TAG,
+        construct_sequence,
     )
     try:
         return yaml_module.load(text, Loader=loader_class)
