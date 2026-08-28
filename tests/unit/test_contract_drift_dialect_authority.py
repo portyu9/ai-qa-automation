@@ -154,3 +154,122 @@ def test_non_openapi_reason_remains_backward_compatible() -> None:
     assert result.severity is ContractDriftSeverity.NOT_ANALYZED
     assert result.analyzed is False
     assert result.reason == "document is not recognized as OpenAPI/Swagger"
+
+
+@pytest.mark.parametrize(
+    "current",
+    [
+        {
+            "openapi": "3.1.0",
+            "paths": {
+                "/orders": {
+                    "post": {
+                        "requestBody": {"$ref": "#/components/requestBodies/Order"},
+                        "responses": {"200": {"description": "ok"}},
+                    }
+                }
+            },
+            "components": {
+                "requestBodies": {"Order": {"required": True, "content": {}}}
+            },
+        },
+        {
+            "openapi": "3.1.0",
+            "paths": {
+                "/orders": {
+                    "get": {
+                        "responses": {
+                            "200": {"$ref": "#/components/responses/Order"}
+                        }
+                    }
+                }
+            },
+            "components": {"responses": {"Order": {"description": "ok"}}},
+        },
+        {"openapi": "3.1.0", "paths": {"/orders": {"get": {}}}},
+        {
+            "openapi": "3.1.0",
+            "paths": {"/orders": {"get": {"responses": {}}}},
+        },
+        {
+            "openapi": "3.1.0",
+            "paths": {"/orders": {"get": {"responses": {"200": {}}}}},
+        },
+        {
+            "swagger": "2.0",
+            "paths": {
+                "/orders": {
+                    "get": {"responses": {"2XX": {"description": "ok"}}}
+                }
+            },
+        },
+        {
+            "openapi": "3.1.0",
+            "paths": {
+                "/orders": {
+                    "post": {
+                        "requestBody": {
+                            "content": {
+                                "application/json": {
+                                    "schema": {"$ref": "https://example.test/order.json"}
+                                }
+                            }
+                        },
+                        "responses": {"200": {"description": "ok"}},
+                    }
+                }
+            },
+        },
+    ],
+)
+def test_indirect_or_incomplete_consumed_payload_shapes_fail_closed(
+    current: dict[str, object],
+) -> None:
+    baseline = (
+        {"swagger": "2.0", "paths": {}}
+        if "swagger" in current
+        else {"openapi": "3.1.0", "paths": {}}
+    )
+
+    result = _analyze(baseline, current)
+
+    assert result.severity is ContractDriftSeverity.NOT_ANALYZED
+    assert result.analyzed is False
+
+
+def test_self_contained_request_and_response_payload_schemas_remain_analyzable() -> None:
+    document = {
+        "openapi": "3.1.0",
+        "paths": {
+            "/orders": {
+                "post": {
+                    "requestBody": {
+                        "required": False,
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/Order"}
+                            }
+                        },
+                    },
+                    "responses": {
+                        "2XX": {
+                            "description": "ok",
+                            "content": {
+                                "application/json": {
+                                    "schema": {"$ref": "#/components/schemas/Order"}
+                                }
+                            },
+                        }
+                    },
+                }
+            }
+        },
+        "components": {
+            "schemas": {"Order": {"type": "object", "properties": {}}}
+        },
+    }
+
+    result = _analyze(document, json.loads(json.dumps(document)))
+
+    assert result.severity is ContractDriftSeverity.NON_BREAKING
+    assert result.analyzed is True
