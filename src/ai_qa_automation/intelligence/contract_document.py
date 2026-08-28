@@ -57,7 +57,7 @@ def _reject_duplicate_json_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
-            raise ValueError(f"contract JSON contains duplicate object key: {key}")
+            raise ValueError("contract JSON contains a duplicate object key")
         result[key] = value
     return result
 
@@ -151,11 +151,17 @@ def _load_yaml(text: str) -> Any:
 
     def construct_json_int(loader: Any, node: Any) -> int:
         value = str(loader.construct_scalar(node)).replace("_", "")
-        return int(value, 10)
+        try:
+            return int(value, 10)
+        except ValueError as exc:
+            raise ValueError("contract YAML contains an invalid explicit integer") from exc
 
     def construct_json_float(loader: Any, node: Any) -> float:
         value = str(loader.construct_scalar(node)).replace("_", "")
-        return float(value)
+        try:
+            return float(value)
+        except ValueError as exc:
+            raise ValueError("contract YAML contains an invalid explicit number") from exc
 
     def construct_mapping(loader: Any, node: Any, deep: bool = False) -> dict[str, Any]:
         if len(node.value) > _MAX_CONTRACT_CONTAINER_ITEMS:
@@ -168,7 +174,7 @@ def _load_yaml(text: str) -> Any:
             if not isinstance(key, str):
                 raise ValueError("contract YAML mapping keys must be strings")
             if key in result:
-                raise ValueError(f"contract YAML contains duplicate mapping key: {key}")
+                raise ValueError("contract YAML contains a duplicate mapping key")
             result[key] = loader.construct_object(value_node, deep=deep)
         return result
 
