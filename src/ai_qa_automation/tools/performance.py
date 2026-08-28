@@ -4,13 +4,13 @@ import json
 import os
 import re
 import shutil
-import stat
 import tempfile
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 from uuid import uuid4
 
+from ..fs_authority import pin_directory_identity, read_bytes_confined
 from ..io_safety import read_text_bounded
 from ..models import PerformanceMetrics, ToolDecision
 from ..policy import PolicyEngine
@@ -43,11 +43,18 @@ class K6Runner:
             raise ValueError("external_egress_enforced must be a boolean")
         if not isinstance(external_process_isolation_enforced, bool):
             raise ValueError("external_process_isolation_enforced must be a boolean")
-        self.workspace = workspace.resolve()
+        self.workspace = workspace.expanduser().absolute()
         self.policy = policy
         self.timeout_seconds = timeout_seconds
         self.external_egress_enforced = external_egress_enforced
         self.external_process_isolation_enforced = external_process_isolation_enforced
+        try:
+            self._workspace_root_identity = pin_directory_identity(
+                self.workspace,
+                label="k6 workspace",
+            )
+        except (OSError, ValueError, RuntimeError):
+            self._workspace_root_identity = None
 
     def _workspace_module_path(self, candidate: Path) -> Path:
         raw = candidate if candidate.is_absolute() else self.workspace / candidate
@@ -58,24 +65,7 @@ class K6Runner:
             raise PermissionError(
                 "k6 local imports must resolve to .js files inside the target workspace"
             ) from exc
-        if not relative_path.parts:
-            raise PermissionError(
-                "k6 local imports must resolve to .js files inside the target workspace"
-            )
-
-        current = self.workspace
-        for part in relative_path.parts:
-            current /= part
-            try:
-                info = current.lstat()
-            except FileNotFoundError as exc:
-                raise PermissionError(
-                    "k6 local imports must resolve to existing .js files inside the target workspace"
-                ) from exc
-            if stat.S_ISLNK(info.st_mode):
-                raise PermissionError("k6 module paths may not traverse symlinks")
-
-        if lexical.suffix != ".js" or not lexical.is_file():
+        if not relative_path.parts or lexical.suffix != ".js":
             raise PermissionError(
                 "k6 local imports must resolve to .js files inside the target workspace"
             )
@@ -86,6 +76,11 @@ class K6Runner:
         script: Path,
         target_url: str,
     ) -> tuple[Path, dict[Path, str]]:
+        if self._workspace_root_identity is None:
+            raise PermissionError(
+                "k6 module ingestion requires descriptor-relative no-follow filesystem authority "
+                "for a stable target workspace"
+            )
         try:
             resolved = self._workspace_module_path(script)
         except PermissionError as exc:
@@ -108,17 +103,33 @@ class K6Runner:
             if len(modules) >= _MAX_K6_MODULES:
                 raise PermissionError(f"k6 import graph exceeds {_MAX_K6_MODULES} local modules")
             try:
-                source = read_text_bounded(
-                    module_path,
+                encoded = read_bytes_confined(
+                    self.workspace,
+                    relative_path,
                     max_bytes=_MAX_K6_MODULE_BYTES,
                     label="k6 module",
+                    expected_root_identity=self._workspace_root_identity,
                 )
-            except ValueError as exc:
+            except FileNotFoundError as exc:
+                if root:
+                    raise PermissionError(
+                        "k6 script must be an existing .js file inside the target workspace"
+                    ) from exc
                 raise PermissionError(
-                    f"k6 module exceeds {_MAX_K6_MODULE_BYTES} byte limit"
+                    "k6 local imports must resolve to existing .js files inside the target workspace"
                 ) from exc
-            except (OSError, UnicodeError) as exc:
-                raise PermissionError("k6 module is unreadable") from exc
+            except RuntimeError as exc:
+                raise PermissionError(
+                    "k6 module ingestion requires descriptor-relative no-follow filesystem authority"
+                ) from exc
+            except (OSError, ValueError) as exc:
+                raise PermissionError(
+                    "k6 module failed confined no-follow ingestion"
+                ) from exc
+            try:
+                source = encoded.decode("utf-8")
+            except UnicodeError as exc:
+                raise PermissionError("k6 module must be valid UTF-8") from exc
             modules[relative_path] = source
             if re.search(r"\bopen\s*\(", source):
                 raise PermissionError("k6 scripts may not read local files through open()")
