@@ -240,7 +240,7 @@ def test_invalid_explicit_numeric_diagnostic_does_not_echo_scalar() -> None:
 def test_invalid_explicit_boolean_diagnostic_does_not_echo_scalar() -> None:
     secret_value = "super-secret-bool-value"
     reason = _assert_not_analyzed(
-        f"openapi: 3.1.0\nx: !!bool {secret_value}\npaths: {{}}\n".encode()
+        f'openapi: 3.1.0\nx: !!bool "{secret_value}"\npaths: {{}}\n'.encode()
     )
 
     assert secret_value not in reason
