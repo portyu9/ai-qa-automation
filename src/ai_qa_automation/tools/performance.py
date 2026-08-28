@@ -168,7 +168,7 @@ class K6Runner:
         for relative_path, source in modules.items():
             destination = snapshot_root / relative_path
             destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_text(source, encoding="utf-8")
+            destination.write_bytes(source.encode("utf-8"))
 
     @staticmethod
     def _metric_values(data: dict[str, Any], metric: str) -> dict[str, Any]:
