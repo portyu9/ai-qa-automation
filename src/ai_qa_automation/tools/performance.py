@@ -191,11 +191,6 @@ class K6Runner:
         )
 
     def run(self, script: Path, *, target_url: str, environment: str) -> PerformanceMetrics:
-        if not self.external_process_isolation_enforced:
-            raise PermissionError(
-                "k6 execution requires trusted infrastructure-level process/filesystem isolation; "
-                "static JavaScript inspection is not an execution sandbox"
-            )
         if not self.external_egress_enforced:
             raise PermissionError(
                 "k6 execution requires trusted infrastructure-level egress enforcement; "
@@ -205,6 +200,11 @@ class K6Runner:
         if decision.decision != ToolDecision.ALLOW:
             raise PermissionError(decision.reason)
         root_relative, modules = self._collect_validated_modules(script, target_url)
+        if not self.external_process_isolation_enforced:
+            raise PermissionError(
+                "k6 execution requires trusted infrastructure-level process/filesystem isolation; "
+                "static JavaScript inspection is not an execution sandbox"
+            )
         if shutil.which("k6") is None:
             raise RuntimeError("k6 is not installed; runtime validation is NOT_VERIFIED")
 
