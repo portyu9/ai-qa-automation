@@ -34,7 +34,7 @@ def test_repository_ci_contract_exposes_build_and_sbom_authority() -> None:
     automatic = result["workflows"]["automatic"]
 
     assert automatic["prebuild_authority"] == (
-        "exact-lock-and-build-authority-before-automatic-installs"
+        "exact-lock-and-build-authority-before-validation-installs"
     )
     assert automatic["dependency_install_count"] == 5
     assert automatic["dependency_install_authority"] == (
@@ -43,7 +43,7 @@ def test_repository_ci_contract_exposes_build_and_sbom_authority() -> None:
     assert automatic["project_install_count"] == 5
     assert automatic["project_install_authority"] == "immediate-static-revalidation"
     assert automatic["archive_build_authority"] == "verified-and-matched-before-wheel-builds"
-    assert automatic["build_provenance_subject"] == "github.sha/isolated-git-view"
+    assert automatic["build_provenance_subject"] == "CI_SUBJECT_SHA/isolated-git-view"
     assert automatic["archive_attribute_authority"] == "versioned-tree-only"
     assert automatic["sbom_lineage"] == "parent-digest-bound-and-bracketed"
 
@@ -208,7 +208,7 @@ def test_ci_contract_rejects_removed_archive_build_authority_guard(tmp_path: Pat
     )
     path.write_text(text, encoding="utf-8")
 
-    with pytest.raises(ValueError, match="exact reviewed event-subject-bound step"):
+    with pytest.raises(ValueError, match="exact reviewed validation-subject-bound step"):
         ci_contract.verify_ci_contract(root)
 
 
@@ -222,7 +222,7 @@ def test_ci_contract_rejects_unmatched_archive_build_authority_evidence(tmp_path
     )
     path.write_text(text, encoding="utf-8")
 
-    with pytest.raises(ValueError, match="exact reviewed event-subject-bound step"):
+    with pytest.raises(ValueError, match="exact reviewed validation-subject-bound step"):
         ci_contract.verify_ci_contract(root)
 
 
@@ -252,7 +252,7 @@ def test_ci_contract_rejects_removed_prebuild_sbom_lineage_check(tmp_path: Path)
     text = text.replace(marker, "", 1)
     path.write_text(text, encoding="utf-8")
 
-    with pytest.raises(ValueError, match="exact reviewed event-subject-bound step"):
+    with pytest.raises(ValueError, match="exact reviewed validation-subject-bound step"):
         ci_contract.verify_ci_contract(root)
 
 
