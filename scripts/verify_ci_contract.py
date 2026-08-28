@@ -681,7 +681,9 @@ def _verify_trusted_status_job(text: str) -> dict[str, Any]:
         raise ValueError("ci.yml: trusted reporter must have exactly one reviewed shell body")
     run_script = publish_step.split(run_marker, 1)[1]
     if "${{ github.event.client_payload." in run_script or "${{ needs." in run_script:
-        raise ValueError("ci.yml: trusted reporter must pass event/result values through env as data")
+        raise ValueError(
+            "ci.yml: trusted reporter must pass event/result values through env as data"
+        )
     if job.count("statuses: write") != 1:
         raise ValueError("ci.yml: trusted reporter must own exactly one statuses: write permission")
     if "actions: write" in job or "contents: write" in job or "pull-requests: write" in job:
