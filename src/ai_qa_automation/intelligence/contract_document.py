@@ -24,6 +24,9 @@ _YAML_JSON_INT = re.compile(r"^[+-]?(?:0|[1-9][0-9]*)$")
 _YAML_JSON_FLOAT = re.compile(
     r"^[+-]?(?:(?:0|[1-9][0-9]*)\.[0-9]+(?:[eE][+-]?[0-9]+)?|(?:0|[1-9][0-9]*)[eE][+-]?[0-9]+)$"
 )
+_COMPARISON_METHODS = frozenset(
+    {"get", "put", "post", "delete", "options", "head", "patch", "trace"}
+)
 
 MAX_CONTRACT_DOCUMENT_BYTES = 2_000_000
 
@@ -261,6 +264,161 @@ def _validate_json_compatible_shape(value: Any) -> None:
         )
 
 
+def _require_object(value: Any, field: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"contract OpenAPI field {field} must be an object for bounded comparison")
+    return value
+
+
+def _validate_security_shape(value: Any) -> None:
+    if not isinstance(value, list):
+        raise ValueError("contract OpenAPI security must be an array for bounded comparison")
+    for requirement in value:
+        if not isinstance(requirement, dict):
+            raise ValueError(
+                "contract OpenAPI security entries must be objects for bounded comparison"
+            )
+        for scopes in requirement.values():
+            if not isinstance(scopes, list) or any(not isinstance(scope, str) for scope in scopes):
+                raise ValueError(
+                    "contract OpenAPI security scopes must be string arrays for bounded comparison"
+                )
+
+
+def _validate_schema_shape(root: dict[str, Any]) -> None:
+    stack = [root]
+    while stack:
+        schema = stack.pop()
+        reference = schema.get("$ref")
+        if reference is not None and not isinstance(reference, str):
+            raise ValueError("contract OpenAPI schema $ref must be a string for bounded comparison")
+
+        if "type" in schema:
+            schema_type = schema["type"]
+            if isinstance(schema_type, list):
+                if not schema_type or any(not isinstance(item, str) for item in schema_type):
+                    raise ValueError(
+                        "contract OpenAPI schema type arrays must contain strings "
+                        "for bounded comparison"
+                    )
+            elif not isinstance(schema_type, str):
+                raise ValueError(
+                    "contract OpenAPI schema type must be a string or string array "
+                    "for bounded comparison"
+                )
+
+        if "enum" in schema:
+            enum = schema["enum"]
+            if not isinstance(enum, list) or any(
+                item is not None and not isinstance(item, (str, bool, int, float)) for item in enum
+            ):
+                raise ValueError(
+                    "contract OpenAPI schema enum must be a scalar array for bounded comparison"
+                )
+
+        if "required" in schema:
+            required = schema["required"]
+            if not isinstance(required, list) or any(
+                not isinstance(item, str) for item in required
+            ):
+                raise ValueError(
+                    "contract OpenAPI schema required must be a string array for bounded comparison"
+                )
+            if len(set(required)) != len(required):
+                raise ValueError(
+                    "contract OpenAPI schema required contains duplicate entries"
+                )
+
+        if "properties" in schema:
+            properties = _require_object(schema["properties"], "schema properties")
+            for nested in properties.values():
+                stack.append(_require_object(nested, "property schema"))
+
+        if "items" in schema:
+            stack.append(_require_object(schema["items"], "schema items"))
+
+
+def _validate_parameter_list(value: Any, *, path_level: bool) -> None:
+    if not isinstance(value, list):
+        raise ValueError("contract OpenAPI parameters must be an array for bounded comparison")
+    if path_level and value:
+        raise ValueError(
+            "contract OpenAPI path-level parameters are not supported by bounded comparison"
+        )
+    seen: set[tuple[str, str]] = set()
+    for parameter in value:
+        parameter = _require_object(parameter, "parameter")
+        if "$ref" in parameter:
+            raise ValueError(
+                "contract OpenAPI referenced parameters are not supported by bounded comparison"
+            )
+        name = parameter.get("name")
+        location = parameter.get("in")
+        if not isinstance(name, str) or not isinstance(location, str):
+            raise ValueError(
+                "contract OpenAPI parameters require string name and in fields "
+                "for bounded comparison"
+            )
+        identity = (location, name)
+        if identity in seen:
+            raise ValueError("contract OpenAPI parameters contain a duplicate name/in identity")
+        seen.add(identity)
+        if "required" in parameter and not isinstance(parameter["required"], bool):
+            raise ValueError(
+                "contract OpenAPI parameter required must be boolean for bounded comparison"
+            )
+        if "schema" in parameter:
+            schema = _require_object(parameter["schema"], "parameter schema")
+            _validate_schema_shape(schema)
+
+
+def _validate_operation_shape(operation: dict[str, Any]) -> None:
+    if "parameters" in operation:
+        _validate_parameter_list(operation["parameters"], path_level=False)
+    if "requestBody" in operation:
+        request_body = _require_object(operation["requestBody"], "requestBody")
+        if "required" in request_body and not isinstance(request_body["required"], bool):
+            raise ValueError(
+                "contract OpenAPI requestBody required must be boolean for bounded comparison"
+            )
+    if "responses" in operation:
+        _require_object(operation["responses"], "responses")
+    if "security" in operation:
+        _validate_security_shape(operation["security"])
+
+
+def _validate_comparison_shape(document: dict[str, Any]) -> None:
+    if "security" in document:
+        _validate_security_shape(document["security"])
+
+    if "paths" in document:
+        paths = _require_object(document["paths"], "paths")
+        for path_item_value in paths.values():
+            path_item = _require_object(path_item_value, "path item")
+            if "$ref" in path_item:
+                raise ValueError(
+                    "contract OpenAPI referenced path items are not supported by bounded comparison"
+                )
+            if "parameters" in path_item:
+                _validate_parameter_list(path_item["parameters"], path_level=True)
+            for key, operation_value in path_item.items():
+                if key.casefold() in _COMPARISON_METHODS:
+                    operation = _require_object(operation_value, "operation")
+                    _validate_operation_shape(operation)
+
+    if "components" in document:
+        components = _require_object(document["components"], "components")
+        if "schemas" in components:
+            schemas = _require_object(components["schemas"], "components schemas")
+            for schema_value in schemas.values():
+                _validate_schema_shape(_require_object(schema_value, "named schema"))
+
+    if "definitions" in document:
+        definitions = _require_object(document["definitions"], "definitions")
+        for schema_value in definitions.values():
+            _validate_schema_shape(_require_object(schema_value, "named schema"))
+
+
 def load_contract_document(path: str, content: bytes) -> dict[str, Any]:
     """Parse a bounded OpenAPI/Swagger JSON-or-YAML document without ambiguous semantics."""
 
@@ -283,4 +441,6 @@ def load_contract_document(path: str, content: bytes) -> dict[str, Any]:
     _validate_json_compatible_shape(value)
     if not isinstance(value, dict):
         raise ValueError("contract root must be an object")
+    if isinstance(value.get("openapi"), str) or isinstance(value.get("swagger"), str):
+        _validate_comparison_shape(value)
     return value
