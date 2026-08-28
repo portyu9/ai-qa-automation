@@ -627,9 +627,7 @@ def _verify_dispatch_contract(text: str) -> None:
         )
     )
     if on_block != expected:
-        raise ValueError(
-            "ci.yml: trigger/owner-dispatch contract differs from reviewed definition"
-        )
+        raise ValueError("ci.yml: trigger/owner-dispatch contract differs from reviewed definition")
     env_block = _semantic_text(_top_level_block(text, "env"))
     expected_subject = (
         "  CI_SUBJECT_SHA: ${{ github.event_name == 'repository_dispatch' "
