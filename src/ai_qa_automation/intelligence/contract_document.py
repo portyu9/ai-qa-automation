@@ -1,0 +1,212 @@
+from __future__ import annotations
+
+import importlib
+import json
+import math
+from pathlib import PurePosixPath
+from typing import Any
+
+_MAX_CONTRACT_DEPTH = 64
+_MAX_CONTRACT_NODES = 100_000
+_MAX_CONTRACT_CONTAINER_ITEMS = 50_000
+_MAX_CONTRACT_INTEGER_BITS = 4096
+_MAX_YAML_TOKENS = 200_000
+_MAX_YAML_ALIASES = 1024
+_MAX_YAML_ANCHORS = 1024
+
+
+def _preflight_json_nesting(text: str) -> None:
+    depth = 0
+    in_string = False
+    escaped = False
+    for character in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character in "[{":
+            depth += 1
+            if depth > _MAX_CONTRACT_DEPTH:
+                raise ValueError("contract JSON exceeds the deterministic nesting-depth limit")
+        elif character in "]}":
+            depth -= 1
+            if depth < 0:
+                return
+
+
+def _reject_duplicate_json_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"contract JSON contains duplicate object key: {key}")
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"contract JSON contains non-standard numeric constant: {value}")
+
+
+def _load_json(text: str) -> Any:
+    _preflight_json_nesting(text)
+    try:
+        return json.loads(
+            text,
+            object_pairs_hook=_reject_duplicate_json_pairs,
+            parse_constant=_reject_json_constant,
+        )
+    except RecursionError as exc:
+        raise ValueError("contract JSON exceeded parser recursion safety") from exc
+
+
+def _preflight_yaml_tokens(yaml_module: Any, text: str) -> None:
+    open_tokens = (
+        yaml_module.tokens.BlockMappingStartToken,
+        yaml_module.tokens.BlockSequenceStartToken,
+        yaml_module.tokens.FlowMappingStartToken,
+        yaml_module.tokens.FlowSequenceStartToken,
+    )
+    close_tokens = (
+        yaml_module.tokens.BlockEndToken,
+        yaml_module.tokens.FlowMappingEndToken,
+        yaml_module.tokens.FlowSequenceEndToken,
+    )
+    depth = 0
+    token_count = 0
+    alias_count = 0
+    anchor_count = 0
+    try:
+        for token in yaml_module.scan(text, Loader=yaml_module.SafeLoader):
+            token_count += 1
+            if token_count > _MAX_YAML_TOKENS:
+                raise ValueError("contract YAML exceeds the deterministic token limit")
+            if isinstance(token, yaml_module.tokens.AliasToken):
+                alias_count += 1
+                if alias_count > _MAX_YAML_ALIASES:
+                    raise ValueError("contract YAML exceeds the deterministic alias limit")
+            elif isinstance(token, yaml_module.tokens.AnchorToken):
+                anchor_count += 1
+                if anchor_count > _MAX_YAML_ANCHORS:
+                    raise ValueError("contract YAML exceeds the deterministic anchor limit")
+            if isinstance(token, open_tokens):
+                depth += 1
+                if depth > _MAX_CONTRACT_DEPTH:
+                    raise ValueError("contract YAML exceeds the deterministic nesting-depth limit")
+            elif isinstance(token, close_tokens):
+                depth = max(0, depth - 1)
+    except Exception as exc:
+        if isinstance(exc, yaml_module.YAMLError):
+            raise ValueError(f"invalid contract YAML: {type(exc).__name__}") from exc
+        raise
+
+
+def _load_yaml(text: str) -> Any:
+    try:
+        yaml_module = importlib.import_module("yaml")
+    except ImportError as exc:
+        raise ValueError(
+            "YAML OpenAPI drift requires PyYAML; JSON contracts remain supported"
+        ) from exc
+
+    _preflight_yaml_tokens(yaml_module, text)
+    loader_class: Any = type("StrictOpenAPIContractLoader", (yaml_module.SafeLoader,), {})
+
+    def construct_mapping(loader: Any, node: Any, deep: bool = False) -> dict[str, Any]:
+        loader.flatten_mapping(node)
+        result: dict[str, Any] = {}
+        for key_node, value_node in node.value:
+            key = loader.construct_object(key_node, deep=deep)
+            if not isinstance(key, str):
+                raise ValueError("contract YAML mapping keys must be strings")
+            if key in result:
+                raise ValueError(f"contract YAML contains duplicate mapping key: {key}")
+            result[key] = loader.construct_object(value_node, deep=deep)
+        return result
+
+    loader_class.add_constructor(
+        yaml_module.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+        construct_mapping,
+    )
+    try:
+        return yaml_module.load(text, Loader=loader_class)
+    except RecursionError as exc:
+        raise ValueError("contract YAML exceeded parser recursion safety") from exc
+    except Exception as exc:
+        if isinstance(exc, yaml_module.YAMLError):
+            raise ValueError(f"invalid contract YAML: {type(exc).__name__}") from exc
+        raise
+
+
+def _validate_json_compatible_shape(value: Any) -> None:
+    stack: list[tuple[Any, int]] = [(value, 0)]
+    seen_containers: set[int] = set()
+    nodes = 0
+    while stack:
+        item, depth = stack.pop()
+        if depth > _MAX_CONTRACT_DEPTH:
+            raise ValueError("contract document exceeds the deterministic nesting-depth limit")
+        nodes += 1
+        if nodes > _MAX_CONTRACT_NODES:
+            raise ValueError("contract document exceeds the deterministic structural-node limit")
+
+        if item is None or isinstance(item, (str, bool)):
+            continue
+        if isinstance(item, int):
+            if item.bit_length() > _MAX_CONTRACT_INTEGER_BITS:
+                raise ValueError("contract document contains an oversized integer")
+            continue
+        if isinstance(item, float):
+            if not math.isfinite(item):
+                raise ValueError("contract document contains a non-finite number")
+            continue
+        if isinstance(item, dict):
+            identity = id(item)
+            if identity in seen_containers:
+                raise ValueError("contract document contains a shared or circular container graph")
+            seen_containers.add(identity)
+            if len(item) > _MAX_CONTRACT_CONTAINER_ITEMS:
+                raise ValueError("contract document contains an oversized object")
+            for key, nested in item.items():
+                if not isinstance(key, str):
+                    raise ValueError("contract document contains a non-string object key")
+                stack.append((nested, depth + 1))
+            continue
+        if isinstance(item, list):
+            identity = id(item)
+            if identity in seen_containers:
+                raise ValueError("contract document contains a shared or circular container graph")
+            seen_containers.add(identity)
+            if len(item) > _MAX_CONTRACT_CONTAINER_ITEMS:
+                raise ValueError("contract document contains an oversized array")
+            stack.extend((nested, depth + 1) for nested in item)
+            continue
+        raise ValueError(
+            f"contract document contains non-JSON value type: {type(item).__name__}"
+        )
+
+
+def load_contract_document(path: str, content: bytes) -> dict[str, Any]:
+    """Parse a bounded OpenAPI/Swagger JSON-or-YAML document without ambiguous semantics."""
+
+    text = content.decode("utf-8")
+    suffix = PurePosixPath(path).suffix.casefold()
+    if suffix == ".json":
+        value = _load_json(text)
+    elif suffix in {".yaml", ".yml"}:
+        value = _load_yaml(text)
+    else:
+        stripped = text.lstrip()
+        if stripped.startswith("{"):
+            value = _load_json(text)
+        else:
+            raise ValueError("unsupported contract serialization")
+    _validate_json_compatible_shape(value)
+    if not isinstance(value, dict):
+        raise ValueError("contract root must be an object")
+    return value
