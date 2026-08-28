@@ -2,7 +2,7 @@ name: CI — ƳƤ AI QA Automation Framework
 
 # Designed and engineered by Ƴunior Ƥortal (ƳƤ).
 # Automatic gates are read-only, secret-free, and bound to the exact GitHub event subject.
-# Owner-authorized workflow_dispatch is a dormant trusted-main path until external Actions Policy is active.
+# Owner-authorized repository_dispatch is a dormant trusted-main path until external Actions Policy is active.
 on:
   pull_request:
     branches: [main]
@@ -10,41 +10,20 @@ on:
   push:
     branches: [main]
   merge_group:
-  workflow_dispatch:
-    inputs:
-      pr_number:
-        description: Pull request number whose exact current subject is being validated
-        required: true
-        type: string
-      expected_head_sha:
-        description: Exact current pull request head SHA
-        required: true
-        type: string
-      expected_base_sha:
-        description: Exact current main/base SHA
-        required: true
-        type: string
-      expected_merge_sha:
-        description: Exact current prospective merge SHA to execute and validate
-        required: true
-        type: string
-      authorized:
-        description: Publish Trusted PR Gate after exact-subject validation
-        required: true
-        default: false
-        type: boolean
+  repository_dispatch:
+    types: [trusted-pr-validation]
 
 permissions:
   contents: read
 
 concurrency:
-  group: ai-qa-ci-${{ github.event.pull_request.number || inputs.pr_number || github.ref }}
+  group: ai-qa-ci-${{ github.event.pull_request.number || github.event.client_payload.pr_number || github.ref }}
   cancel-in-progress: true
 
 env:
   PYTHONUNBUFFERED: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
-  CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_merge_sha || github.sha }}
+  CI_SUBJECT_SHA: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.expected_merge_sha || github.sha }}
 
 jobs:
   quality:
@@ -463,7 +442,7 @@ jobs:
 
   trusted-status:
     name: Trusted PR Gate Reporter
-    if: ${{ always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    if: ${{ always() && github.event_name == 'repository_dispatch' && github.ref == 'refs/heads/main' && github.actor == github.repository_owner }}
     needs:
       - required-gate
     permissions:
@@ -487,10 +466,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python scripts/trusted_pr_control.py report \
-            --pr-number "${{ inputs.pr_number }}" \
-            --expected-head-sha "${{ inputs.expected_head_sha }}" \
-            --expected-base-sha "${{ inputs.expected_base_sha }}" \
-            --expected-merge-sha "${{ inputs.expected_merge_sha }}" \
-            --authorized "${{ inputs.authorized }}" \
+            --pr-number "${{ github.event.client_payload.pr_number }}" \
+            --expected-head-sha "${{ github.event.client_payload.expected_head_sha }}" \
+            --expected-base-sha "${{ github.event.client_payload.expected_base_sha }}" \
+            --expected-merge-sha "${{ github.event.client_payload.expected_merge_sha }}" \
+            --authorized "${{ github.event.client_payload.authorized }}" \
             --job-results-json '{"validation":"${{ needs.required-gate.result }}"}' \
             --target-url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
