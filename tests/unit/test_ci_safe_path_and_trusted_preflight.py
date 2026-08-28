@@ -78,17 +78,14 @@ def test_trusted_dispatch_preflight_freezes_control_plane_before_python() -> Non
 
 def test_validation_jobs_wait_for_supply_chain_preflight() -> None:
     text = CI_WORKFLOW.read_text(encoding="utf-8")
-
-    for job_id in (
-        "quality",
-        "deterministic-evals",
-        "security",
-        "browser-reference-sut",
-    ):
-        start = text.index(f"  {job_id}:")
-        next_job = text.find("\n  ", start + 3)
-        job = text[start:] if next_job < 0 else text[start:next_job]
-        assert "    needs: supply-chain\n" in job
+    expected_headers = {
+        "quality": "  quality:\n    name: Quality / Python ${{ matrix.python-version }}\n    needs: supply-chain\n",
+        "deterministic-evals": "  deterministic-evals:\n    name: 34-Case Deterministic Control Evaluation\n    needs: supply-chain\n",
+        "security": "  security:\n    name: Security Gates\n    needs: supply-chain\n",
+        "browser-reference-sut": "  browser-reference-sut:\n    name: Playwright Reference SUT\n    needs: supply-chain\n",
+    }
+    for header in expected_headers.values():
+        assert header in text
 
     supply_chain = text[text.index("  supply-chain:") : text.index("  security:")]
     assert "          fetch-depth: 0\n" in supply_chain
