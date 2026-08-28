@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-import json
 import pytest
 
 from ai_qa_automation.cli import contract_diff_command
-from ai_qa_automation.intelligence import contract_document
+from ai_qa_automation.intelligence import contract_document, contract_drift
 from ai_qa_automation.intelligence.contract_document import (
     MAX_CONTRACT_DOCUMENT_BYTES,
     load_contract_document,
@@ -36,9 +36,14 @@ def _nested_schema(depth: int) -> dict[str, object]:
 
 
 def _assert_not_analyzed(current: bytes, *, path: str = "openapi.yaml") -> str:
+    baseline = (
+        _baseline_yaml()
+        if path.endswith((".yaml", ".yml"))
+        else b'{"openapi":"3.1.0","paths":{}}'
+    )
     result = OpenAPIContractDriftAnalyzer().analyze(
         path=path,
-        baseline=_baseline_yaml() if path.endswith((".yaml", ".yml")) else b'{"openapi":"3.1.0","paths":{}}',
+        baseline=baseline,
         current=current,
     )
     assert result.analyzed is False
@@ -184,6 +189,15 @@ def test_structural_node_limit_is_enforced_after_parse(
     assert "structural-node limit" in reason
 
 
+def test_parser_enforces_its_own_byte_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(contract_document, "MAX_CONTRACT_DOCUMENT_BYTES", 64)
+    current = b'{"openapi":"3.1.0","paths":{},"x":"' + b"a" * 64 + b'"}'
+
+    reason = _assert_not_analyzed(current, path="openapi.json")
+
+    assert "byte ingestion limit" in reason
+
+
 def test_standalone_contract_diff_rejects_oversized_document(tmp_path: Path) -> None:
     baseline = tmp_path / "baseline.json"
     current = tmp_path / "current.json"
@@ -267,3 +281,78 @@ def test_known_breaking_fact_is_retained_when_other_comparison_is_incomplete() -
     assert result.reason == "contract comparison exceeded a deterministic analysis bound"
     assert any(change.rule_id == "OAS-PATH-REMOVED" for change in result.changes)
     assert any(change.rule_id == "OAS-SCHEMA-DEPTH-LIMIT" for change in result.changes)
+
+
+def test_exact_change_limit_can_remain_fully_analyzed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(contract_drift, "_MAX_COMPARISON_CHANGES", 2)
+    baseline = {"openapi": "3.1.0", "paths": {}}
+    current = {"openapi": "3.1.0", "paths": {"/a": {}, "/b": {}}}
+
+    result = OpenAPIContractDriftAnalyzer().analyze(
+        path="openapi.json",
+        baseline=json.dumps(baseline).encode(),
+        current=json.dumps(current).encode(),
+    )
+
+    assert result.severity is ContractDriftSeverity.NON_BREAKING
+    assert result.analyzed is True
+    assert result.reason is None
+    assert len(result.changes) == 2
+
+
+def test_change_limit_exhaustion_cannot_be_non_breaking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(contract_drift, "_MAX_COMPARISON_CHANGES", 2)
+    stable_schema = {"type": "string"}
+    baseline = {
+        "openapi": "3.1.0",
+        "paths": {"/shared": {}},
+        "components": {"schemas": {"Stable": stable_schema}},
+    }
+    current = {
+        "openapi": "3.1.0",
+        "paths": {"/a": {}, "/b": {}, "/shared": {}},
+        "components": {"schemas": {"Stable": stable_schema}},
+    }
+
+    result = OpenAPIContractDriftAnalyzer().analyze(
+        path="openapi.json",
+        baseline=json.dumps(baseline).encode(),
+        current=json.dumps(current).encode(),
+    )
+
+    assert result.severity is ContractDriftSeverity.NOT_ANALYZED
+    assert result.analyzed is False
+    assert result.reason == "contract comparison exceeded a deterministic analysis bound"
+    assert len(result.changes) == 2
+
+
+def test_breaking_finding_beyond_change_limit_remains_visible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(contract_drift, "_MAX_COMPARISON_CHANGES", 2)
+    baseline = {
+        "openapi": "3.1.0",
+        "paths": {
+            "/shared": {"get": {"responses": {"200": {"description": "ok"}}}}
+        },
+    }
+    current = {
+        "openapi": "3.1.0",
+        "paths": {"/a": {}, "/b": {}, "/shared": {}},
+    }
+
+    result = OpenAPIContractDriftAnalyzer().analyze(
+        path="openapi.json",
+        baseline=json.dumps(baseline).encode(),
+        current=json.dumps(current).encode(),
+    )
+
+    assert result.severity is ContractDriftSeverity.BREAKING
+    assert result.analyzed is False
+    assert result.reason == "contract comparison exceeded a deterministic analysis bound"
+    assert len(result.changes) == 2
+    assert any(change.rule_id == "OAS-OPERATION-REMOVED" for change in result.changes)
