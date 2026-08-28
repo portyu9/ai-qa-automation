@@ -57,6 +57,22 @@ def test_required_property_removal_is_risky() -> None:
     )
 
 
+def test_optional_schema_property_addition_is_risky() -> None:
+    result = _analyze(
+        _schema_document({"type": "object", "properties": {}}),
+        _schema_document(
+            {
+                "type": "object",
+                "properties": {"trace_id": {"type": "string"}},
+            }
+        ),
+    )
+
+    assert result.severity is ContractDriftSeverity.RISKY
+    assert result.analyzed is True
+    assert any(change.rule_id == "OAS-PROPERTY-ADDED" for change in result.changes)
+
+
 def test_added_response_status_is_risky() -> None:
     baseline = {
         "openapi": "3.1.0",
