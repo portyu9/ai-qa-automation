@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -18,6 +19,32 @@ def test_ci_identity_separates_validation_subject_from_github_event_sha(
     monkeypatch.setenv("GITHUB_SHA", github_event_sha)
 
     assert mermaid._ci_identity() == (subject_sha, github_event_sha)
+
+
+def test_main_emits_selected_subject_and_separate_event_sha(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    subject_sha = "a" * 40
+    github_event_sha = "b" * 40
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("CI_SUBJECT_SHA", subject_sha)
+    monkeypatch.setenv("GITHUB_SHA", github_event_sha)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        mermaid,
+        "_discover_mermaid_documents",
+        lambda root: [(Path("README.md"), 1)],
+    )
+    monkeypatch.setattr(mermaid, "_run_mermaid", lambda *args, **kwargs: None)
+
+    assert mermaid.main() == 0
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["schema_version"] == 2
+    assert result["subject_sha"] == subject_sha
+    assert result["github_event_sha"] == github_event_sha
 
 
 @pytest.mark.parametrize("name", ["CI_SUBJECT_SHA", "GITHUB_SHA"])
