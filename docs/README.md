@@ -22,7 +22,7 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 |---|---|
 | **Architecture / principal engineering** | [Architecture](ARCHITECTURE.md) → [Result Contract](RESULT_CONTRACT.md) → [Runtime Control](RUNTIME_CONTROL.md) → [Traceability](TRACEABILITY.md) → [Technical Walkthrough](TECHNICAL_WALKTHROUGH.md) |
 | **Security / red team** | [Security](SECURITY.md) → [Threat Model](THREAT_MODEL.md) → [Tool Input Boundaries](TOOL_INPUT_BOUNDARIES.md) → [Objective Input Boundary](OBJECTIVE_INPUT_BOUNDARY.md) → [Agent SDK Result Boundary](SDK_RESULT_BOUNDARY.md) → [Persistence Resource Boundary](PERSISTENCE_RESOURCE_BOUNDARY.md) → [API Observation Boundary](API_OBSERVATION_BOUNDARY.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Supply Chain](SUPPLY_CHAIN.md) → [CI/CD](CI_CD.md) → [Trusted PR Control Plane](TRUSTED_PR_CONTROL_PLANE.md) → [MCP](MCP.md) → [Verification Boundaries](VERIFICATION_BOUNDARIES.md) → [Pytest Execution Isolation](PYTEST_EXECUTION_ISOLATION.md) → [Limitations](LIMITATIONS.md) |
-| **QA automation / AI engineering** | [Change Intelligence](CHANGE_INTELLIGENCE.md) → [Skills](SKILLS.md) → [Evaluation](EVALUATION.md) → [Result Contract](RESULT_CONTRACT.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Production Readiness](PRODUCTION_READINESS.md) |
+| **QA automation / AI engineering** | [Change Intelligence](CHANGE_INTELLIGENCE.md) → [Contract Drift Boundary](CONTRACT_DRIFT_BOUNDARY.md) → [Skills](SKILLS.md) → [Evaluation](EVALUATION.md) → [Result Contract](RESULT_CONTRACT.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Production Readiness](PRODUCTION_READINESS.md) |
 | **Operator / adopter** | [Setup](SETUP.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Pytest Execution Isolation](PYTEST_EXECUTION_ISOLATION.md) → [Operations](OPERATIONS.md) → [CI/CD](CI_CD.md) → [Troubleshooting](TROUBLESHOOTING.md) → [Runtime Control](RUNTIME_CONTROL.md) → [MCP](MCP.md) |
 
 ### Architecture / principal engineering
@@ -54,11 +54,12 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 ### QA automation / AI engineering
 
 1. [`CHANGE_INTELLIGENCE.md`](CHANGE_INTELLIGENCE.md) — merge-base-aware change analysis
-2. [`SKILLS.md`](SKILLS.md) — five trusted Claude QA procedures
-3. [`EVALUATION.md`](EVALUATION.md) — deterministic primary and repository-visible sequestered readiness evaluation architecture
-4. [`RESULT_CONTRACT.md`](RESULT_CONTRACT.md) — how evidence becomes a runtime outcome
-5. [`BROWSER_VALIDATION.md`](BROWSER_VALIDATION.md) — how browser evidence is subject-bound without overstating page health
-6. [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) — production control model
+2. [`CONTRACT_DRIFT_BOUNDARY.md`](CONTRACT_DRIFT_BOUNDARY.md) — bounded, unambiguous OpenAPI/Swagger parser and comparison authority
+3. [`SKILLS.md`](SKILLS.md) — five trusted Claude QA procedures
+4. [`EVALUATION.md`](EVALUATION.md) — deterministic primary and repository-visible sequestered readiness evaluation architecture
+5. [`RESULT_CONTRACT.md`](RESULT_CONTRACT.md) — how evidence becomes a runtime outcome
+6. [`BROWSER_VALIDATION.md`](BROWSER_VALIDATION.md) — how browser evidence is subject-bound without overstating page health
+7. [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) — production control model
 
 ### Operator / adopter
 
@@ -92,6 +93,7 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 | [`CI_CD.md`](CI_CD.md) | How are trusted dispatch validation, manual credentialed-validation boundaries, exact-subject binding, and repository-setting authority separated? |
 | [`TRUSTED_PR_CONTROL_PLANE.md`](TRUSTED_PR_CONTROL_PLANE.md) | How is protected PR merge authority bound to trusted-main workflow execution, live merge-ref verification, and external Actions Policy? |
 | [`CHANGE_INTELLIGENCE.md`](CHANGE_INTELLIGENCE.md) | How are committed changes, risk, ownership, test impact, and API drift analyzed? |
+| [`CONTRACT_DRIFT_BOUNDARY.md`](CONTRACT_DRIFT_BOUNDARY.md) | How are OpenAPI/Swagger bytes, JSON/YAML semantics, parser resources, and incomplete comparison bounded before compatibility evidence is emitted? |
 | [`EVALUATION.md`](EVALUATION.md) | How is the agent evaluated as software rather than prose? |
 | [`SKILLS.md`](SKILLS.md) | What procedures do the five trusted Claude Skills provide? |
 | [`MCP.md`](MCP.md) | How are external MCP identity, authorization, and evidence handled? |
