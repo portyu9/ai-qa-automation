@@ -22,6 +22,7 @@ _MAX_JSON_SCHEMA_WORKER_DEPTH = 64
 _MAX_JSON_SCHEMA_WORKER_NODES = 100_000
 _MAX_JSON_SCHEMA_WORKER_CONTAINER_ITEMS = 50_000
 _MAX_JSON_SCHEMA_WORKER_INTEGER_BITS = 4_096
+_DEFAULT_JSON_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
 _SAFE_REFERENCE_SCHEMES = frozenset({"http", "https", "file", "ftp", "urn", "data", "relative", "other"})
 
 _JSON_SCHEMA_WORKER_CODE = dedent(
@@ -38,7 +39,8 @@ _JSON_SCHEMA_WORKER_CODE = dedent(
     expected_payload_sha256 = sys.argv[2]
     max_payload_bytes = int(sys.argv[3])
     validation_timeout = float(sys.argv[4])
-    sys.path.extend(sys.argv[5:])
+    default_dialect = sys.argv[5]
+    sys.path.extend(sys.argv[6:])
 
     class ValidationTimeout(RuntimeError):
         pass
@@ -134,6 +136,10 @@ _JSON_SCHEMA_WORKER_CODE = dedent(
     except ImportError:
         finish("dependency_unavailable")
 
+    default_validator_class = validator_for({"$schema": default_dialect}, default=None)
+    if default_validator_class is None:
+        finish("worker_error")
+
     try:
         payload = load_bound_payload(sys.argv[1])
         instance = payload["instance"]
@@ -152,7 +158,7 @@ _JSON_SCHEMA_WORKER_CODE = dedent(
                     if validator_class is None:
                         finish("unsupported_dialect")
                 else:
-                    validator_class = validator_for(schema)
+                    validator_class = default_validator_class
 
                 validator_class.check_schema(schema)
                 meta_id = validator_class.META_SCHEMA.get("$id") or validator_class.META_SCHEMA.get("id")
@@ -201,7 +207,7 @@ _JSON_SCHEMA_WORKER_CODE = dedent(
                         for child in specification.subresources_of(subresource)
                     )
             else:
-                validator_class = validator_for(schema)
+                validator_class = default_validator_class
                 validator_class.check_schema(schema)
 
             def deny_external_reference(uri):
@@ -269,10 +275,34 @@ class _WorkerInputError(ValueError):
     pass
 
 
+def _bounded_worker_utf8_size(value: str, *, remaining: int) -> int:
+    if remaining < 0 or len(value) > remaining:
+        raise _WorkerInputError("JSON Schema worker payload exceeds the UTF-8 content limit")
+    if value.isascii():
+        return len(value)
+    size = 0
+    for character in value:
+        codepoint = ord(character)
+        if codepoint <= 0x7F:
+            size += 1
+        elif codepoint <= 0x7FF:
+            size += 2
+        elif 0xD800 <= codepoint <= 0xDFFF:
+            raise _WorkerInputError("JSON Schema worker payload contains invalid Unicode")
+        elif codepoint <= 0xFFFF:
+            size += 3
+        else:
+            size += 4
+        if size > remaining:
+            raise _WorkerInputError("JSON Schema worker payload exceeds the UTF-8 content limit")
+    return size
+
+
 def _validate_worker_json_shape(value: Any) -> None:
     stack: list[tuple[Any, int]] = [(value, 0)]
     seen_containers: set[int] = set()
     nodes = 0
+    utf8_bytes = 0
     while stack:
         item, depth = stack.pop()
         if depth > _MAX_JSON_SCHEMA_WORKER_DEPTH:
@@ -280,7 +310,12 @@ def _validate_worker_json_shape(value: Any) -> None:
         nodes += 1
         if nodes > _MAX_JSON_SCHEMA_WORKER_NODES:
             raise _WorkerInputError("JSON Schema worker payload exceeds the structural-node limit")
-        if item is None or isinstance(item, (str, bool)):
+        if item is None or isinstance(item, bool):
+            continue
+        if isinstance(item, str):
+            utf8_bytes += _bounded_worker_utf8_size(
+                item, remaining=_MAX_JSON_SCHEMA_WORKER_INPUT_BYTES - utf8_bytes
+            )
             continue
         if isinstance(item, int):
             if item.bit_length() > _MAX_JSON_SCHEMA_WORKER_INTEGER_BITS:
@@ -293,18 +328,26 @@ def _validate_worker_json_shape(value: Any) -> None:
         if isinstance(item, dict):
             identity = id(item)
             if identity in seen_containers:
-                continue
+                raise _WorkerInputError(
+                    "JSON Schema worker payload contains a repeated container identity"
+                )
             seen_containers.add(identity)
             if len(item) > _MAX_JSON_SCHEMA_WORKER_CONTAINER_ITEMS:
                 raise _WorkerInputError("JSON Schema worker payload contains an oversized object")
-            if any(not isinstance(key, str) for key in item):
-                raise _WorkerInputError("JSON Schema worker payload contains a non-string object key")
+            for key in item:
+                if not isinstance(key, str):
+                    raise _WorkerInputError("JSON Schema worker payload contains a non-string object key")
+                utf8_bytes += _bounded_worker_utf8_size(
+                    key, remaining=_MAX_JSON_SCHEMA_WORKER_INPUT_BYTES - utf8_bytes
+                )
             stack.extend((nested, depth + 1) for nested in item.values())
             continue
         if isinstance(item, list):
             identity = id(item)
             if identity in seen_containers:
-                continue
+                raise _WorkerInputError(
+                    "JSON Schema worker payload contains a repeated container identity"
+                )
             seen_containers.add(identity)
             if len(item) > _MAX_JSON_SCHEMA_WORKER_CONTAINER_ITEMS:
                 raise _WorkerInputError("JSON Schema worker payload contains an oversized array")
@@ -382,6 +425,7 @@ def validate_json_schema(instance: Any, schema: Any) -> ValidationResult:
                     payload_sha256,
                     str(_MAX_JSON_SCHEMA_WORKER_INPUT_BYTES),
                     str(_JSON_SCHEMA_VALIDATION_TIMEOUT_SECONDS),
+                    _DEFAULT_JSON_SCHEMA_DIALECT,
                     *dependency_roots,
                 ],
                 cwd=workspace,
@@ -409,7 +453,12 @@ def validate_json_schema(instance: Any, schema: Any) -> ValidationResult:
                 "startup_grace_seconds": _JSON_SCHEMA_WORKER_STARTUP_GRACE_SECONDS,
             },
         )
-    if result.returncode != 0 or result.stdout_truncated:
+    if (
+        result.returncode != 0
+        or result.stdout_truncated
+        or result.stderr_truncated
+        or bool(result.stderr)
+    ):
         return ValidationResult(
             name="json_schema",
             status=ValidationStatus.NOT_VERIFIED,

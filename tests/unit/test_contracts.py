@@ -68,6 +68,12 @@ def test_supported_legacy_draft_remains_explicitly_supported() -> None:
     assert result.status is ValidationStatus.PASS
 
 
+def test_unmarked_schema_uses_project_owned_draft_2020_12_default() -> None:
+    schema = {"prefixItems": [{"const": 1}], "items": False}
+    assert validate_json_schema([1], schema).status is ValidationStatus.PASS
+    assert validate_json_schema([1, 2], schema).status is ValidationStatus.FAIL
+
+
 def test_unknown_embedded_resource_dialect_is_not_reinterpreted() -> None:
     result = validate_json_schema(
         12,
@@ -480,6 +486,46 @@ def test_direct_worker_input_enforces_container_item_bound(
     assert result.status is ValidationStatus.NOT_VERIFIED
 
 
+def test_direct_worker_input_enforces_structural_node_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(contracts, "_MAX_JSON_SCHEMA_WORKER_NODES", 2)
+    result = validate_json_schema([1, 2], {})
+    assert result.status is ValidationStatus.NOT_VERIFIED
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_direct_worker_input_rejects_non_finite_numbers(value: float) -> None:
+    result = validate_json_schema(value, {"type": "number"})
+    assert result.status is ValidationStatus.NOT_VERIFIED
+
+
+def test_direct_worker_input_enforces_utf8_bound_before_encoding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(contracts, "_MAX_JSON_SCHEMA_WORKER_INPUT_BYTES", 8)
+
+    def unexpected_encode(*_args: object, **_kwargs: object) -> object:
+        pytest.fail("worker encoder ran before the UTF-8 preflight bound")
+
+    monkeypatch.setattr(json.JSONEncoder, "iterencode", unexpected_encode)
+    result = validate_json_schema(["12345", "6789"], {})
+    assert result.status is ValidationStatus.NOT_VERIFIED
+
+
+def test_shared_container_graph_is_rejected_before_encoding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shared = [1, 2, 3]
+
+    def unexpected_encode(*_args: object, **_kwargs: object) -> object:
+        pytest.fail("worker encoder ran for a shared container graph")
+
+    monkeypatch.setattr(json.JSONEncoder, "iterencode", unexpected_encode)
+    result = validate_json_schema([shared, shared], {"type": "array"})
+    assert result.status is ValidationStatus.NOT_VERIFIED
+
+
 def test_worker_payload_serialization_is_bounded() -> None:
     result = validate_json_schema("x" * 2_200_000, {"type": "string"})
     assert result.status is ValidationStatus.NOT_VERIFIED
@@ -495,6 +541,20 @@ def test_cyclic_direct_input_is_not_promoted_to_validation() -> None:
 
 def test_dependency_unavailability_is_not_pass(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(contracts, "_isolated_dependency_roots", lambda: None)
+    result = validate_json_schema(12, {"type": "integer"})
+    assert result.status is ValidationStatus.NOT_VERIFIED
+
+
+def test_worker_stderr_prevents_pass(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Result:
+        timed_out = False
+        returncode = 0
+        stdout = '{"kind":"pass"}'
+        stderr = "unexpected worker diagnostic"
+        stdout_truncated = False
+        stderr_truncated = False
+
+    monkeypatch.setattr(contracts, "run_bounded_subprocess", lambda *_args, **_kwargs: Result())
     result = validate_json_schema(12, {"type": "integer"})
     assert result.status is ValidationStatus.NOT_VERIFIED
 
