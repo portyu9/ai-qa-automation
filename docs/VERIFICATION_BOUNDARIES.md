@@ -148,7 +148,9 @@ Deployment evidence includes:
 > [!CAUTION]
 > `AI_QA_K6_EXTERNAL_EGRESS_ENFORCED=true` is a prerequisite assertion, not a firewall. The deployment must actually provide egress containment for every k6 execution. K6 process spawn additionally requires trusted process/filesystem isolation; static JavaScript inspection is not treated as a process or filesystem sandbox. The current live MCP configuration exposes only the egress assertion, so live k6 remains intentionally fail-closed until the separate containment prerequisite is plumbed through trusted runtime configuration.
 
-Every k6 validation outcome is bound to the same normalized six-field subject: script, target URL, environment, maximum p95, maximum error rate, and minimum request rate. Thresholds are validated before any target or k6 process action. The exact normalized target URL participates in gate hashing, but durable blocked-gate details store only the framework-redacted URL so credentials, query strings, and non-root paths do not become persisted authority metadata.
+Every k6 validation outcome is bound to the same normalized six-field subject: script, target URL, environment, maximum p95, maximum error rate, and minimum request rate. Thresholds are validated before any target or k6 process action. The exact normalized subject participates in gate hashing; durable blocked-gate details retain only SHA-256 identifiers for the script and environment, the framework-redacted target URL, and the numeric thresholds. Raw script/environment strings, URL credentials, query strings, and non-root URL paths are not persisted in those details.
+
+Before collecting executable module bytes, `K6Runner` records the workspace root identity. Each root/local-import module is then opened through descriptor-relative no-follow confinement and revalidated against that expected root identity while the bounded read is in progress. A symlinked parent/final component, whole-root replacement, identity change during ingestion, unsupported descriptor-relative authority, or out-of-root lexical path fails closed before snapshot materialization. The separately asserted deployment process/filesystem-isolation prerequisite remains required before process spawn; descriptor-confined ingestion does not claim to implement that external sandbox.
 
 ---
 
@@ -165,7 +167,7 @@ Every k6 validation outcome is bound to the same normalized six-field subject: s
 | Network policy | canonical host validation + adapter authorization | DNS/routing/firewall/proxy enforcement |
 | Playwright | navigation/subresource/WebSocket policy + locator evidence contract | browser runtime + target app behavior |
 | API | host/method policy + bounded evidence capture | target auth/data/service behavior |
-| k6 | non-production/host/script/threshold policy + bounded validated module snapshot + egress/process-isolation prerequisites | executable, approved target, actual infrastructure egress + process/filesystem isolation |
+| k6 | non-production/host/script/threshold policy + root-identity-bound descriptor-confined module ingestion + bounded validated snapshot + egress/process-isolation prerequisites | executable, approved target, actual infrastructure egress + process/filesystem isolation |
 | Appium | runtime/capability inspection boundary | app/device/emulator/cloud session |
 | Secret safety | protected paths, redaction, minimal subprocess env | organization secret manager, rotation, access policy |
 | Traceability | strict run-bound manifests, hashes, journal/runtime binding, typed lineage, artifact/root-verifying unsigned attestation | external signing/identity/timestamping when required |
