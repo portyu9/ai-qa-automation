@@ -24,6 +24,11 @@ class LiveRuntimeServices(RuntimeServices):
     deployment infrastructure explicitly asserts both process/filesystem
     containment and outbound-egress enforcement. These booleans are prerequisite
     assertions only; they do not implement the isolation themselves.
+
+    Target-controlled k6 code is fail-closed at this live-service boundary until
+    process/filesystem-isolation authority is explicitly plumbed through trusted
+    runtime configuration to the controlled runner. Egress configuration alone
+    cannot authorize process spawn.
     """
 
     control: RuntimeControl | None = None
@@ -66,6 +71,17 @@ class LiveRuntimeServices(RuntimeServices):
             + "; configuration flags are prerequisite assertions, not sandbox implementations"
         )
 
+    def k6_execution_block_reason(self) -> str:
+        missing = ["process/filesystem isolation"]
+        if not self.k6_external_egress_enforced:
+            missing.append("outbound-egress enforcement")
+        return (
+            "k6 target-code execution requires trusted deployment enforcement for "
+            + " and ".join(missing)
+            + "; the current live runtime does not expose the process/filesystem-isolation "
+            "assertion required by the controlled K6Runner"
+        )
+
     def consume(self, tool_name: str, tool_input: dict[str, Any]) -> None:
         if self.control is None:  # pragma: no cover - guarded by __post_init__
             raise RuntimeError("live runtime services lost RuntimeControl")
@@ -105,5 +121,35 @@ class LiveRuntimeServices(RuntimeServices):
                 self.state.terminal_reason = reason
                 self.checkpoint()
                 raise PermissionError(reason)
+
+        if tool_name == "run_k6":
+            reason = self.k6_execution_block_reason()
+            gate_payload = {
+                "script": str(tool_input["script"]),
+                "target_url": str(tool_input["target_url"]),
+                "environment": str(tool_input["environment"]),
+                "max_p95_ms": float(tool_input["max_p95_ms"]),
+                "max_error_rate": float(tool_input["max_error_rate"]),
+                "min_request_rate": float(tool_input["min_request_rate"]),
+            }
+            self.state.validation_results.append(
+                ValidationResult(
+                    name="k6",
+                    gate_id=_stable_gate_id("k6", gate_payload),
+                    revision=self.state.change_revision,
+                    status=ValidationStatus.BLOCKED,
+                    summary=reason,
+                    details={
+                        **gate_payload,
+                        "execution_started": False,
+                        "process_isolation_enforced": False,
+                        "external_egress_enforced": self.k6_external_egress_enforced,
+                    },
+                )
+            )
+            self.state.terminal_status = TerminalStatus.BLOCKED
+            self.state.terminal_reason = reason
+            self.checkpoint()
+            raise PermissionError(reason)
 
         self.checkpoint()
