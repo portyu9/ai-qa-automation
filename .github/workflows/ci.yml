@@ -164,7 +164,7 @@ jobs:
         with:
           ref: ${{ env.CI_SUBJECT_SHA }}
           persist-credentials: false
-          fetch-depth: 0
+          fetch-depth: 2
 
       - name: Verify exact source revision
         run: test "$(git rev-parse HEAD)" = "$CI_SUBJECT_SHA"
