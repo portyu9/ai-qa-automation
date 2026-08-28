@@ -511,12 +511,19 @@ jobs:
       - name: Publish exact-subject trusted status
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.client_payload.pr_number }}
+          EXPECTED_HEAD_SHA: ${{ github.event.client_payload.expected_head_sha }}
+          EXPECTED_BASE_SHA: ${{ github.event.client_payload.expected_base_sha }}
+          EXPECTED_MERGE_SHA: ${{ github.event.client_payload.expected_merge_sha }}
+          AUTHORIZED: ${{ github.event.client_payload.authorized }}
+          VALIDATION_RESULT: ${{ needs.required-gate.result }}
         run: |
+          printf -v job_results_json '{"validation":"%s"}' "$VALIDATION_RESULT"
           python scripts/trusted_pr_control.py report \
-            --pr-number "${{ github.event.client_payload.pr_number }}" \
-            --expected-head-sha "${{ github.event.client_payload.expected_head_sha }}" \
-            --expected-base-sha "${{ github.event.client_payload.expected_base_sha }}" \
-            --expected-merge-sha "${{ github.event.client_payload.expected_merge_sha }}" \
-            --authorized "${{ github.event.client_payload.authorized }}" \
-            --job-results-json '{"validation":"${{ needs.required-gate.result }}"}' \
+            --pr-number "$PR_NUMBER" \
+            --expected-head-sha "$EXPECTED_HEAD_SHA" \
+            --expected-base-sha "$EXPECTED_BASE_SHA" \
+            --expected-merge-sha "$EXPECTED_MERGE_SHA" \
+            --authorized "$AUTHORIZED" \
+            --job-results-json "$job_results_json" \
             --target-url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
