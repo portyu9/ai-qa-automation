@@ -20,7 +20,7 @@ def _pull_request_payload(
     *,
     head_sha: str = HEAD_SHA,
     base_sha: str = BASE_SHA,
-    merge_sha: str = MERGE_SHA,
+    merge_sha: str | None = MERGE_SHA,
     state: str = "open",
     base_ref: str = "main",
     mergeable: bool | None = True,
@@ -37,16 +37,21 @@ def _pull_request_payload(
 
 class FakeApi:
     current_payload: Mapping[str, Any] = _pull_request_payload()
+    payload_sequence: ClassVar[list[Mapping[str, Any]]] = []
     instances: ClassVar[list[FakeApi]] = []
 
     def __init__(self, *, repository: str, token: str) -> None:
         self.repository = repository
         self.token = token
         self.statuses: list[dict[str, str]] = []
+        self.fetch_count = 0
         type(self).instances.append(self)
 
     def fetch_pull_request(self, number: int) -> Mapping[str, Any]:
         assert number == 43
+        self.fetch_count += 1
+        if type(self).payload_sequence:
+            return type(self).payload_sequence.pop(0)
         return type(self).current_payload
 
     def post_status(
@@ -70,6 +75,7 @@ class FakeApi:
 @pytest.fixture(autouse=True)
 def _reset_fake_api() -> None:
     FakeApi.current_payload = _pull_request_payload()
+    FakeApi.payload_sequence = []
     FakeApi.instances = []
 
 
@@ -217,6 +223,86 @@ def test_owner_authorized_success_posts_exact_current_head_status(
             "target_url": RUN_URL,
         }
     ]
+
+
+def test_report_waits_for_mergeability_stabilization_before_posting_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    FakeApi.payload_sequence = [
+        _pull_request_payload(mergeable=None, merge_sha=None),
+        _pull_request_payload(mergeable=True, merge_sha=None),
+        _pull_request_payload(),
+    ]
+    sleeps: list[float] = []
+    monkeypatch.setattr(control.time, "sleep", sleeps.append)
+
+    result = _report(monkeypatch)
+
+    assert result["result"] == "SUCCESS"
+    assert FakeApi.instances[0].fetch_count == 3
+    assert sleeps == [control.MERGEABILITY_RETRY_SECONDS] * 2
+    assert FakeApi.instances[0].statuses[0]["state"] == "success"
+
+
+def test_report_bounds_pending_mergeability_without_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    FakeApi.current_payload = _pull_request_payload(mergeable=True, merge_sha=None)
+    sleeps: list[float] = []
+    monkeypatch.setattr(control.time, "sleep", sleeps.append)
+
+    with pytest.raises(RuntimeError, match="did not stabilize"):
+        _report(monkeypatch)
+
+    assert FakeApi.instances[0].fetch_count == control.MERGEABILITY_READ_ATTEMPTS
+    assert sleeps == [control.MERGEABILITY_RETRY_SECONDS] * (
+        control.MERGEABILITY_READ_ATTEMPTS - 1
+    )
+    assert FakeApi.instances[0].statuses == []
+
+
+def test_report_fails_on_identity_drift_during_mergeability_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    FakeApi.payload_sequence = [
+        _pull_request_payload(mergeable=None, merge_sha=None),
+        _pull_request_payload(head_sha=OTHER_SHA, mergeable=None, merge_sha=None),
+    ]
+    sleeps: list[float] = []
+    monkeypatch.setattr(control.time, "sleep", sleeps.append)
+
+    with pytest.raises(ValueError, match="subject changed after authorization"):
+        _report(monkeypatch)
+
+    assert FakeApi.instances[0].fetch_count == 2
+    assert sleeps == [control.MERGEABILITY_RETRY_SECONDS]
+    assert FakeApi.instances[0].statuses == []
+
+
+def test_report_does_not_retry_malformed_merge_sha(monkeypatch: pytest.MonkeyPatch) -> None:
+    FakeApi.current_payload = _pull_request_payload(merge_sha="short")
+    sleeps: list[float] = []
+    monkeypatch.setattr(control.time, "sleep", sleeps.append)
+
+    with pytest.raises(ValueError, match="merge SHA"):
+        _report(monkeypatch)
+
+    assert FakeApi.instances[0].fetch_count == 1
+    assert sleeps == []
+    assert FakeApi.instances[0].statuses == []
+
+
+def test_report_does_not_retry_definitive_unmergeable(monkeypatch: pytest.MonkeyPatch) -> None:
+    FakeApi.current_payload = _pull_request_payload(mergeable=False, merge_sha=None)
+    sleeps: list[float] = []
+    monkeypatch.setattr(control.time, "sleep", sleeps.append)
+
+    with pytest.raises(ValueError, match="definitively mergeable"):
+        _report(monkeypatch)
+
+    assert FakeApi.instances[0].fetch_count == 1
+    assert sleeps == []
+    assert FakeApi.instances[0].statuses == []
 
 
 def test_stale_subject_cannot_post_status(monkeypatch: pytest.MonkeyPatch) -> None:
