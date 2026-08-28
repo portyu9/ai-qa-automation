@@ -297,7 +297,12 @@ def _path_template_names(path_name: str) -> set[str]:
         raise ValueError("contract OpenAPI path keys may not contain query or fragment syntax")
     names = re.findall(r"\{([^{}]+)\}", path_name)
     remainder = re.sub(r"\{[^{}]+\}", "", path_name)
-    if "{" in remainder or "}" in remainder or any(not name or "/" in name for name in names):
+    if (
+        "{" in remainder
+        or "}" in remainder
+        or any(not name or "/" in name for name in names)
+        or len(set(names)) != len(names)
+    ):
         raise ValueError("contract OpenAPI path template syntax is invalid for bounded comparison")
     return set(names)
 
@@ -454,9 +459,9 @@ def _validate_parameter_list(
         raise ValueError("contract OpenAPI parameters must be an array for bounded comparison")
     if path_level and value:
         raise ValueError("contract OpenAPI path-level parameters are not supported by bounded comparison")
+
+    parameters: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
-    swagger_body_count = 0
-    swagger_has_form_data = False
     for parameter_value in value:
         parameter = _require_object(parameter_value, "parameter")
         if "$ref" in parameter:
@@ -467,6 +472,8 @@ def _validate_parameter_list(
             raise ValueError(
                 "contract OpenAPI parameters require string name and in fields for bounded comparison"
             )
+        if not name:
+            raise ValueError("contract OpenAPI parameter name must be non-empty for bounded comparison")
         allowed_locations = (
             _SWAGGER_PARAMETER_LOCATIONS if dialect == "swagger" else _OPENAPI_PARAMETER_LOCATIONS
         )
@@ -480,7 +487,12 @@ def _validate_parameter_list(
             raise ValueError("contract OpenAPI parameter required must be boolean for bounded comparison")
         if location == "path" and parameter.get("required") is not True:
             raise ValueError("contract OpenAPI path parameters must be explicitly required")
+        parameters.append(parameter)
 
+    swagger_body_count = 0
+    swagger_has_form_data = False
+    for parameter in parameters:
+        location = str(parameter["in"])
         if dialect == "swagger":
             if location == "body":
                 swagger_body_count += 1
