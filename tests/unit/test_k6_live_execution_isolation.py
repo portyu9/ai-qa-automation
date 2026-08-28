@@ -10,6 +10,7 @@ from ai_qa_automation.models import AgentRunState, TerminalStatus, ValidationSta
 from ai_qa_automation.runtime.budget import ExecutionBudget
 from ai_qa_automation.runtime.internal_tools import _stable_gate_id
 from ai_qa_automation.runtime.journal import RunJournal
+from ai_qa_automation.runtime.k6_authority import k6_gate_payload, k6_persisted_subject
 from ai_qa_automation.runtime.live_services import LiveRuntimeServices
 from ai_qa_automation.runtime.run_control import RuntimeControl
 from ai_qa_automation.state import StateStore
@@ -80,6 +81,7 @@ def test_live_k6_blocks_and_persists_authority_gate_before_execution(
     services, control, store = make_services(tmp_path, external_egress=external_egress)
     control.budget.charge_tool()
     request = _request()
+    subject = k6_gate_payload(request)
 
     with pytest.raises(PermissionError, match="k6 target-code execution requires"):
         services.consume("run_k6", request)
@@ -92,9 +94,9 @@ def test_live_k6_blocks_and_persists_authority_gate_before_execution(
     validation = services.state.validation_results[0]
     assert validation.name == "k6"
     assert validation.status is ValidationStatus.BLOCKED
-    assert validation.gate_id == _stable_gate_id("k6", request)
+    assert validation.gate_id == _stable_gate_id("k6", subject)
     assert validation.details == {
-        **request,
+        **k6_persisted_subject(subject),
         "execution_started": False,
         "process_isolation_enforced": False,
         "external_egress_enforced": external_egress,
@@ -125,3 +127,40 @@ def test_live_k6_gate_identity_includes_threshold_contract(tmp_path: Path) -> No
     second_gate = services.state.validation_results[-1].gate_id
 
     assert first_gate != second_gate
+
+
+def test_live_k6_persists_sanitized_url_but_hashes_exact_subject(tmp_path: Path) -> None:
+    services, control, store = make_services(tmp_path, external_egress=True)
+    request = _request()
+    request["target_url"] = (
+        "http://alice:super-secret-password@127.0.0.1:8000/private/path?token=super-secret-token"
+    )
+    subject = k6_gate_payload(request)
+    control.budget.charge_tool()
+
+    with pytest.raises(PermissionError):
+        services.consume("run_k6", request)
+
+    validation = services.state.validation_results[-1]
+    assert validation.gate_id == _stable_gate_id("k6", subject)
+    assert validation.details["target_url"] == k6_persisted_subject(subject)["target_url"]
+    rendered = store.path.read_text(encoding="utf-8")
+    assert "super-secret-password" not in rendered
+    assert "super-secret-token" not in rendered
+    assert "/private/path" not in rendered
+
+
+def test_live_k6_rejects_invalid_threshold_without_manufacturing_gate(tmp_path: Path) -> None:
+    services, control, store = make_services(tmp_path, external_egress=True)
+    request = _request()
+    request["max_error_rate"] = 1.5
+    control.budget.charge_tool()
+
+    with pytest.raises(ValueError, match="max_error_rate"):
+        services.consume("run_k6", request)
+
+    assert services.state.tool_call_count == 1
+    assert services.state.validation_results == []
+    persisted = store.load()
+    assert persisted.tool_call_count == 1
+    assert persisted.validation_results == []
