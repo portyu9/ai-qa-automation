@@ -39,7 +39,7 @@ def test_ci_contract_rejects_playwright_privileged_browser_bootstrap(tmp_path: P
     )
     path.write_text(text, encoding="utf-8")
 
-    with pytest.raises(ValueError, match="forbidden automatic-CI authority token"):
+    with pytest.raises(ValueError, match="forbidden validation authority token"):
         ci_contract.verify_ci_contract(root)
 
 
