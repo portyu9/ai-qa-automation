@@ -47,6 +47,10 @@ class _BoundedChanges(list[ContractChange]):
         self.incomplete = True
         if item.severity == ContractDriftSeverity.BREAKING:
             self.suppressed_breaking = True
+            for index in range(len(self) - 1, -1, -1):
+                if self[index].severity != ContractDriftSeverity.BREAKING:
+                    self[index] = item
+                    break
 
     def mark_incomplete(self) -> None:
         self.incomplete = True
