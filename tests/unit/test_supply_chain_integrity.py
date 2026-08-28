@@ -208,33 +208,81 @@ def test_sbom_digest_is_bound_to_the_parsed_bytes_during_substitution(
     assert digest == hashlib.sha256(original).hexdigest()
 
 
-def test_base_image_text_and_digest_use_the_same_observed_bytes(
+def test_base_image_text_and_digest_use_the_same_source_bound_bytes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     shutil.copytree(ROOT / "requirements", root / "requirements")
-    base_image_path = root / "requirements" / "base-image.lock"
-    original = base_image_path.read_bytes()
-    replacement = b"python:3.11.16-slim@sha256:" + (b"0" * 64) + b"\n"
-    original_reader = build_manifest.read_bytes_bounded
-    swapped = False
+    expected = {
+        f"requirements/{name}": (ROOT / "requirements" / name).read_bytes()
+        for name in build_manifest.LOCK_NAMES
+    }
 
-    def swapping_reader(path: Path, *, max_bytes: int, label: str) -> bytes:
-        nonlocal swapped
-        content = original_reader(path, max_bytes=max_bytes, label=label)
-        if not swapped and path == base_image_path:
-            swapped = True
-            base_image_path.write_bytes(replacement)
-        return content
+    def expected_blob(
+        _root: Path,
+        *,
+        source_sha: str,
+        relative_path: str,
+        max_bytes: int,
+        label: str,
+    ) -> bytes:
+        del source_sha, max_bytes, label
+        return expected[relative_path]
 
-    monkeypatch.setattr(build_manifest, "read_bytes_bounded", swapping_reader)
+    monkeypatch.setattr(build_manifest, "_git_blob_bytes", expected_blob)
 
-    digests, base_image = build_manifest._load_lock_inputs(root)
+    digests, base_image = build_manifest._load_lock_inputs(
+        root,
+        expected_source_sha="0" * 40,
+    )
 
+    original = expected["requirements/base-image.lock"]
     assert base_image == original.decode().strip()
     assert digests["base-image.lock"] == hashlib.sha256(original).hexdigest()
+
+
+def test_bound_source_input_rejects_worktree_bytes_not_in_expected_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    path = root / "pyproject.toml"
+    path.write_bytes(b"mutated")
+
+    def expected_blob(
+        _root: Path,
+        *,
+        source_sha: str,
+        relative_path: str,
+        max_bytes: int,
+        label: str,
+    ) -> bytes:
+        del source_sha, relative_path, max_bytes, label
+        return b"expected"
+
+    monkeypatch.setattr(build_manifest, "_git_blob_bytes", expected_blob)
+
+    with pytest.raises(ValueError, match="does not match the explicit expected source commit"):
+        build_manifest._read_bound_source_input(
+            root,
+            source_sha="0" * 40,
+            relative_path="pyproject.toml",
+            max_bytes=1024,
+            label="pyproject.toml",
+        )
+
+
+def test_build_manifest_git_environment_disables_ambient_authority() -> None:
+    env = build_manifest._git_environment()
+
+    assert env["GIT_CONFIG_NOSYSTEM"] == "1"
+    assert env["GIT_CONFIG_GLOBAL"] == build_manifest.os.devnull
+    assert env["GIT_NO_REPLACE_OBJECTS"] == "1"
+    assert env["GIT_OPTIONAL_LOCKS"] == "0"
+    assert env["GIT_NO_LAZY_FETCH"] == "1"
 
 
 def test_build_manifest_output_rejects_symlink_target(tmp_path: Path) -> None:
@@ -247,6 +295,28 @@ def test_build_manifest_output_rejects_symlink_target(tmp_path: Path) -> None:
         build_manifest._write_manifest(output, {"schema_version": 1})
 
     assert external.read_text(encoding="utf-8") == "untouched\n"
+
+
+def test_build_manifest_resolves_exact_current_source_subject() -> None:
+    current = build_manifest._git("rev-parse", "--verify", "HEAD", cwd=ROOT)
+
+    tree = build_manifest._resolve_expected_source(ROOT, current)
+
+    assert tree == build_manifest._git("rev-parse", "--verify", "HEAD^{tree}", cwd=ROOT)
+    build_manifest._assert_expected_source_current(ROOT, current)
+
+
+def test_build_manifest_rejects_revision_expression_as_expected_source() -> None:
+    with pytest.raises(ValueError, match="lowercase full object ID"):
+        build_manifest._resolve_expected_source(ROOT, "HEAD")
+
+
+def test_build_manifest_rejects_current_subject_mismatch() -> None:
+    current = build_manifest._git("rev-parse", "--verify", "HEAD", cwd=ROOT)
+    wrong = ("0" if current[0] != "0" else "1") + current[1:]
+
+    with pytest.raises(ValueError, match="does not match the explicit expected source SHA"):
+        build_manifest._assert_expected_source_current(ROOT, wrong)
 
 
 @pytest.mark.parametrize(
@@ -288,12 +358,43 @@ def test_build_manifest_requires_two_byte_identical_wheels(
         encoding="utf-8",
     )
     monkeypatch.setenv("SOURCE_DATE_EPOCH", "315532800")
+    expected_sbom_sha256 = hashlib.sha256(sbom.read_bytes()).hexdigest()
+    monkeypatch.setenv("RUNTIME_SBOM_SHA256", expected_sbom_sha256)
+    expected_source_sha = build_manifest._git("rev-parse", "--verify", "HEAD", cwd=ROOT)
 
-    manifest = generate_manifest(ROOT, wheel_a, wheel_b, sbom)
+    manifest = generate_manifest(
+        ROOT,
+        wheel_a,
+        wheel_b,
+        sbom,
+        expected_source_sha=expected_source_sha,
+    )
 
+    assert manifest["source"]["commit_sha"] == expected_source_sha
+    assert manifest["source"]["tree_sha"] == build_manifest._git(
+        "rev-parse", "--verify", "HEAD^{tree}", cwd=ROOT
+    )
     assert manifest["build"]["two_builds_byte_identical"] is True
+    assert manifest["sbom"]["sha256"] == expected_sbom_sha256
     assert manifest["identity"] == {"signed": False, "status": "NOT_PROVIDED"}
 
+    monkeypatch.setenv("RUNTIME_SBOM_SHA256", SHA256_ZERO)
+    with pytest.raises(ValueError, match="parent-owned expected digest"):
+        generate_manifest(
+            ROOT,
+            wheel_a,
+            wheel_b,
+            sbom,
+            expected_source_sha=expected_source_sha,
+        )
+
+    monkeypatch.setenv("RUNTIME_SBOM_SHA256", expected_sbom_sha256)
     wheel_b.write_bytes(b"different-wheel")
     with pytest.raises(ValueError, match="different SHA-256"):
-        generate_manifest(ROOT, wheel_a, wheel_b, sbom)
+        generate_manifest(
+            ROOT,
+            wheel_a,
+            wheel_b,
+            sbom,
+            expected_source_sha=expected_source_sha,
+        )

@@ -2,6 +2,7 @@ name: CI — ƳƤ AI QA Automation Framework
 
 # Designed and engineered by Ƴunior Ƥortal (ƳƤ).
 # Automatic gates are read-only, secret-free, and bound to the exact GitHub event subject.
+# Owner-authorized repository_dispatch is a dormant trusted-main path until external Actions Policy is active.
 on:
   pull_request:
     branches: [main]
@@ -9,21 +10,26 @@ on:
   push:
     branches: [main]
   merge_group:
+  repository_dispatch:
+    types: [trusted-pr-validation]
 
 permissions:
   contents: read
 
 concurrency:
-  group: ai-qa-ci-${{ github.event.pull_request.number || github.ref }}
+  group: ai-qa-ci-${{ github.event.pull_request.number || github.event.client_payload.pr_number || github.ref }}
   cancel-in-progress: true
 
 env:
   PYTHONUNBUFFERED: "1"
+  PYTHONSAFEPATH: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  CI_SUBJECT_SHA: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.expected_merge_sha || github.sha }}
 
 jobs:
   quality:
     name: Quality / Python ${{ matrix.python-version }}
+    needs: supply-chain
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -37,26 +43,26 @@ jobs:
             lock-file: requirements/dev-py313.lock
             evidence-suffix: py313
     steps:
-      - name: Checkout exact event subject
+      - name: Checkout exact validation subject
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.CI_SUBJECT_SHA }}
           persist-credentials: false
 
       - name: Verify exact source revision
-        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+        run: test "$(git rev-parse HEAD)" = "$CI_SUBJECT_SHA"
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: ${{ matrix.python-version }}
-          cache: pip
-          cache-dependency-path: ${{ matrix.lock-file }}
 
       - name: Install hash-locked development graph
         run: |
           test "$(python -c 'import platform; print(platform.python_version())')" = "${{ matrix.python-version }}"
+          python scripts/verify_build_authority.py > /dev/null
           python -m pip install --require-hashes -r "${{ matrix.lock-file }}"
+          python scripts/verify_build_authority.py > /dev/null
           python -m pip install --no-deps --no-build-isolation .
           python -m pip check
 
@@ -89,28 +95,29 @@ jobs:
 
   deterministic-evals:
     name: 34-Case Deterministic Control Evaluation
+    needs: supply-chain
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Checkout exact event subject
+      - name: Checkout exact validation subject
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.CI_SUBJECT_SHA }}
           persist-credentials: false
 
       - name: Verify exact source revision
-        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+        run: test "$(git rev-parse HEAD)" = "$CI_SUBJECT_SHA"
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.11.16"
-          cache: pip
-          cache-dependency-path: requirements/dev-py311.lock
 
       - name: Install hash-locked project environment
         run: |
+          python scripts/verify_build_authority.py > /dev/null
           python -m pip install --require-hashes -r requirements/dev-py311.lock
+          python scripts/verify_build_authority.py > /dev/null
           python -m pip install --no-deps --no-build-isolation .
           python -m pip check
 
@@ -152,33 +159,80 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - name: Checkout exact event subject
+      - name: Checkout exact validation subject
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.CI_SUBJECT_SHA }}
           persist-credentials: false
-          fetch-depth: 1
+          fetch-depth: 2
 
       - name: Verify exact source revision
-        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+        run: test "$(git rev-parse HEAD)" = "$CI_SUBJECT_SHA"
+
+      - name: Verify trusted control-plane subject
+        if: github.event_name == 'repository_dispatch'
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.client_payload.expected_head_sha }}
+          EXPECTED_BASE_SHA: ${{ github.event.client_payload.expected_base_sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_ACTOR" = "$GITHUB_REPOSITORY_OWNER"
+          git_clean_env=(env -i PATH="$PATH" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0)
+          extra_parent=""
+          read -r merge_sha base_sha head_sha extra_parent < <("${git_clean_env[@]}" /usr/bin/git rev-list --parents -n 1 "$CI_SUBJECT_SHA")
+          test "$merge_sha" = "$CI_SUBJECT_SHA"
+          test "$base_sha" = "$EXPECTED_BASE_SHA"
+          test "$head_sha" = "$EXPECTED_HEAD_SHA"
+          test "$base_sha" = "$GITHUB_SHA"
+          test -z "$extra_parent"
+          protected_paths=(
+            .github
+            .claude
+            .dockerignore
+            .mcp.json
+            .pre-commit-config.yaml
+            CLAUDE.md
+            Dockerfile
+            evals
+            examples
+            pyproject.toml
+            requirements
+            scripts
+            tests
+            src/ai_qa_automation/__init__.py
+            src/ai_qa_automation/io_safety.py
+            src/ai_qa_automation/tools/__init__.py
+            src/ai_qa_automation/tools/execution_env.py
+          )
+          for path in "${protected_paths[@]}"; do
+            trusted_oid="$("${git_clean_env[@]}" /usr/bin/git rev-parse "${GITHUB_SHA}:${path}")"
+            subject_oid="$("${git_clean_env[@]}" /usr/bin/git rev-parse "${CI_SUBJECT_SHA}:${path}")"
+            test "$trusted_oid" = "$subject_oid"
+          done
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.11.16"
-          cache: pip
-          cache-dependency-path: requirements/dev-py311.lock
+
+      - name: Verify static project build authority
+        run: |
+          set -o pipefail
+          mkdir -p artifacts/ci
+          python scripts/verify_build_authority.py | tee artifacts/ci/build-authority-verification.json
 
       - name: Install hash-locked verification environment
         run: |
+          python scripts/verify_build_authority.py > /dev/null
           python -m pip install --require-hashes -r requirements/dev-py311.lock
+          python scripts/verify_build_authority.py > /dev/null
           python -m pip install --no-deps --no-build-isolation .
           python -m pip check
 
       - name: Verify repository supply-chain invariants
         run: |
           set -o pipefail
-          mkdir -p artifacts/ci
           python scripts/verify_supply_chain.py | tee artifacts/ci/supply-chain-verification.json
 
       - name: Verify CI authority contract
@@ -198,6 +252,7 @@ jobs:
 
       - name: Audit hash-locked runtime graph and emit CycloneDX SBOM
         run: |
+          set -euo pipefail
           pip-audit --require-hashes -r requirements/runtime-py311.lock --format cyclonedx-json --output artifacts/ci/runtime-sbom.cdx.json
           python - <<'PY'
           import json
@@ -206,18 +261,36 @@ jobs:
           assert data['bomFormat'] == 'CycloneDX'
           assert data.get('components')
           PY
+          read -r runtime_sbom_sha256 _ < <(/usr/bin/sha256sum artifacts/ci/runtime-sbom.cdx.json)
+          printf 'RUNTIME_SBOM_SHA256=%s\n' "$runtime_sbom_sha256" >> "$GITHUB_ENV"
 
       - name: Build wheel twice from fresh source trees
         env:
           SOURCE_DATE_EPOCH: "315532800"
         run: |
           set -euo pipefail
-          rm -rf /tmp/aiqa-build-a /tmp/aiqa-build-b
-          mkdir -p /tmp/aiqa-build-a /tmp/aiqa-build-b artifacts/ci/wheel-a artifacts/ci/wheel-b
-          git archive --format=tar HEAD | tar -xf - -C /tmp/aiqa-build-a
-          git archive --format=tar HEAD | tar -xf - -C /tmp/aiqa-build-b
-          python -m pip wheel --no-deps --no-build-isolation /tmp/aiqa-build-a --wheel-dir artifacts/ci/wheel-a
-          python -m pip wheel --no-deps --no-build-isolation /tmp/aiqa-build-b --wheel-dir artifacts/ci/wheel-b
+          test -n "${RUNTIME_SBOM_SHA256:-}"
+          read -r observed_sbom_sha256 _ < <(/usr/bin/sha256sum artifacts/ci/runtime-sbom.cdx.json)
+          test "$observed_sbom_sha256" = "$RUNTIME_SBOM_SHA256"
+          build_a="$(mktemp -d "$RUNNER_TEMP/aiqa-build-a.XXXXXX")"
+          build_b="$(mktemp -d "$RUNNER_TEMP/aiqa-build-b.XXXXXX")"
+          git_view="$(mktemp -d "$RUNNER_TEMP/aiqa-git-view.XXXXXX")"
+          git_template="$(mktemp -d "$RUNNER_TEMP/aiqa-git-template.XXXXXX")"
+          trap 'rm -rf "$build_a" "$build_b" "$git_view" "$git_template"' EXIT
+          mkdir -p artifacts/ci/wheel-a artifacts/ci/wheel-b
+          git_clean_env=(env -i PATH="$PATH" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0)
+          git_object_format="$("${git_clean_env[@]}" /usr/bin/git rev-parse --show-object-format)"
+          git_object_directory="$(cd "$("${git_clean_env[@]}" /usr/bin/git rev-parse --git-path objects)" && pwd -P)"
+          "${git_clean_env[@]}" /usr/bin/git init --bare --object-format="$git_object_format" --template="$git_template" "$git_view" > /dev/null
+          "${git_clean_env[@]}" GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$CI_SUBJECT_SHA" | env -i PATH="$PATH" /usr/bin/tar -xf - -C "$build_a"
+          "${git_clean_env[@]}" GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$CI_SUBJECT_SHA" | env -i PATH="$PATH" /usr/bin/tar -xf - -C "$build_b"
+          python scripts/verify_build_authority.py --root "$build_a" > artifacts/ci/build-authority-archive-a.json
+          python -m pip wheel --no-deps --no-build-isolation "$build_a" --wheel-dir artifacts/ci/wheel-a
+          python scripts/verify_build_authority.py --root "$build_b" > artifacts/ci/build-authority-archive-b.json
+          python -m pip wheel --no-deps --no-build-isolation "$build_b" --wheel-dir artifacts/ci/wheel-b
+          cmp -s artifacts/ci/build-authority-archive-a.json artifacts/ci/build-authority-archive-b.json
+          read -r observed_sbom_sha256 _ < <(/usr/bin/sha256sum artifacts/ci/runtime-sbom.cdx.json)
+          test "$observed_sbom_sha256" = "$RUNTIME_SBOM_SHA256"
           mapfile -t wheel_a < <(find artifacts/ci/wheel-a -maxdepth 1 -type f -name '*.whl' -print)
           mapfile -t wheel_b < <(find artifacts/ci/wheel-b -maxdepth 1 -type f -name '*.whl' -print)
           test "${#wheel_a[@]}" -eq 1
@@ -226,14 +299,24 @@ jobs:
             --wheel-a "${wheel_a[0]}" \
             --wheel-b "${wheel_b[0]}" \
             --sbom artifacts/ci/runtime-sbom.cdx.json \
+            --expected-source-sha "$CI_SUBJECT_SHA" \
             --output artifacts/ci/build-manifest.json
+          read -r observed_sbom_sha256 _ < <(/usr/bin/sha256sum artifacts/ci/runtime-sbom.cdx.json)
+          test "$observed_sbom_sha256" = "$RUNTIME_SBOM_SHA256"
           sha256sum "${wheel_a[0]}" artifacts/ci/runtime-sbom.cdx.json artifacts/ci/build-manifest.json > artifacts/ci/build-checksums.sha256
 
       - name: Build and inspect digest-pinned runtime container
         run: |
           set -euo pipefail
-          image="ai-qa-ci:${{ github.sha }}"
-          docker build --tag "$image" .
+          image="ai-qa-ci:${CI_SUBJECT_SHA}"
+          git_view="$(mktemp -d "$RUNNER_TEMP/aiqa-container-git-view.XXXXXX")"
+          git_template="$(mktemp -d "$RUNNER_TEMP/aiqa-container-git-template.XXXXXX")"
+          trap 'rm -rf "$git_view" "$git_template"' EXIT
+          git_clean_env=(env -i PATH="$PATH" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0)
+          git_object_format="$("${git_clean_env[@]}" /usr/bin/git rev-parse --show-object-format)"
+          git_object_directory="$(cd "$("${git_clean_env[@]}" /usr/bin/git rev-parse --git-path objects)" && pwd -P)"
+          "${git_clean_env[@]}" /usr/bin/git init --bare --object-format="$git_object_format" --template="$git_template" "$git_view" > /dev/null
+          "${git_clean_env[@]}" GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$CI_SUBJECT_SHA" | docker build --tag "$image" -
           test "$(docker image inspect --format '{{.Config.User}}' "$image")" = 'aiqa'
           docker run --rm "$image" doctor
           docker run --rm -i --entrypoint python "$image" - <<'PY'
@@ -255,6 +338,9 @@ jobs:
         with:
           name: supply-chain-evidence
           path: |
+            artifacts/ci/build-authority-verification.json
+            artifacts/ci/build-authority-archive-a.json
+            artifacts/ci/build-authority-archive-b.json
             artifacts/ci/supply-chain-verification.json
             artifacts/ci/ci-contract-verification.json
             artifacts/ci/documentation-integrity.json
@@ -269,29 +355,30 @@ jobs:
 
   security:
     name: Security Gates
+    needs: supply-chain
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - name: Checkout exact event subject
+      - name: Checkout exact validation subject
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.CI_SUBJECT_SHA }}
           persist-credentials: false
           fetch-depth: 1
 
       - name: Verify exact source revision
-        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+        run: test "$(git rev-parse HEAD)" = "$CI_SUBJECT_SHA"
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.11.16"
-          cache: pip
-          cache-dependency-path: requirements/dev-py311.lock
 
       - name: Install hash-locked security environment
         run: |
+          python scripts/verify_build_authority.py > /dev/null
           python -m pip install --require-hashes -r requirements/dev-py311.lock
+          python scripts/verify_build_authority.py > /dev/null
           python -m pip install --no-deps --no-build-isolation .
           python -m pip check
 
@@ -327,31 +414,36 @@ jobs:
 
   browser-reference-sut:
     name: Playwright Reference SUT
+    needs: supply-chain
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
-      - name: Checkout exact event subject
+      - name: Checkout exact validation subject
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.CI_SUBJECT_SHA }}
           persist-credentials: false
 
       - name: Verify exact source revision
-        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+        run: test "$(git rev-parse HEAD)" = "$CI_SUBJECT_SHA"
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.11.16"
-          cache: pip
-          cache-dependency-path: requirements/dev-py311.lock
 
       - name: Install hash-locked project environment
         run: |
+          python scripts/verify_build_authority.py > /dev/null
           python -m pip install --require-hashes -r requirements/dev-py311.lock
+          python scripts/verify_build_authority.py > /dev/null
           python -m pip install --no-deps --no-build-isolation .
           python -m pip check
-          python -m playwright install --with-deps chromium
+
+      - name: Verify hosted Chrome runtime
+        run: |
+          test -x /usr/bin/google-chrome
+          /usr/bin/google-chrome --version
 
       - name: Start deterministic reference SUT
         run: |
@@ -394,3 +486,44 @@ jobs:
           test "${{ needs.supply-chain.result }}" = "success"
           test "${{ needs.security.result }}" = "success"
           test "${{ needs.browser-reference-sut.result }}" = "success"
+
+  trusted-status:
+    name: Trusted PR Gate Reporter
+    if: ${{ always() && github.event_name == 'repository_dispatch' && github.ref == 'refs/heads/main' && github.actor == github.repository_owner }}
+    needs:
+      - required-gate
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout trusted workflow revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify trusted workflow revision
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Publish exact-subject trusted status
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.client_payload.pr_number }}
+          EXPECTED_HEAD_SHA: ${{ github.event.client_payload.expected_head_sha }}
+          EXPECTED_BASE_SHA: ${{ github.event.client_payload.expected_base_sha }}
+          EXPECTED_MERGE_SHA: ${{ github.event.client_payload.expected_merge_sha }}
+          AUTHORIZED: ${{ github.event.client_payload.authorized }}
+          VALIDATION_RESULT: ${{ needs.required-gate.result }}
+        run: |
+          printf -v job_results_json '{"validation":"%s"}' "$VALIDATION_RESULT"
+          python scripts/trusted_pr_control.py report \
+            --pr-number "$PR_NUMBER" \
+            --expected-head-sha "$EXPECTED_HEAD_SHA" \
+            --expected-base-sha "$EXPECTED_BASE_SHA" \
+            --expected-merge-sha "$EXPECTED_MERGE_SHA" \
+            --authorized "$AUTHORIZED" \
+            --job-results-json "$job_results_json" \
+            --target-url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"

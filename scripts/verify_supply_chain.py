@@ -51,6 +51,9 @@ EDITABLE_INSTALL_RE = re.compile(
 )
 HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
 BASE_IMAGE_RE = re.compile(r"^python:3\.11\.16-slim@sha256:[0-9a-f]{64}$")
+EXPECTED_DOCKERFILE_BLOB_SHA = (
+    "cb343dd763dc17ce3f22179d1e94e1618b3cde38"  # pragma: allowlist secret
+)
 
 
 @dataclass(frozen=True)
@@ -83,6 +86,12 @@ def _stable_file_signature(value: os.stat_result) -> tuple[int, int, int, int, i
 
 def _stable_directory_signature(value: os.stat_result) -> tuple[int, int, int, int]:
     return value.st_dev, value.st_ino, value.st_mtime_ns, value.st_ctime_ns
+
+
+def _git_blob_sha1(text: str) -> str:
+    content = text.encode("utf-8")
+    header = f"blob {len(content)}\0".encode()
+    return hashlib.sha1(header + content, usedforsecurity=False).hexdigest()
 
 
 def _read_fd_bounded(fd: int, *, max_bytes: int, label: str) -> bytes:
@@ -388,6 +397,10 @@ def _verify_docker(root: Path, base_text: str) -> str:
         raise ValueError("base-image.lock does not identify the expected digest-pinned Python base")
 
     docker = _read_regular_text(root / "Dockerfile", max_bytes=64 * 1024)
+    if _git_blob_sha1(docker) != EXPECTED_DOCKERFILE_BLOB_SHA:
+        raise ValueError(
+            "Dockerfile bytes differ from the exact reviewed runtime-composition definition"
+        )
     from_subjects = FROM_RE.findall(docker)
     if from_subjects != [base_text, base_text]:
         raise ValueError("every Docker stage must use the exact subject in base-image.lock")
@@ -474,6 +487,7 @@ def verify_repository(root: Path) -> dict[str, Any]:
         "claim": "repository supply-chain inputs satisfy deterministic integrity invariants",
         "locks": locks,
         "base_image": base_image,
+        "dockerfile_authority": "exact-reviewed-git-blob",
         "actions": actions,
         "precommit": precommit,
         "limitations": [

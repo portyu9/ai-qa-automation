@@ -26,6 +26,7 @@ concurrency:
 
 env:
   PYTHONUNBUFFERED: "1"
+  PYTHONSAFEPATH: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
 jobs:
@@ -48,8 +49,6 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.11.16"
-          cache: pip
-          cache-dependency-path: requirements/dev-py311.lock
 
       - name: Install hash-locked project environment
         run: |
@@ -112,8 +111,6 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.11.16"
-          cache: pip
-          cache-dependency-path: requirements/dev-py311.lock
 
       - name: Install hash-locked project environment
         run: |
