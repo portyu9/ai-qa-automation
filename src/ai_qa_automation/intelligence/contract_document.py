@@ -254,6 +254,10 @@ def _validate_json_compatible_shape(value: Any) -> None:
 def load_contract_document(path: str, content: bytes) -> dict[str, Any]:
     """Parse a bounded OpenAPI/Swagger JSON-or-YAML document without ambiguous semantics."""
 
+    if len(content) > MAX_CONTRACT_DOCUMENT_BYTES:
+        raise ValueError(
+            f"contract document exceeds {MAX_CONTRACT_DOCUMENT_BYTES} byte ingestion limit"
+        )
     text = content.decode("utf-8")
     suffix = PurePosixPath(path).suffix.casefold()
     if suffix == ".json":
