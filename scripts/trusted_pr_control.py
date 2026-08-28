@@ -4,7 +4,6 @@ import argparse
 import json
 import os
 import re
-import time
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
@@ -18,8 +17,6 @@ EXPECTED_WORKFLOW_EVENT = "repository_dispatch"
 EXPECTED_WORKFLOW_REF = "refs/heads/main"
 TRUSTED_STATUS_CONTEXT = "Trusted PR Gate"
 MAX_API_RESPONSE_BYTES = 1024 * 1024
-MERGEABILITY_READ_ATTEMPTS = 6
-MERGEABILITY_RETRY_SECONDS = 1.0
 FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 TERMINAL_JOB_RESULTS = {"cancelled", "failure", "skipped", "success"}
@@ -101,6 +98,16 @@ class GitHubApi:
             raise ValueError("pull-request number must be positive")
         return self.get_json(f"/repos/{self.repository}/pulls/{number}")
 
+    def fetch_pull_request_merge_ref(self, number: int) -> Mapping[str, Any]:
+        if number < 1:
+            raise ValueError("pull-request number must be positive")
+        return self.get_json(f"/repos/{self.repository}/git/ref/pull/{number}/merge")
+
+    def fetch_git_commit(self, sha: str) -> Mapping[str, Any]:
+        return self.get_json(
+            f"/repos/{self.repository}/git/commits/{_require_sha(sha, label='merge commit SHA')}"
+        )
+
     def post_status(
         self,
         *,
@@ -172,6 +179,7 @@ def _pull_request_identity(payload: Mapping[str, Any]) -> tuple[int, str, str]:
 
 
 def subject_from_pull_request(payload: Mapping[str, Any]) -> PullRequestSubject:
+    """Parse a complete PR REST response; terminal reporting does not rely on this shape."""
     number, head_sha, base_sha = _pull_request_identity(payload)
     if payload.get("mergeable") is not True:
         raise ValueError("pull request must be currently and definitively mergeable")
@@ -210,37 +218,68 @@ def _verify_current_identity(
         )
 
 
-def fetch_stable_current_subject(
+def _merge_ref_sha(payload: Mapping[str, Any], *, number: int) -> str:
+    expected_ref = f"refs/pull/{number}/merge"
+    if payload.get("ref") != expected_ref:
+        raise ValueError(f"pull-request merge ref must be exactly {expected_ref!r}")
+    obj = _mapping(payload.get("object"), label="pull-request merge ref object")
+    if obj.get("type") != "commit":
+        raise ValueError("pull-request merge ref must point to a commit")
+    return _require_sha(obj.get("sha"), label="pull-request merge-ref SHA")
+
+
+def _verify_merge_commit(expected: PullRequestSubject, payload: Mapping[str, Any]) -> None:
+    commit_sha = _require_sha(payload.get("sha"), label="merge commit SHA")
+    if commit_sha != expected.merge_sha:
+        raise ValueError(
+            "pull-request merge commit changed after authorization: "
+            f"expected {expected.merge_sha}, observed {commit_sha}"
+        )
+    parents = payload.get("parents")
+    if not isinstance(parents, list) or len(parents) != 2:
+        raise ValueError("pull-request merge commit must have exactly two parents")
+    parent_shas = tuple(
+        _require_sha(_mapping(parent, label="merge commit parent").get("sha"), label="parent SHA")
+        for parent in parents
+    )
+    expected_parents = (expected.base_sha, expected.head_sha)
+    if parent_shas != expected_parents:
+        raise ValueError(
+            "pull-request merge commit parents changed after authorization: "
+            f"expected {expected_parents}, observed {parent_shas}"
+        )
+
+
+def resolve_current_subject(
     api: GitHubApi,
     expected: PullRequestSubject,
 ) -> PullRequestSubject:
-    for attempt in range(MERGEABILITY_READ_ATTEMPTS):
-        payload = api.fetch_pull_request(expected.number)
-        _verify_current_identity(expected, payload)
-        if "mergeable" not in payload:
-            raise ValueError("pull-request mergeable field is required")
-        if "merge_commit_sha" not in payload:
-            raise ValueError("pull-request merge SHA field is required")
-        mergeable = payload["mergeable"]
-        merge_sha = payload["merge_commit_sha"]
+    """Bind status authority to GitHub's live PR identity and simulated merge ref."""
+    _verify_current_identity(expected, api.fetch_pull_request(expected.number))
 
-        if mergeable is True and isinstance(merge_sha, str):
-            _require_sha(merge_sha, label="pull-request merge SHA")
-            return verify_current_subject(expected, payload)
-        if mergeable is False:
-            raise ValueError("pull request must be currently and definitively mergeable")
-        if mergeable is not None and mergeable is not True:
-            raise ValueError("pull-request mergeable state must be true, false, or null")
-        if merge_sha is not None:
-            _require_sha(merge_sha, label="pull-request merge SHA")
+    merge_ref = api.fetch_pull_request_merge_ref(expected.number)
+    observed_merge_sha = _merge_ref_sha(merge_ref, number=expected.number)
+    if observed_merge_sha != expected.merge_sha:
+        raise ValueError(
+            "pull-request merge ref changed after authorization: "
+            f"expected {expected.merge_sha}, observed {observed_merge_sha}"
+        )
 
-        if attempt + 1 == MERGEABILITY_READ_ATTEMPTS:
-            raise RuntimeError(
-                "pull-request mergeability did not stabilize within the bounded read window"
-            )
-        time.sleep(MERGEABILITY_RETRY_SECONDS)
+    _verify_merge_commit(expected, api.fetch_git_commit(expected.merge_sha))
 
-    raise AssertionError("bounded mergeability loop exhausted unexpectedly")
+    # Close the largest practical TOCTOU window before status publication. A head/base
+    # change invalidates identity; a regenerated/conflicted merge invalidates the merge ref.
+    _verify_current_identity(expected, api.fetch_pull_request(expected.number))
+    final_merge_sha = _merge_ref_sha(
+        api.fetch_pull_request_merge_ref(expected.number),
+        number=expected.number,
+    )
+    if final_merge_sha != expected.merge_sha:
+        raise ValueError(
+            "pull-request merge ref changed before status publication: "
+            f"expected {expected.merge_sha}, observed {final_merge_sha}"
+        )
+    return expected
 
 
 def parse_job_results(raw: str) -> dict[str, str]:
@@ -282,7 +321,7 @@ def report_authorized_result(
         raise PermissionError("trusted merge authorization must be dispatched by repository owner")
 
     api = GitHubApi(repository=repository, token=token)
-    current = fetch_stable_current_subject(api, expected)
+    current = resolve_current_subject(api, expected)
     if not authorized:
         return {
             "result": "DIAGNOSTIC_ONLY",
