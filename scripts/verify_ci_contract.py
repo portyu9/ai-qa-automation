@@ -835,6 +835,8 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
         "reporter_identity": "ephemeral-github-actions-run",
         "external_policy_required": True,
         "external_policy_invariant": "default-branch-definition-only-for-protected-identity",
+        "external_policy_capability": "repository-dispatch-event-rule-support-unverified",
+        "merge_enforcement_invariant": "strict-up-to-date-required-status",
     }
 
 
@@ -907,6 +909,17 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
                 "revalidate current PR identity before posting Trusted PR Gate; repository code "
                 "cannot attest that the required default-branch-definition-only external Actions "
                 "Policy invariant or ruleset transition is active."
+            ),
+            (
+                "GitHub's published workflow-execution-protection documentation does not prove "
+                "that repository_dispatch is selectable in the repository's event-rule policy; "
+                "that platform capability must be observed before activation."
+            ),
+            (
+                "Trusted PR Gate is published on the PR head after exact head/base/merge "
+                "revalidation, so protected-branch enforcement must remain strict/up-to-date; "
+                "otherwise later base drift could leave stale head status for a different merge "
+                "subject."
             ),
             "A green pull_request run validates GitHub's event SHA, which is normally the prospective merge subject rather than the PR head commit alone.",
             "Credential existence, environment protection, hosted-runner/browser identity, Actions Policy state, ruleset state, and external service availability remain environment-owned facts.",
