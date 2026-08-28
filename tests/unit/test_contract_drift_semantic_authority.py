@@ -136,3 +136,28 @@ def test_cross_or_unsupported_openapi_version_fails_closed(version: str) -> None
 
     assert result.severity is ContractDriftSeverity.NOT_ANALYZED
     assert result.analyzed is False
+
+
+@pytest.mark.parametrize(
+    "current",
+    [
+        {"openapi": "3.1.0", "paths": {"/x": {"get": {"responses": {"200": []}}}}},
+        {"openapi": "3.1.0", "paths": {"/x": {"GET": {"responses": {}}}}},
+        {"openapi": "3.1.0", "paths": {"extension": {}}},
+        {"openapi": "3.1.0", "paths": {"/x": {"get": {"responses": {"20": {}}}}}},
+        {
+            "openapi": "3.1.0",
+            "paths": {},
+            "components": {
+                "schemas": {"Subject": {"$ref": "https://example.test/schema.json"}}
+            },
+        },
+    ],
+)
+def test_unsupported_consumed_contract_shapes_fail_closed(
+    current: dict[str, object],
+) -> None:
+    result = _analyze({"openapi": "3.1.0", "paths": {}}, current)
+
+    assert result.severity is ContractDriftSeverity.NOT_ANALYZED
+    assert result.analyzed is False
