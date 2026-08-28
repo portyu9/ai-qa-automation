@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import hashlib
 import math
 from collections.abc import Mapping
 from typing import Any
 
 from ..redaction import redact_text
+
+
+def _subject_digest(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def k6_gate_payload(tool_input: Mapping[str, Any]) -> dict[str, str | float]:
@@ -39,11 +44,11 @@ def k6_gate_payload(tool_input: Mapping[str, Any]) -> dict[str, str | float]:
 def k6_persisted_subject(
     payload: Mapping[str, str | float],
 ) -> dict[str, str | float]:
-    """Render the k6 subject for durable details without leaking URL secrets."""
+    """Render low-information durable details for an exact k6 gate subject."""
     return {
-        "script": str(payload["script"]),
+        "script_sha256": _subject_digest(str(payload["script"])),
         "target_url": redact_text(str(payload["target_url"])),
-        "environment": str(payload["environment"]),
+        "environment_sha256": _subject_digest(str(payload["environment"])),
         "max_p95_ms": float(payload["max_p95_ms"]),
         "max_error_rate": float(payload["max_error_rate"]),
         "min_request_rate": float(payload["min_request_rate"]),
