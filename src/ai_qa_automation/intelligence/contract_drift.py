@@ -95,13 +95,21 @@ class OpenAPIContractDriftAnalyzer:
         changes: list[ContractChange] = []
         self._compare_paths(old, new, changes)
         self._compare_components(old, new, changes)
+        comparison_incomplete = any(
+            item.severity == ContractDriftSeverity.NOT_ANALYZED for item in changes
+        )
         severity = self._max_severity(changes)
         return ContractDriftReport(
             path=path,
             contract_kind="openapi",
             severity=severity,
             changes=tuple(changes[:250]),
-            analyzed=True,
+            analyzed=not comparison_incomplete,
+            reason=(
+                "contract comparison exceeded a deterministic analysis bound"
+                if comparison_incomplete
+                else None
+            ),
         )
 
     @staticmethod
@@ -499,6 +507,8 @@ class OpenAPIContractDriftAnalyzer:
     def _max_severity(changes: list[ContractChange]) -> ContractDriftSeverity:
         if any(item.severity == ContractDriftSeverity.BREAKING for item in changes):
             return ContractDriftSeverity.BREAKING
+        if any(item.severity == ContractDriftSeverity.NOT_ANALYZED for item in changes):
+            return ContractDriftSeverity.NOT_ANALYZED
         if any(item.severity == ContractDriftSeverity.RISKY for item in changes):
             return ContractDriftSeverity.RISKY
         return ContractDriftSeverity.NON_BREAKING
