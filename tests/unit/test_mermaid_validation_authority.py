@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -45,6 +46,17 @@ def test_candidate_discovery_enforces_directory_entry_limit_during_iteration(
         mermaid._candidate_files(tmp_path)
 
 
+def test_bounded_fd_reader_rejects_bytes_beyond_budget(tmp_path: Path) -> None:
+    path = tmp_path / "input.md"
+    path.write_bytes(b"12345")
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        with pytest.raises(ValueError, match="exceeds 4 bytes"):
+            mermaid._read_fd_bounded(fd, max_bytes=4, label="test input")
+    finally:
+        os.close(fd)
+
+
 def test_mermaid_discovery_enforces_total_diagram_limit(tmp_path: Path) -> None:
     docs = tmp_path / "docs"
     docs.mkdir()
@@ -58,3 +70,12 @@ def test_mermaid_discovery_enforces_total_diagram_limit(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="Mermaid diagrams"):
         mermaid._discover_mermaid_documents(tmp_path)
+
+
+def test_generated_svg_validation_fails_on_first_excess_output(tmp_path: Path) -> None:
+    destination = tmp_path / "README.md"
+    (tmp_path / "README-1.svg").write_text("<svg/>\n", encoding="utf-8")
+    (tmp_path / "README-2.svg").write_text("<svg/>\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="more than 1 SVG"):
+        mermaid._validate_generated_svgs(destination, expected_count=1)
