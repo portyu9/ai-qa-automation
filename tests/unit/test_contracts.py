@@ -32,6 +32,32 @@ def test_valid_schema_mismatch_is_a_real_failure() -> None:
     assert result.status is ValidationStatus.FAIL
 
 
+def test_unknown_explicit_schema_dialect_is_not_reinterpreted() -> None:
+    result = validate_json_schema(
+        12,
+        {
+            "$schema": "https://unknown.example/schema",
+            "type": "integer",
+        },
+    )
+
+    assert result.status is ValidationStatus.NOT_VERIFIED
+    assert "unsupported schema dialect" in result.summary
+
+
+def test_malformed_schema_dialect_identifier_is_not_verified() -> None:
+    result = validate_json_schema(
+        12,
+        {
+            "$schema": 202012,
+            "type": "integer",
+        },
+    )
+
+    assert result.status is ValidationStatus.NOT_VERIFIED
+    assert "malformed schema dialect" in result.summary
+
+
 def test_same_document_reference_remains_deterministic() -> None:
     result = validate_json_schema(
         12,
@@ -91,6 +117,32 @@ def test_remote_reference_is_blocked_without_persisting_secret_uri() -> None:
     assert result.status is ValidationStatus.BLOCKED
     assert result.details == {"reference_scheme": "https"}
     assert "super-secret-token" not in result.model_dump_json()
+
+
+def test_relative_external_reference_is_blocked() -> None:
+    result = validate_json_schema(
+        12,
+        {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$ref": "other-schema.json",
+        },
+    )
+
+    assert result.status is ValidationStatus.BLOCKED
+    assert result.details == {"reference_scheme": "relative"}
+
+
+def test_external_dynamic_reference_is_blocked() -> None:
+    result = validate_json_schema(
+        12,
+        {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$dynamicRef": "https://example.invalid/dynamic-schema.json",
+        },
+    )
+
+    assert result.status is ValidationStatus.BLOCKED
+    assert result.details == {"reference_scheme": "https"}
 
 
 def test_unresolved_same_document_reference_is_not_verified() -> None:
