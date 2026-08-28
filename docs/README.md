@@ -21,7 +21,7 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 | Reviewer goal | Recommended path |
 |---|---|
 | **Architecture / principal engineering** | [Architecture](ARCHITECTURE.md) → [Result Contract](RESULT_CONTRACT.md) → [Runtime Control](RUNTIME_CONTROL.md) → [Traceability](TRACEABILITY.md) → [Technical Walkthrough](TECHNICAL_WALKTHROUGH.md) |
-| **Security / red team** | [Security](SECURITY.md) → [Threat Model](THREAT_MODEL.md) → [Tool Input Boundaries](TOOL_INPUT_BOUNDARIES.md) → [Objective Input Boundary](OBJECTIVE_INPUT_BOUNDARY.md) → [Agent SDK Result Boundary](SDK_RESULT_BOUNDARY.md) → [Persistence Resource Boundary](PERSISTENCE_RESOURCE_BOUNDARY.md) → [API Observation Boundary](API_OBSERVATION_BOUNDARY.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Supply Chain](SUPPLY_CHAIN.md) → [CI/CD](CI_CD.md) → [Trusted PR Control Plane Prototype](TRUSTED_PR_CONTROL_PLANE.md) → [MCP](MCP.md) → [Verification Boundaries](VERIFICATION_BOUNDARIES.md) → [Pytest Execution Isolation](PYTEST_EXECUTION_ISOLATION.md) → [Limitations](LIMITATIONS.md) |
+| **Security / red team** | [Security](SECURITY.md) → [Threat Model](THREAT_MODEL.md) → [Tool Input Boundaries](TOOL_INPUT_BOUNDARIES.md) → [Objective Input Boundary](OBJECTIVE_INPUT_BOUNDARY.md) → [Agent SDK Result Boundary](SDK_RESULT_BOUNDARY.md) → [Persistence Resource Boundary](PERSISTENCE_RESOURCE_BOUNDARY.md) → [API Observation Boundary](API_OBSERVATION_BOUNDARY.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Supply Chain](SUPPLY_CHAIN.md) → [CI/CD](CI_CD.md) → [Trusted PR Control Plane](TRUSTED_PR_CONTROL_PLANE.md) → [MCP](MCP.md) → [Verification Boundaries](VERIFICATION_BOUNDARIES.md) → [Pytest Execution Isolation](PYTEST_EXECUTION_ISOLATION.md) → [Limitations](LIMITATIONS.md) |
 | **QA automation / AI engineering** | [Change Intelligence](CHANGE_INTELLIGENCE.md) → [Skills](SKILLS.md) → [Evaluation](EVALUATION.md) → [Result Contract](RESULT_CONTRACT.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Production Readiness](PRODUCTION_READINESS.md) |
 | **Operator / adopter** | [Setup](SETUP.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Pytest Execution Isolation](PYTEST_EXECUTION_ISOLATION.md) → [Operations](OPERATIONS.md) → [CI/CD](CI_CD.md) → [Troubleshooting](TROUBLESHOOTING.md) → [Runtime Control](RUNTIME_CONTROL.md) → [MCP](MCP.md) |
 
@@ -44,8 +44,8 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 7. [`API_OBSERVATION_BOUNDARY.md`](API_OBSERVATION_BOUNDARY.md) — raw-byte HTTP observation, compression/header/body bounds, complete-body JSON promotion, and explicit decoding truth
 8. [`BROWSER_VALIDATION.md`](BROWSER_VALIDATION.md) — exact-subject browser gates, evidence semantics, and URL confidentiality boundary
 9. [`SUPPLY_CHAIN.md`](SUPPLY_CHAIN.md) — dependency, build, Action, SBOM, and reproducibility trust boundaries
-10. [`CI_CD.md`](CI_CD.md) — automatic/manual workflow authority, exact-subject gates, repository-setting boundary
-11. [`TRUSTED_PR_CONTROL_PLANE.md`](TRUSTED_PR_CONTROL_PLANE.md) — non-authoritative prototype for an externally policy-gated trusted PR control plane
+10. [`CI_CD.md`](CI_CD.md) — trusted-dispatch workflow authority, exact-subject gates, manual-validation boundary, repository-setting authority
+11. [`TRUSTED_PR_CONTROL_PLANE.md`](TRUSTED_PR_CONTROL_PLANE.md) — activated externally policy-gated trusted PR merge authority and its evidence boundaries
 12. [`MCP.md`](MCP.md) — provider identity, action authorization, untrusted remote content
 13. [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md) — evidence ownership across trust domains
 14. [`PYTEST_EXECUTION_ISOLATION.md`](PYTEST_EXECUTION_ISOLATION.md) — fail-closed deployment prerequisites for target-controlled Python
@@ -66,7 +66,7 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 2. [`BROWSER_VALIDATION.md`](BROWSER_VALIDATION.md) — browser gate identity, URL sanitation, and evidence non-claims
 3. [`PYTEST_EXECUTION_ISOLATION.md`](PYTEST_EXECUTION_ISOLATION.md) — deployment containment required before live target pytest execution
 4. [`OPERATIONS.md`](OPERATIONS.md) — operating ladder and artifact handling
-5. [`CI_CD.md`](CI_CD.md) — automatic PR/main gates, manual validation, and repository-governance boundary
+5. [`CI_CD.md`](CI_CD.md) — trusted PR validation, manual-validation boundary, and repository-governance authority
 6. [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) — diagnose without weakening controls
 7. [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md) — recovery and mutation mechanics
 8. [`MCP.md`](MCP.md) — optional GitHub/Atlassian integration policy
@@ -89,8 +89,8 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 | [`API_OBSERVATION_BOUNDARY.md`](API_OBSERVATION_BOUNDARY.md) | How are HTTP response bytes, headers, truncation, decoding, and strict JSON promotion bounded before becoming structured evidence? |
 | [`BROWSER_VALIDATION.md`](BROWSER_VALIDATION.md) | How are browser operations bound to exact subjects without confusing evidence collection with page correctness? |
 | [`SUPPLY_CHAIN.md`](SUPPLY_CHAIN.md) | How are dependency, build, Action, container-base, SBOM, and reproducibility inputs bound and evidenced? |
-| [`CI_CD.md`](CI_CD.md) | How are automatic PR/main gates, manual credentialed validation, exact-subject binding, and repository-setting authority separated? |
-| [`TRUSTED_PR_CONTROL_PLANE.md`](TRUSTED_PR_CONTROL_PLANE.md) | What is the explicitly non-authoritative prototype for moving PR merge authority behind trusted-main workflows and external Actions Policy? |
+| [`CI_CD.md`](CI_CD.md) | How are trusted dispatch validation, manual credentialed-validation boundaries, exact-subject binding, and repository-setting authority separated? |
+| [`TRUSTED_PR_CONTROL_PLANE.md`](TRUSTED_PR_CONTROL_PLANE.md) | How is protected PR merge authority bound to trusted-main workflow execution, live merge-ref verification, and external Actions Policy? |
 | [`CHANGE_INTELLIGENCE.md`](CHANGE_INTELLIGENCE.md) | How are committed changes, risk, ownership, test impact, and API drift analyzed? |
 | [`EVALUATION.md`](EVALUATION.md) | How is the agent evaluated as software rather than prose? |
 | [`SKILLS.md`](SKILLS.md) | What procedures do the five trusted Claude Skills provide? |

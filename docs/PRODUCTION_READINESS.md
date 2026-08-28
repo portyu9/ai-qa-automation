@@ -289,13 +289,13 @@ A material weakness should produce a narrower deterministic control, a regressio
 
 ## CI/CD execution design
 
-`.github/workflows/ci.yml` runs automatically for pull requests targeting `main`, pushes to `main`, and merge-queue subjects. Its token authority is read-only, automatic jobs contain no secret references, persisted checkout credentials are disabled, and every job verifies the exact GitHub event SHA before executing project code.
+`.github/workflows/ci.yml` retains ordinary event triggers in source plus fixed trusted `repository_dispatch`, but the observed external Actions Policy permits only owner-authorized `trusted-pr-validation` dispatch for the protected identity. Validation jobs are read-only, contain no secret references, disable persisted checkout credentials, and verify the exact selected prospective merge subject before executing project code.
 
-The automatic gate covers quality/full deterministic pytest, the 34-case primary evaluator, security scanning, supply-chain/SBOM/repeatability/container evidence, and deterministic Playwright reference-SUT coverage. `Required PR Gate` uses `if: always()` and fails unless every automatic prerequisite succeeds, preventing partial green from becoming aggregate green.
+The trusted validation path covers quality/full deterministic pytest, the 34-case primary evaluator, security scanning, supply-chain/SBOM/repeatability/container evidence, and deterministic Playwright reference-SUT coverage. `Required PR Gate` uses `if: always()` and fails unless every prerequisite succeeds; it is internal aggregate evidence, while protected merge authority is the separately published `Trusted PR Gate` after live subject revalidation.
 
-`.github/workflows/manual-validation.yml` is `workflow_dispatch` only. The repository-visible H-series readiness corpus remains execution-separated there, while credentialed Agent SDK smoke execution is opt-in and consumes `ANTHROPIC_API_KEY` only when selected.
+`.github/workflows/manual-validation.yml` is `workflow_dispatch` only and remains outside protected merge evidence. The observed `repository_dispatch`-only policy prevents it from executing under the same protected identity, so repository-visible H-series readiness and credentialed Agent SDK smoke require a separately trusted execution mechanism or equivalent deliberate policy change; the credential remains step-scoped when that path is executable.
 
-`scripts/verify_ci_contract.py` deterministically checks the repository-owned workflow authority model and emits machine-readable evidence during automatic supply-chain execution. That verifier does not prove GitHub branch protection or required-check settings are enabled; repository settings remain separate authority. See [CI/CD and Repository Governance](CI_CD.md).
+`scripts/verify_ci_contract.py` deterministically checks the repository-owned workflow authority model and emits machine-readable evidence during trusted supply-chain execution. That verifier does not prove the live external Actions Policy or protected ruleset; those platform settings remain separately observed authority. See [CI/CD and Repository Governance](CI_CD.md).
 
 ---
 

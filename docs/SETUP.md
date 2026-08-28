@@ -310,11 +310,11 @@ The legacy `holdout` command stays separate from the routine aggregate to preser
 
 ## GitHub Actions configuration
 
-`.github/workflows/ci.yml` runs automatically for pull requests targeting `main`, pushes to `main`, and merge-queue subjects. It is read-only and secret-free, binds every checkout to the exact GitHub event SHA, and aggregates quality, primary evaluation, security, supply-chain, and deterministic Playwright evidence behind the stable `Required PR Gate` check.
+`.github/workflows/ci.yml` defines ordinary GitHub events plus the fixed `repository_dispatch` event `trusted-pr-validation`. Under the observed active external Actions Policy, only the owner-authorized trusted dispatch is executable for the protected identity. Its read-only, secret-free validation jobs bind execution to the exact prospective merge subject; `Required PR Gate` is an internal deterministic aggregate and `Trusted PR Gate` is the protected merge status.
 
-`.github/workflows/manual-validation.yml` remains `workflow_dispatch` only. It keeps the repository-visible H-series readiness corpus execution-separated from routine primary CI and exposes the optional credentialed Claude Agent SDK smoke path. `ANTHROPIC_API_KEY` is referenced only by that explicitly selected model job.
+`.github/workflows/manual-validation.yml` remains `workflow_dispatch` only. It keeps the repository-visible H-series readiness corpus separated from protected merge validation and contains the optional credentialed Claude Agent SDK smoke path. The observed `repository_dispatch`-only policy prevents that workflow from executing under the same protected identity; when a separately trusted execution mechanism exists, `ANTHROPIC_API_KEY` remains scoped only to the explicitly selected model job.
 
-The workflow definition does not itself enable GitHub branch protection or make `Required PR Gate` a required repository check; that is separate repository-setting authority. See [CI/CD and Repository Governance](CI_CD.md).
+Repository workflow source cannot self-attest the external Actions Policy, protected ruleset, or their future administrative state. See [CI/CD and Repository Governance](CI_CD.md).
 
 Never place credentials directly in workflow YAML, non-secret repository variables, committed fixtures, logs, or artifacts.
 

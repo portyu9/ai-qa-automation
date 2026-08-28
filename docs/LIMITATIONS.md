@@ -252,7 +252,7 @@ The included Dockerfile defines a non-root control-plane image shape. Deployment
 
 ### CI/CD
 
-The automatic PR/main workflow is read-only, secret-free, revision-bound, and aggregates deterministic quality/evaluation/security/supply-chain/reference-browser checks behind `Required PR Gate`. H-series readiness and credentialed model smoke remain manual-only and separately scoped. Repository workflow logic and a green check do not prove that branch protection is enabled, that a hosted runner is immutable, that secrets exist, or that release/deployment authority was exercised.
+The activated protected path uses owner-authorized trusted `repository_dispatch` to run read-only, secret-free, revision-bound quality/evaluation/security/supply-chain/reference-browser validation. `Required PR Gate` is internal aggregate evidence; protected merge authority is `Trusted PR Gate` after live PR/merge-ref revalidation. Ordinary PR/push/merge-group execution is externally denied under the observed policy, while H-series readiness and credentialed model smoke require a separately trusted manual execution mechanism. Repository workflow logic and a green status still do not prove hosted-runner immutability, future platform configuration, credential availability, or release/deployment execution.
 
 See [CI/CD and Repository Governance](CI_CD.md).
 

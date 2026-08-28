@@ -39,7 +39,7 @@
 | **Network posture** | exact host allowlists, read-only API default, browser routing controls, independent k6 egress prerequisite |
 | **External MCP** | explicitly approved vendor integrations; server identity never grants blanket authority and returned content remains untrusted evidence |
 | **Evaluation** | deterministic tests, adversarial primary corpus, repository-visible sequestered H-series readiness corpus, frozen safety thresholds |
-| **Workflow governance** | automatic read-only, secret-free PR/main/merge-queue CI with fail-closed `Required PR Gate`; H-series/model validation remains manual-only |
+| **Workflow governance** | owner-authorized trusted `repository_dispatch` validates exact prospective merges behind protected `Trusted PR Gate`; ordinary PR/push/merge-group execution is externally denied, and H-series/model validation remains separately scoped |
 | **License** | MIT |
 
 **On this page:** [Engineering thesis](#engineering-thesis) · [Architecture](#architecture-at-a-glance) · [Quick start](#quick-start) · [Control model](#production-control-model) · [Runtime truth](#runtime-result-contract) · [AI-assisted QA](#ai-assisted-qa-with-deterministic-closure) · [Safety boundaries](#safety-critical-boundaries) · [Evidence](#evidence-traceability-and-attestation) · [Evaluation](#evaluation-architecture) · [Documentation](#documentation-map)
@@ -781,8 +781,8 @@ The reference SUT is test data for the control architecture, never part of the t
 ├── .github/
 │   ├── CODEOWNERS
 │   └── workflows/
-│       ├── ci.yml                  # automatic read-only PR/main/merge-queue gates
-│       └── manual-validation.yml   # manual H-series + optional credentialed model evidence
+│       ├── ci.yml                  # trusted-dispatch validation + protected-status reporter
+│       └── manual-validation.yml   # workflow_dispatch-only H-series + optional model path
 ├── src/ai_qa_automation/
 │   ├── agent.py                    # Agent SDK orchestration + terminal truth
 │   ├── models.py                   # state/evidence/result contracts
@@ -830,9 +830,9 @@ Start with the [documentation hub](docs/README.md) for reviewer-specific reading
 
 ## GitHub Actions
 
-`.github/workflows/ci.yml` runs automatically for pull requests targeting `main`, pushes to `main`, and merge-queue subjects. Automatic CI is read-only and secret-free, binds every checkout to the exact GitHub event SHA, and runs quality/full deterministic pytest, the primary adversarial evaluator, security scanning, supply-chain/SBOM/repeatability/container checks, and deterministic Playwright reference-SUT coverage. The fail-closed aggregate check is named `Required PR Gate`.
+`.github/workflows/ci.yml` retains ordinary event triggers in source, but under the observed active external Actions Policy only owner-authorized `repository_dispatch` event `trusted-pr-validation` is executable for the protected identity; ordinary `pull_request`, `push`, and `merge_group` attempts are expected to be rejected at startup. The trusted path validates the exact prospective merge through read-only, secret-free gates and uses `Required PR Gate` only as an internal aggregate before the trusted reporter publishes protected `Trusted PR Gate` after live PR/merge-ref revalidation.
 
-`.github/workflows/manual-validation.yml` remains operator-dispatched. It preserves execution separation for the repository-visible H-series readiness corpus and contains the optional credentialed Agent SDK smoke path. Workflow code does not itself prove GitHub branch protection or required-check enforcement is enabled. See [CI/CD and Repository Governance](docs/CI_CD.md).
+`.github/workflows/manual-validation.yml` remains `workflow_dispatch` only and outside protected merge evidence. The observed `repository_dispatch`-only policy prevents it from executing under the same protected identity; H-series/model validation therefore requires a separately trusted execution mechanism or an equivalent deliberate policy change. Workflow source cannot self-attest the external Actions Policy or ruleset. See [CI/CD and Repository Governance](docs/CI_CD.md).
 
 ## Security and contributions
 
