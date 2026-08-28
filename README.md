@@ -781,8 +781,8 @@ The reference SUT is test data for the control architecture, never part of the t
 ├── .github/
 │   ├── CODEOWNERS
 │   └── workflows/
-│       ├── ci.yml                  # automatic read-only PR/main/merge-queue gates
-│       └── manual-validation.yml   # manual H-series + optional credentialed model evidence
+│       ├── ci.yml                  # trusted-dispatch validation + protected-status reporter
+│       └── manual-validation.yml   # workflow_dispatch-only H-series + optional model path
 ├── src/ai_qa_automation/
 │   ├── agent.py                    # Agent SDK orchestration + terminal truth
 │   ├── models.py                   # state/evidence/result contracts
@@ -830,7 +830,7 @@ Start with the [documentation hub](docs/README.md) for reviewer-specific reading
 
 ## GitHub Actions
 
-``.github/workflows/ci.yml` retains ordinary event triggers in source, but under the observed active external Actions Policy only owner-authorized `repository_dispatch` event `trusted-pr-validation` is executable for the protected identity; ordinary `pull_request`, `push`, and `merge_group` attempts are expected to be rejected at startup. The trusted path validates the exact prospective merge through read-only, secret-free gates and uses `Required PR Gate` only as an internal aggregate before the trusted reporter publishes protected `Trusted PR Gate` after live PR/merge-ref revalidation.
+`.github/workflows/ci.yml` retains ordinary event triggers in source, but under the observed active external Actions Policy only owner-authorized `repository_dispatch` event `trusted-pr-validation` is executable for the protected identity; ordinary `pull_request`, `push`, and `merge_group` attempts are expected to be rejected at startup. The trusted path validates the exact prospective merge through read-only, secret-free gates and uses `Required PR Gate` only as an internal aggregate before the trusted reporter publishes protected `Trusted PR Gate` after live PR/merge-ref revalidation.
 
 `.github/workflows/manual-validation.yml` remains `workflow_dispatch` only and outside protected merge evidence. The observed `repository_dispatch`-only policy prevents it from executing under the same protected identity; H-series/model validation therefore requires a separately trusted execution mechanism or an equivalent deliberate policy change. Workflow source cannot self-attest the external Actions Policy or ruleset. See [CI/CD and Repository Governance](docs/CI_CD.md).
 
