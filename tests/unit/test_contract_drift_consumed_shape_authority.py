@@ -47,6 +47,7 @@ def test_mixed_dialect_marker_presence_fails_closed(baseline, current):
         {"name": "q", "in": "query", "required": False, "schema": {"type": "string"}, "content": {"text/plain": {}}},
         {"name": "q", "in": "query", "required": False, "content": {"text/plain": {}, "application/json": {}}},
         {"name": "q", "in": "query", "required": False, "type": "string", "schema": {"type": "string"}},
+        {"name": "", "in": "query", "required": False, "schema": {"type": "string"}},
     ],
 )
 def test_malformed_openapi_parameter_shapes_fail_closed(parameter):
@@ -62,6 +63,7 @@ def test_malformed_openapi_parameter_shapes_fail_closed(parameter):
         ("/items/{id}", [{"name": "other", "in": "path", "required": True, "schema": {"type": "string"}}]),
         ("/items/{id", [{"name": "id", "in": "path", "required": True, "schema": {"type": "string"}}]),
         ("/items?id={id}", [{"name": "id", "in": "path", "required": True, "schema": {"type": "string"}}]),
+        ("/items/{id}/{id}", [{"name": "id", "in": "path", "required": True, "schema": {"type": "string"}}]),
     ],
 )
 def test_openapi_path_template_authority_fails_closed(path, parameters):
@@ -104,6 +106,7 @@ def test_valid_optional_openapi_content_parameter_remains_analyzable():
         {"name": "q", "in": "query", "required": False, "type": "string", "items": {"type": "string"}},
         {"name": "body", "in": "body", "required": False},
         {"name": "body", "in": "body", "required": False, "type": "object", "schema": {"type": "object"}},
+        {"name": "", "in": "query", "required": False, "type": "string"},
     ],
 )
 def test_malformed_swagger_parameter_shapes_fail_closed(parameter):
@@ -138,6 +141,7 @@ def test_swagger_body_and_form_data_cannot_mix():
         ("/items/{id}", []),
         ("/items/{id}", [{"name": "other", "in": "path", "required": True, "type": "string"}]),
         ("/items/{id", [{"name": "id", "in": "path", "required": True, "type": "string"}]),
+        ("/items/{id}/{id}", [{"name": "id", "in": "path", "required": True, "type": "string"}]),
     ],
 )
 def test_swagger_path_template_authority_fails_closed(path, parameters):
