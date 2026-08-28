@@ -53,6 +53,8 @@ The guarded fields are:
 
 Malformed, duplicate-key-ambiguous, or non-standard JSON is denied at the request boundary. Parser recursion cannot become an optimistic or partially verified tool result. In particular, an authority-bearing JSON Schema validation cannot derive a gate subject or `PASS` from a document whose meaning depends on duplicate-key collapse. Accepted raw JSON fields are not reparsed merely to create a repetition fingerprint; fingerprinting rechecks only the generic bounded request shape.
 
+JSON Schema validation is additionally confined to resources already supplied in the schema document. Same-document references and embedded resources identified by `$id` remain available to the validator, but any reference that would require resolver retrieval from a file, network URL, or another external resource is `BLOCKED`. The validation tool is intentionally not a network or filesystem reader, and an attempted external reference does not inherit ambient authority merely because the JSON Schema library supports retrieval. Persisted denial details retain only the reference scheme, not the potentially secret-bearing URI.
+
 ### Browser candidate bound
 
 Locator verification and healing additionally allow at most **20 candidate entries**, matching the controlled browser execution surface. The limit is enforced for both the SDK-prefixed tool name and the internal tool name before a live tool body can construct browser execution state.
