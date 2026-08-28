@@ -29,7 +29,7 @@ EXPECTED_AUTOMATIC_PROJECT_INSTALL_COUNT = 5
 EXPECTED_AUTOMATIC_DEPENDENCY_INSTALL_COUNT = 5
 EXPECTED_AUTOMATIC_SUBJECT_CHECKOUT_COUNT = 5
 EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = (
-    "c3cc332d658b52e691a4ebba2d087c3b7e8683b9"  # pragma: allowlist secret
+    "c7d11246f4bf16062743bd0356b6da7da0647d93"  # pragma: allowlist secret
 )
 AUTOMATIC_PROJECT_INSTALL_COMMAND = (
     "          python -m pip install --no-deps --no-build-isolation ."
@@ -622,42 +622,23 @@ def _verify_dispatch_contract(text: str) -> None:
             "  push:",
             "    branches: [main]",
             "  merge_group:",
-            "  workflow_dispatch:",
-            "    inputs:",
-            "      pr_number:",
-            "        description: Pull request number whose exact current subject is being validated",
-            "        required: true",
-            "        type: string",
-            "      expected_head_sha:",
-            "        description: Exact current pull request head SHA",
-            "        required: true",
-            "        type: string",
-            "      expected_base_sha:",
-            "        description: Exact current main/base SHA",
-            "        required: true",
-            "        type: string",
-            "      expected_merge_sha:",
-            "        description: Exact current prospective merge SHA to execute and validate",
-            "        required: true",
-            "        type: string",
-            "      authorized:",
-            "        description: Publish Trusted PR Gate after exact-subject validation",
-            "        required: true",
-            "        default: false",
-            "        type: boolean",
+            "  repository_dispatch:",
+            "    types: [trusted-pr-validation]",
         )
     )
     if on_block != expected:
         raise ValueError(
-            "ci.yml: trigger/owner-dispatch input contract differs from reviewed definition"
+            "ci.yml: trigger/owner-dispatch contract differs from reviewed definition"
         )
     env_block = _semantic_text(_top_level_block(text, "env"))
     expected_subject = (
-        "  CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' "
-        "&& inputs.expected_merge_sha || github.sha }}"
+        "  CI_SUBJECT_SHA: ${{ github.event_name == 'repository_dispatch' "
+        "&& github.event.client_payload.expected_merge_sha || github.sha }}"
     )
     if expected_subject not in env_block:
-        raise ValueError("ci.yml: CI_SUBJECT_SHA must select only dispatch merge SHA or github.sha")
+        raise ValueError(
+            "ci.yml: CI_SUBJECT_SHA must select only repository-dispatch merge SHA or github.sha"
+        )
 
 
 def _verify_trusted_status_job(text: str) -> dict[str, Any]:
@@ -665,7 +646,7 @@ def _verify_trusted_status_job(text: str) -> dict[str, Any]:
     required_fragments = (
         "  trusted-status:",
         "    name: Trusted PR Gate Reporter",
-        "    if: ${{ always() && github.event_name == 'workflow_dispatch' }}",
+        "    if: ${{ always() && github.event_name == 'repository_dispatch' && github.ref == 'refs/heads/main' && github.actor == github.repository_owner }}",
         "      - required-gate",
         "    permissions:\n      contents: read\n      pull-requests: read\n      statuses: write",
         "      - name: Checkout trusted workflow revision",
@@ -677,11 +658,11 @@ def _verify_trusted_status_job(text: str) -> dict[str, Any]:
         f"      - name: {TRUSTED_STATUS_STEP_NAME}",
         "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
         "          python scripts/trusted_pr_control.py report \\",
-        '            --pr-number "${{ inputs.pr_number }}" \\',
-        '            --expected-head-sha "${{ inputs.expected_head_sha }}" \\',
-        '            --expected-base-sha "${{ inputs.expected_base_sha }}" \\',
-        '            --expected-merge-sha "${{ inputs.expected_merge_sha }}" \\',
-        '            --authorized "${{ inputs.authorized }}" \\',
+        '            --pr-number "${{ github.event.client_payload.pr_number }}" \\',
+        '            --expected-head-sha "${{ github.event.client_payload.expected_head_sha }}" \\',
+        '            --expected-base-sha "${{ github.event.client_payload.expected_base_sha }}" \\',
+        '            --expected-merge-sha "${{ github.event.client_payload.expected_merge_sha }}" \\',
+        '            --authorized "${{ github.event.client_payload.authorized }}" \\',
         '            --job-results-json \'{"validation":"${{ needs.required-gate.result }}"}\' \\',
         '            --target-url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"',
     )
@@ -695,7 +676,7 @@ def _verify_trusted_status_job(text: str) -> dict[str, Any]:
     return {
         "job": "Trusted PR Gate Reporter",
         "status_context": "Trusted PR Gate",
-        "authorization": "owner-workflow-dispatch-only",
+        "authorization": "owner-default-branch-repository-dispatch-only",
         "subject_revalidation": "exact-current-pr-head-base-merge",
         "write_authority": "statuses:write-only",
     }
@@ -704,7 +685,7 @@ def _verify_trusted_status_job(text: str) -> dict[str, Any]:
 def _verify_automatic_workflow(text: str) -> dict[str, Any]:
     name = "ci.yml"
     semantic = _semantic_text(text)
-    expected_triggers = {"pull_request", "push", "merge_group", "workflow_dispatch"}
+    expected_triggers = {"pull_request", "push", "merge_group", "repository_dispatch"}
     triggers = _top_level_keys(_top_level_block(text, "on"))
     if triggers != expected_triggers:
         raise ValueError(
@@ -812,7 +793,7 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
 
     return {
         "triggers": sorted(expected_triggers),
-        "subject": "github.sha-or-owner-dispatch-exact-merge-sha",
+        "subject": "github.sha-or-owner-default-branch-dispatch-exact-merge-sha",
         "checkout_count": checkout_count,
         "required_gate": "Required PR Gate",
         "trusted_status": trusted_status,
@@ -832,7 +813,7 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
         "sbom_lineage": "parent-digest-bound-and-bracketed",
         "supply_chain_evidence": "pinned-upload-action",
         "permissions": "validation=contents:read;trusted-reporter=statuses:write",
-        "secrets": "GITHUB_TOKEN-only-in-trusted-reporter",
+        "reporter_identity": "ephemeral-github-actions-run",
         "external_policy_required": True,
     }
 
@@ -892,7 +873,7 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
         "actions": actions,
         "limitations": [
             "Ordinary pull_request validation remains in-subject self-consistency evidence; it is not independent merge authority until external repository Actions Policy prevents pull_request workflow execution.",
-            "The owner workflow_dispatch path is designed to execute the exact supplied prospective merge subject from a trusted main workflow definition and revalidate current PR identity before posting Trusted PR Gate; repository code cannot attest that the required external Actions Policy or ruleset transition is active.",
+            "The owner repository_dispatch path is designed to execute the exact supplied prospective merge subject from the default-branch workflow definition and revalidate current PR identity before posting Trusted PR Gate; repository code cannot attest that the required external Actions Policy or ruleset transition is active.",
             "A green pull_request run validates GitHub's event SHA, which is normally the prospective merge subject rather than the PR head commit alone.",
             "Credential existence, environment protection, hosted-runner/browser identity, Actions Policy state, ruleset state, and external service availability remain environment-owned facts.",
         ],
