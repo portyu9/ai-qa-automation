@@ -24,35 +24,82 @@ def _pull_request_payload(
     state: str = "open",
     base_ref: str = "main",
     mergeable: bool | None = True,
+    include_merge_fields: bool = True,
 ) -> dict[str, Any]:
-    return {
+    payload: dict[str, Any] = {
         "number": 43,
         "state": state,
         "head": {"sha": head_sha},
         "base": {"ref": base_ref, "sha": base_sha},
-        "merge_commit_sha": merge_sha,
-        "mergeable": mergeable,
+    }
+    if include_merge_fields:
+        payload["merge_commit_sha"] = merge_sha
+        payload["mergeable"] = mergeable
+    return payload
+
+
+def _merge_ref_payload(
+    *,
+    sha: str = MERGE_SHA,
+    ref: str = "refs/pull/43/merge",
+    object_type: str = "commit",
+) -> dict[str, Any]:
+    return {
+        "ref": ref,
+        "object": {
+            "sha": sha,
+            "type": object_type,
+        },
+    }
+
+
+def _merge_commit_payload(
+    *,
+    sha: str = MERGE_SHA,
+    parents: tuple[str, ...] = (BASE_SHA, HEAD_SHA),
+) -> dict[str, Any]:
+    return {
+        "sha": sha,
+        "parents": [{"sha": parent} for parent in parents],
+        "tree": {"sha": "5" * 40},
     }
 
 
 class FakeApi:
-    current_payload: Mapping[str, Any] = _pull_request_payload()
+    current_payload: ClassVar[Mapping[str, Any]] = _pull_request_payload()
     payload_sequence: ClassVar[list[Mapping[str, Any]]] = []
+    merge_ref_payload: ClassVar[Mapping[str, Any]] = _merge_ref_payload()
+    merge_ref_sequence: ClassVar[list[Mapping[str, Any]]] = []
+    merge_commit_payload: ClassVar[Mapping[str, Any]] = _merge_commit_payload()
     instances: ClassVar[list[FakeApi]] = []
 
     def __init__(self, *, repository: str, token: str) -> None:
         self.repository = repository
         self.token = token
         self.statuses: list[dict[str, str]] = []
-        self.fetch_count = 0
+        self.pr_fetch_count = 0
+        self.merge_ref_fetch_count = 0
+        self.merge_commit_fetch_count = 0
         type(self).instances.append(self)
 
     def fetch_pull_request(self, number: int) -> Mapping[str, Any]:
         assert number == 43
-        self.fetch_count += 1
+        self.pr_fetch_count += 1
         if type(self).payload_sequence:
             return type(self).payload_sequence.pop(0)
         return type(self).current_payload
+
+    def fetch_pull_request_merge_ref(self, number: int) -> Mapping[str, Any]:
+        assert number == 43
+        self.merge_ref_fetch_count += 1
+        if type(self).merge_ref_sequence:
+            return type(self).merge_ref_sequence.pop(0)
+        return type(self).merge_ref_payload
+
+    def fetch_git_commit(self, sha: str) -> Mapping[str, Any]:
+        assert sha == MERGE_SHA
+        self.merge_commit_fetch_count += 1
+        return type(self).merge_commit_payload
 
     def post_status(
         self,
@@ -76,6 +123,9 @@ class FakeApi:
 def _reset_fake_api() -> None:
     FakeApi.current_payload = _pull_request_payload()
     FakeApi.payload_sequence = []
+    FakeApi.merge_ref_payload = _merge_ref_payload()
+    FakeApi.merge_ref_sequence = []
+    FakeApi.merge_commit_payload = _merge_commit_payload()
     FakeApi.instances = []
 
 
@@ -113,7 +163,7 @@ def _report(
     )
 
 
-def test_subject_requires_open_main_definitively_mergeable_exact_subject() -> None:
+def test_complete_pr_parser_remains_strict() -> None:
     assert control.subject_from_pull_request(_pull_request_payload()) == _subject()
 
     with pytest.raises(ValueError, match="remain open"):
@@ -128,63 +178,63 @@ def test_subject_requires_open_main_definitively_mergeable_exact_subject() -> No
         control.subject_from_pull_request(_pull_request_payload(merge_sha="short"))
 
 
-def test_report_requires_repository_dispatch_before_api_access(
+@pytest.mark.parametrize(
+    ("workflow_event", "workflow_ref", "actor", "match"),
+    [
+        ("pull_request", "refs/heads/main", "portyu9", "repository_dispatch"),
+        ("repository_dispatch", "refs/heads/feature", "portyu9", "refs/heads/main"),
+        ("repository_dispatch", "refs/heads/main", "contributor", "repository owner"),
+    ],
+)
+def test_report_admission_denies_before_api_access(
     monkeypatch: pytest.MonkeyPatch,
+    workflow_event: str,
+    workflow_ref: str,
+    actor: str,
+    match: str,
 ) -> None:
     monkeypatch.setattr(control, "GitHubApi", FakeApi)
-    with pytest.raises(PermissionError, match="repository_dispatch"):
+
+    with pytest.raises(PermissionError, match=match):
         control.report_authorized_result(
             repository=REPOSITORY,
             token="token",
-            actor="portyu9",
+            actor=actor,
             repository_owner="portyu9",
-            workflow_event="pull_request",
-            workflow_ref="refs/heads/main",
+            workflow_event=workflow_event,
+            workflow_ref=workflow_ref,
             expected=_subject(),
             authorized=True,
             job_results={"validation": "success"},
             target_url=RUN_URL,
         )
+
     assert FakeApi.instances == []
 
 
-def test_report_requires_main_ref_before_api_access(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(control, "GitHubApi", FakeApi)
-    with pytest.raises(PermissionError, match="refs/heads/main"):
-        control.report_authorized_result(
-            repository=REPOSITORY,
-            token="token",
-            actor="portyu9",
-            repository_owner="portyu9",
-            workflow_event="repository_dispatch",
-            workflow_ref="refs/heads/feature",
-            expected=_subject(),
-            authorized=True,
-            job_results={"validation": "success"},
-            target_url=RUN_URL,
-        )
-    assert FakeApi.instances == []
+def test_report_uses_merge_ref_when_pr_merge_fields_are_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    FakeApi.current_payload = _pull_request_payload(include_merge_fields=False)
+
+    result = _report(monkeypatch)
+
+    assert result["result"] == "SUCCESS"
+    api = FakeApi.instances[0]
+    assert api.pr_fetch_count == 2
+    assert api.merge_ref_fetch_count == 2
+    assert api.merge_commit_fetch_count == 1
+    assert api.statuses == [
+        {
+            "sha": HEAD_SHA,
+            "state": "success",
+            "description": "Owner-authorized exact-subject validation passed",
+            "target_url": RUN_URL,
+        }
+    ]
 
 
-def test_non_owner_cannot_report_even_diagnostic(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(control, "GitHubApi", FakeApi)
-    with pytest.raises(PermissionError, match="repository owner"):
-        control.report_authorized_result(
-            repository=REPOSITORY,
-            token="token",
-            actor="contributor",
-            repository_owner="portyu9",
-            workflow_event="repository_dispatch",
-            workflow_ref="refs/heads/main",
-            expected=_subject(),
-            authorized=False,
-            job_results={"validation": "success"},
-            target_url=RUN_URL,
-        )
-    assert FakeApi.instances == []
-
-
-def test_diagnostic_owner_run_refetches_subject_without_posting_status(
+def test_diagnostic_owner_run_verifies_exact_subject_without_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     result = _report(monkeypatch, authorized=False)
@@ -199,131 +249,107 @@ def test_diagnostic_owner_run_refetches_subject_without_posting_status(
             "expected_merge_sha": MERGE_SHA,
         },
     }
-    assert len(FakeApi.instances) == 1
     assert FakeApi.instances[0].statuses == []
 
 
-def test_owner_authorized_success_posts_exact_current_head_status(
+@pytest.mark.parametrize(
+    "payload",
+    [
+        _pull_request_payload(state="closed", include_merge_fields=False),
+        _pull_request_payload(base_ref="release", include_merge_fields=False),
+        _pull_request_payload(head_sha=OTHER_SHA, include_merge_fields=False),
+        _pull_request_payload(base_sha=OTHER_SHA, include_merge_fields=False),
+    ],
+)
+def test_live_pr_identity_drift_fails_before_status(
     monkeypatch: pytest.MonkeyPatch,
+    payload: Mapping[str, Any],
 ) -> None:
-    result = _report(monkeypatch)
+    FakeApi.current_payload = payload
 
-    assert result == {
-        "result": "SUCCESS",
-        "status_posted": True,
-        "status_context": "Trusted PR Gate",
-        "status_subject": HEAD_SHA,
-        "validation_result": "success",
-    }
-    assert FakeApi.instances[0].statuses == [
-        {
-            "sha": HEAD_SHA,
-            "state": "success",
-            "description": "Owner-authorized exact-subject validation passed",
-            "target_url": RUN_URL,
-        }
-    ]
-
-
-def test_report_waits_for_mergeability_stabilization_before_posting_status(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    FakeApi.payload_sequence = [
-        _pull_request_payload(mergeable=None, merge_sha=None),
-        _pull_request_payload(mergeable=True, merge_sha=None),
-        _pull_request_payload(),
-    ]
-    sleeps: list[float] = []
-    monkeypatch.setattr(control.time, "sleep", sleeps.append)
-
-    result = _report(monkeypatch)
-
-    assert result["result"] == "SUCCESS"
-    assert FakeApi.instances[0].fetch_count == 3
-    assert sleeps == [control.MERGEABILITY_RETRY_SECONDS] * 2
-    assert FakeApi.instances[0].statuses[0]["state"] == "success"
-
-
-def test_report_bounds_pending_mergeability_without_status(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    FakeApi.current_payload = _pull_request_payload(mergeable=True, merge_sha=None)
-    sleeps: list[float] = []
-    monkeypatch.setattr(control.time, "sleep", sleeps.append)
-
-    with pytest.raises(RuntimeError, match="did not stabilize"):
+    with pytest.raises(ValueError):
         _report(monkeypatch)
 
-    assert FakeApi.instances[0].fetch_count == control.MERGEABILITY_READ_ATTEMPTS
-    assert sleeps == [control.MERGEABILITY_RETRY_SECONDS] * (control.MERGEABILITY_READ_ATTEMPTS - 1)
+    api = FakeApi.instances[0]
+    assert api.statuses == []
+    assert api.merge_ref_fetch_count == 0
+
+
+@pytest.mark.parametrize(
+    ("payload", "match"),
+    [
+        (_merge_ref_payload(sha=OTHER_SHA), "merge ref changed"),
+        (_merge_ref_payload(ref="refs/pull/43/head"), "merge ref must be exactly"),
+        (_merge_ref_payload(object_type="tag"), "must point to a commit"),
+        (_merge_ref_payload(sha="short"), "merge-ref SHA"),
+    ],
+)
+def test_merge_ref_mismatch_or_malformed_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    payload: Mapping[str, Any],
+    match: str,
+) -> None:
+    FakeApi.merge_ref_payload = payload
+
+    with pytest.raises(ValueError, match=match):
+        _report(monkeypatch)
+
     assert FakeApi.instances[0].statuses == []
 
 
-def test_report_fails_on_identity_drift_during_mergeability_wait(
+@pytest.mark.parametrize(
+    ("payload", "match"),
+    [
+        (_merge_commit_payload(sha=OTHER_SHA), "merge commit changed"),
+        (_merge_commit_payload(parents=(HEAD_SHA, BASE_SHA)), "parents changed"),
+        (_merge_commit_payload(parents=(BASE_SHA,)), "exactly two parents"),
+        (_merge_commit_payload(parents=(BASE_SHA, HEAD_SHA, OTHER_SHA)), "exactly two parents"),
+    ],
+)
+def test_merge_commit_identity_is_bound_to_expected_parents(
+    monkeypatch: pytest.MonkeyPatch,
+    payload: Mapping[str, Any],
+    match: str,
+) -> None:
+    FakeApi.merge_commit_payload = payload
+
+    with pytest.raises(ValueError, match=match):
+        _report(monkeypatch)
+
+    assert FakeApi.instances[0].statuses == []
+
+
+def test_identity_drift_after_merge_verification_fails_before_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     FakeApi.payload_sequence = [
-        _pull_request_payload(mergeable=None, merge_sha=None),
-        _pull_request_payload(head_sha=OTHER_SHA, mergeable=None, merge_sha=None),
+        _pull_request_payload(include_merge_fields=False),
+        _pull_request_payload(head_sha=OTHER_SHA, include_merge_fields=False),
     ]
-    sleeps: list[float] = []
-    monkeypatch.setattr(control.time, "sleep", sleeps.append)
 
     with pytest.raises(ValueError, match="subject changed after authorization"):
         _report(monkeypatch)
 
-    assert FakeApi.instances[0].fetch_count == 2
-    assert sleeps == [control.MERGEABILITY_RETRY_SECONDS]
     assert FakeApi.instances[0].statuses == []
 
 
-def test_report_does_not_retry_malformed_merge_sha(monkeypatch: pytest.MonkeyPatch) -> None:
-    FakeApi.current_payload = _pull_request_payload(merge_sha="short")
-    sleeps: list[float] = []
-    monkeypatch.setattr(control.time, "sleep", sleeps.append)
+def test_merge_ref_drift_immediately_before_status_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    FakeApi.merge_ref_sequence = [
+        _merge_ref_payload(),
+        _merge_ref_payload(sha=OTHER_SHA),
+    ]
 
-    with pytest.raises(ValueError, match="merge SHA"):
+    with pytest.raises(ValueError, match="before status publication"):
         _report(monkeypatch)
 
-    assert FakeApi.instances[0].fetch_count == 1
-    assert sleeps == []
     assert FakeApi.instances[0].statuses == []
 
 
-def test_report_does_not_retry_definitive_unmergeable(monkeypatch: pytest.MonkeyPatch) -> None:
-    FakeApi.current_payload = _pull_request_payload(mergeable=False, merge_sha=None)
-    sleeps: list[float] = []
-    monkeypatch.setattr(control.time, "sleep", sleeps.append)
-
-    with pytest.raises(ValueError, match="definitively mergeable"):
-        _report(monkeypatch)
-
-    assert FakeApi.instances[0].fetch_count == 1
-    assert sleeps == []
-    assert FakeApi.instances[0].statuses == []
-
-
-def test_stale_subject_cannot_post_status(monkeypatch: pytest.MonkeyPatch) -> None:
-    FakeApi.current_payload = _pull_request_payload(merge_sha=OTHER_SHA)
-    monkeypatch.setattr(control, "GitHubApi", FakeApi)
-
-    with pytest.raises(ValueError, match="subject changed after authorization"):
-        control.report_authorized_result(
-            repository=REPOSITORY,
-            token="token",
-            actor="portyu9",
-            repository_owner="portyu9",
-            workflow_event="repository_dispatch",
-            workflow_ref="refs/heads/main",
-            expected=_subject(),
-            authorized=True,
-            job_results={"validation": "success"},
-            target_url=RUN_URL,
-        )
-    assert FakeApi.instances[0].statuses == []
-
-
-def test_owner_authorized_failed_validation_posts_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_owner_authorized_failed_validation_posts_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     result = _report(monkeypatch, job_result="cancelled")
 
     assert result["result"] == "FAILURE"
@@ -331,8 +357,11 @@ def test_owner_authorized_failed_validation_posts_failure(monkeypatch: pytest.Mo
     assert FakeApi.instances[0].statuses[0]["state"] == "failure"
 
 
-def test_direct_report_rejects_unknown_validation_result(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_direct_report_rejects_unknown_validation_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(control, "GitHubApi", FakeApi)
+
     with pytest.raises(ValueError, match="invalid terminal result"):
         control.report_authorized_result(
             repository=REPOSITORY,
@@ -346,6 +375,7 @@ def test_direct_report_rejects_unknown_validation_result(monkeypatch: pytest.Mon
             job_results={"validation": "green"},
             target_url=RUN_URL,
         )
+
     assert FakeApi.instances[0].statuses == []
 
 
@@ -423,5 +453,6 @@ def test_main_exits_nonzero_after_publishing_failure(
 
     with pytest.raises(SystemExit) as exc_info:
         control.main()
+
     assert exc_info.value.code == 1
     assert '"result": "FAILURE"' in capsys.readouterr().out
