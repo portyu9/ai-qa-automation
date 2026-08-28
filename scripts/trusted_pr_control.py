@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
@@ -17,6 +18,8 @@ EXPECTED_WORKFLOW_EVENT = "repository_dispatch"
 EXPECTED_WORKFLOW_REF = "refs/heads/main"
 TRUSTED_STATUS_CONTEXT = "Trusted PR Gate"
 MAX_API_RESPONSE_BYTES = 1024 * 1024
+MERGEABILITY_READ_ATTEMPTS = 6
+MERGEABILITY_RETRY_SECONDS = 1.0
 FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 TERMINAL_JOB_RESULTS = {"cancelled", "failure", "skipped", "success"}
@@ -153,7 +156,7 @@ def _mapping(value: Any, *, label: str) -> Mapping[str, Any]:
     return value
 
 
-def subject_from_pull_request(payload: Mapping[str, Any]) -> PullRequestSubject:
+def _pull_request_identity(payload: Mapping[str, Any]) -> tuple[int, str, str]:
     if payload.get("state") != "open":
         raise ValueError("pull request must remain open")
     number = _require_positive_int(payload.get("number"), label="pull-request number")
@@ -161,12 +164,21 @@ def subject_from_pull_request(payload: Mapping[str, Any]) -> PullRequestSubject:
     base = _mapping(payload.get("base"), label="pull-request base")
     if base.get("ref") != EXPECTED_BASE_REF:
         raise ValueError(f"pull request must target {EXPECTED_BASE_REF!r}")
+    return (
+        number,
+        _require_sha(head.get("sha"), label="pull-request head SHA"),
+        _require_sha(base.get("sha"), label="pull-request base SHA"),
+    )
+
+
+def subject_from_pull_request(payload: Mapping[str, Any]) -> PullRequestSubject:
+    number, head_sha, base_sha = _pull_request_identity(payload)
     if payload.get("mergeable") is not True:
         raise ValueError("pull request must be currently and definitively mergeable")
     return PullRequestSubject(
         number=number,
-        head_sha=_require_sha(head.get("sha"), label="pull-request head SHA"),
-        base_sha=_require_sha(base.get("sha"), label="pull-request base SHA"),
+        head_sha=head_sha,
+        base_sha=base_sha,
         merge_sha=_require_sha(payload.get("merge_commit_sha"), label="pull-request merge SHA"),
     )
 
@@ -182,6 +194,49 @@ def verify_current_subject(
             f"expected {expected}, observed {current}"
         )
     return current
+
+
+def _verify_current_identity(
+    expected: PullRequestSubject,
+    current_payload: Mapping[str, Any],
+) -> None:
+    number, head_sha, base_sha = _pull_request_identity(current_payload)
+    observed = (number, head_sha, base_sha)
+    expected_identity = (expected.number, expected.head_sha, expected.base_sha)
+    if observed != expected_identity:
+        raise ValueError(
+            "pull-request subject changed after authorization: "
+            f"expected identity {expected_identity}, observed {observed}"
+        )
+
+
+def fetch_stable_current_subject(
+    api: GitHubApi,
+    expected: PullRequestSubject,
+) -> PullRequestSubject:
+    for attempt in range(MERGEABILITY_READ_ATTEMPTS):
+        payload = api.fetch_pull_request(expected.number)
+        _verify_current_identity(expected, payload)
+        mergeable = payload.get("mergeable")
+        merge_sha = payload.get("merge_commit_sha")
+
+        if mergeable is True and isinstance(merge_sha, str):
+            _require_sha(merge_sha, label="pull-request merge SHA")
+            return verify_current_subject(expected, payload)
+        if mergeable is False:
+            raise ValueError("pull request must be currently and definitively mergeable")
+        if mergeable is not None and mergeable is not True:
+            raise ValueError("pull-request mergeable state must be true, false, or null")
+        if merge_sha is not None:
+            _require_sha(merge_sha, label="pull-request merge SHA")
+
+        if attempt + 1 == MERGEABILITY_READ_ATTEMPTS:
+            raise RuntimeError(
+                "pull-request mergeability did not stabilize within the bounded read window"
+            )
+        time.sleep(MERGEABILITY_RETRY_SECONDS)
+
+    raise AssertionError("bounded mergeability loop exhausted unexpectedly")
 
 
 def parse_job_results(raw: str) -> dict[str, str]:
@@ -223,7 +278,7 @@ def report_authorized_result(
         raise PermissionError("trusted merge authorization must be dispatched by repository owner")
 
     api = GitHubApi(repository=repository, token=token)
-    current = verify_current_subject(expected, api.fetch_pull_request(expected.number))
+    current = fetch_stable_current_subject(api, expected)
     if not authorized:
         return {
             "result": "DIAGNOSTIC_ONLY",
