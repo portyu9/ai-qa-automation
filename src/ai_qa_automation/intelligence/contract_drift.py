@@ -35,7 +35,7 @@ class ContractChange:
 
 
 class _BoundedChanges(list[ContractChange]):
-    """Retain only reportable findings while tracking omitted authority-relevant truth."""
+    """Retain reportable findings while tracking omitted authority-relevant truth."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -79,12 +79,7 @@ class ContractDriftReport:
 
 
 class OpenAPIContractDriftAnalyzer:
-    """Conservative OpenAPI/Swagger structural drift analysis.
-
-    This analyzer intentionally treats several schema removals/narrowings as
-    breaking even when a particular consumer might tolerate them. It is a QA
-    risk detector, not a substitute for a full protocol-compatibility proof.
-    """
+    """Conservative bounded OpenAPI/Swagger structural drift analysis."""
 
     _METHODS: ClassVar[set[str]] = {
         "get",
@@ -116,16 +111,22 @@ class OpenAPIContractDriftAnalyzer:
                 analyzed=False,
                 reason=str(exc),
             )
+
         old_identity = self._contract_identity(old)
         new_identity = self._contract_identity(new)
         if old_identity is None or new_identity is None:
+            reason = (
+                "document is not recognized as OpenAPI/Swagger"
+                if not self._has_contract_marker(old) or not self._has_contract_marker(new)
+                else "document has an unsupported or ambiguous OpenAPI/Swagger dialect"
+            )
             return ContractDriftReport(
                 path=path,
                 contract_kind="unknown-json-yaml",
                 severity=ContractDriftSeverity.NOT_ANALYZED,
                 changes=(),
                 analyzed=False,
-                reason="document has an unsupported or ambiguous OpenAPI/Swagger dialect",
+                reason=reason,
             )
         if old_identity != new_identity:
             return ContractDriftReport(
@@ -163,6 +164,10 @@ class OpenAPIContractDriftAnalyzer:
     @staticmethod
     def _load_document(path: str, content: bytes) -> dict[str, Any]:
         return load_contract_document(path, content)
+
+    @staticmethod
+    def _has_contract_marker(document: dict[str, Any]) -> bool:
+        return "openapi" in document or "swagger" in document
 
     @staticmethod
     def _contract_identity(document: dict[str, Any]) -> tuple[str, str] | None:
@@ -238,8 +243,8 @@ class OpenAPIContractDriftAnalyzer:
                 summary="Path-item semantics outside the bounded comparison model changed",
                 changes=changes,
             )
-            old_methods = {key for key in old_path if key.casefold() in self._METHODS}
-            new_methods = {key for key in new_path if key.casefold() in self._METHODS}
+            old_methods = {key for key in old_path if key in self._METHODS}
+            new_methods = {key for key in new_path if key in self._METHODS}
             for method in sorted(old_methods - new_methods):
                 changes.append(
                     self._change(
@@ -259,11 +264,10 @@ class OpenAPIContractDriftAnalyzer:
                     )
                 )
             for method in sorted(old_methods & new_methods):
-                location = f"paths.{path_name}.{method}"
                 self._compare_operation(
                     self._mapping(old_path[method]),
                     self._mapping(new_path[method]),
-                    location,
+                    f"paths.{path_name}.{method}",
                     changes,
                 )
 
@@ -302,16 +306,13 @@ class OpenAPIContractDriftAnalyzer:
                 if bool(param.get("required"))
                 else ContractDriftSeverity.NON_BREAKING
             )
-            rule = (
-                "OAS-REQUIRED-PARAMETER-ADDED"
-                if severity == ContractDriftSeverity.BREAKING
-                else "OAS-OPTIONAL-PARAMETER-ADDED"
-            )
             changes.append(
                 self._change(
                     severity,
                     f"{location}.parameters.{key}",
-                    rule,
+                    "OAS-REQUIRED-PARAMETER-ADDED"
+                    if severity == ContractDriftSeverity.BREAKING
+                    else "OAS-OPTIONAL-PARAMETER-ADDED",
                     "Required parameter added"
                     if severity == ContractDriftSeverity.BREAKING
                     else "Optional parameter added",
@@ -395,17 +396,23 @@ class OpenAPIContractDriftAnalyzer:
         old_responses = self._mapping(old.get("responses"))
         new_responses = self._mapping(new.get("responses"))
         for status in sorted(set(old_responses) - set(new_responses)):
-            severity = (
-                ContractDriftSeverity.BREAKING
-                if self._is_success_status(status)
-                else ContractDriftSeverity.RISKY
-            )
             changes.append(
                 self._change(
-                    severity,
+                    ContractDriftSeverity.BREAKING
+                    if self._is_success_status(status)
+                    else ContractDriftSeverity.RISKY,
                     f"{location}.responses.{status}",
                     "OAS-RESPONSE-REMOVED",
                     "Response status removed",
+                )
+            )
+        for status in sorted(set(new_responses) - set(old_responses)):
+            changes.append(
+                self._change(
+                    ContractDriftSeverity.RISKY,
+                    f"{location}.responses.{status}",
+                    "OAS-RESPONSE-ADDED",
+                    "Response status added; consumers may need to handle a new outcome",
                 )
             )
         for status in sorted(set(old_responses) & set(new_responses)):
@@ -463,6 +470,7 @@ class OpenAPIContractDriftAnalyzer:
                     "Non-schema component semantics changed outside the bounded comparison model",
                 )
             )
+
         old_schemas = self._schemas(old)
         new_schemas = self._schemas(new)
         for name in sorted(set(old_schemas) - set(new_schemas)):
@@ -547,11 +555,7 @@ class OpenAPIContractDriftAnalyzer:
             else:
                 assert old_types is not None and new_types is not None
                 removed = old_types - new_types
-                severity = (
-                    ContractDriftSeverity.BREAKING
-                    if removed
-                    else ContractDriftSeverity.RISKY
-                )
+                severity = ContractDriftSeverity.BREAKING if removed else ContractDriftSeverity.RISKY
                 rule = "OAS-TYPE-NARROWED" if removed else "OAS-TYPE-WIDENED"
                 summary = (
                     "Schema type choices removed or replaced"
@@ -600,8 +604,7 @@ class OpenAPIContractDriftAnalyzer:
                             ContractDriftSeverity.RISKY,
                             f"{location}.enum",
                             "OAS-ENUM-WIDENED",
-                            "Allowed enum values expanded; consumers with exhaustive "
-                            "handling may need review",
+                            "Allowed enum values expanded; consumers with exhaustive handling may need review",
                         )
                     )
 
@@ -614,6 +617,15 @@ class OpenAPIContractDriftAnalyzer:
                     f"{location}.required.{name}",
                     "OAS-REQUIRED-PROPERTY-ADDED",
                     "Schema property became required",
+                )
+            )
+        for name in sorted(old_required - new_required):
+            changes.append(
+                self._change(
+                    ContractDriftSeverity.RISKY,
+                    f"{location}.required.{name}",
+                    "OAS-REQUIRED-PROPERTY-REMOVED",
+                    "Schema property is no longer required; consumers may need review",
                 )
             )
 
@@ -629,11 +641,7 @@ class OpenAPIContractDriftAnalyzer:
                 )
             )
         for name in sorted(set(new_props) - set(old_props)):
-            severity = (
-                ContractDriftSeverity.BREAKING
-                if name in new_required
-                else ContractDriftSeverity.NON_BREAKING
-            )
+            severity = ContractDriftSeverity.BREAKING if name in new_required else ContractDriftSeverity.NON_BREAKING
             changes.append(
                 self._change(
                     severity,
@@ -733,8 +741,7 @@ class OpenAPIContractDriftAnalyzer:
 
     @classmethod
     def _schema_remainder(cls, value: dict[str, Any]) -> dict[str, Any]:
-        ignored = cls._SCHEMA_MODELED_KEYS | cls._SCHEMA_ANNOTATION_KEYS
-        return cls._without_keys(value, ignored)
+        return cls._without_keys(value, cls._SCHEMA_MODELED_KEYS | cls._SCHEMA_ANNOTATION_KEYS)
 
     @staticmethod
     def _without_keys(value: dict[str, Any], keys: set[str] | frozenset[str]) -> dict[str, Any]:
@@ -754,14 +761,7 @@ class OpenAPIContractDriftAnalyzer:
     ) -> None:
         excluded = handled | ignored
         if self._without_keys(old, excluded) != self._without_keys(new, excluded):
-            changes.append(
-                self._change(
-                    ContractDriftSeverity.NOT_ANALYZED,
-                    location,
-                    rule_id,
-                    summary,
-                )
-            )
+            changes.append(self._change(ContractDriftSeverity.NOT_ANALYZED, location, rule_id, summary))
 
     @staticmethod
     def _is_success_status(value: str) -> bool:
@@ -772,9 +772,7 @@ class OpenAPIContractDriftAnalyzer:
     def _change(
         severity: ContractDriftSeverity, location: str, rule_id: str, summary: str
     ) -> ContractChange:
-        return ContractChange(
-            severity=severity, location=location, rule_id=rule_id, summary=summary
-        )
+        return ContractChange(severity=severity, location=location, rule_id=rule_id, summary=summary)
 
     @staticmethod
     def _max_severity(changes: _BoundedChanges) -> ContractDriftSeverity:
