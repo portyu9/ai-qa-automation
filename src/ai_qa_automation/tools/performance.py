@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
+import stat
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -47,20 +49,49 @@ class K6Runner:
         self.external_egress_enforced = external_egress_enforced
         self.external_process_isolation_enforced = external_process_isolation_enforced
 
+    def _workspace_module_path(self, candidate: Path) -> Path:
+        raw = candidate if candidate.is_absolute() else self.workspace / candidate
+        lexical = Path(os.path.abspath(raw))
+        try:
+            relative_path = lexical.relative_to(self.workspace)
+        except ValueError as exc:
+            raise PermissionError(
+                "k6 local imports must resolve to .js files inside the target workspace"
+            ) from exc
+        if not relative_path.parts:
+            raise PermissionError(
+                "k6 local imports must resolve to .js files inside the target workspace"
+            )
+
+        current = self.workspace
+        for part in relative_path.parts:
+            current /= part
+            try:
+                info = current.lstat()
+            except FileNotFoundError as exc:
+                raise PermissionError(
+                    "k6 local imports must resolve to existing .js files inside the target workspace"
+                ) from exc
+            if stat.S_ISLNK(info.st_mode):
+                raise PermissionError("k6 module paths may not traverse symlinks")
+
+        if lexical.suffix != ".js" or not lexical.is_file():
+            raise PermissionError(
+                "k6 local imports must resolve to .js files inside the target workspace"
+            )
+        return lexical
+
     def _collect_validated_modules(
         self,
         script: Path,
         target_url: str,
     ) -> tuple[Path, dict[Path, str]]:
-        resolved = (script if script.is_absolute() else self.workspace / script).resolve()
-        if (
-            self.workspace not in resolved.parents
-            or resolved.suffix != ".js"
-            or not resolved.is_file()
-        ):
+        try:
+            resolved = self._workspace_module_path(script)
+        except PermissionError as exc:
             raise PermissionError(
                 "k6 script must be an existing .js file inside the target workspace"
-            )
+            ) from exc
         target_host = (urlparse(target_url).hostname or "").lower()
         if not target_host:
             raise PermissionError("k6 target URL must contain an explicit host")
@@ -70,19 +101,10 @@ class K6Runner:
 
         def inspect_module(module_path: Path, *, root: bool = False) -> None:
             nonlocal root_uses_injected_target
-            module_path = module_path.resolve()
-            try:
-                relative_path = module_path.relative_to(self.workspace)
-            except ValueError as exc:
-                raise PermissionError(
-                    "k6 local imports must resolve to .js files inside the target workspace"
-                ) from exc
+            module_path = self._workspace_module_path(module_path)
+            relative_path = module_path.relative_to(self.workspace)
             if relative_path in modules:
                 return
-            if module_path.suffix != ".js" or not module_path.is_file():
-                raise PermissionError(
-                    "k6 local imports must resolve to .js files inside the target workspace"
-                )
             if len(modules) >= _MAX_K6_MODULES:
                 raise PermissionError(f"k6 import graph exceeds {_MAX_K6_MODULES} local modules")
             try:
@@ -112,7 +134,7 @@ class K6Runner:
                 if specifier.startswith(("http://", "https://")):
                     raise PermissionError("remote k6 module imports are not allowed")
                 if specifier.startswith("."):
-                    imported = (module_path.parent / specifier).resolve()
+                    imported = module_path.parent / specifier
                     if imported.suffix == "":
                         imported = imported.with_suffix(".js")
                     inspect_module(imported)
