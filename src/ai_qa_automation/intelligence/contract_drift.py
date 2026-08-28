@@ -6,6 +6,8 @@ from typing import Any, ClassVar
 
 from .contract_document import load_contract_document
 
+_MAX_COMPARISON_CHANGES = 250
+
 
 class ContractDriftSeverity(StrEnum):
     BREAKING = "BREAKING"
@@ -28,6 +30,26 @@ class ContractChange:
             "rule_id": self.rule_id,
             "summary": self.summary,
         }
+
+
+class _BoundedChanges(list[ContractChange]):
+    """Retain only reportable findings while tracking omitted authority-relevant truth."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.incomplete = False
+        self.suppressed_breaking = False
+
+    def append(self, item: ContractChange) -> None:
+        if len(self) < _MAX_COMPARISON_CHANGES:
+            super().append(item)
+            return
+        self.incomplete = True
+        if item.severity == ContractDriftSeverity.BREAKING:
+            self.suppressed_breaking = True
+
+    def mark_incomplete(self) -> None:
+        self.incomplete = True
 
 
 @dataclass(frozen=True)
@@ -92,18 +114,20 @@ class OpenAPIContractDriftAnalyzer:
                 reason="document is not recognized as OpenAPI/Swagger",
             )
 
-        changes: list[ContractChange] = []
+        changes = _BoundedChanges()
         self._compare_paths(old, new, changes)
         self._compare_components(old, new, changes)
-        comparison_incomplete = any(
+        comparison_incomplete = changes.incomplete or any(
             item.severity == ContractDriftSeverity.NOT_ANALYZED for item in changes
         )
         severity = self._max_severity(changes)
+        if comparison_incomplete and severity != ContractDriftSeverity.BREAKING:
+            severity = ContractDriftSeverity.NOT_ANALYZED
         return ContractDriftReport(
             path=path,
             contract_kind="openapi",
             severity=severity,
-            changes=tuple(changes[:250]),
+            changes=tuple(changes),
             analyzed=not comparison_incomplete,
             reason=(
                 "contract comparison exceeded a deterministic analysis bound"
@@ -124,7 +148,7 @@ class OpenAPIContractDriftAnalyzer:
         self,
         old: dict[str, Any],
         new: dict[str, Any],
-        changes: list[ContractChange],
+        changes: _BoundedChanges,
     ) -> None:
         old_paths = self._mapping(old.get("paths"))
         new_paths = self._mapping(new.get("paths"))
@@ -183,7 +207,7 @@ class OpenAPIContractDriftAnalyzer:
         old: dict[str, Any],
         new: dict[str, Any],
         location: str,
-        changes: list[ContractChange],
+        changes: _BoundedChanges,
     ) -> None:
         old_params = self._parameter_index(old.get("parameters"))
         new_params = self._parameter_index(new.get("parameters"))
@@ -310,7 +334,7 @@ class OpenAPIContractDriftAnalyzer:
         self,
         old: dict[str, Any],
         new: dict[str, Any],
-        changes: list[ContractChange],
+        changes: _BoundedChanges,
     ) -> None:
         old_schemas = self._schemas(old)
         new_schemas = self._schemas(new)
@@ -340,11 +364,12 @@ class OpenAPIContractDriftAnalyzer:
         old: dict[str, Any],
         new: dict[str, Any],
         location: str,
-        changes: list[ContractChange],
+        changes: _BoundedChanges,
         *,
         depth: int = 0,
     ) -> None:
-        if len(changes) >= 500:
+        if len(changes) >= _MAX_COMPARISON_CHANGES:
+            changes.mark_incomplete()
             return
         if depth > 12:
             changes.append(
@@ -504,8 +529,10 @@ class OpenAPIContractDriftAnalyzer:
         )
 
     @staticmethod
-    def _max_severity(changes: list[ContractChange]) -> ContractDriftSeverity:
-        if any(item.severity == ContractDriftSeverity.BREAKING for item in changes):
+    def _max_severity(changes: _BoundedChanges) -> ContractDriftSeverity:
+        if changes.suppressed_breaking or any(
+            item.severity == ContractDriftSeverity.BREAKING for item in changes
+        ):
             return ContractDriftSeverity.BREAKING
         if any(item.severity == ContractDriftSeverity.NOT_ANALYZED for item in changes):
             return ContractDriftSeverity.NOT_ANALYZED
