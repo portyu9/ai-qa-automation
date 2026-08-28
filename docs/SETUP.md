@@ -108,7 +108,9 @@ Inject configuration through:
 | `AI_QA_ALLOWED_NETWORK_HOSTS` | `["127.0.0.1","localhost"]` | canonical exact host/IP allowlist |
 | `AI_QA_ALLOW_TEST_WRITES` | `false` | enables only policy-eligible live autonomous Python test writes |
 | `AI_QA_ALLOW_MUTATING_API_METHODS` | `false` | enables policy-eligible API mutation; read-only remains default |
-| `AI_QA_K6_EXTERNAL_EGRESS_ENFORCED` | `false` | asserts deployment-level egress containment for k6; required for every k6 run |
+| `AI_QA_K6_EXTERNAL_EGRESS_ENFORCED` | `false` | asserts deployment-level egress containment for k6; necessary but not sufficient for process execution |
+
+The live MCP configuration currently exposes the k6 egress prerequisite only. The controlled runner also requires a separate trusted process/filesystem-isolation assertion immediately before process spawn. Because that second assertion is not yet wired through the live MCP configuration, live `run_k6` remains intentionally fail-closed rather than treating static JavaScript inspection as an execution sandbox.
 
 ---
 
@@ -271,14 +273,21 @@ Reusable patch/generation components may understand other syntaxes without widen
 
 ## Controlled k6 execution
 
-Every k6 run requires deployment-level egress containment to be independently established:
+Every k6 execution requires deployment-level egress containment **and** process/filesystem isolation to be independently established. Repository configuration currently exposes only the egress prerequisite:
 
 ```bash
 export AI_QA_K6_EXTERNAL_EGRESS_ENFORCED=true
 ```
 
 > [!WARNING]
-> This variable is a trusted prerequisite assertion. It does not create a firewall. The operating environment must actually enforce outbound network policy.
+> This variable is a trusted prerequisite assertion. It does not create a firewall, process sandbox, filesystem namespace, or container boundary. The operating environment must actually enforce outbound network policy, and process execution must remain fail-closed until trusted process/filesystem containment is independently asserted.
+
+The controlled runner additionally:
+
+- validates a bounded root/local-import graph before execution;
+- rejects remote and unapproved extension imports, unapproved literal hosts, `open()` use, path escape, and symlink-traversing module subjects;
+- snapshots the exact validated UTF-8 module bytes into a fresh temporary execution tree; and
+- executes only that snapshot when both infrastructure prerequisites are asserted, so later workspace mutation cannot change the code that runs.
 
 The k6 target must additionally satisfy:
 
@@ -289,7 +298,7 @@ The k6 target must additionally satisfy:
 - script/import restrictions; and
 - predefined threshold assessment.
 
-The egress prerequisite applies to localhost targets too because JavaScript can construct destinations dynamically.
+The egress prerequisite applies to localhost targets too because JavaScript can construct destinations dynamically. The live MCP `run_k6` path currently remains intentionally blocked even when the egress flag is true because its separate trusted process/filesystem-isolation assertion has not yet been plumbed into runtime configuration.
 
 ---
 
@@ -327,7 +336,7 @@ The operating environment owns observations such as:
 - live Anthropic provider behavior;
 - authenticated GitHub/Atlassian behavior;
 - external application browser/API behavior;
-- approved k6 workload behavior and egress enforcement;
+- approved k6 workload behavior, egress enforcement, and process/filesystem isolation;
 - Appium app/device/emulator/cloud behavior;
 - process/container isolation;
 - firewall/proxy policy;
