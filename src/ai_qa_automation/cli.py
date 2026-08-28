@@ -10,7 +10,9 @@ from .agent import run_agent_sync
 from .config import Settings
 from .demo import run_demo
 from .doctor import environment_report
+from .intelligence.contract_document import MAX_CONTRACT_DOCUMENT_BYTES
 from .intelligence.contract_drift import OpenAPIContractDriftAnalyzer
+from .io_safety import read_bytes_bounded
 from .runtime.attestation import build_run_attestation
 from .runtime.lineage import build_run_lineage
 from .runtime.recovery import inspect_recovery
@@ -73,10 +75,20 @@ def contract_diff_command(
     ],
 ) -> None:
     """Deterministically report conservative OpenAPI/Swagger compatibility drift."""
+    baseline_bytes = read_bytes_bounded(
+        baseline,
+        max_bytes=MAX_CONTRACT_DOCUMENT_BYTES,
+        label="contract diff baseline",
+    )
+    current_bytes = read_bytes_bounded(
+        current,
+        max_bytes=MAX_CONTRACT_DOCUMENT_BYTES,
+        label="contract diff current",
+    )
     report = OpenAPIContractDriftAnalyzer().analyze(
         path=current.name,
-        baseline=baseline.read_bytes(),
-        current=current.read_bytes(),
+        baseline=baseline_bytes,
+        current=current_bytes,
     )
     typer.echo(json.dumps(report.as_dict(), indent=2, default=str))
 
