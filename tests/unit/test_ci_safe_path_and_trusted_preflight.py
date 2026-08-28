@@ -90,3 +90,31 @@ def test_validation_jobs_wait_for_supply_chain_preflight() -> None:
 
     supply_chain = text[text.index("  supply-chain:") : text.index("  security:")]
     assert "          fetch-depth: 0\n" in supply_chain
+
+
+def test_trusted_reporter_treats_dispatch_payload_as_data() -> None:
+    text = CI_WORKFLOW.read_text(encoding="utf-8")
+    trusted_status = text[text.index("  trusted-status:") :]
+    publish_step = trusted_status[
+        trusted_status.index("      - name: Publish exact-subject trusted status") :
+    ]
+    run_script = publish_step[publish_step.index("        run: |\n") :]
+
+    for variable, expression in (
+        ("PR_NUMBER", "${{ github.event.client_payload.pr_number }}"),
+        ("EXPECTED_HEAD_SHA", "${{ github.event.client_payload.expected_head_sha }}"),
+        ("EXPECTED_BASE_SHA", "${{ github.event.client_payload.expected_base_sha }}"),
+        ("EXPECTED_MERGE_SHA", "${{ github.event.client_payload.expected_merge_sha }}"),
+        ("AUTHORIZED", "${{ github.event.client_payload.authorized }}"),
+        ("VALIDATION_RESULT", "${{ needs.required-gate.result }}"),
+    ):
+        assert f"          {variable}: {expression}\n" in publish_step
+
+    assert "${{ github.event.client_payload." not in run_script
+    assert 'printf -v job_results_json \'{"validation":"%s"}\' "$VALIDATION_RESULT"' in run_script
+    assert '--pr-number "$PR_NUMBER"' in run_script
+    assert '--expected-head-sha "$EXPECTED_HEAD_SHA"' in run_script
+    assert '--expected-base-sha "$EXPECTED_BASE_SHA"' in run_script
+    assert '--expected-merge-sha "$EXPECTED_MERGE_SHA"' in run_script
+    assert '--authorized "$AUTHORIZED"' in run_script
+    assert '--job-results-json "$job_results_json"' in run_script
