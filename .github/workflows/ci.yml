@@ -189,14 +189,17 @@ jobs:
           protected_paths=(
             .github
             .claude
+            .dockerignore
             .mcp.json
             .pre-commit-config.yaml
             CLAUDE.md
             Dockerfile
             evals
+            examples
             pyproject.toml
             requirements
             scripts
+            tests
             src/ai_qa_automation/__init__.py
             src/ai_qa_automation/io_safety.py
             src/ai_qa_automation/tools/__init__.py
