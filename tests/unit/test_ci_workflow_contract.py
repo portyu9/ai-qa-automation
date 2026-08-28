@@ -286,8 +286,12 @@ def test_ci_contract_rejects_reenabled_replace_objects_for_archive(tmp_path: Pat
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "ci.yml"
     text = path.read_text(encoding="utf-8")
-    assert " GIT_NO_REPLACE_OBJECTS=1" in text
-    path.write_text(text.replace(" GIT_NO_REPLACE_OBJECTS=1", "", 1), encoding="utf-8")
+    archive_marker = " GIT_ATTR_NOSYSTEM=1 GIT_NO_REPLACE_OBJECTS=1"
+    assert archive_marker in text
+    path.write_text(
+        text.replace(archive_marker, " GIT_ATTR_NOSYSTEM=1", 1),
+        encoding="utf-8",
+    )
 
     with pytest.raises(ValueError, match="exact reviewed validation-subject-bound step"):
         ci_contract.verify_ci_contract(root)
