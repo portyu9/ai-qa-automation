@@ -372,6 +372,8 @@ class OpenAPIContractDriftAnalyzer:
         *,
         depth: int = 0,
     ) -> None:
+        if not old and not new:
+            return
         if len(changes) >= _MAX_COMPARISON_CHANGES:
             changes.mark_incomplete()
             return
@@ -384,8 +386,6 @@ class OpenAPIContractDriftAnalyzer:
                     "Nested schema comparison exceeded the bounded depth limit",
                 )
             )
-            return
-        if not old and not new:
             return
         old_type = old.get("type")
         new_type = new.get("type")
