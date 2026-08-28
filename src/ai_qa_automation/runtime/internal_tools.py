@@ -43,6 +43,7 @@ from .browser_validation import (
     browser_locator_verification_subject,
     browser_validation_result,
 )
+from .k6_authority import k6_gate_payload
 from .model_source_observation import (
     CoverageSearchObservation,
     read_model_source_confined,
@@ -851,7 +852,6 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
                         status=ValidationStatus.NOT_VERIFIED,
                         summary="Browser locator verification did not complete deterministically.",
                         evidence_ids=[exc.evidence_id],
-                        details={"failure_kind": "browser_execution"},
                     )
                 )
             services.checkpoint()
@@ -1304,7 +1304,20 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
     )
     async def run_k6(args: dict[str, Any]) -> dict[str, Any]:
         services.consume("run_k6", args)
-        services.network_hosts(args["target_url"])
+        try:
+            gate_payload = k6_gate_payload(args)
+        except ValueError as exc:
+            return {
+                "content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}],
+                "is_error": True,
+            }
+        try:
+            services.network_hosts(str(gate_payload["target_url"]))
+        except PermissionError as exc:
+            return {
+                "content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}],
+                "is_error": True,
+            }
         if not services.k6_external_egress_enforced:
             return {
                 "content": [
@@ -1322,15 +1335,15 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
         )
         try:
             metrics = runner.run(
-                Path(args["script"]),
-                target_url=args["target_url"],
-                environment=args["environment"],
+                Path(str(gate_payload["script"])),
+                target_url=str(gate_payload["target_url"]),
+                environment=str(gate_payload["environment"]),
             )
             assessment = PerformanceAssessor().assess(
                 metrics,
-                max_p95_ms=float(args["max_p95_ms"]),
-                max_error_rate=float(args["max_error_rate"]),
-                min_request_rate=float(args["min_request_rate"]),
+                max_p95_ms=float(gate_payload["max_p95_ms"]),
+                max_error_rate=float(gate_payload["max_error_rate"]),
+                min_request_rate=float(gate_payload["min_request_rate"]),
             )
         except PermissionError as exc:
             return {
@@ -1342,14 +1355,7 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
             services.state.validation_results.append(
                 ValidationResult(
                     name="k6",
-                    gate_id=_stable_gate_id(
-                        "k6",
-                        {
-                            "script": args["script"],
-                            "target_url": args["target_url"],
-                            "environment": args["environment"],
-                        },
-                    ),
+                    gate_id=_stable_gate_id("k6", gate_payload),
                     revision=services.state.change_revision,
                     status=status,
                     summary=redact_text(str(exc)),
@@ -1376,17 +1382,7 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
         services.state.validation_results.append(
             ValidationResult(
                 name="k6",
-                gate_id=_stable_gate_id(
-                    "k6",
-                    {
-                        "script": args["script"],
-                        "target_url": args["target_url"],
-                        "environment": args["environment"],
-                        "max_p95_ms": float(args["max_p95_ms"]),
-                        "max_error_rate": float(args["max_error_rate"]),
-                        "min_request_rate": float(args["min_request_rate"]),
-                    },
-                ),
+                gate_id=_stable_gate_id("k6", gate_payload),
                 revision=services.state.change_revision,
                 status=assessment.status,
                 summary=assessment.summary,
