@@ -272,6 +272,7 @@ def _subject_from_args(args: argparse.Namespace) -> PullRequestSubject:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Trusted PR status reporter")
+    parser.add_argument("command", nargs="?", default="report", choices=("report",))
     parser.add_argument("--pr-number", required=True)
     parser.add_argument("--expected-head-sha", required=True)
     parser.add_argument("--expected-base-sha", required=True)
