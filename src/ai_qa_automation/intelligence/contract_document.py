@@ -27,7 +27,8 @@ _YAML_JSON_FLOAT = re.compile(
 _COMPARISON_METHODS = frozenset(
     {"get", "put", "post", "delete", "options", "head", "patch", "trace"}
 )
-_RESPONSE_KEY = re.compile(r"^(?:default|[1-5](?:[0-9]{2}|XX))$")
+_OPENAPI_RESPONSE_KEY = re.compile(r"^(?:default|[1-5](?:[0-9]{2}|XX))$")
+_SWAGGER_RESPONSE_KEY = re.compile(r"^(?:default|[1-5][0-9]{2})$")
 _SCHEMA_TYPES = frozenset({"array", "boolean", "integer", "number", "object", "string"})
 _SCHEMA_TYPES_31 = _SCHEMA_TYPES | {"null"}
 
@@ -437,6 +438,28 @@ def _validate_parameter_list(
             )
 
 
+def _validate_media_content(
+    value: Any,
+    *,
+    field: str,
+    ref_prefix: str,
+    named_schemas: dict[str, Any],
+    allow_type_array: bool,
+) -> None:
+    content = _require_object(value, field)
+    if not content:
+        raise ValueError(f"contract OpenAPI {field} must not be empty for bounded comparison")
+    for media_type in content.values():
+        media = _require_object(media_type, "media type")
+        if "schema" in media:
+            _validate_schema_shape(
+                _require_object(media["schema"], "media schema"),
+                ref_prefix=ref_prefix,
+                named_schemas=named_schemas,
+                allow_type_array=allow_type_array,
+            )
+
+
 def _validate_operation_shape(
     operation: dict[str, Any],
     *,
@@ -457,14 +480,57 @@ def _validate_operation_shape(
         if dialect == "swagger":
             raise ValueError("contract Swagger 2.0 requestBody is not supported by bounded comparison")
         request_body = _require_object(operation["requestBody"], "requestBody")
+        if "$ref" in request_body:
+            raise ValueError(
+                "contract OpenAPI referenced request bodies are not supported by bounded comparison"
+            )
         if "required" in request_body and not isinstance(request_body["required"], bool):
             raise ValueError("contract OpenAPI requestBody required must be boolean for bounded comparison")
-    if "responses" in operation:
-        responses = _require_object(operation["responses"], "responses")
-        for status, response in responses.items():
-            if _RESPONSE_KEY.fullmatch(status) is None:
-                raise ValueError("contract OpenAPI response status key is unsupported for bounded comparison")
-            _require_object(response, "response")
+        if "content" not in request_body:
+            raise ValueError("contract OpenAPI requestBody content is required for bounded comparison")
+        _validate_media_content(
+            request_body["content"],
+            field="requestBody content",
+            ref_prefix=ref_prefix,
+            named_schemas=named_schemas,
+            allow_type_array=allow_type_array,
+        )
+
+    if "responses" not in operation:
+        raise ValueError("contract OpenAPI operation responses are required for bounded comparison")
+    responses = _require_object(operation["responses"], "responses")
+    if not responses:
+        raise ValueError("contract OpenAPI responses must not be empty for bounded comparison")
+    response_key = _SWAGGER_RESPONSE_KEY if dialect == "swagger" else _OPENAPI_RESPONSE_KEY
+    for status, response_value in responses.items():
+        if response_key.fullmatch(status) is None:
+            raise ValueError("contract OpenAPI response status key is unsupported for bounded comparison")
+        response = _require_object(response_value, "response")
+        if "$ref" in response:
+            raise ValueError(
+                "contract OpenAPI referenced responses are not supported by bounded comparison"
+            )
+        description = response.get("description")
+        if not isinstance(description, str):
+            raise ValueError(
+                "contract OpenAPI response description is required for bounded comparison"
+            )
+        if dialect == "swagger":
+            if "schema" in response:
+                _validate_schema_shape(
+                    _require_object(response["schema"], "response schema"),
+                    ref_prefix=ref_prefix,
+                    named_schemas=named_schemas,
+                    allow_type_array=allow_type_array,
+                )
+        elif "content" in response:
+            _validate_media_content(
+                response["content"],
+                field="response content",
+                ref_prefix=ref_prefix,
+                named_schemas=named_schemas,
+                allow_type_array=allow_type_array,
+            )
     if "security" in operation:
         _validate_security_shape(operation["security"])
 
