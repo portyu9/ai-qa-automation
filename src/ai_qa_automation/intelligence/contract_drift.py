@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, ClassVar
@@ -7,6 +8,7 @@ from typing import Any, ClassVar
 from .contract_document import load_contract_document
 
 _MAX_COMPARISON_CHANGES = 250
+_OPENAPI_VERSION = re.compile(r"^3\.(?:0|1)\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$")
 
 
 class ContractDriftSeverity(StrEnum):
@@ -94,6 +96,12 @@ class OpenAPIContractDriftAnalyzer:
         "patch",
         "trace",
     }
+    _SCHEMA_MODELED_KEYS: ClassVar[frozenset[str]] = frozenset(
+        {"$ref", "type", "enum", "required", "properties", "items"}
+    )
+    _SCHEMA_ANNOTATION_KEYS: ClassVar[frozenset[str]] = frozenset(
+        {"title", "description", "example", "examples", "externalDocs", "xml"}
+    )
 
     def analyze(self, *, path: str, baseline: bytes, current: bytes) -> ContractDriftReport:
         try:
@@ -108,17 +116,29 @@ class OpenAPIContractDriftAnalyzer:
                 analyzed=False,
                 reason=str(exc),
             )
-        if not self._is_openapi(old) or not self._is_openapi(new):
+        old_identity = self._contract_identity(old)
+        new_identity = self._contract_identity(new)
+        if old_identity is None or new_identity is None:
             return ContractDriftReport(
                 path=path,
                 contract_kind="unknown-json-yaml",
                 severity=ContractDriftSeverity.NOT_ANALYZED,
                 changes=(),
                 analyzed=False,
-                reason="document is not recognized as OpenAPI/Swagger",
+                reason="document has an unsupported or ambiguous OpenAPI/Swagger dialect",
+            )
+        if old_identity != new_identity:
+            return ContractDriftReport(
+                path=path,
+                contract_kind="openapi",
+                severity=ContractDriftSeverity.NOT_ANALYZED,
+                changes=(),
+                analyzed=False,
+                reason="cross-dialect or cross-version contract comparison is not supported",
             )
 
         changes = _BoundedChanges()
+        self._compare_document_remainder(old, new, changes)
         self._compare_paths(old, new, changes)
         self._compare_components(old, new, changes)
         comparison_incomplete = changes.incomplete or any(
@@ -145,8 +165,39 @@ class OpenAPIContractDriftAnalyzer:
         return load_contract_document(path, content)
 
     @staticmethod
-    def _is_openapi(document: dict[str, Any]) -> bool:
-        return isinstance(document.get("openapi"), str) or isinstance(document.get("swagger"), str)
+    def _contract_identity(document: dict[str, Any]) -> tuple[str, str] | None:
+        openapi = document.get("openapi")
+        swagger = document.get("swagger")
+        has_openapi = isinstance(openapi, str)
+        has_swagger = isinstance(swagger, str)
+        if has_openapi == has_swagger:
+            return None
+        if has_openapi:
+            assert isinstance(openapi, str)
+            if _OPENAPI_VERSION.fullmatch(openapi) is None:
+                return None
+            return ("openapi", openapi)
+        assert isinstance(swagger, str)
+        if swagger != "2.0":
+            return None
+        return ("swagger", swagger)
+
+    def _compare_document_remainder(
+        self,
+        old: dict[str, Any],
+        new: dict[str, Any],
+        changes: _BoundedChanges,
+    ) -> None:
+        ignored = {"openapi", "swagger", "info", "paths", "components", "definitions"}
+        if self._without_keys(old, ignored) != self._without_keys(new, ignored):
+            changes.append(
+                self._change(
+                    ContractDriftSeverity.NOT_ANALYZED,
+                    "document",
+                    "OAS-DOCUMENT-SEMANTICS-UNMODELED",
+                    "Contract-level semantics outside the bounded comparison model changed",
+                )
+            )
 
     def _compare_paths(
         self,
@@ -177,6 +228,16 @@ class OpenAPIContractDriftAnalyzer:
         for path_name in sorted(set(old_paths) & set(new_paths)):
             old_path = self._mapping(old_paths[path_name])
             new_path = self._mapping(new_paths[path_name])
+            self._compare_mapping_remainder(
+                old_path,
+                new_path,
+                handled=self._METHODS | {"parameters"},
+                ignored={"summary", "description"},
+                location=f"paths.{path_name}",
+                rule_id="OAS-PATH-SEMANTICS-UNMODELED",
+                summary="Path-item semantics outside the bounded comparison model changed",
+                changes=changes,
+            )
             old_methods = {key for key in old_path if key.casefold() in self._METHODS}
             new_methods = {key for key in new_path if key.casefold() in self._METHODS}
             for method in sorted(old_methods - new_methods):
@@ -213,6 +274,16 @@ class OpenAPIContractDriftAnalyzer:
         location: str,
         changes: _BoundedChanges,
     ) -> None:
+        self._compare_mapping_remainder(
+            old,
+            new,
+            handled={"parameters", "requestBody", "responses", "security"},
+            ignored={"summary", "description", "operationId", "tags"},
+            location=location,
+            rule_id="OAS-OPERATION-SEMANTICS-UNMODELED",
+            summary="Operation semantics outside the bounded comparison model changed",
+            changes=changes,
+        )
         old_params = self._parameter_index(old.get("parameters"))
         new_params = self._parameter_index(new.get("parameters"))
         for key in sorted(set(old_params) - set(new_params)):
@@ -249,6 +320,16 @@ class OpenAPIContractDriftAnalyzer:
         for key in sorted(set(old_params) & set(new_params)):
             old_param = old_params[key]
             new_param = new_params[key]
+            self._compare_mapping_remainder(
+                old_param,
+                new_param,
+                handled={"name", "in", "required", "schema"},
+                ignored={"description"},
+                location=f"{location}.parameters.{key}",
+                rule_id="OAS-PARAMETER-SEMANTICS-UNMODELED",
+                summary="Parameter semantics outside the bounded comparison model changed",
+                changes=changes,
+            )
             if not bool(old_param.get("required")) and bool(new_param.get("required")):
                 changes.append(
                     self._change(
@@ -290,20 +371,26 @@ class OpenAPIContractDriftAnalyzer:
                     "Request body added",
                 )
             )
-        elif (
-            old_request
-            and new_request
-            and not bool(old_request.get("required"))
-            and bool(new_request.get("required"))
-        ):
-            changes.append(
-                self._change(
-                    ContractDriftSeverity.BREAKING,
-                    f"{location}.requestBody",
-                    "OAS-REQUEST-BODY-BECAME-REQUIRED",
-                    "Request body became required",
-                )
+        elif old_request and new_request:
+            self._compare_mapping_remainder(
+                old_request,
+                new_request,
+                handled={"required"},
+                ignored={"description"},
+                location=f"{location}.requestBody",
+                rule_id="OAS-REQUEST-BODY-SEMANTICS-UNMODELED",
+                summary="Request-body semantics outside the bounded comparison model changed",
+                changes=changes,
             )
+            if not bool(old_request.get("required")) and bool(new_request.get("required")):
+                changes.append(
+                    self._change(
+                        ContractDriftSeverity.BREAKING,
+                        f"{location}.requestBody",
+                        "OAS-REQUEST-BODY-BECAME-REQUIRED",
+                        "Request body became required",
+                    )
+                )
 
         old_responses = self._mapping(old.get("responses"))
         new_responses = self._mapping(new.get("responses"))
@@ -321,6 +408,20 @@ class OpenAPIContractDriftAnalyzer:
                     "Response status removed",
                 )
             )
+        for status in sorted(set(old_responses) & set(new_responses)):
+            old_response = self._mapping(old_responses[status])
+            new_response = self._mapping(new_responses[status])
+            if self._without_keys(old_response, {"description"}) != self._without_keys(
+                new_response, {"description"}
+            ):
+                changes.append(
+                    self._change(
+                        ContractDriftSeverity.NOT_ANALYZED,
+                        f"{location}.responses.{status}",
+                        "OAS-RESPONSE-SEMANTICS-UNMODELED",
+                        "Response semantics outside the bounded comparison model changed",
+                    )
+                )
 
         old_security = old.get("security")
         new_security = new.get("security")
@@ -333,6 +434,15 @@ class OpenAPIContractDriftAnalyzer:
                     "Operation now declares security requirements",
                 )
             )
+        elif old_security != new_security:
+            changes.append(
+                self._change(
+                    ContractDriftSeverity.NOT_ANALYZED,
+                    f"{location}.security",
+                    "OAS-SECURITY-SEMANTICS-UNMODELED",
+                    "Operation security requirements changed outside the bounded comparison model",
+                )
+            )
 
     def _compare_components(
         self,
@@ -340,6 +450,19 @@ class OpenAPIContractDriftAnalyzer:
         new: dict[str, Any],
         changes: _BoundedChanges,
     ) -> None:
+        old_components = self._mapping(old.get("components"))
+        new_components = self._mapping(new.get("components"))
+        if self._without_keys(old_components, {"schemas"}) != self._without_keys(
+            new_components, {"schemas"}
+        ):
+            changes.append(
+                self._change(
+                    ContractDriftSeverity.NOT_ANALYZED,
+                    "components",
+                    "OAS-COMPONENT-SEMANTICS-UNMODELED",
+                    "Non-schema component semantics changed outside the bounded comparison model",
+                )
+            )
         old_schemas = self._schemas(old)
         new_schemas = self._schemas(new)
         for name in sorted(set(old_schemas) - set(new_schemas)):
@@ -387,39 +510,100 @@ class OpenAPIContractDriftAnalyzer:
                 )
             )
             return
-        old_type = old.get("type")
-        new_type = new.get("type")
-        if old_type is not None and new_type is not None and old_type != new_type:
+
+        if self._schema_remainder(old) != self._schema_remainder(new):
+            changes.append(
+                self._change(
+                    ContractDriftSeverity.NOT_ANALYZED,
+                    location,
+                    "OAS-SCHEMA-SEMANTICS-UNMODELED",
+                    "Schema semantics outside the bounded comparison model changed",
+                )
+            )
+
+        old_ref = old.get("$ref")
+        new_ref = new.get("$ref")
+        if old_ref != new_ref:
             changes.append(
                 self._change(
                     ContractDriftSeverity.BREAKING,
                     location,
-                    "OAS-TYPE-CHANGED",
-                    f"Schema type changed from {old_type!r} to {new_type!r}",
+                    "OAS-SCHEMA-REF-CHANGED",
+                    "Schema reference target changed",
                 )
             )
 
-        old_enum = set(self._scalar_list(old.get("enum")))
-        new_enum = set(self._scalar_list(new.get("enum")))
-        removed_enum = sorted(old_enum - new_enum, key=str)
-        if removed_enum:
-            changes.append(
-                self._change(
-                    ContractDriftSeverity.BREAKING,
-                    f"{location}.enum",
-                    "OAS-ENUM-NARROWED",
-                    f"Allowed enum values removed: {removed_enum[:10]}",
+        old_types = self._type_set(old.get("type"))
+        new_types = self._type_set(new.get("type"))
+        if old_types != new_types:
+            if old_types is None and new_types is not None:
+                severity = ContractDriftSeverity.BREAKING
+                rule = "OAS-TYPE-CONSTRAINT-ADDED"
+                summary = "Schema type constraint added"
+            elif old_types is not None and new_types is None:
+                severity = ContractDriftSeverity.RISKY
+                rule = "OAS-TYPE-CONSTRAINT-REMOVED"
+                summary = "Schema type constraint removed"
+            else:
+                assert old_types is not None and new_types is not None
+                removed = old_types - new_types
+                severity = (
+                    ContractDriftSeverity.BREAKING
+                    if removed
+                    else ContractDriftSeverity.RISKY
                 )
-            )
-        elif new_enum - old_enum and old_enum:
-            changes.append(
-                self._change(
-                    ContractDriftSeverity.RISKY,
-                    f"{location}.enum",
-                    "OAS-ENUM-WIDENED",
-                    "Allowed enum values expanded; consumers with exhaustive handling may need review",
+                rule = "OAS-TYPE-NARROWED" if removed else "OAS-TYPE-WIDENED"
+                summary = (
+                    "Schema type choices removed or replaced"
+                    if removed
+                    else "Schema type choices expanded"
                 )
-            )
+            changes.append(self._change(severity, location, rule, summary))
+
+        old_enum = self._enum_map(old.get("enum"))
+        new_enum = self._enum_map(new.get("enum"))
+        if old_enum != new_enum:
+            if old_enum is None and new_enum is not None:
+                changes.append(
+                    self._change(
+                        ContractDriftSeverity.BREAKING,
+                        f"{location}.enum",
+                        "OAS-ENUM-CONSTRAINT-ADDED",
+                        "Allowed values were newly constrained by an enum",
+                    )
+                )
+            elif old_enum is not None and new_enum is None:
+                changes.append(
+                    self._change(
+                        ContractDriftSeverity.RISKY,
+                        f"{location}.enum",
+                        "OAS-ENUM-CONSTRAINT-REMOVED",
+                        "Enum constraint removed; exhaustive consumers may need review",
+                    )
+                )
+            else:
+                assert old_enum is not None and new_enum is not None
+                removed_keys = old_enum.keys() - new_enum.keys()
+                added_keys = new_enum.keys() - old_enum.keys()
+                if removed_keys:
+                    changes.append(
+                        self._change(
+                            ContractDriftSeverity.BREAKING,
+                            f"{location}.enum",
+                            "OAS-ENUM-NARROWED",
+                            "Allowed enum values removed or replaced",
+                        )
+                    )
+                elif added_keys:
+                    changes.append(
+                        self._change(
+                            ContractDriftSeverity.RISKY,
+                            f"{location}.enum",
+                            "OAS-ENUM-WIDENED",
+                            "Allowed enum values expanded; consumers with exhaustive "
+                            "handling may need review",
+                        )
+                    )
 
         old_required = set(self._string_list(old.get("required")))
         new_required = set(self._string_list(new.get("required")))
@@ -514,10 +698,70 @@ class OpenAPIContractDriftAnalyzer:
         return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
 
     @staticmethod
-    def _scalar_list(value: Any) -> list[str | int | float | bool | None]:
+    def _type_set(value: Any) -> frozenset[str] | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return frozenset({value})
+        if isinstance(value, list):
+            return frozenset(item for item in value if isinstance(item, str))
+        return None
+
+    @staticmethod
+    def _enum_identity(value: str | int | float | bool | None) -> tuple[str, object]:
+        if value is None:
+            return ("null", "")
+        if isinstance(value, bool):
+            return ("boolean", value)
+        if isinstance(value, str):
+            return ("string", value)
+        return ("number", value)
+
+    @classmethod
+    def _enum_map(
+        cls, value: Any
+    ) -> dict[tuple[str, object], str | int | float | bool | None] | None:
+        if value is None:
+            return None
         if not isinstance(value, list):
-            return []
-        return [item for item in value if item is None or isinstance(item, (str, int, float, bool))]
+            return None
+        result: dict[tuple[str, object], str | int | float | bool | None] = {}
+        for item in value:
+            if item is None or isinstance(item, (str, int, float, bool)):
+                result[cls._enum_identity(item)] = item
+        return result
+
+    @classmethod
+    def _schema_remainder(cls, value: dict[str, Any]) -> dict[str, Any]:
+        ignored = cls._SCHEMA_MODELED_KEYS | cls._SCHEMA_ANNOTATION_KEYS
+        return cls._without_keys(value, ignored)
+
+    @staticmethod
+    def _without_keys(value: dict[str, Any], keys: set[str] | frozenset[str]) -> dict[str, Any]:
+        return {key: item for key, item in value.items() if key not in keys}
+
+    def _compare_mapping_remainder(
+        self,
+        old: dict[str, Any],
+        new: dict[str, Any],
+        *,
+        handled: set[str],
+        ignored: set[str],
+        location: str,
+        rule_id: str,
+        summary: str,
+        changes: _BoundedChanges,
+    ) -> None:
+        excluded = handled | ignored
+        if self._without_keys(old, excluded) != self._without_keys(new, excluded):
+            changes.append(
+                self._change(
+                    ContractDriftSeverity.NOT_ANALYZED,
+                    location,
+                    rule_id,
+                    summary,
+                )
+            )
 
     @staticmethod
     def _is_success_status(value: str) -> bool:
