@@ -44,5 +44,5 @@ def test_ci_contract_rejects_pre_verifier_setup_python_cache(tmp_path: Path) -> 
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="automatic dependency caching is forbidden"):
+    with pytest.raises(ValueError, match="dependency caching is forbidden"):
         ci_contract.verify_ci_contract(root)
