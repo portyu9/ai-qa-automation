@@ -852,6 +852,7 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
                         status=ValidationStatus.NOT_VERIFIED,
                         summary="Browser locator verification did not complete deterministically.",
                         evidence_ids=[exc.evidence_id],
+                        details={"failure_kind": "browser_execution"},
                     )
                 )
             services.checkpoint()
