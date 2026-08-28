@@ -50,6 +50,11 @@ def _schema_validation_budget() -> Iterator[None]:
         )
 
     previous_handler = signal.getsignal(signal.SIGALRM)
+    if previous_handler != signal.SIG_DFL:
+        raise _SchemaValidationTimerUnavailable(
+            "process alarm-signal authority is already owned by another runtime component"
+        )
+
     signal.signal(signal.SIGALRM, _raise_schema_validation_timeout)
     try:
         signal.setitimer(signal.ITIMER_REAL, _JSON_SCHEMA_VALIDATION_TIMEOUT_SECONDS)
