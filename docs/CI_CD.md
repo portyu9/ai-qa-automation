@@ -275,6 +275,8 @@ The observed activated `Protect Main` ruleset has:
 - sole required status `Trusted PR Gate` from GitHub Actions integration `15368`;
 - no bypass actors and `current_user_can_bypass = never`.
 
+At the same observed governance checkpoint, repository-wide settings constrained merge methods to merge commits only, retained automatic branch deletion after merge, set the default workflow token to read-only, disallowed workflow-token pull-request approvals, and enabled vulnerability alerts, Dependabot security updates, secret scanning with push protection, and private vulnerability reporting. Those settings are external platform state and are not self-attested by repository source.
+
 This repository configuration, together with the active external execution policy and trusted status path, closes the same-integration workflow-provenance boundary for the observed state. Any material administrative change to those authorities requires a fresh observation and exact-subject validation before equivalent assurance can be claimed.
 
 ---

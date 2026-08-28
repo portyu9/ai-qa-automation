@@ -298,9 +298,9 @@ See [`TRACEABILITY.md`](TRACEABILITY.md).
 
 ## GitHub Actions
 
-`.github/workflows/ci.yml` runs automatically for pull requests targeting `main`, pushes to `main`, and merge-queue subjects. It uses read-only token authority, no repository secrets, exact `${{ github.sha }}` checkout/verification, and hash-locked dependency installation.
+`.github/workflows/ci.yml` retains ordinary event triggers in source plus fixed `repository_dispatch` event `trusted-pr-validation`. Under the observed active external Actions Policy, only owner-authorized trusted dispatch executes for the protected identity; ordinary `pull_request`, `push`, and `merge_group` attempts are expected to be rejected at startup. Trusted validation remains read-only and secret-free, selects the exact prospective merge subject, verifies it explicitly, and uses hash-locked dependency installation.
 
-Its automatic gates cover:
+The trusted validation domains cover:
 
 - CPython 3.11.16 and 3.13.15 quality/full deterministic pytest;
 - the fixed 34-case primary deterministic control evaluation;
@@ -308,9 +308,9 @@ Its automatic gates cover:
 - supply-chain verification, runtime dependency audit, SBOM/repeatability/container evidence;
 - deterministic Playwright reference-SUT execution.
 
-`Required PR Gate` executes with `if: always()` and fails unless every automatic prerequisite succeeds. This gives repository settings one stable check name to require without allowing partial green to masquerade as completion.
+`Required PR Gate` executes with `if: always()` and fails unless every validation prerequisite succeeds. It is the internal deterministic aggregate consumed by the trusted reporter; the observed `Protect Main` ruleset requires `Trusted PR Gate`, which is published only after live PR/merge-ref revalidation.
 
-`.github/workflows/manual-validation.yml` is `workflow_dispatch` only. H-series readiness remains execution-separated there, and the optional model smoke consumes `ANTHROPIC_API_KEY` only when explicitly selected.
+`.github/workflows/manual-validation.yml` is `workflow_dispatch` only and is not protected merge evidence. The observed `repository_dispatch`-only policy prevents it from executing under the same protected identity; H-series/model evidence requires a separately trusted execution mechanism or an equivalent deliberate policy change. When executable, the optional model smoke consumes `ANTHROPIC_API_KEY` only when explicitly selected.
 
 The workflow contract is deterministically checked by `scripts/verify_ci_contract.py`. GitHub branch protection/required-check configuration remains separate repository state and is not implied by a green run. See [CI/CD and Repository Governance](CI_CD.md).
 
