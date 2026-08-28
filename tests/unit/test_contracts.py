@@ -254,10 +254,38 @@ def test_existing_interval_timer_is_not_overridden() -> None:
     assert interval == 0
 
 
+def test_existing_alarm_handler_is_not_overridden() -> None:
+    if not contracts._schema_validation_timer_supported():
+        return
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    if previous_handler != signal.SIG_DFL:
+        result = validate_json_schema(12, {"type": "integer"})
+        assert result.status is ValidationStatus.BLOCKED
+        return
+
+    def custom_handler(_signum: int, _frame: object) -> None:
+        return None
+
+    signal.signal(signal.SIGALRM, custom_handler)
+    try:
+        result = validate_json_schema(12, {"type": "integer"})
+        observed_handler = signal.getsignal(signal.SIGALRM)
+    finally:
+        signal.signal(signal.SIGALRM, previous_handler)
+
+    assert result.status is ValidationStatus.BLOCKED
+    assert "alarm-signal authority" in result.summary
+    assert observed_handler is custom_handler
+
+
 def test_signal_handler_is_restored_after_schema_validation() -> None:
     if not contracts._schema_validation_timer_supported():
         return
     previous_handler = signal.getsignal(signal.SIGALRM)
+    if previous_handler != signal.SIG_DFL:
+        result = validate_json_schema(12, {"type": "integer"})
+        assert result.status is ValidationStatus.BLOCKED
+        return
 
     result = validate_json_schema(12, {"type": "integer"})
 
