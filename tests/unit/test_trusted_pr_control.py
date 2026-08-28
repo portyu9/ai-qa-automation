@@ -255,9 +255,7 @@ def test_report_bounds_pending_mergeability_without_status(
         _report(monkeypatch)
 
     assert FakeApi.instances[0].fetch_count == control.MERGEABILITY_READ_ATTEMPTS
-    assert sleeps == [control.MERGEABILITY_RETRY_SECONDS] * (
-        control.MERGEABILITY_READ_ATTEMPTS - 1
-    )
+    assert sleeps == [control.MERGEABILITY_RETRY_SECONDS] * (control.MERGEABILITY_READ_ATTEMPTS - 1)
     assert FakeApi.instances[0].statuses == []
 
 
