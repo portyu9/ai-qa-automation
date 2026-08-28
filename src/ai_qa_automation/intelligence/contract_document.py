@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import json
 import math
+import re
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -14,6 +15,17 @@ _MAX_YAML_TOKENS = 200_000
 _MAX_YAML_ALIASES = 1024
 _MAX_YAML_ANCHORS = 1024
 _YAML_MERGE_TAG = "tag:yaml.org,2002:merge"
+_YAML_BOOL_TAG = "tag:yaml.org,2002:bool"
+_YAML_INT_TAG = "tag:yaml.org,2002:int"
+_YAML_FLOAT_TAG = "tag:yaml.org,2002:float"
+_YAML_TIMESTAMP_TAG = "tag:yaml.org,2002:timestamp"
+_YAML_JSON_BOOL = re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$")
+_YAML_JSON_INT = re.compile(r"^[+-]?(?:0|[1-9][0-9]*)$")
+_YAML_JSON_FLOAT = re.compile(
+    r"^[+-]?(?:(?:0|[1-9][0-9]*)\.[0-9]+(?:[eE][+-]?[0-9]+)?|(?:0|[1-9][0-9]*)[eE][+-]?[0-9]+)$"
+)
+
+MAX_CONTRACT_DOCUMENT_BYTES = 2_000_000
 
 
 def _preflight_json_nesting(text: str) -> None:
@@ -117,6 +129,33 @@ def _load_yaml(text: str) -> Any:
 
     _preflight_yaml_tokens(yaml_module, text)
     loader_class: Any = type("StrictOpenAPIContractLoader", (yaml_module.SafeLoader,), {})
+    loader_class.yaml_implicit_resolvers = {
+        key: [
+            (tag, resolver)
+            for tag, resolver in resolvers
+            if tag not in {_YAML_BOOL_TAG, _YAML_INT_TAG, _YAML_FLOAT_TAG, _YAML_TIMESTAMP_TAG}
+        ]
+        for key, resolvers in yaml_module.SafeLoader.yaml_implicit_resolvers.items()
+    }
+    loader_class.add_implicit_resolver(_YAML_BOOL_TAG, _YAML_JSON_BOOL, list("tTfF"))
+    loader_class.add_implicit_resolver(
+        _YAML_INT_TAG,
+        _YAML_JSON_INT,
+        list("-+0123456789"),
+    )
+    loader_class.add_implicit_resolver(
+        _YAML_FLOAT_TAG,
+        _YAML_JSON_FLOAT,
+        list("-+0123456789"),
+    )
+
+    def construct_json_int(loader: Any, node: Any) -> int:
+        value = str(loader.construct_scalar(node)).replace("_", "")
+        return int(value, 10)
+
+    def construct_json_float(loader: Any, node: Any) -> float:
+        value = str(loader.construct_scalar(node)).replace("_", "")
+        return float(value)
 
     def construct_mapping(loader: Any, node: Any, deep: bool = False) -> dict[str, Any]:
         if len(node.value) > _MAX_CONTRACT_CONTAINER_ITEMS:
@@ -138,6 +177,8 @@ def _load_yaml(text: str) -> Any:
             raise ValueError("contract YAML contains an oversized array")
         return [loader.construct_object(child, deep=deep) for child in node.value]
 
+    loader_class.add_constructor(_YAML_INT_TAG, construct_json_int)
+    loader_class.add_constructor(_YAML_FLOAT_TAG, construct_json_float)
     loader_class.add_constructor(
         yaml_module.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
         construct_mapping,
