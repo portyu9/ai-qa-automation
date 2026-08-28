@@ -259,7 +259,7 @@ def test_ci_contract_rejects_unbound_trusted_reporter_checkout(tmp_path: Path) -
     assert text.count(marker) == 1
     path.write_text(text.replace(marker, "ref: main", 1), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="trusted reporter must be the sole github.sha checkout"):
+    with pytest.raises(ValueError, match=r"trusted reporter must be the sole github\.sha checkout"):
         ci_contract.verify_ci_contract(root)
 
 
