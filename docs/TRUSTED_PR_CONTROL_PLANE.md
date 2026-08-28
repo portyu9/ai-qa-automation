@@ -1,130 +1,146 @@
 # Trusted PR control plane
 
-This document defines the trusted pull-request validation and terminal-status authority for **ƳƤ AI QA Automation Framework**. The design exists to prevent pull-request-controlled GitHub Actions workflow bytes from manufacturing the same protected check identity that authorizes merge.
+This document defines the trusted pull-request validation and terminal-status authority for **ƳƤ AI QA Automation Framework**. The design prevents pull-request-controlled GitHub Actions workflow bytes from manufacturing the same protected status identity that authorizes merge.
 
-The control plane is partially activated but **not yet merge-authoritative**. The reviewed trusted workflow is on `main`, the repository Actions Policy capability has been observed live, and the policy is active with `repository_dispatch` as the sole allowed event for the protected GitHub Actions identity. A live trusted dispatch exposed a reporter API-shape defect; the current remediation binds terminal reporting to GitHub's pull-request merge ref instead of the intermittently omitted `merge_commit_sha` field. `Protect Main` still requires `Required PR Gate`, so finding 13 remains open until a successful exact-subject trusted run is observed and the ruleset is transitioned and revalidated.
+The control plane is **activated for the observed repository configuration**. The reviewed trusted workflow is on `main`; the repository Actions Policy has been observed active with repository-owner actor restriction and `repository_dispatch` as the sole allowed event; a live owner-authorized trusted dispatch completed successfully; `Trusted PR Gate` was independently read back on the exact PR head; and `Protect Main` was re-fetched after transition with `Trusted PR Gate` as its sole required status, strict/up-to-date semantics enabled, and no bypass actors.
+
+This is evidence bound to the observed repository state, not a claim that repository source can self-attest future GitHub configuration. The external policy and ruleset remain platform-owned authorities that must be re-observed after material administrative change.
 
 ## Threat model
 
-A stable check name is not an independent trust root when a pull request can cause feature-controlled workflow definitions to execute under the same GitHub Actions integration. Denying only `pull_request` is insufficient because `push`, `merge_group`, ref-selectable `workflow_dispatch`, or a future event could otherwise execute feature-ref workflow bytes under that same identity.
+A stable check name is not an independent trust root when a pull request can cause feature-controlled workflow definitions to execute under the same GitHub Actions integration. Denying only `pull_request` is insufficient because `push`, `merge_group`, ref-selectable `workflow_dispatch`, or another event could otherwise execute feature-ref workflow bytes under that same identity.
 
-The required external invariant is therefore **default-branch-definition-only execution for the protected identity**. In the activated repository policy, only the fixed `repository_dispatch` path is allowed and the actor is restricted to the repository owner. Ordinary pull-request workflow execution has been observed failing at workflow startup with zero jobs while owner `repository_dispatch` execution succeeds in starting from the default-branch workflow definition.
+The required external invariant is therefore **default-branch-definition-only execution for the protected identity**. In the observed activated repository policy:
 
-A separate invariant is required for base drift. `Trusted PR Gate` is posted to the PR head commit, while the validated subject also includes the base and simulated merge result. Protected-branch enforcement must remain strict/up-to-date so a later base change cannot reuse a status created for an older prospective merge.
+- enforcement is active;
+- actor is restricted to the repository owner;
+- `repository_dispatch` is the sole allowed event;
+- ordinary `pull_request` execution is denied;
+- feature/ref-defined `push` is denied;
+- `merge_group` is denied;
+- ref-selectable `workflow_dispatch` is denied.
+
+Live disposable probes demonstrated that ordinary `pull_request` runs are rejected at workflow startup while owner `repository_dispatch` runs execute the workflow definition from `main`.
+
+A separate invariant is required for base drift. `Trusted PR Gate` is posted to the PR head commit, while the validated subject also includes the base and simulated merge result. Protected-branch enforcement therefore remains strict/up-to-date so a later base change cannot reuse a status created for an older prospective merge.
 
 ## Authority flow
 
-The intended runtime authority chain is:
+The runtime authority chain is:
 
 **exact PR subject → default-branch trusted workflow → read-only validation → deterministic aggregate → live PR/merge-ref revalidation → `Trusted PR Gate` status → strict protected-branch enforcement**
 
-The individual authorities are intentionally separated:
+The authorities are intentionally separated:
 
 1. `repository_dispatch` selects the workflow definition from the default branch. The payload carries PR number, expected head SHA, expected base SHA, expected simulated-merge SHA, and an explicit authorization boolean as untrusted data.
 2. The five validation domains set `CI_SUBJECT_SHA` to the supplied expected merge SHA, check out that exact object with persisted credentials disabled, and verify the checkout revision before execution.
 3. The trusted subject preflight verifies that the supplied merge commit has the expected base/head parents and that protected control-plane paths match the trusted default-branch revision before repository scripts execute.
-4. The validation jobs remain read-only and secret-free. They cannot publish terminal merge authority.
-5. `Required PR Gate` deterministically aggregates the five validation domains. It is validation evidence, not the intended terminal trust root.
+4. Validation jobs remain read-only and secret-free. They cannot publish terminal merge authority.
+5. `Required PR Gate` deterministically aggregates the five validation domains. It remains validation evidence but is no longer the protected merge status.
 6. `Trusted PR Gate Reporter` runs only for `repository_dispatch`, `refs/heads/main`, and repository-owner actor. It is the workflow's sole `statuses: write` authority and sole GitHub Actions token consumer.
 7. The reporter checks out and verifies the trusted `github.sha` default-branch revision before invoking `scripts/trusted_pr_control.py`.
 8. The helper admits only the fixed trusted event/ref/actor tuple before GitHub API access.
-9. Before any status write, the helper revalidates the live open PR number/head/base identity, GitHub's exact `refs/pull/<number>/merge` ref, the merge commit's exact two parents `(base, head)`, then re-fetches both PR identity and merge ref to narrow the final TOCTOU window.
+9. Before any status write, the helper revalidates the live open PR number/head/base identity, GitHub's exact `refs/pull/<number>/merge` ref, the merge commit's exact two ordered parents `(base, head)`, then re-fetches both PR identity and merge ref to narrow the final TOCTOU window.
 10. Only an authorized successful aggregate publishes `Trusted PR Gate: success` to the exact PR head. An authorized non-success publishes failure and the reporter exits nonzero. Diagnostic dispatches never publish status.
+11. `Protect Main` requires `Trusted PR Gate` from the intended GitHub Actions integration with strict/up-to-date semantics and no bypass.
 
 Model output has no role in this authorization path.
 
 ## Why the merge ref is authoritative
 
-GitHub creates a temporary read-only `refs/pull/<PR>/merge` reference when a pull request can be simulated as a merge. GitHub documents that this ref represents what the repository would look like if the pull request were merged at that time and that it updates when the head or base changes.
+GitHub creates a temporary read-only `refs/pull/<PR>/merge` reference when a pull request can be simulated as a merge. It represents the simulated merge object for the current PR head/base state and changes as that subject changes.
 
-Live activation runs showed that `GET /repos/{owner}/{repo}/pulls/{number}` can omit `merge_commit_sha` entirely when called by the workflow token, even while the pull request merge ref exists at the expected SHA. Treating that intermittently shaped response field as required terminal authority caused the reporter to fail closed after all validation domains passed.
+Live activation runs showed that the workflow-token pull-request response can omit `merge_commit_sha` even while the pull-request merge ref exists at the expected SHA. Treating that intermittently shaped response field as required terminal authority caused earlier reporters to fail closed after all validation domains passed.
 
-The remediation therefore does **not** relax subject binding. It replaces the unstable field dependency with stronger Git-object evidence:
+The remediation did **not** relax subject binding. Terminal reporting instead requires stronger Git-object evidence:
 
-- the live PR must remain open, target `main`, and have the exact expected head/base identity;
-- `refs/pull/<number>/merge` must exist, be exactly named, point to a commit, and equal the dispatched expected merge SHA;
-- the Git commit object at that merge SHA must have exactly two parents in order: expected base then expected head;
-- PR identity and merge ref are fetched again before the status write;
-- any API failure, missing/malformed object, mismatched SHA/ref/type/parent, closed PR, base/head drift, or second-read drift fails closed with no status.
+- the live PR remains open and targets `main`;
+- PR number, head SHA, and base SHA equal the dispatched expected identity;
+- `refs/pull/<number>/merge` exists, has the exact expected name/type, and points to the dispatched expected merge SHA;
+- the Git commit object at that SHA has exactly two ordered parents: expected base then expected head;
+- PR identity and merge ref are fetched again immediately before status publication;
+- any API failure, missing/malformed object, mismatched SHA/ref/type/parent, closed PR, base/head drift, or final-read drift fails closed with no success status.
 
-There is no retry after a status write and no generic retry of authorization/schema failures.
+There is no retry after a status write and no generic retry of authorization, schema, or mutation failures.
 
 ## External Actions Policy
 
-The repository Actions Policy capability has been observed live. The active policy is intended to remain:
+The activated external policy was observed through the repository GitHub settings surface. Its required invariant is:
 
 - enforcement: active;
 - allowed actor: repository owner only;
 - allowed event: `repository_dispatch` only;
-- `pull_request`: denied;
-- feature/ref-defined `push`: denied;
-- `merge_group`: denied;
-- ref-selectable `workflow_dispatch`: denied;
-- future feature-ref-defined event classes: denied unless an independently enforced mechanism proves equivalent default-branch workflow-definition provenance.
+- all feature/ref-defined competing execution paths denied unless an independently enforced mechanism proves equivalent default-branch workflow-definition provenance.
 
-Live disposable probe PRs demonstrated that ordinary `pull_request` runs are rejected at startup while the trusted `repository_dispatch` path starts from `main`. This is external runtime evidence; repository code and `verify_ci_contract.py` cannot independently attest the current GitHub policy UI/configuration.
+Repository code and `scripts/verify_ci_contract.py` intentionally cannot attest that live policy state. An administrative policy edit is therefore an external authority change and invalidates any assumption that the last observation still holds.
+
+Temporary activation-bootstrap windows that admitted `pull_request` were used only to validate protected reporter revisions before those revisions could exist on `main`. Those windows were closed after each bootstrap. The final activation probe independently demonstrated the restored `repository_dispatch`-only boundary before terminal transition.
 
 ## Merge-enforcement invariant
 
-The current `Protect Main` ruleset still requires `Required PR Gate` and has strict/up-to-date required-status enforcement with no bypass actors. That is deliberately unchanged during reporter remediation.
+The observed `Protect Main` ruleset after activation requires:
 
-The final transition is permitted only after a successful trusted dispatch publishes a verified `Trusted PR Gate` status on the exact current PR head. The transition must then:
+- `Trusted PR Gate` as the sole required status;
+- GitHub Actions integration ID `15368` for that context;
+- `strict_required_status_checks_policy = true`;
+- no bypass actors;
+- pull-request review-thread resolution;
+- merge commits as the allowed merge method;
+- deletion and non-fast-forward protection.
 
-- require `Trusted PR Gate` from the intended GitHub Actions integration;
-- preserve strict/up-to-date required-status enforcement;
-- remove `Required PR Gate` as protected merge authority;
-- preserve the existing no-bypass contract; and
-- be re-fetched after mutation before finding 13 can be closed.
+`Required PR Gate` remains an internal deterministic aggregate inside the workflow. It is no longer protected merge authority.
 
-Without strict/up-to-date enforcement, a base update could change the prospective merge while leaving the head SHA—and therefore an old status—unchanged.
+Strict/up-to-date enforcement is essential. A base update can change the prospective merge while leaving the PR head SHA unchanged; strict enforcement forces revalidation rather than accepting a trusted status created for an older merge subject.
 
-## Bootstrap and live evidence
+## Activation evidence
 
-The trusted workflow/helper/verifier definition was bootstrapped to `main` through audited PR #45. The bounded PR-mergeability response stabilization introduced after initial activation failures was bootstrapped through PR #47, but a later trusted run demonstrated that the workflow-token PR response may omit the merge SHA field rather than return it as `null`.
+The activation sequence produced both positive and negative evidence.
 
-Live evidence collected during activation includes:
+### Bootstrap and fail-closed evidence
 
-- ordinary probe `pull_request` runs rejected at startup by the active external policy;
-- owner `repository_dispatch` runs selecting the trusted default-branch workflow revision;
-- exact prospective-merge checkout and trusted subject preflight succeeding;
-- supply chain, security, 34-case deterministic control evaluation, Playwright reference SUT, and Python 3.11/3.13 deterministic suites succeeding on the dispatched merge subject;
-- reporter failures producing no false trusted status when live subject evidence was incomplete;
-- direct observation that `refs/pull/48/merge` pointed to the exact dispatched prospective merge SHA while the workflow-token PR response omitted `merge_commit_sha`.
+- PR #45 bootstrapped the reviewed trusted workflow/control-plane definition to `main`.
+- Initial live trusted dispatches exposed GitHub pull-request mergeability/merge-SHA response-shape behavior.
+- Those reporters failed closed and emitted no false trusted success status.
+- PR #47 bootstrapped bounded mergeability stabilization after exact-revision ordinary CI.
+- A later trusted run proved the workflow-token response could omit `merge_commit_sha` entirely.
+- PR #49 bootstrapped the merge-ref authority remediation after exact-revision ordinary CI run #631.
 
 Historical failed trusted runs are evidence of fail-closed behavior, not PASS evidence for the terminal trusted reporter.
 
-## Current remediation contract
+### Successful terminal activation evidence
 
-The merge-ref remediation changes only reporter subject resolution and focused tests. It does not change:
+For disposable probe PR #50:
 
-- `.github/workflows/ci.yml`;
-- workflow triggers or permissions;
-- protected-path preflight scope;
-- deterministic validation domains or thresholds;
-- dependency/cache authority;
-- `Protect Main` rules;
-- the external Actions Policy; or
-- the requirement for owner/default-branch `repository_dispatch`.
+- ordinary `pull_request` run #633 was rejected at workflow startup by the restored external policy;
+- PR head was `5dadafe85c0bc2710672963dcf220186b88f812d`;
+- base was trusted `main` `fc95c3554853d3b9b50a788e7bcfd10257637126`;
+- GitHub's live `refs/pull/50/merge` pointed to `15139baa4e1537eb37db328e32f654e27e3e1ac2` with exactly the expected ordered parents;
+- owner-authorized `repository_dispatch` run #634 selected workflow revision `fc95c3554853d3b9b50a788e7bcfd10257637126` from `main`;
+- trusted subject preflight succeeded;
+- supply chain, security, 34-case deterministic control evaluation, Playwright reference SUT, Python 3.11.16, Python 3.13.15, and `Required PR Gate` all succeeded;
+- Python 3.11 Mypy succeeded; Python 3.13 Mypy was intentionally skipped by workflow design;
+- `Trusted PR Gate Reporter` succeeded and reported `status_posted: true` for the exact PR head;
+- an independent status read returned `Trusted PR Gate: success` with target run #634 and GitHub Actions integration ID `15368`;
+- `Protect Main` was then transitioned and independently re-fetched with `Trusted PR Gate` required, strict/up-to-date enabled, and no bypass actors;
+- probe PR #50 was closed unmerged after serving its evidence purpose.
 
-Because `scripts/trusted_pr_control.py` is a protected control-plane path, a trusted dispatch cannot bootstrap its own changed reporter bytes. The exact remediation revision must first receive ordinary exact-revision CI under a narrowly controlled temporary `pull_request` policy window, be audited and merged to `main`, and then the policy must return to `repository_dispatch`-only before trusted activation testing resumes.
+The external workflow-provenance finding addressed by this control plane is therefore closed for the observed activated configuration. A future change to the Actions Policy, protected required context, strict semantics, integration identity, default branch, trusted workflow definition, or reporter authority is a new material authority change and requires revalidation.
 
-## Activation completion sequence
+## Normal protected-PR operation
 
-The remaining sequence is:
+With the policy active, ordinary PR/push/merge-group workflows under this GitHub Actions identity are expected to be blocked. A merge candidate is validated through the trusted path:
 
-1. validate and audit the merge-ref reporter remediation as an ordinary PR revision;
-2. bootstrap only that exact validated revision to `main`;
-3. restore and independently observe the `repository_dispatch`-only Actions Policy boundary;
-4. create a disposable probe from the new `main` and observe its ordinary `pull_request` workflow being denied;
-5. obtain the exact current PR head/base/merge-ref tuple;
-6. issue owner-authorized `trusted-pr-validation` `repository_dispatch` for that tuple;
-7. require every validation domain and `Required PR Gate` to succeed;
-8. require the trusted default-branch reporter to publish `Trusted PR Gate: success` to the exact head and independently read that status back;
-9. inspect exact-subject artifacts and live PR state;
-10. transition `Protect Main` from `Required PR Gate` to `Trusted PR Gate` while preserving strict/up-to-date enforcement and no bypass;
-11. re-fetch the ruleset, main SHA, PR subject, and status provenance before closing finding 13.
+1. obtain the current PR number, head SHA, base SHA, and live `refs/pull/<number>/merge` SHA;
+2. verify the merge commit has ordered parents `(base, head)`;
+3. issue owner-authorized `repository_dispatch` event type `trusted-pr-validation` with that exact tuple;
+4. inspect the exact `repository_dispatch` run and persisted evidence;
+5. require all five validation domains and `Required PR Gate` to succeed;
+6. require `Trusted PR Gate Reporter` to succeed;
+7. independently read `Trusted PR Gate: success` on the exact current head;
+8. re-check PR head/base/merge subject before merge;
+9. rely on strict protected-branch enforcement to reject stale base/head evidence.
 
-No merge-authority claim is valid before step 11 completes.
+If the subject changes, the old trusted status does not certify the new subject; issue a new exact-subject trusted validation.
 
 ## Repository controls
 
@@ -145,10 +161,16 @@ No merge-authority claim is valid before step 11 completes.
 
 ## Evidence semantics
 
-A green ordinary PR run proves the repository candidate is internally consistent for that exact GitHub PR merge subject. It does not by itself prove trusted workflow-definition provenance.
+A green ordinary PR run from a temporary bootstrap window proves the candidate was internally consistent for that exact GitHub PR merge subject. It does not by itself prove trusted workflow-definition provenance.
 
 A green trusted validation aggregate proves the dispatched prospective merge subject passed the deterministic repository gates. It does not prove terminal trusted authority unless the reporter also successfully revalidates the live PR/merge ref and publishes `Trusted PR Gate` on the exact current head.
 
-A `Trusted PR Gate` success is not sufficient by itself until `Protect Main` requires that context with strict/up-to-date semantics and no bypass, and the resulting ruleset has been re-fetched.
+A `Trusted PR Gate` success proves terminal status publication for that exact observed subject, but merge authority additionally depends on the external Actions Policy and strict protected-branch ruleset remaining as observed.
 
 Blocked, failed, missing, stale, or unobserved evidence remains non-PASS truth.
+
+---
+
+[← CI/CD](CI_CD.md) · [Documentation home](README.md)
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).

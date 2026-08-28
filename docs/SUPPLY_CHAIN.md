@@ -1,7 +1,7 @@
 # Supply-Chain Integrity
 
 > [!IMPORTANT]
-> **Integrity, availability, reproducibility, identity, and merge authority are different claims.** The ƳƤ AI QA Automation Framework binds accepted dependency/build inputs and produces subject-bound build evidence without treating package hashes, an SBOM, a repeated build, or a green PR workflow as publisher identity, release signing, or independently trusted merge authorization.
+> **Integrity, availability, reproducibility, identity, and merge authority are different claims.** The ƳƤ AI QA Automation Framework binds accepted dependency/build inputs and produces subject-bound build evidence without treating package hashes, an SBOM, a repeated build, or a green validation aggregate as publisher identity, release signing, or terminal merge authorization.
 
 **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
@@ -20,12 +20,12 @@ The repository separates supply-chain subjects instead of treating “the build�
 | Automatic dependency-install definitions | exact reviewed Git-blob identities for all five committed `.lock` files | pre-install and post-install build-authority verification before project code or later CI tools run |
 | Python build backend graph | `requirements/build-py311.lock` + `hatchling==1.32.0` | isolated backend dependency graph, separate from runtime |
 | Project build/install configuration + file/source authority + Hatch plugin surface | exact static `pyproject.toml` build/Hatch configuration + distribution name `ai-qa-automation` + sole console script `ai-qa` + no GUI/project entry-point groups + fixed bounded `README.md`/`LICENSE` inputs + bounded symlink-free `src/ai_qa_automation` tree + no installed `hatch` entry points | checkout and per-archive build-authority JSON evidence |
-| CI validation subject | `CI_SUBJECT_SHA`: `github.sha` for ordinary events or `repository_dispatch.client_payload.expected_merge_sha` for the dormant trusted path | exact-subject checkout, archive, manifest, wheel, SBOM lineage, and container-context evidence |
+| CI validation subject | `CI_SUBJECT_SHA`: `github.sha` for ordinary event execution or `repository_dispatch.client_payload.expected_merge_sha` for the trusted path | exact-subject checkout, archive, manifest, wheel, SBOM lineage, and container-context evidence |
 | Automatic browser runtime | hosted `/usr/bin/google-chrome`, observed before the reference test; no automatic browser/OS installer authority | observed Chrome version + deterministic localhost reference-SUT JUnit evidence |
 | Container base | `requirements/base-image.lock` | exact `python:3.11.16-slim` OCI digest used by every Docker stage |
 | Container runtime-composition definition | exact reviewed `Dockerfile` Git blob identity | deterministic denial of unreviewed Dockerfile byte/instruction drift |
 | Container build context | exact `CI_SUBJECT_SHA` tar stream from an isolated bare Git view | runtime image consumes repository bytes from the selected validation subject rather than mutable checkout state |
-| Trusted reporter implementation | default-branch `repository_dispatch` `github.sha`, separate from `CI_SUBJECT_SHA` | reporter validates trusted workflow revision before any status write; live PR head/base/merge are re-fetched before terminal status |
+| Trusted reporter implementation | default-branch `repository_dispatch` `github.sha`, separate from `CI_SUBJECT_SHA` | reporter verifies trusted workflow revision and live PR/merge-ref identity before terminal status publication |
 
 The dependency lock files are repository-owned resolution snapshots derived from declared project constraints and then committed/reviewed. Runtime and verification installation use `pip --require-hashes`; direct URL/VCS/editable requirements, non-exact pins, missing hashes, unexpected lock files, and non-SHA-256 hash directives are rejected by `scripts/verify_supply_chain.py`.
 
@@ -42,7 +42,7 @@ The dependency lock files are repository-owned resolution snapshots derived from
 CI_SUBJECT_SHA = repository_dispatch ? client_payload.expected_merge_sha : github.sha
 ```
 
-For ordinary `pull_request`, `push`, and `merge_group` execution, this preserves the existing GitHub event subject. For the dormant trusted `repository_dispatch` path, `expected_merge_sha` is untrusted dispatch data used only to select the read-only validation subject.
+For the activated trusted `repository_dispatch` path, `expected_merge_sha` is untrusted dispatch data used only to select the read-only validation subject. It does not select the trusted reporter implementation or authorize a terminal status.
 
 The five validation jobs all:
 
@@ -54,17 +54,20 @@ The same subject is used for:
 
 - both isolated reproducible-wheel archives;
 - `generate_build_manifest.py --expected-source-sha`;
-- the isolated runtime-container tar context.
+- the isolated runtime-container tar context;
+- persisted subject-bound supply-chain evidence.
 
 No reviewed build/evidence step derives the accepted subject from mutable `HEAD`.
 
-The trusted reporter is deliberately separate. On the dormant `repository_dispatch` path it checks out and verifies `github.sha`, which GitHub resolves from the default branch for that event, while the prospective merge subject remains data. The reporter/helper then re-fetches the live pull request before any status write. This separation is documented in [`TRUSTED_PR_CONTROL_PLANE.md`](TRUSTED_PR_CONTROL_PLANE.md); it is not yet active merge authority because the definition is still on a draft branch and the external policy/bootstrap prerequisites remain unverified.
+The trusted reporter is deliberately separate. On `repository_dispatch` it checks out and verifies `github.sha`, which resolves to the trusted default-branch workflow revision, while the prospective merge remains data. Before any status write the helper independently revalidates the live PR identity, `refs/pull/<number>/merge`, and the merge commit's ordered parents, then repeats the live PR/ref read.
+
+That reporter path is now active merge authority only because the external Actions Policy and `Protect Main` ruleset were separately observed and validated. Repository supply-chain source cannot self-attest those external authorities.
 
 ---
 
 ## Pre-install dependency authority
 
-Hash-required installation is insufficient if an unreviewed pull request can first rewrite the lock that `pip` consumes. A changed but internally hash-valid development lock could add a package that installs an executable named `ruff`, `pytest`, `pip-audit`, or another later CI command before the deeper supply-chain verifier runs.
+Hash-required installation is insufficient if an unreviewed candidate can first rewrite the lock that `pip` consumes. A changed but internally hash-valid development lock could add a package that installs an executable named `ruff`, `pytest`, `pip-audit`, or another later CI command before the deeper supply-chain verifier runs.
 
 `scripts/verify_build_authority.py` therefore validates the **exact five reviewed lock-file bytes before automatic dependency installation**. The standard-library-only boundary requires:
 
@@ -77,7 +80,7 @@ Hash-required installation is insufficient if an unreviewed pull request can fir
 
 Every automatic `python -m pip install --require-hashes -r ...` site is structurally bracketed by `verify_build_authority.py`: the first invocation proves the lock subject before `pip` consumes it, and the second revalidates the same reviewed lock/build authority immediately after installation and before project installation or later repository-owned tool execution.
 
-`scripts/verify_ci_contract.py` requires exactly the reviewed five dependency-install definitions and rejects removal of either side of any bracket. A legitimate lock refresh therefore requires an explicit review plus intentional policy-constant update; a pull request cannot silently substitute a different lock while preserving the old pre-install authority result.
+`scripts/verify_ci_contract.py` requires exactly the reviewed dependency-install definitions and rejects removal of either side of any bracket. A legitimate lock refresh therefore requires an explicit reviewed authority update; a candidate cannot silently substitute a different lock while preserving the old pre-install authority result.
 
 These controls constrain repository-selected dependency inputs. They do not independently attest the hosted Python bootstrap, `pip` executable bytes, package publisher, or network/package-index availability.
 
@@ -133,9 +136,7 @@ CI persists:
 - `build-authority-archive-a.json`;
 - `build-authority-archive-b.json`.
 
-Those deterministic JSON results must be byte-identical. They include the reviewed lock blob map, observed source entry/byte counts, and reviewed ceilings, so both archive roots are checked under the same dependency/build/install/resource authority contract.
-
-A future legitimate dependency-lock change, distribution-name change, added console/GUI script, project entry-point group, build hook/plugin, dynamic metadata source, backend path, file-valued metadata expansion, package selection change, symlink, or resource-budget change requires an explicit policy update rather than silently gaining authority.
+Those deterministic JSON results must be byte-identical and include reviewed lock identities, source entry/byte counts, and configured ceilings.
 
 ---
 
@@ -173,13 +174,13 @@ The runtime stage:
 - runs as non-root user `aiqa`;
 - is checked to exclude Hatchling and repository-defined build-only packages.
 
-`scripts/verify_supply_chain.py` binds the complete bounded-read `Dockerfile` bytes to the reviewed Git blob identity before accepting runtime-composition checks. Any added or changed Docker instruction—including unreviewed `apt`, `curl`, `pip`, `ADD`, or other installation/network authority—requires an intentional reviewed blob update rather than passing through token-presence checks.
+`scripts/verify_supply_chain.py` binds the complete bounded-read `Dockerfile` bytes to the reviewed Git blob identity before accepting runtime-composition checks. Any added or changed Docker instruction requires an intentional reviewed blob update rather than passing through token-presence checks.
 
 ---
 
 ## Runtime-container context authority
 
-The runtime-container build does not hand mutable checkout `.` to Docker. It creates a separate fresh bare Git view and empty template under `RUNNER_TEMP`, runs Git under the reviewed clean environment, points the view at the checked-out content-addressed object store, disables replacement-object rewriting, and archives exact `$CI_SUBJECT_SHA` with `core.attributesFile=/dev/null`.
+The runtime-container build does not hand mutable checkout `.` to Docker. It creates a separate fresh bare Git view and empty template under `RUNNER_TEMP`, runs Git under the reviewed clean environment, points the view at the checked-out content-addressed object store, disables replacement-object rewriting, and archives exact `$CI_SUBJECT_SHA` with reviewed attribute/config authority.
 
 That tar stream is piped directly to:
 
@@ -187,7 +188,7 @@ That tar stream is piped directly to:
 docker build --tag "$image" -
 ```
 
-Consequently, later worktree changes, checkout-local `.dockerignore`, checkout Git metadata, global/system attributes, and mutable `HEAD` cannot silently retarget the repository bytes consumed by the runtime image. Committed files and committed attributes in the selected validation tree remain repository-owned context authority.
+Consequently, later worktree changes, checkout-local `.dockerignore`, checkout Git metadata, global/system attributes, and mutable `HEAD` cannot silently retarget the repository bytes consumed by the runtime image.
 
 This control constrains **which repository bytes Docker may consume**. It does not attest Docker/BuildKit binaries, the hosted runner, external registry availability, package-index availability, or privileged mutation outside the build context.
 
@@ -197,7 +198,7 @@ No container-image byte-for-byte reproducibility claim is made. The container ch
 
 ## Reproducible wheel authority
 
-The reproducible-wheel path creates fresh random source directories and a fresh bare Git view initialized from an empty template. Git executes through a clean `env -i` authority containing only `PATH` plus reviewed controls for:
+The reproducible-wheel path creates fresh random source directories and a fresh bare Git view initialized from an empty template. Git executes through a clean authority with reviewed controls for:
 
 - system/global config isolation;
 - system attribute isolation;
@@ -205,9 +206,9 @@ The reproducible-wheel path creates fresh random source directories and a fresh 
 - lazy-fetch disabling;
 - optional-lock disabling.
 
-The bare view shares only the checked-out repository object store. Both archives explicitly name `$CI_SUBJECT_SHA`; `core.attributesFile=/dev/null` prevents mutable global attribute injection, and extraction runs `/usr/bin/tar` under a clean environment.
+The bare view shares only the checked-out repository object store. Both archives explicitly name `$CI_SUBJECT_SHA`; extraction uses `/usr/bin/tar` under the reviewed clean environment.
 
-The two archive roots are independently build-authority-verified immediately before wheel creation. The wheel outputs must match under the repository reproducibility contract.
+The two archive roots are independently build-authority-verified immediately before wheel creation. Wheel outputs must match under the repository reproducibility contract.
 
 This proves repeatability for the tested Python wheel under the reviewed build environment and source subject. It is not a package signature, publisher identity attestation, or guarantee that a different hosted platform/toolchain produces identical bytes.
 
@@ -217,15 +218,9 @@ This proves repeatability for the tested Python wheel under the reviewed build e
 
 `scripts/generate_build_manifest.py` requires an explicit `--expected-source-sha`. CI passes `$CI_SUBJECT_SHA`; the manifest does not accept mutable `HEAD` as source authority.
 
-The generator resolves the original commit/tree with replacement-object rewriting disabled, verifies tracked fixed inputs against exact expected commit blobs, brackets repository HEAD around manifest construction, and binds the runtime SBOM digest into the manifest.
+The runtime CycloneDX SBOM is generated from the hash-locked runtime graph. Immediately after the audit, CI records its SHA-256 into parent-step state. The wheel/build-manifest step requires the same digest before wheel generation, after both wheel builds, and after manifest generation.
 
-The runtime CycloneDX SBOM is generated from the hash-locked runtime graph. Immediately after the audit, CI records its SHA-256 into the parent step environment. The wheel/build-manifest step requires the same digest:
-
-- before wheel generation;
-- after both wheel builds;
-- after manifest generation.
-
-The manifest generator independently requires the parent-owned digest. A later action therefore cannot silently replace the audited SBOM with a different structurally valid file while preserving the reviewed lineage checks.
+The manifest generator independently requires that parent-owned digest. A later action therefore cannot silently replace the audited SBOM with a different structurally valid file while preserving the reviewed lineage checks.
 
 ---
 
@@ -237,7 +232,7 @@ Permanent CI uses exact reviewed GitHub Action commit SHAs for:
 - `actions/setup-python`;
 - `actions/upload-artifact`.
 
-The Ruff pre-commit mirror is pinned to an exact repository commit. Public Git/action/blob SHA literals use narrow `detect-secrets` allowlist annotations only where necessary because they are provenance identifiers, not credentials.
+The Ruff pre-commit mirror is pinned to an exact repository commit. Public Git/action/blob SHA literals use narrow secret-scan allowlist annotations only where necessary because they are provenance identifiers, not credentials.
 
 CI names exact CPython patch releases (`3.11.16`, `3.13.15`) and the `ubuntu-24.04` runner family instead of `ubuntu-latest`.
 
@@ -246,9 +241,9 @@ CI names exact CPython patch releases (`3.11.16`, `3.13.15`) and the `ubuntu-24.
 
 ### Automatic browser runtime boundary
 
-The automatic reference-SUT browser job consumes hosted `/usr/bin/google-chrome` instead of installing a browser during untrusted validation. Its exact reviewed step requires the executable and records its version. `scripts/verify_ci_contract.py` rejects automatic tokens for `playwright install`, `sudo`, `apt-get`, and `apt install`.
+The automatic reference-SUT browser job consumes hosted `/usr/bin/google-chrome` instead of installing a browser during validation. Its reviewed step requires the executable and records its version. `scripts/verify_ci_contract.py` rejects automatic tokens for `playwright install`, `sudo`, `apt-get`, and `apt install`.
 
-Absence or incompatibility is a browser-validation failure/incomplete condition, not authorization to acquire root/browser-install authority during the PR run.
+Absence or incompatibility is a browser-validation failure/incomplete condition, not authorization to acquire root/browser-install authority.
 
 ### Bootstrap trust boundary
 
@@ -287,13 +282,13 @@ The pre-install lock-blob check proves which repository lock bytes `pip` is inst
 - exact complete `ci.yml` Git blob identity;
 - sole trusted reporter write/token authority.
 
-These verifiers are deterministic repository controls. During ordinary PR execution they remain part of the PR subject and therefore do not independently solve merge-authority provenance; that external/bootstrap boundary is described in [`CI_CD.md`](CI_CD.md) and [`TRUSTED_PR_CONTROL_PLANE.md`](TRUSTED_PR_CONTROL_PLANE.md).
+These verifiers are deterministic repository controls. Their source identity does not independently attest the external Actions Policy or protected ruleset; those platform authorities are described in [`CI_CD.md`](CI_CD.md) and [`TRUSTED_PR_CONTROL_PLANE.md`](TRUSTED_PR_CONTROL_PLANE.md).
 
 ---
 
 ## Evidence bundle
 
-The automatic Supply Chain job persists the reviewed evidence set, including:
+The Supply Chain job persists the reviewed evidence set, including:
 
 - checkout build-authority verification;
 - archive A/B build-authority verification;
@@ -307,9 +302,9 @@ The automatic Supply Chain job persists the reviewed evidence set, including:
 - reproducible wheel artifact;
 - runtime container image ID.
 
-Artifact upload uses the exact reviewed immutable `actions/upload-artifact` revision with `if-no-files-found: error` for the supply-chain bundle and bounded retention.
+Artifact upload uses the exact reviewed immutable `actions/upload-artifact` revision with `if-no-files-found: error` and bounded retention.
 
-Artifact presence alone does not imply Supply Chain or overall CI succeeded: failure-path uploads may contain partial diagnostic evidence. Terminal job conclusions and the aggregate gate remain authoritative for what actually passed.
+Artifact presence alone does not imply Supply Chain or overall validation succeeded: failure-path uploads may contain partial diagnostic evidence. Terminal job conclusions and the deterministic aggregate remain authoritative for what actually passed.
 
 ---
 
@@ -333,9 +328,11 @@ Changing an authority-bearing constant merely to recover green without reviewing
 
 ## What green proves—and does not prove
 
-For an ordinary exact PR event subject, a fully green run can prove that the executed reviewed source passed the deterministic gates and that its recorded build/evidence artifacts are internally bound to the selected `CI_SUBJECT_SHA` under the checks described here.
+For an exact trusted `repository_dispatch` subject, a fully green validation run can prove that the selected prospective merge subject passed the deterministic gates and that its recorded build/evidence artifacts are internally bound to `CI_SUBJECT_SHA` under the checks described here.
 
-It does **not** by itself prove:
+When the trusted reporter also succeeds, it additionally proves that the live PR/merge-ref subject checks passed and the reporter published the terminal status for that exact observed head. Merge authority still depends on the external Actions Policy and `Protect Main` ruleset remaining as separately observed.
+
+Supply-chain green does **not** by itself prove:
 
 - package-publisher identity;
 - hosted Python/runner/browser byte identity;
@@ -343,12 +340,13 @@ It does **not** by itself prove:
 - Docker/BuildKit identity;
 - signed provenance or release publication;
 - container-image byte reproducibility;
-- GitHub Actions Policy state;
-- ruleset/branch-protection state;
-- that the default-branch trusted `repository_dispatch` path has executed;
-- that `Trusted PR Gate` is active merge authority.
+- future GitHub Actions Policy state;
+- future ruleset/branch-protection state;
+- that a later PR subject matches an earlier validated tuple.
 
-The dormant trusted path is source design plus ordinary PR self-consistency evidence until it is bootstrapped to `main`, external policy is observed, the fixed `repository_dispatch` is executed against an exact current subject, its evidence/status is inspected, and merge enforcement is revalidated.
+Activation evidence established the currently observed trusted merge path: owner-only `repository_dispatch`, successful run #634, exact-head `Trusted PR Gate: success`, and a re-fetched strict `Protect Main` ruleset requiring that context. Those external facts must be re-observed after material administrative change.
+
+The build manifest and SBOM remain unsigned evidence. Do not represent them as signing, notarization, or publisher identity.
 
 ---
 
