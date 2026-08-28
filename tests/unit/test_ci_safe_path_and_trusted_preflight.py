@@ -89,7 +89,7 @@ def test_validation_jobs_wait_for_supply_chain_preflight() -> None:
         assert header in text
 
     supply_chain = text[text.index("  supply-chain:") : text.index("  security:")]
-    assert "          fetch-depth: 0\n" in supply_chain
+    assert "          fetch-depth: 2\n" in supply_chain
 
 
 def test_trusted_reporter_treats_dispatch_payload_as_data() -> None:
