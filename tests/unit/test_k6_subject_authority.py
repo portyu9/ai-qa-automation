@@ -58,18 +58,32 @@ def test_invalid_k6_thresholds_fail_before_subject_authority(
         k6_gate_payload(payload)
 
 
-def test_k6_persisted_subject_redacts_url_secrets_without_changing_raw_subject() -> None:
+def test_k6_persisted_subject_minimizes_untrusted_identity_fields() -> None:
     payload = request()
+    payload["script"] = "performance/token=super-secret-script-value/load.js"
     payload["target_url"] = (
         "http://alice:super-secret-password@127.0.0.1:8000/private/path?token=super-secret-token"
     )
+    payload["environment"] = "secret=super-secret-environment-value"
     raw = k6_gate_payload(payload)
     persisted = k6_persisted_subject(raw)
 
     assert raw["target_url"] != persisted["target_url"]
+    assert set(persisted) == {
+        "script_sha256",
+        "target_url",
+        "environment_sha256",
+        "max_p95_ms",
+        "max_error_rate",
+        "min_request_rate",
+    }
+    assert len(str(persisted["script_sha256"])) == 64
+    assert len(str(persisted["environment_sha256"])) == 64
     rendered = str(persisted)
+    assert "super-secret-script-value" not in rendered
     assert "super-secret-password" not in rendered
     assert "super-secret-token" not in rendered
+    assert "super-secret-environment-value" not in rendered
     assert "/private/path" not in rendered
     assert "127.0.0.1:8000" in rendered
     assert _stable_gate_id("k6", raw) != _stable_gate_id("k6", persisted)
