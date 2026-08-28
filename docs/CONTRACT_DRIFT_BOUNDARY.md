@@ -95,16 +95,22 @@ Safe parsing alone does not make a tree eligible for `NON_BREAKING`. Fields cons
 
 The comparison-shape boundary therefore fails closed when, among other cases:
 
+- both `openapi` and `swagger` marker keys are present, regardless of either marker's value type; the selected dialect marker must itself be a string;
 - OpenAPI 3.x uses Swagger 2 `definitions`, or Swagger 2 uses OpenAPI 3 `components`;
 - Swagger 2 supplies an OpenAPI 3 `requestBody`;
-- path keys do not use the supported `/...` form, HTTP method keys use non-canonical casing, or consumed path/operation/response structures are not objects;
+- path keys do not use the supported `/...` form, contain query/fragment syntax, contain malformed or repeated template variables, or HTTP method keys use non-canonical casing;
+- each operation's declared `in: path` parameter names do not exactly equal its path-template variable names, or a path parameter is not explicitly `required: true`;
 - operations omit responses, provide an empty responses object, use a response without a string description, or use a Swagger 2 response-range key such as `2XX`;
 - request-body or response Reference Objects are used where the comparator cannot bind their effective semantics directly;
 - OpenAPI request bodies omit content, provide empty content, or carry payload schemas outside the same-document named-schema boundary; response/request media schemas and Swagger response schemas are shape-validated through that same schema boundary;
-- operation parameters are not arrays, contain duplicate `(in, name)` identities, use unsupported parameter references/path-level parameter inheritance, or carry a non-boolean `required` value;
+- operation parameters are not arrays, contain duplicate `(in, name)` identities, use unsupported parameter references/path-level parameter inheritance, use an empty name, or carry a non-boolean `required` value;
+- OpenAPI 3 parameters use unsupported locations, use Swagger `type`/`format`/`items`/`collectionFormat` fields, omit both `schema` and `content`, provide both, or provide parameter `content` with anything other than one media type;
+- Swagger 2 parameters use unsupported locations or types, use `schema` outside a body parameter, omit a body schema, declare more than one body parameter, mix body and `formData` parameters, place a `file` parameter outside `formData`, or use malformed/non-bounded array `items` structure;
 - schema `type` uses an unsupported type name, contains duplicate alternatives, or uses a type array outside OpenAPI 3.1;
 - schema `enum` is empty, contains non-scalar values outside the bounded model, or contains duplicate values under JSON-type-aware equality (`true` remains distinct from `1`, while numerically equal JSON numbers are duplicates);
 - schema `$ref` leaves the document, points below the supported named-schema boundary, has invalid JSON Pointer escaping, or does not resolve to a named schema object in the same dialect.
+
+Parameter identity/type preflight occurs before detailed dialect-specific shape validation. This preserves a stable duplicate-identity authority result instead of allowing malformed duplicate entries to be interpreted in an order-dependent way.
 
 Local named-schema references in named components, parameters, request media, response media, and Swagger response schemas are **identity checked, not dereferenced into a second comparison traversal**. Every named schema is independently shape-validated and compared; contract content never receives filesystem or network retrieval authority.
 
