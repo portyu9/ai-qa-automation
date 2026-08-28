@@ -834,6 +834,7 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
         "permissions": "validation=contents:read;trusted-reporter=statuses:write",
         "reporter_identity": "ephemeral-github-actions-run",
         "external_policy_required": True,
+        "external_policy_invariant": "default-branch-definition-only-for-protected-identity",
     }
 
 
@@ -894,8 +895,19 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
         },
         "actions": actions,
         "limitations": [
-            "Ordinary pull_request validation remains in-subject self-consistency evidence; it is not independent merge authority until external repository Actions Policy prevents pull_request workflow execution.",
-            "The owner repository_dispatch path is designed to execute the exact supplied prospective merge subject from the default-branch workflow definition and revalidate current PR identity before posting Trusted PR Gate; repository code cannot attest that the required external Actions Policy or ruleset transition is active.",
+            (
+                "Ordinary repository workflow execution remains in-subject self-consistency "
+                "evidence; it is not independent merge authority while any allowed event can "
+                "execute workflow definitions from a PR/feature-controlled ref under the same "
+                "protected GitHub Actions identity. Denying pull_request alone is insufficient."
+            ),
+            (
+                "The owner repository_dispatch path is designed to execute the exact supplied "
+                "prospective merge subject from the default-branch workflow definition and "
+                "revalidate current PR identity before posting Trusted PR Gate; repository code "
+                "cannot attest that the required default-branch-definition-only external Actions "
+                "Policy invariant or ruleset transition is active."
+            ),
             "A green pull_request run validates GitHub's event SHA, which is normally the prospective merge subject rather than the PR head commit alone.",
             "Credential existence, environment protection, hosted-runner/browser identity, Actions Policy state, ruleset state, and external service availability remain environment-owned facts.",
         ],
