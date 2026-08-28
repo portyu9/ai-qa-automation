@@ -146,7 +146,7 @@ Deployment evidence includes:
 - incident-response and availability controls.
 
 > [!CAUTION]
-> `AI_QA_K6_EXTERNAL_EGRESS_ENFORCED=true` is a prerequisite assertion, not a firewall. The deployment must actually provide egress containment for every k6 execution.
+> `AI_QA_K6_EXTERNAL_EGRESS_ENFORCED=true` is a prerequisite assertion, not a firewall. The deployment must actually provide egress containment for every k6 execution. K6 process spawn additionally requires trusted process/filesystem isolation; static JavaScript inspection is not treated as a process or filesystem sandbox. The current live MCP configuration exposes only the egress assertion, so live k6 remains intentionally fail-closed until the separate containment prerequisite is plumbed through trusted runtime configuration.
 
 ---
 
@@ -163,7 +163,7 @@ Deployment evidence includes:
 | Network policy | canonical host validation + adapter authorization | DNS/routing/firewall/proxy enforcement |
 | Playwright | navigation/subresource/WebSocket policy + locator evidence contract | browser runtime + target app behavior |
 | API | host/method policy + bounded evidence capture | target auth/data/service behavior |
-| k6 | non-production/host/script/threshold policy + universal egress prerequisite | executable, approved target, actual infrastructure egress |
+| k6 | non-production/host/script/threshold policy + bounded validated module snapshot + egress/process-isolation prerequisites | executable, approved target, actual infrastructure egress + process/filesystem isolation |
 | Appium | runtime/capability inspection boundary | app/device/emulator/cloud session |
 | Secret safety | protected paths, redaction, minimal subprocess env | organization secret manager, rotation, access policy |
 | Traceability | strict run-bound manifests, hashes, journal/runtime binding, typed lineage, artifact/root-verifying unsigned attestation | external signing/identity/timestamping when required |
