@@ -72,7 +72,7 @@ def validate_json_schema(instance: Any, schema: dict[str, Any]) -> ValidationRes
         return ValidationResult(
             name="json_schema",
             status=ValidationStatus.NOT_VERIFIED,
-            summary="jsonschema optional dependency is not installed.",
+            summary="JSON Schema validation dependencies are not installed.",
         )
 
     dialect = schema.get("$schema")
@@ -93,10 +93,11 @@ def validate_json_schema(instance: Any, schema: dict[str, Any]) -> ValidationRes
             summary="JSON Schema declares an unsupported schema dialect.",
         )
 
-    retrieval_attempts: list[str] = []
+    retrieval_schemes: list[str] = []
 
     def deny_external_reference(uri: str) -> NoReturn:
-        retrieval_attempts.append(str(uri))
+        scheme = urlparse(str(uri)).scheme.casefold() or "relative"
+        retrieval_schemes.append(scheme)
         raise NoSuchResource(ref=uri)
 
     try:
@@ -139,15 +140,14 @@ def validate_json_schema(instance: Any, schema: dict[str, Any]) -> ValidationRes
             details={"path": path, "validator": str(exc.validator)},
         )
     except Unresolvable:
-        if retrieval_attempts:
-            scheme = urlparse(retrieval_attempts[-1]).scheme.casefold() or "relative"
+        if retrieval_schemes:
             return ValidationResult(
                 name="json_schema",
                 status=ValidationStatus.BLOCKED,
                 summary=(
                     "JSON Schema external reference retrieval is disabled by deterministic policy."
                 ),
-                details={"reference_scheme": scheme},
+                details={"reference_scheme": retrieval_schemes[-1]},
             )
         return ValidationResult(
             name="json_schema",
