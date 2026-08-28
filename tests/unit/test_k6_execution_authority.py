@@ -150,7 +150,7 @@ def test_k6_rejects_symlinked_root_script(tmp_path: Path) -> None:
         pytest.skip("symlinks unavailable on this platform")
     runner = K6Runner(tmp_path, _policy(tmp_path), external_egress_enforced=True)
 
-    with pytest.raises(PermissionError, match=r"existing \.js file"):
+    with pytest.raises(PermissionError, match="confined no-follow ingestion"):
         runner._validate_script(link.relative_to(tmp_path), "http://127.0.0.1:8000")
 
 
@@ -172,5 +172,70 @@ def test_k6_rejects_symlinked_local_import(tmp_path: Path) -> None:
     )
     runner = K6Runner(tmp_path, _policy(tmp_path), external_egress_enforced=True)
 
-    with pytest.raises(PermissionError, match="may not traverse symlinks"):
+    with pytest.raises(PermissionError, match="confined no-follow ingestion"):
         runner._validate_script(Path("performance/load.js"), "http://127.0.0.1:8000")
+
+
+def test_k6_rejects_workspace_root_replacement_after_runner_construction(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    script = _write_import_graph(workspace)
+    runner = K6Runner(
+        workspace,
+        PolicyEngine(tmp_path / "control", workspace),
+        external_egress_enforced=True,
+    )
+    workspace.rename(tmp_path / "original-workspace")
+    workspace.mkdir()
+    _write_import_graph(workspace)
+
+    with pytest.raises(PermissionError, match="confined no-follow ingestion"):
+        runner._validate_script(script, "http://127.0.0.1:8000")
+
+
+def test_k6_rejects_parent_symlink_swap_during_import_collection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script = _write_import_graph(tmp_path)
+    runner = K6Runner(tmp_path, _policy(tmp_path), external_egress_enforced=True)
+    original_read = performance.read_bytes_confined
+    swapped = False
+
+    def swap_parent_then_read(
+        root: Path,
+        relative_path: str | Path,
+        *,
+        max_bytes: int,
+        label: str,
+        expected_root_identity: tuple[int, int] | None = None,
+    ) -> bytes:
+        nonlocal swapped
+        relative = Path(relative_path)
+        if relative == Path("performance/helper.js") and not swapped:
+            swapped = True
+            original_directory = tmp_path / "performance"
+            original_directory.rename(tmp_path / "original-performance")
+            outside = tmp_path / "outside"
+            outside.mkdir()
+            (outside / "helper.js").write_text(
+                "export const path = '/outside';\n",
+                encoding="utf-8",
+            )
+            try:
+                original_directory.symlink_to(outside, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                pytest.skip("symlinks unavailable on this platform")
+        return original_read(
+            root,
+            relative,
+            max_bytes=max_bytes,
+            label=label,
+            expected_root_identity=expected_root_identity,
+        )
+
+    monkeypatch.setattr(performance, "read_bytes_confined", swap_parent_then_read)
+
+    with pytest.raises(PermissionError, match="confined no-follow ingestion"):
+        runner._validate_script(script, "http://127.0.0.1:8000")
+    assert swapped is True
