@@ -28,11 +28,15 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     assert automatic["required_gate"] == "Required PR Gate"
     assert automatic["documentation_integrity"] == "required-via-supply-chain"
     assert automatic["mermaid_render"] == "required-via-supply-chain"
-    assert automatic["build_provenance_subject"] == "github.sha/isolated-git-view"
+    assert automatic["build_provenance_subject"] == "CI_SUBJECT_SHA/isolated-git-view"
     assert automatic["archive_attribute_authority"] == "versioned-tree-only"
     assert automatic["sbom_lineage"] == "parent-digest-bound-and-bracketed"
     assert automatic["supply_chain_evidence"] == "pinned-upload-action"
-    assert automatic["secrets"] is False
+    assert automatic["subject"] == "github.sha-or-owner-default-branch-dispatch-exact-merge-sha"
+    assert automatic["reporter_identity"] == "ephemeral-github-actions-run"
+    assert automatic["trusted_status"]["authorization"] == (
+        "owner-default-branch-repository-dispatch-only"
+    )
     assert result["workflows"]["manual"]["credentialed_model"] == "manual-only"
 
 
@@ -67,7 +71,52 @@ def test_ci_contract_rejects_pull_request_target_even_with_spoof_comment(tmp_pat
     )
     path.write_text(text, encoding="utf-8")
 
-    with pytest.raises(ValueError, match="automatic trigger set"):
+    with pytest.raises(ValueError, match="trigger set must be exactly"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_rejects_workflow_dispatch_for_trusted_validation(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "ci.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = "  repository_dispatch:\n    types: [trusted-pr-validation]\n"
+    assert marker in text
+    path.write_text(
+        text.replace(marker, "  workflow_dispatch:\n", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="trigger set must be exactly"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_rejects_unreviewed_repository_dispatch_event_type(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "ci.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = "    types: [trusted-pr-validation]\n"
+    assert marker in text
+    path.write_text(text.replace(marker, "    types: [arbitrary]\n", 1), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="trigger/owner-dispatch contract"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_rejects_client_payload_subject_bypass(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "ci.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = (
+        "  CI_SUBJECT_SHA: ${{ github.event_name == 'repository_dispatch' "
+        "&& github.event.client_payload.expected_merge_sha || github.sha }}\n"
+    )
+    assert marker in text
+    path.write_text(
+        text.replace(marker, "  CI_SUBJECT_SHA: ${{ github.sha }}\n", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="CI_SUBJECT_SHA must select only"):
         ci_contract.verify_ci_contract(root)
 
 
@@ -77,19 +126,59 @@ def test_ci_contract_rejects_write_permission(tmp_path: Path) -> None:
     text = path.read_text(encoding="utf-8").replace("  contents: read", "  contents: write", 1)
     path.write_text(text, encoding="utf-8")
 
-    with pytest.raises(ValueError, match="permissions must be exactly contents: read"):
+    with pytest.raises(ValueError, match="write permission is forbidden outside trusted reporter"):
         ci_contract.verify_ci_contract(root)
 
 
-def test_ci_contract_rejects_secret_in_automatic_workflow(tmp_path: Path) -> None:
+def test_ci_contract_rejects_secret_in_validation_workflow(tmp_path: Path) -> None:
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "ci.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = '  PIP_DISABLE_PIP_VERSION_CHECK: "1"\n'
+    assert marker in text
     path.write_text(
-        path.read_text(encoding="utf-8") + "\nenv:\n  BAD: ${{ secrets.ANTHROPIC_API_KEY }}\n",
+        text.replace(marker, marker + "  BAD: ${{ secrets.ANTHROPIC_API_KEY }}\n", 1),
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="forbidden automatic-CI authority token"):
+    with pytest.raises(ValueError, match="forbidden validation authority token"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_rejects_second_reporter_token_consumer(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "ci.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n"
+    assert text.count(marker) == 1
+    path.write_text(
+        text.replace(marker, marker + "          SECOND_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="sole GITHUB_TOKEN secret consumer"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_rejects_trusted_reporter_without_main_owner_guard(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "ci.yml"
+    text = path.read_text(encoding="utf-8")
+    exact = (
+        "    if: ${{ always() && github.event_name == 'repository_dispatch' "
+        "&& github.ref == 'refs/heads/main' && github.actor == github.repository_owner }}\n"
+    )
+    assert exact in text
+    path.write_text(
+        text.replace(
+            exact,
+            "    if: ${{ always() && github.event_name == 'repository_dispatch' }}\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="trusted reporter is missing reviewed fragment"):
         ci_contract.verify_ci_contract(root)
 
 
@@ -150,13 +239,27 @@ def test_ci_contract_enforces_directory_enumeration_bound(tmp_path: Path) -> Non
         ci_contract.verify_ci_contract(root)
 
 
-def test_ci_contract_rejects_unbound_checkout(tmp_path: Path) -> None:
+def test_ci_contract_rejects_unbound_validation_checkout(tmp_path: Path) -> None:
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "ci.yml"
-    text = path.read_text(encoding="utf-8").replace("ref: ${{ github.sha }}", "ref: main")
-    path.write_text(text, encoding="utf-8")
+    text = path.read_text(encoding="utf-8")
+    marker = "ref: ${{ env.CI_SUBJECT_SHA }}"
+    assert text.count(marker) == ci_contract.EXPECTED_AUTOMATIC_SUBJECT_CHECKOUT_COUNT
+    path.write_text(text.replace(marker, "ref: main", 1), encoding="utf-8")
 
-    with pytest.raises(ValueError, match=r"every checkout must bind to github\.sha"):
+    with pytest.raises(ValueError, match="every validation checkout must bind"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_rejects_unbound_trusted_reporter_checkout(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "ci.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = "ref: ${{ github.sha }}"
+    assert text.count(marker) == 1
+    path.write_text(text.replace(marker, "ref: main", 1), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="trusted reporter must be the sole github.sha checkout"):
         ci_contract.verify_ci_contract(root)
 
 
@@ -164,7 +267,7 @@ def test_ci_contract_rejects_mutable_head_for_reproducible_archive(tmp_path: Pat
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "ci.yml"
     original = (
-        '/usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$GITHUB_SHA" '
+        '/usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$CI_SUBJECT_SHA" '
         '| env -i PATH="$PATH" /usr/bin/tar -xf - -C "$build_a"'
     )
     replacement = (
@@ -175,7 +278,7 @@ def test_ci_contract_rejects_mutable_head_for_reproducible_archive(tmp_path: Pat
     assert original in text
     path.write_text(text.replace(original, replacement, 1), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="exact reviewed event-subject-bound step"):
+    with pytest.raises(ValueError, match="exact reviewed validation-subject-bound step"):
         ci_contract.verify_ci_contract(root)
 
 
@@ -186,7 +289,7 @@ def test_ci_contract_rejects_reenabled_replace_objects_for_archive(tmp_path: Pat
     assert " GIT_NO_REPLACE_OBJECTS=1" in text
     path.write_text(text.replace(" GIT_NO_REPLACE_OBJECTS=1", "", 1), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="exact reviewed event-subject-bound step"):
+    with pytest.raises(ValueError, match="exact reviewed validation-subject-bound step"):
         ci_contract.verify_ci_contract(root)
 
 
@@ -197,7 +300,7 @@ def test_ci_contract_rejects_removed_system_attribute_isolation(tmp_path: Path) 
     assert " GIT_ATTR_NOSYSTEM=1" in text
     path.write_text(text.replace(" GIT_ATTR_NOSYSTEM=1", "", 1), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="exact reviewed event-subject-bound step"):
+    with pytest.raises(ValueError, match="exact reviewed validation-subject-bound step"):
         ci_contract.verify_ci_contract(root)
 
 
@@ -211,7 +314,7 @@ def test_ci_contract_rejects_ambient_global_archive_attributes(tmp_path: Path) -
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="exact reviewed event-subject-bound step"):
+    with pytest.raises(ValueError, match="exact reviewed validation-subject-bound step"):
         ci_contract.verify_ci_contract(root)
 
 
@@ -229,7 +332,7 @@ def test_ci_contract_rejects_checkout_git_dir_for_archive(tmp_path: Path) -> Non
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="exact reviewed event-subject-bound step"):
+    with pytest.raises(ValueError, match="exact reviewed validation-subject-bound step"):
         ci_contract.verify_ci_contract(root)
 
 
@@ -240,7 +343,7 @@ def test_ci_contract_rejects_nonempty_git_template_authority(tmp_path: Path) -> 
     assert '--template="$git_template"' in text
     path.write_text(text.replace(' --template="$git_template"', "", 1), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="exact reviewed event-subject-bound step"):
+    with pytest.raises(ValueError, match="exact reviewed validation-subject-bound step"):
         ci_contract.verify_ci_contract(root)
 
 
@@ -255,21 +358,22 @@ def test_ci_contract_rejects_ambient_tar_options_for_archive_extraction(tmp_path
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="exact reviewed event-subject-bound step"):
+    with pytest.raises(ValueError, match="exact reviewed validation-subject-bound step"):
         ci_contract.verify_ci_contract(root)
 
 
 def test_ci_contract_rejects_mutable_head_for_build_manifest_subject(tmp_path: Path) -> None:
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "ci.yml"
-    text = path.read_text(encoding="utf-8").replace(
-        '--expected-source-sha "$GITHUB_SHA"',
-        '--expected-source-sha "$(git rev-parse HEAD)"',
-        1,
+    text = path.read_text(encoding="utf-8")
+    original = '--expected-source-sha "$CI_SUBJECT_SHA"'
+    assert original in text
+    path.write_text(
+        text.replace(original, '--expected-source-sha "$(git rev-parse HEAD)"', 1),
+        encoding="utf-8",
     )
-    path.write_text(text, encoding="utf-8")
 
-    with pytest.raises(ValueError, match="exact reviewed event-subject-bound step"):
+    with pytest.raises(ValueError, match="exact reviewed validation-subject-bound step"):
         ci_contract.verify_ci_contract(root)
 
 
