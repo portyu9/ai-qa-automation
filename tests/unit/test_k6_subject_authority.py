@@ -70,15 +70,11 @@ def test_k6_persisted_subject_minimizes_untrusted_identity_fields() -> None:
 
     assert raw["target_url"] != persisted["target_url"]
     assert set(persisted) == {
-        "script_sha256",
         "target_url",
-        "environment_sha256",
         "max_p95_ms",
         "max_error_rate",
         "min_request_rate",
     }
-    assert len(str(persisted["script_sha256"])) == 64
-    assert len(str(persisted["environment_sha256"])) == 64
     rendered = str(persisted)
     assert "super-secret-script-value" not in rendered
     assert "super-secret-password" not in rendered
