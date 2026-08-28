@@ -641,13 +641,17 @@ class OpenAPIContractDriftAnalyzer:
                 )
             )
         for name in sorted(set(new_props) - set(old_props)):
-            severity = ContractDriftSeverity.BREAKING if name in new_required else ContractDriftSeverity.NON_BREAKING
+            required = name in new_required
             changes.append(
                 self._change(
-                    severity,
+                    ContractDriftSeverity.BREAKING
+                    if required
+                    else ContractDriftSeverity.RISKY,
                     f"{location}.properties.{name}",
                     "OAS-PROPERTY-ADDED",
-                    "Schema property added",
+                    "Required schema property added"
+                    if required
+                    else "Optional schema property added; response consumers may need review",
                 )
             )
         for name in sorted(set(old_props) & set(new_props)):
