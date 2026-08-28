@@ -15,11 +15,26 @@ MERMAID_IMAGE = (
 )
 PUBLIC_ROOT_MARKDOWN = ("README.md", "CONTRIBUTING.md", "SECURITY.md")
 FENCE_OPEN_RE = re.compile(r"^(?P<fence>`{3,}|~{3,})[ \t]*(?P<info>[A-Za-z0-9_+.-]*)[ \t]*$")
+GITHUB_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 MAX_MARKDOWN_FILES = 128
 MAX_MARKDOWN_BYTES = 4 * 1024 * 1024
 MAX_TOTAL_MARKDOWN_BYTES = 16 * 1024 * 1024
+MAX_MERMAID_DIAGRAMS = 256
 MAX_RENDER_FILE_BYTES = 16 * 1024 * 1024
 RENDER_TIMEOUT_SECONDS = 60
+
+
+def _ci_identity() -> tuple[str | None, str | None]:
+    subject_sha = os.environ.get("CI_SUBJECT_SHA")
+    github_event_sha = os.environ.get("GITHUB_SHA")
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        for name, value in (
+            ("CI_SUBJECT_SHA", subject_sha),
+            ("GITHUB_SHA", github_event_sha),
+        ):
+            if value is None or GITHUB_SHA_RE.fullmatch(value) is None:
+                raise ValueError(f"{name} must be a full lowercase GitHub commit SHA in CI")
+    return subject_sha, github_event_sha
 
 
 def _candidate_files(root: Path) -> list[Path]:
@@ -32,9 +47,11 @@ def _candidate_files(root: Path) -> list[Path]:
     if stat.S_ISLNK(docs_stat.st_mode) or not stat.S_ISDIR(docs_stat.st_mode):
         raise ValueError("docs must be a real directory, not a symlink")
 
-    entries = list(docs.iterdir())
-    if len(entries) > MAX_MARKDOWN_FILES:
-        raise ValueError(f"docs exceeds {MAX_MARKDOWN_FILES} direct entries")
+    entries: list[Path] = []
+    for index, path in enumerate(docs.iterdir(), start=1):
+        if index > MAX_MARKDOWN_FILES:
+            raise ValueError(f"docs exceeds {MAX_MARKDOWN_FILES} direct entries")
+        entries.append(path)
     candidates.extend(
         sorted(
             (path for path in entries if path.suffix.lower() == ".md"),
@@ -118,6 +135,7 @@ def _mermaid_block_count(text: str) -> int:
 def _discover_mermaid_documents(root: Path) -> list[tuple[Path, int]]:
     selected: list[tuple[Path, int]] = []
     total_bytes = 0
+    total_diagrams = 0
     candidates = _candidate_files(root)
     if len(candidates) > MAX_MARKDOWN_FILES:
         raise ValueError(f"documentation corpus exceeds {MAX_MARKDOWN_FILES} Markdown files")
@@ -130,6 +148,11 @@ def _discover_mermaid_documents(root: Path) -> list[tuple[Path, int]]:
                 f"documentation corpus exceeds {MAX_TOTAL_MARKDOWN_BYTES} total Markdown bytes"
             )
         count = _mermaid_block_count(text)
+        total_diagrams += count
+        if total_diagrams > MAX_MERMAID_DIAGRAMS:
+            raise ValueError(
+                f"documentation corpus exceeds {MAX_MERMAID_DIAGRAMS} Mermaid diagrams"
+            )
         if count:
             selected.append((path.relative_to(root), count))
     if not selected:
@@ -176,28 +199,24 @@ def _run_mermaid(root: Path, relative_path: Path, output_root: Path, expected_co
         f"/out/{relative_path.as_posix()}",
     ]
     try:
-        completed = subprocess.run(
+        subprocess.run(
             command,
             check=True,
-            capture_output=True,
-            text=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             timeout=RENDER_TIMEOUT_SECONDS,
         )
     except subprocess.CalledProcessError as exc:
-        if exc.stdout:
-            print(exc.stdout, file=sys.stderr, end="")
-        if exc.stderr:
-            print(exc.stderr, file=sys.stderr, end="")
-        raise
+        raise RuntimeError(f"Mermaid render failed for {relative_path}") from exc
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(
             f"Mermaid render exceeded {RENDER_TIMEOUT_SECONDS}s for {relative_path}"
         ) from exc
 
-    if completed.stderr:
-        print(completed.stderr, file=sys.stderr, end="")
     if not destination.is_file():
         raise RuntimeError(f"Mermaid CLI did not emit transformed Markdown for {relative_path}")
+    if destination.stat().st_size > MAX_RENDER_FILE_BYTES:
+        raise RuntimeError(f"Mermaid CLI output exceeded file-size limit for {relative_path}")
     transformed = destination.read_text(encoding="utf-8")
     remaining = _mermaid_block_count(transformed)
     if remaining:
@@ -213,6 +232,7 @@ def _run_mermaid(root: Path, relative_path: Path, output_root: Path, expected_co
 
 
 def main() -> int:
+    subject_sha, github_event_sha = _ci_identity()
     root = Path.cwd().resolve()
     documents = _discover_mermaid_documents(root)
     with tempfile.TemporaryDirectory(prefix="aiqa-mermaid-") as temp_dir:
@@ -221,10 +241,11 @@ def main() -> int:
             _run_mermaid(root, relative_path, output_root, count)
 
     result = {
-        "schema_version": 1,
+        "schema_version": 2,
         "validator": "official_mermaid_cli_container",
         "container": MERMAID_IMAGE,
-        "subject_sha": os.environ.get("GITHUB_SHA"),
+        "subject_sha": subject_sha,
+        "github_event_sha": github_event_sha,
         "documents": [
             {"path": path.as_posix(), "diagram_count": count} for path, count in documents
         ],
