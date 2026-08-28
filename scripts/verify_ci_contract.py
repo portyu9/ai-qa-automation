@@ -29,7 +29,7 @@ EXPECTED_AUTOMATIC_PROJECT_INSTALL_COUNT = 5
 EXPECTED_AUTOMATIC_DEPENDENCY_INSTALL_COUNT = 5
 EXPECTED_AUTOMATIC_SUBJECT_CHECKOUT_COUNT = 5
 EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = (
-    "2e264e88ba7422443d3802e97579a74e9a651732"  # pragma: allowlist secret
+    "2b36e38ec1850ff44dd88f81ae5bdd253ee5e59b"  # pragma: allowlist secret
 )
 AUTOMATIC_PROJECT_INSTALL_COMMAND = (
     "          python -m pip install --no-deps --no-build-isolation ."
@@ -65,6 +65,7 @@ HOSTED_BROWSER_EXECUTABLE = "/usr/bin/google-chrome"
 REQUIRED_GATE_STEP_NAME = "Require every automatic gate to succeed"
 TRUSTED_STATUS_JOB_ID = "trusted-status"
 TRUSTED_STATUS_STEP_NAME = "Publish exact-subject trusted status"
+PYTHON_SAFE_PATH_LINE = '  PYTHONSAFEPATH: "1"'
 SUPPLY_CHAIN_ARTIFACTS = (
     BUILD_AUTHORITY_ARTIFACT,
     *ARCHIVE_BUILD_AUTHORITY_ARTIFACTS,
@@ -641,6 +642,7 @@ def _verify_dispatch_contract(text: str) -> None:
 
 def _verify_trusted_status_job(text: str) -> dict[str, Any]:
     job = _semantic_text(_job_block(text, TRUSTED_STATUS_JOB_ID)).strip("\n")
+    publish_step = _semantic_text(_step_block(job, TRUSTED_STATUS_STEP_NAME)).strip("\n")
     required_fragments = (
         "  trusted-status:",
         "    name: Trusted PR Gate Reporter",
@@ -655,18 +657,31 @@ def _verify_trusted_status_job(text: str) -> dict[str, Any]:
         '        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"',
         f"      - name: {TRUSTED_STATUS_STEP_NAME}",
         "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+        "          PR_NUMBER: ${{ github.event.client_payload.pr_number }}",
+        "          EXPECTED_HEAD_SHA: ${{ github.event.client_payload.expected_head_sha }}",
+        "          EXPECTED_BASE_SHA: ${{ github.event.client_payload.expected_base_sha }}",
+        "          EXPECTED_MERGE_SHA: ${{ github.event.client_payload.expected_merge_sha }}",
+        "          AUTHORIZED: ${{ github.event.client_payload.authorized }}",
+        "          VALIDATION_RESULT: ${{ needs.required-gate.result }}",
+        '          printf -v job_results_json \'{"validation":"%s"}\' "$VALIDATION_RESULT"',
         "          python scripts/trusted_pr_control.py report \\",
-        '            --pr-number "${{ github.event.client_payload.pr_number }}" \\',
-        '            --expected-head-sha "${{ github.event.client_payload.expected_head_sha }}" \\',
-        '            --expected-base-sha "${{ github.event.client_payload.expected_base_sha }}" \\',
-        '            --expected-merge-sha "${{ github.event.client_payload.expected_merge_sha }}" \\',
-        '            --authorized "${{ github.event.client_payload.authorized }}" \\',
-        '            --job-results-json \'{"validation":"${{ needs.required-gate.result }}"}\' \\',
+        '            --pr-number "$PR_NUMBER" \\',
+        '            --expected-head-sha "$EXPECTED_HEAD_SHA" \\',
+        '            --expected-base-sha "$EXPECTED_BASE_SHA" \\',
+        '            --expected-merge-sha "$EXPECTED_MERGE_SHA" \\',
+        '            --authorized "$AUTHORIZED" \\',
+        '            --job-results-json "$job_results_json" \\',
         '            --target-url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"',
     )
     for fragment in required_fragments:
         if fragment not in job:
             raise ValueError(f"ci.yml: trusted reporter is missing reviewed fragment: {fragment}")
+    run_marker = "        run: |\n"
+    if publish_step.count(run_marker) != 1:
+        raise ValueError("ci.yml: trusted reporter must have exactly one reviewed shell body")
+    run_script = publish_step.split(run_marker, 1)[1]
+    if "${{ github.event.client_payload." in run_script or "${{ needs." in run_script:
+        raise ValueError("ci.yml: trusted reporter must pass event/result values through env as data")
     if job.count("statuses: write") != 1:
         raise ValueError("ci.yml: trusted reporter must own exactly one statuses: write permission")
     if "actions: write" in job or "contents: write" in job or "pull-requests: write" in job:
@@ -676,6 +691,7 @@ def _verify_trusted_status_job(text: str) -> dict[str, Any]:
         "status_context": "Trusted PR Gate",
         "authorization": "owner-default-branch-repository-dispatch-only",
         "subject_revalidation": "exact-current-pr-head-base-merge",
+        "payload_authority": "runner-env-data-only",
         "write_authority": "statuses:write-only",
     }
 
@@ -690,6 +706,8 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
             f"{name}: trigger set must be exactly {sorted(expected_triggers)}, "
             f"got {sorted(triggers)}"
         )
+    if PYTHON_SAFE_PATH_LINE not in _semantic_text(_top_level_block(text, "env")):
+        raise ValueError(f"{name}: Python safe-path mode is required")
     _verify_dispatch_contract(text)
     trusted_status_raw = _job_block(text, TRUSTED_STATUS_JOB_ID)
     semantic_without_trusted_status = semantic.replace(_semantic_text(trusted_status_raw), "")
@@ -801,6 +819,7 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
         "project_install_count": project_install_count,
         "project_install_authority": "immediate-static-revalidation",
         "workflow_definition": "exact-reviewed-git-blob",
+        "python_safe_path": True,
         "setup_python_cache": False,
         "browser_runtime_authority": "hosted-system-chrome-observed-without-automatic-installer",
         "archive_build_authority": "verified-and-matched-before-wheel-builds",
@@ -838,6 +857,8 @@ def _verify_manual_workflow(text: str) -> dict[str, Any]:
         raise ValueError(f"{name}: live/editable dependency installation is forbidden")
     if CACHE_CONFIGURATION_RE.search(semantic):
         raise ValueError(f"{name}: trusted/manual workflow dependency caching is forbidden")
+    if PYTHON_SAFE_PATH_LINE not in _semantic_text(_top_level_block(text, "env")):
+        raise ValueError(f"{name}: Python safe-path mode is required")
     _verify_top_level_read_only_permissions(text, name=name)
     if WRITE_PERMISSION_RE.search(semantic):
         raise ValueError(f"{name}: workflow requests write permission")
@@ -847,6 +868,7 @@ def _verify_manual_workflow(text: str) -> dict[str, Any]:
         "subject": "github.sha",
         "checkout_count": checkout_count,
         "permissions": "contents:read",
+        "python_safe_path": True,
         "setup_python_cache": False,
         "credentialed_model": "manual-only",
         "holdout": "manual-separated",
