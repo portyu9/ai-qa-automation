@@ -26,6 +26,7 @@ concurrency:
 
 env:
   PYTHONUNBUFFERED: "1"
+  PYTHONSAFEPATH: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
 jobs:
