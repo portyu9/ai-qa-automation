@@ -87,7 +87,7 @@ def _report(
     *,
     actor: str = "portyu9",
     repository_owner: str = "portyu9",
-    workflow_event: str = "workflow_dispatch",
+    workflow_event: str = "repository_dispatch",
     workflow_ref: str = "refs/heads/main",
     authorized: bool = True,
     job_result: str = "success",
@@ -122,11 +122,11 @@ def test_subject_requires_open_main_definitively_mergeable_exact_subject() -> No
         control.subject_from_pull_request(_pull_request_payload(merge_sha="short"))
 
 
-def test_report_requires_workflow_dispatch_before_api_access(
+def test_report_requires_repository_dispatch_before_api_access(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(control, "GitHubApi", FakeApi)
-    with pytest.raises(PermissionError, match="workflow_dispatch"):
+    with pytest.raises(PermissionError, match="repository_dispatch"):
         control.report_authorized_result(
             repository=REPOSITORY,
             token="token",
@@ -150,7 +150,7 @@ def test_report_requires_main_ref_before_api_access(monkeypatch: pytest.MonkeyPa
             token="token",
             actor="portyu9",
             repository_owner="portyu9",
-            workflow_event="workflow_dispatch",
+            workflow_event="repository_dispatch",
             workflow_ref="refs/heads/feature",
             expected=_subject(),
             authorized=True,
@@ -168,7 +168,7 @@ def test_non_owner_cannot_report_even_diagnostic(monkeypatch: pytest.MonkeyPatch
             token="token",
             actor="contributor",
             repository_owner="portyu9",
-            workflow_event="workflow_dispatch",
+            workflow_event="repository_dispatch",
             workflow_ref="refs/heads/main",
             expected=_subject(),
             authorized=False,
@@ -229,7 +229,7 @@ def test_stale_subject_cannot_post_status(monkeypatch: pytest.MonkeyPatch) -> No
             token="token",
             actor="portyu9",
             repository_owner="portyu9",
-            workflow_event="workflow_dispatch",
+            workflow_event="repository_dispatch",
             workflow_ref="refs/heads/main",
             expected=_subject(),
             authorized=True,
@@ -255,7 +255,7 @@ def test_direct_report_rejects_unknown_validation_result(monkeypatch: pytest.Mon
             token="token",
             actor="portyu9",
             repository_owner="portyu9",
-            workflow_event="workflow_dispatch",
+            workflow_event="repository_dispatch",
             workflow_ref="refs/heads/main",
             expected=_subject(),
             authorized=True,
@@ -313,7 +313,7 @@ def test_main_exits_nonzero_after_publishing_failure(
     monkeypatch.setenv("GITHUB_TOKEN", "token")
     monkeypatch.setenv("GITHUB_ACTOR", "portyu9")
     monkeypatch.setenv("GITHUB_REPOSITORY_OWNER", "portyu9")
-    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_dispatch")
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "repository_dispatch")
     monkeypatch.setenv("GITHUB_REF", "refs/heads/main")
     monkeypatch.setattr(
         sys,
