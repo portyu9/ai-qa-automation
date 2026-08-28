@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import json
 import pytest
 
 from ai_qa_automation.cli import contract_diff_command
@@ -25,6 +26,13 @@ paths:
       responses:
         '200': {description: ok}
 """
+
+
+def _nested_schema(depth: int) -> dict[str, object]:
+    schema: dict[str, object] = {"type": "string"}
+    for _ in range(depth):
+        schema = {"type": "array", "items": schema}
+    return schema
 
 
 def _assert_not_analyzed(current: bytes, *, path: str = "openapi.yaml") -> str:
@@ -184,3 +192,78 @@ def test_standalone_contract_diff_rejects_oversized_document(tmp_path: Path) -> 
 
     with pytest.raises(ValueError, match="ingestion limit"):
         contract_diff_command(baseline, current)
+
+
+def test_duplicate_key_diagnostic_does_not_echo_untrusted_key() -> None:
+    secret_key = "token-super-secret-value"
+    result = OpenAPIContractDriftAnalyzer().analyze(
+        path="openapi.json",
+        baseline=b'{"openapi":"3.1.0","paths":{}}',
+        current=(
+            '{"openapi":"3.1.0","paths":{},"'
+            + secret_key
+            + '":1,"'
+            + secret_key
+            + '":2}'
+        ).encode(),
+    )
+
+    assert result.severity is ContractDriftSeverity.NOT_ANALYZED
+    assert result.reason is not None
+    assert secret_key not in result.reason
+
+
+def test_invalid_explicit_numeric_diagnostic_does_not_echo_scalar() -> None:
+    secret_value = "super-secret-numeric-value"
+    reason = _assert_not_analyzed(
+        f"openapi: 3.1.0\nx: !!float {secret_value}\npaths: {{}}\n".encode()
+    )
+
+    assert secret_value not in reason
+    assert "invalid explicit number" in reason
+
+
+def test_schema_comparison_depth_limit_cannot_be_non_breaking() -> None:
+    document = {
+        "openapi": "3.1.0",
+        "paths": {},
+        "components": {"schemas": {"Deep": _nested_schema(14)}},
+    }
+    payload = json.dumps(document).encode()
+
+    result = OpenAPIContractDriftAnalyzer().analyze(
+        path="openapi.json",
+        baseline=payload,
+        current=payload,
+    )
+
+    assert result.severity is ContractDriftSeverity.NOT_ANALYZED
+    assert result.analyzed is False
+    assert result.reason == "contract comparison exceeded a deterministic analysis bound"
+    assert any(change.rule_id == "OAS-SCHEMA-DEPTH-LIMIT" for change in result.changes)
+
+
+def test_known_breaking_fact_is_retained_when_other_comparison_is_incomplete() -> None:
+    deep = _nested_schema(14)
+    baseline = {
+        "openapi": "3.1.0",
+        "paths": {"/removed": {"get": {"responses": {"200": {"description": "ok"}}}}},
+        "components": {"schemas": {"Deep": deep}},
+    }
+    current = {
+        "openapi": "3.1.0",
+        "paths": {},
+        "components": {"schemas": {"Deep": deep}},
+    }
+
+    result = OpenAPIContractDriftAnalyzer().analyze(
+        path="openapi.json",
+        baseline=json.dumps(baseline).encode(),
+        current=json.dumps(current).encode(),
+    )
+
+    assert result.severity is ContractDriftSeverity.BREAKING
+    assert result.analyzed is False
+    assert result.reason == "contract comparison exceeded a deterministic analysis bound"
+    assert any(change.rule_id == "OAS-PATH-REMOVED" for change in result.changes)
+    assert any(change.rule_id == "OAS-SCHEMA-DEPTH-LIMIT" for change in result.changes)
