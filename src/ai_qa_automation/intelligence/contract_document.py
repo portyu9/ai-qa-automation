@@ -31,6 +31,9 @@ _OPENAPI_RESPONSE_KEY = re.compile(r"^(?:default|[1-5](?:[0-9]{2}|XX))$")
 _SWAGGER_RESPONSE_KEY = re.compile(r"^(?:default|[1-5][0-9]{2})$")
 _SCHEMA_TYPES = frozenset({"array", "boolean", "integer", "number", "object", "string"})
 _SCHEMA_TYPES_31 = _SCHEMA_TYPES | {"null"}
+_OPENAPI_PARAMETER_LOCATIONS = frozenset({"query", "header", "path", "cookie"})
+_SWAGGER_PARAMETER_LOCATIONS = frozenset({"query", "header", "path", "formData", "body"})
+_SWAGGER_PARAMETER_TYPES = frozenset({"string", "number", "integer", "boolean", "array", "file"})
 
 MAX_CONTRACT_DOCUMENT_BYTES = 2_000_000
 
@@ -289,15 +292,23 @@ def _decode_pointer_token(token: str) -> str:
 
 
 def _schema_context(document: dict[str, Any]) -> tuple[str, str, dict[str, Any], bool]:
-    openapi = document.get("openapi")
-    swagger = document.get("swagger")
-    if isinstance(openapi, str) and not isinstance(swagger, str):
+    has_openapi = "openapi" in document
+    has_swagger = "swagger" in document
+    if has_openapi and has_swagger:
+        raise ValueError("contract document may not mix OpenAPI and Swagger dialect markers")
+    if has_openapi:
+        openapi = document["openapi"]
+        if not isinstance(openapi, str):
+            raise ValueError("contract OpenAPI dialect marker must be a string")
         if "definitions" in document:
             raise ValueError("contract OpenAPI 3.x definitions are not supported by bounded comparison")
         components = _require_object(document["components"], "components") if "components" in document else {}
         schemas = _require_object(components["schemas"], "components schemas") if "schemas" in components else {}
         return ("openapi", "#/components/schemas/", schemas, openapi.startswith("3.1."))
-    if isinstance(swagger, str) and not isinstance(openapi, str):
+    if has_swagger:
+        swagger = document["swagger"]
+        if not isinstance(swagger, str):
+            raise ValueError("contract Swagger dialect marker must be a string")
         if "components" in document:
             raise ValueError("contract Swagger 2.0 components are not supported by bounded comparison")
         definitions = _require_object(document["definitions"], "definitions") if "definitions" in document else {}
@@ -404,6 +415,7 @@ def _validate_parameter_list(
     value: Any,
     *,
     path_level: bool,
+    dialect: str,
     ref_prefix: str,
     named_schemas: dict[str, Any],
     allow_type_array: bool,
@@ -423,15 +435,64 @@ def _validate_parameter_list(
             raise ValueError(
                 "contract OpenAPI parameters require string name and in fields for bounded comparison"
             )
+        allowed_locations = (
+            _SWAGGER_PARAMETER_LOCATIONS if dialect == "swagger" else _OPENAPI_PARAMETER_LOCATIONS
+        )
+        if location not in allowed_locations:
+            raise ValueError("contract OpenAPI parameter location is unsupported for bounded comparison")
         identity = (location, name)
         if identity in seen:
             raise ValueError("contract OpenAPI parameters contain a duplicate name/in identity")
         seen.add(identity)
         if "required" in parameter and not isinstance(parameter["required"], bool):
             raise ValueError("contract OpenAPI parameter required must be boolean for bounded comparison")
-        if "schema" in parameter:
+        if location == "path" and parameter.get("required") is not True:
+            raise ValueError("contract OpenAPI path parameters must be explicitly required")
+
+        if dialect == "swagger":
+            if location == "body":
+                if "schema" not in parameter:
+                    raise ValueError("contract Swagger body parameters require a schema")
+                _validate_schema_shape(
+                    _require_object(parameter["schema"], "parameter schema"),
+                    ref_prefix=ref_prefix,
+                    named_schemas=named_schemas,
+                    allow_type_array=allow_type_array,
+                )
+                continue
+            if "schema" in parameter:
+                raise ValueError("contract Swagger non-body parameters may not use schema")
+            parameter_type = parameter.get("type")
+            if not isinstance(parameter_type, str) or parameter_type not in _SWAGGER_PARAMETER_TYPES:
+                raise ValueError("contract Swagger non-body parameters require a supported type")
+            if parameter_type == "file" and location != "formData":
+                raise ValueError("contract Swagger file parameters require formData location")
+            if parameter_type == "array" and not isinstance(parameter.get("items"), dict):
+                raise ValueError("contract Swagger array parameters require an items object")
+            continue
+
+        has_schema = "schema" in parameter
+        has_content = "content" in parameter
+        if has_schema == has_content:
+            raise ValueError(
+                "contract OpenAPI parameters require exactly one of schema or content for bounded comparison"
+            )
+        if has_schema:
             _validate_schema_shape(
                 _require_object(parameter["schema"], "parameter schema"),
+                ref_prefix=ref_prefix,
+                named_schemas=named_schemas,
+                allow_type_array=allow_type_array,
+            )
+        else:
+            content = _require_object(parameter["content"], "parameter content")
+            if len(content) != 1:
+                raise ValueError(
+                    "contract OpenAPI parameter content must contain exactly one media type"
+                )
+            _validate_media_content(
+                content,
+                field="parameter content",
                 ref_prefix=ref_prefix,
                 named_schemas=named_schemas,
                 allow_type_array=allow_type_array,
@@ -472,6 +533,7 @@ def _validate_operation_shape(
         _validate_parameter_list(
             operation["parameters"],
             path_level=False,
+            dialect=dialect,
             ref_prefix=ref_prefix,
             named_schemas=named_schemas,
             allow_type_array=allow_type_array,
@@ -551,6 +613,7 @@ def _validate_comparison_shape(document: dict[str, Any]) -> None:
                 _validate_parameter_list(
                     path_item["parameters"],
                     path_level=True,
+                    dialect=dialect,
                     ref_prefix=ref_prefix,
                     named_schemas=named_schemas,
                     allow_type_array=allow_type_array,
@@ -595,6 +658,6 @@ def load_contract_document(path: str, content: bytes) -> dict[str, Any]:
     _validate_json_compatible_shape(value)
     if not isinstance(value, dict):
         raise ValueError("contract root must be an object")
-    if isinstance(value.get("openapi"), str) or isinstance(value.get("swagger"), str):
+    if "openapi" in value or "swagger" in value:
         _validate_comparison_shape(value)
     return value
