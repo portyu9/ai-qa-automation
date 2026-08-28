@@ -1,7 +1,7 @@
 # CI/CD and Repository Governance
 
 > [!IMPORTANT]
-> **Workflow definition, workflow execution, validation subject, status identity, and merge enforcement are separate authorities.** Ordinary `pull_request` CI remains exact-subject self-consistency evidence; it is not an independently trusted merge root while a pull request can edit the workflow and verifier that emit the same check name. This branch also implements a dormant default-branch `repository_dispatch` path for a future `Trusted PR Gate`, but that path is not merge authority until the reviewed definition is on `main`, external Actions Policy is active and observed, the trusted event is exercised, and repository merge enforcement is revalidated.
+> **Workflow definition, workflow execution, validation subject, status identity, and merge enforcement are separate authorities.** Ordinary repository CI remains exact-subject self-consistency evidence; it is not an independently trusted merge root while a pull request can cause workflow bytes from a feature-controlled ref to execute under the same GitHub Actions integration as a protected check. This branch implements a dormant default-branch `repository_dispatch` path for a future `Trusted PR Gate`, but that path is not merge authority until the reviewed definition is on `main`, an external execution policy allows only default-branch-definition trusted execution for that protected identity, the trusted event is exercised, and repository merge enforcement is revalidated.
 
 **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
@@ -15,11 +15,13 @@ The repository separates ordinary validation, dormant trusted reporting, and man
 
 | Surface | Trigger | Write/secret authority | Purpose |
 |---|---|---|---|
-| `.github/workflows/ci.yml` ordinary path | `pull_request`, `push` to `main`, `merge_group` | validation jobs are read-only and secret-free | deterministic repository gates for the exact GitHub event subject |
+| `.github/workflows/ci.yml` ordinary path | `pull_request`, `push` to `main`, `merge_group` | validation jobs are read-only and secret-free | deterministic repository gates for the exact GitHub event subject during pre-activation validation |
 | `.github/workflows/ci.yml` dormant trusted path | fixed `repository_dispatch` type `trusted-pr-validation` | only `Trusted PR Gate Reporter` has `statuses: write` and the GitHub Actions run token | validate an exact prospective merge subject using the default-branch workflow definition, then revalidate the live PR before optional status publication |
-| `.github/workflows/manual-validation.yml` | `workflow_dispatch` only | model step uses the `credentialed-validation` environment; Anthropic credential is step-scoped | repository-visible H-series readiness and optional credentialed Agent SDK evidence |
+| `.github/workflows/manual-validation.yml` | `workflow_dispatch` only | model step uses the `credentialed-validation` environment; Anthropic credential is step-scoped | repository-visible H-series readiness and optional credentialed Agent SDK evidence before trusted-gate activation |
 
 Top-level workflow permissions remain `contents: read`. Persisted checkout credentials are disabled everywhere. Dependency caching is forbidden in both automatic/trusted and manual workflows.
+
+These trigger surfaces describe the committed repository workflows, not the eventual external execution allow-list. Once `Trusted PR Gate` becomes the protected same-integration merge authority, external Actions Policy must prevent every event that could execute workflow definitions from PR/feature-controlled refs. Denying only `pull_request` is insufficient; the intended active policy for this prototype is `repository_dispatch`-only, or an equivalently strong platform-enforced default-branch-definition-only rule.
 
 ### Validation subject selection
 
@@ -84,7 +86,7 @@ The browser remains a hosted-runner input. Recording its observed version proves
 
 After structural checks, `scripts/verify_ci_contract.py` binds the complete `ci.yml` bytes to the reviewed Git blob identity. This rejects accidental or unreviewed definition drift, including extra semantically equivalent installation commands.
 
-For an ordinary PR run, that exact-blob check is still **in-subject self-consistency evidence**: a hostile pull request can in principle change both workflow and verifier unless an external GitHub control prevents PR-editable workflow execution from supplying merge authority. The dormant `repository_dispatch` design addresses workflow-definition provenance only after the reviewed workflow exists on the default branch and the external policy boundary is activated.
+For an ordinary PR run, that exact-blob check is still **in-subject self-consistency evidence**: a hostile pull request can in principle change both workflow and verifier. More importantly, denying only the `pull_request` event would not solve that provenance problem if a different allowed event can execute workflow bytes from a feature-controlled ref. A feature-branch `push`, for example, can select branch workflow bytes under the same GitHub Actions integration. The dormant `repository_dispatch` design addresses workflow-definition provenance only after the reviewed workflow exists on the default branch and external execution policy prevents every competing feature-ref-defined path from supplying the protected identity.
 
 ### Reproducible wheel and manifest subject
 
@@ -120,7 +122,7 @@ Required PR Gate
 
 It uses `if: ${{ always() }}`, depends on every validation domain, and succeeds only when each dependency result is `success`. A skipped, cancelled, timed-out, or failed prerequisite cannot be hidden by partial green when the reviewed definition is the workflow actually executing.
 
-`Required PR Gate` remains useful repository validation evidence and is still the existing branch-policy interface during this prototype. It must **not** be described as independently trusted merge provenance while ordinary PR-editable workflow code can still produce it.
+`Required PR Gate` remains useful repository validation evidence and is still the existing branch-policy interface during this prototype. It must **not** be described as independently trusted merge provenance while any PR/feature-controlled workflow execution path under the same GitHub Actions integration can produce a protected context.
 
 For the dormant trusted event, `Required PR Gate` is only an input to `Trusted PR Gate Reporter`. It does not itself gain write authority or become the terminal trusted status.
 
@@ -147,13 +149,15 @@ The read-only validation jobs execute the supplied prospective merge subject. Th
 
 Diagnostic runs do not publish status. An authorized successful aggregate publishes `Trusted PR Gate` success to the exact current PR head. An authorized non-success publishes failure and exits the reporter job nonzero.
 
-This design is intentionally **dormant on the prototype branch**. The branch cannot use a default-branch-trusted workflow definition that has not yet been bootstrapped to `main`, and the connected tooling cannot certify the external Actions Policy prerequisite or issue the live `repository_dispatch`. See [`TRUSTED_PR_CONTROL_PLANE.md`](TRUSTED_PR_CONTROL_PLANE.md).
+This design is intentionally **dormant on the prototype branch**. The branch cannot use a default-branch-trusted workflow definition that has not yet been bootstrapped to `main`, and the connected tooling cannot certify the external Actions Policy prerequisite or issue the live `repository_dispatch`. The required policy is stronger than `pull_request` denial: while `Trusted PR Gate` is protected, the intended allow-list is the fixed default-branch `repository_dispatch` path only, or an externally enforced equivalent that proves no feature-ref workflow definition can emit that protected same-integration identity. See [`TRUSTED_PR_CONTROL_PLANE.md`](TRUSTED_PR_CONTROL_PLANE.md).
 
 ---
 
 ## Manual-only validation
 
-`manual-validation.yml` remains `workflow_dispatch`-only and is not part of automatic PR merge evidence.
+`manual-validation.yml` remains `workflow_dispatch`-only and is not part of automatic PR merge evidence during this pre-activation prototype.
+
+Once the same GitHub Actions integration is being relied on for protected `Trusted PR Gate` authority, ref-selectable `workflow_dispatch` cannot remain an allowed execution path merely because its repository workflow itself is read-only: a feature ref can select feature-controlled workflow bytes. Under the intended `repository_dispatch`-only active policy, this manual workflow is therefore unavailable unless a separately trusted identity or an independently enforced default-branch-definition-only mechanism is introduced.
 
 ### Repository-visible H-series readiness
 
@@ -207,7 +211,7 @@ The verifier fails closed unless the reviewed repository authority model remains
 
 The regression suite adversarially mutates these paths. Coverage includes trigger substitution, arbitrary repository-dispatch event types, client-payload subject bypass, `pull_request_target`, added write permission, validation secrets, second reporter token consumers, missing reporter owner/main guards, unbound validation/reporter checkouts, automatic/manual cache reintroduction, dependency/build authority removal/reordering, alternate project-install spellings, mutable archive/container subjects, Git replace/config/attribute authority, SBOM lineage, documentation/Mermaid fail-open behavior, artifact-upload weakening, and aggregate result-check corruption.
 
-Repository tests and exact-workflow blob identity are strong reviewed-code controls; they are not an external trust anchor for themselves during ordinary PR execution.
+Repository tests and exact-workflow blob identity are strong reviewed-code controls; they are not an external trust anchor for themselves during ordinary PR execution. The repository verifier also cannot attest the external Actions Policy allow-list; that policy must be observed independently before trusted-gate activation.
 
 ---
 
@@ -225,10 +229,12 @@ The intended activation sequence is:
 
 1. validate and adversarially audit the repository source;
 2. bootstrap the reviewed trusted definition to `main` through an explicitly audited revision;
-3. configure and verify repository Actions Policy so ordinary PR-editable `pull_request` workflow execution cannot supply protected merge authority;
+3. configure and verify repository Actions Policy so the protected GitHub Actions identity is executable only through the default-branch-definition trusted path. For this prototype that means allowing the fixed `repository_dispatch` path and denying `pull_request`, feature/ref-defined `push`, `merge_group`, ref-selectable `workflow_dispatch`, and any other feature-ref-defined execution class; denying `pull_request` alone is insufficient;
 4. issue and inspect the fixed `trusted-pr-validation` `repository_dispatch` for an exact current PR subject;
 5. verify `Trusted PR Gate` was produced by the trusted default-branch reporter after exact live subject revalidation;
 6. only then update and re-fetch merge enforcement to require `Trusted PR Gate`.
+
+If GitHub later provides an independently enforced policy primitive that allows another event while cryptographically or platform-authoritatively fixing its workflow definition to trusted default-branch bytes, that may be equivalent. Repository source must not assume such a primitive exists without observing it.
 
 Force-push/deletion protection, review-thread resolution, merge-queue use, and other repository settings remain platform configuration and must not be inferred from workflow source.
 
@@ -246,7 +252,7 @@ Ordinary validation jobs:
 
 The dormant reporter owns only the minimum additional authority needed for its role: pull-request read plus commit-status write, with the GitHub Actions run token scoped to that final step.
 
-Credentialed Agent SDK execution remains manual, `main`-gated, environment-bound, and step-scoped.
+Credentialed Agent SDK execution remains manual, `main`-gated, environment-bound, and step-scoped during the pre-activation control plane.
 
 This does not replace GitHub platform isolation, Actions Policy, environment protection, administrative identity trust, hosted-runner trust, or secure review.
 
@@ -267,6 +273,7 @@ A green ordinary PR run can prove, for its exact PR event subject, that the revi
 Ordinary green CI does **not** by itself prove:
 
 - external Actions Policy is active;
+- the policy denies every feature-ref-defined workflow execution path rather than only `pull_request`;
 - the trusted workflow definition exists on `main`;
 - a `repository_dispatch` trusted run occurred;
 - `Trusted PR Gate` was published or required by merge policy;
