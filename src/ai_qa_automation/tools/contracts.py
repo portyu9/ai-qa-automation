@@ -20,6 +20,24 @@ def validate_json_schema(instance: Any, schema: dict[str, Any]) -> ValidationRes
             summary="jsonschema optional dependency is not installed.",
         )
 
+    dialect = schema.get("$schema")
+    if dialect is not None and not isinstance(dialect, str):
+        return ValidationResult(
+            name="json_schema",
+            status=ValidationStatus.NOT_VERIFIED,
+            summary="JSON Schema declares a malformed schema dialect identifier.",
+        )
+    if dialect is None:
+        validator_class = validator_for(schema)
+    else:
+        validator_class = validator_for(schema, default=None)
+        if validator_class is None:
+            return ValidationResult(
+                name="json_schema",
+                status=ValidationStatus.NOT_VERIFIED,
+                summary="JSON Schema declares an unsupported schema dialect.",
+            )
+
     retrieval_attempts: list[str] = []
 
     def deny_external_reference(uri: str) -> Any:
@@ -27,7 +45,6 @@ def validate_json_schema(instance: Any, schema: dict[str, Any]) -> ValidationRes
         raise NoSuchResource(ref=uri)
 
     try:
-        validator_class = validator_for(schema)
         validator_class.check_schema(schema)
         validator = validator_class(
             schema,
