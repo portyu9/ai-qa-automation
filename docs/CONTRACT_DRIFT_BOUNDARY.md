@@ -67,7 +67,7 @@ Additional semantics are deliberately strict:
 - container aliases that create shared or circular object graphs are rejected rather than promoted as a JSON tree;
 - explicit YAML-only values such as timestamp objects, sets, binary values, or other non-JSON types are rejected;
 - invalid explicit numeric diagnostics do not echo the supplied scalar;
-- plain `true` / `false` retain boolean meaning;
+- plain `true` / `false` retain boolean meaning, and explicit `!!bool` values are accepted only when they spell `true` or `false` case-insensitively; YAML-1.1 explicit forms such as `!!bool yes` are rejected rather than reinterpreted;
 - PyYAML YAML-1.1 words such as `on`, `off`, `yes`, and `no` are not silently coerced to booleans, preserving their YAML-1.2-style string meaning for OpenAPI keys/values;
 - implicit numeric conversion is restricted to a deterministic decimal/exponent subset; legacy YAML-only numeric spellings are not silently reinterpreted as another numeric value.
 
@@ -99,7 +99,7 @@ Incomplete comparison has conservative authority semantics:
 - if no breaking fact has been established, overall severity becomes `NOT_ANALYZED` and `analyzed=false`, even if retained findings were otherwise only `RISKY` or `NON_BREAKING`;
 - if a breaking fact was already established, or a later top-level comparison observes one after the finding budget is full, overall severity remains `BREAKING` while `analyzed=false` records that the rest of the contract was not completely compared;
 - a breaking finding encountered after the detail budget is full deterministically replaces one lower-severity retained finding, so `BREAKING` is never emitted without visible supporting change evidence;
-- reaching exactly 250 findings is not itself incomplete when no comparison work is omitted; incompleteness begins only when further bounded analysis would be required.
+- reaching exactly 250 findings is not itself incomplete when no comparison work is omitted; a no-op empty shared schema also does not manufacture incompleteness merely because the finding budget is exactly full.
 
 The existing conservative rules identify path/operation removals, required-input changes, response removals, security changes, schema/property changes, enum narrowing, and other implemented structural signals.
 
