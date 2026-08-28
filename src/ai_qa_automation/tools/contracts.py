@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import signal
 import threading
+import warnings
 from collections.abc import Iterator
 from contextlib import contextmanager
 from types import FrameType
-from typing import Any
+from typing import Any, NoReturn
 from urllib.parse import urlparse
 
 from ..models import ValidationResult, ValidationStatus
@@ -81,20 +82,20 @@ def validate_json_schema(instance: Any, schema: dict[str, Any]) -> ValidationRes
             status=ValidationStatus.NOT_VERIFIED,
             summary="JSON Schema declares a malformed schema dialect identifier.",
         )
-    if dialect is None:
-        validator_class = validator_for(schema)
-    else:
-        validator_class = validator_for(schema, default=None)
-        if validator_class is None:
-            return ValidationResult(
-                name="json_schema",
-                status=ValidationStatus.NOT_VERIFIED,
-                summary="JSON Schema declares an unsupported schema dialect.",
-            )
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            validator_class = validator_for(schema)
+    except DeprecationWarning:
+        return ValidationResult(
+            name="json_schema",
+            status=ValidationStatus.NOT_VERIFIED,
+            summary="JSON Schema declares an unsupported schema dialect.",
+        )
 
     retrieval_attempts: list[str] = []
 
-    def deny_external_reference(uri: str) -> Any:
+    def deny_external_reference(uri: str) -> NoReturn:
         retrieval_attempts.append(str(uri))
         raise NoSuchResource(ref=uri)
 
