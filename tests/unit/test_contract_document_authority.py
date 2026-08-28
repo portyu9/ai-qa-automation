@@ -247,6 +247,64 @@ def test_invalid_explicit_boolean_diagnostic_does_not_echo_scalar() -> None:
     assert "invalid explicit boolean" in reason
 
 
+@pytest.mark.parametrize(
+    ("current", "reason_fragment"),
+    [
+        (b'{"openapi":"3.1.0","paths":[]}', "field paths must be an object"),
+        (
+            b'{"openapi":"3.1.0","paths":{"/a":{"get":[]}}}',
+            "field operation must be an object",
+        ),
+        (
+            b'{"openapi":"3.1.0","paths":{"/a":{"get":{"parameters":{}}}}}',
+            "parameters must be an array",
+        ),
+        (
+            b'{"openapi":"3.1.0","paths":{"/a":{"get":{"parameters":['
+            b'{"name":"q","in":"query"},{"name":"q","in":"query"}]}}}}',
+            "duplicate name/in identity",
+        ),
+        (
+            b'{"openapi":"3.1.0","paths":{"/a":{"parameters":['
+            b'{"name":"q","in":"query"}]}}}',
+            "path-level parameters are not supported",
+        ),
+        (
+            b'{"openapi":"3.1.0","paths":{"/a":{"get":{"parameters":['
+            b'{"$ref":"#/components/parameters/Q"}]}}}}',
+            "referenced parameters are not supported",
+        ),
+        (
+            b'{"openapi":"3.1.0","paths":{"/a":{"get":{"parameters":['
+            b'{"name":"q","in":"query","required":"false"}]}}}}',
+            "parameter required must be boolean",
+        ),
+        (
+            b'{"openapi":"3.1.0","components":{"schemas":{"X":{"enum":['
+            b'{"a":1}]}}},"paths":{}}',
+            "schema enum must be a scalar array",
+        ),
+        (
+            b'{"openapi":"3.1.0","components":{"schemas":{"X":{"required":['
+            b'"a",1]}}},"paths":{}}',
+            "schema required must be a string array",
+        ),
+        (
+            b'{"openapi":"3.1.0","components":{"schemas":{"X":{"properties":[]}}},'
+            b'"paths":{}}',
+            "field schema properties must be an object",
+        ),
+    ],
+)
+def test_malformed_comparison_shapes_fail_closed(
+    current: bytes,
+    reason_fragment: str,
+) -> None:
+    reason = _assert_not_analyzed(current, path="openapi.json")
+
+    assert reason_fragment in reason
+
+
 def test_schema_comparison_depth_limit_cannot_be_non_breaking() -> None:
     document = {
         "openapi": "3.1.0",
