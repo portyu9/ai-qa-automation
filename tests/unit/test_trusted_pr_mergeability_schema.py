@@ -15,20 +15,28 @@ RUN_URL = f"https://github.com/{REPOSITORY}/actions/runs/123"
 
 
 class FakeApi:
-    payload: ClassVar[Mapping[str, Any]]
+    pr_payload: ClassVar[Mapping[str, Any]]
+    merge_ref_payload: ClassVar[Mapping[str, Any]]
+    merge_commit_payload: ClassVar[Mapping[str, Any]]
     instances: ClassVar[list[FakeApi]] = []
 
     def __init__(self, *, repository: str, token: str) -> None:
         self.repository = repository
         self.token = token
-        self.fetch_count = 0
         self.statuses: list[dict[str, str]] = []
         type(self).instances.append(self)
 
     def fetch_pull_request(self, number: int) -> Mapping[str, Any]:
         assert number == 43
-        self.fetch_count += 1
-        return type(self).payload
+        return type(self).pr_payload
+
+    def fetch_pull_request_merge_ref(self, number: int) -> Mapping[str, Any]:
+        assert number == 43
+        return type(self).merge_ref_payload
+
+    def fetch_git_commit(self, sha: str) -> Mapping[str, Any]:
+        assert sha == MERGE_SHA
+        return type(self).merge_commit_payload
 
     def post_status(
         self,
@@ -48,50 +56,80 @@ class FakeApi:
         )
 
 
-def _payload() -> dict[str, Any]:
+def _pr_payload() -> dict[str, Any]:
     return {
         "number": 43,
         "state": "open",
         "head": {"sha": HEAD_SHA},
         "base": {"ref": "main", "sha": BASE_SHA},
-        "merge_commit_sha": MERGE_SHA,
-        "mergeable": True,
     }
 
 
-@pytest.mark.parametrize("missing_field", ["mergeable", "merge_commit_sha"])
-def test_missing_mergeability_schema_is_nonretryable(
+def _merge_ref_payload() -> dict[str, Any]:
+    return {
+        "ref": "refs/pull/43/merge",
+        "object": {"type": "commit", "sha": MERGE_SHA},
+    }
+
+
+def _merge_commit_payload() -> dict[str, Any]:
+    return {
+        "sha": MERGE_SHA,
+        "parents": [{"sha": BASE_SHA}, {"sha": HEAD_SHA}],
+    }
+
+
+def _report(monkeypatch: pytest.MonkeyPatch) -> None:
+    FakeApi.instances = []
+    monkeypatch.setattr(control, "GitHubApi", FakeApi)
+    control.report_authorized_result(
+        repository=REPOSITORY,
+        token="token",
+        actor="portyu9",
+        repository_owner="portyu9",
+        workflow_event="repository_dispatch",
+        workflow_ref="refs/heads/main",
+        expected=control.PullRequestSubject(
+            number=43,
+            head_sha=HEAD_SHA,
+            base_sha=BASE_SHA,
+            merge_sha=MERGE_SHA,
+        ),
+        authorized=True,
+        job_results={"validation": "success"},
+        target_url=RUN_URL,
+    )
+
+
+@pytest.mark.parametrize("missing_field", ["ref", "object"])
+def test_missing_merge_ref_schema_is_non_authoritative(
     monkeypatch: pytest.MonkeyPatch,
     missing_field: str,
 ) -> None:
-    payload = _payload()
-    payload.pop(missing_field)
-    FakeApi.payload = payload
-    FakeApi.instances = []
-    sleeps: list[float] = []
-    monkeypatch.setattr(control, "GitHubApi", FakeApi)
-    monkeypatch.setattr(control.time, "sleep", sleeps.append)
+    FakeApi.pr_payload = _pr_payload()
+    merge_ref = _merge_ref_payload()
+    merge_ref.pop(missing_field)
+    FakeApi.merge_ref_payload = merge_ref
+    FakeApi.merge_commit_payload = _merge_commit_payload()
 
-    with pytest.raises(ValueError, match="field is required"):
-        control.report_authorized_result(
-            repository=REPOSITORY,
-            token="token",
-            actor="portyu9",
-            repository_owner="portyu9",
-            workflow_event="repository_dispatch",
-            workflow_ref="refs/heads/main",
-            expected=control.PullRequestSubject(
-                number=43,
-                head_sha=HEAD_SHA,
-                base_sha=BASE_SHA,
-                merge_sha=MERGE_SHA,
-            ),
-            authorized=True,
-            job_results={"validation": "success"},
-            target_url=RUN_URL,
-        )
+    with pytest.raises(ValueError):
+        _report(monkeypatch)
 
-    assert len(FakeApi.instances) == 1
-    assert FakeApi.instances[0].fetch_count == 1
     assert FakeApi.instances[0].statuses == []
-    assert sleeps == []
+
+
+@pytest.mark.parametrize("missing_field", ["sha", "parents"])
+def test_missing_merge_commit_schema_is_non_authoritative(
+    monkeypatch: pytest.MonkeyPatch,
+    missing_field: str,
+) -> None:
+    FakeApi.pr_payload = _pr_payload()
+    FakeApi.merge_ref_payload = _merge_ref_payload()
+    merge_commit = _merge_commit_payload()
+    merge_commit.pop(missing_field)
+    FakeApi.merge_commit_payload = merge_commit
+
+    with pytest.raises(ValueError):
+        _report(monkeypatch)
+
+    assert FakeApi.instances[0].statuses == []
