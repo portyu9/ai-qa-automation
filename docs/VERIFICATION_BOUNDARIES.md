@@ -148,6 +148,8 @@ Deployment evidence includes:
 > [!CAUTION]
 > `AI_QA_K6_EXTERNAL_EGRESS_ENFORCED=true` is a prerequisite assertion, not a firewall. The deployment must actually provide egress containment for every k6 execution. K6 process spawn additionally requires trusted process/filesystem isolation; static JavaScript inspection is not treated as a process or filesystem sandbox. The current live MCP configuration exposes only the egress assertion, so live k6 remains intentionally fail-closed until the separate containment prerequisite is plumbed through trusted runtime configuration.
 
+Every k6 validation outcome is bound to the same normalized six-field subject: script, target URL, environment, maximum p95, maximum error rate, and minimum request rate. Thresholds are validated before any target or k6 process action. The exact normalized target URL participates in gate hashing, but durable blocked-gate details store only the framework-redacted URL so credentials, query strings, and non-root paths do not become persisted authority metadata.
+
 ---
 
 ## Capability/evidence matrix
