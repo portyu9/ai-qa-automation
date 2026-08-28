@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import importlib
-import json
 from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import PurePosixPath
 from typing import Any, ClassVar
+
+from .contract_document import load_contract_document
 
 
 class ContractDriftSeverity(StrEnum):
@@ -74,7 +73,7 @@ class OpenAPIContractDriftAnalyzer:
         try:
             old = self._load_document(path, baseline)
             new = self._load_document(path, current)
-        except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+        except (ValueError, UnicodeError) as exc:
             return ContractDriftReport(
                 path=path,
                 contract_kind="openapi",
@@ -107,27 +106,7 @@ class OpenAPIContractDriftAnalyzer:
 
     @staticmethod
     def _load_document(path: str, content: bytes) -> dict[str, Any]:
-        text = content.decode("utf-8")
-        suffix = PurePosixPath(path).suffix.casefold()
-        if suffix == ".json":
-            value = json.loads(text)
-        elif suffix in {".yaml", ".yml"}:
-            try:
-                yaml = importlib.import_module("yaml")
-            except ImportError as exc:
-                raise ValueError(
-                    "YAML OpenAPI drift requires optional PyYAML; JSON contracts remain supported"
-                ) from exc
-            value = yaml.safe_load(text)
-        else:
-            stripped = text.lstrip()
-            if stripped.startswith("{"):
-                value = json.loads(text)
-            else:
-                raise ValueError("unsupported contract serialization")
-        if not isinstance(value, dict):
-            raise ValueError("contract root must be an object")
-        return value
+        return load_contract_document(path, content)
 
     @staticmethod
     def _is_openapi(document: dict[str, Any]) -> bool:
