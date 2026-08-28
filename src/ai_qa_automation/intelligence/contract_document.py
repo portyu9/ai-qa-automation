@@ -27,6 +27,8 @@ _YAML_JSON_FLOAT = re.compile(
 _COMPARISON_METHODS = frozenset(
     {"get", "put", "post", "delete", "options", "head", "patch", "trace"}
 )
+_RESPONSE_KEY = re.compile(r"^(?:default|[1-5](?:[0-9]{2}|XX))$")
+_SUPPORTED_SCHEMA_REF_PREFIXES = ("#/components/schemas/", "#/definitions/")
 
 MAX_CONTRACT_DOCUMENT_BYTES = 2_000_000
 
@@ -290,8 +292,16 @@ def _validate_schema_shape(root: dict[str, Any]) -> None:
     while stack:
         schema = stack.pop()
         reference = schema.get("$ref")
-        if reference is not None and not isinstance(reference, str):
-            raise ValueError("contract OpenAPI schema $ref must be a string for bounded comparison")
+        if reference is not None:
+            if not isinstance(reference, str):
+                raise ValueError(
+                    "contract OpenAPI schema $ref must be a string for bounded comparison"
+                )
+            if not reference.startswith(_SUPPORTED_SCHEMA_REF_PREFIXES):
+                raise ValueError(
+                    "contract OpenAPI schema $ref must target a local named schema "
+                    "for bounded comparison"
+                )
 
         if "type" in schema:
             schema_type = schema["type"]
@@ -382,7 +392,13 @@ def _validate_operation_shape(operation: dict[str, Any]) -> None:
                 "contract OpenAPI requestBody required must be boolean for bounded comparison"
             )
     if "responses" in operation:
-        _require_object(operation["responses"], "responses")
+        responses = _require_object(operation["responses"], "responses")
+        for status, response in responses.items():
+            if _RESPONSE_KEY.fullmatch(status) is None:
+                raise ValueError(
+                    "contract OpenAPI response status key is unsupported for bounded comparison"
+                )
+            _require_object(response, "response")
     if "security" in operation:
         _validate_security_shape(operation["security"])
 
@@ -393,7 +409,11 @@ def _validate_comparison_shape(document: dict[str, Any]) -> None:
 
     if "paths" in document:
         paths = _require_object(document["paths"], "paths")
-        for path_item_value in paths.values():
+        for path_name, path_item_value in paths.items():
+            if not path_name.startswith("/"):
+                raise ValueError(
+                    "contract OpenAPI path keys must begin with '/' for bounded comparison"
+                )
             path_item = _require_object(path_item_value, "path item")
             if "$ref" in path_item:
                 raise ValueError(
@@ -402,7 +422,12 @@ def _validate_comparison_shape(document: dict[str, Any]) -> None:
             if "parameters" in path_item:
                 _validate_parameter_list(path_item["parameters"], path_level=True)
             for key, operation_value in path_item.items():
-                if key.casefold() in _COMPARISON_METHODS:
+                normalized = key.casefold()
+                if normalized in _COMPARISON_METHODS:
+                    if key != normalized:
+                        raise ValueError(
+                            "contract OpenAPI method keys must use canonical lowercase spelling"
+                        )
                     operation = _require_object(operation_value, "operation")
                     _validate_operation_shape(operation)
 
