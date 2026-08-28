@@ -15,5 +15,12 @@ def test_ci_contract_reports_default_branch_definition_only_external_policy_boun
         automatic["external_policy_invariant"]
         == "default-branch-definition-only-for-protected-identity"
     )
+    assert (
+        automatic["external_policy_capability"]
+        == "repository-dispatch-event-rule-support-unverified"
+    )
+    assert automatic["merge_enforcement_invariant"] == "strict-up-to-date-required-status"
     assert "Denying pull_request alone is insufficient." in limitations
     assert "default-branch-definition-only external Actions Policy invariant" in limitations
+    assert "platform capability must be observed before activation." in limitations
+    assert "protected-branch enforcement must remain strict/up-to-date" in limitations
