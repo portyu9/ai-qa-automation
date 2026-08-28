@@ -237,6 +237,16 @@ def test_invalid_explicit_numeric_diagnostic_does_not_echo_scalar() -> None:
     assert "invalid explicit number" in reason
 
 
+def test_invalid_explicit_boolean_diagnostic_does_not_echo_scalar() -> None:
+    secret_value = "super-secret-bool-value"
+    reason = _assert_not_analyzed(
+        f"openapi: 3.1.0\nx: !!bool {secret_value}\npaths: {{}}\n".encode()
+    )
+
+    assert secret_value not in reason
+    assert "invalid explicit boolean" in reason
+
+
 def test_schema_comparison_depth_limit_cannot_be_non_breaking() -> None:
     document = {
         "openapi": "3.1.0",
@@ -289,6 +299,33 @@ def test_exact_change_limit_can_remain_fully_analyzed(
     monkeypatch.setattr(contract_drift, "_MAX_COMPARISON_CHANGES", 2)
     baseline = {"openapi": "3.1.0", "paths": {}}
     current = {"openapi": "3.1.0", "paths": {"/a": {}, "/b": {}}}
+
+    result = OpenAPIContractDriftAnalyzer().analyze(
+        path="openapi.json",
+        baseline=json.dumps(baseline).encode(),
+        current=json.dumps(current).encode(),
+    )
+
+    assert result.severity is ContractDriftSeverity.NON_BREAKING
+    assert result.analyzed is True
+    assert result.reason is None
+    assert len(result.changes) == 2
+
+
+def test_exact_change_limit_with_empty_shared_schema_remains_complete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(contract_drift, "_MAX_COMPARISON_CHANGES", 2)
+    baseline = {
+        "openapi": "3.1.0",
+        "paths": {},
+        "components": {"schemas": {"Empty": {}}},
+    }
+    current = {
+        "openapi": "3.1.0",
+        "paths": {"/a": {}, "/b": {}},
+        "components": {"schemas": {"Empty": {}}},
+    }
 
     result = OpenAPIContractDriftAnalyzer().analyze(
         path="openapi.json",
