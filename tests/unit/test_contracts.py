@@ -148,6 +148,80 @@ def test_embedded_resource_reference_remains_deterministic() -> None:
     assert result.status is ValidationStatus.PASS
 
 
+def test_duplicate_resource_identifiers_fail_closed() -> None:
+    schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+            "first": {"$id": "urn:aiqa:duplicate", "const": 1},
+            "second": {"$id": "urn:aiqa:duplicate", "const": 2},
+        },
+        "$ref": "urn:aiqa:duplicate",
+    }
+    assert validate_json_schema(1, schema).status is ValidationStatus.NOT_VERIFIED
+    assert validate_json_schema(2, schema).status is ValidationStatus.NOT_VERIFIED
+
+
+def test_duplicate_legacy_resource_identifiers_fail_closed() -> None:
+    schema = {
+        "$schema": "http://json-schema.org/draft-04/schema#",
+        "definitions": {
+            "first": {"id": "urn:aiqa:duplicate", "enum": [1]},
+            "second": {"id": "urn:aiqa:duplicate", "enum": [2]},
+        },
+        "$ref": "urn:aiqa:duplicate",
+    }
+    assert validate_json_schema(1, schema).status is ValidationStatus.NOT_VERIFIED
+    assert validate_json_schema(2, schema).status is ValidationStatus.NOT_VERIFIED
+
+
+def test_duplicate_plain_anchors_fail_closed() -> None:
+    schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+            "first": {"$anchor": "duplicate", "const": 1},
+            "second": {"$anchor": "duplicate", "const": 2},
+        },
+        "$ref": "#duplicate",
+    }
+    assert validate_json_schema(1, schema).status is ValidationStatus.NOT_VERIFIED
+    assert validate_json_schema(2, schema).status is ValidationStatus.NOT_VERIFIED
+
+
+def test_plain_and_dynamic_anchor_collision_fails_closed() -> None:
+    schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+            "first": {"$anchor": "duplicate", "const": 1},
+            "second": {"$dynamicAnchor": "duplicate", "const": 2},
+        },
+        "$ref": "#duplicate",
+    }
+    assert validate_json_schema(1, schema).status is ValidationStatus.NOT_VERIFIED
+    assert validate_json_schema(2, schema).status is ValidationStatus.NOT_VERIFIED
+
+
+def test_same_anchor_name_in_distinct_resources_remains_valid() -> None:
+    schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://example.invalid/root",
+        "$defs": {
+            "first": {
+                "$id": "first",
+                "$anchor": "shared",
+                "const": 1,
+            },
+            "second": {
+                "$id": "second",
+                "$anchor": "shared",
+                "const": 2,
+            },
+        },
+        "$ref": "first#shared",
+    }
+    assert validate_json_schema(1, schema).status is ValidationStatus.PASS
+    assert validate_json_schema(2, schema).status is ValidationStatus.FAIL
+
+
 def test_schema_shaped_literal_data_does_not_trigger_schema_policy() -> None:
     literal = {
         "$schema": "https://unknown.example/literal",
@@ -337,6 +411,73 @@ def test_combinatorial_schema_cannot_run_unbounded(monkeypatch: pytest.MonkeyPat
     assert time.monotonic() - started < 3.0
     assert result.status is ValidationStatus.NOT_VERIFIED
     assert result.details == {"timeout_seconds": 0.05}
+
+
+@pytest.mark.parametrize(
+    ("invalid_key", "encoded_key"),
+    [(1, "1"), (True, "true"), (None, "null"), (1.5, "1.5")],
+)
+def test_non_string_mapping_keys_are_not_reinterpreted(
+    invalid_key: object, encoded_key: str
+) -> None:
+    result = validate_json_schema(
+        {invalid_key: "value"},
+        {
+            "type": "object",
+            "required": [encoded_key],
+            "properties": {encoded_key: {"const": "value"}},
+            "additionalProperties": False,
+        },
+    )
+    assert result.status is ValidationStatus.NOT_VERIFIED
+
+
+def test_python_tuple_is_not_reinterpreted_as_json_array() -> None:
+    result = validate_json_schema((1, 2), {"type": "array", "items": {"type": "integer"}})
+    assert result.status is ValidationStatus.NOT_VERIFIED
+
+
+def test_worker_payload_replacement_cannot_change_validated_subject(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_worker = contracts.run_bounded_subprocess
+
+    def replace_payload(command: list[str], **kwargs: object):
+        payload_path = Path(command[5])
+        payload_path.write_text(
+            json.dumps({"instance": 12, "schema": {"const": 12}}),
+            encoding="utf-8",
+        )
+        return run_worker(command, **kwargs)
+
+    monkeypatch.setattr(contracts, "run_bounded_subprocess", replace_payload)
+    result = validate_json_schema("wrong", {"const": "wrong"})
+
+    assert result.status is ValidationStatus.BLOCKED
+    assert "serialized subject" in result.summary.lower()
+
+
+def test_direct_worker_input_enforces_integer_magnitude_bound() -> None:
+    result = validate_json_schema(1 << 4096, {"type": "integer"})
+    assert result.status is ValidationStatus.NOT_VERIFIED
+
+
+def test_direct_worker_input_enforces_nesting_depth_bound() -> None:
+    at_limit: object = 0
+    for _ in range(64):
+        at_limit = [at_limit]
+    beyond_limit = [at_limit]
+
+    assert validate_json_schema(at_limit, {}).status is ValidationStatus.PASS
+    assert validate_json_schema(beyond_limit, {}).status is ValidationStatus.NOT_VERIFIED
+
+
+def test_direct_worker_input_enforces_container_item_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(contracts, "_MAX_JSON_SCHEMA_WORKER_CONTAINER_ITEMS", 2)
+    result = validate_json_schema([1, 2, 3], {"type": "array"})
+    assert result.status is ValidationStatus.NOT_VERIFIED
 
 
 def test_worker_payload_serialization_is_bounded() -> None:
