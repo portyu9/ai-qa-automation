@@ -43,8 +43,9 @@ def test_trusted_dispatch_preflight_freezes_control_plane_before_python() -> Non
     text = CI_WORKFLOW.read_text(encoding="utf-8")
     supply_chain = text[text.index("  supply-chain:") : text.index("  security:")]
     preflight = supply_chain[
-        supply_chain.index("      - name: Verify trusted control-plane subject") :
-        supply_chain.index("      - name: Set up Python")
+        supply_chain.index(
+            "      - name: Verify trusted control-plane subject"
+        ) : supply_chain.index("      - name: Set up Python")
     ]
 
     assert "if: github.event_name == 'repository_dispatch'" in preflight
