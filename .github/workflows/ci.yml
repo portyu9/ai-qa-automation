@@ -22,12 +22,14 @@ concurrency:
 
 env:
   PYTHONUNBUFFERED: "1"
+  PYTHONSAFEPATH: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
   CI_SUBJECT_SHA: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.expected_merge_sha || github.sha }}
 
 jobs:
   quality:
     name: Quality / Python ${{ matrix.python-version }}
+    needs: supply-chain
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -93,6 +95,7 @@ jobs:
 
   deterministic-evals:
     name: 34-Case Deterministic Control Evaluation
+    needs: supply-chain
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -161,10 +164,49 @@ jobs:
         with:
           ref: ${{ env.CI_SUBJECT_SHA }}
           persist-credentials: false
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Verify exact source revision
         run: test "$(git rev-parse HEAD)" = "$CI_SUBJECT_SHA"
+
+      - name: Verify trusted control-plane subject
+        if: github.event_name == 'repository_dispatch'
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.client_payload.expected_head_sha }}
+          EXPECTED_BASE_SHA: ${{ github.event.client_payload.expected_base_sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_ACTOR" = "$GITHUB_REPOSITORY_OWNER"
+          git_clean_env=(env -i PATH="$PATH" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0)
+          extra_parent=""
+          read -r merge_sha base_sha head_sha extra_parent < <("${git_clean_env[@]}" /usr/bin/git rev-list --parents -n 1 "$CI_SUBJECT_SHA")
+          test "$merge_sha" = "$CI_SUBJECT_SHA"
+          test "$base_sha" = "$EXPECTED_BASE_SHA"
+          test "$head_sha" = "$EXPECTED_HEAD_SHA"
+          test "$base_sha" = "$GITHUB_SHA"
+          test -z "$extra_parent"
+          protected_paths=(
+            .github
+            .claude
+            .mcp.json
+            .pre-commit-config.yaml
+            CLAUDE.md
+            Dockerfile
+            evals
+            pyproject.toml
+            requirements
+            scripts
+            src/ai_qa_automation/__init__.py
+            src/ai_qa_automation/io_safety.py
+            src/ai_qa_automation/tools/__init__.py
+            src/ai_qa_automation/tools/execution_env.py
+          )
+          for path in "${protected_paths[@]}"; do
+            trusted_oid="$("${git_clean_env[@]}" /usr/bin/git rev-parse "${GITHUB_SHA}:${path}")"
+            subject_oid="$("${git_clean_env[@]}" /usr/bin/git rev-parse "${CI_SUBJECT_SHA}:${path}")"
+            test "$trusted_oid" = "$subject_oid"
+          done
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
@@ -310,6 +352,7 @@ jobs:
 
   security:
     name: Security Gates
+    needs: supply-chain
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -368,6 +411,7 @@ jobs:
 
   browser-reference-sut:
     name: Playwright Reference SUT
+    needs: supply-chain
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
