@@ -138,3 +138,39 @@ def test_k6_executes_validated_snapshot_after_workspace_mutation(
     assert metrics.p95_ms == 3.0
     assert observed["cwd"] != tmp_path
     assert str(observed["cwd"]).endswith("/workspace")
+
+
+def test_k6_rejects_symlinked_root_script(tmp_path: Path) -> None:
+    script = _write_import_graph(tmp_path)
+    target = tmp_path / script
+    link = target.with_name("linked.js")
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable on this platform")
+    runner = K6Runner(tmp_path, _policy(tmp_path), external_egress_enforced=True)
+
+    with pytest.raises(PermissionError, match=r"existing \.js file"):
+        runner._validate_script(link.relative_to(tmp_path), "http://127.0.0.1:8000")
+
+
+def test_k6_rejects_symlinked_local_import(tmp_path: Path) -> None:
+    directory = tmp_path / "performance"
+    directory.mkdir()
+    target = directory / "real-helper.js"
+    target.write_text("export const path = '/v1';\n", encoding="utf-8")
+    link = directory / "helper.js"
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable on this platform")
+    (directory / "load.js").write_text(
+        "import http from 'k6/http';\n"
+        "import { path } from './helper.js';\n"
+        "export default function () { http.get(__ENV.BASE_URL + path); }\n",
+        encoding="utf-8",
+    )
+    runner = K6Runner(tmp_path, _policy(tmp_path), external_egress_enforced=True)
+
+    with pytest.raises(PermissionError, match="may not traverse symlinks"):
+        runner._validate_script(Path("performance/load.js"), "http://127.0.0.1:8000")
