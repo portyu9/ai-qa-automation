@@ -16,11 +16,12 @@ The contract path preserves this ordering:
 bounded subject bytes
 → deterministic JSON/YAML parse boundary
 → JSON-compatible tree validation
+→ dialect-bound comparison-shape validation
 → bounded conservative structural drift comparison
 → explicit BREAKING / RISKY / NON_BREAKING / NOT_ANALYZED report
 ```
 
-Parser failure, unsupported syntax, resource exhaustion, ambiguous document meaning, or incomplete comparison is **not compatibility evidence**.
+Parser failure, unsupported syntax, resource exhaustion, ambiguous document meaning, unsupported consumed structure, or incomplete comparison is **not compatibility evidence**.
 
 ## Byte authority
 
@@ -88,9 +89,25 @@ Both JSON and YAML results must form a finite JSON-compatible tree:
 
 These limits are enforced before structural comparison. Exceeding one means the document was not safely analyzed.
 
+## Dialect and consumed-shape authority
+
+Safe parsing alone does not make a tree eligible for `NON_BREAKING`. Fields consumed by the comparator must also have one unambiguous meaning within the supported OpenAPI/Swagger dialect.
+
+The comparison-shape boundary therefore fails closed when, among other cases:
+
+- OpenAPI 3.x uses Swagger 2 `definitions`, or Swagger 2 uses OpenAPI 3 `components`;
+- Swagger 2 supplies an OpenAPI 3 `requestBody`;
+- path keys do not use the supported `/...` form, HTTP method keys use non-canonical casing, or consumed path/operation/response structures are not objects;
+- operation parameters are not arrays, contain duplicate `(in, name)` identities, use unsupported parameter references/path-level parameter inheritance, or carry a non-boolean `required` value;
+- schema `type` uses an unsupported type name, contains duplicate alternatives, or uses a type array outside OpenAPI 3.1;
+- schema `enum` is empty, contains non-scalar values outside the bounded model, or contains duplicate values under JSON-type-aware equality (`true` remains distinct from `1`, while numerically equal JSON numbers are duplicates);
+- schema `$ref` leaves the document, points below the supported named-schema boundary, has invalid JSON Pointer escaping, or does not resolve to a named schema object in the same dialect.
+
+Local named-schema references are **identity checked, not dereferenced into a second comparison traversal**. Every named schema is independently shape-validated and compared; contract content never receives filesystem or network retrieval authority.
+
 ## Comparison bounds and terminal truth
 
-Only two safely parsed, recognized OpenAPI/Swagger documents enter the comparison engine. The comparison itself is also bounded; parser success does not authorize an unbounded structural walk or a partially observed compatibility claim.
+Only two safely parsed, recognized, dialect-compatible OpenAPI/Swagger documents enter the comparison engine. The comparison itself is also bounded; parser success does not authorize an unbounded structural walk or a partially observed compatibility claim.
 
 The analyzer retains at most **250 change findings**, which is also the complete persisted finding budget. There is no larger hidden finding set that is later sliced for presentation. Attempting to record a 251st finding marks the comparison incomplete. Nested schema comparison has an independent maximum depth of **12 recursive levels beyond the root comparison frame**; crossing that bound also marks the comparison incomplete.
 
@@ -101,14 +118,14 @@ Incomplete comparison has conservative authority semantics:
 - a breaking finding encountered after the detail budget is full deterministically replaces one lower-severity retained finding, so `BREAKING` is never emitted without visible supporting change evidence;
 - reaching exactly 250 findings is not itself incomplete when no comparison work is omitted; a no-op empty shared schema also does not manufacture incompleteness merely because the finding budget is exactly full.
 
-The existing conservative rules identify path/operation removals, required-input changes, response removals, security changes, schema/property changes, enum narrowing, and other implemented structural signals.
+The conservative rules identify path/operation removals, required-input changes, response removals, security changes, schema/property changes, enum/type narrowing, and other implemented structural signals. A newly observed response status and removal of a schema property from the `required` set are `RISKY` rather than silently disappearing into `NON_BREAKING`. Changes to consumed semantics that are structurally valid but outside the implemented rule model are retained as `NOT_ANALYZED` findings.
 
 | Result | Meaning |
 |---|---|
 | `BREAKING` | an implemented structural rule found a conservatively breaking change; `analyzed=false` may additionally indicate other comparison work was incomplete |
 | `RISKY` | a complete bounded comparison found compatibility risk requiring broader validation/review |
-| `NON_BREAKING` | both documents passed the bounded parser, the comparison completed within all analysis bounds, and no implemented breaking/risky rule matched |
-| `NOT_ANALYZED` | document meaning, safe bounded parsing, or complete bounded comparison could not be established |
+| `NON_BREAKING` | both documents passed bounded parsing and dialect/shape validation, the comparison completed within all analysis bounds, and no implemented breaking/risky rule matched |
+| `NOT_ANALYZED` | document meaning, safe bounded parsing, supported consumed shape, or complete bounded comparison could not be established |
 
 `NON_BREAKING` remains scoped to the implemented structural rules; it is not a complete protocol-compatibility proof. `BREAKING` with `analyzed=false` means the recorded breaking fact is valid while the full comparison remains incomplete; it must not be reinterpreted as proof that every breaking condition was discovered.
 
@@ -120,11 +137,11 @@ This boundary does **not**:
 - dereference remote `$ref` resources or grant network/filesystem retrieval authority to contract content;
 - prove consumer compatibility beyond implemented drift rules;
 - make repository-controlled contracts trusted;
-- turn unsupported YAML features into low risk;
+- turn unsupported YAML or OpenAPI/Swagger structures into low risk;
 - allow missing baseline history or unreadable current bytes to become compatibility evidence;
-- claim completeness when parser, finding-count, or nested-schema bounds stop analysis.
+- claim completeness when parser, shape, finding-count, or nested-schema bounds stop analysis.
 
-> **Ambiguous parse is not compatibility. Unsupported YAML is not compatibility. Resource exhaustion is not compatibility. Incomplete comparison is not compatibility. `NOT_ANALYZED` is a legitimate terminal fact for the drift analyzer.**
+> **Ambiguous parse is not compatibility. Unsupported serialization or consumed shape is not compatibility. Resource exhaustion is not compatibility. Incomplete comparison is not compatibility. `NOT_ANALYZED` is a legitimate terminal fact for the drift analyzer.**
 
 ---
 
