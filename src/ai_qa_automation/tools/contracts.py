@@ -1,13 +1,67 @@
 from __future__ import annotations
 
+import signal
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
+from types import FrameType
 from typing import Any
 from urllib.parse import urlparse
 
 from ..models import ValidationResult, ValidationStatus
 
+_JSON_SCHEMA_VALIDATION_TIMEOUT_SECONDS = 2.0
+
+
+class _SchemaValidationTimeout(RuntimeError):
+    pass
+
+
+class _SchemaValidationTimerUnavailable(RuntimeError):
+    pass
+
+
+def _schema_validation_timer_supported() -> bool:
+    return (
+        hasattr(signal, "setitimer")
+        and hasattr(signal, "getitimer")
+        and hasattr(signal, "ITIMER_REAL")
+        and hasattr(signal, "SIGALRM")
+        and threading.current_thread() is threading.main_thread()
+    )
+
+
+def _raise_schema_validation_timeout(_signum: int, _frame: FrameType | None) -> None:
+    raise _SchemaValidationTimeout("JSON Schema validation exceeded its execution budget")
+
+
+@contextmanager
+def _schema_validation_budget() -> Iterator[None]:
+    if not _schema_validation_timer_supported():
+        raise _SchemaValidationTimerUnavailable(
+            "deterministic JSON Schema validation timer is unavailable in this runtime"
+        )
+
+    remaining, interval = signal.getitimer(signal.ITIMER_REAL)
+    if remaining > 0 or interval > 0:
+        raise _SchemaValidationTimerUnavailable(
+            "process interval-timer authority is already owned by another runtime component"
+        )
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    signal.signal(signal.SIGALRM, _raise_schema_validation_timeout)
+    try:
+        signal.setitimer(signal.ITIMER_REAL, _JSON_SCHEMA_VALIDATION_TIMEOUT_SECONDS)
+        try:
+            yield
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+    finally:
+        signal.signal(signal.SIGALRM, previous_handler)
+
 
 def validate_json_schema(instance: Any, schema: dict[str, Any]) -> ValidationResult:
-    """Validate one supplied JSON Schema without granting reference-retrieval authority."""
+    """Validate one supplied JSON Schema without granting ambient authority."""
     try:
         import jsonschema
         from jsonschema.validators import validator_for
@@ -45,12 +99,28 @@ def validate_json_schema(instance: Any, schema: dict[str, Any]) -> ValidationRes
         raise NoSuchResource(ref=uri)
 
     try:
-        validator_class.check_schema(schema)
-        validator = validator_class(
-            schema,
-            registry=Registry(retrieve=deny_external_reference),
+        with _schema_validation_budget():
+            validator_class.check_schema(schema)
+            validator = validator_class(
+                schema,
+                registry=Registry(retrieve=deny_external_reference),
+            )
+            validator.validate(instance)
+    except _SchemaValidationTimerUnavailable as exc:
+        return ValidationResult(
+            name="json_schema",
+            status=ValidationStatus.BLOCKED,
+            summary=f"JSON Schema validation is blocked: {exc}.",
         )
-        validator.validate(instance)
+    except _SchemaValidationTimeout:
+        return ValidationResult(
+            name="json_schema",
+            status=ValidationStatus.NOT_VERIFIED,
+            summary=(
+                "JSON Schema validation exceeded its deterministic execution-time budget."
+            ),
+            details={"timeout_seconds": _JSON_SCHEMA_VALIDATION_TIMEOUT_SECONDS},
+        )
     except jsonschema.SchemaError as exc:
         path = "/".join(str(part) for part in exc.path) or "<root>"
         return ValidationResult(
