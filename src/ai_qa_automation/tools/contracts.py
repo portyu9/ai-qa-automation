@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -16,18 +18,27 @@ _JSON_SCHEMA_VALIDATION_TIMEOUT_SECONDS = 2.0
 _JSON_SCHEMA_WORKER_STARTUP_GRACE_SECONDS = 5.0
 _MAX_JSON_SCHEMA_WORKER_INPUT_BYTES = 2_100_000
 _MAX_JSON_SCHEMA_WORKER_OUTPUT_BYTES = 8_192
+_MAX_JSON_SCHEMA_WORKER_DEPTH = 64
+_MAX_JSON_SCHEMA_WORKER_NODES = 100_000
+_MAX_JSON_SCHEMA_WORKER_CONTAINER_ITEMS = 50_000
+_MAX_JSON_SCHEMA_WORKER_INTEGER_BITS = 4_096
 _SAFE_REFERENCE_SCHEMES = frozenset({"http", "https", "file", "ftp", "urn", "data", "relative", "other"})
 
 _JSON_SCHEMA_WORKER_CODE = dedent(
     r"""
+    import hashlib
     import json
+    import os
     import signal
+    import stat
     import sys
     from contextlib import contextmanager
-    from urllib.parse import urlparse
+    from urllib.parse import urljoin, urlparse
 
-    validation_timeout = float(sys.argv[2])
-    sys.path.extend(sys.argv[3:])
+    expected_payload_sha256 = sys.argv[2]
+    max_payload_bytes = int(sys.argv[3])
+    validation_timeout = float(sys.argv[4])
+    sys.path.extend(sys.argv[5:])
 
     class ValidationTimeout(RuntimeError):
         pass
@@ -75,6 +86,45 @@ _JSON_SCHEMA_WORKER_CODE = dedent(
             return raw
         return "other"
 
+    def load_bound_payload(path):
+        flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        if hasattr(os, "O_NONBLOCK"):
+            flags |= os.O_NONBLOCK
+        try:
+            descriptor = os.open(path, flags)
+        except OSError:
+            finish("payload_unavailable")
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > max_payload_bytes:
+                finish("payload_integrity_error")
+            chunks = []
+            total = 0
+            while True:
+                chunk = os.read(descriptor, min(64 * 1024, max_payload_bytes + 1 - total))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+                if total > max_payload_bytes:
+                    finish("payload_integrity_error")
+        except OSError:
+            finish("payload_unavailable")
+        finally:
+            os.close(descriptor)
+        raw_payload = b"".join(chunks)
+        if hashlib.sha256(raw_payload).hexdigest() != expected_payload_sha256:
+            finish("payload_integrity_error")
+        try:
+            payload = json.loads(raw_payload.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError):
+            finish("payload_integrity_error")
+        if not isinstance(payload, dict) or set(payload) != {"instance", "schema"}:
+            finish("payload_integrity_error")
+        return payload
+
     try:
         import jsonschema
         from jsonschema.validators import validator_for
@@ -85,8 +135,7 @@ _JSON_SCHEMA_WORKER_CODE = dedent(
         finish("dependency_unavailable")
 
     try:
-        with open(sys.argv[1], "r", encoding="utf-8") as stream:
-            payload = json.load(stream)
+        payload = load_bound_payload(sys.argv[1])
         instance = payload["instance"]
         schema = payload["schema"]
         retrieval_schemes = []
@@ -114,21 +163,43 @@ _JSON_SCHEMA_WORKER_CODE = dedent(
                 except Exception:
                     finish("worker_error")
 
-                stack = list(specification.subresources_of(schema))
+                root_identifier = specification.id_of(schema)
+                root_uri = urljoin("", root_identifier) if root_identifier is not None else ""
+                resource_uris = {root_uri}
+                anchors_by_resource = {}
+                stack = [(schema, root_uri, True)]
                 while stack:
-                    subresource = stack.pop()
+                    subresource, inherited_uri, is_root = stack.pop()
                     if not isinstance(subresource, dict):
                         continue
-                    nested_dialect = subresource.get("$schema")
-                    if nested_dialect is not None:
-                        if not isinstance(nested_dialect, str):
-                            finish("malformed_embedded_dialect")
-                        nested_validator = validator_for(subresource, default=None)
-                        if nested_validator is None:
-                            finish("unsupported_embedded_dialect")
-                        if nested_validator is not validator_class:
-                            finish("cross_dialect_resource")
-                    stack.extend(specification.subresources_of(subresource))
+                    resource_uri = inherited_uri
+                    if not is_root:
+                        nested_dialect = subresource.get("$schema")
+                        if nested_dialect is not None:
+                            if not isinstance(nested_dialect, str):
+                                finish("malformed_embedded_dialect")
+                            nested_validator = validator_for(subresource, default=None)
+                            if nested_validator is None:
+                                finish("unsupported_embedded_dialect")
+                            if nested_validator is not validator_class:
+                                finish("cross_dialect_resource")
+                        identifier = specification.id_of(subresource)
+                        if identifier is not None:
+                            resource_uri = urljoin(inherited_uri, identifier)
+                            if resource_uri in resource_uris:
+                                finish("duplicate_resource_identifier")
+                            resource_uris.add(resource_uri)
+
+                    anchor_names = anchors_by_resource.setdefault(resource_uri, set())
+                    for anchor in specification.anchors_in(subresource):
+                        if anchor.name in anchor_names:
+                            finish("duplicate_anchor_identifier")
+                        anchor_names.add(anchor.name)
+
+                    stack.extend(
+                        (child, resource_uri, False)
+                        for child in specification.subresources_of(subresource)
+                    )
             else:
                 validator_class = validator_for(schema)
                 validator_class.check_schema(schema)
@@ -198,7 +269,53 @@ class _WorkerInputError(ValueError):
     pass
 
 
-def _write_worker_payload(path: Path, *, instance: Any, schema: Any) -> None:
+def _validate_worker_json_shape(value: Any) -> None:
+    stack: list[tuple[Any, int]] = [(value, 0)]
+    seen_containers: set[int] = set()
+    nodes = 0
+    while stack:
+        item, depth = stack.pop()
+        if depth > _MAX_JSON_SCHEMA_WORKER_DEPTH:
+            raise _WorkerInputError("JSON Schema worker payload exceeds the nesting-depth limit")
+        nodes += 1
+        if nodes > _MAX_JSON_SCHEMA_WORKER_NODES:
+            raise _WorkerInputError("JSON Schema worker payload exceeds the structural-node limit")
+        if item is None or isinstance(item, (str, bool)):
+            continue
+        if isinstance(item, int):
+            if item.bit_length() > _MAX_JSON_SCHEMA_WORKER_INTEGER_BITS:
+                raise _WorkerInputError("JSON Schema worker payload contains an oversized integer")
+            continue
+        if isinstance(item, float):
+            if not math.isfinite(item):
+                raise _WorkerInputError("JSON Schema worker payload contains a non-finite number")
+            continue
+        if isinstance(item, dict):
+            identity = id(item)
+            if identity in seen_containers:
+                continue
+            seen_containers.add(identity)
+            if len(item) > _MAX_JSON_SCHEMA_WORKER_CONTAINER_ITEMS:
+                raise _WorkerInputError("JSON Schema worker payload contains an oversized object")
+            if any(not isinstance(key, str) for key in item):
+                raise _WorkerInputError("JSON Schema worker payload contains a non-string object key")
+            stack.extend((nested, depth + 1) for nested in item.values())
+            continue
+        if isinstance(item, list):
+            identity = id(item)
+            if identity in seen_containers:
+                continue
+            seen_containers.add(identity)
+            if len(item) > _MAX_JSON_SCHEMA_WORKER_CONTAINER_ITEMS:
+                raise _WorkerInputError("JSON Schema worker payload contains an oversized array")
+            stack.extend((nested, depth + 1) for nested in item)
+            continue
+        raise _WorkerInputError("JSON Schema worker payload contains a non-JSON value type")
+
+
+def _write_worker_payload(path: Path, *, instance: Any, schema: Any) -> str:
+    _validate_worker_json_shape(instance)
+    _validate_worker_json_shape(schema)
     encoder = json.JSONEncoder(
         ensure_ascii=False,
         allow_nan=False,
@@ -206,6 +323,7 @@ def _write_worker_payload(path: Path, *, instance: Any, schema: Any) -> None:
         separators=(",", ":"),
     )
     total = 0
+    digest = hashlib.sha256()
     try:
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
@@ -219,11 +337,13 @@ def _write_worker_payload(path: Path, *, instance: Any, schema: Any) -> None:
                 total += len(encoded)
                 if total > _MAX_JSON_SCHEMA_WORKER_INPUT_BYTES:
                     raise _WorkerInputError("JSON Schema worker payload exceeds the byte limit")
+                digest.update(encoded)
                 stream.write(encoded)
     except _WorkerInputError:
         raise
     except (TypeError, ValueError, RecursionError, UnicodeError, OverflowError) as exc:
         raise _WorkerInputError("JSON Schema worker payload is not bounded JSON") from exc
+    return digest.hexdigest()
 
 
 def validate_json_schema(instance: Any, schema: Any) -> ValidationResult:
@@ -241,7 +361,9 @@ def validate_json_schema(instance: Any, schema: Any) -> ValidationResult:
             workspace = Path(temporary)
             payload_path = workspace / "payload.json"
             try:
-                _write_worker_payload(payload_path, instance=instance, schema=schema)
+                payload_sha256 = _write_worker_payload(
+                    payload_path, instance=instance, schema=schema
+                )
             except _WorkerInputError:
                 return ValidationResult(
                     name="json_schema",
@@ -257,6 +379,8 @@ def validate_json_schema(instance: Any, schema: Any) -> ValidationResult:
                     "-c",
                     _JSON_SCHEMA_WORKER_CODE,
                     str(payload_path),
+                    payload_sha256,
+                    str(_MAX_JSON_SCHEMA_WORKER_INPUT_BYTES),
                     str(_JSON_SCHEMA_VALIDATION_TIMEOUT_SECONDS),
                     *dependency_roots,
                 ],
@@ -316,6 +440,12 @@ def validate_json_schema(instance: Any, schema: Any) -> ValidationResult:
             status=ValidationStatus.BLOCKED,
             summary="Isolated JSON Schema evaluation timer is unavailable or already owned.",
         )
+    if kind in {"payload_unavailable", "payload_integrity_error"}:
+        return ValidationResult(
+            name="json_schema",
+            status=ValidationStatus.BLOCKED,
+            summary="Isolated JSON Schema worker input could not be bound to the serialized subject.",
+        )
     if kind == "pass":
         return ValidationResult(
             name="json_schema",
@@ -361,6 +491,12 @@ def validate_json_schema(instance: Any, schema: Any) -> ValidationResult:
             name="json_schema",
             status=ValidationStatus.NOT_VERIFIED,
             summary="JSON Schema declares an unsupported or ambiguous schema dialect boundary.",
+        )
+    if kind in {"duplicate_resource_identifier", "duplicate_anchor_identifier"}:
+        return ValidationResult(
+            name="json_schema",
+            status=ValidationStatus.NOT_VERIFIED,
+            summary="JSON Schema contains ambiguous duplicate resource or anchor identifiers.",
         )
     if kind == "schema_error":
         return ValidationResult(
