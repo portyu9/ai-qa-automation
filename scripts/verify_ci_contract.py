@@ -29,7 +29,7 @@ EXPECTED_AUTOMATIC_PROJECT_INSTALL_COUNT = 5
 EXPECTED_AUTOMATIC_DEPENDENCY_INSTALL_COUNT = 5
 EXPECTED_AUTOMATIC_SUBJECT_CHECKOUT_COUNT = 5
 EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = (
-    "2b36e38ec1850ff44dd88f81ae5bdd253ee5e59b"  # pragma: allowlist secret
+    "9bc09d2450e7f1195b02bcb1d3736b7cbaf4670f"  # pragma: allowlist secret
 )
 AUTOMATIC_PROJECT_INSTALL_COMMAND = (
     "          python -m pip install --no-deps --no-build-isolation ."
