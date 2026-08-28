@@ -129,12 +129,14 @@ def test_live_k6_gate_identity_includes_threshold_contract(tmp_path: Path) -> No
     assert first_gate != second_gate
 
 
-def test_live_k6_persists_sanitized_url_but_hashes_exact_subject(tmp_path: Path) -> None:
+def test_live_k6_persists_minimized_subject_but_hashes_exact_subject(tmp_path: Path) -> None:
     services, control, store = make_services(tmp_path, external_egress=True)
     request = _request()
+    request["script"] = "performance/token=super-secret-script-value/load.js"
     request["target_url"] = (
         "http://alice:super-secret-password@127.0.0.1:8000/private/path?token=super-secret-token"
     )
+    request["environment"] = "secret=super-secret-environment-value"
     subject = k6_gate_payload(request)
     control.budget.charge_tool()
 
@@ -143,10 +145,15 @@ def test_live_k6_persists_sanitized_url_but_hashes_exact_subject(tmp_path: Path)
 
     validation = services.state.validation_results[-1]
     assert validation.gate_id == _stable_gate_id("k6", subject)
-    assert validation.details["target_url"] == k6_persisted_subject(subject)["target_url"]
+    persisted_subject = k6_persisted_subject(subject)
+    assert validation.details["target_url"] == persisted_subject["target_url"]
+    assert validation.details["script_sha256"] == persisted_subject["script_sha256"]
+    assert validation.details["environment_sha256"] == persisted_subject["environment_sha256"]
     rendered = store.path.read_text(encoding="utf-8")
+    assert "super-secret-script-value" not in rendered
     assert "super-secret-password" not in rendered
     assert "super-secret-token" not in rendered
+    assert "super-secret-environment-value" not in rendered
     assert "/private/path" not in rendered
 
 
