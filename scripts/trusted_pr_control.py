@@ -13,7 +13,7 @@ from typing import Any
 API_ROOT = "https://api.github.com"
 API_VERSION = "2026-03-10"
 EXPECTED_BASE_REF = "main"
-EXPECTED_WORKFLOW_EVENT = "workflow_dispatch"
+EXPECTED_WORKFLOW_EVENT = "repository_dispatch"
 EXPECTED_WORKFLOW_REF = "refs/heads/main"
 TRUSTED_STATUS_CONTEXT = "Trusted PR Gate"
 MAX_API_RESPONSE_BYTES = 1024 * 1024
@@ -199,7 +199,7 @@ def _parse_bool(value: str) -> bool:
         return True
     if value == "false":
         return False
-    raise ValueError("boolean workflow input must be exactly 'true' or 'false'")
+    raise ValueError("authorization value must be exactly 'true' or 'false'")
 
 
 def report_authorized_result(
@@ -216,7 +216,7 @@ def report_authorized_result(
     target_url: str,
 ) -> dict[str, Any]:
     if workflow_event != EXPECTED_WORKFLOW_EVENT:
-        raise PermissionError("trusted status publication requires workflow_dispatch")
+        raise PermissionError("trusted status publication requires repository_dispatch")
     if workflow_ref != EXPECTED_WORKFLOW_REF:
         raise PermissionError("trusted status publication requires refs/heads/main")
     if not repository_owner or actor != repository_owner:
