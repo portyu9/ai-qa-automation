@@ -22,7 +22,7 @@ _MAX_K6_SUMMARY_BYTES = 1_000_000
 
 
 class K6Runner:
-    """Runs a target-bound k6 script only behind an infrastructure-egress prerequisite."""
+    """Runs a target-bound k6 script only behind trusted execution isolation."""
 
     def __init__(
         self,
@@ -31,6 +31,7 @@ class K6Runner:
         timeout_seconds: int = 180,
         *,
         external_egress_enforced: bool = False,
+        external_process_isolation_enforced: bool = False,
     ) -> None:
         if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int):
             raise ValueError("k6 timeout_seconds must be an integer")
@@ -38,12 +39,19 @@ class K6Runner:
             raise ValueError("k6 timeout_seconds must be positive")
         if not isinstance(external_egress_enforced, bool):
             raise ValueError("external_egress_enforced must be a boolean")
+        if not isinstance(external_process_isolation_enforced, bool):
+            raise ValueError("external_process_isolation_enforced must be a boolean")
         self.workspace = workspace.resolve()
         self.policy = policy
         self.timeout_seconds = timeout_seconds
         self.external_egress_enforced = external_egress_enforced
+        self.external_process_isolation_enforced = external_process_isolation_enforced
 
-    def _validate_script(self, script: Path, target_url: str) -> Path:
+    def _collect_validated_modules(
+        self,
+        script: Path,
+        target_url: str,
+    ) -> tuple[Path, dict[Path, str]]:
         resolved = (script if script.is_absolute() else self.workspace / script).resolve()
         if (
             self.workspace not in resolved.parents
@@ -57,25 +65,26 @@ class K6Runner:
         if not target_host:
             raise PermissionError("k6 target URL must contain an explicit host")
         allowed_literal_hosts = {target_host}
-        visited: set[Path] = set()
+        modules: dict[Path, str] = {}
         root_uses_injected_target = False
 
         def inspect_module(module_path: Path, *, root: bool = False) -> None:
             nonlocal root_uses_injected_target
             module_path = module_path.resolve()
-            if module_path in visited:
+            try:
+                relative_path = module_path.relative_to(self.workspace)
+            except ValueError as exc:
+                raise PermissionError(
+                    "k6 local imports must resolve to .js files inside the target workspace"
+                ) from exc
+            if relative_path in modules:
                 return
-            if (
-                self.workspace not in module_path.parents
-                or module_path.suffix != ".js"
-                or not module_path.is_file()
-            ):
+            if module_path.suffix != ".js" or not module_path.is_file():
                 raise PermissionError(
                     "k6 local imports must resolve to .js files inside the target workspace"
                 )
-            if len(visited) >= _MAX_K6_MODULES:
+            if len(modules) >= _MAX_K6_MODULES:
                 raise PermissionError(f"k6 import graph exceeds {_MAX_K6_MODULES} local modules")
-            visited.add(module_path)
             try:
                 source = read_text_bounded(
                     module_path,
@@ -88,6 +97,7 @@ class K6Runner:
                 ) from exc
             except (OSError, UnicodeError) as exc:
                 raise PermissionError("k6 module is unreadable") from exc
+            modules[relative_path] = source
             if re.search(r"\bopen\s*\(", source):
                 raise PermissionError("k6 scripts may not read local files through open()")
             if root and ("__ENV.BASE_URL" in source or "__ENV.TARGET_URL" in source):
@@ -125,7 +135,18 @@ class K6Runner:
         inspect_module(resolved, root=True)
         if not root_uses_injected_target:
             raise PermissionError("k6 script must consume an injected BASE_URL or TARGET_URL")
-        return resolved
+        return resolved.relative_to(self.workspace), modules
+
+    def _validate_script(self, script: Path, target_url: str) -> Path:
+        root_relative, _modules = self._collect_validated_modules(script, target_url)
+        return self.workspace / root_relative
+
+    @staticmethod
+    def _write_validated_snapshot(snapshot_root: Path, modules: dict[Path, str]) -> None:
+        for relative_path, source in modules.items():
+            destination = snapshot_root / relative_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(source, encoding="utf-8")
 
     @staticmethod
     def _metric_values(data: dict[str, Any], metric: str) -> dict[str, Any]:
@@ -170,6 +191,11 @@ class K6Runner:
         )
 
     def run(self, script: Path, *, target_url: str, environment: str) -> PerformanceMetrics:
+        if not self.external_process_isolation_enforced:
+            raise PermissionError(
+                "k6 execution requires trusted infrastructure-level process/filesystem isolation; "
+                "static JavaScript inspection is not an execution sandbox"
+            )
         if not self.external_egress_enforced:
             raise PermissionError(
                 "k6 execution requires trusted infrastructure-level egress enforcement; "
@@ -178,13 +204,16 @@ class K6Runner:
         decision = self.policy.authorize_performance_target(target_url, environment=environment)
         if decision.decision != ToolDecision.ALLOW:
             raise PermissionError(decision.reason)
-        script_path = self._validate_script(script, target_url)
+        root_relative, modules = self._collect_validated_modules(script, target_url)
         if shutil.which("k6") is None:
             raise RuntimeError("k6 is not installed; runtime validation is NOT_VERIFIED")
 
         data: dict[str, Any]
         with tempfile.TemporaryDirectory(prefix="aiqa-k6-runtime-") as temp_runtime:
             runtime_root = Path(temp_runtime)
+            snapshot_root = runtime_root / "workspace"
+            self._write_validated_snapshot(snapshot_root, modules)
+            script_path = snapshot_root / root_relative
             summary_path = runtime_root / f"summary-{uuid4().hex}.json"
             command = [
                 "k6",
@@ -207,7 +236,7 @@ class K6Runner:
             )
             result = run_bounded_subprocess(
                 command,
-                cwd=self.workspace,
+                cwd=snapshot_root,
                 env=env,
                 timeout_seconds=self.timeout_seconds,
             )
