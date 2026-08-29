@@ -94,7 +94,10 @@ def test_k6_accepts_one_unambiguous_bounded_summary(
     assert metrics.p95_ms == 3.0
     assert metrics.request_rate == 5.0
     assert len(metrics.module_snapshot_sha256) == 64
-    assert metrics.model_dump(mode="json")["module_snapshot_sha256"] == metrics.module_snapshot_sha256
+    assert (
+        metrics.model_dump(mode="json")["module_snapshot_sha256"]
+        == metrics.module_snapshot_sha256
+    )
 
 
 def test_k6_snapshot_identity_is_stable_for_same_bytes_and_changes_with_script_bytes(
@@ -161,13 +164,61 @@ def test_k6_rejects_nonstandard_summary_numeric_constants(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     script = _write_script(tmp_path)
-    rendered = json.dumps(_summary(), separators=(",", ":")).replace('"p(95)":3.0', '"p(95)":NaN')
+    rendered = json.dumps(_summary(), separators=(",", ":")).replace(
+        '"p(95)":3.0',
+        '"p(95)":NaN',
+    )
     _install_fake_k6(
         monkeypatch,
         lambda path: path.write_text(rendered, encoding="utf-8"),
     )
 
     with pytest.raises(RuntimeError, match="bounded unambiguous JSON ingestion"):
+        _runner(tmp_path).run(
+            script,
+            target_url="http://127.0.0.1:8000",
+            environment="local",
+        )
+
+
+def test_k6_rejects_finite_syntax_that_overflows_to_infinity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script = _write_script(tmp_path)
+    rendered = json.dumps(_summary(), separators=(",", ":")).replace(
+        '"p(95)":3.0',
+        '"p(95)":1e309',
+    )
+    _install_fake_k6(
+        monkeypatch,
+        lambda path: path.write_text(rendered, encoding="utf-8"),
+    )
+
+    with pytest.raises(RuntimeError, match=r"http_req_duration\.p\(95\) must be finite"):
+        _runner(tmp_path).run(
+            script,
+            target_url="http://127.0.0.1:8000",
+            environment="local",
+        )
+
+
+def test_k6_rejects_integer_metric_that_overflows_float_conversion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script = _write_script(tmp_path)
+    huge_integer = "9" * 4000
+    rendered = json.dumps(_summary(), separators=(",", ":")).replace(
+        '"p(95)":3.0',
+        f'"p(95)":{huge_integer}',
+    )
+    _install_fake_k6(
+        monkeypatch,
+        lambda path: path.write_text(rendered, encoding="utf-8"),
+    )
+
+    with pytest.raises(RuntimeError, match=r"http_req_duration\.p\(95\) exceeds the numeric bound"):
         _runner(tmp_path).run(
             script,
             target_url="http://127.0.0.1:8000",
