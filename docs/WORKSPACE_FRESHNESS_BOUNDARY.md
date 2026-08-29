@@ -57,16 +57,16 @@ A denied external request may already have its attempt/network budget conservati
 
 ### 2. Before accepting internal non-mutation target results
 
-An internal validation/read tool can begin against a fresh target and the workspace can still change while it is running. Internal non-mutation tools therefore re-prove freshness at durable checkpoints, and `PostToolUse` re-proves freshness once more before a successful internal result can participate in deterministic closure.
+An internal validation/read tool can begin against a fresh target and the workspace can still change while it is running. Internal non-mutation tools therefore re-prove freshness at durable checkpoints, and `PostToolUse` attempts one additional freshness observation before a successful internal result is accepted through the SDK hook path.
 
-If freshness changed before internal result acceptance:
+If that PostToolUse freshness observation completes and detects changed authority:
 
 - the tool result is rewritten to an error-shaped result;
 - the tool is recorded as failed by runtime control;
 - a validation-bearing tool receives an additional revision-bound `workspace_freshness=NOT_VERIFIED` validation gate; and
 - terminal state is latched to a non-success truth according to the freshness failure category.
 
-The final PostToolUse check closes the race between the last internal checkpoint/tool return and SDK result acceptance.
+The PostToolUse observation is defense in depth for the short return/acceptance gap; it is **not** the sole success authority and the repository does not assume a timed-out hook can certify freshness. Internal tool bodies have already checkpointed against the authorized subject, the next internal execution rechecks freshness before proceeding, and candidate terminal `SUCCESS` is independently revalidated. If the hook does not complete safely, those application-owned boundaries still prevent stale local bytes from becoming terminal success.
 
 External MCP output is different. It is remote observed data, not local target-validation authority. External responses continue through their existing deterministic output-size, JSON-shape, sanitization, and untrusted-evidence boundary without first performing another potentially expensive repository snapshot inside `PostToolUse`. This avoids making remote-output sanitization depend on repository-snapshot latency. Later controlled work rechecks freshness, and candidate terminal `SUCCESS` is independently revalidated against the workspace baseline.
 
@@ -92,11 +92,11 @@ This final gate does not manufacture success. All normal result-contract require
 
 Autonomous mutation tools are special only because their authorized purpose is to change target bytes.
 
-`PreToolUse` may reserve mutation budget and establish that deterministic policy allows the requested path, but it does not capture rollback bytes. At internal tool entry, `LiveRuntimeServices` first proves that the current workspace still matches the prior authorized baseline. Only then may `RuntimeControl.prepare_mutation` read the target and durably establish pending/rollback ownership. If freshness is missing, incomplete, unavailable, or drifted, no new pending transaction or rollback backup is created.
+`PreToolUse` may reserve mutation budget and establish that deterministic policy allows the requested path, but it does not capture rollback bytes. At internal tool entry, `LiveRuntimeServices` first proves that the current workspace still matches the prior authorized baseline and independently rechecks deterministic mutation policy. Only then may `RuntimeControl.prepare_mutation` read the target and durably establish pending/rollback ownership. If freshness is missing, incomplete, unavailable, or drifted—or policy no longer authorizes the mutation—no new pending transaction or rollback backup is created.
 
-While that one prepared mutation body is active, its internal checkpoint does not demand equality with the old fingerprint; doing so would reject the very candidate change the policy just authorized. PostToolUse instead observes the complete candidate fingerprint and advances runtime authority only through the mutation transaction path. Incomplete candidate fingerprinting causes rollback and blocks further mutation authority rather than adopting an ambiguous state.
+While that one prepared mutation body is active, its internal checkpoint does not demand equality with the old fingerprint; doing so would reject the very candidate change the policy just authorized. PostToolUse instead observes the complete candidate fingerprint and advances runtime authority only through the mutation transaction path. A success-shaped mutation result without durable pending transaction authority is rejected rather than adopted. Incomplete candidate fingerprinting causes rollback and blocks further mutation authority rather than adopting an ambiguous state.
 
-Mutation failure and rollback paths similarly refresh the baseline only after framework-owned restoration/closure logic has run. Read-only tools never receive this exception.
+Mutation failure and rollback paths refresh the baseline only after an actual framework-owned rollback/restoration closes pending authority. A mutation failure that never established pending authority cannot advance the workspace baseline. Read-only tools never receive this exception.
 
 ## Why repository inspection cannot rebase authority
 
@@ -125,7 +125,7 @@ The design therefore avoids making repository freshness depend on the 10-second 
 
 These are defense-in-depth controls; they do not make missing protected validation into PASS. The runtime also does not inflate hook or repository-inspection timeouts merely to obtain green execution.
 
-PostToolUse external-response sanitization intentionally does not wait behind a repository snapshot. This preserves the existing deterministic remote-output boundary independently of workspace-fingerprint observation cost. Local target success remains protected by execution-owned and terminal freshness checks, while internal target-validation results retain the stronger post-execution acceptance check.
+PostToolUse external-response sanitization intentionally does not wait behind a repository snapshot. This preserves the existing deterministic remote-output boundary independently of workspace-fingerprint observation cost. Local target success remains protected by execution-owned and terminal freshness checks, while internal target-validation results retain application-owned checkpointing plus the additional hook-path acceptance check when it completes.
 
 ## Concurrency and deployment boundary
 
