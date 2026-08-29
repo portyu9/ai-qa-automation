@@ -70,6 +70,7 @@ class K6Runner:
         self.external_module_isolation_enforced = external_module_isolation_enforced
         self.external_resource_limits_enforced = external_resource_limits_enforced
         self.external_workload_limits_enforced = external_workload_limits_enforced
+        self._workspace_root_identity: tuple[int, int] | None
         try:
             self._workspace_root_identity = pin_directory_identity(
                 self.workspace,
