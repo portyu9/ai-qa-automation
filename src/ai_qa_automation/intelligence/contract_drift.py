@@ -555,7 +555,9 @@ class OpenAPIContractDriftAnalyzer:
             else:
                 assert old_types is not None and new_types is not None
                 removed = old_types - new_types
-                severity = ContractDriftSeverity.BREAKING if removed else ContractDriftSeverity.RISKY
+                severity = (
+                    ContractDriftSeverity.BREAKING if removed else ContractDriftSeverity.RISKY
+                )
                 rule = "OAS-TYPE-NARROWED" if removed else "OAS-TYPE-WIDENED"
                 summary = (
                     "Schema type choices removed or replaced"
@@ -644,9 +646,7 @@ class OpenAPIContractDriftAnalyzer:
             required = name in new_required
             changes.append(
                 self._change(
-                    ContractDriftSeverity.BREAKING
-                    if required
-                    else ContractDriftSeverity.RISKY,
+                    ContractDriftSeverity.BREAKING if required else ContractDriftSeverity.RISKY,
                     f"{location}.properties.{name}",
                     "OAS-PROPERTY-ADDED",
                     "Required schema property added"
@@ -765,7 +765,9 @@ class OpenAPIContractDriftAnalyzer:
     ) -> None:
         excluded = handled | ignored
         if self._without_keys(old, excluded) != self._without_keys(new, excluded):
-            changes.append(self._change(ContractDriftSeverity.NOT_ANALYZED, location, rule_id, summary))
+            changes.append(
+                self._change(ContractDriftSeverity.NOT_ANALYZED, location, rule_id, summary)
+            )
 
     @staticmethod
     def _is_success_status(value: str) -> bool:
@@ -776,7 +778,9 @@ class OpenAPIContractDriftAnalyzer:
     def _change(
         severity: ContractDriftSeverity, location: str, rule_id: str, summary: str
     ) -> ContractChange:
-        return ContractChange(severity=severity, location=location, rule_id=rule_id, summary=summary)
+        return ContractChange(
+            severity=severity, location=location, rule_id=rule_id, summary=summary
+        )
 
     @staticmethod
     def _max_severity(changes: _BoundedChanges) -> ContractDriftSeverity:
