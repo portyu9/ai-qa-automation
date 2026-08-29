@@ -37,6 +37,8 @@ class K6Runner:
         external_egress_enforced: bool = False,
         external_process_isolation_enforced: bool = False,
         external_module_isolation_enforced: bool = False,
+        external_resource_limits_enforced: bool = False,
+        external_workload_limits_enforced: bool = False,
     ) -> None:
         if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int):
             raise ValueError("k6 timeout_seconds must be an integer")
@@ -48,12 +50,18 @@ class K6Runner:
             raise ValueError("external_process_isolation_enforced must be a boolean")
         if not isinstance(external_module_isolation_enforced, bool):
             raise ValueError("external_module_isolation_enforced must be a boolean")
+        if not isinstance(external_resource_limits_enforced, bool):
+            raise ValueError("external_resource_limits_enforced must be a boolean")
+        if not isinstance(external_workload_limits_enforced, bool):
+            raise ValueError("external_workload_limits_enforced must be a boolean")
         self.workspace = workspace.expanduser().absolute()
         self.policy = policy
         self.timeout_seconds = timeout_seconds
         self.external_egress_enforced = external_egress_enforced
         self.external_process_isolation_enforced = external_process_isolation_enforced
         self.external_module_isolation_enforced = external_module_isolation_enforced
+        self.external_resource_limits_enforced = external_resource_limits_enforced
+        self.external_workload_limits_enforced = external_workload_limits_enforced
         try:
             self._workspace_root_identity = pin_directory_identity(
                 self.workspace,
@@ -256,6 +264,16 @@ class K6Runner:
             raise PermissionError(
                 "k6 execution requires trusted infrastructure-level module-loading isolation; "
                 "validated JavaScript inspection cannot prove that runtime-loaded code is confined"
+            )
+        if not self.external_resource_limits_enforced:
+            raise PermissionError(
+                "k6 execution requires trusted infrastructure-level CPU/memory/process resource limits; "
+                "wall-clock and output bounds are not a resource sandbox"
+            )
+        if not self.external_workload_limits_enforced:
+            raise PermissionError(
+                "k6 execution requires trusted infrastructure-level target workload limits; "
+                "result thresholds do not bound virtual users, request concurrency, or request rate"
             )
         if shutil.which("k6") is None:
             raise RuntimeError("k6 is not installed; runtime validation is NOT_VERIFIED")
