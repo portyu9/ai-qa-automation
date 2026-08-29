@@ -180,9 +180,7 @@ def test_non_openapi_reason_remains_backward_compatible() -> None:
         {
             "openapi": "3.1.0",
             "paths": {
-                "/orders": {
-                    "get": {"responses": {"200": {"$ref": "#/components/responses/Order"}}}
-                }
+                "/orders": {"get": {"responses": {"200": {"$ref": "#/components/responses/Order"}}}}
             },
             "components": {"responses": {"Order": {"description": "ok"}}},
         },
@@ -206,7 +204,9 @@ def test_non_openapi_reason_remains_backward_compatible() -> None:
                     "post": {
                         "requestBody": {
                             "content": {
-                                "application/json": {"schema": {"$ref": "https://example.test/order.json"}}
+                                "application/json": {
+                                    "schema": {"$ref": "https://example.test/order.json"}
+                                }
                             }
                         },
                         "responses": {"200": {"description": "ok"}},
@@ -240,9 +240,7 @@ def test_self_contained_request_and_response_payload_schemas_remain_analyzable()
                     "requestBody": {
                         "required": False,
                         "content": {
-                            "application/json": {
-                                "schema": {"$ref": "#/components/schemas/Order"}
-                            }
+                            "application/json": {"schema": {"$ref": "#/components/schemas/Order"}}
                         },
                     },
                     "responses": {
