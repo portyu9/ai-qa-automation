@@ -145,9 +145,7 @@ class K6Runner:
                     "k6 module ingestion requires descriptor-relative no-follow filesystem authority"
                 ) from exc
             except (OSError, ValueError) as exc:
-                raise PermissionError(
-                    "k6 module failed confined no-follow ingestion"
-                ) from exc
+                raise PermissionError("k6 module failed confined no-follow ingestion") from exc
             try:
                 source = encoded.decode("utf-8")
             except UnicodeError as exc:
@@ -156,13 +154,9 @@ class K6Runner:
             if re.search(r"\bopen\s*\(", source):
                 raise PermissionError("k6 scripts may not read local files through open()")
             if _COMMONJS_REQUIRE.search(source):
-                raise PermissionError(
-                    "k6 CommonJS require is not allowed in the controlled runner"
-                )
+                raise PermissionError("k6 CommonJS require is not allowed in the controlled runner")
             if _DYNAMIC_IMPORT.search(source):
-                raise PermissionError(
-                    "k6 dynamic import() is not allowed in the controlled runner"
-                )
+                raise PermissionError("k6 dynamic import() is not allowed in the controlled runner")
             if root and ("__ENV.BASE_URL" in source or "__ENV.TARGET_URL" in source):
                 root_uses_injected_target = True
             for literal in _URL_LITERAL.findall(source):
