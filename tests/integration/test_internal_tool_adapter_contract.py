@@ -11,7 +11,7 @@ import pytest
 
 from ai_qa_automation.evidence import EvidenceStore
 from ai_qa_automation.fs_authority import pin_directory_identity
-from ai_qa_automation.models import AgentRunState
+from ai_qa_automation.models import AgentRunState, ValidationStatus
 from ai_qa_automation.policy import PolicyEngine
 from ai_qa_automation.runtime.internal_tools import RuntimeServices, build_internal_mcp_server
 
@@ -237,3 +237,64 @@ async def test_every_registered_internal_tool_adapter_is_invoked_through_sdk_bou
     assert k6["is_error"] is True
 
     assert services.state.tool_call_count == len(EXPECTED_SCHEMAS)
+
+
+@pytest.mark.asyncio
+async def test_registered_test_creation_adapter_cannot_chain_unverified_mutations(
+    tmp_path: Path,
+    fake_sdk: ModuleType,
+) -> None:
+    del fake_sdk
+    services = make_services(tmp_path)
+    services.policy = PolicyEngine(tmp_path / "control", services.workspace, allow_test_writes=True)
+    tools = registered_tools(services)
+
+    coverage_response = await tools["search_test_coverage"](
+        {"query": "test_sample", "max_results": 10}
+    )
+    coverage_payload = json.loads(coverage_response["content"][0]["text"])
+    plan_response = await tools["plan_tests"](
+        {
+            "requirement": "Preserve arithmetic behavior",
+            "existing_coverage_json": '["tests/test_sample.py"]',
+            "coverage_evidence_id": coverage_payload["coverage_evidence_id"],
+        }
+    )
+    plan_payload = json.loads(plan_response["content"][0]["text"])
+
+    generated_path = "tests/test_generated_behavior.py"
+    generated_content = (
+        "def test_generated_behavior():\n"
+        "    value = 2 + 3\n"
+        "    assert value == 5\n"
+    )
+    creation = await tools["create_test_file"](
+        {
+            "path": generated_path,
+            "content": generated_content,
+            "plan_evidence_id": plan_payload["plan_evidence_id"],
+        }
+    )
+
+    assert creation.get("is_error") is not True
+    assert (services.workspace / generated_path).read_text(encoding="utf-8") == generated_content
+    assert services.state.change_revision == 1
+    patch_safety = services.state.validation_results[-1]
+    assert patch_safety.name == "test_patch_safety"
+    assert patch_safety.revision == 1
+    assert patch_safety.status is ValidationStatus.PASS
+    assert patch_safety.details["path"] == generated_path
+
+    blocked_path = "tests/test_second_generated_behavior.py"
+    second_creation = await tools["create_test_file"](
+        {
+            "path": blocked_path,
+            "content": generated_content,
+            "plan_evidence_id": plan_payload["plan_evidence_id"],
+        }
+    )
+
+    assert second_creation["is_error"] is True
+    assert "change revision 1 is not closed" in second_creation["content"][0]["text"]
+    assert not (services.workspace / blocked_path).exists()
+    assert services.state.change_revision == 1
