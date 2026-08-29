@@ -208,11 +208,7 @@ def test_duplicate_key_diagnostic_does_not_echo_untrusted_key() -> None:
         path="openapi.json",
         baseline=b'{"openapi":"3.1.0","paths":{}}',
         current=(
-            '{"openapi":"3.1.0","paths":{},"'
-            + untrusted_key
-            + '":1,"'
-            + untrusted_key
-            + '":2}'
+            '{"openapi":"3.1.0","paths":{},"' + untrusted_key + '":1,"' + untrusted_key + '":2}'
         ).encode(),
     )
 
