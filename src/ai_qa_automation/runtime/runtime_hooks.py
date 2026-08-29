@@ -468,6 +468,7 @@ def posttool_policy_output(
         state is not None
         and control is not None
         and not failed
+        and not external_provider
         and tool_name not in _MUTATION_TOOLS
     ):
         freshness_reason = _workspace_freshness_denial(
