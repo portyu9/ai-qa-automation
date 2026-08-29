@@ -47,7 +47,7 @@ RENDER_WAIT_COMMAND = (
 )
 GITHUB_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 CONTAINER_ID_RE = re.compile(r"^[0-9a-f]{64}$")
-DOCKER_START_TIMEOUT_SECONDS = 15
+DOCKER_START_TIMEOUT_SECONDS = 60
 RENDER_TIMEOUT_SECONDS = 60
 DOCKER_CLEANUP_TIMEOUT_SECONDS = 15
 DOCKER_COPY_TIMEOUT_SECONDS = 30
@@ -234,6 +234,7 @@ def _run_mermaid(root: Path, relative: Path, output_root: Path, expected_count: 
         input_path,
     ]
     error: RuntimeError | None = None
+    cleanup_error: RuntimeError | None = None
     cleanup_required = True
     try:
         subprocess.run(
@@ -266,7 +267,14 @@ def _run_mermaid(root: Path, relative: Path, output_root: Path, expected_count: 
         error = exc
     finally:
         if cleanup_required:
-            _remove_renderer_container(name, cidfile, docker_executable=docker_executable)
+            try:
+                _remove_renderer_container(name, cidfile, docker_executable=docker_executable)
+            except RuntimeError as exc:
+                cleanup_error = exc
+    if cleanup_error is not None:
+        if error is not None:
+            raise RuntimeError(f"{error}; renderer cleanup authority also failed") from cleanup_error
+        raise cleanup_error
     if error is not None:
         raise error
     _validate_rendered_outputs(output_root, Path("rendered.md"), expected_count=expected_count)
