@@ -83,6 +83,32 @@ def test_k6_rejects_non_boolean_module_isolation_assertion(
         )
 
 
+@pytest.mark.parametrize("value", [1, "true", object()])
+def test_k6_rejects_non_boolean_resource_limits_assertion(
+    tmp_path: Path, value: object
+) -> None:
+    with pytest.raises(ValueError, match="external_resource_limits_enforced"):
+        K6Runner(
+            tmp_path,
+            _policy(tmp_path),
+            external_egress_enforced=True,
+            external_resource_limits_enforced=value,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize("value", [1, "true", object()])
+def test_k6_rejects_non_boolean_workload_limits_assertion(
+    tmp_path: Path, value: object
+) -> None:
+    with pytest.raises(ValueError, match="external_workload_limits_enforced"):
+        K6Runner(
+            tmp_path,
+            _policy(tmp_path),
+            external_egress_enforced=True,
+            external_workload_limits_enforced=value,  # type: ignore[arg-type]
+        )
+
+
 def test_k6_requires_module_isolation_before_binary_lookup(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -100,6 +126,57 @@ def test_k6_requires_module_isolation_before_binary_lookup(
 
     monkeypatch.setattr(performance.shutil, "which", fail_lookup)
     with pytest.raises(PermissionError, match="module-loading isolation"):
+        runner.run(
+            script,
+            target_url="http://127.0.0.1:8000",
+            environment="local",
+        )
+
+
+def test_k6_requires_resource_limits_before_binary_lookup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script = _write_import_graph(tmp_path)
+    runner = K6Runner(
+        tmp_path,
+        _policy(tmp_path),
+        external_egress_enforced=True,
+        external_process_isolation_enforced=True,
+        external_module_isolation_enforced=True,
+    )
+
+    def fail_lookup(_name: str) -> str:
+        raise AssertionError("k6 binary lookup occurred before resource-limit authorization")
+
+    monkeypatch.setattr(performance.shutil, "which", fail_lookup)
+    with pytest.raises(PermissionError, match="CPU/memory/process resource limits"):
+        runner.run(
+            script,
+            target_url="http://127.0.0.1:8000",
+            environment="local",
+        )
+
+
+def test_k6_requires_workload_limits_before_binary_lookup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script = _write_import_graph(tmp_path)
+    runner = K6Runner(
+        tmp_path,
+        _policy(tmp_path),
+        external_egress_enforced=True,
+        external_process_isolation_enforced=True,
+        external_module_isolation_enforced=True,
+        external_resource_limits_enforced=True,
+    )
+
+    def fail_lookup(_name: str) -> str:
+        raise AssertionError("k6 binary lookup occurred before workload-limit authorization")
+
+    monkeypatch.setattr(performance.shutil, "which", fail_lookup)
+    with pytest.raises(PermissionError, match="target workload limits"):
         runner.run(
             script,
             target_url="http://127.0.0.1:8000",
@@ -163,6 +240,8 @@ def test_k6_executes_validated_snapshot_after_workspace_mutation(
         external_egress_enforced=True,
         external_process_isolation_enforced=True,
         external_module_isolation_enforced=True,
+        external_resource_limits_enforced=True,
+        external_workload_limits_enforced=True,
     )
     monkeypatch.setattr(performance.shutil, "which", lambda _: "/usr/bin/k6")
 
@@ -251,7 +330,7 @@ def test_k6_rejects_symlinked_local_import(tmp_path: Path) -> None:
     (directory / "load.js").write_text(
         "import http from 'k6/http';\n"
         "import { path } from './helper.js';\n"
-        "export default function () { http.get(__ENV.BASE_URL + path); }\n",
+        "export default function () { http.get(__ENV.BASE_URL + '/v1'); }\n",
         encoding="utf-8",
     )
     runner = K6Runner(tmp_path, _policy(tmp_path), external_egress_enforced=True)
