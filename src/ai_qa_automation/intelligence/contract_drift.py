@@ -178,11 +178,13 @@ class OpenAPIContractDriftAnalyzer:
         if has_openapi == has_swagger:
             return None
         if has_openapi:
-            assert isinstance(openapi, str)
+            if not isinstance(openapi, str):
+                return None
             if _OPENAPI_VERSION.fullmatch(openapi) is None:
                 return None
             return ("openapi", openapi)
-        assert isinstance(swagger, str)
+        if not isinstance(swagger, str):
+            return None
         if swagger != "2.0":
             return None
         return ("swagger", swagger)
@@ -552,8 +554,7 @@ class OpenAPIContractDriftAnalyzer:
                 severity = ContractDriftSeverity.RISKY
                 rule = "OAS-TYPE-CONSTRAINT-REMOVED"
                 summary = "Schema type constraint removed"
-            else:
-                assert old_types is not None and new_types is not None
+            elif old_types is not None and new_types is not None:
                 removed = old_types - new_types
                 severity = (
                     ContractDriftSeverity.BREAKING if removed else ContractDriftSeverity.RISKY
@@ -564,6 +565,9 @@ class OpenAPIContractDriftAnalyzer:
                     if removed
                     else "Schema type choices expanded"
                 )
+            else:
+                changes.mark_incomplete()
+                return
             changes.append(self._change(severity, location, rule, summary))
 
         old_enum = self._enum_map(old.get("enum"))
@@ -587,8 +591,7 @@ class OpenAPIContractDriftAnalyzer:
                         "Enum constraint removed; exhaustive consumers may need review",
                     )
                 )
-            else:
-                assert old_enum is not None and new_enum is not None
+            elif old_enum is not None and new_enum is not None:
                 removed_keys = old_enum.keys() - new_enum.keys()
                 added_keys = new_enum.keys() - old_enum.keys()
                 if removed_keys:
@@ -609,6 +612,9 @@ class OpenAPIContractDriftAnalyzer:
                             "Allowed enum values expanded; consumers with exhaustive handling may need review",
                         )
                     )
+            else:
+                changes.mark_incomplete()
+                return
 
         old_required = set(self._string_list(old.get("required")))
         new_required = set(self._string_list(new.get("required")))
