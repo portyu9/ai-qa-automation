@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import uuid
 from pathlib import Path
@@ -61,6 +63,11 @@ MAX_MERMAID_DIAGRAMS = _fs.MAX_MERMAID_DIAGRAMS
 MAX_RENDER_FILE_BYTES = _fs.MAX_RENDER_FILE_BYTES
 MAX_RENDER_TOTAL_BYTES = _fs.MAX_RENDER_TOTAL_BYTES
 MAX_RENDER_OUTPUT_ENTRIES = _fs.MAX_RENDER_OUTPUT_ENTRIES
+# The tmpfs bounds file data and inode count, but sparse files could have a
+# larger logical tar representation. Cap the archive stream independently.
+MAX_RENDER_ARCHIVE_BYTES = (
+    MAX_RENDER_TOTAL_BYTES + MAX_RENDER_OUTPUT_ENTRIES * 2048 + 65536
+)
 READ_CHUNK_BYTES = _fs.READ_CHUNK_BYTES
 _read_fd_bounded = _fs._read_fd_bounded
 _read_regular_bytes = _fs._read_regular_bytes
@@ -168,19 +175,102 @@ def _wait_renderer_completion(container_id: str, *, docker_executable: str) -> N
         raise RuntimeError("Mermaid renderer did not complete successfully") from exc
 
 
-def _copy_renderer_outputs(
-    container_id: str, output_root: Path, *, docker_executable: str
-) -> None:
+def _archive_member_name(member: tarfile.TarInfo) -> str | None:
+    name = member.name
+    while name.startswith("./"):
+        name = name[2:]
+    if name in {"", "."}:
+        return None if member.isdir() else ""
+    if name in {".."} or "/" in name or "\\" in name or Path(name).is_absolute():
+        return ""
+    return name
+
+
+def _write_archive_member(root_fd: int, name: str, data: bytes) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(name, flags, 0o600, dir_fd=root_fd)
     try:
-        subprocess.run(
-            [docker_executable, "cp", f"{container_id}:/out/.", str(output_root)],
+        view = memoryview(data)
+        while view:
+            written = os.write(fd, view[:READ_CHUNK_BYTES])
+            if written <= 0:
+                raise RuntimeError("Mermaid renderer output could not be materialized")
+            view = view[written:]
+    finally:
+        os.close(fd)
+
+
+def _materialize_renderer_archive(
+    archive: bytes, output_root: Path, *, expected_count: int
+) -> None:
+    if len(archive) > MAX_RENDER_ARCHIVE_BYTES:
+        raise RuntimeError("Mermaid renderer archive exceeded the bounded output budget")
+    expected_names = {"rendered.md"} | {
+        f"rendered-{index}.svg" for index in range(1, expected_count + 1)
+    }
+    seen: set[str] = set()
+    total_bytes = 0
+    root_fd = os.open(
+        output_root,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        try:
+            with tarfile.open(fileobj=io.BytesIO(archive), mode="r:*") as rendered:
+                for index, member in enumerate(rendered, start=1):
+                    if index > MAX_RENDER_OUTPUT_ENTRIES + 1:
+                        raise RuntimeError("Mermaid renderer archive exceeded the entry budget")
+                    name = _archive_member_name(member)
+                    if name is None:
+                        continue
+                    if not name or name not in expected_names or name in seen or not member.isfile():
+                        raise RuntimeError("Mermaid renderer archive contained an invalid output entry")
+                    if member.size <= 0 or member.size > MAX_RENDER_FILE_BYTES:
+                        raise RuntimeError("Mermaid renderer archive contained an invalid output size")
+                    total_bytes += member.size
+                    if total_bytes > MAX_RENDER_TOTAL_BYTES:
+                        raise RuntimeError("Mermaid renderer archive exceeded the aggregate byte budget")
+                    extracted = rendered.extractfile(member)
+                    if extracted is None:
+                        raise RuntimeError("Mermaid renderer archive member could not be read")
+                    data = extracted.read(member.size + 1)
+                    if len(data) != member.size:
+                        raise RuntimeError("Mermaid renderer archive member was incomplete")
+                    _write_archive_member(root_fd, name, data)
+                    seen.add(name)
+        except (tarfile.TarError, EOFError) as exc:
+            raise RuntimeError("Mermaid renderer archive was invalid or incomplete") from exc
+    finally:
+        os.close(root_fd)
+    if seen != expected_names:
+        raise RuntimeError("Mermaid renderer archive did not contain the exact expected outputs")
+
+
+def _copy_renderer_outputs(
+    container_id: str,
+    output_root: Path,
+    *,
+    expected_count: int,
+    docker_executable: str,
+) -> None:
+    archive_command = (
+        "/bin/busybox tar -C /out -cf - . | "
+        f"/bin/busybox head -c {MAX_RENDER_ARCHIVE_BYTES + 1}"
+    )
+    try:
+        result = subprocess.run(
+            [docker_executable, "exec", container_id, "/bin/sh", "-c", archive_command],
             check=True,
-            stdout=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=DOCKER_COPY_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        raise RuntimeError("Mermaid renderer output copy could not be completed") from exc
+        raise RuntimeError("Mermaid renderer output archive could not be collected") from exc
+    archive = result.stdout
+    if len(archive) > MAX_RENDER_ARCHIVE_BYTES:
+        raise RuntimeError("Mermaid renderer archive exceeded the bounded output budget")
+    _materialize_renderer_archive(archive, output_root, expected_count=expected_count)
 
 
 def _run_mermaid(root: Path, relative: Path, output_root: Path, expected_count: int) -> None:
@@ -248,9 +338,14 @@ def _run_mermaid(root: Path, relative: Path, output_root: Path, expected_count: 
         if container_id is None:
             raise RuntimeError("Mermaid renderer did not publish an exact container identity")
         _wait_renderer_completion(container_id, docker_executable=docker_executable)
-        # /out is a container-private tmpfs. Copy while the exact container is
-        # still alive; stopping it first would discard the rendered bytes.
-        _copy_renderer_outputs(container_id, output_root, docker_executable=docker_executable)
+        # Docker's archive API cannot copy tmpfs mounts. Stream a bounded tar
+        # from the exact live container and validate every member before host write.
+        _copy_renderer_outputs(
+            container_id,
+            output_root,
+            expected_count=expected_count,
+            docker_executable=docker_executable,
+        )
     except subprocess.CalledProcessError as exc:
         error = RuntimeError(f"Mermaid renderer could not be started for {relative}")
         error.__cause__ = exc
