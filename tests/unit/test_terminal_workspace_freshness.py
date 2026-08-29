@@ -223,8 +223,6 @@ async def test_external_permission_denies_drift_after_pretool_accounting(tmp_pat
     assert state.terminal_status is TerminalStatus.BLOCKED
     assert store.load().terminal_status is TerminalStatus.BLOCKED
     assert control.expected_workspace_fingerprint == expected
-    # The attempt/network budget was conservatively reserved by PreToolUse, but
-    # the permission callback denied before the external provider action executed.
     assert control.budget.snapshot().tool_calls == 1
     assert control.budget.snapshot().network_calls == 1
 
@@ -381,12 +379,19 @@ def test_external_posttool_accepts_sanitized_result_when_workspace_is_fresh(tmp_
     assert state.external_evidence[0] in state.evidence_ids
 
 
-def test_mutation_body_checkpoint_allows_authorized_candidate_transition(tmp_path: Path) -> None:
+def test_mutation_preparation_occurs_only_after_fresh_workspace_proof(tmp_path: Path) -> None:
     workspace, state, control, _store, services = _runtime(tmp_path)
     relative = "tests/generated_test.py"
-    control.prepare_mutation(relative, change_revision_before=state.change_revision)
+    state.target_git_sha = _git(workspace, "rev-parse", "HEAD")
 
-    services.consume("create_test_file", {"path": relative, "source": "def test_ok():\n    assert True\n"})
+    services.consume(
+        "create_test_file",
+        {"path": relative, "source": "def test_ok():\n    assert True\n"},
+    )
+
+    assert control.pending_mutation is not None
+    assert control.pending_mutation.relative_path == relative
+
     target = workspace / relative
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
@@ -396,6 +401,23 @@ def test_mutation_body_checkpoint_allows_authorized_candidate_transition(tmp_pat
     assert control.pending_mutation is not None
 
     control.rollback_pending_mutation(reason="test cleanup")
+
+
+def test_drifted_mutation_never_creates_pending_or_rollback_authority(tmp_path: Path) -> None:
+    workspace, state, control, _store, services = _runtime(tmp_path)
+    state.target_git_sha = _git(workspace, "rev-parse", "HEAD")
+    (workspace / "tracked.txt").write_text("drift-before-mutation-preparation\n", encoding="utf-8")
+    rollback_root = control.metadata_path.parent / "rollback"
+
+    with pytest.raises(PermissionError, match="outside the authorized runtime mutation lineage"):
+        services.consume(
+            "create_test_file",
+            {"path": "tests/generated_test.py", "source": "def test_ok():\n    assert True\n"},
+        )
+
+    assert state.terminal_status is TerminalStatus.BLOCKED
+    assert control.pending_mutation is None
+    assert not rollback_root.exists()
 
 
 def test_observer_marks_incomplete_fingerprint_non_fresh(
