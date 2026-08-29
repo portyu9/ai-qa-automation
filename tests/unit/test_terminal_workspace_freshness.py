@@ -10,6 +10,7 @@ from typing import Any, cast
 import pytest
 
 import ai_qa_automation.agent as agent_module
+import ai_qa_automation.runtime.runtime_hooks as runtime_hooks_module
 import ai_qa_automation.runtime.workspace_freshness as workspace_freshness_module
 from ai_qa_automation.agent import _enforce_terminal_workspace_freshness
 from ai_qa_automation.evidence import EvidenceStore
@@ -27,6 +28,7 @@ from ai_qa_automation.runtime.journal import RunJournal
 from ai_qa_automation.runtime.live_services import LiveRuntimeServices
 from ai_qa_automation.runtime.run_control import RuntimeControl
 from ai_qa_automation.runtime.runtime_hooks import (
+    build_permission_handler,
     posttool_policy_output,
     pretool_policy_output,
 )
@@ -156,10 +158,16 @@ def test_non_mutation_checkpoint_catches_drift_after_tool_entry(tmp_path: Path) 
     assert control.expected_workspace_fingerprint == expected
 
 
-def test_universal_pretool_denies_external_execution_after_workspace_drift(tmp_path: Path) -> None:
-    workspace, state, control, store, services = _runtime(tmp_path)
-    (workspace / "tracked.txt").write_text("external-pretool-drift\n", encoding="utf-8")
+def test_pretool_does_not_run_repository_freshness_observation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _workspace, state, control, store, services = _runtime(tmp_path)
 
+    def explode(*_args: object, **_kwargs: object) -> WorkspaceFreshness:
+        raise AssertionError("PreToolUse must not run RepositoryInspector freshness")
+
+    monkeypatch.setattr(runtime_hooks_module, "observe_workspace_freshness", explode)
     result = pretool_policy_output(
         services.policy,
         {
@@ -171,13 +179,82 @@ def test_universal_pretool_denies_external_execution_after_workspace_drift(tmp_p
         control=control,
     )
 
-    hook = result["hookSpecificOutput"]
-    assert hook["permissionDecision"] == "deny"
-    assert "outside the authorized runtime mutation lineage" in hook["permissionDecisionReason"]
-    assert state.terminal_status is TerminalStatus.BLOCKED
+    assert result == {}
+    assert state.terminal_status is None
     assert control.budget.snapshot().tool_calls == 1
-    assert control.budget.snapshot().network_calls == 0
-    assert state.policy_decisions == []
+    assert control.budget.snapshot().network_calls == 1
+    assert len(state.policy_decisions) == 1
+
+
+@pytest.mark.asyncio
+async def test_external_permission_denies_drift_after_pretool_accounting(tmp_path: Path) -> None:
+    workspace, state, control, store, services = _runtime(tmp_path)
+    expected = control.expected_workspace_fingerprint
+    request = {
+        "tool_name": "mcp__github__get_issue",
+        "tool_input": {"issue_number": 42},
+    }
+
+    assert (
+        pretool_policy_output(
+            services.policy,
+            request,
+            state=state,
+            state_store=store,
+            control=control,
+        )
+        == {}
+    )
+    (workspace / "tracked.txt").write_text("external-permission-drift\n", encoding="utf-8")
+
+    handler = build_permission_handler(
+        services.policy,
+        state=state,
+        state_store=store,
+        control=control,
+    )
+    decision = await handler("mcp__github__get_issue", {"issue_number": 42}, None)
+
+    assert type(decision).__name__ == "PermissionResultDeny"
+    assert "workspace-integrity" in str(getattr(decision, "message", ""))
+    assert "outside the authorized runtime mutation lineage" in str(
+        getattr(decision, "message", "")
+    )
+    assert state.terminal_status is TerminalStatus.BLOCKED
+    assert store.load().terminal_status is TerminalStatus.BLOCKED
+    assert control.expected_workspace_fingerprint == expected
+    # The attempt/network budget was conservatively reserved by PreToolUse, but
+    # the permission callback denied before the external provider action executed.
+    assert control.budget.snapshot().tool_calls == 1
+    assert control.budget.snapshot().network_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_external_write_policy_denial_precedes_freshness_observation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _workspace, state, control, store, services = _runtime(tmp_path)
+
+    def explode(*_args: object, **_kwargs: object) -> WorkspaceFreshness:
+        raise AssertionError("policy-denied external writes must not run repository freshness")
+
+    monkeypatch.setattr(runtime_hooks_module, "observe_workspace_freshness", explode)
+    handler = build_permission_handler(
+        services.policy,
+        state=state,
+        state_store=store,
+        control=control,
+    )
+    decision = await handler(
+        "mcp__github__create_issue",
+        {"title": "must require approval"},
+        None,
+    )
+
+    assert type(decision).__name__ == "PermissionResultDeny"
+    assert "MCP-TOOL-002" in str(getattr(decision, "message", ""))
+    assert state.terminal_status is None
 
 
 def test_read_only_posttool_rejects_drift_and_never_rebases_authority(tmp_path: Path) -> None:
