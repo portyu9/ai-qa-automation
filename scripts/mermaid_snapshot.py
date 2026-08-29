@@ -39,6 +39,15 @@ else:
     )
 
 FENCE_OPEN_RE = re.compile(r"^(?P<fence>`{3,}|~{3,})[ \t]*(?P<info>[A-Za-z0-9_+.-]*)[ \t]*$")
+# Mermaid CLI 11.16.0's Markdown extractor uses exactly three backtick/colon
+# delimiter characters, the literal lowercase info string ``mermaid``, optional
+# horizontal whitespace, and a line-delimited closing delimiter. Keep this
+# separate from the broader Markdown fence parser so documentation syntax that
+# the pinned renderer would silently ignore fails closed before container work.
+RENDERER_MERMAID_RE = re.compile(
+    r"^[^\S\n]*[`:]{3}mermaid[^\S\n]*\r?\n[\s\S]*?[`:]{3}[^\S\n]*$",
+    re.MULTILINE,
+)
 
 
 @dataclass(frozen=True)
@@ -80,6 +89,10 @@ def _mermaid_block_count(text: str) -> int:
     if fence is not None:
         raise ValueError("unterminated fenced code block in public documentation")
     return count
+
+
+def _renderer_mermaid_block_count(text: str) -> int:
+    return sum(1 for _ in RENDERER_MERMAID_RE.finditer(text))
 
 
 def discover_mermaid_snapshot(
