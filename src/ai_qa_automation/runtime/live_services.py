@@ -5,6 +5,7 @@ from typing import Any
 
 from ..models import TerminalStatus, ValidationResult, ValidationStatus
 from .internal_tools import RuntimeServices, _pytest_scope, _stable_gate_id
+from .k6_authority import k6_gate_payload, k6_persisted_subject
 from .mutation_lineage import build_rollback_lineage_checkpoints
 from .run_control import RuntimeControl
 from .tool_input_bounds import validate_tool_request
@@ -24,6 +25,11 @@ class LiveRuntimeServices(RuntimeServices):
     deployment infrastructure explicitly asserts both process/filesystem
     containment and outbound-egress enforcement. These booleans are prerequisite
     assertions only; they do not implement the isolation themselves.
+
+    Target-controlled k6 code is fail-closed at this live-service boundary until
+    process/filesystem-isolation and executable module-loading isolation authority
+    are explicitly plumbed through trusted runtime configuration to the controlled
+    runner. Egress configuration alone cannot authorize process spawn.
     """
 
     control: RuntimeControl | None = None
@@ -66,6 +72,18 @@ class LiveRuntimeServices(RuntimeServices):
             + "; configuration flags are prerequisite assertions, not sandbox implementations"
         )
 
+    def k6_execution_block_reason(self) -> str:
+        missing = ["process/filesystem isolation", "module-loading isolation"]
+        if not self.k6_external_egress_enforced:
+            missing.append("outbound-egress enforcement")
+        return (
+            "k6 target-code execution requires trusted deployment enforcement for "
+            + ", ".join(missing)
+            + "; the current live runtime exposes only the outbound-egress assertion, "
+            "not the process/filesystem or module-loading isolation assertions required "
+            "by the controlled K6Runner"
+        )
+
     def consume(self, tool_name: str, tool_input: dict[str, Any]) -> None:
         if self.control is None:  # pragma: no cover - guarded by __post_init__
             raise RuntimeError("live runtime services lost RuntimeControl")
@@ -105,5 +123,35 @@ class LiveRuntimeServices(RuntimeServices):
                 self.state.terminal_reason = reason
                 self.checkpoint()
                 raise PermissionError(reason)
+
+        if tool_name == "run_k6":
+            try:
+                gate_payload = k6_gate_payload(tool_input)
+            except ValueError:
+                # The canonical attempt was already charged. Persist that accounting,
+                # but do not manufacture a validation gate for an invalid subject.
+                self.checkpoint()
+                raise
+            reason = self.k6_execution_block_reason()
+            self.state.validation_results.append(
+                ValidationResult(
+                    name="k6",
+                    gate_id=_stable_gate_id("k6", gate_payload),
+                    revision=self.state.change_revision,
+                    status=ValidationStatus.BLOCKED,
+                    summary=reason,
+                    details={
+                        **k6_persisted_subject(gate_payload),
+                        "execution_started": False,
+                        "process_isolation_enforced": False,
+                        "module_isolation_enforced": False,
+                        "external_egress_enforced": self.k6_external_egress_enforced,
+                    },
+                )
+            )
+            self.state.terminal_status = TerminalStatus.BLOCKED
+            self.state.terminal_reason = reason
+            self.checkpoint()
+            raise PermissionError(reason)
 
         self.checkpoint()

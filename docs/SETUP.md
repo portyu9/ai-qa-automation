@@ -108,7 +108,9 @@ Inject configuration through:
 | `AI_QA_ALLOWED_NETWORK_HOSTS` | `["127.0.0.1","localhost"]` | canonical exact host/IP allowlist |
 | `AI_QA_ALLOW_TEST_WRITES` | `false` | enables only policy-eligible live autonomous Python test writes |
 | `AI_QA_ALLOW_MUTATING_API_METHODS` | `false` | enables policy-eligible API mutation; read-only remains default |
-| `AI_QA_K6_EXTERNAL_EGRESS_ENFORCED` | `false` | asserts deployment-level egress containment for k6; required for every k6 run |
+| `AI_QA_K6_EXTERNAL_EGRESS_ENFORCED` | `false` | asserts deployment-level egress containment for k6; necessary but not sufficient for process execution |
+
+The live MCP configuration currently exposes the k6 egress prerequisite only. The controlled runner additionally requires separate trusted **process/filesystem isolation** and **executable module-loading isolation** assertions before process spawn. Because neither additional assertion is wired through live MCP configuration, live `run_k6` remains intentionally fail-closed rather than treating static JavaScript inspection, a validated snapshot, or the egress flag as an execution/module sandbox.
 
 ---
 
@@ -271,14 +273,24 @@ Reusable patch/generation components may understand other syntaxes without widen
 
 ## Controlled k6 execution
 
-Every k6 run requires deployment-level egress containment to be independently established:
+Every k6 execution requires three independent deployment-level facts: **outbound-egress containment**, **process/filesystem isolation**, and **executable module-loading isolation**. Repository configuration currently exposes only the egress prerequisite:
 
 ```bash
 export AI_QA_K6_EXTERNAL_EGRESS_ENFORCED=true
 ```
 
 > [!WARNING]
-> This variable is a trusted prerequisite assertion. It does not create a firewall. The operating environment must actually enforce outbound network policy.
+> This variable is a trusted prerequisite assertion. It does not create a firewall, process sandbox, filesystem namespace, container boundary, or module-loader sandbox. Process execution must remain fail-closed until the deployment independently enforces all three prerequisites.
+
+The controlled runner additionally applies defense-in-depth before an eventual authorized spawn:
+
+- validates a bounded static ESM root/local-import graph through descriptor-relative no-follow reads;
+- rejects CommonJS `require`, dynamic `import()`, remote static imports, unapproved extension/builtin imports, unapproved literal hosts, `open()` use, path escape, and symlink-traversing module subjects;
+- disables k6 automatic extension resolution with `K6_AUTO_EXTENSION_RESOLUTION=false`;
+- snapshots the exact validated UTF-8 static module bytes into a fresh temporary execution tree; and
+- executes only that snapshot when all three infrastructure prerequisites are asserted, so later workspace mutation cannot change the statically validated code.
+
+These static checks do **not** prove runtime module confinement. The separate module-loading-isolation prerequisite exists because a JavaScript runtime can otherwise acquire executable code through loader behavior that static source inspection cannot comprehensively authorize.
 
 The k6 target must additionally satisfy:
 
@@ -289,7 +301,7 @@ The k6 target must additionally satisfy:
 - script/import restrictions; and
 - predefined threshold assessment.
 
-The egress prerequisite applies to localhost targets too because JavaScript can construct destinations dynamically.
+The egress prerequisite applies to localhost targets too because JavaScript can construct destinations dynamically. The live MCP `run_k6` path currently remains intentionally blocked even when the egress flag is true because its separate trusted process/filesystem-isolation and module-loading-isolation assertions have not been plumbed into runtime configuration.
 
 ---
 
@@ -327,7 +339,7 @@ The operating environment owns observations such as:
 - live Anthropic provider behavior;
 - authenticated GitHub/Atlassian behavior;
 - external application browser/API behavior;
-- approved k6 workload behavior and egress enforcement;
+- approved k6 workload behavior, egress enforcement, process/filesystem isolation, and executable module-loading isolation;
 - Appium app/device/emulator/cloud behavior;
 - process/container isolation;
 - firewall/proxy policy;

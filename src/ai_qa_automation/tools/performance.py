@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import tempfile
@@ -9,20 +10,23 @@ from typing import Any
 from urllib.parse import urlparse
 from uuid import uuid4
 
+from ..fs_authority import pin_directory_identity, read_bytes_confined
 from ..io_safety import read_text_bounded
 from ..models import PerformanceMetrics, ToolDecision
 from ..policy import PolicyEngine
 from .execution_env import restricted_subprocess_env, run_bounded_subprocess
 
 _URL_LITERAL = re.compile(r"https?://[^'\"`\s)]+", re.I)
-_IMPORT_SPECIFIER = re.compile(r"(?:from\s+|import\s*\(\s*|import\s+)([\'\"])([^\'\"]+)\1")
+_IMPORT_SPECIFIER = re.compile(r"(?:from\s+|import\s+)([\'\"])([^\'\"]+)\1")
+_COMMONJS_REQUIRE = re.compile(r"\brequire\b")
+_DYNAMIC_IMPORT = re.compile(r"\bimport\s*\(")
 _MAX_K6_MODULE_BYTES = 1_000_000
 _MAX_K6_MODULES = 64
 _MAX_K6_SUMMARY_BYTES = 1_000_000
 
 
 class K6Runner:
-    """Runs a target-bound k6 script only behind an infrastructure-egress prerequisite."""
+    """Runs a target-bound k6 script only behind trusted execution isolation."""
 
     def __init__(
         self,
@@ -31,6 +35,8 @@ class K6Runner:
         timeout_seconds: int = 180,
         *,
         external_egress_enforced: bool = False,
+        external_process_isolation_enforced: bool = False,
+        external_module_isolation_enforced: bool = False,
     ) -> None:
         if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int):
             raise ValueError("k6 timeout_seconds must be an integer")
@@ -38,58 +44,109 @@ class K6Runner:
             raise ValueError("k6 timeout_seconds must be positive")
         if not isinstance(external_egress_enforced, bool):
             raise ValueError("external_egress_enforced must be a boolean")
-        self.workspace = workspace.resolve()
+        if not isinstance(external_process_isolation_enforced, bool):
+            raise ValueError("external_process_isolation_enforced must be a boolean")
+        if not isinstance(external_module_isolation_enforced, bool):
+            raise ValueError("external_module_isolation_enforced must be a boolean")
+        self.workspace = workspace.expanduser().absolute()
         self.policy = policy
         self.timeout_seconds = timeout_seconds
         self.external_egress_enforced = external_egress_enforced
+        self.external_process_isolation_enforced = external_process_isolation_enforced
+        self.external_module_isolation_enforced = external_module_isolation_enforced
+        try:
+            self._workspace_root_identity = pin_directory_identity(
+                self.workspace,
+                label="k6 workspace",
+            )
+        except (OSError, ValueError, RuntimeError):
+            self._workspace_root_identity = None
 
-    def _validate_script(self, script: Path, target_url: str) -> Path:
-        resolved = (script if script.is_absolute() else self.workspace / script).resolve()
-        if (
-            self.workspace not in resolved.parents
-            or resolved.suffix != ".js"
-            or not resolved.is_file()
-        ):
+    def _workspace_module_path(self, candidate: Path) -> Path:
+        raw = candidate if candidate.is_absolute() else self.workspace / candidate
+        lexical = Path(os.path.abspath(raw))
+        try:
+            relative_path = lexical.relative_to(self.workspace)
+        except ValueError as exc:
+            raise PermissionError(
+                "k6 local imports must resolve to .js files inside the target workspace"
+            ) from exc
+        if not relative_path.parts or lexical.suffix != ".js":
+            raise PermissionError(
+                "k6 local imports must resolve to .js files inside the target workspace"
+            )
+        return lexical
+
+    def _collect_validated_modules(
+        self,
+        script: Path,
+        target_url: str,
+    ) -> tuple[Path, dict[Path, str]]:
+        if self._workspace_root_identity is None:
+            raise PermissionError(
+                "k6 module ingestion requires descriptor-relative no-follow filesystem authority "
+                "for a stable target workspace"
+            )
+        try:
+            resolved = self._workspace_module_path(script)
+        except PermissionError as exc:
             raise PermissionError(
                 "k6 script must be an existing .js file inside the target workspace"
-            )
+            ) from exc
         target_host = (urlparse(target_url).hostname or "").lower()
         if not target_host:
             raise PermissionError("k6 target URL must contain an explicit host")
         allowed_literal_hosts = {target_host}
-        visited: set[Path] = set()
+        modules: dict[Path, str] = {}
         root_uses_injected_target = False
 
         def inspect_module(module_path: Path, *, root: bool = False) -> None:
             nonlocal root_uses_injected_target
-            module_path = module_path.resolve()
-            if module_path in visited:
+            module_path = self._workspace_module_path(module_path)
+            relative_path = module_path.relative_to(self.workspace)
+            if relative_path in modules:
                 return
-            if (
-                self.workspace not in module_path.parents
-                or module_path.suffix != ".js"
-                or not module_path.is_file()
-            ):
-                raise PermissionError(
-                    "k6 local imports must resolve to .js files inside the target workspace"
-                )
-            if len(visited) >= _MAX_K6_MODULES:
+            if len(modules) >= _MAX_K6_MODULES:
                 raise PermissionError(f"k6 import graph exceeds {_MAX_K6_MODULES} local modules")
-            visited.add(module_path)
             try:
-                source = read_text_bounded(
-                    module_path,
+                encoded = read_bytes_confined(
+                    self.workspace,
+                    relative_path,
                     max_bytes=_MAX_K6_MODULE_BYTES,
                     label="k6 module",
+                    expected_root_identity=self._workspace_root_identity,
                 )
-            except ValueError as exc:
+            except FileNotFoundError as exc:
+                if root:
+                    raise PermissionError(
+                        "k6 script must be an existing .js file inside the target workspace"
+                    ) from exc
                 raise PermissionError(
-                    f"k6 module exceeds {_MAX_K6_MODULE_BYTES} byte limit"
+                    "k6 local imports must resolve to existing .js files inside the target workspace"
                 ) from exc
-            except (OSError, UnicodeError) as exc:
-                raise PermissionError("k6 module is unreadable") from exc
+            except RuntimeError as exc:
+                raise PermissionError(
+                    "k6 module ingestion requires descriptor-relative no-follow filesystem authority"
+                ) from exc
+            except (OSError, ValueError) as exc:
+                raise PermissionError(
+                    "k6 module failed confined no-follow ingestion"
+                ) from exc
+            try:
+                source = encoded.decode("utf-8")
+            except UnicodeError as exc:
+                raise PermissionError("k6 module must be valid UTF-8") from exc
+            modules[relative_path] = source
             if re.search(r"\bopen\s*\(", source):
                 raise PermissionError("k6 scripts may not read local files through open()")
+            if _COMMONJS_REQUIRE.search(source):
+                raise PermissionError(
+                    "k6 CommonJS require is not allowed in the controlled runner"
+                )
+            if _DYNAMIC_IMPORT.search(source):
+                raise PermissionError(
+                    "k6 dynamic import() is not allowed in the controlled runner"
+                )
             if root and ("__ENV.BASE_URL" in source or "__ENV.TARGET_URL" in source):
                 root_uses_injected_target = True
             for literal in _URL_LITERAL.findall(source):
@@ -102,7 +159,7 @@ class K6Runner:
                 if specifier.startswith(("http://", "https://")):
                     raise PermissionError("remote k6 module imports are not allowed")
                 if specifier.startswith("."):
-                    imported = (module_path.parent / specifier).resolve()
+                    imported = module_path.parent / specifier
                     if imported.suffix == "":
                         imported = imported.with_suffix(".js")
                     inspect_module(imported)
@@ -125,7 +182,18 @@ class K6Runner:
         inspect_module(resolved, root=True)
         if not root_uses_injected_target:
             raise PermissionError("k6 script must consume an injected BASE_URL or TARGET_URL")
-        return resolved
+        return resolved.relative_to(self.workspace), modules
+
+    def _validate_script(self, script: Path, target_url: str) -> Path:
+        root_relative, _modules = self._collect_validated_modules(script, target_url)
+        return self.workspace / root_relative
+
+    @staticmethod
+    def _write_validated_snapshot(snapshot_root: Path, modules: dict[Path, str]) -> None:
+        for relative_path, source in modules.items():
+            destination = snapshot_root / relative_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(source.encode("utf-8"))
 
     @staticmethod
     def _metric_values(data: dict[str, Any], metric: str) -> dict[str, Any]:
@@ -178,13 +246,26 @@ class K6Runner:
         decision = self.policy.authorize_performance_target(target_url, environment=environment)
         if decision.decision != ToolDecision.ALLOW:
             raise PermissionError(decision.reason)
-        script_path = self._validate_script(script, target_url)
+        root_relative, modules = self._collect_validated_modules(script, target_url)
+        if not self.external_process_isolation_enforced:
+            raise PermissionError(
+                "k6 execution requires trusted infrastructure-level process/filesystem isolation; "
+                "static JavaScript inspection is not an execution sandbox"
+            )
+        if not self.external_module_isolation_enforced:
+            raise PermissionError(
+                "k6 execution requires trusted infrastructure-level module-loading isolation; "
+                "validated JavaScript inspection cannot prove that runtime-loaded code is confined"
+            )
         if shutil.which("k6") is None:
             raise RuntimeError("k6 is not installed; runtime validation is NOT_VERIFIED")
 
         data: dict[str, Any]
         with tempfile.TemporaryDirectory(prefix="aiqa-k6-runtime-") as temp_runtime:
             runtime_root = Path(temp_runtime)
+            snapshot_root = runtime_root / "workspace"
+            self._write_validated_snapshot(snapshot_root, modules)
+            script_path = snapshot_root / root_relative
             summary_path = runtime_root / f"summary-{uuid4().hex}.json"
             command = [
                 "k6",
@@ -203,11 +284,12 @@ class K6Runner:
                     "BASE_URL": target_url.rstrip("/"),
                     "TARGET_URL": target_url.rstrip("/"),
                     "K6_NO_USAGE_REPORT": "true",
+                    "K6_AUTO_EXTENSION_RESOLUTION": "false",
                 },
             )
             result = run_bounded_subprocess(
                 command,
-                cwd=self.workspace,
+                cwd=snapshot_root,
                 env=env,
                 timeout_seconds=self.timeout_seconds,
             )
