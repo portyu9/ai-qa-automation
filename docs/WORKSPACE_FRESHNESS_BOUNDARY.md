@@ -39,9 +39,10 @@ Workspace freshness is re-proved at three independent target-authority boundarie
 
 Freshness admission deliberately does **not** run inside the bounded `PreToolUse` callback. `RepositoryInspector` has its own bounded Git-subprocess budgets, and nesting that observation inside a shorter SDK hook timeout would create a fragile timeout-dependent authorization path.
 
-`PreToolUse` therefore remains responsible for bounded tool-input validation plus canonical attempt, repetition, network/mutation-budget, policy, and mutation-transaction accounting. Freshness is enforced at the execution boundary that actually owns each tool class:
+`PreToolUse` therefore remains responsible for bounded tool-input validation plus canonical attempt, repetition, network/mutation-budget, and policy accounting. Freshness is enforced at the execution boundary that actually owns each tool class:
 
 - internal QA MCP tools are pre-approved by the SDK only because `LiveRuntimeServices` re-proves the current repository fingerprint at the first in-process tool-body checkpoint, before tool-specific side effects;
+- for internal mutation tools, rollback/pending transaction authority is prepared **only after** that freshness proof succeeds, so already-drifted target bytes cannot become the rollback source for a new autonomous mutation;
 - external MCP tools are not placed in `allowed_tools`; after deterministic policy allows a read-only operation, the independent `can_use_tool` permission callback re-proves workspace freshness before granting provider execution;
 - external write/destructive/unknown operations are denied by deterministic policy before repository freshness observation, avoiding expensive subject work for requests that can never execute unattended.
 
@@ -91,9 +92,9 @@ This final gate does not manufacture success. All normal result-contract require
 
 Autonomous mutation tools are special only because their authorized purpose is to change target bytes.
 
-Before an internal mutation body starts, `LiveRuntimeServices` must prove that the current workspace still matches the prior authorized baseline. `RuntimeControl.prepare_mutation` must already have established rollback/ownership authority through the deterministic request-control path.
+`PreToolUse` may reserve mutation budget and establish that deterministic policy allows the requested path, but it does not capture rollback bytes. At internal tool entry, `LiveRuntimeServices` first proves that the current workspace still matches the prior authorized baseline. Only then may `RuntimeControl.prepare_mutation` read the target and durably establish pending/rollback ownership. If freshness is missing, incomplete, unavailable, or drifted, no new pending transaction or rollback backup is created.
 
-While that one mutation body is active, its internal checkpoint does not demand equality with the old fingerprint; doing so would reject the very candidate change the policy just authorized. PostToolUse instead observes the complete candidate fingerprint and advances runtime authority only through the mutation transaction path. Incomplete candidate fingerprinting causes rollback and blocks further mutation authority rather than adopting an ambiguous state.
+While that one prepared mutation body is active, its internal checkpoint does not demand equality with the old fingerprint; doing so would reject the very candidate change the policy just authorized. PostToolUse instead observes the complete candidate fingerprint and advances runtime authority only through the mutation transaction path. Incomplete candidate fingerprinting causes rollback and blocks further mutation authority rather than adopting an ambiguous state.
 
 Mutation failure and rollback paths similarly refresh the baseline only after framework-owned restoration/closure logic has run. Read-only tools never receive this exception.
 
