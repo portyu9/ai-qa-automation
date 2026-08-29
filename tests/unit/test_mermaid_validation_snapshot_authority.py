@@ -75,7 +75,7 @@ def test_repository_root_replacement_during_discovery_fails_closed(
         mermaid._discover_mermaid_snapshot(root)
 
 
-def test_renderer_timeout_force_removes_exact_container_id(
+def test_renderer_timeout_force_removes_exact_container_id_without_copy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = tmp_path / "snapshot"
@@ -89,6 +89,8 @@ def test_renderer_timeout_force_removes_exact_container_id(
         if command[1] == "run":
             cidfile = Path(command[command.index("--cidfile") + 1])
             cidfile.write_text("b" * 64 + "\n", encoding="ascii")
+            return subprocess.CompletedProcess(command, 0)
+        if command[1] == "exec":
             raise subprocess.TimeoutExpired(command, mermaid.RENDER_TIMEOUT_SECONDS)
         return subprocess.CompletedProcess(command, 0)
 
@@ -96,7 +98,35 @@ def test_renderer_timeout_force_removes_exact_container_id(
     monkeypatch.setattr(mermaid.subprocess, "run", fake_run)
     with pytest.raises(RuntimeError, match="render exceeded"):
         mermaid._run_mermaid(root, Path("README.md"), output, 1)
-    assert calls[1] == ["docker", "rm", "--force", "b" * 64]
+    assert not any(command[1] == "cp" for command in calls)
+    assert calls[-1] == ["docker", "rm", "--force", "b" * 64]
+
+
+def test_renderer_nonzero_completion_does_not_copy_and_force_removes_exact_container_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "snapshot"
+    output = tmp_path / "output"
+    root.mkdir()
+    output.mkdir()
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        calls.append(command)
+        if command[1] == "run":
+            cidfile = Path(command[command.index("--cidfile") + 1])
+            cidfile.write_text("e" * 64 + "\n", encoding="ascii")
+            return subprocess.CompletedProcess(command, 0)
+        if command[1] == "exec":
+            raise subprocess.CalledProcessError(1, command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(mermaid, "_resolve_docker_executable", lambda: "docker")
+    monkeypatch.setattr(mermaid.subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError, match="did not complete successfully"):
+        mermaid._run_mermaid(root, Path("README.md"), output, 1)
+    assert not any(command[1] == "cp" for command in calls)
+    assert calls[-1] == ["docker", "rm", "--force", "e" * 64]
 
 
 def test_renderer_cleanup_failure_is_a_hard_failure(
@@ -111,6 +141,8 @@ def test_renderer_cleanup_failure_is_a_hard_failure(
         if command[1] == "run":
             cidfile = Path(command[command.index("--cidfile") + 1])
             cidfile.write_text("c" * 64 + "\n", encoding="ascii")
+            return subprocess.CompletedProcess(command, 0)
+        if command[1] == "exec":
             return subprocess.CompletedProcess(command, 0)
         if command[1] == "cp":
             (output / "rendered.md").write_text("# Rendered\n", encoding="utf-8")
@@ -139,6 +171,8 @@ def test_renderer_copy_failure_still_force_removes_exact_container_id(
         if command[1] == "run":
             cidfile = Path(command[command.index("--cidfile") + 1])
             cidfile.write_text("d" * 64 + "\n", encoding="ascii")
+            return subprocess.CompletedProcess(command, 0)
+        if command[1] == "exec":
             return subprocess.CompletedProcess(command, 0)
         if command[1] == "cp":
             raise subprocess.CalledProcessError(1, command)
