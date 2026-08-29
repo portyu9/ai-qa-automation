@@ -108,28 +108,41 @@ def test_renderer_uses_immutable_image_and_bounded_container_authority(
     root = tmp_path / "repo"
     root.mkdir()
     relative_path = Path("README.md")
+    (root / relative_path).write_text(
+        "```mermaid\nflowchart LR\nA --> B\n```\n",
+        encoding="utf-8",
+    )
     output_root = tmp_path / "output"
     output_root.mkdir()
-    observed: dict[str, object] = {}
+    calls: list[tuple[list[str], dict[str, object]]] = []
 
-    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        observed["command"] = command
-        observed["kwargs"] = kwargs
-        destination = output_root / relative_path
-        destination.write_text("# Rendered\n", encoding="utf-8")
-        (output_root / "README-1.svg").write_text("<svg/>\n", encoding="utf-8")
-        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        calls.append((command, kwargs))
+        if command[1] == "run":
+            cidfile = Path(command[command.index("--cidfile") + 1])
+            cidfile.write_text("a" * 64 + "\n", encoding="ascii")
+            return subprocess.CompletedProcess(command, 0)
+        if command[1] == "cp":
+            assert command[2] == f"{'a' * 64}:/out/."
+            (output_root / "rendered.md").write_text("# Rendered\n", encoding="utf-8")
+            (output_root / "rendered-1.svg").write_text("<svg/>\n", encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0)
+        assert command[1:3] == ["rm", "--force"]
+        return subprocess.CompletedProcess(command, 0)
 
+    monkeypatch.setattr(mermaid, "_resolve_docker_executable", lambda: "docker")
     monkeypatch.setattr(mermaid.subprocess, "run", fake_run)
 
     mermaid._run_mermaid(root, relative_path, output_root, 1)
 
-    command = observed["command"]
-    assert isinstance(command, list)
+    command, kwargs = calls[0]
     assert re.fullmatch(
         r"ghcr\.io/mermaid-js/mermaid-cli/mermaid-cli@sha256:[0-9a-f]{64}",
         mermaid.MERMAID_IMAGE,
     )
+    assert "--rm" not in command
+    assert "--name" in command
+    assert "--cidfile" in command
     assert "--network" in command and command[command.index("--network") + 1] == "none"
     assert "--read-only" in command
     assert "--cap-drop" in command and command[command.index("--cap-drop") + 1] == "ALL"
@@ -140,7 +153,12 @@ def test_renderer_uses_immutable_image_and_bounded_container_authority(
         f"fsize={mermaid.MAX_RENDER_FILE_BYTES}:{mermaid.MAX_RENDER_FILE_BYTES}"
     )
     assert mermaid.MERMAID_IMAGE in command
-    kwargs = observed["kwargs"]
-    assert isinstance(kwargs, dict)
+    assert f"type=bind,src={root},dst=/repo,readonly" in command
+    assert not any("type=bind" in item and "dst=/out" in item for item in command)
+    out_tmpfs = command[command.index("--tmpfs", command.index("--tmpfs") + 1) + 1]
+    assert f"size={mermaid.MAX_RENDER_TOTAL_BYTES}" in out_tmpfs
+    assert f"nr_inodes={mermaid.MAX_RENDER_OUTPUT_ENTRIES}" in out_tmpfs
     assert kwargs["timeout"] == mermaid.RENDER_TIMEOUT_SECONDS
     assert kwargs["check"] is True
+    assert calls[1][0] == ["docker", "cp", f"{'a' * 64}:/out/.", str(output_root)]
+    assert calls[2][0] == ["docker", "rm", "--force", "a" * 64]

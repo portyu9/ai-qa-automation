@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -28,15 +29,18 @@ def test_main_emits_selected_subject_and_separate_event_sha(
 ) -> None:
     subject_sha = "a" * 40
     github_event_sha = "b" * 40
+    content = b"```mermaid\nflowchart LR\nA --> B\n```\n"
+    document = mermaid.MermaidDocumentSnapshot(
+        relative_path=Path("README.md"),
+        diagram_count=1,
+        content=content,
+        sha256=hashlib.sha256(content).hexdigest(),
+    )
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setenv("CI_SUBJECT_SHA", subject_sha)
     monkeypatch.setenv("GITHUB_SHA", github_event_sha)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(
-        mermaid,
-        "_discover_mermaid_documents",
-        lambda root: [(Path("README.md"), 1)],
-    )
+    monkeypatch.setattr(mermaid, "_discover_mermaid_snapshot", lambda root: [document])
     monkeypatch.setattr(mermaid, "_run_mermaid", lambda *args, **kwargs: None)
 
     assert mermaid.main() == 0
@@ -45,6 +49,13 @@ def test_main_emits_selected_subject_and_separate_event_sha(
     assert result["schema_version"] == 2
     assert result["subject_sha"] == subject_sha
     assert result["github_event_sha"] == github_event_sha
+    assert result["documents"] == [
+        {
+            "path": "README.md",
+            "diagram_count": 1,
+            "sha256": hashlib.sha256(content).hexdigest(),
+        }
+    ]
 
 
 @pytest.mark.parametrize("name", ["CI_SUBJECT_SHA", "GITHUB_SHA"])
