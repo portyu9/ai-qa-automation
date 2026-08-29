@@ -203,37 +203,41 @@ def test_standalone_contract_diff_rejects_oversized_document(tmp_path: Path) -> 
 
 
 def test_duplicate_key_diagnostic_does_not_echo_untrusted_key() -> None:
-    secret_key = "token-super-secret-value"
+    untrusted_key = "opaque-duplicate-marker"
     result = OpenAPIContractDriftAnalyzer().analyze(
         path="openapi.json",
         baseline=b'{"openapi":"3.1.0","paths":{}}',
         current=(
-            '{"openapi":"3.1.0","paths":{},"' + secret_key + '":1,"' + secret_key + '":2}'
+            '{"openapi":"3.1.0","paths":{},"'
+            + untrusted_key
+            + '":1,"'
+            + untrusted_key
+            + '":2}'
         ).encode(),
     )
 
     assert result.severity is ContractDriftSeverity.NOT_ANALYZED
     assert result.reason is not None
-    assert secret_key not in result.reason
+    assert untrusted_key not in result.reason
 
 
 def test_invalid_explicit_numeric_diagnostic_does_not_echo_scalar() -> None:
-    secret_value = "super-secret-numeric-value"
+    untrusted_scalar = "opaque-numeric-marker"
     reason = _assert_not_analyzed(
-        f"openapi: 3.1.0\nx: !!float {secret_value}\npaths: {{}}\n".encode()
+        f"openapi: 3.1.0\nx: !!float {untrusted_scalar}\npaths: {{}}\n".encode()
     )
 
-    assert secret_value not in reason
+    assert untrusted_scalar not in reason
     assert "invalid explicit number" in reason
 
 
 def test_invalid_explicit_boolean_diagnostic_does_not_echo_scalar() -> None:
-    secret_value = "super-secret-bool-value"
+    untrusted_scalar = "opaque-bool-marker"
     reason = _assert_not_analyzed(
-        f'openapi: 3.1.0\nx: !!bool "{secret_value}"\npaths: {{}}\n'.encode()
+        f'openapi: 3.1.0\nx: !!bool "{untrusted_scalar}"\npaths: {{}}\n'.encode()
     )
 
-    assert secret_value not in reason
+    assert untrusted_scalar not in reason
     assert "invalid explicit boolean" in reason
 
 
@@ -267,7 +271,7 @@ def test_invalid_explicit_boolean_diagnostic_does_not_echo_scalar() -> None:
         ),
         (
             b'{"openapi":"3.1.0","components":{"schemas":{"X":{"enum":[{"a":1}]}}},"paths":{}}',
-            "schema enum must be a scalar array",
+            "schema enum must be a non-empty scalar array",
         ),
         (
             b'{"openapi":"3.1.0","components":{"schemas":{"X":{"required":["a",1]}}},"paths":{}}',
