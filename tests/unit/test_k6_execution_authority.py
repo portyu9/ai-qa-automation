@@ -32,9 +32,7 @@ def _write_import_graph(tmp_path: Path) -> Path:
 def _summary() -> dict[str, object]:
     return {
         "metrics": {
-            "http_req_duration": {
-                "values": {"med": 1.0, "p(90)": 2.0, "p(95)": 3.0, "p(99)": 4.0}
-            },
+            "http_req_duration": {"values": {"med": 1.0, "p(90)": 2.0, "p(95)": 3.0, "p(99)": 4.0}},
             "http_reqs": {"values": {"rate": 5.0}},
             "http_req_failed": {"values": {"rate": 0.0}},
         }
@@ -58,9 +56,7 @@ def test_k6_requires_process_filesystem_isolation_before_execution(tmp_path: Pat
 
 
 @pytest.mark.parametrize("value", [1, "true", object()])
-def test_k6_rejects_non_boolean_process_isolation_assertion(
-    tmp_path: Path, value: object
-) -> None:
+def test_k6_rejects_non_boolean_process_isolation_assertion(tmp_path: Path, value: object) -> None:
     with pytest.raises(ValueError, match="external_process_isolation_enforced"):
         K6Runner(
             tmp_path,
@@ -71,9 +67,7 @@ def test_k6_rejects_non_boolean_process_isolation_assertion(
 
 
 @pytest.mark.parametrize("value", [1, "true", object()])
-def test_k6_rejects_non_boolean_module_isolation_assertion(
-    tmp_path: Path, value: object
-) -> None:
+def test_k6_rejects_non_boolean_module_isolation_assertion(tmp_path: Path, value: object) -> None:
     with pytest.raises(ValueError, match="external_module_isolation_enforced"):
         K6Runner(
             tmp_path,
@@ -84,9 +78,7 @@ def test_k6_rejects_non_boolean_module_isolation_assertion(
 
 
 @pytest.mark.parametrize("value", [1, "true", object()])
-def test_k6_rejects_non_boolean_resource_limits_assertion(
-    tmp_path: Path, value: object
-) -> None:
+def test_k6_rejects_non_boolean_resource_limits_assertion(tmp_path: Path, value: object) -> None:
     with pytest.raises(ValueError, match="external_resource_limits_enforced"):
         K6Runner(
             tmp_path,
@@ -97,9 +89,7 @@ def test_k6_rejects_non_boolean_resource_limits_assertion(
 
 
 @pytest.mark.parametrize("value", [1, "true", object()])
-def test_k6_rejects_non_boolean_workload_limits_assertion(
-    tmp_path: Path, value: object
-) -> None:
+def test_k6_rejects_non_boolean_workload_limits_assertion(tmp_path: Path, value: object) -> None:
     with pytest.raises(ValueError, match="external_workload_limits_enforced"):
         K6Runner(
             tmp_path,
