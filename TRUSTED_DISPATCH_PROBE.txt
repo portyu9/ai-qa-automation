@@ -1,0 +1,2 @@
+Disposable post-bootstrap trusted-dispatch probe for ƳƤ AI QA Automation Framework.
+This branch and pull request are intentionally never merged.
