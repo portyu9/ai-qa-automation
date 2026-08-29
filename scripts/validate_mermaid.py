@@ -44,8 +44,7 @@ RENDER_WRAPPER = (
     "while :; do sleep 3600; done"
 )
 RENDER_WAIT_COMMAND = (
-    "while [ ! -f /tmp/aiqa-render-done ]; do sleep 0.05; done; "
-    "test -f /tmp/aiqa-render-ok"
+    "while [ ! -f /tmp/aiqa-render-done ]; do sleep 0.05; done; test -f /tmp/aiqa-render-ok"
 )
 GITHUB_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 CONTAINER_ID_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -65,9 +64,7 @@ MAX_RENDER_TOTAL_BYTES = _fs.MAX_RENDER_TOTAL_BYTES
 MAX_RENDER_OUTPUT_ENTRIES = _fs.MAX_RENDER_OUTPUT_ENTRIES
 # The tmpfs bounds file data and inode count, but sparse files could have a
 # larger logical tar representation. Cap the archive stream independently.
-MAX_RENDER_ARCHIVE_BYTES = (
-    MAX_RENDER_TOTAL_BYTES + MAX_RENDER_OUTPUT_ENTRIES * 2048 + 65536
-)
+MAX_RENDER_ARCHIVE_BYTES = MAX_RENDER_TOTAL_BYTES + MAX_RENDER_OUTPUT_ENTRIES * 2048 + 65536
 READ_CHUNK_BYTES = _fs.READ_CHUNK_BYTES
 _read_fd_bounded = _fs._read_fd_bounded
 _read_regular_bytes = _fs._read_regular_bytes
@@ -122,9 +119,11 @@ def _resolve_docker_executable() -> str:
 
 def _container_id_from_cidfile(path: Path) -> str | None:
     try:
-        value = _read_regular_bytes(path, max_bytes=128, label="Mermaid renderer container id").decode(
-            "ascii"
-        ).strip()
+        value = (
+            _read_regular_bytes(path, max_bytes=128, label="Mermaid renderer container id")
+            .decode("ascii")
+            .strip()
+        )
     except (UnicodeDecodeError, ValueError):
         return None
     return value if CONTAINER_ID_RE.fullmatch(value) else None
@@ -223,13 +222,24 @@ def _materialize_renderer_archive(
                     name = _archive_member_name(member)
                     if name is None:
                         continue
-                    if not name or name not in expected_names or name in seen or not member.isfile():
-                        raise RuntimeError("Mermaid renderer archive contained an invalid output entry")
+                    if (
+                        not name
+                        or name not in expected_names
+                        or name in seen
+                        or not member.isfile()
+                    ):
+                        raise RuntimeError(
+                            "Mermaid renderer archive contained an invalid output entry"
+                        )
                     if member.size <= 0 or member.size > MAX_RENDER_FILE_BYTES:
-                        raise RuntimeError("Mermaid renderer archive contained an invalid output size")
+                        raise RuntimeError(
+                            "Mermaid renderer archive contained an invalid output size"
+                        )
                     total_bytes += member.size
                     if total_bytes > MAX_RENDER_TOTAL_BYTES:
-                        raise RuntimeError("Mermaid renderer archive exceeded the aggregate byte budget")
+                        raise RuntimeError(
+                            "Mermaid renderer archive exceeded the aggregate byte budget"
+                        )
                     extracted = rendered.extractfile(member)
                     if extracted is None:
                         raise RuntimeError("Mermaid renderer archive member could not be read")
@@ -254,8 +264,7 @@ def _copy_renderer_outputs(
     docker_executable: str,
 ) -> None:
     archive_command = (
-        "/bin/busybox tar -C /out -cf - . | "
-        f"/bin/busybox head -c {MAX_RENDER_ARCHIVE_BYTES + 1}"
+        f"/bin/busybox tar -C /out -cf - . | /bin/busybox head -c {MAX_RENDER_ARCHIVE_BYTES + 1}"
     )
     try:
         result = subprocess.run(
@@ -368,7 +377,9 @@ def _run_mermaid(root: Path, relative: Path, output_root: Path, expected_count: 
                 cleanup_error = exc
     if cleanup_error is not None:
         if error is not None:
-            raise RuntimeError(f"{error}; renderer cleanup authority also failed") from cleanup_error
+            raise RuntimeError(
+                f"{error}; renderer cleanup authority also failed"
+            ) from cleanup_error
         raise cleanup_error
     if error is not None:
         raise error
