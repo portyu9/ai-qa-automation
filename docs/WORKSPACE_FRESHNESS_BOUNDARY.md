@@ -37,18 +37,22 @@ Workspace freshness is re-proved at three independent target-authority boundarie
 
 ### 1. Before controlled tool execution
 
-The universal `PreToolUse` authority checks the current repository fingerprint against the expected runtime baseline after bounded tool-input validation and before request fingerprinting, policy evaluation, network-budget charging, mutation-budget charging, or controlled execution.
+Freshness admission deliberately does **not** run inside the bounded `PreToolUse` callback. `RepositoryInspector` has its own bounded Git-subprocess budgets, and nesting that observation inside a shorter SDK hook timeout would create a fragile timeout-dependent authorization path.
 
-If the current subject cannot be bound safely, the request is denied. In particular:
+`PreToolUse` therefore remains responsible for bounded tool-input validation plus canonical attempt, repetition, network/mutation-budget, policy, and mutation-transaction accounting. Freshness is enforced at the execution boundary that actually owns each tool class:
+
+- internal QA MCP tools are pre-approved by the SDK only because `LiveRuntimeServices` re-proves the current repository fingerprint at the first in-process tool-body checkpoint, before tool-specific side effects;
+- external MCP tools are not placed in `allowed_tools`; after deterministic policy allows a read-only operation, the independent `can_use_tool` permission callback re-proves workspace freshness before granting provider execution;
+- external write/destructive/unknown operations are denied by deterministic policy before repository freshness observation, avoiding expensive subject work for requests that can never execute unattended.
+
+If the current subject cannot be bound safely at an execution-owned freshness check:
 
 - missing fingerprint baseline → `BLOCKED`;
 - incomplete fingerprint coverage → `BLOCKED`;
 - fingerprint mismatch / out-of-band workspace drift → `BLOCKED`;
 - inability to revalidate repository/root subject identity safely → `INFRASTRUCTURE_FAILURE`.
 
-The attempted tool call is still charged against the overall tool-attempt budget before this check. Stale-workspace retries therefore cannot be used to obtain free unbounded attempts. A freshness-denied external request does not consume network authority because no network action is allowed to begin.
-
-`LiveRuntimeServices` independently repeats this check before an internal QA tool body. That second check is defense in depth for direct live-service invocation and for drift in the gap between the SDK hook and the internal body.
+A denied external request may already have its attempt/network budget conservatively reserved by `PreToolUse`; that accounting does not mean provider execution occurred. The permission callback denies before the provider action. Stale retries therefore cannot create free attempts.
 
 ### 2. Before accepting internal non-mutation target results
 
@@ -63,7 +67,7 @@ If freshness changed before internal result acceptance:
 
 The final PostToolUse check closes the race between the last internal checkpoint/tool return and SDK result acceptance.
 
-External MCP output is different. It is remote observed data, not local target-validation authority. External responses continue through their existing deterministic output-size, JSON-shape, sanitization, and untrusted-evidence boundary without first performing another potentially expensive repository snapshot inside `PostToolUse`. This avoids making remote-output sanitization depend on repository-snapshot latency. An external request still requires a fresh workspace before it begins; later controlled work rechecks freshness; and candidate terminal `SUCCESS` is independently revalidated against the workspace baseline.
+External MCP output is different. It is remote observed data, not local target-validation authority. External responses continue through their existing deterministic output-size, JSON-shape, sanitization, and untrusted-evidence boundary without first performing another potentially expensive repository snapshot inside `PostToolUse`. This avoids making remote-output sanitization depend on repository-snapshot latency. Later controlled work rechecks freshness, and candidate terminal `SUCCESS` is independently revalidated against the workspace baseline.
 
 A remote result observed while local bytes changed can therefore remain recorded as sanitized **remote evidence**, but it cannot authorize or certify the changed local target and cannot preserve terminal `SUCCESS` for stale local bytes.
 
@@ -87,7 +91,7 @@ This final gate does not manufacture success. All normal result-contract require
 
 Autonomous mutation tools are special only because their authorized purpose is to change target bytes.
 
-Before the mutation body starts, the universal and live-service freshness checks must prove that the current workspace still matches the prior authorized baseline. `RuntimeControl.prepare_mutation` must then establish rollback/ownership authority.
+Before an internal mutation body starts, `LiveRuntimeServices` must prove that the current workspace still matches the prior authorized baseline. `RuntimeControl.prepare_mutation` must already have established rollback/ownership authority through the deterministic request-control path.
 
 While that one mutation body is active, its internal checkpoint does not demand equality with the old fingerprint; doing so would reject the very candidate change the policy just authorized. PostToolUse instead observes the complete candidate fingerprint and advances runtime authority only through the mutation transaction path. Incomplete candidate fingerprinting causes rollback and blocks further mutation authority rather than adopting an ambiguous state.
 
@@ -112,19 +116,21 @@ A workspace fingerprint proves identity of the repository/worktree state covered
 
 Those are separate trust domains. The freshness boundary prevents target validation and terminal truth from silently floating from one observed local target state to another; external MCP evidence remains separately classified as untrusted remote observation.
 
-## Hook latency and dependency boundary
+## SDK permission and hook dependency boundary
 
-Freshness admission runs inside the bounded `PreToolUse` hook. The repository pins `claude-agent-sdk==0.2.136`, but it does not independently pin or attest a bundled Claude CLI sub-version or convert undocumented hook-timeout behavior into repository-owned authority. Exact protected validation must therefore exercise the pinned dependency set's denial/timeout behavior; a historical upstream fix or documentation claim is not a substitute for revision-bound execution evidence.
+The repository pins `claude-agent-sdk==0.2.136`, but it does not independently pin or attest a bundled Claude CLI sub-version or convert undocumented SDK hook/permission behavior into repository-owned authority. Exact protected validation must exercise the pinned dependency set's hook, auto-approval, and `can_use_tool` behavior; upstream documentation or historical fixes are not revision-bound repository evidence.
 
-The runtime does not inflate hook timeouts merely to obtain green execution. External MCP writes also retain the independent unattended `can_use_tool` denial path, while internal high-impact tools re-check their own path/network/mutation/runner boundaries inside the in-process MCP server. These are defense-in-depth controls; they do not make missing protected validation into PASS.
+The design therefore avoids making repository freshness depend on the 10-second PreToolUse hook timeout. Internal tools enforce freshness inside application-owned code before their bodies proceed. External tools remain outside SDK auto-approval and receive the freshness decision through `can_use_tool` only after deterministic policy allows the operation. External writes retain the independent unattended permission denial, while internal high-impact tools continue to re-check their path/network/mutation/runner boundaries inside the in-process MCP server.
 
-PostToolUse external-response sanitization intentionally does not wait behind a second repository snapshot. This preserves the existing deterministic remote-output boundary independently of workspace-fingerprint observation cost. Local target success remains protected by pre-execution and terminal freshness checks, while internal target-validation results retain the stronger post-execution acceptance check.
+These are defense-in-depth controls; they do not make missing protected validation into PASS. The runtime also does not inflate hook or repository-inspection timeouts merely to obtain green execution.
+
+PostToolUse external-response sanitization intentionally does not wait behind a repository snapshot. This preserves the existing deterministic remote-output boundary independently of workspace-fingerprint observation cost. Local target success remains protected by execution-owned and terminal freshness checks, while internal target-validation results retain the stronger post-execution acceptance check.
 
 ## Concurrency and deployment boundary
 
 The framework's workspace lease coordinates cooperating framework runs and pins the authorized workspace object where supported. It is not claimed to be an operating-system mandatory-write sandbox.
 
-A non-cooperating process with independent write authority to the same target can still race the application. The pre-tool, internal-checkpoint/internal-PostToolUse, and terminal gates detect such drift at their respective observation boundaries and fail closed when it is visible.
+A non-cooperating process with independent write authority to the same target can still race the application. Internal entry/checkpoint/PostToolUse gates, external permission admission, and terminal freshness detect such drift at their respective observation boundaries and fail closed when it is visible.
 
 There is one unavoidable application-level window during an authorized mutation: the policy-owned mutation itself is expected to change the workspace, so the old fingerprint cannot remain equal while the mutation is in progress. Preventing an unrelated non-cooperating writer from changing a second path inside that exact window requires deployment-owned workspace/process isolation. The repository does not fabricate that infrastructure control from an application flag or advisory lock.
 
