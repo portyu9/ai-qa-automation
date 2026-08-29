@@ -254,31 +254,32 @@ def test_file_reference_cannot_read_local_schema_resource(tmp_path: Path) -> Non
     assert result.details == {"reference_scheme": "file"}
 
 
-def test_remote_reference_is_blocked_without_persisting_secret_uri() -> None:
+def test_remote_reference_is_blocked_without_persisting_untrusted_uri() -> None:
+    untrusted_marker = "opaque-query-marker"
     result = validate_json_schema(
         12,
         {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "$ref": "https://example.invalid/schema.json?token=super-secret-token",
+            "$ref": f"https://example.invalid/schema.json?opaque={untrusted_marker}",
         },
     )
     assert result.status is ValidationStatus.BLOCKED
     assert result.details == {"reference_scheme": "https"}
-    assert "super-secret-token" not in result.model_dump_json()
+    assert untrusted_marker not in result.model_dump_json()
 
 
 def test_unknown_reference_scheme_is_minimized() -> None:
-    secret_scheme = "super-secret-scheme"
+    untrusted_scheme = "opaque-scheme-marker"
     result = validate_json_schema(
         12,
         {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "$ref": f"{secret_scheme}:payload",
+            "$ref": f"{untrusted_scheme}:payload",
         },
     )
     assert result.status is ValidationStatus.BLOCKED
     assert result.details == {"reference_scheme": "other"}
-    assert secret_scheme not in result.model_dump_json()
+    assert untrusted_scheme not in result.model_dump_json()
 
 
 def test_relative_external_reference_is_blocked() -> None:
@@ -318,19 +319,22 @@ def test_unresolved_same_document_reference_is_not_verified() -> None:
 
 
 def test_failure_diagnostics_do_not_echo_untrusted_property_names() -> None:
-    secret = "super-secret-property-name"
+    untrusted_name = "opaque-property-marker"
     mismatch = validate_json_schema(
-        {secret: "wrong"},
-        {"type": "object", "properties": {secret: {"type": "integer"}}},
+        {untrusted_name: "wrong"},
+        {"type": "object", "properties": {untrusted_name: {"type": "integer"}}},
     )
     invalid = validate_json_schema(
         12,
-        {"$defs": {secret: {"type": "not-a-real-type"}}, "$ref": f"#/$defs/{secret}"},
+        {
+            "$defs": {untrusted_name: {"type": "not-a-real-type"}},
+            "$ref": f"#/$defs/{untrusted_name}",
+        },
     )
     assert mismatch.status is ValidationStatus.FAIL
     assert invalid.status is ValidationStatus.NOT_VERIFIED
-    assert secret not in mismatch.model_dump_json()
-    assert secret not in invalid.model_dump_json()
+    assert untrusted_name not in mismatch.model_dump_json()
+    assert untrusted_name not in invalid.model_dump_json()
 
 
 def test_parent_interval_timer_is_not_claimed() -> None:
