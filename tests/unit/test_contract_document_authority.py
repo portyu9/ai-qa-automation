@@ -37,9 +37,7 @@ def _nested_schema(depth: int) -> dict[str, object]:
 
 def _assert_not_analyzed(current: bytes, *, path: str = "openapi.yaml") -> str:
     baseline = (
-        _baseline_yaml()
-        if path.endswith((".yaml", ".yml"))
-        else b'{"openapi":"3.1.0","paths":{}}'
+        _baseline_yaml() if path.endswith((".yaml", ".yml")) else b'{"openapi":"3.1.0","paths":{}}'
     )
     result = OpenAPIContractDriftAnalyzer().analyze(
         path=path,
@@ -79,9 +77,7 @@ def test_duplicate_json_keys_are_not_reinterpreted() -> None:
 
 
 def test_duplicate_yaml_keys_are_not_reinterpreted() -> None:
-    reason = _assert_not_analyzed(
-        b"openapi: 3.1.0\npaths: {}\npaths: {'/hidden': {}}\n"
-    )
+    reason = _assert_not_analyzed(b"openapi: 3.1.0\npaths: {}\npaths: {'/hidden': {}}\n")
 
     assert "duplicate mapping key" in reason
 
@@ -111,9 +107,7 @@ def test_yaml_explicit_non_json_scalar_is_not_analyzed() -> None:
 
 
 def test_yaml_non_string_mapping_key_is_not_analyzed() -> None:
-    reason = _assert_not_analyzed(
-        b"openapi: 3.1.0\npaths:\n  1: {}\n"
-    )
+    reason = _assert_not_analyzed(b"openapi: 3.1.0\npaths:\n  1: {}\n")
 
     assert "mapping keys must be strings" in reason
 
@@ -214,11 +208,7 @@ def test_duplicate_key_diagnostic_does_not_echo_untrusted_key() -> None:
         path="openapi.json",
         baseline=b'{"openapi":"3.1.0","paths":{}}',
         current=(
-            '{"openapi":"3.1.0","paths":{},"'
-            + secret_key
-            + '":1,"'
-            + secret_key
-            + '":2}'
+            '{"openapi":"3.1.0","paths":{},"' + secret_key + '":1,"' + secret_key + '":2}'
         ).encode(),
     )
 
@@ -260,38 +250,31 @@ def test_invalid_explicit_boolean_diagnostic_does_not_echo_scalar() -> None:
             "parameters must be an array",
         ),
         (
-            b'{"openapi":"3.1.0","paths":{"/a":{"get":{"parameters":['
-            b'{"name":"q","in":"query"},{"name":"q","in":"query"}]}}}}',
+            b'{"openapi":"3.1.0","paths":{"/a":{"get":{"parameters":[{"name":"q","in":"query"},{"name":"q","in":"query"}]}}}}',
             "duplicate name/in identity",
         ),
         (
-            b'{"openapi":"3.1.0","paths":{"/a":{"parameters":['
-            b'{"name":"q","in":"query"}]}}}',
+            b'{"openapi":"3.1.0","paths":{"/a":{"parameters":[{"name":"q","in":"query"}]}}}',
             "path-level parameters are not supported",
         ),
         (
-            b'{"openapi":"3.1.0","paths":{"/a":{"get":{"parameters":['
-            b'{"$ref":"#/components/parameters/Q"}]}}}}',
+            b'{"openapi":"3.1.0","paths":{"/a":{"get":{"parameters":[{"$ref":"#/components/parameters/Q"}]}}}}',
             "referenced parameters are not supported",
         ),
         (
-            b'{"openapi":"3.1.0","paths":{"/a":{"get":{"parameters":['
-            b'{"name":"q","in":"query","required":"false"}]}}}}',
+            b'{"openapi":"3.1.0","paths":{"/a":{"get":{"parameters":[{"name":"q","in":"query","required":"false"}]}}}}',
             "parameter required must be boolean",
         ),
         (
-            b'{"openapi":"3.1.0","components":{"schemas":{"X":{"enum":['
-            b'{"a":1}]}}},"paths":{}}',
+            b'{"openapi":"3.1.0","components":{"schemas":{"X":{"enum":[{"a":1}]}}},"paths":{}}',
             "schema enum must be a scalar array",
         ),
         (
-            b'{"openapi":"3.1.0","components":{"schemas":{"X":{"required":['
-            b'"a",1]}}},"paths":{}}',
+            b'{"openapi":"3.1.0","components":{"schemas":{"X":{"required":["a",1]}}},"paths":{}}',
             "schema required must be a string array",
         ),
         (
-            b'{"openapi":"3.1.0","components":{"schemas":{"X":{"properties":[]}}},'
-            b'"paths":{}}',
+            b'{"openapi":"3.1.0","components":{"schemas":{"X":{"properties":[]}}},"paths":{}}',
             "field schema properties must be an object",
         ),
     ],
@@ -431,9 +414,7 @@ def test_breaking_finding_beyond_change_limit_remains_visible(
     monkeypatch.setattr(contract_drift, "_MAX_COMPARISON_CHANGES", 2)
     baseline = {
         "openapi": "3.1.0",
-        "paths": {
-            "/shared": {"get": {"responses": {"200": {"description": "ok"}}}}
-        },
+        "paths": {"/shared": {"get": {"responses": {"200": {"description": "ok"}}}}},
     }
     current = {
         "openapi": "3.1.0",
