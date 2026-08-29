@@ -205,10 +205,11 @@ def test_read_only_posttool_rejects_drift_and_never_rebases_authority(tmp_path: 
     assert state.terminal_status is TerminalStatus.BLOCKED
 
 
-def test_external_posttool_rejects_drift_without_registering_remote_evidence(tmp_path: Path) -> None:
+def test_external_posttool_sanitizes_remote_result_but_terminal_freshness_blocks_local_success(
+    tmp_path: Path,
+) -> None:
     workspace, state, control, store, services = _runtime(tmp_path)
-    evidence_before = list(state.evidence_ids)
-    external_before = list(state.external_evidence)
+    expected = control.expected_workspace_fingerprint
     (workspace / "tracked.txt").write_text("external-return-drift\n", encoding="utf-8")
 
     result = posttool_policy_output(
@@ -226,11 +227,20 @@ def test_external_posttool_rejects_drift_without_registering_remote_evidence(tmp
     )
 
     hook = result["hookSpecificOutput"]
-    assert hook["updatedToolOutput"]["is_error"] is True
+    assert hook["updatedToolOutput"]["content"][0]["text"] == "untrusted provider result"
+    assert state.terminal_status is None
+    assert state.mcp_status["github"] is MCPStatus.AVAILABLE
+    assert len(state.external_evidence) == 1
+    assert state.external_evidence[0] in state.evidence_ids
+    assert control.expected_workspace_fingerprint == expected
+
+    state.terminal_status = TerminalStatus.SUCCESS
+    _enforce_terminal_workspace_freshness(state, control, workspace)
+
     assert state.terminal_status is TerminalStatus.BLOCKED
-    assert state.evidence_ids == evidence_before
-    assert state.external_evidence == external_before
-    assert state.mcp_status.get("github") is not MCPStatus.AVAILABLE
+    assert state.terminal_reason is not None
+    assert "outside authorized mutation lineage" in state.terminal_reason
+    assert control.expected_workspace_fingerprint == expected
 
 
 def test_validation_posttool_drift_adds_not_verified_freshness_gate(tmp_path: Path) -> None:
@@ -269,7 +279,7 @@ def test_validation_posttool_drift_adds_not_verified_freshness_gate(tmp_path: Pa
     assert freshness.details["tool_name"] == "mcp__qa__run_pytest"
 
 
-def test_external_posttool_accepts_result_only_while_workspace_remains_fresh(tmp_path: Path) -> None:
+def test_external_posttool_accepts_sanitized_result_when_workspace_is_fresh(tmp_path: Path) -> None:
     _workspace, state, control, store, services = _runtime(tmp_path)
 
     result = posttool_policy_output(
