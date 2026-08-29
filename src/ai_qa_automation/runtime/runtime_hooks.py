@@ -29,13 +29,7 @@ from ..state import StateStore
 from ..tools.repository import RepositoryInspector
 from .budget import BudgetExceededError
 from .mutation_lineage import reconcile_rolled_back_mutation
-from .run_control import (
-    CircuitOpenError,
-    MutationPendingError,
-    PendingMutation,
-    RepeatedActionError,
-    RuntimeControl,
-)
+from .run_control import CircuitOpenError, PendingMutation, RepeatedActionError, RuntimeControl
 from .tool_input_bounds import ToolInputBoundsError, tool_input_fingerprint, validate_tool_request
 from .tool_output_bounds import (
     ToolOutputBoundsError,
@@ -43,6 +37,7 @@ from .tool_output_bounds import (
     validate_external_failure_message,
 )
 from .validation_truth import evaluate_revision_closure
+from .workspace_freshness import WorkspaceFreshnessCode, observe_workspace_freshness
 
 _NETWORK_TOOLS = {
     "mcp__qa__probe_api",
@@ -121,6 +116,39 @@ def _record_unexpected_validation_tool_failure(
     )
 
 
+def _record_workspace_freshness_validation_failure(
+    state: AgentRunState,
+    *,
+    tool_name: str,
+    tool_input: dict[str, Any],
+) -> None:
+    """Poison validation lineage when target freshness changes before result acceptance."""
+
+    try:
+        fingerprint = _input_fingerprint(tool_name, tool_input)
+    except ToolInputBoundsError as exc:
+        fingerprint = hashlib.sha256(
+            f"{tool_name}:invalid-tool-input:{exc.code}".encode()
+        ).hexdigest()
+    state.validation_results.append(
+        ValidationResult(
+            name="workspace_freshness",
+            gate_id=f"workspace_freshness:{tool_name}:{fingerprint}",
+            revision=state.change_revision,
+            status=ValidationStatus.NOT_VERIFIED,
+            summary=(
+                "Workspace freshness changed before validation-bearing tool output could be "
+                "accepted for the current revision."
+            ),
+            details={
+                "tool_name": tool_name,
+                "scope": "post_execution_workspace_drift",
+                "input_hash": fingerprint,
+            },
+        )
+    )
+
+
 def _reconcile_rolled_back_mutation(
     state: AgentRunState | None,
     pending: PendingMutation | None,
@@ -179,6 +207,46 @@ def _bind_latest_targeted_pytest_to_pending_mutation(
             details["scope"] = "diagnostic"
         state.validation_results[index] = item.model_copy(update={"details": details})
         return
+
+
+def _workspace_freshness_denial(
+    state: AgentRunState,
+    control: RuntimeControl,
+    *,
+    tool_name: str,
+    stage: str,
+) -> str | None:
+    """Fail closed when controlled execution or result acceptance targets stale bytes."""
+
+    freshness = observe_workspace_freshness(
+        control.workspace,
+        expected_fingerprint=control.expected_workspace_fingerprint,
+        expected_root_identity=control.workspace_identity,
+    )
+    if freshness.fresh:
+        return None
+    if freshness.code is WorkspaceFreshnessCode.SUBJECT_UNAVAILABLE:
+        status = TerminalStatus.INFRASTRUCTURE_FAILURE
+        reason = "Workspace subject identity could not be revalidated safely."
+    elif freshness.code is WorkspaceFreshnessCode.FINGERPRINT_INCOMPLETE:
+        status = TerminalStatus.BLOCKED
+        reason = "Workspace fingerprint coverage is incomplete; controlled execution is denied."
+    elif freshness.code is WorkspaceFreshnessCode.BASELINE_MISSING:
+        status = TerminalStatus.BLOCKED
+        reason = "Workspace fingerprint baseline is unavailable; controlled execution is denied."
+    else:
+        status = TerminalStatus.BLOCKED
+        reason = "Target workspace changed outside the authorized runtime mutation lineage."
+    if state.terminal_status in {None, TerminalStatus.SUCCESS}:
+        state.terminal_status = status
+        state.terminal_reason = reason
+    control.journal.try_append(
+        "workspace_freshness_denied",
+        stage=stage,
+        tool_name=tool_name,
+        reason_code=freshness.code.value,
+    )
+    return reason
 
 
 def pretool_policy_output(
@@ -293,93 +361,31 @@ def pretool_policy_output(
             input_hash=fingerprint,
         )
 
-    if tool_name in _MUTATION_TOOLS and state is not None and control is not None:
-        if state.target_git_sha is None:
-            state.terminal_status = TerminalStatus.BLOCKED
-            state.terminal_reason = "Autonomous mutation requires a Git-backed target workspace"
-            control.journal.append("mutation_blocked_non_git_workspace", tool_name=tool_name)
-            _checkpoint(state, state_store, control)
-            return {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": "workspace-integrity: autonomous writes require a git-backed isolated worktree",
-                }
+    if (
+        tool_name in _MUTATION_TOOLS
+        and state is not None
+        and control is not None
+        and state.target_git_sha is None
+    ):
+        state.terminal_status = TerminalStatus.BLOCKED
+        state.terminal_reason = "Autonomous mutation requires a Git-backed target workspace"
+        control.journal.append("mutation_blocked_non_git_workspace", tool_name=tool_name)
+        _checkpoint(state, state_store, control)
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": "workspace-integrity: autonomous writes require a git-backed isolated worktree",
             }
-        current_snapshot = RepositoryInspector(control.workspace).snapshot()
-        if not current_snapshot.fingerprint_complete:
-            reasons = ", ".join(current_snapshot.fingerprint_incomplete_reasons)
-            state.terminal_status = TerminalStatus.BLOCKED
-            state.terminal_reason = "Mutation blocked because the workspace fingerprint cannot bind every changed subject"
-            control.journal.append(
-                "workspace_fingerprint_incomplete",
-                reasons=list(current_snapshot.fingerprint_incomplete_reasons),
-            )
-            _checkpoint(state, state_store, control)
-            return {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": (
-                        "workspace-integrity: fingerprint coverage is incomplete; "
-                        f"restart from a simpler/fully readable worktree ({reasons})"
-                    ),
-                }
-            }
-        current = current_snapshot.fingerprint
-        expected = control.expected_workspace_fingerprint
-        if expected is None:
-            state.terminal_status = TerminalStatus.BLOCKED
-            state.terminal_reason = (
-                "Mutation blocked because no workspace fingerprint baseline exists"
-            )
-            control.journal.append("workspace_drift_blocked", expected=None, actual=current)
-            _checkpoint(state, state_store, control)
-            return {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": "workspace-integrity: establish a fresh repository baseline before mutation",
-                }
-            }
-        if current != expected:
-            state.terminal_status = TerminalStatus.BLOCKED
-            state.terminal_reason = (
-                "Target workspace changed outside the agent after its baseline was captured"
-            )
-            control.journal.append("workspace_drift_blocked", expected=expected, actual=current)
-            _checkpoint(state, state_store, control)
-            return {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": "workspace-integrity: concurrent or out-of-band target changes detected; restart from a fresh baseline",
-                }
-            }
+        }
 
     decision = policy.authorize_tool(tool_name, tool_input)
     if state is not None:
         state.policy_decisions.append(decision)
 
     if decision.decision.value == "ALLOW":
-        if tool_name in _MUTATION_TOOLS and control is not None:
-            try:
-                control.prepare_mutation(
-                    str(tool_input.get("path") or ""),
-                    change_revision_before=(state.change_revision if state is not None else None),
-                )
-            except MutationPendingError as exc:
-                control.journal.append(
-                    "mutation_prepare_denied", tool_name=tool_name, reason=str(exc)
-                )
-                _checkpoint(state, state_store, control)
-                return {
-                    "hookSpecificOutput": {
-                        "hookEventName": "PreToolUse",
-                        "permissionDecision": "deny",
-                        "permissionDecisionReason": f"mutation-transaction: {exc}",
-                    }
-                }
+        # Mutation transaction preparation is application-owned and occurs in
+        # LiveRuntimeServices only after target freshness has been re-proved.
         _checkpoint(state, state_store, control)
         return {}
 
@@ -409,6 +415,8 @@ def posttool_policy_output(
 ) -> dict[str, Any]:
     """Sanitize provenance and refresh integrity state after successful tools."""
     tool_name = str(input_data.get("tool_name", ""))
+    raw_tool_input = input_data.get("tool_input")
+    tool_input = raw_tool_input if isinstance(raw_tool_input, dict) else {}
     safe_input = sanitize(input_data.get("tool_input") or {})
     response = input_data.get("tool_response")
     external_provider = tool_name.startswith(("mcp__github__", "mcp__atlassian__"))
@@ -419,17 +427,64 @@ def posttool_policy_output(
         "additionalContext": f"Policy audit recorded sanitized tool metadata: {safe_input}",
     }
 
-    if state is not None and control is not None and not failed:
-        if tool_name == "mcp__qa__inspect_repository":
-            control.set_workspace_fingerprint(
-                RepositoryInspector(control.workspace).snapshot().fingerprint
+    if (
+        state is not None
+        and control is not None
+        and not failed
+        and not external_provider
+        and tool_name not in _MUTATION_TOOLS
+    ):
+        freshness_reason = _workspace_freshness_denial(
+            state,
+            control,
+            tool_name=tool_name,
+            stage="post_tool_hook",
+        )
+        if freshness_reason is not None:
+            failed = True
+            if tool_name in _VALIDATION_BEARING_TOOLS:
+                _record_workspace_freshness_validation_failure(
+                    state,
+                    tool_name=tool_name,
+                    tool_input=tool_input,
+                )
+            output["updatedToolOutput"] = {
+                "is_error": True,
+                "error": "Tool result rejected because workspace freshness changed during execution.",
+            }
+            output["additionalContext"] = (
+                "Tool execution completed, but its result was rejected because the target workspace "
+                "no longer matched the authorized fingerprint lineage. No successful result from "
+                "this tool may be used for deterministic closure."
             )
-        elif tool_name in _MUTATION_TOOLS:
+
+    if state is not None and control is not None and not failed and tool_name in _MUTATION_TOOLS:
+        pending = control.pending_mutation
+        if pending is None:
+            failed = True
+            mutation_integrity_blocked = True
+            state.terminal_status = TerminalStatus.BLOCKED
+            state.terminal_reason = (
+                "Mutation result was rejected because no pending transaction authority exists"
+            )
+            control.open_circuits.update(_MUTATION_TOOLS)
+            control.journal.try_append(
+                "mutation_result_without_transaction",
+                tool_name=tool_name,
+            )
+            output["updatedToolOutput"] = {
+                "is_error": True,
+                "error": "Mutation result rejected because transaction authority was not prepared.",
+            }
+            output["additionalContext"] = (
+                "A mutation-shaped tool result arrived without a fresh, durable pending mutation "
+                "transaction. The result was rejected and mutation authority is disabled for this run."
+            )
+        else:
             candidate_snapshot = RepositoryInspector(control.workspace).snapshot()
             if candidate_snapshot.fingerprint_complete:
                 control.set_workspace_fingerprint(candidate_snapshot.fingerprint)
             else:
-                pending = control.pending_mutation
                 reasons = ", ".join(candidate_snapshot.fingerprint_incomplete_reasons)
                 rolled_back = control.rollback_pending_mutation(
                     reason="post-mutation workspace fingerprint became incomplete"
@@ -537,11 +592,15 @@ def posttool_policy_output(
     if control is not None:
         if tool_name in _MUTATION_TOOLS and failed and not mutation_integrity_blocked:
             pending = control.pending_mutation
-            rolled_back = control.rollback_pending_mutation(reason="mutation tool reported failure")
-            _reconcile_rolled_back_mutation(state, pending, rolled_back)
-            control.set_workspace_fingerprint(
-                RepositoryInspector(control.workspace).snapshot().fingerprint
-            )
+            if pending is not None:
+                rolled_back = control.rollback_pending_mutation(
+                    reason="mutation tool reported failure"
+                )
+                _reconcile_rolled_back_mutation(state, pending, rolled_back)
+                if rolled_back is not None:
+                    control.set_workspace_fingerprint(
+                        RepositoryInspector(control.workspace).snapshot().fingerprint
+                    )
         elif tool_name == "mcp__qa__run_pytest" and not failed and state is not None:
             if control.pending_mutation is not None:
                 _bind_latest_targeted_pytest_to_pending_mutation(state, control)
@@ -611,13 +670,15 @@ def posttool_failure_output(
     if control is not None:
         if tool_name in _MUTATION_TOOLS:
             pending = control.pending_mutation
-            rolled_back = control.rollback_pending_mutation(
-                reason="mutation tool raised an execution failure"
-            )
-            _reconcile_rolled_back_mutation(state, pending, rolled_back)
-            control.set_workspace_fingerprint(
-                RepositoryInspector(control.workspace).snapshot().fingerprint
-            )
+            if pending is not None:
+                rolled_back = control.rollback_pending_mutation(
+                    reason="mutation tool raised an execution failure"
+                )
+                _reconcile_rolled_back_mutation(state, pending, rolled_back)
+                if rolled_back is not None:
+                    control.set_workspace_fingerprint(
+                        RepositoryInspector(control.workspace).snapshot().fingerprint
+                    )
         control.record_tool_result(tool_name, failed=True)
         control.journal.append("tool_failed", tool_name=tool_name, error_type="tool_failure")
     _checkpoint(state, state_store, control)
@@ -629,8 +690,14 @@ def posttool_failure_output(
     }
 
 
-def build_permission_handler(policy: PolicyEngine) -> Any:
-    """Handle permission requests programmatically; approval-required and unknown tools deny."""
+def build_permission_handler(
+    policy: PolicyEngine,
+    *,
+    state: AgentRunState | None = None,
+    state_store: StateStore | None = None,
+    control: RuntimeControl | None = None,
+) -> Any:
+    """Handle permission requests; allowed requests still require fresh workspace authority."""
     try:
         from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
     except ImportError as exc:  # pragma: no cover
@@ -645,12 +712,25 @@ def build_permission_handler(policy: PolicyEngine) -> Any:
                 interrupt=False,
             )
         decision = policy.authorize_tool(tool_name, tool_input)
-        if decision.decision.value == "ALLOW":
-            return PermissionResultAllow(updated_input=tool_input)
-        return PermissionResultDeny(
-            message=f"{decision.rule_id}: {decision.reason}",
-            interrupt=decision.risk.value == "CRITICAL",
-        )
+        if decision.decision.value != "ALLOW":
+            return PermissionResultDeny(
+                message=f"{decision.rule_id}: {decision.reason}",
+                interrupt=decision.risk.value == "CRITICAL",
+            )
+        if state is not None and control is not None:
+            freshness_reason = _workspace_freshness_denial(
+                state,
+                control,
+                tool_name=tool_name,
+                stage="permission_callback",
+            )
+            if freshness_reason is not None:
+                _checkpoint(state, state_store, control)
+                return PermissionResultDeny(
+                    message=f"workspace-integrity: {freshness_reason}",
+                    interrupt=False,
+                )
+        return PermissionResultAllow(updated_input=tool_input)
 
     return can_use_tool
 

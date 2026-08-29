@@ -29,6 +29,7 @@ from ai_qa_automation.runtime.validation_truth import (
     evaluate_revision_closure,
 )
 from ai_qa_automation.state import StateStore
+from ai_qa_automation.tools.repository import RepositoryInspector
 
 
 def validation(
@@ -215,7 +216,7 @@ def make_control(tmp_path: Path, *, max_repeated_action: int = 2) -> RuntimeCont
     workspace = tmp_path / "sut"
     workspace.mkdir()
     run_dir = tmp_path / "run"
-    return RuntimeControl(
+    control = RuntimeControl(
         workspace=workspace,
         budget=ExecutionBudget(
             max_tool_calls=10,
@@ -228,6 +229,13 @@ def make_control(tmp_path: Path, *, max_repeated_action: int = 2) -> RuntimeCont
         lease_id="lease-phase2",
         max_repeated_action=max_repeated_action,
     )
+    snapshot = RepositoryInspector(
+        workspace,
+        expected_root_identity=control.workspace_identity,
+    ).snapshot()
+    assert snapshot.fingerprint_complete is True
+    control.set_workspace_fingerprint(snapshot.fingerprint)
+    return control
 
 
 def test_live_repetition_authority_is_content_sensitive_and_persisted(tmp_path: Path) -> None:

@@ -1,149 +1,301 @@
 from __future__ import annotations
 
+import hashlib
+import io
 import json
 import os
 import re
-import stat
+import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
+import uuid
 from pathlib import Path
+
+if __package__:
+    from . import mermaid_fs as _fs
+    from . import mermaid_output as _output
+    from . import mermaid_snapshot as _snapshot
+else:
+    # PYTHONSAFEPATH deliberately removes the script directory from the
+    # interpreter's implicit import path. Direct execution still needs the three
+    # reviewed sibling helper modules, so admit only this script's resolved
+    # directory rather than relying on the ambient working directory/PYTHONPATH.
+    _script_dir = str(Path(__file__).resolve(strict=True).parent)
+    if _script_dir not in sys.path:
+        sys.path.insert(0, _script_dir)
+    import mermaid_fs as _fs
+    import mermaid_output as _output
+    import mermaid_snapshot as _snapshot
 
 MERMAID_IMAGE = (
     "ghcr.io/mermaid-js/mermaid-cli/mermaid-cli@"
     "sha256:8cc6fb93037759668ac6c48d3b727da15c60419304f3bd4c69c8cd8589e2b485"
 )
-PUBLIC_ROOT_MARKDOWN = ("README.md", "CONTRIBUTING.md", "SECURITY.md")
-FENCE_OPEN_RE = re.compile(r"^(?P<fence>`{3,}|~{3,})[ \t]*(?P<info>[A-Za-z0-9_+.-]*)[ \t]*$")
-MAX_MARKDOWN_FILES = 128
-MAX_MARKDOWN_BYTES = 4 * 1024 * 1024
-MAX_TOTAL_MARKDOWN_BYTES = 16 * 1024 * 1024
-MAX_RENDER_FILE_BYTES = 16 * 1024 * 1024
+MERMAID_EXECUTABLE = "/home/mermaidcli/node_modules/.bin/mmdc"
+MERMAID_PUPPETEER_CONFIG = "/puppeteer-config.json"
+RENDER_WRAPPER = (
+    "status=0; "
+    f'{MERMAID_EXECUTABLE} -p {MERMAID_PUPPETEER_CONFIG} -q -i "$1" '
+    "-o /out/rendered.md || status=$?; "
+    'if [ "$status" -eq 0 ]; then : > /tmp/aiqa-render-ok; fi; '
+    ": > /tmp/aiqa-render-done; "
+    "while :; do sleep 3600; done"
+)
+RENDER_WAIT_COMMAND = (
+    "while [ ! -f /tmp/aiqa-render-done ]; do sleep 0.05; done; test -f /tmp/aiqa-render-ok"
+)
+GITHUB_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+CONTAINER_ID_RE = re.compile(r"^[0-9a-f]{64}$")
+DOCKER_START_TIMEOUT_SECONDS = 60
 RENDER_TIMEOUT_SECONDS = 60
+DOCKER_CLEANUP_TIMEOUT_SECONDS = 15
+DOCKER_COPY_TIMEOUT_SECONDS = 30
+
+MermaidDocumentSnapshot = _snapshot.MermaidDocumentSnapshot
+PUBLIC_ROOT_MARKDOWN = _fs.PUBLIC_ROOT_MARKDOWN
+MAX_MARKDOWN_FILES = _fs.MAX_MARKDOWN_FILES
+MAX_MARKDOWN_BYTES = _fs.MAX_MARKDOWN_BYTES
+MAX_TOTAL_MARKDOWN_BYTES = _fs.MAX_TOTAL_MARKDOWN_BYTES
+MAX_MERMAID_DIAGRAMS = _fs.MAX_MERMAID_DIAGRAMS
+MAX_RENDER_FILE_BYTES = _fs.MAX_RENDER_FILE_BYTES
+MAX_RENDER_TOTAL_BYTES = _fs.MAX_RENDER_TOTAL_BYTES
+MAX_RENDER_OUTPUT_ENTRIES = _fs.MAX_RENDER_OUTPUT_ENTRIES
+# The tmpfs bounds file data and inode count, but sparse files could have a
+# larger logical tar representation. Cap the archive stream independently.
+MAX_RENDER_ARCHIVE_BYTES = MAX_RENDER_TOTAL_BYTES + MAX_RENDER_OUTPUT_ENTRIES * 2048 + 65536
+READ_CHUNK_BYTES = _fs.READ_CHUNK_BYTES
+_read_fd_bounded = _fs._read_fd_bounded
+_read_regular_bytes = _fs._read_regular_bytes
+_candidate_files = _fs._candidate_files
+_read_regular_file = _fs._read_regular_file
+_parse_fence_open = _snapshot._parse_fence_open
+_is_fence_close = _snapshot._is_fence_close
+_mermaid_block_count = _snapshot._mermaid_block_count
+_write_snapshot = _snapshot._write_snapshot
+_require_empty_render_root = _output._require_empty_render_root
+_validate_rendered_outputs = _output._validate_rendered_outputs
+_validate_generated_svgs = _output._validate_generated_svgs
 
 
-def _candidate_files(root: Path) -> list[Path]:
-    candidates = [root / name for name in PUBLIC_ROOT_MARKDOWN]
-    docs = root / "docs"
-    try:
-        docs_stat = docs.lstat()
-    except FileNotFoundError as exc:
-        raise ValueError("docs directory is required for Mermaid validation") from exc
-    if stat.S_ISLNK(docs_stat.st_mode) or not stat.S_ISDIR(docs_stat.st_mode):
-        raise ValueError("docs must be a real directory, not a symlink")
-
-    entries = list(docs.iterdir())
-    if len(entries) > MAX_MARKDOWN_FILES:
-        raise ValueError(f"docs exceeds {MAX_MARKDOWN_FILES} direct entries")
-    candidates.extend(
-        sorted(
-            (path for path in entries if path.suffix.lower() == ".md"),
-            key=lambda path: path.name,
-        )
-    )
-    return candidates
+def _ci_identity() -> tuple[str | None, str | None]:
+    subject = os.environ.get("CI_SUBJECT_SHA")
+    event = os.environ.get("GITHUB_SHA")
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        for name, value in (("CI_SUBJECT_SHA", subject), ("GITHUB_SHA", event)):
+            if value is None or GITHUB_SHA_RE.fullmatch(value) is None:
+                raise ValueError(f"{name} must be a full lowercase GitHub commit SHA in CI")
+    return subject, event
 
 
-def _read_regular_file(path: Path) -> str:
-    try:
-        before = path.lstat()
-    except FileNotFoundError as exc:
-        raise ValueError(f"required documentation file is missing: {path}") from exc
-    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
-        raise ValueError(f"documentation path must be a regular non-symlink file: {path}")
-    if before.st_size > MAX_MARKDOWN_BYTES:
-        raise ValueError(f"documentation file exceeds {MAX_MARKDOWN_BYTES} bytes: {path}")
-    data = path.read_bytes()
-    after = path.lstat()
-    if (
-        before.st_dev,
-        before.st_ino,
-        before.st_size,
-        before.st_mtime_ns,
-        before.st_ctime_ns,
-    ) != (
-        after.st_dev,
-        after.st_ino,
-        after.st_size,
-        after.st_mtime_ns,
-        after.st_ctime_ns,
-    ):
-        raise ValueError(f"documentation file changed during validation discovery: {path}")
-    return data.decode("utf-8")
-
-
-def _parse_fence_open(line: str) -> tuple[str, int, str] | None:
-    match = FENCE_OPEN_RE.match(line.strip())
-    if match is None:
+def _snapshot_from_bytes(path: Path, data: bytes) -> MermaidDocumentSnapshot | None:
+    count = _mermaid_block_count(data.decode("utf-8"))
+    if not count:
         return None
-    fence = match.group("fence")
-    return fence[0], len(fence), match.group("info").lower()
+    return MermaidDocumentSnapshot(path, count, data, hashlib.sha256(data).hexdigest())
 
 
-def _is_fence_close(line: str, *, fence_char: str, minimum_length: int) -> bool:
-    stripped = line.strip()
-    return (
-        len(stripped) >= minimum_length
-        and bool(stripped)
-        and all(character == fence_char for character in stripped)
-    )
-
-
-def _mermaid_block_count(text: str) -> int:
-    count = 0
-    fence_char: str | None = None
-    minimum_length = 0
-    language = ""
-
-    for line in text.splitlines():
-        if fence_char is None:
-            opened = _parse_fence_open(line)
-            if opened is None:
-                continue
-            fence_char, minimum_length, language = opened
-            if language == "mermaid":
-                count += 1
-            continue
-
-        if _is_fence_close(line, fence_char=fence_char, minimum_length=minimum_length):
-            fence_char = None
-            minimum_length = 0
-            language = ""
-
-    if fence_char is not None:
-        raise ValueError("unterminated fenced code block in public documentation")
-    return count
+def _discover_mermaid_snapshot(root: Path) -> list[MermaidDocumentSnapshot]:
+    return _snapshot.discover_mermaid_snapshot(root, snapshot_factory=_snapshot_from_bytes)
 
 
 def _discover_mermaid_documents(root: Path) -> list[tuple[Path, int]]:
-    selected: list[tuple[Path, int]] = []
+    return [(item.relative_path, item.diagram_count) for item in _discover_mermaid_snapshot(root)]
+
+
+def _resolve_docker_executable() -> str:
+    discovered = shutil.which("docker")
+    if discovered is None:
+        raise RuntimeError("Docker executable is unavailable for Mermaid validation")
+    try:
+        resolved = Path(discovered).resolve(strict=True)
+    except OSError as exc:
+        raise RuntimeError("Docker executable identity could not be resolved") from exc
+    if not resolved.is_file() or not os.access(resolved, os.X_OK):
+        raise RuntimeError("Docker executable is not an executable regular file")
+    return str(resolved)
+
+
+def _container_id_from_cidfile(path: Path) -> str | None:
+    try:
+        value = (
+            _read_regular_bytes(path, max_bytes=128, label="Mermaid renderer container id")
+            .decode("ascii")
+            .strip()
+        )
+    except (UnicodeDecodeError, ValueError):
+        return None
+    return value if CONTAINER_ID_RE.fullmatch(value) else None
+
+
+def _remove_renderer_container(
+    name: str, cidfile: Path, *, docker_executable: str = "docker"
+) -> None:
+    container_id = _container_id_from_cidfile(cidfile)
+    target = container_id or name
+    try:
+        result = subprocess.run(
+            [docker_executable, "rm", "--force", target],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=DOCKER_CLEANUP_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError("Mermaid renderer container cleanup could not be completed") from exc
+    if container_id is None:
+        raise RuntimeError(
+            "Mermaid renderer exact container identity was unavailable during cleanup"
+        )
+    if result.returncode != 0:
+        raise RuntimeError("Mermaid renderer container cleanup did not confirm removal")
+
+
+def _wait_renderer_completion(container_id: str, *, docker_executable: str) -> None:
+    try:
+        subprocess.run(
+            [
+                docker_executable,
+                "exec",
+                container_id,
+                "/bin/sh",
+                "-c",
+                RENDER_WAIT_COMMAND,
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=RENDER_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"Mermaid render exceeded {RENDER_TIMEOUT_SECONDS}s") from exc
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError("Mermaid renderer did not complete successfully") from exc
+
+
+def _archive_member_name(member: tarfile.TarInfo) -> str | None:
+    name = member.name
+    while name.startswith("./"):
+        name = name[2:]
+    if name in {"", "."}:
+        return None if member.isdir() else ""
+    if name in {".."} or "/" in name or "\\" in name or Path(name).is_absolute():
+        return ""
+    return name
+
+
+def _write_archive_member(root_fd: int, name: str, data: bytes) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(name, flags, 0o600, dir_fd=root_fd)
+    try:
+        view = memoryview(data)
+        while view:
+            written = os.write(fd, view[:READ_CHUNK_BYTES])
+            if written <= 0:
+                raise RuntimeError("Mermaid renderer output could not be materialized")
+            view = view[written:]
+    finally:
+        os.close(fd)
+
+
+def _materialize_renderer_archive(
+    archive: bytes, output_root: Path, *, expected_count: int
+) -> None:
+    if len(archive) > MAX_RENDER_ARCHIVE_BYTES:
+        raise RuntimeError("Mermaid renderer archive exceeded the bounded output budget")
+    expected_names = {"rendered.md"} | {
+        f"rendered-{index}.svg" for index in range(1, expected_count + 1)
+    }
+    seen: set[str] = set()
     total_bytes = 0
-    candidates = _candidate_files(root)
-    if len(candidates) > MAX_MARKDOWN_FILES:
-        raise ValueError(f"documentation corpus exceeds {MAX_MARKDOWN_FILES} Markdown files")
+    root_fd = os.open(
+        output_root,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        try:
+            with tarfile.open(fileobj=io.BytesIO(archive), mode="r:*") as rendered:
+                for index, member in enumerate(rendered, start=1):
+                    if index > MAX_RENDER_OUTPUT_ENTRIES + 1:
+                        raise RuntimeError("Mermaid renderer archive exceeded the entry budget")
+                    name = _archive_member_name(member)
+                    if name is None:
+                        continue
+                    if (
+                        not name
+                        or name not in expected_names
+                        or name in seen
+                        or not member.isfile()
+                    ):
+                        raise RuntimeError(
+                            "Mermaid renderer archive contained an invalid output entry"
+                        )
+                    if member.size <= 0 or member.size > MAX_RENDER_FILE_BYTES:
+                        raise RuntimeError(
+                            "Mermaid renderer archive contained an invalid output size"
+                        )
+                    total_bytes += member.size
+                    if total_bytes > MAX_RENDER_TOTAL_BYTES:
+                        raise RuntimeError(
+                            "Mermaid renderer archive exceeded the aggregate byte budget"
+                        )
+                    extracted = rendered.extractfile(member)
+                    if extracted is None:
+                        raise RuntimeError("Mermaid renderer archive member could not be read")
+                    data = extracted.read(member.size + 1)
+                    if len(data) != member.size:
+                        raise RuntimeError("Mermaid renderer archive member was incomplete")
+                    _write_archive_member(root_fd, name, data)
+                    seen.add(name)
+        except (tarfile.TarError, EOFError) as exc:
+            raise RuntimeError("Mermaid renderer archive was invalid or incomplete") from exc
+    finally:
+        os.close(root_fd)
+    if seen != expected_names:
+        raise RuntimeError("Mermaid renderer archive did not contain the exact expected outputs")
 
-    for path in candidates:
-        text = _read_regular_file(path)
-        total_bytes += len(text.encode("utf-8"))
-        if total_bytes > MAX_TOTAL_MARKDOWN_BYTES:
-            raise ValueError(
-                f"documentation corpus exceeds {MAX_TOTAL_MARKDOWN_BYTES} total Markdown bytes"
-            )
-        count = _mermaid_block_count(text)
-        if count:
-            selected.append((path.relative_to(root), count))
-    if not selected:
-        raise ValueError("no Mermaid diagrams discovered in the public Markdown corpus")
-    return selected
+
+def _copy_renderer_outputs(
+    container_id: str,
+    output_root: Path,
+    *,
+    expected_count: int,
+    docker_executable: str,
+) -> None:
+    archive_command = (
+        f"/bin/busybox tar -C /out -cf - . | /bin/busybox head -c {MAX_RENDER_ARCHIVE_BYTES + 1}"
+    )
+    try:
+        result = subprocess.run(
+            [docker_executable, "exec", container_id, "/bin/sh", "-c", archive_command],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=DOCKER_COPY_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError("Mermaid renderer output archive could not be collected") from exc
+    archive = result.stdout
+    if len(archive) > MAX_RENDER_ARCHIVE_BYTES:
+        raise RuntimeError("Mermaid renderer archive exceeded the bounded output budget")
+    _materialize_renderer_archive(archive, output_root, expected_count=expected_count)
 
 
-def _run_mermaid(root: Path, relative_path: Path, output_root: Path, expected_count: int) -> None:
-    destination = output_root / relative_path
-    destination.parent.mkdir(parents=True, exist_ok=True)
+def _run_mermaid(root: Path, relative: Path, output_root: Path, expected_count: int) -> None:
+    _require_empty_render_root(output_root)
+    docker_executable = _resolve_docker_executable()
+    name = f"aiqa-mermaid-{os.getpid()}-{uuid.uuid4().hex}"
+    cidfile = output_root.parent / f".{name}.cid"
+    input_path = f"/repo/{relative.as_posix()}"
     command = [
-        "docker",
+        docker_executable,
         "run",
-        "--rm",
+        "--detach",
+        "--name",
+        name,
+        "--cidfile",
+        str(cidfile),
         "--network",
         "none",
         "--read-only",
@@ -167,69 +319,104 @@ def _run_mermaid(root: Path, relative_path: Path, output_root: Path, expected_co
         "/tmp:rw,noexec,nosuid,nodev,size=256m",
         "--mount",
         f"type=bind,src={root},dst=/repo,readonly",
-        "--mount",
-        f"type=bind,src={output_root},dst=/out",
+        "--tmpfs",
+        (
+            "/out:rw,noexec,nosuid,nodev,"
+            f"size={MAX_RENDER_TOTAL_BYTES},nr_inodes={MAX_RENDER_OUTPUT_ENTRIES}"
+        ),
+        "--entrypoint",
+        "/bin/sh",
         MERMAID_IMAGE,
-        "-i",
-        f"/repo/{relative_path.as_posix()}",
-        "-o",
-        f"/out/{relative_path.as_posix()}",
+        "-c",
+        RENDER_WRAPPER,
+        "aiqa-mermaid-wrapper",
+        input_path,
     ]
+    error: RuntimeError | None = None
+    cleanup_error: RuntimeError | None = None
+    cleanup_required = True
     try:
-        completed = subprocess.run(
+        subprocess.run(
             command,
             check=True,
-            capture_output=True,
-            text=True,
-            timeout=RENDER_TIMEOUT_SECONDS,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=DOCKER_START_TIMEOUT_SECONDS,
+        )
+        container_id = _container_id_from_cidfile(cidfile)
+        if container_id is None:
+            raise RuntimeError("Mermaid renderer did not publish an exact container identity")
+        _wait_renderer_completion(container_id, docker_executable=docker_executable)
+        # Docker's archive API cannot copy tmpfs mounts. Stream a bounded tar
+        # from the exact live container and validate every member before host write.
+        _copy_renderer_outputs(
+            container_id,
+            output_root,
+            expected_count=expected_count,
+            docker_executable=docker_executable,
         )
     except subprocess.CalledProcessError as exc:
-        if exc.stdout:
-            print(exc.stdout, file=sys.stderr, end="")
-        if exc.stderr:
-            print(exc.stderr, file=sys.stderr, end="")
-        raise
+        error = RuntimeError(f"Mermaid renderer could not be started for {relative}")
+        error.__cause__ = exc
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(
-            f"Mermaid render exceeded {RENDER_TIMEOUT_SECONDS}s for {relative_path}"
-        ) from exc
-
-    if completed.stderr:
-        print(completed.stderr, file=sys.stderr, end="")
-    if not destination.is_file():
-        raise RuntimeError(f"Mermaid CLI did not emit transformed Markdown for {relative_path}")
-    transformed = destination.read_text(encoding="utf-8")
-    remaining = _mermaid_block_count(transformed)
-    if remaining:
-        raise RuntimeError(
-            f"Mermaid CLI left {remaining} unrendered Mermaid block(s) in {relative_path}"
+        error = RuntimeError(
+            f"Mermaid renderer start exceeded {DOCKER_START_TIMEOUT_SECONDS}s for {relative}"
         )
-    generated = sorted(destination.parent.glob(f"{destination.stem}-*.svg"))
-    if len(generated) != expected_count:
-        raise RuntimeError(
-            f"Mermaid CLI rendered {len(generated)} SVGs for {relative_path}; "
-            f"expected {expected_count}"
-        )
+        error.__cause__ = exc
+    except OSError as exc:
+        cleanup_required = False
+        error = RuntimeError(f"Mermaid renderer could not be started for {relative}")
+        error.__cause__ = exc
+    except RuntimeError as exc:
+        error = exc
+    finally:
+        if cleanup_required:
+            try:
+                _remove_renderer_container(name, cidfile, docker_executable=docker_executable)
+            except RuntimeError as exc:
+                cleanup_error = exc
+    if cleanup_error is not None:
+        if error is not None:
+            raise RuntimeError(
+                f"{error}; renderer cleanup authority also failed"
+            ) from cleanup_error
+        raise cleanup_error
+    if error is not None:
+        raise error
+    _validate_rendered_outputs(output_root, Path("rendered.md"), expected_count=expected_count)
 
 
 def main() -> int:
-    root = Path.cwd().resolve()
-    documents = _discover_mermaid_documents(root)
-    with tempfile.TemporaryDirectory(prefix="aiqa-mermaid-") as temp_dir:
-        output_root = Path(temp_dir).resolve()
-        for relative_path, count in documents:
-            _run_mermaid(root, relative_path, output_root, count)
-
+    subject, event = _ci_identity()
+    documents = _discover_mermaid_snapshot(Path.cwd().resolve())
+    with tempfile.TemporaryDirectory(prefix="aiqa-mermaid-") as temp:
+        temporary = Path(temp).resolve()
+        source = temporary / "input"
+        outputs = temporary / "output"
+        source.mkdir()
+        outputs.mkdir()
+        for item in documents:
+            _write_snapshot(source, item)
+        for item in documents:
+            with tempfile.TemporaryDirectory(prefix="render-", dir=outputs) as render_temp:
+                output = Path(render_temp)
+                _run_mermaid(source, item.relative_path, output, item.diagram_count)
     result = {
-        "schema_version": 1,
+        "schema_version": 2,
         "validator": "official_mermaid_cli_container",
         "container": MERMAID_IMAGE,
-        "subject_sha": os.environ.get("GITHUB_SHA"),
+        "subject_sha": subject,
+        "github_event_sha": event,
         "documents": [
-            {"path": path.as_posix(), "diagram_count": count} for path, count in documents
+            {
+                "path": item.relative_path.as_posix(),
+                "diagram_count": item.diagram_count,
+                "sha256": item.sha256,
+            }
+            for item in documents
         ],
         "document_count": len(documents),
-        "diagram_count": sum(count for _, count in documents),
+        "diagram_count": sum(item.diagram_count for item in documents),
         "failures": 0,
     }
     json.dump(result, sys.stdout, indent=2, sort_keys=True)

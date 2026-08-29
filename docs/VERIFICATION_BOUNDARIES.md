@@ -136,6 +136,8 @@ Deployment evidence includes:
 - process/container/VM isolation;
 - non-root/security context;
 - firewall/proxy/egress enforcement;
+- CPU/memory/process-tree resource quotas;
+- target workload/concurrency/request-rate enforcement;
 - identity and secret lifecycle;
 - provider-side authentication/authorization;
 - trusted artifact-root ownership/protection from arbitrary same-account writers;
@@ -146,7 +148,17 @@ Deployment evidence includes:
 - incident-response and availability controls.
 
 > [!CAUTION]
-> `AI_QA_K6_EXTERNAL_EGRESS_ENFORCED=true` is a prerequisite assertion, not a firewall. The deployment must actually provide egress containment for every k6 execution.
+> `AI_QA_K6_EXTERNAL_EGRESS_ENFORCED=true` is a prerequisite assertion, not a firewall. The deployment must actually provide egress containment for every k6 execution. K6 process spawn additionally requires trusted **process/filesystem isolation**, **executable module-loading isolation**, **runner CPU/memory/process resource limits**, and **target workload/concurrency/request-rate limits**. Static JavaScript inspection is not treated as a process, filesystem, network, module-loader, resource, or workload sandbox. The current live MCP configuration exposes only the egress assertion, so live k6 remains intentionally fail-closed until all four additional containment prerequisites are plumbed through trusted runtime configuration.
+
+Every live blocked k6 validation outcome is bound to the same normalized six-field attempted request subject: script path, target URL, environment, maximum p95, maximum error rate, and minimum request rate. Thresholds are validated before any target or k6 process action. The exact normalized request participates in gate hashing; durable blocked-gate details retain only the framework-redacted target URL and numeric thresholds. Raw script/environment strings, URL credentials, query strings, non-root URL paths, and separate per-field correlation hashes are not persisted in those details. Durable live blocked details explicitly record `process_isolation_enforced=false`, `module_isolation_enforced=false`, `resource_limits_enforced=false`, and `workload_limits_enforced=false` because none of those authorities is currently exposed by the live path. Because live k6 does not execute, this blocked request identity must not be described as proof of executable script-byte identity or target behavior.
+
+For an eventually authorized execution, successful k6 metric evidence and its validation details additionally carry `module_snapshot_sha256`, a deterministic domain-separated SHA-256 over every validated local module's relative path and exact UTF-8 bytes. The request-level gate remains stable for the operator's predeclared objective contract, while PASS/FAIL evidence is separately bound to the exact validated executable snapshot. Reusing the same script pathname with different validated bytes therefore cannot produce byte-ambiguous successful evidence.
+
+Before collecting executable module bytes, `K6Runner` records the workspace root identity. Each root/local-import module is then opened through descriptor-relative no-follow confinement and revalidated against that expected root identity while the bounded read is in progress. A symlinked parent/final component, whole-root replacement, identity change during ingestion, unsupported descriptor-relative authority, or out-of-root lexical path fails closed before snapshot materialization.
+
+Static module inspection is defense-in-depth rather than module-loader authority. The controlled runner rejects CommonJS `require`, dynamic `import()`, remote static imports, unapproved extension/builtin imports, and disables automatic k6 extension resolution with `K6_AUTO_EXTENSION_RESOLUTION=false`. The separate deployment module-loading-isolation prerequisite still must prove that executable runtime code cannot escape the validated snapshot plus approved built-ins; the process/filesystem-isolation prerequisite independently constrains the spawned workload. The runner-resource prerequisite must bound CPU/memory/process-tree consumption, and the target-workload prerequisite must enforce an approved ceiling on virtual users/concurrency/request rate outside target-controlled JavaScript. Result thresholds assess observed output after execution; they are not workload authorization or load caps. None of these prerequisites is inferred from static source checks.
+
+A k6 summary becomes metric authority only after bounded regular-file/no-follow ingestion and strict JSON-object parsing. Duplicate keys, non-standard JSON constants, symlinked summary subjects, non-finite required metrics, and numeric values that cannot be represented as finite floats fail non-optimistically before metric evidence is accepted. The parser error exposed to the runtime is intentionally low-information rather than echoing attacker-controlled summary contents.
 
 ---
 
@@ -163,7 +175,7 @@ Deployment evidence includes:
 | Network policy | canonical host validation + adapter authorization | DNS/routing/firewall/proxy enforcement |
 | Playwright | navigation/subresource/WebSocket policy + locator evidence contract | browser runtime + target app behavior |
 | API | host/method policy + bounded evidence capture | target auth/data/service behavior |
-| k6 | non-production/host/script/threshold policy + universal egress prerequisite | executable, approved target, actual infrastructure egress |
+| k6 | non-production/host/script/threshold policy + root-identity-bound descriptor-confined module ingestion + bounded validated snapshot + exact snapshot hash on successful metric evidence + strict bounded summary JSON + static loader denials + egress/process/module/resource/workload prerequisites | executable, approved target, actual infrastructure egress + process/filesystem isolation + executable module-loading isolation + runner resource quotas + target workload limits |
 | Appium | runtime/capability inspection boundary | app/device/emulator/cloud session |
 | Secret safety | protected paths, redaction, minimal subprocess env | organization secret manager, rotation, access policy |
 | Traceability | strict run-bound manifests, hashes, journal/runtime binding, typed lineage, artifact/root-verifying unsigned attestation | external signing/identity/timestamping when required |

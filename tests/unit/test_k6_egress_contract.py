@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 
 from ai_qa_automation.policy import PolicyEngine
 from ai_qa_automation.tools.performance import K6Runner
@@ -130,12 +129,12 @@ def test_k6_boolean_metric_is_not_treated_as_numeric(tmp_path: Path) -> None:
         runner._parse_metrics(summary)
 
 
-def test_k6_non_finite_metric_is_rejected_by_canonical_model(tmp_path: Path) -> None:
+def test_k6_non_finite_metric_is_rejected_before_canonical_model(tmp_path: Path) -> None:
     summary = full_summary()
     summary["metrics"]["http_req_duration"]["values"]["p(95)"] = float("nan")  # type: ignore[index]
     runner = K6Runner(tmp_path, policy(tmp_path), external_egress_enforced=True)
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(RuntimeError, match="must be finite"):
         runner._parse_metrics(summary)
 
 
