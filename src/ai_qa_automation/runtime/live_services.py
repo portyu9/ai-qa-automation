@@ -20,8 +20,9 @@ class LiveRuntimeServices(RuntimeServices):
     Internal tool implementations still call ``consume`` as an execution
     checkpoint, but they do not maintain an independent live budget/repetition
     authority. Canonical RuntimeControl covers internal and external SDK tool
-    requests uniformly; this adapter only mirrors that charged request count into
-    AgentRunState while preserving standalone RuntimeServices behavior elsewhere.
+    requests uniformly; this adapter mirrors that charged request count while
+    owning the target-subject checks that must occur immediately before an
+    in-process internal tool body proceeds.
 
     Target-controlled pytest code is additionally fail-closed unless trusted
     deployment infrastructure explicitly asserts both process/filesystem
@@ -121,23 +122,42 @@ class LiveRuntimeServices(RuntimeServices):
         if self.control is None:  # pragma: no cover - guarded by __post_init__
             raise RuntimeError("live runtime services lost RuntimeControl")
 
-        # Defense in depth for direct live-service invocation. Normal SDK execution
-        # is rejected earlier by PreToolUse before request fingerprinting or budget
-        # mutation, but a tool body may never receive an unbounded input even when
-        # invoked outside that hook path.
+        # Defense in depth for direct live-service invocation. A tool body may never
+        # receive an unbounded input even if the SDK hook path is unavailable.
         validate_tool_request(tool_name, tool_input)
 
-        # PreToolUse already charged the canonical runtime budget. Mirror that
+        # PreToolUse normally charged the canonical runtime budget. Mirror that
         # authority before any tool-specific fail-closed return so persisted
-        # AgentRunState cannot undercount a blocked request.
+        # AgentRunState cannot undercount an already-accounted request.
         self.state.tool_call_count = self.control.budget.snapshot().tool_calls
 
-        # Re-prove freshness immediately before every internal tool body. Mutation
-        # tools are allowed to change the fingerprint only after this pre-execution
-        # proof; their in-body checkpoints are exempt until PostToolUse records the
-        # authorized candidate fingerprint. Every non-mutation checkpoint re-proves
-        # freshness again, catching concurrent drift before successful tool return.
+        # Re-prove target freshness at the application-owned internal execution
+        # boundary. This deliberately avoids RepositoryInspector work inside the
+        # shorter SDK PreToolUse timeout.
         self._require_workspace_freshness(stage="pre_tool", tool_name=tool_name)
+
+        if tool_name in _LIVE_MUTATION_TOOL_NAMES:
+            if self.state.target_git_sha is None:
+                reason = "Autonomous mutation requires a Git-backed target workspace"
+                self.state.terminal_status = TerminalStatus.BLOCKED
+                self.state.terminal_reason = reason
+                self.control.journal.try_append(
+                    "mutation_blocked_non_git_workspace",
+                    tool_name=f"mcp__qa__{tool_name}",
+                )
+                if self.state_store is not None:  # pragma: no branch - __post_init__ requires it
+                    self.state_store.save(self.state)
+                self.control.persist()
+                raise PermissionError(reason)
+
+            # Capture rollback authority only after the exact workspace baseline has
+            # been re-proved. A drifted workspace must never become the rollback
+            # source for a newly prepared autonomous mutation.
+            self.control.prepare_mutation(
+                str(tool_input.get("path") or ""),
+                change_revision_before=self.state.change_revision,
+            )
+
         self._active_tool_name = tool_name
         super().checkpoint()
 
