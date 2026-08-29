@@ -31,8 +31,23 @@ MERMAID_IMAGE = (
     "ghcr.io/mermaid-js/mermaid-cli/mermaid-cli@"
     "sha256:8cc6fb93037759668ac6c48d3b727da15c60419304f3bd4c69c8cd8589e2b485"
 )
+MERMAID_EXECUTABLE = "/home/mermaidcli/node_modules/.bin/mmdc"
+MERMAID_PUPPETEER_CONFIG = "/puppeteer-config.json"
+RENDER_WRAPPER = (
+    "status=0; "
+    f'{MERMAID_EXECUTABLE} -p {MERMAID_PUPPETEER_CONFIG} -q -i "$1" '
+    "-o /out/rendered.md || status=$?; "
+    'if [ "$status" -eq 0 ]; then : > /tmp/aiqa-render-ok; fi; '
+    ": > /tmp/aiqa-render-done; "
+    "while :; do sleep 3600; done"
+)
+RENDER_WAIT_COMMAND = (
+    "while [ ! -f /tmp/aiqa-render-done ]; do sleep 0.05; done; "
+    "test -f /tmp/aiqa-render-ok"
+)
 GITHUB_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 CONTAINER_ID_RE = re.compile(r"^[0-9a-f]{64}$")
+DOCKER_START_TIMEOUT_SECONDS = 15
 RENDER_TIMEOUT_SECONDS = 60
 DOCKER_CLEANUP_TIMEOUT_SECONDS = 15
 DOCKER_COPY_TIMEOUT_SECONDS = 30
@@ -131,6 +146,28 @@ def _remove_renderer_container(
         raise RuntimeError("Mermaid renderer container cleanup did not confirm removal")
 
 
+def _wait_renderer_completion(container_id: str, *, docker_executable: str) -> None:
+    try:
+        subprocess.run(
+            [
+                docker_executable,
+                "exec",
+                container_id,
+                "/bin/sh",
+                "-c",
+                RENDER_WAIT_COMMAND,
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=RENDER_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"Mermaid render exceeded {RENDER_TIMEOUT_SECONDS}s") from exc
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError("Mermaid renderer did not complete successfully") from exc
+
+
 def _copy_renderer_outputs(
     container_id: str, output_root: Path, *, docker_executable: str
 ) -> None:
@@ -151,9 +188,11 @@ def _run_mermaid(root: Path, relative: Path, output_root: Path, expected_count: 
     docker_executable = _resolve_docker_executable()
     name = f"aiqa-mermaid-{os.getpid()}-{uuid.uuid4().hex}"
     cidfile = output_root.parent / f".{name}.cid"
+    input_path = f"/repo/{relative.as_posix()}"
     command = [
         docker_executable,
         "run",
+        "--detach",
         "--name",
         name,
         "--cidfile",
@@ -186,11 +225,13 @@ def _run_mermaid(root: Path, relative: Path, output_root: Path, expected_count: 
             "/out:rw,noexec,nosuid,nodev,"
             f"size={MAX_RENDER_TOTAL_BYTES},nr_inodes={MAX_RENDER_OUTPUT_ENTRIES}"
         ),
+        "--entrypoint",
+        "/bin/sh",
         MERMAID_IMAGE,
-        "-i",
-        f"/repo/{relative.as_posix()}",
-        "-o",
-        "/out/rendered.md",
+        "-c",
+        RENDER_WRAPPER,
+        "aiqa-mermaid-wrapper",
+        input_path,
     ]
     error: RuntimeError | None = None
     cleanup_required = True
@@ -200,29 +241,32 @@ def _run_mermaid(root: Path, relative: Path, output_root: Path, expected_count: 
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            timeout=RENDER_TIMEOUT_SECONDS,
+            timeout=DOCKER_START_TIMEOUT_SECONDS,
         )
         container_id = _container_id_from_cidfile(cidfile)
         if container_id is None:
             raise RuntimeError("Mermaid renderer did not publish an exact container identity")
-        _copy_renderer_outputs(
-            container_id, output_root, docker_executable=docker_executable
-        )
+        _wait_renderer_completion(container_id, docker_executable=docker_executable)
+        # /out is a container-private tmpfs. Copy while the exact container is
+        # still alive; stopping it first would discard the rendered bytes.
+        _copy_renderer_outputs(container_id, output_root, docker_executable=docker_executable)
     except subprocess.CalledProcessError as exc:
-        error = RuntimeError(f"Mermaid render failed for {relative}")
+        error = RuntimeError(f"Mermaid renderer could not be started for {relative}")
         error.__cause__ = exc
     except subprocess.TimeoutExpired as exc:
-        error = RuntimeError(f"Mermaid render exceeded {RENDER_TIMEOUT_SECONDS}s for {relative}")
+        error = RuntimeError(
+            f"Mermaid renderer start exceeded {DOCKER_START_TIMEOUT_SECONDS}s for {relative}"
+        )
         error.__cause__ = exc
     except OSError as exc:
         cleanup_required = False
         error = RuntimeError(f"Mermaid renderer could not be started for {relative}")
         error.__cause__ = exc
+    except RuntimeError as exc:
+        error = exc
     finally:
         if cleanup_required:
-            _remove_renderer_container(
-                name, cidfile, docker_executable=docker_executable
-            )
+            _remove_renderer_container(name, cidfile, docker_executable=docker_executable)
     if error is not None:
         raise error
     _validate_rendered_outputs(output_root, Path("rendered.md"), expected_count=expected_count)
