@@ -75,6 +75,10 @@ def _is_fence_close(line: str, *, fence_char: str, minimum_length: int) -> bool:
     )
 
 
+def _renderer_mermaid_block_count(text: str) -> int:
+    return sum(1 for _ in RENDERER_MERMAID_RE.finditer(text))
+
+
 def _mermaid_block_count(text: str) -> int:
     count = 0
     fence: tuple[str, int, str] | None = None
@@ -88,11 +92,12 @@ def _mermaid_block_count(text: str) -> int:
             fence = None
     if fence is not None:
         raise ValueError("unterminated fenced code block in public documentation")
+    renderer_count = _renderer_mermaid_block_count(text)
+    if renderer_count != count:
+        raise ValueError(
+            "Mermaid fence syntax is not exactly consumable by the pinned Mermaid CLI renderer"
+        )
     return count
-
-
-def _renderer_mermaid_block_count(text: str) -> int:
-    return sum(1 for _ in RENDERER_MERMAID_RE.finditer(text))
 
 
 def discover_mermaid_snapshot(
