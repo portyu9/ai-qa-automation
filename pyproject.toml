@@ -7,7 +7,7 @@ name = "ai-qa-automation"
 version = "0.1.0"
 description = "ƳƤ AI QA Automation Framework — evidence-first agentic quality engineering with deterministic safety, validation, and traceability"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14,!=3.12.*"
 authors = [{name = "Ƴunior Ƥortal"}]
 license = {file = "LICENSE"}
 keywords = [
@@ -25,6 +25,7 @@ classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.13",
   "Topic :: Software Development :: Quality Assurance",
   "Topic :: Software Development :: Testing",
   "Typing :: Typed",
@@ -84,6 +85,13 @@ markers = [
   "model: tests requiring Anthropic credentials",
 ]
 asyncio_mode = "auto"
+
+[tool.coverage.run]
+branch = true
+
+[tool.coverage.report]
+fail_under = 75
+show_missing = true
 
 [tool.ruff]
 target-version = "py311"
