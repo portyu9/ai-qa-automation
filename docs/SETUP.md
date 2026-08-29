@@ -26,7 +26,7 @@ Each mode has its own evidence source. Local configuration does not stand in for
 
 ## Install
 
-Project metadata requires Python **3.11+**. The repository-owned development environments are currently locked and continuously exercised on exact **CPython 3.11.16** and **3.13.15**; use one of those interpreters when reproducing repository validation.
+Project metadata deliberately accepts only the repository-certified Python minors: **CPython 3.11 and 3.13** (`>=3.11,<3.14,!=3.12.*`). The repository-owned development environments are locked and continuously exercised on exact **CPython 3.11.16** and **3.13.15**. Python 3.12 and future minors remain unsupported until a matching lock, clean install, and trusted CI evidence are added; installer compatibility is not treated as support evidence.
 
 Dependency installation is intentionally lock-bound. Do not replace the commands below with an editable `.[dev]` install or a live resolver upgrade when the goal is to reproduce repository-controlled verification.
 
@@ -97,8 +97,10 @@ Inject configuration through:
 | `AI_QA_MODEL` | `claude-sonnet-5` | live agent model identifier |
 | `AI_QA_CONTROL_ROOT` | current working directory | trusted framework root containing `CLAUDE.md` + `.claude/settings.json` |
 | `AI_QA_ARTIFACT_ROOT` | `<control-root>/artifacts` | trusted state/evidence/journal/rollback/artifact root |
-| `AI_QA_BASE_REF` | unset | explicit Git comparison baseline, e.g. `origin/main` |
+| `AI_QA_BASE_REF` | unset | canonical Git comparison baseline, e.g. `origin/main`; included in the trusted configuration fingerprint |
 | `AI_QA_REGULATED_MODE` | `false` | additional audit chaining / retention classification |
+
+`AI_QA_BASE_REF` is resolved through the same validated `Settings` object used for runtime provenance. Bootstrap does not perform a second ambient environment lookup, so two runs with different baselines cannot share a configuration fingerprint merely because the baseline bypassed canonical settings.
 
 ### Safety configuration
 
