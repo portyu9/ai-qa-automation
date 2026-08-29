@@ -120,6 +120,8 @@ def test_renderer_uses_immutable_image_and_bounded_container_authority(
             cidfile = Path(command[command.index("--cidfile") + 1])
             cidfile.write_text("a" * 64 + "\n", encoding="ascii")
             return subprocess.CompletedProcess(command, 0)
+        if command[1] == "exec":
+            return subprocess.CompletedProcess(command, 0)
         if command[1] == "cp":
             assert command[2] == f"{'a' * 64}:/out/."
             (output_root / "rendered.md").write_text("# Rendered\n", encoding="utf-8")
@@ -139,6 +141,7 @@ def test_renderer_uses_immutable_image_and_bounded_container_authority(
         mermaid.MERMAID_IMAGE,
     )
     assert "--rm" not in command
+    assert "--detach" in command
     assert "--name" in command
     assert "--cidfile" in command
     assert "--network" in command and command[command.index("--network") + 1] == "none"
@@ -156,7 +159,21 @@ def test_renderer_uses_immutable_image_and_bounded_container_authority(
     out_tmpfs = command[command.index("--tmpfs", command.index("--tmpfs") + 1) + 1]
     assert f"size={mermaid.MAX_RENDER_TOTAL_BYTES}" in out_tmpfs
     assert f"nr_inodes={mermaid.MAX_RENDER_OUTPUT_ENTRIES}" in out_tmpfs
-    assert kwargs["timeout"] == mermaid.RENDER_TIMEOUT_SECONDS
+    assert command[command.index("--entrypoint") + 1] == "/bin/sh"
+    assert mermaid.RENDER_WRAPPER in command
+    assert command[-1] == "/repo/README.md"
+    assert kwargs["timeout"] == mermaid.DOCKER_START_TIMEOUT_SECONDS
     assert kwargs["check"] is True
-    assert calls[1][0] == ["docker", "cp", f"{'a' * 64}:/out/.", str(output_root)]
-    assert calls[2][0] == ["docker", "rm", "--force", "a" * 64]
+
+    wait_command, wait_kwargs = calls[1]
+    assert wait_command == [
+        "docker",
+        "exec",
+        "a" * 64,
+        "/bin/sh",
+        "-c",
+        mermaid.RENDER_WAIT_COMMAND,
+    ]
+    assert wait_kwargs["timeout"] == mermaid.RENDER_TIMEOUT_SECONDS
+    assert calls[2][0] == ["docker", "cp", f"{'a' * 64}:/out/.", str(output_root)]
+    assert calls[3][0] == ["docker", "rm", "--force", "a" * 64]
