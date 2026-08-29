@@ -38,9 +38,7 @@ def _runner(tmp_path: Path) -> K6Runner:
 def _summary() -> dict[str, object]:
     return {
         "metrics": {
-            "http_req_duration": {
-                "values": {"med": 1.0, "p(90)": 2.0, "p(95)": 3.0, "p(99)": 4.0}
-            },
+            "http_req_duration": {"values": {"med": 1.0, "p(90)": 2.0, "p(95)": 3.0, "p(99)": 4.0}},
             "http_reqs": {"values": {"rate": 5.0}},
             "http_req_failed": {"values": {"rate": 0.0}},
         }
@@ -95,8 +93,7 @@ def test_k6_accepts_one_unambiguous_bounded_summary(
     assert metrics.request_rate == 5.0
     assert len(metrics.module_snapshot_sha256) == 64
     assert (
-        metrics.model_dump(mode="json")["module_snapshot_sha256"]
-        == metrics.module_snapshot_sha256
+        metrics.model_dump(mode="json")["module_snapshot_sha256"] == metrics.module_snapshot_sha256
     )
 
 
