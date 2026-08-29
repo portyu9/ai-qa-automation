@@ -212,8 +212,8 @@ class LiveRuntimeServices(RuntimeServices):
         super().checkpoint()
 
         if tool_name == "run_pytest":
-            reason = self.pytest_execution_block_reason()
-            if reason is not None:
+            pytest_block_reason = self.pytest_execution_block_reason()
+            if pytest_block_reason is not None:
                 pytest_args = [str(item) for item in (tool_input.get("args") or [])]
                 self.state.validation_results.append(
                     ValidationResult(
@@ -221,7 +221,7 @@ class LiveRuntimeServices(RuntimeServices):
                         gate_id=_stable_gate_id("pytest", pytest_args),
                         revision=self.state.change_revision,
                         status=ValidationStatus.BLOCKED,
-                        summary=reason,
+                        summary=pytest_block_reason,
                         details={
                             "scope": _pytest_scope(pytest_args),
                             "args": pytest_args,
@@ -232,9 +232,9 @@ class LiveRuntimeServices(RuntimeServices):
                     )
                 )
                 self.state.terminal_status = TerminalStatus.BLOCKED
-                self.state.terminal_reason = reason
+                self.state.terminal_reason = pytest_block_reason
                 super().checkpoint()
-                raise PermissionError(reason)
+                raise PermissionError(pytest_block_reason)
 
         if tool_name == "run_k6":
             try:
