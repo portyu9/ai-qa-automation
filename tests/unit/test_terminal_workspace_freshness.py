@@ -383,6 +383,11 @@ def test_mutation_preparation_occurs_only_after_fresh_workspace_proof(tmp_path: 
     workspace, state, control, _store, services = _runtime(tmp_path)
     relative = "tests/generated_test.py"
     state.target_git_sha = _git(workspace, "rev-parse", "HEAD")
+    services.policy = PolicyEngine(
+        tmp_path / "control-write",
+        workspace,
+        allow_test_writes=True,
+    )
 
     services.consume(
         "create_test_file",
