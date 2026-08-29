@@ -16,6 +16,13 @@ if __package__:
     from . import mermaid_output as _output
     from . import mermaid_snapshot as _snapshot
 else:
+    # PYTHONSAFEPATH deliberately removes the script directory from the
+    # interpreter's implicit import path. Direct execution still needs the three
+    # reviewed sibling helper modules, so admit only this script's resolved
+    # directory rather than relying on the ambient working directory/PYTHONPATH.
+    _script_dir = str(Path(__file__).resolve(strict=True).parent)
+    if _script_dir not in sys.path:
+        sys.path.insert(0, _script_dir)
     import mermaid_fs as _fs
     import mermaid_output as _output
     import mermaid_snapshot as _snapshot
