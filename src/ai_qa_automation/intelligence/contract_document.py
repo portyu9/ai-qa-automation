@@ -445,7 +445,8 @@ def _validate_schema_shape(
                 not isinstance(enum, list)
                 or not enum
                 or any(
-                    item is not None and not isinstance(item, (str, bool, int, float)) for item in enum
+                    item is not None and not isinstance(item, (str, bool, int, float))
+                    for item in enum
                 )
             ):
                 raise ValueError(
@@ -650,9 +651,7 @@ def _validate_operation_shape(
             named_schemas=named_schemas,
             allow_type_array=allow_type_array,
         )
-    actual_path_parameters = {
-        name for location, name in parameter_identities if location == "path"
-    }
+    actual_path_parameters = {name for location, name in parameter_identities if location == "path"}
     if actual_path_parameters != path_template_names:
         raise ValueError(
             "contract OpenAPI operation path parameters must exactly match path template variables"
