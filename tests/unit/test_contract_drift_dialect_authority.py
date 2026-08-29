@@ -22,9 +22,7 @@ def _analyze(baseline: dict[str, object], current: dict[str, object]):
     )
 
 
-def _schema_document(
-    schema: dict[str, object], *, version: str = "3.1.0"
-) -> dict[str, object]:
+def _schema_document(schema: dict[str, object], *, version: str = "3.1.0") -> dict[str, object]:
     return {
         "openapi": version,
         "paths": {},
@@ -52,9 +50,7 @@ def test_required_property_removal_is_risky() -> None:
 
     assert result.severity is ContractDriftSeverity.RISKY
     assert result.analyzed is True
-    assert any(
-        change.rule_id == "OAS-REQUIRED-PROPERTY-REMOVED" for change in result.changes
-    )
+    assert any(change.rule_id == "OAS-REQUIRED-PROPERTY-REMOVED" for change in result.changes)
 
 
 def test_optional_schema_property_addition_is_risky() -> None:
@@ -76,16 +72,10 @@ def test_optional_schema_property_addition_is_risky() -> None:
 def test_added_response_status_is_risky() -> None:
     baseline = {
         "openapi": "3.1.0",
-        "paths": {
-            "/orders": {
-                "get": {"responses": {"200": {"description": "ok"}}}
-            }
-        },
+        "paths": {"/orders": {"get": {"responses": {"200": {"description": "ok"}}}}},
     }
     current = json.loads(json.dumps(baseline))
-    current["paths"]["/orders"]["get"]["responses"]["404"] = {
-        "description": "not found"
-    }
+    current["paths"]["/orders"]["get"]["responses"]["404"] = {"description": "not found"}
 
     result = _analyze(baseline, current)
 
@@ -185,19 +175,13 @@ def test_non_openapi_reason_remains_backward_compatible() -> None:
                     }
                 }
             },
-            "components": {
-                "requestBodies": {"Order": {"required": True, "content": {}}}
-            },
+            "components": {"requestBodies": {"Order": {"required": True, "content": {}}}},
         },
         {
             "openapi": "3.1.0",
             "paths": {
                 "/orders": {
-                    "get": {
-                        "responses": {
-                            "200": {"$ref": "#/components/responses/Order"}
-                        }
-                    }
+                    "get": {"responses": {"200": {"$ref": "#/components/responses/Order"}}}
                 }
             },
             "components": {"responses": {"Order": {"description": "ok"}}},
@@ -213,11 +197,7 @@ def test_non_openapi_reason_remains_backward_compatible() -> None:
         },
         {
             "swagger": "2.0",
-            "paths": {
-                "/orders": {
-                    "get": {"responses": {"2XX": {"description": "ok"}}}
-                }
-            },
+            "paths": {"/orders": {"get": {"responses": {"2XX": {"description": "ok"}}}}},
         },
         {
             "openapi": "3.1.0",
@@ -226,9 +206,7 @@ def test_non_openapi_reason_remains_backward_compatible() -> None:
                     "post": {
                         "requestBody": {
                             "content": {
-                                "application/json": {
-                                    "schema": {"$ref": "https://example.test/order.json"}
-                                }
+                                "application/json": {"schema": {"$ref": "https://example.test/order.json"}}
                             }
                         },
                         "responses": {"200": {"description": "ok"}},
@@ -280,9 +258,7 @@ def test_self_contained_request_and_response_payload_schemas_remain_analyzable()
                 }
             }
         },
-        "components": {
-            "schemas": {"Order": {"type": "object", "properties": {}}}
-        },
+        "components": {"schemas": {"Order": {"type": "object", "properties": {}}}},
     }
 
     result = _analyze(document, json.loads(json.dumps(document)))
