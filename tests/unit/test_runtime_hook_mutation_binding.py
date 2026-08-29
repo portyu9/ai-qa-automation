@@ -7,13 +7,14 @@ from ai_qa_automation.runtime.budget import ExecutionBudget
 from ai_qa_automation.runtime.journal import RunJournal
 from ai_qa_automation.runtime.run_control import RuntimeControl
 from ai_qa_automation.runtime.runtime_hooks import posttool_policy_output
+from ai_qa_automation.tools.repository import RepositoryInspector
 
 
 def control(tmp_path: Path) -> RuntimeControl:
     workspace = tmp_path / "sut"
     workspace.mkdir()
     run_dir = tmp_path / "artifacts" / "run-binding"
-    return RuntimeControl(
+    subject = RuntimeControl(
         workspace=workspace.resolve(),
         budget=ExecutionBudget(
             max_tool_calls=20,
@@ -25,6 +26,8 @@ def control(tmp_path: Path) -> RuntimeControl:
         metadata_path=run_dir / "runtime.json",
         lease_id="lease-binding",
     )
+    subject.set_workspace_fingerprint(RepositoryInspector(subject.workspace).snapshot().fingerprint)
+    return subject
 
 
 def patch_safety(path: str) -> ValidationResult:
