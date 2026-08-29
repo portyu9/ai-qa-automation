@@ -71,7 +71,7 @@ def _bounded_output_shape(root_fd: int, *, relative: Path) -> str:
 
 
 def _validate_rendered_outputs(root: Path, relative: Path, *, expected_count: int) -> None:
-    if relative.is_absolute() or relative.parent != Path("."):
+    if relative.is_absolute() or relative.parent != Path():
         raise RuntimeError("Mermaid renderer output must use the flat private output namespace")
     root_fd = os.open(root, os.O_RDONLY | _dirflag() | _nofollow())
     try:
