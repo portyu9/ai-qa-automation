@@ -34,7 +34,7 @@ def test_discovers_mermaid_documents_and_counts_blocks(tmp_path: Path) -> None:
     ]
 
 
-def test_discovers_tilde_and_long_backtick_mermaid_fences(tmp_path: Path) -> None:
+def test_renderer_incompatible_mermaid_fences_fail_closed(tmp_path: Path) -> None:
     (tmp_path / "README.md").write_text(
         "~~~~mermaid\nflowchart LR\nA --> B\n~~~~\n",
         encoding="utf-8",
@@ -47,10 +47,8 @@ def test_discovers_tilde_and_long_backtick_mermaid_fences(tmp_path: Path) -> Non
         encoding="utf-8",
     )
 
-    assert mermaid._discover_mermaid_documents(tmp_path) == [
-        (Path("README.md"), 1),
-        (Path("docs/ALT.md"), 1),
-    ]
+    with pytest.raises(ValueError, match="pinned Mermaid CLI renderer"):
+        mermaid._discover_mermaid_documents(tmp_path)
 
 
 def test_discovery_includes_public_root_security_document(tmp_path: Path) -> None:
