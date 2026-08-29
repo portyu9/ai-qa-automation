@@ -25,6 +25,8 @@ from ai_qa_automation.state import StateStore
 
 def _runtime(
     tmp_path: Path,
+    *,
+    allow_test_writes: bool = True,
 ) -> tuple[AgentRunState, RuntimeControl, StateStore, LiveRuntimeServices]:
     workspace = tmp_path / "sut"
     workspace.mkdir()
@@ -53,7 +55,11 @@ def _runtime(
         workspace=workspace,
         state=state,
         evidence=cast(Any, object()),
-        policy=PolicyEngine(tmp_path / "control", workspace, allow_test_writes=True),
+        policy=PolicyEngine(
+            tmp_path / "control",
+            workspace,
+            allow_test_writes=allow_test_writes,
+        ),
         test_runner=cast(Any, object()),
         max_tool_calls=10,
         max_repeated_action=3,
@@ -102,6 +108,40 @@ def test_freshness_denied_mutation_failure_does_not_rebase_workspace_authority(
     assert control.pending_mutation is None
     assert control.expected_workspace_fingerprint == expected
     assert state.terminal_status is TerminalStatus.BLOCKED
+
+
+def test_policy_denied_mutation_never_reaches_rollback_preparation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state, control, store, services = _runtime(tmp_path, allow_test_writes=False)
+    expected = control.expected_workspace_fingerprint
+    monkeypatch.setattr(
+        live_services_module,
+        "observe_workspace_freshness",
+        lambda *_args, **_kwargs: WorkspaceFreshness(
+            WorkspaceFreshnessCode.FRESH,
+            "fresh",
+        ),
+    )
+    monkeypatch.setattr(
+        control,
+        "prepare_mutation",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("policy denial must precede rollback preparation")
+        ),
+    )
+
+    with pytest.raises(PermissionError, match="TOOL-WRITE-001"):
+        services.consume(
+            "create_test_file",
+            {"path": "tests/test_generated.py", "source": "def test_ok():\n    assert True\n"},
+        )
+
+    assert state.terminal_status is TerminalStatus.POLICY_DENIED
+    assert control.pending_mutation is None
+    assert control.expected_workspace_fingerprint == expected
+    assert store.load().terminal_status is TerminalStatus.POLICY_DENIED
 
 
 def test_mutation_success_without_pending_transaction_is_rejected_without_rebase(
