@@ -137,6 +137,29 @@ class LiveRuntimeServices(RuntimeServices):
         self._require_workspace_freshness(stage="pre_tool", tool_name=tool_name)
 
         if tool_name in _LIVE_MUTATION_TOOL_NAMES:
+            # A skipped/broken SDK hook must not widen rollback authority. Re-run
+            # deterministic mutation tool policy before reading any target bytes for
+            # backup preparation.
+            policy_decision = self.policy.authorize_tool(
+                f"mcp__qa__{tool_name}",
+                tool_input,
+            )
+            self.state.policy_decisions.append(policy_decision)
+            if policy_decision.decision.value != "ALLOW":
+                reason = f"{policy_decision.rule_id}: {policy_decision.reason}"
+                if self.state.terminal_status in {None, TerminalStatus.SUCCESS}:
+                    self.state.terminal_status = TerminalStatus.POLICY_DENIED
+                    self.state.terminal_reason = reason
+                self.control.journal.try_append(
+                    "mutation_policy_denied",
+                    tool_name=f"mcp__qa__{tool_name}",
+                    rule_id=policy_decision.rule_id,
+                )
+                if self.state_store is not None:  # pragma: no branch - __post_init__ requires it
+                    self.state_store.save(self.state)
+                self.control.persist()
+                raise PermissionError(reason)
+
             if self.state.target_git_sha is None:
                 reason = "Autonomous mutation requires a Git-backed target workspace"
                 self.state.terminal_status = TerminalStatus.BLOCKED
@@ -150,9 +173,9 @@ class LiveRuntimeServices(RuntimeServices):
                 self.control.persist()
                 raise PermissionError(reason)
 
-            # Capture rollback authority only after the exact workspace baseline has
-            # been re-proved. A drifted workspace must never become the rollback
-            # source for a newly prepared autonomous mutation.
+            # Capture rollback authority only after the exact workspace baseline and
+            # mutation policy have both been re-proved. A drifted or unauthorized
+            # workspace must never become the rollback source for a new mutation.
             self.control.prepare_mutation(
                 str(tool_input.get("path") or ""),
                 change_revision_before=self.state.change_revision,
