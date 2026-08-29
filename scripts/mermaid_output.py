@@ -85,7 +85,9 @@ def _validate_rendered_outputs(root: Path, relative: Path, *, expected_count: in
             rendered = rendered_bytes.decode("utf-8")
         except (UnicodeDecodeError, ValueError) as exc:
             shape = _bounded_output_shape(root_fd, relative=relative)
-            raise RuntimeError(f"invalid Mermaid transformed Markdown; output shape: {shape}") from exc
+            raise RuntimeError(
+                f"invalid Mermaid transformed Markdown; output shape: {shape}"
+            ) from exc
         remaining = _mermaid_block_count(rendered)
         if remaining:
             raise RuntimeError(
