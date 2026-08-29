@@ -43,6 +43,7 @@ from .tool_output_bounds import (
     validate_external_failure_message,
 )
 from .validation_truth import evaluate_revision_closure
+from .workspace_freshness import WorkspaceFreshnessCode, observe_workspace_freshness
 
 _NETWORK_TOOLS = {
     "mcp__qa__probe_api",
@@ -181,6 +182,45 @@ def _bind_latest_targeted_pytest_to_pending_mutation(
         return
 
 
+def _workspace_freshness_denial(
+    state: AgentRunState,
+    control: RuntimeControl,
+    *,
+    tool_name: str,
+) -> str | None:
+    """Fail closed before any controlled tool executes against stale target bytes."""
+
+    freshness = observe_workspace_freshness(
+        control.workspace,
+        expected_fingerprint=control.expected_workspace_fingerprint,
+        expected_root_identity=control.workspace_identity,
+    )
+    if freshness.fresh:
+        return None
+    if freshness.code is WorkspaceFreshnessCode.SUBJECT_UNAVAILABLE:
+        status = TerminalStatus.INFRASTRUCTURE_FAILURE
+        reason = "Workspace subject identity could not be revalidated safely."
+    elif freshness.code is WorkspaceFreshnessCode.FINGERPRINT_INCOMPLETE:
+        status = TerminalStatus.BLOCKED
+        reason = "Workspace fingerprint is incomplete; controlled execution is denied."
+    elif freshness.code is WorkspaceFreshnessCode.BASELINE_MISSING:
+        status = TerminalStatus.BLOCKED
+        reason = "Workspace fingerprint baseline is unavailable; controlled execution is denied."
+    else:
+        status = TerminalStatus.BLOCKED
+        reason = "Target workspace changed outside the authorized runtime mutation lineage."
+    if state.terminal_status in {None, TerminalStatus.SUCCESS}:
+        state.terminal_status = status
+        state.terminal_reason = reason
+    control.journal.try_append(
+        "workspace_freshness_denied",
+        stage="pre_tool_hook",
+        tool_name=tool_name,
+        reason_code=freshness.code.value,
+    )
+    return reason
+
+
 def pretool_policy_output(
     policy: PolicyEngine,
     input_data: dict[str, Any],
@@ -238,6 +278,19 @@ def pretool_policy_output(
     tool_name = raw_tool_name
     if not isinstance(tool_input, dict):  # pragma: no cover - guarded above
         raise ToolInputBoundsError("root_type", "tool input must be a JSON object")
+
+    if state is not None and control is not None:
+        freshness_reason = _workspace_freshness_denial(state, control, tool_name=tool_name)
+        if freshness_reason is not None:
+            _checkpoint(state, state_store, control)
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": f"workspace-integrity: {freshness_reason}",
+                }
+            }
+
     fingerprint = _input_fingerprint(tool_name, tool_input)
 
     try:
