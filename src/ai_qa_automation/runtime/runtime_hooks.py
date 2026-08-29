@@ -420,11 +420,7 @@ def posttool_policy_output(
     }
 
     if state is not None and control is not None and not failed:
-        if tool_name == "mcp__qa__inspect_repository":
-            control.set_workspace_fingerprint(
-                RepositoryInspector(control.workspace).snapshot().fingerprint
-            )
-        elif tool_name in _MUTATION_TOOLS:
+        if tool_name in _MUTATION_TOOLS:
             candidate_snapshot = RepositoryInspector(control.workspace).snapshot()
             if candidate_snapshot.fingerprint_complete:
                 control.set_workspace_fingerprint(candidate_snapshot.fingerprint)
