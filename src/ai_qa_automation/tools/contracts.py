@@ -18,6 +18,7 @@ _JSON_SCHEMA_VALIDATION_TIMEOUT_SECONDS = 2.0
 _JSON_SCHEMA_WORKER_STARTUP_GRACE_SECONDS = 5.0
 _MAX_JSON_SCHEMA_WORKER_INPUT_BYTES = 2_100_000
 _MAX_JSON_SCHEMA_WORKER_OUTPUT_BYTES = 8_192
+_MAX_JSON_SCHEMA_WORKER_MEMORY_BYTES = 1024 * 1024 * 1024
 _MAX_JSON_SCHEMA_WORKER_DEPTH = 64
 _MAX_JSON_SCHEMA_WORKER_NODES = 100_000
 _MAX_JSON_SCHEMA_WORKER_CONTAINER_ITEMS = 50_000
@@ -39,8 +40,9 @@ _JSON_SCHEMA_WORKER_CODE = dedent(
     expected_payload_sha256 = sys.argv[2]
     max_payload_bytes = int(sys.argv[3])
     validation_timeout = float(sys.argv[4])
-    default_dialect = sys.argv[5]
-    sys.path.extend(sys.argv[6:])
+    max_worker_memory_bytes = int(sys.argv[5])
+    default_dialect = sys.argv[6]
+    sys.path.extend(sys.argv[7:])
 
     class ValidationTimeout(RuntimeError):
         pass
@@ -52,6 +54,37 @@ _JSON_SCHEMA_WORKER_CODE = dedent(
     def finish(kind, **details):
         emit(kind, **details)
         raise SystemExit(0)
+
+    def install_memory_budget():
+        try:
+            import resource
+        except ImportError:
+            finish("memory_budget_unavailable")
+        if not hasattr(resource, "RLIMIT_AS") or not hasattr(resource, "RLIM_INFINITY"):
+            finish("memory_budget_unavailable")
+        try:
+            soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+            candidates = [max_worker_memory_bytes]
+            for current in (soft, hard):
+                if current == resource.RLIM_INFINITY:
+                    continue
+                if current <= 0:
+                    finish("memory_budget_unavailable")
+                candidates.append(current)
+            limit = min(candidates)
+            resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+            observed_soft, observed_hard = resource.getrlimit(resource.RLIMIT_AS)
+        except (OSError, ValueError):
+            finish("memory_budget_unavailable")
+        if (
+            observed_soft == resource.RLIM_INFINITY
+            or observed_hard == resource.RLIM_INFINITY
+            or observed_soft <= 0
+            or observed_hard <= 0
+            or observed_soft > max_worker_memory_bytes
+            or observed_hard > max_worker_memory_bytes
+        ):
+            finish("memory_budget_unavailable")
 
     def raise_timeout(_signum, _frame):
         raise ValidationTimeout("schema evaluation timed out")
@@ -126,6 +159,8 @@ _JSON_SCHEMA_WORKER_CODE = dedent(
         if not isinstance(payload, dict) or set(payload) != {"instance", "schema"}:
             finish("payload_integrity_error")
         return payload
+
+    install_memory_budget()
 
     try:
         import jsonschema
@@ -218,6 +253,8 @@ _JSON_SCHEMA_WORKER_CODE = dedent(
             validator.validate(instance)
     except ValidationTimeout:
         finish("timeout")
+    except MemoryError:
+        finish("memory_exhausted")
     except jsonschema.SchemaError:
         finish("schema_error")
     except jsonschema.ValidationError:
@@ -425,6 +462,7 @@ def validate_json_schema(instance: Any, schema: Any) -> ValidationResult:
                     payload_sha256,
                     str(_MAX_JSON_SCHEMA_WORKER_INPUT_BYTES),
                     str(_JSON_SCHEMA_VALIDATION_TIMEOUT_SECONDS),
+                    str(_MAX_JSON_SCHEMA_WORKER_MEMORY_BYTES),
                     _DEFAULT_JSON_SCHEMA_DIALECT,
                     *dependency_roots,
                 ],
@@ -488,6 +526,20 @@ def validate_json_schema(instance: Any, schema: Any) -> ValidationResult:
             name="json_schema",
             status=ValidationStatus.BLOCKED,
             summary="Isolated JSON Schema evaluation timer is unavailable or already owned.",
+        )
+    if kind == "memory_budget_unavailable":
+        return ValidationResult(
+            name="json_schema",
+            status=ValidationStatus.BLOCKED,
+            summary="Isolated JSON Schema worker memory authority is unavailable.",
+            details={"memory_limit_bytes": _MAX_JSON_SCHEMA_WORKER_MEMORY_BYTES},
+        )
+    if kind == "memory_exhausted":
+        return ValidationResult(
+            name="json_schema",
+            status=ValidationStatus.NOT_VERIFIED,
+            summary="JSON Schema evaluation exceeded its deterministic memory budget.",
+            details={"memory_limit_bytes": _MAX_JSON_SCHEMA_WORKER_MEMORY_BYTES},
         )
     if kind in {"payload_unavailable", "payload_integrity_error"}:
         return ValidationResult(
