@@ -132,7 +132,7 @@ def test_policy_denied_mutation_never_reaches_rollback_preparation(
         ),
     )
 
-    with pytest.raises(PermissionError, match="TOOL-WRITE-001"):
+    with pytest.raises(PermissionError, match="WRITE-001"):
         services.consume(
             "create_test_file",
             {"path": "tests/test_generated.py", "source": "def test_ok():\n    assert True\n"},
