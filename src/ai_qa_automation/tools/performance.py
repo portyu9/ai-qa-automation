@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import json
+import hashlib
+import math
 import os
 import re
 import shutil
@@ -11,7 +12,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 from ..fs_authority import pin_directory_identity, read_bytes_confined
-from ..io_safety import read_text_bounded
+from ..io_safety import read_json_object_bounded
 from ..models import PerformanceMetrics, ToolDecision
 from ..policy import PolicyEngine
 from .execution_env import restricted_subprocess_env, run_bounded_subprocess
@@ -23,6 +24,13 @@ _DYNAMIC_IMPORT = re.compile(r"\bimport\s*\(")
 _MAX_K6_MODULE_BYTES = 1_000_000
 _MAX_K6_MODULES = 64
 _MAX_K6_SUMMARY_BYTES = 1_000_000
+_K6_SNAPSHOT_HASH_DOMAIN = b"ai-qa-k6-module-snapshot-v1\0"
+
+
+class K6ExecutionMetrics(PerformanceMetrics):
+    """Observed k6 metrics bound to the exact validated module snapshot."""
+
+    module_snapshot_sha256: str
 
 
 class K6Runner:
@@ -197,6 +205,19 @@ class K6Runner:
         return self.workspace / root_relative
 
     @staticmethod
+    def _module_snapshot_sha256(modules: dict[Path, str]) -> str:
+        digest = hashlib.sha256()
+        digest.update(_K6_SNAPSHOT_HASH_DOMAIN)
+        for relative_path in sorted(modules, key=lambda path: path.as_posix()):
+            path_bytes = relative_path.as_posix().encode("utf-8")
+            source_bytes = modules[relative_path].encode("utf-8")
+            digest.update(len(path_bytes).to_bytes(8, "big"))
+            digest.update(path_bytes)
+            digest.update(len(source_bytes).to_bytes(8, "big"))
+            digest.update(source_bytes)
+        return digest.hexdigest()
+
+    @staticmethod
     def _write_validated_snapshot(snapshot_root: Path, modules: dict[Path, str]) -> None:
         for relative_path, source in modules.items():
             destination = snapshot_root / relative_path
@@ -223,7 +244,13 @@ class K6Runner:
         raw = values[key]
         if isinstance(raw, bool) or not isinstance(raw, (int, float)):
             raise RuntimeError(f"k6 metric {metric}.{key} is not numeric")
-        return float(raw)
+        try:
+            value = float(raw)
+        except OverflowError as exc:
+            raise RuntimeError(f"k6 metric {metric}.{key} exceeds the numeric bound") from exc
+        if not math.isfinite(value):
+            raise RuntimeError(f"k6 metric {metric}.{key} must be finite")
+        return value
 
     @classmethod
     def _parse_metrics(cls, data: dict[str, Any]) -> PerformanceMetrics:
@@ -245,7 +272,7 @@ class K6Runner:
             error_rate=cls._required_number(failures, "rate", metric="http_req_failed"),
         )
 
-    def run(self, script: Path, *, target_url: str, environment: str) -> PerformanceMetrics:
+    def run(self, script: Path, *, target_url: str, environment: str) -> K6ExecutionMetrics:
         if not self.external_egress_enforced:
             raise PermissionError(
                 "k6 execution requires trusted infrastructure-level egress enforcement; "
@@ -255,6 +282,7 @@ class K6Runner:
         if decision.decision != ToolDecision.ALLOW:
             raise PermissionError(decision.reason)
         root_relative, modules = self._collect_validated_modules(script, target_url)
+        module_snapshot_sha256 = self._module_snapshot_sha256(modules)
         if not self.external_process_isolation_enforced:
             raise PermissionError(
                 "k6 execution requires trusted infrastructure-level process/filesystem isolation; "
@@ -318,17 +346,16 @@ class K6Runner:
             if not summary_path.is_file():
                 raise RuntimeError("k6 completed without producing the required summary artifact")
             try:
-                rendered = read_text_bounded(
+                data = read_json_object_bounded(
                     summary_path,
                     max_bytes=_MAX_K6_SUMMARY_BYTES,
                     label="k6 summary",
                 )
-            except ValueError as exc:
-                raise RuntimeError(
-                    f"k6 summary exceeds {_MAX_K6_SUMMARY_BYTES} byte ingestion limit"
-                ) from exc
-            data = json.loads(rendered)
-            if not isinstance(data, dict):
-                raise RuntimeError("k6 summary root must be a JSON object")
+            except (OSError, UnicodeError, ValueError) as exc:
+                raise RuntimeError("k6 summary failed bounded unambiguous JSON ingestion") from exc
 
-        return self._parse_metrics(data)
+        metrics = self._parse_metrics(data)
+        return K6ExecutionMetrics(
+            **metrics.model_dump(mode="python"),
+            module_snapshot_sha256=module_snapshot_sha256,
+        )

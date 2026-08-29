@@ -14,6 +14,7 @@ from ai_qa_automation.policy import PolicyEngine
 from ai_qa_automation.runtime import internal_tools
 from ai_qa_automation.runtime.internal_tools import RuntimeServices, _stable_gate_id, build_internal_mcp_server
 from ai_qa_automation.runtime.k6_authority import k6_gate_payload
+from ai_qa_automation.tools.performance import K6ExecutionMetrics
 
 
 def fake_tool(
@@ -133,3 +134,42 @@ async def test_runtime_failure_gate_uses_complete_threshold_subject(
     assert second_validation.status is ValidationStatus.NOT_VERIFIED
     assert second_validation.gate_id == _stable_gate_id("k6", k6_gate_payload(second))
     assert first_validation.gate_id != second_validation.gate_id
+
+
+@pytest.mark.asyncio
+async def test_successful_k6_evidence_persists_exact_validated_snapshot_identity(
+    tmp_path: Path,
+    fake_sdk: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del fake_sdk
+    services = make_services(tmp_path)
+    snapshot_sha = "a" * 64
+
+    class SuccessfulRunner:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def run(self, *_args: object, **_kwargs: object) -> K6ExecutionMetrics:
+            return K6ExecutionMetrics(
+                p50_ms=1.0,
+                p90_ms=2.0,
+                p95_ms=3.0,
+                p99_ms=4.0,
+                request_rate=5.0,
+                error_rate=0.0,
+                module_snapshot_sha256=snapshot_sha,
+            )
+
+    monkeypatch.setattr(internal_tools, "K6Runner", SuccessfulRunner)
+    payload = request()
+
+    response = await tool_map(services)["run_k6"](payload)
+
+    assert response.get("is_error") is not True
+    validation = services.state.validation_results[-1]
+    assert validation.status is ValidationStatus.PASS
+    assert validation.gate_id == _stable_gate_id("k6", k6_gate_payload(payload))
+    assert validation.details["metrics"]["module_snapshot_sha256"] == snapshot_sha
+    evidence = services.evidence.all()[-1]
+    assert evidence.structured_data["metrics"]["module_snapshot_sha256"] == snapshot_sha
