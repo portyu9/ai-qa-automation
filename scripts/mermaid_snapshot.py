@@ -195,10 +195,14 @@ def _write_snapshot(root: Path, item: MermaidDocumentSnapshot) -> None:
         while view:
             written = os.write(fd, view[:READ_CHUNK_BYTES])
             if written <= 0:
-                raise RuntimeError(f"could not complete Mermaid source snapshot for {item.relative_path}")
+                raise RuntimeError(
+                    f"could not complete Mermaid source snapshot for {item.relative_path}"
+                )
             view = view[written:]
     finally:
         os.close(fd)
-    observed = _read_regular_bytes(path, max_bytes=MAX_MARKDOWN_BYTES, label="Mermaid source snapshot")
+    observed = _read_regular_bytes(
+        path, max_bytes=MAX_MARKDOWN_BYTES, label="Mermaid source snapshot"
+    )
     if hashlib.sha256(observed).hexdigest() != item.sha256:
         raise RuntimeError(f"Mermaid source snapshot identity mismatch for {item.relative_path}")
