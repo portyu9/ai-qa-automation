@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import subprocess
 import sys
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -19,6 +21,23 @@ def _write_required_repo(root: Path, readme: str) -> None:
     (root / "CONTRIBUTING.md").write_text("# Contributing\n", encoding="utf-8")
     (root / "SECURITY.md").write_text("# Security\n", encoding="utf-8")
     (root / "docs").mkdir(exist_ok=True)
+
+
+def _render_archive(*entries: tuple[str, bytes]) -> bytes:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as archive:
+        for name, data in entries:
+            member = tarfile.TarInfo(name)
+            member.size = len(data)
+            archive.addfile(member, io.BytesIO(data))
+    return buffer.getvalue()
+
+
+def _valid_render_archive() -> bytes:
+    return _render_archive(
+        ("rendered.md", b"# Rendered\n"),
+        ("rendered-1.svg", b"<svg/>\n"),
+    )
 
 
 def test_snapshot_records_exact_document_digest(tmp_path: Path) -> None:
@@ -75,7 +94,7 @@ def test_repository_root_replacement_during_discovery_fails_closed(
         mermaid._discover_mermaid_snapshot(root)
 
 
-def test_renderer_timeout_force_removes_exact_container_id_without_copy(
+def test_renderer_timeout_force_removes_exact_container_id_without_archive(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = tmp_path / "snapshot"
@@ -98,11 +117,11 @@ def test_renderer_timeout_force_removes_exact_container_id_without_copy(
     monkeypatch.setattr(mermaid.subprocess, "run", fake_run)
     with pytest.raises(RuntimeError, match="render exceeded"):
         mermaid._run_mermaid(root, Path("README.md"), output, 1)
-    assert not any(command[1] == "cp" for command in calls)
+    assert sum(command[1] == "exec" for command in calls) == 1
     assert calls[-1] == ["docker", "rm", "--force", "b" * 64]
 
 
-def test_renderer_nonzero_completion_does_not_copy_and_force_removes_exact_container_id(
+def test_renderer_nonzero_completion_does_not_archive_and_force_removes_exact_container_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = tmp_path / "snapshot"
@@ -125,7 +144,7 @@ def test_renderer_nonzero_completion_does_not_copy_and_force_removes_exact_conta
     monkeypatch.setattr(mermaid.subprocess, "run", fake_run)
     with pytest.raises(RuntimeError, match="did not complete successfully"):
         mermaid._run_mermaid(root, Path("README.md"), output, 1)
-    assert not any(command[1] == "cp" for command in calls)
+    assert sum(command[1] == "exec" for command in calls) == 1
     assert calls[-1] == ["docker", "rm", "--force", "e" * 64]
 
 
@@ -142,12 +161,10 @@ def test_renderer_cleanup_failure_is_a_hard_failure(
             cidfile = Path(command[command.index("--cidfile") + 1])
             cidfile.write_text("c" * 64 + "\n", encoding="ascii")
             return subprocess.CompletedProcess(command, 0)
+        if command[1] == "exec" and command[-1] == mermaid.RENDER_WAIT_COMMAND:
+            return subprocess.CompletedProcess(command, 0, stdout=b"")
         if command[1] == "exec":
-            return subprocess.CompletedProcess(command, 0)
-        if command[1] == "cp":
-            (output / "rendered.md").write_text("# Rendered\n", encoding="utf-8")
-            (output / "rendered-1.svg").write_text("<svg/>\n", encoding="utf-8")
-            return subprocess.CompletedProcess(command, 0)
+            return subprocess.CompletedProcess(command, 0, stdout=_valid_render_archive())
         assert command[-1] == "c" * 64
         return subprocess.CompletedProcess(command, 1)
 
@@ -157,7 +174,7 @@ def test_renderer_cleanup_failure_is_a_hard_failure(
         mermaid._run_mermaid(root, Path("README.md"), output, 1)
 
 
-def test_renderer_copy_failure_still_force_removes_exact_container_id(
+def test_renderer_archive_collection_failure_still_force_removes_exact_container_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = tmp_path / "snapshot"
@@ -172,15 +189,15 @@ def test_renderer_copy_failure_still_force_removes_exact_container_id(
             cidfile = Path(command[command.index("--cidfile") + 1])
             cidfile.write_text("d" * 64 + "\n", encoding="ascii")
             return subprocess.CompletedProcess(command, 0)
+        if command[1] == "exec" and command[-1] == mermaid.RENDER_WAIT_COMMAND:
+            return subprocess.CompletedProcess(command, 0, stdout=b"")
         if command[1] == "exec":
-            return subprocess.CompletedProcess(command, 0)
-        if command[1] == "cp":
             raise subprocess.CalledProcessError(1, command)
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(mermaid, "_resolve_docker_executable", lambda: "docker")
     monkeypatch.setattr(mermaid.subprocess, "run", fake_run)
-    with pytest.raises(RuntimeError, match="output copy could not be completed"):
+    with pytest.raises(RuntimeError, match="output archive could not be collected"):
         mermaid._run_mermaid(root, Path("README.md"), output, 1)
     assert calls[-1] == ["docker", "rm", "--force", "d" * 64]
 
@@ -200,6 +217,58 @@ def test_renderer_cleanup_without_exact_container_id_fails_closed_after_best_eff
     with pytest.raises(RuntimeError, match="exact container identity was unavailable"):
         mermaid._remove_renderer_container("aiqa-mermaid-private-name", cidfile)
     assert calls == [["docker", "rm", "--force", "aiqa-mermaid-private-name"]]
+
+
+def test_renderer_archive_rejects_path_traversal_without_host_write(tmp_path: Path) -> None:
+    output = tmp_path / "output"
+    output.mkdir()
+    archive = _render_archive(
+        ("rendered.md", b"# Rendered\n"),
+        ("../rendered-1.svg", b"<svg/>\n"),
+    )
+
+    with pytest.raises(RuntimeError, match="invalid output entry"):
+        mermaid._materialize_renderer_archive(archive, output, expected_count=1)
+    assert not (tmp_path / "rendered-1.svg").exists()
+
+
+def test_renderer_archive_rejects_duplicate_expected_member(tmp_path: Path) -> None:
+    output = tmp_path / "output"
+    output.mkdir()
+    archive = _render_archive(
+        ("rendered.md", b"# Rendered\n"),
+        ("rendered-1.svg", b"<svg/>\n"),
+        ("rendered-1.svg", b"<svg>duplicate</svg>\n"),
+    )
+
+    with pytest.raises(RuntimeError, match="invalid output entry"):
+        mermaid._materialize_renderer_archive(archive, output, expected_count=1)
+
+
+def test_renderer_archive_rejects_symlink_member(tmp_path: Path) -> None:
+    output = tmp_path / "output"
+    output.mkdir()
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as archive:
+        markdown = tarfile.TarInfo("rendered.md")
+        markdown.size = len(b"# Rendered\n")
+        archive.addfile(markdown, io.BytesIO(b"# Rendered\n"))
+        link = tarfile.TarInfo("rendered-1.svg")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "/etc/passwd"
+        archive.addfile(link)
+
+    with pytest.raises(RuntimeError, match="invalid output entry"):
+        mermaid._materialize_renderer_archive(buffer.getvalue(), output, expected_count=1)
+
+
+def test_renderer_archive_requires_exact_expected_outputs(tmp_path: Path) -> None:
+    output = tmp_path / "output"
+    output.mkdir()
+    archive = _render_archive(("rendered.md", b"# Rendered\n"))
+
+    with pytest.raises(RuntimeError, match="exact expected outputs"):
+        mermaid._materialize_renderer_archive(archive, output, expected_count=1)
 
 
 def test_nested_renderer_output_parent_symlink_is_rejected_without_host_read(
