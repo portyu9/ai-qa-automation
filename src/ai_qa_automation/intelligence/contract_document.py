@@ -336,17 +336,33 @@ def _schema_context(document: dict[str, Any]) -> tuple[str, str, dict[str, Any],
         if not isinstance(openapi, str):
             raise ValueError("contract OpenAPI dialect marker must be a string")
         if "definitions" in document:
-            raise ValueError("contract OpenAPI 3.x definitions are not supported by bounded comparison")
-        components = _require_object(document["components"], "components") if "components" in document else {}
-        schemas = _require_object(components["schemas"], "components schemas") if "schemas" in components else {}
+            raise ValueError(
+                "contract OpenAPI 3.x definitions are not supported by bounded comparison"
+            )
+        components = (
+            _require_object(document["components"], "components")
+            if "components" in document
+            else {}
+        )
+        schemas = (
+            _require_object(components["schemas"], "components schemas")
+            if "schemas" in components
+            else {}
+        )
         return ("openapi", "#/components/schemas/", schemas, openapi.startswith("3.1."))
     if has_swagger:
         swagger = document["swagger"]
         if not isinstance(swagger, str):
             raise ValueError("contract Swagger dialect marker must be a string")
         if "components" in document:
-            raise ValueError("contract Swagger 2.0 components are not supported by bounded comparison")
-        definitions = _require_object(document["definitions"], "definitions") if "definitions" in document else {}
+            raise ValueError(
+                "contract Swagger 2.0 components are not supported by bounded comparison"
+            )
+        definitions = (
+            _require_object(document["definitions"], "definitions")
+            if "definitions" in document
+            else {}
+        )
         return ("swagger", "#/definitions/", definitions, False)
     return ("unknown", "", {}, False)
 
@@ -356,10 +372,14 @@ def _validate_security_shape(value: Any) -> None:
         raise ValueError("contract OpenAPI security must be an array for bounded comparison")
     for requirement in value:
         if not isinstance(requirement, dict):
-            raise ValueError("contract OpenAPI security entries must be objects for bounded comparison")
+            raise ValueError(
+                "contract OpenAPI security entries must be objects for bounded comparison"
+            )
         for scopes in requirement.values():
             if not isinstance(scopes, list) or any(not isinstance(scope, str) for scope in scopes):
-                raise ValueError("contract OpenAPI security scopes must be string arrays for bounded comparison")
+                raise ValueError(
+                    "contract OpenAPI security scopes must be string arrays for bounded comparison"
+                )
 
 
 def _validate_schema_shape(
@@ -376,7 +396,9 @@ def _validate_schema_shape(
         reference = schema.get("$ref")
         if reference is not None:
             if not isinstance(reference, str):
-                raise ValueError("contract OpenAPI schema $ref must be a string for bounded comparison")
+                raise ValueError(
+                    "contract OpenAPI schema $ref must be a string for bounded comparison"
+                )
             if not ref_prefix or not reference.startswith(ref_prefix):
                 raise ValueError(
                     "contract OpenAPI schema $ref must target a local named schema for bounded comparison"
@@ -405,7 +427,9 @@ def _validate_schema_shape(
                         "contract OpenAPI schema type arrays must contain strings for bounded comparison"
                     )
                 if len(set(schema_type)) != len(schema_type):
-                    raise ValueError("contract OpenAPI schema type array contains duplicate entries")
+                    raise ValueError(
+                        "contract OpenAPI schema type array contains duplicate entries"
+                    )
                 if any(item not in allowed_types for item in schema_type):
                     raise ValueError("contract OpenAPI schema contains an unsupported type")
             elif not isinstance(schema_type, str):
@@ -420,9 +444,13 @@ def _validate_schema_shape(
             if (
                 not isinstance(enum, list)
                 or not enum
-                or any(item is not None and not isinstance(item, (str, bool, int, float)) for item in enum)
+                or any(
+                    item is not None and not isinstance(item, (str, bool, int, float)) for item in enum
+                )
             ):
-                raise ValueError("contract OpenAPI schema enum must be a non-empty scalar array for bounded comparison")
+                raise ValueError(
+                    "contract OpenAPI schema enum must be a non-empty scalar array for bounded comparison"
+                )
             seen_enum: set[tuple[str, object]] = set()
             for item in enum:
                 identity = _enum_identity(item)
@@ -432,8 +460,12 @@ def _validate_schema_shape(
 
         if "required" in schema:
             required = schema["required"]
-            if not isinstance(required, list) or any(not isinstance(item, str) for item in required):
-                raise ValueError("contract OpenAPI schema required must be a string array for bounded comparison")
+            if not isinstance(required, list) or any(
+                not isinstance(item, str) for item in required
+            ):
+                raise ValueError(
+                    "contract OpenAPI schema required must be a string array for bounded comparison"
+                )
             if len(set(required)) != len(required):
                 raise ValueError("contract OpenAPI schema required contains duplicate entries")
 
@@ -458,14 +490,18 @@ def _validate_parameter_list(
     if not isinstance(value, list):
         raise ValueError("contract OpenAPI parameters must be an array for bounded comparison")
     if path_level and value:
-        raise ValueError("contract OpenAPI path-level parameters are not supported by bounded comparison")
+        raise ValueError(
+            "contract OpenAPI path-level parameters are not supported by bounded comparison"
+        )
 
     parameters: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     for parameter_value in value:
         parameter = _require_object(parameter_value, "parameter")
         if "$ref" in parameter:
-            raise ValueError("contract OpenAPI referenced parameters are not supported by bounded comparison")
+            raise ValueError(
+                "contract OpenAPI referenced parameters are not supported by bounded comparison"
+            )
         name = parameter.get("name")
         location = parameter.get("in")
         if not isinstance(name, str) or not isinstance(location, str):
@@ -473,18 +509,24 @@ def _validate_parameter_list(
                 "contract OpenAPI parameters require string name and in fields for bounded comparison"
             )
         if not name:
-            raise ValueError("contract OpenAPI parameter name must be non-empty for bounded comparison")
+            raise ValueError(
+                "contract OpenAPI parameter name must be non-empty for bounded comparison"
+            )
         allowed_locations = (
             _SWAGGER_PARAMETER_LOCATIONS if dialect == "swagger" else _OPENAPI_PARAMETER_LOCATIONS
         )
         if location not in allowed_locations:
-            raise ValueError("contract OpenAPI parameter location is unsupported for bounded comparison")
+            raise ValueError(
+                "contract OpenAPI parameter location is unsupported for bounded comparison"
+            )
         identity = (location, name)
         if identity in seen:
             raise ValueError("contract OpenAPI parameters contain a duplicate name/in identity")
         seen.add(identity)
         if "required" in parameter and not isinstance(parameter["required"], bool):
-            raise ValueError("contract OpenAPI parameter required must be boolean for bounded comparison")
+            raise ValueError(
+                "contract OpenAPI parameter required must be boolean for bounded comparison"
+            )
         if location == "path" and parameter.get("required") is not True:
             raise ValueError("contract OpenAPI path parameters must be explicitly required")
         parameters.append(parameter)
@@ -497,10 +539,10 @@ def _validate_parameter_list(
             if location == "body":
                 swagger_body_count += 1
                 if swagger_body_count > 1:
-                    raise ValueError("contract Swagger operations may contain at most one body parameter")
-                if any(
-                    key in parameter for key in ("type", "format", "items", "collectionFormat")
-                ):
+                    raise ValueError(
+                        "contract Swagger operations may contain at most one body parameter"
+                    )
+                if any(key in parameter for key in ("type", "format", "items", "collectionFormat")):
                     raise ValueError(
                         "contract Swagger body parameters may not use non-body type fields"
                     )
@@ -518,7 +560,10 @@ def _validate_parameter_list(
             if "schema" in parameter:
                 raise ValueError("contract Swagger non-body parameters may not use schema")
             parameter_type = parameter.get("type")
-            if not isinstance(parameter_type, str) or parameter_type not in _SWAGGER_PARAMETER_TYPES:
+            if (
+                not isinstance(parameter_type, str)
+                or parameter_type not in _SWAGGER_PARAMETER_TYPES
+            ):
                 raise ValueError("contract Swagger non-body parameters require a supported type")
             if parameter_type == "file" and location != "formData":
                 raise ValueError("contract Swagger file parameters require formData location")
@@ -531,9 +576,7 @@ def _validate_parameter_list(
             continue
 
         if any(key in parameter for key in ("type", "format", "items", "collectionFormat")):
-            raise ValueError(
-                "contract OpenAPI 3.x parameters may not use Swagger type fields"
-            )
+            raise ValueError("contract OpenAPI 3.x parameters may not use Swagger type fields")
         has_schema = "schema" in parameter
         has_content = "content" in parameter
         if has_schema == has_content:
@@ -616,16 +659,22 @@ def _validate_operation_shape(
         )
     if "requestBody" in operation:
         if dialect == "swagger":
-            raise ValueError("contract Swagger 2.0 requestBody is not supported by bounded comparison")
+            raise ValueError(
+                "contract Swagger 2.0 requestBody is not supported by bounded comparison"
+            )
         request_body = _require_object(operation["requestBody"], "requestBody")
         if "$ref" in request_body:
             raise ValueError(
                 "contract OpenAPI referenced request bodies are not supported by bounded comparison"
             )
         if "required" in request_body and not isinstance(request_body["required"], bool):
-            raise ValueError("contract OpenAPI requestBody required must be boolean for bounded comparison")
+            raise ValueError(
+                "contract OpenAPI requestBody required must be boolean for bounded comparison"
+            )
         if "content" not in request_body:
-            raise ValueError("contract OpenAPI requestBody content is required for bounded comparison")
+            raise ValueError(
+                "contract OpenAPI requestBody content is required for bounded comparison"
+            )
         _validate_media_content(
             request_body["content"],
             field="requestBody content",
@@ -642,7 +691,9 @@ def _validate_operation_shape(
     response_key = _SWAGGER_RESPONSE_KEY if dialect == "swagger" else _OPENAPI_RESPONSE_KEY
     for status, response_value in responses.items():
         if response_key.fullmatch(status) is None:
-            raise ValueError("contract OpenAPI response status key is unsupported for bounded comparison")
+            raise ValueError(
+                "contract OpenAPI response status key is unsupported for bounded comparison"
+            )
         response = _require_object(response_value, "response")
         if "$ref" in response:
             raise ValueError(
@@ -681,11 +732,15 @@ def _validate_comparison_shape(document: dict[str, Any]) -> None:
         paths = _require_object(document["paths"], "paths")
         for path_name, path_item_value in paths.items():
             if not path_name.startswith("/"):
-                raise ValueError("contract OpenAPI path keys must begin with '/' for bounded comparison")
+                raise ValueError(
+                    "contract OpenAPI path keys must begin with '/' for bounded comparison"
+                )
             path_template_names = _path_template_names(path_name)
             path_item = _require_object(path_item_value, "path item")
             if "$ref" in path_item:
-                raise ValueError("contract OpenAPI referenced path items are not supported by bounded comparison")
+                raise ValueError(
+                    "contract OpenAPI referenced path items are not supported by bounded comparison"
+                )
             if "parameters" in path_item:
                 _validate_parameter_list(
                     path_item["parameters"],
@@ -699,7 +754,9 @@ def _validate_comparison_shape(document: dict[str, Any]) -> None:
                 normalized = key.casefold()
                 if normalized in _COMPARISON_METHODS:
                     if key != normalized:
-                        raise ValueError("contract OpenAPI method keys must use canonical lowercase spelling")
+                        raise ValueError(
+                            "contract OpenAPI method keys must use canonical lowercase spelling"
+                        )
                     _validate_operation_shape(
                         _require_object(operation_value, "operation"),
                         dialect=dialect,
@@ -720,7 +777,9 @@ def _validate_comparison_shape(document: dict[str, Any]) -> None:
 def load_contract_document(path: str, content: bytes) -> dict[str, Any]:
     """Parse a bounded OpenAPI/Swagger JSON-or-YAML document without ambiguous semantics."""
     if len(content) > MAX_CONTRACT_DOCUMENT_BYTES:
-        raise ValueError(f"contract document exceeds {MAX_CONTRACT_DOCUMENT_BYTES} byte ingestion limit")
+        raise ValueError(
+            f"contract document exceeds {MAX_CONTRACT_DOCUMENT_BYTES} byte ingestion limit"
+        )
     text = content.decode("utf-8")
     suffix = PurePosixPath(path).suffix.casefold()
     if suffix == ".json":
