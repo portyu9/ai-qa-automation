@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 EXPECTED_JSON_INSTANCE = '{"value":4}'
@@ -12,6 +13,12 @@ EXPECTED_TERMINAL_SUMMARY = (
     "Agent completed with passing deterministic checks, but the operator did not supply an exact "
     "objective-validation gate contract."
 )
+
+
+def live_smoke_artifact_root(workspace: Path) -> Path:
+    """Return a sibling artifact root so the smoke preserves runtime trust-root separation."""
+
+    return workspace.parent / f"{workspace.name}-artifacts"
 
 
 def assert_live_agent_smoke_contract(result: dict[str, Any]) -> None:
