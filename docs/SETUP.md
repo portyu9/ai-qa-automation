@@ -26,7 +26,7 @@ Each mode has its own evidence source. Local configuration does not stand in for
 
 ## Install
 
-Project metadata deliberately accepts only the repository-certified Python minors: **CPython 3.11 and 3.13** (`>=3.11,<3.14,!=3.12.*`). The repository-owned development environments are locked and continuously exercised on exact **CPython 3.11.16** and **3.13.15**. Python 3.12 and future minors remain unsupported until a matching lock, clean install, and trusted CI evidence are added; installer compatibility is not treated as support evidence.
+Package metadata declares runtime compatibility with **Python 3.11+**. That installer range is intentionally broader than the repository-certified development matrix: reproducible repository validation is currently lock-bound and continuously exercised only on exact **CPython 3.11.16** and **3.13.15**. Other accepted minors, including 3.12, are **not repository-certified environments** until a matching development lock and trusted CI evidence exist. Package acceptance must not be reported as repository verification.
 
 Dependency installation is intentionally lock-bound. Do not replace the commands below with an editable `.[dev]` install or a live resolver upgrade when the goal is to reproduce repository-controlled verification.
 
