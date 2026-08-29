@@ -14,9 +14,7 @@ def _encode(document: dict[str, object]) -> bytes:
     return json.dumps(document, separators=(",", ":"), sort_keys=True).encode()
 
 
-def _analyze(
-    baseline: dict[str, object], current: dict[str, object]
-):
+def _analyze(baseline: dict[str, object], current: dict[str, object]):
     return OpenAPIContractDriftAnalyzer().analyze(
         path="openapi.json",
         baseline=_encode(baseline),
@@ -106,9 +104,7 @@ def test_response_content_change_cannot_be_non_breaking() -> None:
                     "responses": {
                         "200": {
                             "description": "ok",
-                            "content": {
-                                "application/json": {"schema": {"type": "string"}}
-                            },
+                            "content": {"application/json": {"schema": {"type": "string"}}},
                         }
                     }
                 }
@@ -116,9 +112,9 @@ def test_response_content_change_cannot_be_non_breaking() -> None:
         },
     }
     current = json.loads(json.dumps(baseline))
-    current["paths"]["/orders"]["get"]["responses"]["200"]["content"][
-        "application/json"
-    ]["schema"]["type"] = "integer"
+    current["paths"]["/orders"]["get"]["responses"]["200"]["content"]["application/json"][
+        "schema"
+    ]["type"] = "integer"
 
     result = _analyze(baseline, current)
 
@@ -148,9 +144,7 @@ def test_cross_or_unsupported_openapi_version_fails_closed(version: str) -> None
         {
             "openapi": "3.1.0",
             "paths": {},
-            "components": {
-                "schemas": {"Subject": {"$ref": "https://example.test/schema.json"}}
-            },
+            "components": {"schemas": {"Subject": {"$ref": "https://example.test/schema.json"}}},
         },
     ],
 )
