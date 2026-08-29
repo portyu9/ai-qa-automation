@@ -36,6 +36,40 @@ def _require_empty_render_root(root: Path) -> None:
         os.close(fd)
 
 
+def _bounded_output_shape(root_fd: int, *, relative: Path) -> str:
+    entries = 0
+    regular = 0
+    directories = 0
+    symlinks = 0
+    other = 0
+    expected_markdown = False
+    expected_svgs = 0
+    prefix = f"{relative.stem}-"
+    with os.scandir(root_fd) as output_entries:
+        for entry in output_entries:
+            entries += 1
+            if entries > MAX_RENDER_OUTPUT_ENTRIES:
+                return f"entries>{MAX_RENDER_OUTPUT_ENTRIES}"
+            if entry.name == relative.name:
+                expected_markdown = True
+            if entry.name.startswith(prefix) and entry.name.endswith(".svg"):
+                expected_svgs += 1
+            info = entry.stat(follow_symlinks=False)
+            if stat.S_ISLNK(info.st_mode):
+                symlinks += 1
+            elif stat.S_ISREG(info.st_mode):
+                regular += 1
+            elif stat.S_ISDIR(info.st_mode):
+                directories += 1
+            else:
+                other += 1
+    return (
+        f"entries={entries},regular={regular},directories={directories},"
+        f"symlinks={symlinks},other={other},expected_markdown={expected_markdown},"
+        f"expected_svgs={expected_svgs}"
+    )
+
+
 def _validate_rendered_outputs(root: Path, relative: Path, *, expected_count: int) -> None:
     if relative.is_absolute() or relative.parent != Path("."):
         raise RuntimeError("Mermaid renderer output must use the flat private output namespace")
@@ -50,7 +84,8 @@ def _validate_rendered_outputs(root: Path, relative: Path, *, expected_count: in
             )
             rendered = rendered_bytes.decode("utf-8")
         except (UnicodeDecodeError, ValueError) as exc:
-            raise RuntimeError("invalid Mermaid transformed Markdown") from exc
+            shape = _bounded_output_shape(root_fd, relative=relative)
+            raise RuntimeError(f"invalid Mermaid transformed Markdown; output shape: {shape}") from exc
         remaining = _mermaid_block_count(rendered)
         if remaining:
             raise RuntimeError(
