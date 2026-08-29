@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import re
 import shutil
@@ -11,7 +10,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 from ..fs_authority import pin_directory_identity, read_bytes_confined
-from ..io_safety import read_text_bounded
+from ..io_safety import read_json_object_bounded
 from ..models import PerformanceMetrics, ToolDecision
 from ..policy import PolicyEngine
 from .execution_env import restricted_subprocess_env, run_bounded_subprocess
@@ -318,17 +317,12 @@ class K6Runner:
             if not summary_path.is_file():
                 raise RuntimeError("k6 completed without producing the required summary artifact")
             try:
-                rendered = read_text_bounded(
+                data = read_json_object_bounded(
                     summary_path,
                     max_bytes=_MAX_K6_SUMMARY_BYTES,
                     label="k6 summary",
                 )
-            except ValueError as exc:
-                raise RuntimeError(
-                    f"k6 summary exceeds {_MAX_K6_SUMMARY_BYTES} byte ingestion limit"
-                ) from exc
-            data = json.loads(rendered)
-            if not isinstance(data, dict):
-                raise RuntimeError("k6 summary root must be a JSON object")
+            except (OSError, UnicodeError, ValueError) as exc:
+                raise RuntimeError("k6 summary failed bounded unambiguous JSON ingestion") from exc
 
         return self._parse_metrics(data)
