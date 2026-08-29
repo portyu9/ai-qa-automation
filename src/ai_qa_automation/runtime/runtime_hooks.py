@@ -202,7 +202,7 @@ def _workspace_freshness_denial(
         reason = "Workspace subject identity could not be revalidated safely."
     elif freshness.code is WorkspaceFreshnessCode.FINGERPRINT_INCOMPLETE:
         status = TerminalStatus.BLOCKED
-        reason = "Workspace fingerprint is incomplete; controlled execution is denied."
+        reason = "Workspace fingerprint coverage is incomplete; controlled execution is denied."
     elif freshness.code is WorkspaceFreshnessCode.BASELINE_MISSING:
         status = TerminalStatus.BLOCKED
         reason = "Workspace fingerprint baseline is unavailable; controlled execution is denied."
@@ -357,56 +357,6 @@ def pretool_policy_output(
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "deny",
                     "permissionDecisionReason": "workspace-integrity: autonomous writes require a git-backed isolated worktree",
-                }
-            }
-        current_snapshot = RepositoryInspector(control.workspace).snapshot()
-        if not current_snapshot.fingerprint_complete:
-            reasons = ", ".join(current_snapshot.fingerprint_incomplete_reasons)
-            state.terminal_status = TerminalStatus.BLOCKED
-            state.terminal_reason = "Mutation blocked because the workspace fingerprint cannot bind every changed subject"
-            control.journal.append(
-                "workspace_fingerprint_incomplete",
-                reasons=list(current_snapshot.fingerprint_incomplete_reasons),
-            )
-            _checkpoint(state, state_store, control)
-            return {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": (
-                        "workspace-integrity: fingerprint coverage is incomplete; "
-                        f"restart from a simpler/fully readable worktree ({reasons})"
-                    ),
-                }
-            }
-        current = current_snapshot.fingerprint
-        expected = control.expected_workspace_fingerprint
-        if expected is None:
-            state.terminal_status = TerminalStatus.BLOCKED
-            state.terminal_reason = (
-                "Mutation blocked because no workspace fingerprint baseline exists"
-            )
-            control.journal.append("workspace_drift_blocked", expected=None, actual=current)
-            _checkpoint(state, state_store, control)
-            return {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": "workspace-integrity: establish a fresh repository baseline before mutation",
-                }
-            }
-        if current != expected:
-            state.terminal_status = TerminalStatus.BLOCKED
-            state.terminal_reason = (
-                "Target workspace changed outside the agent after its baseline was captured"
-            )
-            control.journal.append("workspace_drift_blocked", expected=expected, actual=current)
-            _checkpoint(state, state_store, control)
-            return {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": "workspace-integrity: concurrent or out-of-band target changes detected; restart from a fresh baseline",
                 }
             }
 
