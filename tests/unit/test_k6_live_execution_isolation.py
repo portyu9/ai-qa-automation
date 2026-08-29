@@ -69,8 +69,14 @@ def _request() -> dict[str, object]:
 @pytest.mark.parametrize(
     ("external_egress", "missing_text"),
     [
-        (False, "process/filesystem isolation, module-loading isolation, outbound-egress enforcement"),
-        (True, "process/filesystem isolation, module-loading isolation"),
+        (
+            False,
+            "process/filesystem isolation, module-loading isolation, runner resource limits, target workload limits, outbound-egress enforcement",
+        ),
+        (
+            True,
+            "process/filesystem isolation, module-loading isolation, runner resource limits, target workload limits",
+        ),
     ],
 )
 def test_live_k6_blocks_and_persists_authority_gate_before_execution(
@@ -100,6 +106,8 @@ def test_live_k6_blocks_and_persists_authority_gate_before_execution(
         "execution_started": False,
         "process_isolation_enforced": False,
         "module_isolation_enforced": False,
+        "resource_limits_enforced": False,
+        "workload_limits_enforced": False,
         "external_egress_enforced": external_egress,
     }
 
@@ -110,6 +118,8 @@ def test_live_k6_blocks_and_persists_authority_gate_before_execution(
     assert persisted.validation_results[0].gate_id == validation.gate_id
     assert persisted.validation_results[0].details["execution_started"] is False
     assert persisted.validation_results[0].details["module_isolation_enforced"] is False
+    assert persisted.validation_results[0].details["resource_limits_enforced"] is False
+    assert persisted.validation_results[0].details["workload_limits_enforced"] is False
 
 
 def test_live_k6_gate_identity_includes_threshold_contract(tmp_path: Path) -> None:
