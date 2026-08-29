@@ -484,14 +484,10 @@ def _enforce_terminal_workspace_freshness(
         )
     elif freshness.code is WorkspaceFreshnessCode.BASELINE_MISSING:
         state.terminal_status = TerminalStatus.BLOCKED
-        state.terminal_reason = (
-            "Terminal success was refused because no authorized workspace fingerprint baseline exists."
-        )
+        state.terminal_reason = "Terminal success was refused because no authorized workspace fingerprint baseline exists."
     else:
         state.terminal_status = TerminalStatus.BLOCKED
-        state.terminal_reason = (
-            "Terminal success was refused because the target workspace changed outside authorized mutation lineage."
-        )
+        state.terminal_reason = "Terminal success was refused because the target workspace changed outside authorized mutation lineage."
     control.journal.try_append(
         "terminal_workspace_freshness_denied",
         reason_code=freshness.code.value,
