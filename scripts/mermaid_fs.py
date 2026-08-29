@@ -78,7 +78,11 @@ def _read_regular_bytes(path: Path, *, max_bytes: int, label: str) -> bytes:
         current = path.lstat()
     except FileNotFoundError as exc:
         raise ValueError(f"{label} disappeared during bounded ingestion: {path}") from exc
-    if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode) or _sig(after) != _sig(current):
+    if (
+        stat.S_ISLNK(current.st_mode)
+        or not stat.S_ISREG(current.st_mode)
+        or _sig(after) != _sig(current)
+    ):
         raise ValueError(f"{label} path identity changed during bounded ingestion: {path}")
     return data
 
@@ -103,7 +107,11 @@ def _read_regular_bytes_at(parent_fd: int, name: str, *, max_bytes: int, label: 
         current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
     except FileNotFoundError as exc:
         raise ValueError(f"{label} disappeared during bounded ingestion: {name}") from exc
-    if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode) or _sig(after) != _sig(current):
+    if (
+        stat.S_ISLNK(current.st_mode)
+        or not stat.S_ISREG(current.st_mode)
+        or _sig(after) != _sig(current)
+    ):
         raise ValueError(f"{label} path identity changed during bounded ingestion: {name}")
     return data
 
@@ -136,13 +144,17 @@ def _candidate_files(root: Path) -> list[Path]:
     finally:
         os.close(fd)
     current = docs.lstat()
-    if not stat.S_ISDIR(current.st_mode) or _sig(opened) != _sig(after) or _sig(after) != _sig(current):
+    if (
+        not stat.S_ISDIR(current.st_mode)
+        or _sig(opened) != _sig(after)
+        or _sig(after) != _sig(current)
+    ):
         raise ValueError("docs path identity changed during bounded enumeration")
     candidates.extend(root / "docs" / name for name in sorted(names))
     return candidates
 
 
 def _read_regular_file(path: Path) -> str:
-    return _read_regular_bytes(path, max_bytes=MAX_MARKDOWN_BYTES, label="documentation file").decode(
-        "utf-8"
-    )
+    return _read_regular_bytes(
+        path, max_bytes=MAX_MARKDOWN_BYTES, label="documentation file"
+    ).decode("utf-8")
