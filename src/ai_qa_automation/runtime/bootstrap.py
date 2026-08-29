@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -169,8 +168,6 @@ def bootstrap_runtime_context(
     if workspace_root_identity is not None and bootstrap_root_identity != workspace_root_identity:
         raise ValueError("runtime bootstrap workspace changed identity since lease acquisition")
     inspector = RepositoryInspector(workspace)
-    if baseline_ref is None:
-        baseline_ref = os.environ.get("AI_QA_BASE_REF") or None
     snapshot = inspector.snapshot()
     if (
         pin_directory_identity(workspace, label="runtime bootstrap workspace")
