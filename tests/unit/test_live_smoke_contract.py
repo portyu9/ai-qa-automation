@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
 from tests.evaluations.live_smoke_contract import (
     EXPECTED_GATE_ID,
     assert_live_agent_smoke_contract,
+    live_smoke_artifact_root,
 )
 
 
@@ -33,6 +35,17 @@ def _valid_result() -> dict[str, object]:
             ],
         }
     }
+
+
+def test_live_smoke_artifact_root_is_disjoint_sibling(tmp_path: Path) -> None:
+    artifact_root = live_smoke_artifact_root(tmp_path)
+
+    assert artifact_root.parent == tmp_path.parent
+    assert artifact_root != tmp_path
+    with pytest.raises(ValueError):
+        artifact_root.relative_to(tmp_path)
+    with pytest.raises(ValueError):
+        tmp_path.relative_to(artifact_root)
 
 
 def test_live_smoke_contract_accepts_exact_expected_validation() -> None:
