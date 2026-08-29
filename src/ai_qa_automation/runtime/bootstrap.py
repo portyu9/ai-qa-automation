@@ -41,6 +41,10 @@ _DEPENDENCY_MANIFESTS = {
 _MAX_DEPENDENCY_MANIFEST_BYTES = 8_000_000
 
 
+class BaselineResolutionError(RuntimeError):
+    """Configured repository baseline could not be resolved deterministically."""
+
+
 def _dependency_inventory(
     workspace: Path,
     *,
@@ -180,15 +184,15 @@ def bootstrap_runtime_context(
     control.set_workspace_fingerprint(snapshot.fingerprint)
 
     change_set: RepositoryChangeSet | None = None
-    baseline_error: str | None = None
     changed_files = snapshot.changed_files
     if baseline_ref:
         try:
             change_set = inspector.change_set(baseline_ref)
         except (OSError, RuntimeError, ValueError) as exc:
-            baseline_error = f"{type(exc).__name__}: {str(exc)[:500]}"
-        else:
-            changed_files = change_set.changed_files
+            raise BaselineResolutionError(
+                "configured repository baseline could not be resolved safely"
+            ) from exc
+        changed_files = change_set.changed_files
         if (
             pin_directory_identity(workspace, label="runtime bootstrap workspace")
             != bootstrap_root_identity
@@ -208,7 +212,6 @@ def bootstrap_runtime_context(
         structured_data={
             "assessment": impact.as_dict(),
             "baseline": change_set.as_dict() if change_set else None,
-            "baseline_error": baseline_error,
         },
     )
 
@@ -320,7 +323,6 @@ def bootstrap_runtime_context(
         git_sha=snapshot.git_sha,
         baseline_ref=baseline_ref,
         baseline_resolved=change_set is not None,
-        baseline_error=baseline_error,
         changed_file_count=len(changed_files),
         change_risk=impact.risk.value,
         dependency_manifest_count=len(dependencies),
@@ -348,7 +350,6 @@ def bootstrap_runtime_context(
             "fingerprint_incomplete_reasons": list(snapshot.fingerprint_incomplete_reasons),
         },
         "baseline_change_set": change_set.as_dict() if change_set else None,
-        "baseline_resolution_error": baseline_error,
         "change_impact": impact.as_dict(),
         "test_impact": test_impact.as_dict(),
         "ownership": ownership.as_dict(),
