@@ -29,13 +29,7 @@ from ..state import StateStore
 from ..tools.repository import RepositoryInspector
 from .budget import BudgetExceededError
 from .mutation_lineage import reconcile_rolled_back_mutation
-from .run_control import (
-    CircuitOpenError,
-    MutationPendingError,
-    PendingMutation,
-    RepeatedActionError,
-    RuntimeControl,
-)
+from .run_control import CircuitOpenError, PendingMutation, RepeatedActionError, RuntimeControl
 from .tool_input_bounds import ToolInputBoundsError, tool_input_fingerprint, validate_tool_request
 from .tool_output_bounds import (
     ToolOutputBoundsError,
@@ -386,24 +380,8 @@ def pretool_policy_output(
         state.policy_decisions.append(decision)
 
     if decision.decision.value == "ALLOW":
-        if tool_name in _MUTATION_TOOLS and control is not None:
-            try:
-                control.prepare_mutation(
-                    str(tool_input.get("path") or ""),
-                    change_revision_before=(state.change_revision if state is not None else None),
-                )
-            except MutationPendingError as exc:
-                control.journal.append(
-                    "mutation_prepare_denied", tool_name=tool_name, reason=str(exc)
-                )
-                _checkpoint(state, state_store, control)
-                return {
-                    "hookSpecificOutput": {
-                        "hookEventName": "PreToolUse",
-                        "permissionDecision": "deny",
-                        "permissionDecisionReason": f"mutation-transaction: {exc}",
-                    }
-                }
+        # Mutation transaction preparation is application-owned and occurs in
+        # LiveRuntimeServices only after target freshness has been re-proved.
         _checkpoint(state, state_store, control)
         return {}
 
