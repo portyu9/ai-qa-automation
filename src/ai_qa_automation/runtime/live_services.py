@@ -183,7 +183,8 @@ class LiveRuntimeServices(RuntimeServices):
                     tool_name=f"mcp__qa__{tool_name}",
                     rule_id=policy_decision.rule_id,
                 )
-                self.state_store.save(self.state)
+                if self.state_store is not None:  # pragma: no branch - required in __post_init__
+                    self.state_store.save(self.state)
                 self.control.persist()
                 raise PermissionError(reason)
 
@@ -195,7 +196,8 @@ class LiveRuntimeServices(RuntimeServices):
                     "mutation_blocked_non_git_workspace",
                     tool_name=f"mcp__qa__{tool_name}",
                 )
-                self.state_store.save(self.state)
+                if self.state_store is not None:  # pragma: no branch - required in __post_init__
+                    self.state_store.save(self.state)
                 self.control.persist()
                 raise PermissionError(reason)
 
