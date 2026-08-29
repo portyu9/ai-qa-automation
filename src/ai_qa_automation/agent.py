@@ -34,6 +34,7 @@ from .runtime.sdk_result_bounds import SDKResultBoundsError, validate_sdk_result
 from .runtime.stale_recovery import recover_stale_mutation
 from .runtime.system_prompt import RUNTIME_SYSTEM_PROMPT
 from .runtime.validation_truth import determine_terminal_outcome
+from .runtime.workspace_freshness import WorkspaceFreshnessCode, observe_workspace_freshness
 from .runtime.workspace_lease import WorkspaceBusyError, WorkspaceLease
 from .state import StateStore
 from .telemetry import emit_event, trace_span
@@ -383,6 +384,8 @@ async def run_agent(
                         f"Rollback integrity could not be guaranteed: {type(rollback_exc).__name__}"
                     )
                     journal.try_append("rollback_failed", error_type=type(rollback_exc).__name__)
+            if state.terminal_status == TerminalStatus.SUCCESS:
+                _enforce_terminal_workspace_freshness(state, control, workspace)
             if state.terminal_status is None:
                 state.terminal_status = TerminalStatus.NOT_VERIFIED
                 state.terminal_reason = (
@@ -442,6 +445,52 @@ def _rollback_unresolved_mutation(
             f"Unresolved mutation rolled back before terminal report: {rolled_back}"
         )
     control.set_workspace_fingerprint(RepositoryInspector(workspace).snapshot().fingerprint)
+
+
+def _enforce_terminal_workspace_freshness(
+    state: AgentRunState,
+    control: RuntimeControl,
+    workspace: Path,
+) -> None:
+    """Demote candidate SUCCESS unless the current workspace still matches authorized lineage."""
+
+    freshness = observe_workspace_freshness(
+        workspace,
+        expected_fingerprint=control.expected_workspace_fingerprint,
+        expected_root_identity=control.workspace_identity,
+    )
+    if freshness.fresh:
+        control.journal.try_append(
+            "terminal_workspace_freshness_verified",
+            reason_code=freshness.code.value,
+        )
+        return
+
+    if freshness.code is WorkspaceFreshnessCode.SUBJECT_UNAVAILABLE:
+        state.terminal_status = TerminalStatus.INFRASTRUCTURE_FAILURE
+        state.terminal_reason = (
+            "Terminal workspace subject identity could not be revalidated safely."
+        )
+    elif freshness.code is WorkspaceFreshnessCode.FINGERPRINT_INCOMPLETE:
+        state.terminal_status = TerminalStatus.NOT_VERIFIED
+        state.terminal_reason = (
+            "Terminal success was refused because the current workspace fingerprint is incomplete."
+        )
+    elif freshness.code is WorkspaceFreshnessCode.BASELINE_MISSING:
+        state.terminal_status = TerminalStatus.BLOCKED
+        state.terminal_reason = (
+            "Terminal success was refused because no authorized workspace fingerprint baseline exists."
+        )
+    else:
+        state.terminal_status = TerminalStatus.BLOCKED
+        state.terminal_reason = (
+            "Terminal success was refused because the target workspace changed outside authorized mutation lineage."
+        )
+    control.journal.try_append(
+        "terminal_workspace_freshness_denied",
+        reason_code=freshness.code.value,
+        terminal_status=state.terminal_status.value,
+    )
 
 
 def validate_runtime_roots(
