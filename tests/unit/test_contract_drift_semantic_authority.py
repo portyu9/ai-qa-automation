@@ -112,9 +112,9 @@ def test_response_content_change_cannot_be_non_breaking() -> None:
         },
     }
     current = json.loads(json.dumps(baseline))
-    current["paths"]["/orders"]["get"]["responses"]["200"]["content"]["application/json"][
-        "schema"
-    ]["type"] = "integer"
+    current["paths"]["/orders"]["get"]["responses"]["200"]["content"]["application/json"]["schema"][
+        "type"
+    ] = "integer"
 
     result = _analyze(baseline, current)
 
