@@ -7,7 +7,7 @@ name = "ai-qa-automation"
 version = "0.1.0"
 description = "ƳƤ AI QA Automation Framework — evidence-first agentic quality engineering with deterministic safety, validation, and traceability"
 readme = "README.md"
-requires-python = ">=3.11,<3.14,!=3.12.*"
+requires-python = ">=3.11"
 authors = [{name = "Ƴunior Ƥortal"}]
 license = {file = "LICENSE"}
 keywords = [
