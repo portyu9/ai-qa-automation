@@ -93,6 +93,47 @@ def test_k6_accepts_one_unambiguous_bounded_summary(
 
     assert metrics.p95_ms == 3.0
     assert metrics.request_rate == 5.0
+    assert len(metrics.module_snapshot_sha256) == 64
+    assert metrics.model_dump(mode="json")["module_snapshot_sha256"] == metrics.module_snapshot_sha256
+
+
+def test_k6_snapshot_identity_is_stable_for_same_bytes_and_changes_with_script_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script = _write_script(tmp_path)
+    _install_fake_k6(
+        monkeypatch,
+        lambda path: path.write_text(json.dumps(_summary()), encoding="utf-8"),
+    )
+    runner = _runner(tmp_path)
+
+    first = runner.run(
+        script,
+        target_url="http://127.0.0.1:8000",
+        environment="local",
+    )
+    second = runner.run(
+        script,
+        target_url="http://127.0.0.1:8000",
+        environment="local",
+    )
+
+    assert first.module_snapshot_sha256 == second.module_snapshot_sha256
+
+    (tmp_path / script).write_text(
+        "import http from 'k6/http';\n"
+        "// byte-distinct validated subject\n"
+        "export default function () { http.get(__ENV.BASE_URL + '/v1'); }\n",
+        encoding="utf-8",
+    )
+    changed = runner.run(
+        script,
+        target_url="http://127.0.0.1:8000",
+        environment="local",
+    )
+
+    assert changed.module_snapshot_sha256 != first.module_snapshot_sha256
 
 
 def test_k6_rejects_duplicate_summary_object_keys(
