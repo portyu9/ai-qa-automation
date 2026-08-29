@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import re
 import shutil
@@ -243,7 +244,13 @@ class K6Runner:
         raw = values[key]
         if isinstance(raw, bool) or not isinstance(raw, (int, float)):
             raise RuntimeError(f"k6 metric {metric}.{key} is not numeric")
-        return float(raw)
+        try:
+            value = float(raw)
+        except OverflowError as exc:
+            raise RuntimeError(f"k6 metric {metric}.{key} exceeds the numeric bound") from exc
+        if not math.isfinite(value):
+            raise RuntimeError(f"k6 metric {metric}.{key} must be finite")
+        return value
 
     @classmethod
     def _parse_metrics(cls, data: dict[str, Any]) -> PerformanceMetrics:
