@@ -24,7 +24,9 @@ _MAX_JSON_SCHEMA_WORKER_NODES = 100_000
 _MAX_JSON_SCHEMA_WORKER_CONTAINER_ITEMS = 50_000
 _MAX_JSON_SCHEMA_WORKER_INTEGER_BITS = 4_096
 _DEFAULT_JSON_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
-_SAFE_REFERENCE_SCHEMES = frozenset({"http", "https", "file", "ftp", "urn", "data", "relative", "other"})
+_SAFE_REFERENCE_SCHEMES = frozenset(
+    {"http", "https", "file", "ftp", "urn", "data", "relative", "other"}
+)
 
 _JSON_SCHEMA_WORKER_CODE = dedent(
     r"""
@@ -373,7 +375,9 @@ def _validate_worker_json_shape(value: Any) -> None:
                 raise _WorkerInputError("JSON Schema worker payload contains an oversized object")
             for key in item:
                 if not isinstance(key, str):
-                    raise _WorkerInputError("JSON Schema worker payload contains a non-string object key")
+                    raise _WorkerInputError(
+                        "JSON Schema worker payload contains a non-string object key"
+                    )
                 utf8_bytes += _bounded_worker_utf8_size(
                     key, remaining=_MAX_JSON_SCHEMA_WORKER_INPUT_BYTES - utf8_bytes
                 )
