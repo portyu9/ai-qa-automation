@@ -1,6 +1,11 @@
 import json
+
 import pytest
-from ai_qa_automation.intelligence.contract_drift import ContractDriftSeverity, OpenAPIContractDriftAnalyzer
+
+from ai_qa_automation.intelligence.contract_drift import (
+    ContractDriftSeverity,
+    OpenAPIContractDriftAnalyzer,
+)
 
 
 def analyze(baseline, current):
@@ -14,14 +19,18 @@ def analyze(baseline, current):
 def openapi_operation(parameters, *, path="/items"):
     return {
         "openapi": "3.1.0",
-        "paths": {path: {"get": {"parameters": parameters, "responses": {"200": {"description": "ok"}}}}},
+        "paths": {
+            path: {"get": {"parameters": parameters, "responses": {"200": {"description": "ok"}}}}
+        },
     }
 
 
 def swagger_operation(parameters, *, path="/items"):
     return {
         "swagger": "2.0",
-        "paths": {path: {"get": {"parameters": parameters, "responses": {"200": {"description": "ok"}}}}},
+        "paths": {
+            path: {"get": {"parameters": parameters, "responses": {"200": {"description": "ok"}}}}
+        },
     }
 
 
@@ -44,9 +53,26 @@ def test_mixed_dialect_marker_presence_fails_closed(baseline, current):
     [
         {"name": "payload", "in": "body", "required": False, "schema": {"type": "string"}},
         {"name": "q", "in": "query", "required": False},
-        {"name": "q", "in": "query", "required": False, "schema": {"type": "string"}, "content": {"text/plain": {}}},
-        {"name": "q", "in": "query", "required": False, "content": {"text/plain": {}, "application/json": {}}},
-        {"name": "q", "in": "query", "required": False, "type": "string", "schema": {"type": "string"}},
+        {
+            "name": "q",
+            "in": "query",
+            "required": False,
+            "schema": {"type": "string"},
+            "content": {"text/plain": {}},
+        },
+        {
+            "name": "q",
+            "in": "query",
+            "required": False,
+            "content": {"text/plain": {}, "application/json": {}},
+        },
+        {
+            "name": "q",
+            "in": "query",
+            "required": False,
+            "type": "string",
+            "schema": {"type": "string"},
+        },
         {"name": "", "in": "query", "required": False, "schema": {"type": "string"}},
     ],
 )
@@ -60,10 +86,22 @@ def test_malformed_openapi_parameter_shapes_fail_closed(parameter):
     ("path", "parameters"),
     [
         ("/items/{id}", []),
-        ("/items/{id}", [{"name": "other", "in": "path", "required": True, "schema": {"type": "string"}}]),
-        ("/items/{id", [{"name": "id", "in": "path", "required": True, "schema": {"type": "string"}}]),
-        ("/items?id={id}", [{"name": "id", "in": "path", "required": True, "schema": {"type": "string"}}]),
-        ("/items/{id}/{id}", [{"name": "id", "in": "path", "required": True, "schema": {"type": "string"}}]),
+        (
+            "/items/{id}",
+            [{"name": "other", "in": "path", "required": True, "schema": {"type": "string"}}],
+        ),
+        (
+            "/items/{id",
+            [{"name": "id", "in": "path", "required": True, "schema": {"type": "string"}}],
+        ),
+        (
+            "/items?id={id}",
+            [{"name": "id", "in": "path", "required": True, "schema": {"type": "string"}}],
+        ),
+        (
+            "/items/{id}/{id}",
+            [{"name": "id", "in": "path", "required": True, "schema": {"type": "string"}}],
+        ),
     ],
 )
 def test_openapi_path_template_authority_fails_closed(path, parameters):
@@ -88,7 +126,12 @@ def test_valid_optional_openapi_schema_parameter_remains_analyzable():
 
 
 def test_valid_optional_openapi_content_parameter_remains_analyzable():
-    parameter = {"name": "q", "in": "query", "required": False, "content": {"text/plain": {"schema": {"type": "string"}}}}
+    parameter = {
+        "name": "q",
+        "in": "query",
+        "required": False,
+        "content": {"text/plain": {"schema": {"type": "string"}}},
+    }
     result = analyze(openapi_operation([]), openapi_operation([parameter]))
     assert result.severity is ContractDriftSeverity.NON_BREAKING
     assert result.analyzed is True
@@ -103,9 +146,21 @@ def test_valid_optional_openapi_content_parameter_remains_analyzable():
         {"name": "upload", "in": "query", "required": False, "type": "file"},
         {"name": "values", "in": "query", "required": False, "type": "array"},
         {"name": "values", "in": "query", "required": False, "type": "array", "items": {}},
-        {"name": "q", "in": "query", "required": False, "type": "string", "items": {"type": "string"}},
+        {
+            "name": "q",
+            "in": "query",
+            "required": False,
+            "type": "string",
+            "items": {"type": "string"},
+        },
         {"name": "body", "in": "body", "required": False},
-        {"name": "body", "in": "body", "required": False, "type": "object", "schema": {"type": "object"}},
+        {
+            "name": "body",
+            "in": "body",
+            "required": False,
+            "type": "object",
+            "schema": {"type": "object"},
+        },
         {"name": "", "in": "query", "required": False, "type": "string"},
     ],
 )
@@ -139,9 +194,18 @@ def test_swagger_body_and_form_data_cannot_mix():
     ("path", "parameters"),
     [
         ("/items/{id}", []),
-        ("/items/{id}", [{"name": "other", "in": "path", "required": True, "type": "string"}]),
-        ("/items/{id", [{"name": "id", "in": "path", "required": True, "type": "string"}]),
-        ("/items/{id}/{id}", [{"name": "id", "in": "path", "required": True, "type": "string"}]),
+        (
+            "/items/{id}",
+            [{"name": "other", "in": "path", "required": True, "type": "string"}],
+        ),
+        (
+            "/items/{id",
+            [{"name": "id", "in": "path", "required": True, "type": "string"}],
+        ),
+        (
+            "/items/{id}/{id}",
+            [{"name": "id", "in": "path", "required": True, "type": "string"}],
+        ),
     ],
 )
 def test_swagger_path_template_authority_fails_closed(path, parameters):
@@ -166,7 +230,13 @@ def test_valid_optional_swagger_parameter_remains_analyzable():
 
 
 def test_valid_swagger_array_parameter_remains_analyzable():
-    parameter = {"name": "q", "in": "query", "required": False, "type": "array", "items": {"type": "string"}}
+    parameter = {
+        "name": "q",
+        "in": "query",
+        "required": False,
+        "type": "array",
+        "items": {"type": "string"},
+    }
     result = analyze(swagger_operation([]), swagger_operation([parameter]))
     assert result.severity is ContractDriftSeverity.NON_BREAKING
     assert result.analyzed is True
