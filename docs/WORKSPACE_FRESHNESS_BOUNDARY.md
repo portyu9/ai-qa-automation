@@ -112,9 +112,11 @@ A workspace fingerprint proves identity of the repository/worktree state covered
 
 Those are separate trust domains. The freshness boundary prevents target validation and terminal truth from silently floating from one observed local target state to another; external MCP evidence remains separately classified as untrusted remote observation.
 
-## Hook latency and fail-closed semantics
+## Hook latency and dependency boundary
 
-Freshness admission runs inside the bounded `PreToolUse` hook. The repository pins `claude-agent-sdk==0.2.136`, whose bundled Claude CLI is newer than the upstream fix that prevents timed-out PreToolUse authorization from proceeding as an allowed tool execution. A freshness-hook timeout is therefore treated as availability failure, not authorization success; the repository does not inflate hook timeouts merely to obtain green execution.
+Freshness admission runs inside the bounded `PreToolUse` hook. The repository pins `claude-agent-sdk==0.2.136`, but it does not independently pin or attest a bundled Claude CLI sub-version or convert undocumented hook-timeout behavior into repository-owned authority. Exact protected validation must therefore exercise the pinned dependency set's denial/timeout behavior; a historical upstream fix or documentation claim is not a substitute for revision-bound execution evidence.
+
+The runtime does not inflate hook timeouts merely to obtain green execution. External MCP writes also retain the independent unattended `can_use_tool` denial path, while internal high-impact tools re-check their own path/network/mutation/runner boundaries inside the in-process MCP server. These are defense-in-depth controls; they do not make missing protected validation into PASS.
 
 PostToolUse external-response sanitization intentionally does not wait behind a second repository snapshot. This preserves the existing deterministic remote-output boundary independently of workspace-fingerprint observation cost. Local target success remains protected by pre-execution and terminal freshness checks, while internal target-validation results retain the stronger post-execution acceptance check.
 
