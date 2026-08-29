@@ -3,14 +3,16 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
-import ai_qa_automation.runtime.runtime_hooks as runtime_hooks
+import ai_qa_automation.runtime.live_services as live_services_module
 from ai_qa_automation.models import AgentRunState, TerminalStatus, ValidationStatus
 from ai_qa_automation.policy import PolicyEngine
 from ai_qa_automation.runtime.budget import ExecutionBudget
 from ai_qa_automation.runtime.journal import RunJournal
+from ai_qa_automation.runtime.live_services import LiveRuntimeServices
 from ai_qa_automation.runtime.run_control import (
     PendingMutation,
     RuntimeControl,
@@ -19,7 +21,6 @@ from ai_qa_automation.runtime.run_control import (
 from ai_qa_automation.runtime.runtime_hooks import (
     _reconcile_rolled_back_mutation,
     posttool_policy_output,
-    pretool_policy_output,
 )
 from ai_qa_automation.runtime.stale_recovery import recover_stale_mutation
 from ai_qa_automation.runtime.workspace_freshness import (
@@ -91,8 +92,22 @@ def test_mutation_denies_incomplete_workspace_fingerprint(
         workspace=str(control.workspace),
         target_git_sha="a" * 40,
     )
+    store = StateStore(control.metadata_path.parent / "state.json")
+    store.save(state)
+    services = LiveRuntimeServices(
+        workspace=control.workspace,
+        state=state,
+        evidence=cast(Any, object()),
+        policy=policy,
+        test_runner=cast(Any, object()),
+        max_tool_calls=10,
+        max_repeated_action=3,
+        state_store=store,
+        workspace_root_identity=control.workspace_identity,
+        control=control,
+    )
     monkeypatch.setattr(
-        runtime_hooks,
+        live_services_module,
         "observe_workspace_freshness",
         lambda *_args, **_kwargs: WorkspaceFreshness(
             WorkspaceFreshnessCode.FINGERPRINT_INCOMPLETE,
@@ -100,19 +115,12 @@ def test_mutation_denies_incomplete_workspace_fingerprint(
         ),
     )
 
-    result = pretool_policy_output(
-        policy,
-        {
-            "tool_name": "mcp__qa__create_test_file",
-            "tool_input": {"path": "tests/test_generated.py"},
-        },
-        state=state,
-        control=control,
-    )
+    with pytest.raises(PermissionError, match="freshness is incomplete"):
+        services.consume(
+            "create_test_file",
+            {"path": "tests/test_generated.py"},
+        )
 
-    hook = result["hookSpecificOutput"]
-    assert hook["permissionDecision"] == "deny"
-    assert "fingerprint coverage is incomplete" in hook["permissionDecisionReason"]
     assert state.terminal_status is TerminalStatus.BLOCKED
     assert control.pending_mutation is None
 

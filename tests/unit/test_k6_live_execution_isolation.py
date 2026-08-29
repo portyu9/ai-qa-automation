@@ -14,7 +14,6 @@ from ai_qa_automation.runtime.k6_authority import k6_gate_payload, k6_persisted_
 from ai_qa_automation.runtime.live_services import LiveRuntimeServices
 from ai_qa_automation.runtime.run_control import RuntimeControl
 from ai_qa_automation.state import StateStore
-from ai_qa_automation.tools.repository import RepositoryInspector
 
 
 def make_services(
@@ -40,12 +39,6 @@ def make_services(
         lease_id="lease-k6-isolation",
         max_repeated_action=3,
     )
-    snapshot = RepositoryInspector(
-        workspace,
-        expected_root_identity=control.workspace_identity,
-    ).snapshot()
-    assert snapshot.fingerprint_complete is True
-    control.set_workspace_fingerprint(snapshot.fingerprint)
     services = LiveRuntimeServices(
         workspace=workspace,
         state=state,

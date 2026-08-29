@@ -210,11 +210,12 @@ async def run_agent(
         mcp_servers: dict[str, Any] = {"qa": internal_server, **external}
 
         # `allowed_tools` is an SDK auto-approval rule, not an availability list.
-        # Internal QA tools may be pre-approved because the universal PreToolUse
-        # hook still applies deterministic runtime policy before execution.
-        # External MCP tools remain unlisted so an allowed request still reaches
-        # default SDK permission handling/can_use_tool; requests denied by
-        # PreToolUse never reach a second permission stage.
+        # Internal QA tools are pre-approved only because their in-process service
+        # boundary re-proves workspace freshness and tool-specific authority before
+        # side effects. External MCP tools remain unlisted so any policy-allowed read
+        # reaches `can_use_tool`, which independently re-proves workspace freshness.
+        # PreToolUse remains the bounded attempt/repetition/budget/policy accounting
+        # hook and deliberately does not run repository inspection inside its 10s hook.
         allowed_tools = list(internal_tool_names)
 
         options = ClaudeAgentOptions(
@@ -241,7 +242,12 @@ async def run_agent(
                 "WebSearch",
             ],
             permission_mode="default",
-            can_use_tool=build_permission_handler(policy),
+            can_use_tool=build_permission_handler(
+                policy,
+                state=state,
+                state_store=state_store,
+                control=control,
+            ),
             mcp_servers=mcp_servers,
             strict_mcp_config=True,
             max_turns=cfg.max_turns,

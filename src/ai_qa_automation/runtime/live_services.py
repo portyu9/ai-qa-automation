@@ -16,13 +16,14 @@ _LIVE_MUTATION_TOOL_NAMES = frozenset({"create_test_file", "apply_locator_heal"}
 
 @dataclass
 class LiveRuntimeServices(RuntimeServices):
-    """RuntimeServices adapter whose live tool accounting is owned by PreToolUse.
+    """Bind live internal execution to canonical runtime and workspace authority.
 
     Internal tool implementations still call ``consume`` as an execution
     checkpoint, but they do not maintain an independent live budget/repetition
     authority. Canonical RuntimeControl covers internal and external SDK tool
-    requests uniformly; this adapter only mirrors that charged request count into
-    AgentRunState while preserving standalone RuntimeServices behavior elsewhere.
+    requests uniformly; this adapter mirrors that charged request count while
+    owning the target-subject checks that must occur immediately before an
+    in-process internal tool body proceeds.
 
     Target-controlled pytest code is additionally fail-closed unless trusted
     deployment infrastructure explicitly asserts both process/filesystem
@@ -34,12 +35,6 @@ class LiveRuntimeServices(RuntimeServices):
     runner resources, and bounded target workload authority are explicitly plumbed
     through trusted runtime configuration to the controlled runner. Egress
     configuration alone cannot authorize process spawn.
-
-    Every internal tool also re-proves the lease-bound workspace fingerprint before
-    its body. Non-mutation checkpoints re-prove it again so observed/validated output
-    cannot silently float to newer target bytes. Mutation bodies are the only narrow
-    checkpoint exception because policy has explicitly authorized them to change the
-    candidate workspace before PostToolUse advances transaction authority.
     """
 
     control: RuntimeControl | None = None
@@ -113,10 +108,15 @@ class LiveRuntimeServices(RuntimeServices):
 
         if freshness.code is WorkspaceFreshnessCode.SUBJECT_UNAVAILABLE:
             status = TerminalStatus.INFRASTRUCTURE_FAILURE
-            reason = "Workspace freshness infrastructure could not revalidate the target subject safely."
+            reason = (
+                "Workspace freshness infrastructure could not revalidate the target subject safely."
+            )
         elif freshness.code is WorkspaceFreshnessCode.FINGERPRINT_INCOMPLETE:
             status = TerminalStatus.BLOCKED
-            reason = "Workspace freshness is incomplete; live tool execution cannot bind the current target subject."
+            reason = (
+                "Workspace freshness is incomplete; live tool execution cannot bind the current "
+                "target subject."
+            )
         elif freshness.code is WorkspaceFreshnessCode.BASELINE_MISSING:
             status = TerminalStatus.BLOCKED
             reason = "Workspace freshness baseline is unavailable; live tool execution is denied."
@@ -138,7 +138,7 @@ class LiveRuntimeServices(RuntimeServices):
         raise PermissionError(reason)
 
     def checkpoint(self) -> None:
-        """Persist tool state only while non-mutation observations remain on the authorized subject."""
+        """Persist tool state only while observations remain on the authorized subject."""
 
         if self._active_tool_name not in _LIVE_MUTATION_TOOL_NAMES:
             self._require_workspace_freshness(
@@ -151,23 +151,61 @@ class LiveRuntimeServices(RuntimeServices):
         if self.control is None:  # pragma: no cover - guarded by __post_init__
             raise RuntimeError("live runtime services lost RuntimeControl")
 
-        # Defense in depth for direct live-service invocation. Normal SDK execution
-        # is rejected earlier by PreToolUse before request fingerprinting or budget
-        # mutation, but a tool body may never receive an unbounded input even when
-        # invoked outside that hook path.
+        # Defense in depth for direct live-service invocation. A tool body may never
+        # receive an unbounded input even if the SDK hook path is unavailable.
         validate_tool_request(tool_name, tool_input)
 
-        # PreToolUse already charged the canonical runtime budget. Mirror that
+        # PreToolUse normally charged the canonical runtime budget. Mirror that
         # authority before any tool-specific fail-closed return so persisted
-        # AgentRunState cannot undercount a blocked request.
+        # AgentRunState cannot undercount an already-accounted request.
         self.state.tool_call_count = self.control.budget.snapshot().tool_calls
 
-        # Re-prove freshness immediately before every internal tool body. Mutation
-        # tools are allowed to change the fingerprint only after this pre-execution
-        # proof; their in-body checkpoints are exempt until PostToolUse records the
-        # authorized candidate fingerprint. Every non-mutation checkpoint re-proves
-        # freshness again, catching concurrent drift before successful tool return.
+        # Re-prove target freshness at the application-owned internal execution
+        # boundary. This deliberately avoids RepositoryInspector work inside the
+        # shorter SDK PreToolUse timeout.
         self._require_workspace_freshness(stage="pre_tool", tool_name=tool_name)
+
+        if tool_name in _LIVE_MUTATION_TOOL_NAMES:
+            # A skipped/broken SDK hook must not widen rollback authority. Re-run
+            # deterministic mutation policy before reading target bytes for backup.
+            policy_decision = self.policy.authorize_tool(
+                f"mcp__qa__{tool_name}",
+                tool_input,
+            )
+            self.state.policy_decisions.append(policy_decision)
+            if policy_decision.decision.value != "ALLOW":
+                reason = f"{policy_decision.rule_id}: {policy_decision.reason}"
+                if self.state.terminal_status in {None, TerminalStatus.SUCCESS}:
+                    self.state.terminal_status = TerminalStatus.POLICY_DENIED
+                    self.state.terminal_reason = reason
+                self.control.journal.try_append(
+                    "mutation_policy_denied",
+                    tool_name=f"mcp__qa__{tool_name}",
+                    rule_id=policy_decision.rule_id,
+                )
+                self.state_store.save(self.state)
+                self.control.persist()
+                raise PermissionError(reason)
+
+            if self.state.target_git_sha is None:
+                reason = "Autonomous mutation requires a Git-backed target workspace"
+                self.state.terminal_status = TerminalStatus.BLOCKED
+                self.state.terminal_reason = reason
+                self.control.journal.try_append(
+                    "mutation_blocked_non_git_workspace",
+                    tool_name=f"mcp__qa__{tool_name}",
+                )
+                self.state_store.save(self.state)
+                self.control.persist()
+                raise PermissionError(reason)
+
+            # Capture rollback authority only after the exact workspace baseline and
+            # mutation policy have both been re-proved.
+            self.control.prepare_mutation(
+                str(tool_input.get("path") or ""),
+                change_revision_before=self.state.change_revision,
+            )
+
         self._active_tool_name = tool_name
         super().checkpoint()
 
@@ -202,7 +240,7 @@ class LiveRuntimeServices(RuntimeServices):
             except ValueError:
                 # The canonical attempt was already charged. Persist that accounting,
                 # but do not manufacture a validation gate for an invalid subject.
-                self.checkpoint()
+                super().checkpoint()
                 raise
             reason = self.k6_execution_block_reason()
             self.state.validation_results.append(
@@ -225,7 +263,5 @@ class LiveRuntimeServices(RuntimeServices):
             )
             self.state.terminal_status = TerminalStatus.BLOCKED
             self.state.terminal_reason = reason
-            self.checkpoint()
+            super().checkpoint()
             raise PermissionError(reason)
-
-        self.checkpoint()
