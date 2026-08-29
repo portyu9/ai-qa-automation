@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import io
 import re
 import subprocess
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -12,6 +14,16 @@ import scripts.validate_mermaid as mermaid
 def _write_required_root_docs(root: Path) -> None:
     for name in ("CONTRIBUTING.md", "SECURITY.md"):
         (root / name).write_text(f"# {name}\n", encoding="utf-8")
+
+
+def _render_archive() -> bytes:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as archive:
+        for name, data in (("rendered.md", b"# Rendered\n"), ("rendered-1.svg", b"<svg/>\n")):
+            member = tarfile.TarInfo(name)
+            member.size = len(data)
+            archive.addfile(member, io.BytesIO(data))
+    return buffer.getvalue()
 
 
 def test_discovers_mermaid_documents_and_counts_blocks(tmp_path: Path) -> None:
@@ -120,13 +132,10 @@ def test_renderer_uses_immutable_image_and_bounded_container_authority(
             cidfile = Path(command[command.index("--cidfile") + 1])
             cidfile.write_text("a" * 64 + "\n", encoding="ascii")
             return subprocess.CompletedProcess(command, 0)
+        if command[1] == "exec" and command[-1] == mermaid.RENDER_WAIT_COMMAND:
+            return subprocess.CompletedProcess(command, 0, stdout=b"")
         if command[1] == "exec":
-            return subprocess.CompletedProcess(command, 0)
-        if command[1] == "cp":
-            assert command[2] == f"{'a' * 64}:/out/."
-            (output_root / "rendered.md").write_text("# Rendered\n", encoding="utf-8")
-            (output_root / "rendered-1.svg").write_text("<svg/>\n", encoding="utf-8")
-            return subprocess.CompletedProcess(command, 0)
+            return subprocess.CompletedProcess(command, 0, stdout=_render_archive())
         assert command[1:3] == ["rm", "--force"]
         return subprocess.CompletedProcess(command, 0)
 
@@ -175,5 +184,13 @@ def test_renderer_uses_immutable_image_and_bounded_container_authority(
         mermaid.RENDER_WAIT_COMMAND,
     ]
     assert wait_kwargs["timeout"] == mermaid.RENDER_TIMEOUT_SECONDS
-    assert calls[2][0] == ["docker", "cp", f"{'a' * 64}:/out/.", str(output_root)]
+
+    archive_command, archive_kwargs = calls[2]
+    assert archive_command[:5] == ["docker", "exec", "a" * 64, "/bin/sh", "-c"]
+    assert "/bin/busybox tar -C /out -cf - ." in archive_command[-1]
+    assert f"head -c {mermaid.MAX_RENDER_ARCHIVE_BYTES + 1}" in archive_command[-1]
+    assert archive_kwargs["timeout"] == mermaid.DOCKER_COPY_TIMEOUT_SECONDS
+    assert archive_kwargs["stdout"] is subprocess.PIPE
     assert calls[3][0] == ["docker", "rm", "--force", "a" * 64]
+    assert (output_root / "rendered.md").read_text(encoding="utf-8") == "# Rendered\n"
+    assert (output_root / "rendered-1.svg").read_text(encoding="utf-8") == "<svg/>\n"
