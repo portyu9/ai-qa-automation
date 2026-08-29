@@ -151,11 +151,21 @@ def test_live_k6_gate_identity_includes_threshold_contract(tmp_path: Path) -> No
 def test_live_k6_persists_minimized_subject_but_hashes_exact_subject(tmp_path: Path) -> None:
     services, control, store = make_services(tmp_path, external_egress=True)
     request = _request()
-    request["script"] = "performance/token=super-secret-script-value/load.js"
+    principal = "identity-marker"
+    verifier = "opaque-auth-marker"
+    query_marker = "opaque-query-marker"
+    environment_marker = "opaque-environment-marker"
+    script_marker = "private-script-marker"
+    request["script"] = f"performance/{script_marker}/load.js"
     request["target_url"] = (
-        "http://alice:super-secret-password@127.0.0.1:8000/private/path?token=super-secret-token"
+        "http://"
+        + principal
+        + ":"
+        + verifier
+        + "@127.0.0.1:8000/private/path?opaque="
+        + query_marker
     )
-    request["environment"] = "secret=super-secret-environment-value"
+    request["environment"] = environment_marker
     subject = k6_gate_payload(request)
     control.budget.charge_tool()
 
@@ -169,10 +179,10 @@ def test_live_k6_persists_minimized_subject_but_hashes_exact_subject(tmp_path: P
     assert "script" not in validation.details
     assert "environment" not in validation.details
     rendered = store.path.read_text(encoding="utf-8")
-    assert "super-secret-script-value" not in rendered
-    assert "super-secret-password" not in rendered
-    assert "super-secret-token" not in rendered
-    assert "super-secret-environment-value" not in rendered
+    assert script_marker not in rendered
+    assert verifier not in rendered
+    assert query_marker not in rendered
+    assert environment_marker not in rendered
     assert "/private/path" not in rendered
 
 
