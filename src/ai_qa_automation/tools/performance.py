@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shutil
@@ -22,6 +23,13 @@ _DYNAMIC_IMPORT = re.compile(r"\bimport\s*\(")
 _MAX_K6_MODULE_BYTES = 1_000_000
 _MAX_K6_MODULES = 64
 _MAX_K6_SUMMARY_BYTES = 1_000_000
+_K6_SNAPSHOT_HASH_DOMAIN = b"ai-qa-k6-module-snapshot-v1\0"
+
+
+class K6ExecutionMetrics(PerformanceMetrics):
+    """Observed k6 metrics bound to the exact validated module snapshot."""
+
+    module_snapshot_sha256: str
 
 
 class K6Runner:
@@ -196,6 +204,19 @@ class K6Runner:
         return self.workspace / root_relative
 
     @staticmethod
+    def _module_snapshot_sha256(modules: dict[Path, str]) -> str:
+        digest = hashlib.sha256()
+        digest.update(_K6_SNAPSHOT_HASH_DOMAIN)
+        for relative_path in sorted(modules, key=lambda path: path.as_posix()):
+            path_bytes = relative_path.as_posix().encode("utf-8")
+            source_bytes = modules[relative_path].encode("utf-8")
+            digest.update(len(path_bytes).to_bytes(8, "big"))
+            digest.update(path_bytes)
+            digest.update(len(source_bytes).to_bytes(8, "big"))
+            digest.update(source_bytes)
+        return digest.hexdigest()
+
+    @staticmethod
     def _write_validated_snapshot(snapshot_root: Path, modules: dict[Path, str]) -> None:
         for relative_path, source in modules.items():
             destination = snapshot_root / relative_path
@@ -244,7 +265,7 @@ class K6Runner:
             error_rate=cls._required_number(failures, "rate", metric="http_req_failed"),
         )
 
-    def run(self, script: Path, *, target_url: str, environment: str) -> PerformanceMetrics:
+    def run(self, script: Path, *, target_url: str, environment: str) -> K6ExecutionMetrics:
         if not self.external_egress_enforced:
             raise PermissionError(
                 "k6 execution requires trusted infrastructure-level egress enforcement; "
@@ -254,6 +275,7 @@ class K6Runner:
         if decision.decision != ToolDecision.ALLOW:
             raise PermissionError(decision.reason)
         root_relative, modules = self._collect_validated_modules(script, target_url)
+        module_snapshot_sha256 = self._module_snapshot_sha256(modules)
         if not self.external_process_isolation_enforced:
             raise PermissionError(
                 "k6 execution requires trusted infrastructure-level process/filesystem isolation; "
@@ -325,4 +347,8 @@ class K6Runner:
             except (OSError, UnicodeError, ValueError) as exc:
                 raise RuntimeError("k6 summary failed bounded unambiguous JSON ingestion") from exc
 
-        return self._parse_metrics(data)
+        metrics = self._parse_metrics(data)
+        return K6ExecutionMetrics(
+            **metrics.model_dump(mode="python"),
+            module_snapshot_sha256=module_snapshot_sha256,
+        )
