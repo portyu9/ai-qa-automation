@@ -70,6 +70,88 @@ def test_k6_rejects_non_boolean_process_isolation_assertion(
         )
 
 
+@pytest.mark.parametrize("value", [1, "true", object()])
+def test_k6_rejects_non_boolean_module_isolation_assertion(
+    tmp_path: Path, value: object
+) -> None:
+    with pytest.raises(ValueError, match="external_module_isolation_enforced"):
+        K6Runner(
+            tmp_path,
+            _policy(tmp_path),
+            external_egress_enforced=True,
+            external_module_isolation_enforced=value,  # type: ignore[arg-type]
+        )
+
+
+def test_k6_requires_module_isolation_before_binary_lookup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script = _write_import_graph(tmp_path)
+    runner = K6Runner(
+        tmp_path,
+        _policy(tmp_path),
+        external_egress_enforced=True,
+        external_process_isolation_enforced=True,
+    )
+
+    def fail_lookup(_name: str) -> str:
+        raise AssertionError("k6 binary lookup occurred before module-isolation authorization")
+
+    monkeypatch.setattr(performance.shutil, "which", fail_lookup)
+    with pytest.raises(PermissionError, match="module-loading isolation"):
+        runner.run(
+            script,
+            target_url="http://127.0.0.1:8000",
+            environment="local",
+        )
+
+
+def test_k6_rejects_target_host_remote_commonjs_require(tmp_path: Path) -> None:
+    directory = tmp_path / "performance"
+    directory.mkdir()
+    (directory / "load.js").write_text(
+        "import http from 'k6/http';\n"
+        "const module = require('http://127.0.0.1:8000/target-controlled.js');\n"
+        "export default function () { module.run(); http.get(__ENV.BASE_URL + '/v1'); }\n",
+        encoding="utf-8",
+    )
+    runner = K6Runner(tmp_path, _policy(tmp_path), external_egress_enforced=True)
+
+    with pytest.raises(PermissionError, match="CommonJS require"):
+        runner._validate_script(Path("performance/load.js"), "http://127.0.0.1:8000")
+
+
+def test_k6_rejects_aliased_commonjs_require(tmp_path: Path) -> None:
+    directory = tmp_path / "performance"
+    directory.mkdir()
+    (directory / "load.js").write_text(
+        "import http from 'k6/http';\n"
+        "const loader = require; loader(__ENV.BASE_URL + '/target-controlled.js');\n"
+        "export default function () { http.get(__ENV.BASE_URL + '/v1'); }\n",
+        encoding="utf-8",
+    )
+    runner = K6Runner(tmp_path, _policy(tmp_path), external_egress_enforced=True)
+
+    with pytest.raises(PermissionError, match="CommonJS require"):
+        runner._validate_script(Path("performance/load.js"), "http://127.0.0.1:8000")
+
+
+def test_k6_rejects_dynamic_import(tmp_path: Path) -> None:
+    directory = tmp_path / "performance"
+    directory.mkdir()
+    (directory / "load.js").write_text(
+        "import http from 'k6/http';\n"
+        "const modulePromise = import('./helper.js');\n"
+        "export default function () { http.get(__ENV.BASE_URL + '/v1'); }\n",
+        encoding="utf-8",
+    )
+    runner = K6Runner(tmp_path, _policy(tmp_path), external_egress_enforced=True)
+
+    with pytest.raises(PermissionError, match=r"dynamic import\(\)"):
+        runner._validate_script(Path("performance/load.js"), "http://127.0.0.1:8000")
+
+
 def test_k6_executes_validated_snapshot_after_workspace_mutation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -80,6 +162,7 @@ def test_k6_executes_validated_snapshot_after_workspace_mutation(
         _policy(tmp_path),
         external_egress_enforced=True,
         external_process_isolation_enforced=True,
+        external_module_isolation_enforced=True,
     )
     monkeypatch.setattr(performance.shutil, "which", lambda _: "/usr/bin/k6")
 
@@ -107,8 +190,9 @@ def test_k6_executes_validated_snapshot_after_workspace_mutation(
         env: dict[str, str],
         timeout_seconds: int,
     ) -> BoundedSubprocessResult:
-        del env, timeout_seconds
+        del timeout_seconds
         observed["cwd"] = cwd
+        assert env["K6_AUTO_EXTENSION_RESOLUTION"] == "false"
         snapshot_script = Path(command[-1])
         assert snapshot_script.read_text(encoding="utf-8").endswith(
             "export default function () { http.get(__ENV.BASE_URL + path); }\n"

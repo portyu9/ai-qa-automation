@@ -17,7 +17,9 @@ from ..policy import PolicyEngine
 from .execution_env import restricted_subprocess_env, run_bounded_subprocess
 
 _URL_LITERAL = re.compile(r"https?://[^'\"`\s)]+", re.I)
-_IMPORT_SPECIFIER = re.compile(r"(?:from\s+|import\s*\(\s*|import\s+)([\'\"])([^\'\"]+)\1")
+_IMPORT_SPECIFIER = re.compile(r"(?:from\s+|import\s+)([\'\"])([^\'\"]+)\1")
+_COMMONJS_REQUIRE = re.compile(r"\brequire\b")
+_DYNAMIC_IMPORT = re.compile(r"\bimport\s*\(")
 _MAX_K6_MODULE_BYTES = 1_000_000
 _MAX_K6_MODULES = 64
 _MAX_K6_SUMMARY_BYTES = 1_000_000
@@ -34,6 +36,7 @@ class K6Runner:
         *,
         external_egress_enforced: bool = False,
         external_process_isolation_enforced: bool = False,
+        external_module_isolation_enforced: bool = False,
     ) -> None:
         if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int):
             raise ValueError("k6 timeout_seconds must be an integer")
@@ -43,11 +46,14 @@ class K6Runner:
             raise ValueError("external_egress_enforced must be a boolean")
         if not isinstance(external_process_isolation_enforced, bool):
             raise ValueError("external_process_isolation_enforced must be a boolean")
+        if not isinstance(external_module_isolation_enforced, bool):
+            raise ValueError("external_module_isolation_enforced must be a boolean")
         self.workspace = workspace.expanduser().absolute()
         self.policy = policy
         self.timeout_seconds = timeout_seconds
         self.external_egress_enforced = external_egress_enforced
         self.external_process_isolation_enforced = external_process_isolation_enforced
+        self.external_module_isolation_enforced = external_module_isolation_enforced
         try:
             self._workspace_root_identity = pin_directory_identity(
                 self.workspace,
@@ -133,6 +139,14 @@ class K6Runner:
             modules[relative_path] = source
             if re.search(r"\bopen\s*\(", source):
                 raise PermissionError("k6 scripts may not read local files through open()")
+            if _COMMONJS_REQUIRE.search(source):
+                raise PermissionError(
+                    "k6 CommonJS require is not allowed in the controlled runner"
+                )
+            if _DYNAMIC_IMPORT.search(source):
+                raise PermissionError(
+                    "k6 dynamic import() is not allowed in the controlled runner"
+                )
             if root and ("__ENV.BASE_URL" in source or "__ENV.TARGET_URL" in source):
                 root_uses_injected_target = True
             for literal in _URL_LITERAL.findall(source):
@@ -238,6 +252,11 @@ class K6Runner:
                 "k6 execution requires trusted infrastructure-level process/filesystem isolation; "
                 "static JavaScript inspection is not an execution sandbox"
             )
+        if not self.external_module_isolation_enforced:
+            raise PermissionError(
+                "k6 execution requires trusted infrastructure-level module-loading isolation; "
+                "validated JavaScript inspection cannot prove that runtime-loaded code is confined"
+            )
         if shutil.which("k6") is None:
             raise RuntimeError("k6 is not installed; runtime validation is NOT_VERIFIED")
 
@@ -265,6 +284,7 @@ class K6Runner:
                     "BASE_URL": target_url.rstrip("/"),
                     "TARGET_URL": target_url.rstrip("/"),
                     "K6_NO_USAGE_REPORT": "true",
+                    "K6_AUTO_EXTENSION_RESOLUTION": "false",
                 },
             )
             result = run_bounded_subprocess(

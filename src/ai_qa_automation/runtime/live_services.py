@@ -27,9 +27,9 @@ class LiveRuntimeServices(RuntimeServices):
     assertions only; they do not implement the isolation themselves.
 
     Target-controlled k6 code is fail-closed at this live-service boundary until
-    process/filesystem-isolation authority is explicitly plumbed through trusted
-    runtime configuration to the controlled runner. Egress configuration alone
-    cannot authorize process spawn.
+    process/filesystem-isolation and executable module-loading isolation authority
+    are explicitly plumbed through trusted runtime configuration to the controlled
+    runner. Egress configuration alone cannot authorize process spawn.
     """
 
     control: RuntimeControl | None = None
@@ -73,14 +73,15 @@ class LiveRuntimeServices(RuntimeServices):
         )
 
     def k6_execution_block_reason(self) -> str:
-        missing = ["process/filesystem isolation"]
+        missing = ["process/filesystem isolation", "module-loading isolation"]
         if not self.k6_external_egress_enforced:
             missing.append("outbound-egress enforcement")
         return (
             "k6 target-code execution requires trusted deployment enforcement for "
-            + " and ".join(missing)
-            + "; the current live runtime does not expose the process/filesystem-isolation "
-            "assertion required by the controlled K6Runner"
+            + ", ".join(missing)
+            + "; the current live runtime exposes only the outbound-egress assertion, "
+            "not the process/filesystem or module-loading isolation assertions required "
+            "by the controlled K6Runner"
         )
 
     def consume(self, tool_name: str, tool_input: dict[str, Any]) -> None:
@@ -143,6 +144,7 @@ class LiveRuntimeServices(RuntimeServices):
                         **k6_persisted_subject(gate_payload),
                         "execution_started": False,
                         "process_isolation_enforced": False,
+                        "module_isolation_enforced": False,
                         "external_egress_enforced": self.k6_external_egress_enforced,
                     },
                 )
