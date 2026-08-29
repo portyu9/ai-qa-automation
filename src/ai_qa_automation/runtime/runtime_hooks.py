@@ -454,13 +454,33 @@ def posttool_policy_output(
                 "this tool may be used for deterministic closure."
             )
 
-    if state is not None and control is not None and not failed:
-        if tool_name in _MUTATION_TOOLS:
+    if state is not None and control is not None and not failed and tool_name in _MUTATION_TOOLS:
+        pending = control.pending_mutation
+        if pending is None:
+            failed = True
+            mutation_integrity_blocked = True
+            state.terminal_status = TerminalStatus.BLOCKED
+            state.terminal_reason = (
+                "Mutation result was rejected because no pending transaction authority exists"
+            )
+            control.open_circuits.update(_MUTATION_TOOLS)
+            control.journal.try_append(
+                "mutation_result_without_transaction",
+                tool_name=tool_name,
+            )
+            output["updatedToolOutput"] = {
+                "is_error": True,
+                "error": "Mutation result rejected because transaction authority was not prepared.",
+            }
+            output["additionalContext"] = (
+                "A mutation-shaped tool result arrived without a fresh, durable pending mutation "
+                "transaction. The result was rejected and mutation authority is disabled for this run."
+            )
+        else:
             candidate_snapshot = RepositoryInspector(control.workspace).snapshot()
             if candidate_snapshot.fingerprint_complete:
                 control.set_workspace_fingerprint(candidate_snapshot.fingerprint)
             else:
-                pending = control.pending_mutation
                 reasons = ", ".join(candidate_snapshot.fingerprint_incomplete_reasons)
                 rolled_back = control.rollback_pending_mutation(
                     reason="post-mutation workspace fingerprint became incomplete"
@@ -568,11 +588,15 @@ def posttool_policy_output(
     if control is not None:
         if tool_name in _MUTATION_TOOLS and failed and not mutation_integrity_blocked:
             pending = control.pending_mutation
-            rolled_back = control.rollback_pending_mutation(reason="mutation tool reported failure")
-            _reconcile_rolled_back_mutation(state, pending, rolled_back)
-            control.set_workspace_fingerprint(
-                RepositoryInspector(control.workspace).snapshot().fingerprint
-            )
+            if pending is not None:
+                rolled_back = control.rollback_pending_mutation(
+                    reason="mutation tool reported failure"
+                )
+                _reconcile_rolled_back_mutation(state, pending, rolled_back)
+                if rolled_back is not None:
+                    control.set_workspace_fingerprint(
+                        RepositoryInspector(control.workspace).snapshot().fingerprint
+                    )
         elif tool_name == "mcp__qa__run_pytest" and not failed and state is not None:
             if control.pending_mutation is not None:
                 _bind_latest_targeted_pytest_to_pending_mutation(state, control)
@@ -642,13 +666,15 @@ def posttool_failure_output(
     if control is not None:
         if tool_name in _MUTATION_TOOLS:
             pending = control.pending_mutation
-            rolled_back = control.rollback_pending_mutation(
-                reason="mutation tool raised an execution failure"
-            )
-            _reconcile_rolled_back_mutation(state, pending, rolled_back)
-            control.set_workspace_fingerprint(
-                RepositoryInspector(control.workspace).snapshot().fingerprint
-            )
+            if pending is not None:
+                rolled_back = control.rollback_pending_mutation(
+                    reason="mutation tool raised an execution failure"
+                )
+                _reconcile_rolled_back_mutation(state, pending, rolled_back)
+                if rolled_back is not None:
+                    control.set_workspace_fingerprint(
+                        RepositoryInspector(control.workspace).snapshot().fingerprint
+                    )
         control.record_tool_result(tool_name, failed=True)
         control.journal.append("tool_failed", tool_name=tool_name, error_type="tool_failure")
     _checkpoint(state, state_store, control)
