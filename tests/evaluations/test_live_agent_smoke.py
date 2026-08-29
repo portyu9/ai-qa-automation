@@ -9,6 +9,7 @@ from tests.evaluations.live_smoke_contract import (
     EXPECTED_JSON_INSTANCE,
     EXPECTED_JSON_SCHEMA,
     assert_live_agent_smoke_contract,
+    live_smoke_artifact_root,
 )
 
 
@@ -17,7 +18,6 @@ from tests.evaluations.live_smoke_contract import (
 async def test_live_agent_executes_exact_bounded_safe_tool_without_mutation(tmp_path: Path):
     if not os.getenv("ANTHROPIC_API_KEY"):
         pytest.skip("ANTHROPIC_API_KEY is required for model-backed evaluation")
-    artifact_root = tmp_path.parent / f"{tmp_path.name}-artifacts"
     result = await run_agent(
         (
             "Call the validate_json_contract QA tool exactly once with instance_json "
@@ -27,7 +27,7 @@ async def test_live_agent_executes_exact_bounded_safe_tool_without_mutation(tmp_
         tmp_path,
         Settings(
             control_root=Path.cwd(),
-            artifact_root=artifact_root,
+            artifact_root=live_smoke_artifact_root(tmp_path),
             max_turns=5,
             max_tool_calls=1,
             max_cost_usd=1.0,
