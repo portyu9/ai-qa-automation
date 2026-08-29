@@ -361,19 +361,23 @@ def pretool_policy_output(
             input_hash=fingerprint,
         )
 
-    if tool_name in _MUTATION_TOOLS and state is not None and control is not None:
-        if state.target_git_sha is None:
-            state.terminal_status = TerminalStatus.BLOCKED
-            state.terminal_reason = "Autonomous mutation requires a Git-backed target workspace"
-            control.journal.append("mutation_blocked_non_git_workspace", tool_name=tool_name)
-            _checkpoint(state, state_store, control)
-            return {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": "workspace-integrity: autonomous writes require a git-backed isolated worktree",
-                }
+    if (
+        tool_name in _MUTATION_TOOLS
+        and state is not None
+        and control is not None
+        and state.target_git_sha is None
+    ):
+        state.terminal_status = TerminalStatus.BLOCKED
+        state.terminal_reason = "Autonomous mutation requires a Git-backed target workspace"
+        control.journal.append("mutation_blocked_non_git_workspace", tool_name=tool_name)
+        _checkpoint(state, state_store, control)
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": "workspace-integrity: autonomous writes require a git-backed isolated worktree",
             }
+        }
 
     decision = policy.authorize_tool(tool_name, tool_input)
     if state is not None:
