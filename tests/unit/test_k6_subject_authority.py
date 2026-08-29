@@ -60,11 +60,21 @@ def test_invalid_k6_thresholds_fail_before_subject_authority(
 
 def test_k6_persisted_subject_minimizes_untrusted_identity_fields() -> None:
     payload = request()
-    payload["script"] = "performance/token=super-secret-script-value/load.js"
+    principal = "identity-marker"
+    verifier = "opaque-auth-marker"
+    query_marker = "opaque-query-marker"
+    environment_marker = "opaque-environment-marker"
+    script_marker = "private-script-marker"
+    payload["script"] = f"performance/{script_marker}/load.js"
     payload["target_url"] = (
-        "http://alice:super-secret-password@127.0.0.1:8000/private/path?token=super-secret-token"
+        "http://"
+        + principal
+        + ":"
+        + verifier
+        + "@127.0.0.1:8000/private/path?opaque="
+        + query_marker
     )
-    payload["environment"] = "secret=super-secret-environment-value"
+    payload["environment"] = environment_marker
     raw = k6_gate_payload(payload)
     persisted = k6_persisted_subject(raw)
 
@@ -76,10 +86,10 @@ def test_k6_persisted_subject_minimizes_untrusted_identity_fields() -> None:
         "min_request_rate",
     }
     rendered = str(persisted)
-    assert "super-secret-script-value" not in rendered
-    assert "super-secret-password" not in rendered
-    assert "super-secret-token" not in rendered
-    assert "super-secret-environment-value" not in rendered
+    assert script_marker not in rendered
+    assert verifier not in rendered
+    assert query_marker not in rendered
+    assert environment_marker not in rendered
     assert "/private/path" not in rendered
     assert "127.0.0.1:8000" in rendered
     assert _stable_gate_id("k6", raw) != _stable_gate_id("k6", persisted)
