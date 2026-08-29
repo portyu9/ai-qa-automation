@@ -80,7 +80,7 @@ class K6Runner:
 
     def _workspace_module_path(self, candidate: Path) -> Path:
         raw = candidate if candidate.is_absolute() else self.workspace / candidate
-        lexical = Path(os.path.abspath(raw))
+        lexical = Path(os.path.normpath(raw))
         try:
             relative_path = lexical.relative_to(self.workspace)
         except ValueError as exc:
