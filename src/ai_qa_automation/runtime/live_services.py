@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from ..models import TerminalStatus, ValidationResult, ValidationStatus
@@ -9,6 +9,9 @@ from .k6_authority import k6_gate_payload, k6_persisted_subject
 from .mutation_lineage import build_rollback_lineage_checkpoints
 from .run_control import RuntimeControl
 from .tool_input_bounds import validate_tool_request
+from .workspace_freshness import WorkspaceFreshnessCode, observe_workspace_freshness
+
+_LIVE_MUTATION_TOOL_NAMES = frozenset({"create_test_file", "apply_locator_heal"})
 
 
 @dataclass
@@ -31,11 +34,18 @@ class LiveRuntimeServices(RuntimeServices):
     runner resources, and bounded target workload authority are explicitly plumbed
     through trusted runtime configuration to the controlled runner. Egress
     configuration alone cannot authorize process spawn.
+
+    Every internal tool also re-proves the lease-bound workspace fingerprint before
+    its body. Non-mutation checkpoints re-prove it again so observed/validated output
+    cannot silently float to newer target bytes. Mutation bodies are the only narrow
+    checkpoint exception because policy has explicitly authorized them to change the
+    candidate workspace before PostToolUse advances transaction authority.
     """
 
     control: RuntimeControl | None = None
     pytest_process_isolation_enforced: bool = False
     pytest_external_egress_enforced: bool = False
+    _active_tool_name: str | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -90,6 +100,53 @@ class LiveRuntimeServices(RuntimeServices):
             "authority required by the controlled K6Runner"
         )
 
+    def _require_workspace_freshness(self, *, stage: str, tool_name: str | None) -> None:
+        if self.control is None or self.state_store is None:  # pragma: no cover - guarded above
+            raise RuntimeError("live runtime services lost durable workspace authority")
+        freshness = observe_workspace_freshness(
+            self.workspace,
+            expected_fingerprint=self.control.expected_workspace_fingerprint,
+            expected_root_identity=self.workspace_root_identity,
+        )
+        if freshness.fresh:
+            return
+
+        if freshness.code is WorkspaceFreshnessCode.SUBJECT_UNAVAILABLE:
+            status = TerminalStatus.INFRASTRUCTURE_FAILURE
+            reason = "Workspace freshness infrastructure could not revalidate the target subject safely."
+        elif freshness.code is WorkspaceFreshnessCode.FINGERPRINT_INCOMPLETE:
+            status = TerminalStatus.BLOCKED
+            reason = "Workspace freshness is incomplete; live tool execution cannot bind the current target subject."
+        elif freshness.code is WorkspaceFreshnessCode.BASELINE_MISSING:
+            status = TerminalStatus.BLOCKED
+            reason = "Workspace freshness baseline is unavailable; live tool execution is denied."
+        else:
+            status = TerminalStatus.BLOCKED
+            reason = "Target workspace changed outside the authorized runtime mutation lineage."
+
+        if self.state.terminal_status in {None, TerminalStatus.SUCCESS}:
+            self.state.terminal_status = status
+            self.state.terminal_reason = reason
+        self.control.journal.try_append(
+            "workspace_freshness_denied",
+            stage=stage,
+            tool_name=tool_name,
+            reason_code=freshness.code.value,
+        )
+        self.state_store.save(self.state)
+        self.control.persist()
+        raise PermissionError(reason)
+
+    def checkpoint(self) -> None:
+        """Persist tool state only while non-mutation observations remain on the authorized subject."""
+
+        if self._active_tool_name not in _LIVE_MUTATION_TOOL_NAMES:
+            self._require_workspace_freshness(
+                stage="tool_checkpoint",
+                tool_name=self._active_tool_name,
+            )
+        super().checkpoint()
+
     def consume(self, tool_name: str, tool_input: dict[str, Any]) -> None:
         if self.control is None:  # pragma: no cover - guarded by __post_init__
             raise RuntimeError("live runtime services lost RuntimeControl")
@@ -104,6 +161,15 @@ class LiveRuntimeServices(RuntimeServices):
         # authority before any tool-specific fail-closed return so persisted
         # AgentRunState cannot undercount a blocked request.
         self.state.tool_call_count = self.control.budget.snapshot().tool_calls
+
+        # Re-prove freshness immediately before every internal tool body. Mutation
+        # tools are allowed to change the fingerprint only after this pre-execution
+        # proof; their in-body checkpoints are exempt until PostToolUse records the
+        # authorized candidate fingerprint. Every non-mutation checkpoint re-proves
+        # freshness again, catching concurrent drift before successful tool return.
+        self._require_workspace_freshness(stage="pre_tool", tool_name=tool_name)
+        self._active_tool_name = tool_name
+        super().checkpoint()
 
         if tool_name == "run_pytest":
             reason = self.pytest_execution_block_reason()
@@ -127,7 +193,7 @@ class LiveRuntimeServices(RuntimeServices):
                 )
                 self.state.terminal_status = TerminalStatus.BLOCKED
                 self.state.terminal_reason = reason
-                self.checkpoint()
+                super().checkpoint()
                 raise PermissionError(reason)
 
         if tool_name == "run_k6":

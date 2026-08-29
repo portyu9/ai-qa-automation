@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import ai_qa_automation.runtime.runtime_hooks as runtime_hooks
 from ai_qa_automation.models import AgentRunState, TerminalStatus, ValidationStatus
 from ai_qa_automation.policy import PolicyEngine
 from ai_qa_automation.runtime.budget import ExecutionBudget
@@ -21,6 +22,10 @@ from ai_qa_automation.runtime.runtime_hooks import (
     pretool_policy_output,
 )
 from ai_qa_automation.runtime.stale_recovery import recover_stale_mutation
+from ai_qa_automation.runtime.workspace_freshness import (
+    WorkspaceFreshness,
+    WorkspaceFreshnessCode,
+)
 from ai_qa_automation.state import StateStore
 from ai_qa_automation.tools.repository import RepositoryInspector
 
@@ -76,7 +81,7 @@ def test_fingerprint_marks_changed_symlink_incomplete(tmp_path: Path) -> None:
 
 def test_mutation_denies_incomplete_workspace_fingerprint(
     tmp_path: Path,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     control = _control(tmp_path)
     control.expected_workspace_fingerprint = "sha256:baseline"
@@ -86,21 +91,13 @@ def test_mutation_denies_incomplete_workspace_fingerprint(
         workspace=str(control.workspace),
         target_git_sha="a" * 40,
     )
-
-    class FakeInspector:
-        def __init__(self, _workspace: Path) -> None:
-            pass
-
-        def snapshot(self) -> SimpleNamespace:
-            return SimpleNamespace(
-                fingerprint="sha256:baseline",
-                fingerprint_complete=False,
-                fingerprint_incomplete_reasons=("changed-file-limit-exceeded",),
-            )
-
     monkeypatch.setattr(
-        "ai_qa_automation.runtime.runtime_hooks.RepositoryInspector",
-        FakeInspector,
+        runtime_hooks,
+        "observe_workspace_freshness",
+        lambda *_args, **_kwargs: WorkspaceFreshness(
+            WorkspaceFreshnessCode.FINGERPRINT_INCOMPLETE,
+            "incomplete",
+        ),
     )
 
     result = pretool_policy_output(
