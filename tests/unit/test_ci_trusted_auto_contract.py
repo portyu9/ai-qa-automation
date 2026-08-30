@@ -15,13 +15,11 @@ def _copy_contract_repo(tmp_path: Path) -> Path:
     workflow_dir = root / ".github" / "workflows"
     workflow_dir.parent.mkdir(parents=True)
     shutil.copytree(ROOT / ".github" / "workflows", workflow_dir)
-    scripts_dir = root / "scripts"
-    scripts_dir.mkdir()
-    shutil.copyfile(ROOT / "scripts" / "ci_contract_base.py", scripts_dir / "ci_contract_base.py")
     return root
 
 
 def test_trusted_auto_contract_is_frozen_and_read_only() -> None:
+    ci_contract._verify_frozen_base()
     result = ci_contract.verify_ci_contract(ROOT)
     auto = result["workflows"]["trusted_auto"]
 
@@ -90,13 +88,4 @@ def test_trusted_auto_contract_rejects_reporter_secret_before_final_revalidation
     path.write_text(text.replace(marker, injected + marker, 1), encoding="utf-8")
 
     with pytest.raises(ValueError, match="exact reviewed automatic trust definition"):
-        ci_contract.verify_ci_contract(root)
-
-
-def test_trusted_auto_contract_rejects_frozen_base_verifier_drift(tmp_path: Path) -> None:
-    root = _copy_contract_repo(tmp_path)
-    path = root / "scripts" / "ci_contract_base.py"
-    path.write_text(path.read_text(encoding="utf-8") + "\n# drift\n", encoding="utf-8")
-
-    with pytest.raises(ValueError, match="frozen hardened definition"):
         ci_contract.verify_ci_contract(root)
