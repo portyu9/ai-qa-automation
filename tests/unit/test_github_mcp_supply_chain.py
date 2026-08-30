@@ -47,8 +47,7 @@ def test_repository_uses_reviewed_immutable_github_mcp_image() -> None:
         "ghcr.io/github/github-mcp-server:v1.0.4",
         "ghcr.io/github/github-mcp-server:latest",
         "ghcr.io/github/github-mcp-server:v1.0.4@sha256:deadbeef",
-        "docker.io/github/github-mcp-server:v1.0.4@sha256:"
-        + "0" * 64,
+        "docker.io/github/github-mcp-server:v1.0.4@sha256:" + "0" * 64,
     ],
 )
 def test_github_mcp_image_validator_rejects_mutable_or_malformed_references(image: str) -> None:
