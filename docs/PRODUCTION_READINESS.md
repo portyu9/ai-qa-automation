@@ -23,7 +23,7 @@ The framework intentionally separates concerns that conventional AI agents often
 | **Validation** | deterministic gates | proves or disproves claims for a scope/revision |
 | **Mutation integrity** | transaction + workspace ownership | prevents stale, concurrent, unsupported, or unsafe writes |
 | **Terminal truth** | result contract | derives runtime outcome from current deterministic lineage |
-| **Deployment assurance** | infrastructure / organization | owns isolation, egress, identity, secrets, retention, target access |
+| **Deployment assurance** | infrastructure / organization | owns isolation, egress, identity, secrets, retention, target access, and repository merge controls |
 
 A persuasive model response cannot substitute for a lower layer.
 
@@ -34,7 +34,7 @@ A persuasive model response cannot substitute for a lower layer.
 ```mermaid
 flowchart TD
     accTitle: Production control stack separating advisory reasoning, deterministic authority, evidence, validation, and deployment enforcement
-    accDescr: Advisory model reasoning submits actions into deterministic authorization. Authorized controlled execution produces persisted evidence and provenance. Revision-aware deterministic validation derives the structured runtime outcome. Deployment infrastructure independently constrains authorization and controlled execution through isolation, egress, identity, secrets, target, and storage controls.
+    accDescr: Advisory model reasoning submits actions into deterministic authorization. Authorized controlled execution produces persisted evidence and provenance. Revision-aware deterministic validation derives the structured runtime outcome. Deployment infrastructure independently constrains authorization and controlled execution through isolation, egress, identity, secrets, target, storage, and repository merge controls.
 
     A[Bounded model reasoning] -->|proposes action| B[Deterministic authorization]
     B -->|authorizes| C[Controlled observation / execution]
@@ -42,7 +42,7 @@ flowchart TD
     D -->|supports| E[Revision-aware deterministic validation]
     E -->|derives| F[Structured runtime outcome]
     G[Deployment infrastructure] -. isolation / egress / identity / secrets .-> B
-    G -. target + storage controls .-> C
+    G -. target + storage + repository controls .-> C
 
     classDef advisory fill:#fbefff,stroke:#8250df,color:#24292f,stroke-width:2px
     classDef authority fill:#ddf4ff,stroke:#0969da,color:#24292f,stroke-width:2px
@@ -257,6 +257,7 @@ Hard-safety expectations and schema-v3 numerical acceptance bars are defined bef
 | provider action policy | identity/OAuth/token lifecycle + org permissions |
 | load-target policy and egress prerequisite | actual approved load environment + network controls |
 | Appium capability boundary | device/emulator/cloud provisioning + app signing |
+| repository CI workflow authority model | GitHub App installation/permissions, Environment trusted-ref protection, Actions Policy, ruleset expected-source binding, strict branch protection |
 | unsigned content-integrity attestation | external signing/identity/timestamping where required |
 
 Neither side is silently treated as proof of the other.
@@ -282,6 +283,10 @@ A mature production review should be able to answer these without appealing to â
 - Can dynamic k6 JavaScript escape the declared target without infrastructure egress containment?
 - Can an intact journal coexist with tampered registered artifacts and still produce an integrity-verified attestation?
 - Can one resource dimension be exhausted through another unbounded path?
+- Can a pull-request-controlled GitHub Actions workflow publish the identity required for `Trusted PR Gate`?
+- Can a candidate ref obtain the dedicated reporter App private key or bypass the `trusted-pr-gate` Environment restriction?
+- Can a stale or partial protected-path manifest authorize different control-plane bytes than the owner reviewed?
+- Can a same-named status from GitHub Actions satisfy a ruleset intended to require the dedicated reporter App?
 
 A material weakness should produce a narrower deterministic control, a regression/security test, an adversarial evaluation, or an explicit deployment boundaryâ€”not stronger prompt wording alone.
 
@@ -289,13 +294,27 @@ A material weakness should produce a narrower deterministic control, a regressio
 
 ## CI/CD execution design
 
-`.github/workflows/ci.yml` retains ordinary event triggers in source plus fixed trusted `repository_dispatch`, but the observed external Actions Policy permits only owner-authorized `trusted-pr-validation` dispatch for the protected identity. Validation jobs are read-only, contain no secret references, disable persisted checkout credentials, and verify the exact selected prospective merge subject before executing project code.
+`.github/workflows/ci.yml` supports automatic `pull_request` development feedback and fixed trusted `repository_dispatch`. Ordinary PR validation is read-only, secret-free, and bound to the exact GitHub event subject. Its result is useful deterministic evidence but not terminal merge authority.
 
-The trusted validation path covers quality/full deterministic pytest, the 34-case primary evaluator, security scanning, supply-chain/SBOM/repeatability/container evidence, and deterministic Playwright reference-SUT coverage. `Required PR Gate` uses `if: always()` and fails unless every prerequisite succeeds; it is internal aggregate evidence, while protected merge authority is the separately published `Trusted PR Gate` after live subject revalidation.
+The owner trusted-dispatch path executes the exact supplied prospective merge subject from the default-branch workflow definition. Before repository scripts run, the Supply Chain preflight verifies the exact `(base, head, merge)` relationship and requires an owner-supplied protected-root manifest to equal the complete observed base/subject Git-object changes for protected roots. An empty manifest authorizes no protected changes.
 
-`.github/workflows/manual-validation.yml` is `workflow_dispatch` only and remains outside protected merge evidence. The observed `repository_dispatch`-only policy prevents it from executing under the same protected identity, so repository-visible H-series readiness and credentialed Agent SDK smoke require a separately trusted execution mechanism or equivalent deliberate policy change; the credential remains step-scoped when that path is executable.
+The trusted validation path covers quality/full deterministic pytest, the 34-case primary evaluator, security scanning, supply-chain/SBOM/repeatability/container evidence, and deterministic Playwright reference-SUT coverage. `Required PR Gate` uses `if: always()` and fails unless every prerequisite succeeds; it remains internal aggregate evidence.
 
-`scripts/verify_ci_contract.py` deterministically checks the repository-owned workflow authority model and emits machine-readable evidence during trusted supply-chain execution. That verifier does not prove the live external Actions Policy or protected ruleset; those platform settings remain separately observed authority. See [CI/CD and Repository Governance](CI_CD.md).
+Protected merge authority is intentionally separated from GitHub Actions. Job `trusted-status` runs only for owner `repository_dispatch` on `refs/heads/main`, enters Environment `trusted-pr-gate`, keeps native GitHub Actions permissions read-only, and mints a short-lived dedicated GitHub App installation token with only the read/write permissions needed for PR identity reads and commit-status publication. `scripts/trusted_pr_control.py` revalidates the live PR/head/base/merge-ref subject immediately before terminal status write.
+
+The repository source cannot make that design active by itself. Deployment must separately establish and observe:
+
+- the dedicated App installation and least-privilege permission set;
+- Environment `trusted-pr-gate` restricted so candidate refs cannot obtain the private key;
+- the App client ID and private key stored in the Environment rather than repository content;
+- an Actions Policy that permits intended automatic read-only PR feedback and owner trusted dispatch without widening App credential access;
+- `Protect Main` requiring `Trusted PR Gate` from the **dedicated App integration** with strict/up-to-date semantics and no persistent bypass.
+
+Historical probe #50 / run #634 demonstrated an earlier dispatch-only control plane in which GitHub Actions integration ID `15368` published `Trusted PR Gate`. That evidence remains historical; it does not certify the dedicated-App migration.
+
+`.github/workflows/manual-validation.yml` remains `workflow_dispatch` only and outside protected merge evidence. Repository-visible H-series readiness and credentialed Agent SDK smoke are separate evidence classes; the model credential remains step-scoped when that path is executable.
+
+`scripts/verify_ci_contract.py` deterministically checks repository-owned workflow authority and exact workflow bytes. It cannot attest the live App, Environment, Actions Policy, ruleset expected-source binding, or later administrative drift. See [CI/CD and Repository Governance](CI_CD.md) and [Trusted PR control plane](TRUSTED_PR_CONTROL_PLANE.md).
 
 ---
 
