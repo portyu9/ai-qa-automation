@@ -37,11 +37,11 @@ The `workflow_run` payload is only a wake-up signal. `scripts/auto_trusted_prefl
 4. exactly one open non-draft same-repository PR resolves from the live head SHA and targets `main`;
 5. the PR base equals current `main`;
 6. the live prospective merge has exactly two ordered parents `(base, head)`;
-7. every protected authority root has the same Git object ID at trusted base and prospective merge.
+7. every automatic protected authority root has the same Git object ID at trusted base and prospective merge.
 
-Any API failure, malformed/truncated response, ambiguity, fork head, stale base, identity drift, merge-parent mismatch, or protected-root change fails closed.
+Any API failure, malformed/truncated response, bounded-PR-resolution saturation, ambiguity, fork head, stale base, identity drift, merge-parent mismatch, or protected-root change fails closed.
 
-The trusted automatic workflow itself is selected from the default branch. Before any candidate script executes, trusted workflow YAML checks out the exact prospective merge, verifies its parents, and independently compares every protected root with `git ls-tree`. Only a zero-drift result permits candidate validation commands to run.
+The trusted automatic workflow itself is selected from the default branch. Before any candidate script executes, trusted workflow YAML checks out the exact prospective merge, verifies its parents, and independently compares the core protected roots with `git ls-tree`. The default-branch preflight additionally treats versioned `.gitattributes` as indirect archive/build authority, so an attributes change is ineligible even though candidate code has not yet executed. Only a zero-drift admission permits candidate validation commands to run.
 
 The validation jobs remain read-only and secret-free. Only the final `trusted-pr-gate` Environment job can reference the dedicated App credential. That reporter checks out the trusted default-branch revision, runs the automatic admission preflight again, requires exact equality with the original PR/head/base/merge/trusted tuple, and only then mints the short-lived App token. `scripts/auto_trusted_report.py` reuses the canonical live PR/head/base/merge resolver from `scripts/trusted_pr_control.py` immediately before status publication.
 
@@ -57,7 +57,7 @@ This distinction removes routine human dispatch work without letting an automati
 
 ## Protected authority roots
 
-The automatic and maintenance lanes share the reviewed protected-root set:
+The explicit maintenance-manifest root set is:
 
 - `.github`
 - `.claude`
@@ -77,9 +77,11 @@ The automatic and maintenance lanes share the reviewed protected-root set:
 - `src/ai_qa_automation/tools/__init__.py`
 - `src/ai_qa_automation/tools/execution_env.py`
 
-For automatic admission, **any** object-ID difference in this set makes the PR ineligible for the automatic trusted lane. There is no automatic allowlist override.
+The routine automatic preflight is intentionally stricter: it protects that entire set **plus `.gitattributes`**, because versioned Git attributes can alter archive bytes used by reproducible-build and container-context validation. A `.gitattributes` addition, removal, or object change therefore cannot enter the automatic trusted lane.
 
-For maintenance dispatch, the preflight uses an **exact protected-object manifest**. For each protected root, it observes the Git object ID at the trusted base and at the prospective merge subject. Missing paths are represented only by the literal `MISSING` sentinel. A Git observation failure is fatal; `MISSING` is emitted only when an exact `git ls-tree` lookup succeeds and returns no object for that protected path.
+For automatic admission, **any** protected object-ID difference makes the PR ineligible. There is no automatic allowlist override. The trusted YAML subject guard independently repeats the core root comparison, while the preflight and final preflight revalidation both enforce the stricter automatic set.
+
+For maintenance dispatch, the preflight uses an **exact protected-object manifest** for its reviewed manifest root set. The dispatch itself is an explicit owner authorization of the exact PR/base/prospective-merge tuple; the manifest adds exact object-transition binding for the reviewed control-plane roots. For each such root, it observes the Git object ID at the trusted base and at the prospective merge subject. Missing paths are represented only by the literal `MISSING` sentinel. A Git observation failure is fatal; `MISSING` is emitted only when an exact `git ls-tree` lookup succeeds and returns no object for that protected path.
 
 `client_payload.protected_manifest` must be a bounded JSON array. Every entry must contain exactly:
 
@@ -87,9 +89,9 @@ For maintenance dispatch, the preflight uses an **exact protected-object manifes
 {"path":"tests","base_oid":"<40-hex-or-MISSING>","subject_oid":"<40-hex-or-MISSING>"}
 ```
 
-The maintenance workflow rejects the dispatch unless the normalized supplied manifest equals the complete observed set of protected-root changes exactly. Unknown paths, duplicates, malformed object IDs, omitted changes, extra changes, or stale object IDs fail closed.
+The maintenance workflow rejects the dispatch unless the normalized supplied manifest equals the complete observed set of manifest-root changes exactly. Unknown paths, duplicates, malformed object IDs, omitted changes, extra changes, or stale object IDs fail closed.
 
-An empty manifest means **no protected-root changes are authorized**. A non-empty manifest is explicit owner authorization for exactly those object transitions. It is not independent proof that changed tests or control-plane code are correct; the candidate still requires full validation and adversarial review.
+An empty manifest means **no manifest-root changes are authorized**. A non-empty manifest is explicit owner authorization for exactly those object transitions. It is not independent proof that changed tests or control-plane code are correct; the candidate still requires full validation and adversarial review.
 
 ## Trusted App and Environment contract
 
@@ -170,16 +172,16 @@ For an ordinary owner same-repository PR with no protected-root changes:
 1. normal `pull_request` CI provides development evidence;
 2. completed successful CI wakes the default-branch `workflow_run` orchestrator;
 3. live admission recomputes the PR/head/base/merge tuple and protected Git objects;
-4. trusted YAML independently rechecks merge parents and zero protected-object drift before candidate execution;
+4. trusted YAML independently rechecks merge parents and the core protected-object set before candidate execution;
 5. the trusted validation domains execute against the exact prospective merge;
 6. the aggregate must succeed;
-7. the reporter re-runs live admission on the trusted default-branch checkout;
+7. the reporter re-runs the stricter live admission on the trusted default-branch checkout;
 8. only then does it mint the dedicated App token and invoke final live PR/merge-ref revalidation;
 9. independently observe `Trusted PR Gate: success` from the dedicated App integration on the exact head before merge.
 
 A subject change requires a new ordinary PR run and a new automatic trusted evaluation. No human dispatch is expected for this routine path.
 
-For a PR that changes any protected root, automatic admission stops with `eligible=false`; use the maintenance path and exact owner manifest instead.
+For a PR that changes any automatic protected root, automatic admission stops with `eligible=false`; use the maintenance path and exact owner authorization instead.
 
 ## Automatic-admission migration bootstrap
 
@@ -206,13 +208,13 @@ The earlier migration from a GitHub-Actions-owned status identity to the indepen
 
 ## Repository controls
 
-`scripts/auto_trusted_preflight.py` is standard-library-only and performs bounded, fail-closed live admission from the `workflow_run` wake-up event. It does not mutate GitHub or publish status.
+`scripts/auto_trusted_preflight.py` is standard-library-only and performs bounded, fail-closed live admission from the `workflow_run` wake-up event. It uses no-follow bounded event-file ingestion and rejects ambiguous or saturated PR resolution, malformed refs/commits, stale base identity, truncated Git trees, or protected-object drift. It does not mutate GitHub or publish status.
 
 `scripts/auto_trusted_report.py` is a thin automatic authorization adapter. It cannot discover or invent a subject; it receives the already admitted exact tuple and reuses `scripts/trusted_pr_control.py` for live PR/head/base/merge resolution and the App-backed status primitive.
 
 `scripts/trusted_pr_control.py` remains the canonical exact-subject resolver for terminal status publication and the explicit owner-dispatch reporter. It enforces bounded API ingestion, exact live PR identity, exact merge-ref/parent identity, final live re-read, exact-head status publication, and nonzero exit after an authorized validation failure.
 
-`scripts/ci_contract_base.py` preserves the previously hardened CI verifier bytes. `scripts/verify_ci_contract.py` retains that full contract and adds exact-byte plus structural verification for the automatic workflow: trigger identity, read-only native permissions, trusted/candidate checkout boundaries, protected paths, validation aggregation, final admission revalidation, isolated App credential use, and reporter ordering.
+`scripts/ci_contract_base.py` preserves the previously hardened CI verifier bytes. `scripts/verify_ci_contract.py` retains that full contract and adds exact-byte plus structural verification for the automatic workflow: trigger identity, read-only native permissions, trusted/candidate checkout boundaries, core YAML protected paths, validation aggregation, final admission revalidation, isolated App credential use, and reporter ordering.
 
 The repository verifier cannot certify live GitHub App installation state, secret values, Environment branch policy, Actions Policy, or ruleset integration ID; those remain external observations.
 
@@ -220,7 +222,7 @@ The repository verifier cannot certify live GitHub App installation state, secre
 
 A green ordinary PR run proves the candidate's deterministic gates for that exact ordinary GitHub event subject. It is not merge authority.
 
-A green automatic trusted validation proves the live prospective merge passed the trusted automatic gate only if admission was eligible, protected roots were unchanged, the final admission revalidation remained identical, and the reporter completed. It is not terminal merge authority unless the resulting `Trusted PR Gate` status came from the dedicated App integration required by the live ruleset.
+A green automatic trusted validation proves the live prospective merge passed the trusted automatic gate only if admission was eligible, automatic protected roots were unchanged, the final admission revalidation remained identical, and the reporter completed. It is not terminal merge authority unless the resulting `Trusted PR Gate` status came from the dedicated App integration required by the live ruleset.
 
 A green owner-dispatch trusted validation proves the explicitly authorized prospective merge subject passed the deterministic repository gates under the trusted default-branch maintenance definition. It is not terminal authority unless the reporter also revalidates the live subject and publishes through the dedicated App.
 
