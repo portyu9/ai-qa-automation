@@ -15,7 +15,7 @@ from .integrations.mcp_registry import build_external_mcp
 from .models import AgentRunState, MCPStatus, TerminalStatus
 from .policy import PolicyEngine
 from .reporting import build_final_report
-from .runtime.bootstrap import bootstrap_runtime_context
+from .runtime.bootstrap import BaselineResolutionError, bootstrap_runtime_context
 from .runtime.budget import ExecutionBudget
 from .runtime.internal_tools import build_internal_mcp_server
 from .runtime.journal import RunJournal
@@ -175,15 +175,35 @@ async def run_agent(
             lease_id=lease.lease_id,
             workspace=str(workspace),
         )
-        bootstrap_context = bootstrap_runtime_context(
-            workspace=workspace,
-            state=state,
-            evidence=evidence,
-            state_store=state_store,
-            control=control,
-            baseline_ref=cfg.base_ref,
-            workspace_root_identity=lease.workspace_root_identity,
-        )
+        try:
+            bootstrap_context = bootstrap_runtime_context(
+                workspace=workspace,
+                state=state,
+                evidence=evidence,
+                state_store=state_store,
+                control=control,
+                baseline_ref=cfg.base_ref,
+                workspace_root_identity=lease.workspace_root_identity,
+            )
+        except BaselineResolutionError as exc:
+            state.terminal_status = TerminalStatus.BLOCKED
+            state.terminal_reason = (
+                "Configured repository baseline could not be resolved safely."
+            )
+            state.phase = "BLOCKED"
+            journal.try_append(
+                "runtime_bootstrap_baseline_denied",
+                error_type=type(exc.__cause__).__name__ if exc.__cause__ is not None else None,
+            )
+            _sync_operational_state(state, state_store, control)
+            return _final_response(
+                state,
+                agent_result="",
+                limitations=[
+                    "The configured repository comparison baseline could not be resolved; "
+                    "model execution was not started."
+                ],
+            )
         policy = PolicyEngine(cfg.control_root, workspace, allow_test_writes=cfg.allow_test_writes)
         runner = TestRunner(workspace, evidence, timeout_seconds=cfg.tool_timeout_seconds)
         services = LiveRuntimeServices(
