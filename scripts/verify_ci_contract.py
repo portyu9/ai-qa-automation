@@ -48,8 +48,8 @@ TRUSTED_AUTO_PROTECTED_PATHS = (
 _base.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
 
 
-def _verify_frozen_base(root: Path) -> None:
-    path = root / "scripts" / "ci_contract_base.py"
+def _verify_frozen_base() -> None:
+    path = Path(_base.__file__)
     if path.is_symlink() or not path.is_file():
         raise ValueError("CI contract base verifier must be a regular non-symlink file")
     text = path.read_text(encoding="utf-8")
@@ -136,9 +136,9 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     for fragment in required_guard:
         if fragment not in subject_guard:
             raise ValueError(f"trusted automatic subject guard is missing reviewed fragment: {fragment}")
-    for path in TRUSTED_AUTO_PROTECTED_PATHS:
-        if f"            {path}\n" not in subject_guard:
-            raise ValueError(f"trusted automatic subject guard does not protect {path}")
+    for protected_path in TRUSTED_AUTO_PROTECTED_PATHS:
+        if f"            {protected_path}\n" not in subject_guard:
+            raise ValueError(f"trusted automatic subject guard does not protect {protected_path}")
 
     candidate_checkout = "ref: ${{ needs.preflight.outputs.merge_sha }}"
     trusted_checkout = "ref: ${{ needs.preflight.outputs.trusted_sha }}"
@@ -235,7 +235,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
 
 def verify_ci_contract(root: Path) -> dict[str, Any]:
     root = root.resolve()
-    _verify_frozen_base(root)
+    _verify_frozen_base()
     _base.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
     result = _base.verify_ci_contract(root)
     snapshots = _base._read_workflow_set(root / ".github" / "workflows")
