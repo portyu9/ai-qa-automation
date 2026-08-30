@@ -592,13 +592,47 @@ jobs:
 
       - name: Mint dedicated Trusted PR Gate token
         id: trusted-app
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ vars.TRUSTED_GATE_APP_CLIENT_ID }}
-          private-key: ${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}
-          permission-contents: read
-          permission-pull-requests: read
-          permission-statuses: write
+        env:
+          TRUSTED_GATE_APP_CLIENT_ID: ${{ vars.TRUSTED_GATE_APP_CLIENT_ID }}
+          TRUSTED_GATE_APP_PRIVATE_KEY: ${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$TRUSTED_GATE_APP_CLIENT_ID"
+          test -n "$TRUSTED_GATE_APP_PRIVATE_KEY"
+          b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
+          now="$(date +%s)"
+          issued_at="$((now - 60))"
+          expires_at="$((now + 540))"
+          header="$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)"
+          payload="$(printf '{"iat":%s,"exp":%s,"iss":"%s"}' "$issued_at" "$expires_at" "$TRUSTED_GATE_APP_CLIENT_ID" | b64url)"
+          unsigned="$header.$payload"
+          key_file="$RUNNER_TEMP/trusted-gate-app-key.pem"
+          umask 077
+          printf '%s' "$TRUSTED_GATE_APP_PRIVATE_KEY" > "$key_file"
+          trap 'rm -f "$key_file"' EXIT
+          signature="$(printf '%s' "$unsigned" | openssl dgst -sha256 -sign "$key_file" -binary | b64url)"
+          jwt="$unsigned.$signature"
+          rm -f "$key_file"
+          trap - EXIT
+          installation_json="$(curl --fail-with-body --silent --show-error \
+            -H "Authorization: Bearer $jwt" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/installation")"
+          installation_id="$(INSTALLATION_JSON="$installation_json" python -c 'import json, os; value=json.loads(os.environ["INSTALLATION_JSON"])["id"]; assert isinstance(value, int) and value > 0; print(value)')"
+          repo_name="${GITHUB_REPOSITORY#*/}"
+          request_json="$(REPO_NAME="$repo_name" python -c 'import json, os; print(json.dumps({"repositories":[os.environ["REPO_NAME"]],"permissions":{"contents":"read","pull_requests":"read","statuses":"write"}}, separators=(",", ":"), sort_keys=True))')"
+          token_json="$(curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "Authorization: Bearer $jwt" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            -H 'Content-Type: application/json' \
+            --data "$request_json" \
+            "$GITHUB_API_URL/app/installations/$installation_id/access_tokens")"
+          token="$(TOKEN_JSON="$token_json" python -c 'import json, os; value=json.loads(os.environ["TOKEN_JSON"])["token"]; assert isinstance(value, str) and value; print(value)')"
+          echo "::add-mask::$token"
+          printf 'token=%s\n' "$token" >> "$GITHUB_OUTPUT"
 
       - name: Publish exact-subject trusted status
         env:
