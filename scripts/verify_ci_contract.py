@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import importlib.util
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
-from scripts import ci_contract_base as _base
+_BASE_PATH = Path(__file__).with_name("ci_contract_base.py")
+_BASE_SPEC = importlib.util.spec_from_file_location("aiqa_ci_contract_base", _BASE_PATH)
+if _BASE_SPEC is None or _BASE_SPEC.loader is None:
+    raise RuntimeError("unable to load frozen CI contract base verifier")
+_base = importlib.util.module_from_spec(_BASE_SPEC)
+sys.modules[_BASE_SPEC.name] = _base
+_BASE_SPEC.loader.exec_module(_base)
 
 # Preserve the complete hardened verifier API because the existing adversarial tests import
 # its private helpers directly. This wrapper adds one independently frozen workflow contract
