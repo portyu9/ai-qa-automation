@@ -37,12 +37,8 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     assert automatic["trusted_status"]["authorization"] == (
         "owner-default-branch-repository-dispatch-plus-main-only-environment"
     )
-    assert automatic["trusted_status"]["write_authority"] == (
-        "dedicated-github-app:statuses-write"
-    )
-    assert automatic["protected_manifest"]["mode"] == (
-        "exact-owner-dispatch-object-manifest"
-    )
+    assert automatic["trusted_status"]["write_authority"] == ("dedicated-github-app:statuses-write")
+    assert automatic["protected_manifest"]["mode"] == ("exact-owner-dispatch-object-manifest")
     assert result["workflows"]["manual"]["credentialed_model"] == "manual-only"
 
 
