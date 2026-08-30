@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, ClassVar
 
 import pytest
@@ -8,6 +12,7 @@ import pytest
 from scripts import auto_trusted_report as reporter
 from scripts import trusted_pr_control as control
 
+ROOT = Path(__file__).resolve().parents[2]
 HEAD_SHA = "1" * 40
 BASE_SHA = "2" * 40
 MERGE_SHA = "3" * 40
@@ -203,3 +208,19 @@ def test_automatic_report_rejects_invalid_validation_contract_before_api(
             target_url=RUN_URL,
         )
     assert FakeApi.instances == []
+
+
+def test_automatic_report_cli_loads_shared_control_under_python_safe_path() -> None:
+    env = dict(os.environ)
+    env["PYTHONSAFEPATH"] = "1"
+    completed = subprocess.run(
+        [sys.executable, "scripts/auto_trusted_report.py", "--help"],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "Automatic trusted PR status reporter" in completed.stdout
