@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import json
+import os
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -30,6 +34,24 @@ def test_trusted_auto_contract_is_frozen_and_read_only() -> None:
     assert auto["validation_authority"] == "read-only-secret-free-before-reporter"
     assert auto["status_writer"] == "dedicated-github-app"
     assert auto["maintenance_fallback"] == "owner-repository-dispatch-exact-object-manifest"
+
+
+def test_ci_verifier_executes_under_python_safe_path() -> None:
+    env = dict(os.environ)
+    env["PYTHONSAFEPATH"] = "1"
+    completed = subprocess.run(
+        [sys.executable, "scripts/verify_ci_contract.py"],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    payload = json.loads(completed.stdout)
+    assert payload["result"] == "PASS"
+    assert payload["workflows"]["trusted_auto"]["status_writer"] == "dedicated-github-app"
 
 
 def test_trusted_auto_contract_rejects_candidate_checkout_in_preflight(tmp_path: Path) -> None:
