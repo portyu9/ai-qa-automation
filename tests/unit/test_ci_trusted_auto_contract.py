@@ -105,7 +105,7 @@ def test_trusted_auto_contract_rejects_reporter_secret_before_final_revalidation
         "      - name: Illicit early secret consumer\n"
         "        env:\n"
         "          BAD: ${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}\n"
-        "        run: test -n \"$BAD\"\n\n"
+        '        run: test -n "$BAD"\n\n'
     )
     path.write_text(text.replace(marker, injected + marker, 1), encoding="utf-8")
 

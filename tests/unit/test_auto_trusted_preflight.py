@@ -75,9 +75,7 @@ def _responses(*, changed_path: str | None = None) -> dict[str, Any]:
     return {
         f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/{run_id}": live_run,
         f"/repos/{preflight.EXPECTED_REPOSITORY}/commits/{HEAD}/pulls?per_page=10": [candidate],
-        f"/repos/{preflight.EXPECTED_REPOSITORY}/git/ref/heads/main": {
-            "object": {"sha": BASE}
-        },
+        f"/repos/{preflight.EXPECTED_REPOSITORY}/git/ref/heads/main": {"object": {"sha": BASE}},
         f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/{pr_number}": pr,
         f"/repos/{preflight.EXPECTED_REPOSITORY}/git/ref/pull/{pr_number}/merge": {
             "object": {"sha": MERGE}
@@ -86,9 +84,7 @@ def _responses(*, changed_path: str | None = None) -> dict[str, Any]:
             "parents": [{"sha": BASE}, {"sha": HEAD}],
             "tree": {"sha": MERGE_TREE},
         },
-        f"/repos/{preflight.EXPECTED_REPOSITORY}/git/commits/{BASE}": {
-            "tree": {"sha": BASE_TREE}
-        },
+        f"/repos/{preflight.EXPECTED_REPOSITORY}/git/commits/{BASE}": {"tree": {"sha": BASE_TREE}},
         f"/repos/{preflight.EXPECTED_REPOSITORY}/git/trees/{BASE_TREE}?recursive=1": {
             "truncated": False,
             "tree": _tree(),
@@ -134,9 +130,9 @@ def test_protected_change_is_observed_but_not_auto_authorized() -> None:
 
 def test_fork_head_is_rejected_before_pr_admission() -> None:
     responses = _responses()
-    responses[
-        f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"
-    ]["head_repository"]["full_name"] = "attacker/fork"
+    responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]["head_repository"][
+        "full_name"
+    ] = "attacker/fork"
 
     with pytest.raises(ValueError, match="fork/external-head"):
         preflight.evaluate_admission(FakeAPI(responses), event=_event())
@@ -154,9 +150,9 @@ def test_ambiguous_pull_request_resolution_fails_closed() -> None:
 
 def test_stale_base_relative_to_current_main_fails_closed() -> None:
     responses = _responses()
-    responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/git/ref/heads/main"][
-        "object"
-    ]["sha"] = "8" * 40
+    responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/git/ref/heads/main"]["object"]["sha"] = (
+        "8" * 40
+    )
 
     with pytest.raises(ValueError, match="stale relative to current main"):
         preflight.evaluate_admission(FakeAPI(responses), event=_event())
@@ -185,9 +181,9 @@ def test_wrong_workflow_identity_or_result_fails_closed(
 
 def test_truncated_recursive_tree_fails_closed() -> None:
     responses = _responses()
-    responses[
-        f"/repos/{preflight.EXPECTED_REPOSITORY}/git/trees/{MERGE_TREE}?recursive=1"
-    ]["truncated"] = True
+    responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/git/trees/{MERGE_TREE}?recursive=1"][
+        "truncated"
+    ] = True
 
     with pytest.raises(ValueError, match="truncated"):
         preflight.evaluate_admission(FakeAPI(responses), event=_event())
@@ -195,9 +191,10 @@ def test_truncated_recursive_tree_fails_closed() -> None:
 
 def test_merge_parent_order_must_bind_base_then_head() -> None:
     responses = _responses()
-    responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/git/commits/{MERGE}"][
-        "parents"
-    ] = [{"sha": HEAD}, {"sha": BASE}]
+    responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/git/commits/{MERGE}"]["parents"] = [
+        {"sha": HEAD},
+        {"sha": BASE},
+    ]
 
     with pytest.raises(ValueError, match="parent order"):
         preflight.evaluate_admission(FakeAPI(responses), event=_event())

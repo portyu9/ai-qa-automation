@@ -89,7 +89,9 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     if permissions != {"actions": "read", "contents": "read", "pull-requests": "read"}:
         raise ValueError("trusted-pr-auto.yml top-level token must be exactly read-only")
     if _base.WRITE_PERMISSION_RE.search(semantic):
-        raise ValueError("trusted-pr-auto.yml native GitHub token must never request write authority")
+        raise ValueError(
+            "trusted-pr-auto.yml native GitHub token must never request write authority"
+        )
     for forbidden in (
         "pull_request_target:",
         "repository_dispatch:",
@@ -116,14 +118,16 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         '        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"',
         "          GITHUB_TOKEN: ${{ github.token }}",
         "          python scripts/auto_trusted_preflight.py \\",
-        "            --event \"$GITHUB_EVENT_PATH\" \\",
-        "            --github-output \"$GITHUB_OUTPUT\"",
+        '            --event "$GITHUB_EVENT_PATH" \\',
+        '            --github-output "$GITHUB_OUTPUT"',
         '          test "$TRUSTED_SHA" = "$GITHUB_SHA"',
         '            test "$PROTECTED_CHANGES_JSON" = "[]"',
     )
     for fragment in required_preflight:
         if fragment not in preflight:
-            raise ValueError(f"trusted automatic preflight is missing reviewed fragment: {fragment}")
+            raise ValueError(
+                f"trusted automatic preflight is missing reviewed fragment: {fragment}"
+            )
     if "needs.preflight.outputs.merge_sha" in preflight:
         raise ValueError("trusted automatic preflight must not checkout or execute candidate bytes")
 
@@ -143,7 +147,9 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     )
     for fragment in required_guard:
         if fragment not in subject_guard:
-            raise ValueError(f"trusted automatic subject guard is missing reviewed fragment: {fragment}")
+            raise ValueError(
+                f"trusted automatic subject guard is missing reviewed fragment: {fragment}"
+            )
     for protected_path in TRUSTED_AUTO_PROTECTED_PATHS:
         if f"            {protected_path}\n" not in subject_guard:
             raise ValueError(f"trusted automatic subject guard does not protect {protected_path}")
@@ -169,7 +175,9 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     for job_id in validation_jobs:
         job = _base._semantic_text(_base._job_block(text, job_id))
         if candidate_checkout not in job:
-            raise ValueError(f"trusted automatic validation job {job_id} is not merge-subject-bound")
+            raise ValueError(
+                f"trusted automatic validation job {job_id} is not merge-subject-bound"
+            )
         if "${{ secrets." in job:
             raise ValueError(f"trusted automatic validation job {job_id} must be secret-free")
         if "persist-credentials: false" not in job:
@@ -184,7 +192,10 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "security",
         "browser-reference-sut",
     ):
-        if f'          test "${{{{ needs.{dependency}.result }}}}" = "success"' not in required_gate:
+        if (
+            f'          test "${{{{ needs.{dependency}.result }}}}" = "success"'
+            not in required_gate
+        ):
             raise ValueError(f"automatic trusted aggregate does not require {dependency}")
 
     reporter = _base._semantic_text(_base._job_block(text, "trusted-status"))
@@ -222,7 +233,9 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     revalidate_position = reporter.index("      - name: Revalidate automatic trusted admission")
     final_identity_position = reporter.index("      - name: Require exact final admission identity")
     mint_position = reporter.index("      - name: Mint dedicated Trusted PR Gate token")
-    publish_position = reporter.index("      - name: Publish automatic exact-subject trusted status")
+    publish_position = reporter.index(
+        "      - name: Publish automatic exact-subject trusted status"
+    )
     if not revalidate_position < final_identity_position < mint_position < publish_position:
         raise ValueError("automatic trusted reporter authority steps are out of reviewed order")
 
