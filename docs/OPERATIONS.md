@@ -298,7 +298,9 @@ See [`TRACEABILITY.md`](TRACEABILITY.md).
 
 ## GitHub Actions
 
-`.github/workflows/ci.yml` retains ordinary event triggers in source plus fixed `repository_dispatch` event `trusted-pr-validation`. Under the observed active external Actions Policy, only owner-authorized trusted dispatch executes for the protected identity; ordinary `pull_request`, `push`, and `merge_group` attempts are expected to be rejected at startup. Trusted validation remains read-only and secret-free, selects the exact prospective merge subject, verifies it explicitly, and uses hash-locked dependency installation.
+`.github/workflows/ci.yml` keeps automatic `pull_request` feedback and the fixed owner `repository_dispatch` event `trusted-pr-validation`. Ordinary PR validation is read-only, secret-free, exact-subject development evidence. It can be used continuously without being treated as the protected merge oracle.
+
+The trusted dispatch path executes the prospective merge subject from the default-branch workflow definition. It verifies the exact merge/base/head tuple and requires an exact bounded base/subject Git-object manifest for any changed protected control-plane root before repository scripts execute.
 
 The trusted validation domains cover:
 
@@ -308,11 +310,15 @@ The trusted validation domains cover:
 - supply-chain verification, runtime dependency audit, SBOM/repeatability/container evidence;
 - deterministic Playwright reference-SUT execution.
 
-`Required PR Gate` executes with `if: always()` and fails unless every validation prerequisite succeeds. It is the internal deterministic aggregate consumed by the trusted reporter; the observed `Protect Main` ruleset requires `Trusted PR Gate`, which is published only after live PR/merge-ref revalidation.
+`Required PR Gate` executes with `if: always()` and fails unless every validation prerequisite succeeds. It is deterministic aggregate evidence, not protected merge authority.
 
-`.github/workflows/manual-validation.yml` is `workflow_dispatch` only and is not protected merge evidence. The observed `repository_dispatch`-only policy prevents it from executing under the same protected identity; H-series/model evidence requires a separately trusted execution mechanism or an equivalent deliberate policy change. When executable, the optional model smoke consumes `ANTHROPIC_API_KEY` only when explicitly selected.
+Terminal `Trusted PR Gate` publication is intentionally a different identity boundary. Job `trusted-status` is owner/default-branch/repository-dispatch only, enters Environment `trusted-pr-gate`, keeps its native GitHub Actions token read-only, mints a short-lived least-privilege dedicated GitHub App installation token, and publishes only after `scripts/trusted_pr_control.py` revalidates the live PR/head/base/merge-ref subject.
 
-The workflow contract is deterministically checked by `scripts/verify_ci_contract.py`. GitHub branch protection/required-check configuration remains separate repository state and is not implied by a green run. See [CI/CD and Repository Governance](CI_CD.md).
+The independent-identity design becomes active merge authority only after the external GitHub App installation/permissions, Environment trusted-ref restriction, App client ID/private-key configuration, Actions Policy, and `Protect Main` required-status binding to the dedicated App integration have been independently observed. Repository source cannot certify those platform facts. Historical `Trusted PR Gate` evidence from GitHub Actions integration ID `15368` belongs to the earlier control plane and does not prove the new App boundary.
+
+`.github/workflows/manual-validation.yml` is `workflow_dispatch` only and remains outside protected merge evidence. H-series/model evidence is separate; the optional model smoke consumes `ANTHROPIC_API_KEY` only when explicitly selected and available.
+
+The workflow contract is deterministically checked by `scripts/verify_ci_contract.py`. See [CI/CD and Repository Governance](CI_CD.md) and [Trusted PR control plane](TRUSTED_PR_CONTROL_PLANE.md).
 
 ---
 
@@ -330,6 +336,8 @@ Before a live provider/target run:
 - [ ] any k6 run has actual deployment egress containment;
 - [ ] external provider permissions are least privilege;
 - [ ] evidence/artifacts fit approved data-access and retention policy.
+
+For protected PR operation after the independent-status migration, also require the dedicated App installation, `trusted-pr-gate` Environment restriction, required-status App binding, strict/up-to-date branch protection, and current exact-subject trusted-dispatch evidence to be independently observed.
 
 ---
 

@@ -302,3 +302,64 @@ def test_ci_contract_rejects_unsafe_supply_chain_step_order(tmp_path: Path) -> N
 
     with pytest.raises(ValueError, match="out of reviewed order"):
         ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_rejects_appended_runtime_sbom_command(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = _ci_path(root)
+    text = path.read_text(encoding="utf-8")
+    step = ci_contract._step_block(
+        ci_contract._job_block(text, "supply-chain"),
+        ci_contract.RUNTIME_SBOM_STEP_NAME,
+    )
+    path.write_text(
+        _replace_supply_chain_step(
+            text, ci_contract.RUNTIME_SBOM_STEP_NAME, step + "\n          true"
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="exact reviewed digest-exporting evidence step"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_rejects_appended_reproducible_build_command(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = _ci_path(root)
+    text = path.read_text(encoding="utf-8")
+    step = ci_contract._step_block(
+        ci_contract._job_block(text, "supply-chain"),
+        ci_contract.REPRODUCIBLE_BUILD_STEP_NAME,
+    )
+    path.write_text(
+        _replace_supply_chain_step(
+            text,
+            ci_contract.REPRODUCIBLE_BUILD_STEP_NAME,
+            step + "\n          true",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="exact reviewed validation-subject-bound step"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_rejects_appended_supply_chain_upload_authority(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = _ci_path(root)
+    text = path.read_text(encoding="utf-8")
+    step = ci_contract._step_block(
+        ci_contract._job_block(text, "supply-chain"),
+        ci_contract.SUPPLY_CHAIN_UPLOAD_STEP_NAME,
+    )
+    path.write_text(
+        _replace_supply_chain_step(
+            text,
+            ci_contract.SUPPLY_CHAIN_UPLOAD_STEP_NAME,
+            step + "\n        env:\n          UNREVIEWED: value",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="exact reviewed pinned action step"):
+        ci_contract.verify_ci_contract(root)

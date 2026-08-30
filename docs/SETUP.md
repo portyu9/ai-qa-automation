@@ -323,11 +323,17 @@ The legacy `holdout` command stays separate from the routine aggregate to preser
 
 ## GitHub Actions configuration
 
-`.github/workflows/ci.yml` defines ordinary GitHub events plus the fixed `repository_dispatch` event `trusted-pr-validation`. Under the observed active external Actions Policy, only the owner-authorized trusted dispatch is executable for the protected identity. Its read-only, secret-free validation jobs bind execution to the exact prospective merge subject; `Required PR Gate` is an internal deterministic aggregate and `Trusted PR Gate` is the protected merge status.
+`.github/workflows/ci.yml` defines automatic `pull_request` feedback plus `push`, `merge_group`, and the fixed owner-controlled `repository_dispatch` event `trusted-pr-validation`. The automatic validation jobs remain read-only and secret-free and bind execution to the exact GitHub event subject. Their green result is development evidence, not protected merge authority.
 
-`.github/workflows/manual-validation.yml` remains `workflow_dispatch` only. It keeps the repository-visible H-series readiness corpus separated from protected merge validation and contains the optional credentialed Claude Agent SDK smoke path. The observed `repository_dispatch`-only policy prevents that workflow from executing under the same protected identity; when a separately trusted execution mechanism exists, `ANTHROPIC_API_KEY` remains scoped only to the explicitly selected model job.
+The trusted dispatch path validates an exact prospective merge subject from the default-branch workflow definition. Protected-root changes require an exact owner-supplied base/subject Git-object manifest that must equal the complete observed protected-root change set.
 
-Repository workflow source cannot self-attest the external Actions Policy, protected ruleset, or their future administrative state. See [CI/CD and Repository Governance](CI_CD.md).
+Terminal `Trusted PR Gate` publication is designed for a separate main-only authority domain: job `trusted-status` enters Environment `trusted-pr-gate`, keeps the native GitHub Actions token read-only, mints a least-privilege dedicated GitHub App installation token, and publishes only after live PR/head/base/merge-ref revalidation. The branch ruleset must be bound to that App integration for the independent-identity design to become active merge authority.
+
+The dedicated App installation, Environment trusted-ref restriction, `TRUSTED_GATE_APP_CLIENT_ID`, `TRUSTED_GATE_APP_PRIVATE_KEY`, Actions Policy, and required-status App binding are **environment-owned controls**. Repository source cannot certify that they are configured. Historical activation evidence using GitHub Actions integration ID `15368` remains historical and must not be confused with proof of the new App boundary.
+
+`.github/workflows/manual-validation.yml` remains `workflow_dispatch` only. It keeps the repository-visible H-series readiness corpus separated from protected merge validation and contains the optional credentialed Claude Agent SDK smoke path. It is not protected merge evidence; when executable, `ANTHROPIC_API_KEY` remains scoped only to the explicitly selected model job.
+
+See [CI/CD and Repository Governance](CI_CD.md) and [Trusted PR control plane](TRUSTED_PR_CONTROL_PLANE.md) for the exact source and external activation contract.
 
 Never place credentials directly in workflow YAML, non-secret repository variables, committed fixtures, logs, or artifacts.
 
@@ -344,6 +350,7 @@ The operating environment owns observations such as:
 - Appium app/device/emulator/cloud behavior;
 - process/container isolation;
 - firewall/proxy policy;
+- GitHub App installation/permissions, Environment protection, Actions Policy, required-status source binding, and strict branch-protection state;
 - organization identity, secret management, retention, and compliance controls.
 
 See [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md) and [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md).

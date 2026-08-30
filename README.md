@@ -39,7 +39,7 @@
 | **Network posture** | exact host allowlists, read-only API default, browser routing controls, independent k6 egress prerequisite |
 | **External MCP** | explicitly approved vendor integrations; server identity never grants blanket authority and returned content remains untrusted evidence |
 | **Evaluation** | deterministic tests, adversarial primary corpus, repository-visible sequestered H-series readiness corpus, frozen safety thresholds |
-| **Workflow governance** | owner-authorized trusted `repository_dispatch` validates exact prospective merges behind protected `Trusted PR Gate`; ordinary PR/push/merge-group execution is externally denied, and H-series/model validation remains separately scoped |
+| **Workflow governance** | automatic PR validation is read-only development evidence; owner trusted dispatch validates exact prospective merges, while protected `Trusted PR Gate` is designed for a main-only dedicated GitHub App identity with exact live subject revalidation |
 | **License** | MIT |
 
 **On this page:** [Engineering thesis](#engineering-thesis) · [Architecture](#architecture-at-a-glance) · [Quick start](#quick-start) · [Control model](#production-control-model) · [Runtime truth](#runtime-result-contract) · [AI-assisted QA](#ai-assisted-qa-with-deterministic-closure) · [Safety boundaries](#safety-critical-boundaries) · [Evidence](#evidence-traceability-and-attestation) · [Evaluation](#evaluation-architecture) · [Documentation](#documentation-map)
@@ -237,10 +237,10 @@ sequenceDiagram
 | **Control plane** | trusted authority | runtime package, policy, hooks, Skills, tool schemas, deterministic thresholds |
 | **Target / SUT** | untrusted data and evidence source | source, tests, DOM, logs, API responses, target `CLAUDE.md`, `.claude/`, `.mcp.json` |
 | **External providers** | approved transport/provider; privileges remain tool-gated and returned content remains untrusted | GitHub MCP, Atlassian Rovo MCP |
-| **Deployment infrastructure** | independent enforcement boundary | process/container isolation, egress, identity, secrets, retention, devices, real targets |
+| **Deployment infrastructure** | independent enforcement boundary | process/container isolation, egress, identity, secrets, retention, devices, real targets, GitHub App/Environment/ruleset configuration |
 
 > [!WARNING]
-> Application-layer guardrails are defense in depth, not a substitute for deployment controls. High-assurance process isolation, network egress, secret management, provider identity, retention, devices, and real target environments remain deployment-owned enforcement boundaries rather than claims manufactured by repository code.
+> Application-layer guardrails are defense in depth, not a substitute for deployment controls. High-assurance process isolation, network egress, secret management, provider identity, retention, devices, real target environments, and repository merge controls remain deployment-owned enforcement boundaries rather than claims manufactured by repository code.
 
 Deep dives: [Architecture](docs/ARCHITECTURE.md) · [Runtime Control](docs/RUNTIME_CONTROL.md) · [Security](docs/SECURITY.md) · [Threat Model](docs/THREAT_MODEL.md)
 
@@ -781,7 +781,7 @@ The reference SUT is test data for the control architecture, never part of the t
 ├── .github/
 │   ├── CODEOWNERS
 │   └── workflows/
-│       ├── ci.yml                  # trusted-dispatch validation + protected-status reporter
+│       ├── ci.yml                  # automatic read-only PR validation + trusted dispatch/App reporter
 │       └── manual-validation.yml   # workflow_dispatch-only H-series + optional model path
 ├── src/ai_qa_automation/
 │   ├── agent.py                    # Agent SDK orchestration + terminal truth
@@ -830,9 +830,15 @@ Start with the [documentation hub](docs/README.md) for reviewer-specific reading
 
 ## GitHub Actions
 
-`.github/workflows/ci.yml` retains ordinary event triggers in source, but under the observed active external Actions Policy only owner-authorized `repository_dispatch` event `trusted-pr-validation` is executable for the protected identity; ordinary `pull_request`, `push`, and `merge_group` attempts are expected to be rejected at startup. The trusted path validates the exact prospective merge through read-only, secret-free gates and uses `Required PR Gate` only as an internal aggregate before the trusted reporter publishes protected `Trusted PR Gate` after live PR/merge-ref revalidation.
+`.github/workflows/ci.yml` keeps automatic `pull_request` validation as read-only, secret-free development evidence and also defines the owner-controlled `repository_dispatch` event `trusted-pr-validation` for protected exact-subject validation. Ordinary PR green—including `Required PR Gate`—does not by itself authorize merge because candidate workflow bytes are not an independent trust root.
 
-`.github/workflows/manual-validation.yml` remains `workflow_dispatch` only and outside protected merge evidence. The observed `repository_dispatch`-only policy prevents it from executing under the same protected identity; H-series/model validation therefore requires a separately trusted execution mechanism or an equivalent deliberate policy change. Workflow source cannot self-attest the external Actions Policy or ruleset. See [CI/CD and Repository Governance](docs/CI_CD.md).
+The trusted dispatch path executes the exact prospective merge subject from the default-branch workflow definition, verifies its expected base/head parentage, and requires an exact owner-supplied base/subject Git-object manifest for any changed protected control-plane root before repository scripts run.
+
+Terminal `Trusted PR Gate` publication is designed for a separate status identity. The main-only reporter enters Environment `trusted-pr-gate`, keeps its native GitHub Actions token read-only, mints a short-lived least-privilege dedicated GitHub App installation token, and publishes only after `scripts/trusted_pr_control.py` revalidates the live PR/head/base/merge ref and exact merge parents.
+
+That independent identity is deployment-owned until observed. Repository source cannot prove the App installation/permissions, Environment trusted-ref restriction, App credential, Actions Policy, or `Protect Main` expected status source. Historical activation evidence using GitHub Actions integration ID `15368` remains evidence for the earlier dispatch-only control plane and does not certify the dedicated-App migration.
+
+`.github/workflows/manual-validation.yml` remains `workflow_dispatch` only and outside protected merge evidence. H-series/model validation stays separately scoped; credentialed model execution does not gain protected status authority by succeeding. See [CI/CD and Repository Governance](docs/CI_CD.md) and [Trusted PR Control Plane](docs/TRUSTED_PR_CONTROL_PLANE.md).
 
 ## Security and contributions
 
