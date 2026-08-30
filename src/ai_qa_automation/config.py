@@ -71,6 +71,7 @@ class Settings(BaseSettings):
     model: str = "claude-sonnet-5"
     control_root: Path = Field(default_factory=lambda: Path.cwd())
     artifact_root: Path | None = None
+    base_ref: str | None = None
     regulated_mode: bool = False
     allow_external_network: bool = False
     allowed_network_hosts: list[str] = Field(default_factory=lambda: ["127.0.0.1", "localhost"])
@@ -92,6 +93,14 @@ class Settings(BaseSettings):
     tool_timeout_seconds: int = Field(default=120, ge=1, le=900)
     global_timeout_seconds: int = Field(default=600, ge=10, le=3600)
     max_cost_usd: float = Field(default=5.0, gt=0, le=100)
+
+    @field_validator("base_ref")
+    @classmethod
+    def normalize_base_ref(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
     @field_validator("allowed_network_hosts")
     @classmethod

@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
-from tests.evaluations.live_smoke_contract import assert_live_agent_smoke_contract
+from tests.evaluations.live_smoke_contract import (
+    EXPECTED_GATE_ID,
+    assert_live_agent_smoke_contract,
+    live_smoke_artifact_root,
+)
 
 
 def _valid_result() -> dict[str, object]:
@@ -19,20 +24,31 @@ def _valid_result() -> dict[str, object]:
             "provenance": {"objective_gate_id": "NOT_SUPPLIED"},
             "validation_results": [
                 {
-                    "name": "pytest",
-                    "gate_id": "pytest:0123456789abcdef",
+                    "name": "json_schema",
+                    "gate_id": EXPECTED_GATE_ID,
                     "revision": 0,
                     "status": "PASS",
-                    "summary": "pytest exited with 0",
-                    "evidence_ids": ["ev-123"],
-                    "details": {"scope": "targeted", "args": ["test_sample.py"]},
+                    "summary": "Payload matches JSON Schema.",
+                    "evidence_ids": [],
+                    "details": {},
                 }
             ],
         }
     }
 
 
-def test_live_smoke_contract_accepts_exact_expected_evidence() -> None:
+def test_live_smoke_artifact_root_is_disjoint_sibling(tmp_path: Path) -> None:
+    artifact_root = live_smoke_artifact_root(tmp_path)
+
+    assert artifact_root.parent == tmp_path.parent
+    assert artifact_root != tmp_path
+    with pytest.raises(ValueError):
+        artifact_root.relative_to(tmp_path)
+    with pytest.raises(ValueError):
+        tmp_path.relative_to(artifact_root)
+
+
+def test_live_smoke_contract_accepts_exact_expected_validation() -> None:
     assert_live_agent_smoke_contract(_valid_result())
 
 
@@ -47,16 +63,16 @@ def test_live_smoke_contract_rejects_terminal_success_without_objective_gate() -
 def test_live_smoke_contract_rejects_unrelated_validation() -> None:
     result = _valid_result()
     validation = result["report"]["validation_results"][0]  # type: ignore[index]
-    validation["name"] = "json_schema"  # type: ignore[index]
+    validation["name"] = "pytest"  # type: ignore[index]
 
     with pytest.raises(AssertionError):
         assert_live_agent_smoke_contract(result)  # type: ignore[arg-type]
 
 
-def test_live_smoke_contract_rejects_wrong_pytest_subject() -> None:
+def test_live_smoke_contract_rejects_wrong_json_subject() -> None:
     result = _valid_result()
     validation = result["report"]["validation_results"][0]  # type: ignore[index]
-    validation["details"]["args"] = []  # type: ignore[index]
+    validation["gate_id"] = "json_schema:wrong-subject"  # type: ignore[index]
 
     with pytest.raises(AssertionError):
         assert_live_agent_smoke_contract(result)  # type: ignore[arg-type]

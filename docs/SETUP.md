@@ -26,7 +26,7 @@ Each mode has its own evidence source. Local configuration does not stand in for
 
 ## Install
 
-Project metadata requires Python **3.11+**. The repository-owned development environments are currently locked and continuously exercised on exact **CPython 3.11.16** and **3.13.15**; use one of those interpreters when reproducing repository validation.
+Package metadata declares runtime compatibility with **Python 3.11+**. That installer range is intentionally broader than the repository-certified development matrix: reproducible repository validation is currently lock-bound and continuously exercised only on exact **CPython 3.11.16** and **3.13.15**. Other accepted minors, including 3.12, are **not repository-certified environments** until a matching development lock and trusted CI evidence exist. Package acceptance must not be reported as repository verification.
 
 Dependency installation is intentionally lock-bound. Do not replace the commands below with an editable `.[dev]` install or a live resolver upgrade when the goal is to reproduce repository-controlled verification.
 
@@ -97,8 +97,10 @@ Inject configuration through:
 | `AI_QA_MODEL` | `claude-sonnet-5` | live agent model identifier |
 | `AI_QA_CONTROL_ROOT` | current working directory | trusted framework root containing `CLAUDE.md` + `.claude/settings.json` |
 | `AI_QA_ARTIFACT_ROOT` | `<control-root>/artifacts` | trusted state/evidence/journal/rollback/artifact root |
-| `AI_QA_BASE_REF` | unset | explicit Git comparison baseline, e.g. `origin/main` |
+| `AI_QA_BASE_REF` | unset | canonical Git comparison baseline, e.g. `origin/main`; included in the trusted configuration fingerprint |
 | `AI_QA_REGULATED_MODE` | `false` | additional audit chaining / retention classification |
+
+`AI_QA_BASE_REF` is resolved through the same validated `Settings` object used for runtime provenance. Bootstrap does not perform a second ambient environment lookup, so two runs with different baselines cannot share a configuration fingerprint merely because the baseline bypassed canonical settings.
 
 ### Safety configuration
 
