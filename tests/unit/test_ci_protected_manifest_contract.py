@@ -23,7 +23,7 @@ def test_ci_contract_rejects_missing_path_lookup_that_masks_git_failure(tmp_path
     text = path.read_text(encoding="utf-8")
     current = (
         '            oid="$("${git_clean_env[@]}" /usr/bin/git ls-tree '
-        "--format='%(objectname)' \"$revision\" -- \"$path\")\"\n"
+        '--format=\'%(objectname)\' "$revision" -- "$path")"\n'
     )
     weakened = (
         '            if oid="$("${git_clean_env[@]}" /usr/bin/git rev-parse '
