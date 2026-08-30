@@ -187,9 +187,7 @@ async def run_agent(
             )
         except BaselineResolutionError as exc:
             state.terminal_status = TerminalStatus.BLOCKED
-            state.terminal_reason = (
-                "Configured repository baseline could not be resolved safely."
-            )
+            state.terminal_reason = "Configured repository baseline could not be resolved safely."
             state.phase = "BLOCKED"
             journal.try_append(
                 "runtime_bootstrap_baseline_denied",
