@@ -11,10 +11,7 @@ from ai_qa_automation.evidence import EvidenceStore
 from ai_qa_automation.fs_authority import pin_directory_identity
 from ai_qa_automation.models import AgentRunState, ValidationStatus
 from ai_qa_automation.policy import PolicyEngine
-from ai_qa_automation.runtime.internal_tools import (
-    RuntimeServices,
-    build_internal_mcp_server,
-)
+from ai_qa_automation.runtime import internal_tools
 
 
 EXPECTED_TOOL_NAMES = [
@@ -114,7 +111,7 @@ class FakeTestRunner:
         )
 
 
-def make_services(tmp_path: Path) -> RuntimeServices:
+def make_services(tmp_path: Path) -> internal_tools.RuntimeServices:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     test_file = workspace / "tests" / "test_sample.py"
@@ -123,7 +120,7 @@ def make_services(tmp_path: Path) -> RuntimeServices:
     state = AgentRunState(
         objective="exercise the pinned SDK MCP boundary", workspace=str(workspace)
     )
-    return RuntimeServices(
+    return internal_tools.RuntimeServices(
         workspace=workspace,
         state=state,
         evidence=EvidenceStore(tmp_path / "artifacts", state.run_id),
@@ -138,10 +135,10 @@ def make_services(tmp_path: Path) -> RuntimeServices:
     )
 
 
-def real_sdk_server(services: RuntimeServices) -> Any:
+def real_sdk_server(services: internal_tools.RuntimeServices) -> Any:
     from mcp.types import CallToolRequest, ListToolsRequest
 
-    server_config, names = build_internal_mcp_server(services)
+    server_config, names = internal_tools.build_internal_mcp_server(services)
     assert server_config["type"] == "sdk"
     assert server_config["name"] == "qa"
     assert names == [f"mcp__qa__{name}" for name in EXPECTED_TOOL_NAMES]
