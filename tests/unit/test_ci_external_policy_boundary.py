@@ -11,9 +11,7 @@ def test_ci_contract_reports_independent_status_publisher_boundary() -> None:
     limitations = "\n".join(result["limitations"])
 
     assert automatic["external_policy_required"] is True
-    assert automatic["external_policy_invariant"] == (
-        "pull-request-feedback-plus-owner-dispatch"
-    )
+    assert automatic["external_policy_invariant"] == ("pull-request-feedback-plus-owner-dispatch")
     assert automatic["external_policy_capability"] == (
         "main-only-environment-and-required-status-app-binding"
     )
