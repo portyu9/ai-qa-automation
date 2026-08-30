@@ -318,7 +318,12 @@ def _step_block(job: str, step_name: str) -> str:
 def _require_exact_script_step(job: str, *, step_name: str, command: str) -> None:
     step = _semantic_text(_step_block(job, step_name)).strip("\n")
     expected = "\n".join(
-        (f"      - name: {step_name}", "        run: |", "          set -o pipefail", f"          {command}")
+        (
+            f"      - name: {step_name}",
+            "        run: |",
+            "          set -o pipefail",
+            f"          {command}",
+        )
     )
     if step != expected:
         raise ValueError(f"{step_name} must be the exact reviewed fail-closed script step")
@@ -399,7 +404,7 @@ def _require_exact_reproducible_build_step(job: str) -> None:
         '          SOURCE_DATE_EPOCH: "315532800"',
         "          set -euo pipefail",
         '          test -n "${RUNTIME_SBOM_SHA256:-}"',
-        'GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 GIT_NO_REPLACE_OBJECTS=1',
+        "GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 GIT_NO_REPLACE_OBJECTS=1",
         'GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory"',
         '--template="$git_template"',
         '-c core.attributesFile=/dev/null archive --format=tar "$CI_SUBJECT_SHA"',
@@ -501,7 +506,10 @@ def _verify_automatic_checkout_binding(text: str, *, name: str) -> int:
         raise ValueError(
             f"{name}: checkout count must be exactly {expected_total} including trusted reporter"
         )
-    if semantic.count("ref: ${{ env.CI_SUBJECT_SHA }}") != EXPECTED_AUTOMATIC_SUBJECT_CHECKOUT_COUNT:
+    if (
+        semantic.count("ref: ${{ env.CI_SUBJECT_SHA }}")
+        != EXPECTED_AUTOMATIC_SUBJECT_CHECKOUT_COUNT
+    ):
         raise ValueError(f"{name}: every validation checkout must bind to env.CI_SUBJECT_SHA")
     if semantic.count("ref: ${{ github.sha }}") != 1:
         raise ValueError(f"{name}: trusted reporter must be the sole github.sha checkout")
@@ -545,7 +553,9 @@ def _verify_dependency_install_authority(text: str, *, name: str) -> int:
 def _verify_project_install_authority(text: str, *, name: str) -> int:
     semantic_lines = _semantic_text(text).splitlines()
     install_indices = [
-        index for index, line in enumerate(semantic_lines) if line == AUTOMATIC_PROJECT_INSTALL_COMMAND
+        index
+        for index, line in enumerate(semantic_lines)
+        if line == AUTOMATIC_PROJECT_INSTALL_COMMAND
     ]
     if len(install_indices) != EXPECTED_AUTOMATIC_PROJECT_INSTALL_COUNT:
         raise ValueError(
@@ -595,13 +605,15 @@ def _verify_protected_manifest_contract(text: str) -> dict[str, Any]:
         '          changes_file="$RUNNER_TEMP/aiqa-protected-changes.tsv"',
         '          chmod 600 "$changes_file"',
         '                  "protected_manifest does not exactly authorize the observed protected-path object changes"',
-        "              if not isinstance(item, dict) or set(item) != {\"path\", \"base_oid\", \"subject_oid\"}:",
+        '              if not isinstance(item, dict) or set(item) != {"path", "base_oid", "subject_oid"}:',
         "              if path not in allowed_paths or path in seen:",
         '              if oid != "MISSING" and (not isinstance(oid, str) or sha_re.fullmatch(oid) is None):',
         "          if normalized != observed:",
     )
     if any(fragment not in job for fragment in required):
-        raise ValueError("ci.yml: protected change manifest contract differs from reviewed definition")
+        raise ValueError(
+            "ci.yml: protected change manifest contract differs from reviewed definition"
+        )
     return {
         "mode": "exact-owner-dispatch-object-manifest",
         "default": "empty-manifest-for-no-protected-changes",
@@ -651,9 +663,9 @@ def _verify_trusted_status_job(text: str) -> dict[str, Any]:
         '          signature="$(printf \'%s\' "$unsigned" | openssl dgst -sha256 -sign "$key_file" -binary | b64url)"',
         '            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/installation")"',
         '            "$GITHUB_API_URL/app/installations/$installation_id/access_tokens")"',
-        '\"permissions\":{\"contents\":\"read\",\"pull_requests\":\"read\",\"statuses\":\"write\"}',
+        '"permissions":{"contents":"read","pull_requests":"read","statuses":"write"}',
         '          echo "::add-mask::$token"',
-        "          printf 'token=%s\\n' \"$token\" >> \"$GITHUB_OUTPUT\"",
+        '          printf \'token=%s\\n\' "$token" >> "$GITHUB_OUTPUT"',
     )
     for fragment in required_mint_fragments:
         if fragment not in mint_step:
@@ -718,9 +730,13 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
     if semantic.count("${{ secrets.GITHUB_TOKEN }}") != 0:
         raise ValueError(f"{name}: native GITHUB_TOKEN secret consumption is forbidden")
     if semantic.count("${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}") != 1:
-        raise ValueError(f"{name}: trusted App private key must be scoped to exactly one reporter step")
+        raise ValueError(
+            f"{name}: trusted App private key must be scoped to exactly one reporter step"
+        )
     if semantic.count("${{ vars.TRUSTED_GATE_APP_CLIENT_ID }}") != 1:
-        raise ValueError(f"{name}: trusted App client ID must be scoped to exactly one reporter step")
+        raise ValueError(
+            f"{name}: trusted App client ID must be scoped to exactly one reporter step"
+        )
     if CACHE_CONFIGURATION_RE.search(semantic):
         raise ValueError(f"{name}: dependency caching is forbidden before reviewed lock authority")
     if "ubuntu-latest" in semantic:
