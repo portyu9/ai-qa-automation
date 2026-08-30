@@ -247,6 +247,7 @@ Deep dives: [Architecture](docs/ARCHITECTURE.md) · [Runtime Control](docs/RUNTI
 ---
 
 ## Quick start
+
 ### Local deterministic tooling
 
 Repository verification is intentionally bound to the committed interpreter-specific development lock. For the shortest reproducible path on macOS/Linux, use an exact supported interpreter and the repository-owned installer:
@@ -746,6 +747,7 @@ See [Evaluation Strategy](docs/EVALUATION.md).
 | `prompt-injection` | instruction-shaped DOM content remains untrusted evidence |
 
 The reference SUT is test data for the control architecture, never part of the trusted control plane.
+
 ---
 
 ## Operating modes
