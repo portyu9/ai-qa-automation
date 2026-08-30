@@ -159,6 +159,19 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
+      - name: Validate trusted dispatch subject syntax
+        if: github.event_name == 'repository_dispatch'
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.client_payload.expected_head_sha }}
+          EXPECTED_BASE_SHA: ${{ github.event.client_payload.expected_base_sha }}
+        run: |
+          set -euo pipefail
+          sha_re='^[0-9a-f]{40}$'
+          [[ "$CI_SUBJECT_SHA" =~ $sha_re ]]
+          [[ "$EXPECTED_HEAD_SHA" =~ $sha_re ]]
+          [[ "$EXPECTED_BASE_SHA" =~ $sha_re ]]
+          [[ "$GITHUB_SHA" =~ $sha_re ]]
+
       - name: Checkout exact validation subject
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
