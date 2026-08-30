@@ -36,6 +36,68 @@ EXPECTED_TOOL_NAMES = [
 ]
 
 
+EXPECTED_TOOL_PROPERTIES: dict[str, dict[str, dict[str, object]]] = {
+    "inspect_repository": {},
+    "run_pytest": {"args": {"type": "array", "items": {"type": "string"}}},
+    "probe_api": {"method": {"type": "string"}, "url": {"type": "string"}},
+    "inspect_browser": {"url": {"type": "string"}},
+    "classify_failure": {},
+    "read_test_file": {"path": {"type": "string"}},
+    "search_test_coverage": {
+        "query": {"type": "string"},
+        "max_results": {"type": "integer"},
+    },
+    "plan_tests": {
+        "requirement": {"type": "string"},
+        "existing_coverage_json": {"type": "string"},
+        "coverage_evidence_id": {"type": "string"},
+    },
+    "prioritize_regression": {
+        "candidates_json": {"type": "string"},
+        "dependency_confidence": {"type": "number"},
+    },
+    "review_python_test": {"path": {"type": "string"}},
+    "create_test_file": {
+        "path": {"type": "string"},
+        "content": {"type": "string"},
+        "plan_evidence_id": {"type": "string"},
+    },
+    "verify_locator_candidates": {
+        "url": {"type": "string"},
+        "original_locator": {"type": "string"},
+        "candidates_json": {"type": "string"},
+    },
+    "propose_locator_heal": {
+        "path": {"type": "string"},
+        "expected_sha256": {"type": "string"},
+        "original_locator": {"type": "string"},
+        "candidates_json": {"type": "string"},
+        "verification_evidence_id": {"type": "string"},
+    },
+    "apply_locator_heal": {
+        "proposal_evidence_id": {"type": "string"},
+        "path": {"type": "string"},
+    },
+    "validate_json_contract": {
+        "instance_json": {"type": "string"},
+        "schema_json": {"type": "string"},
+    },
+    "analyze_ci_failure": {
+        "exit_code": {"type": "integer"},
+        "log_tail": {"type": "string"},
+    },
+    "inspect_mobile_runtime": {},
+    "run_k6": {
+        "script": {"type": "string"},
+        "target_url": {"type": "string"},
+        "environment": {"type": "string"},
+        "max_p95_ms": {"type": "number"},
+        "max_error_rate": {"type": "number"},
+        "min_request_rate": {"type": "number"},
+    },
+}
+
+
 class FakeTestRunner:
     def run_pytest(self, args: list[str]) -> SimpleNamespace:
         assert args == []
@@ -116,6 +178,13 @@ async def test_all_registered_adapters_cross_pinned_sdk_mcp_boundary(tmp_path: P
     list_handler = server.request_handlers[ListToolsRequest]
     listed = await list_handler(ListToolsRequest(method="tools/list"))
     assert [tool.name for tool in listed.root.tools] == EXPECTED_TOOL_NAMES
+    listed_by_name = {tool.name: tool for tool in listed.root.tools}
+    for name, properties in EXPECTED_TOOL_PROPERTIES.items():
+        assert listed_by_name[name].inputSchema == {
+            "type": "object",
+            "properties": properties,
+            "required": list(properties),
+        }
 
     repository = await call_real_sdk_tool(server, "inspect_repository", {})
     assert repository.isError is not True
@@ -229,8 +298,7 @@ async def test_all_registered_adapters_cross_pinned_sdk_mcp_boundary(tmp_path: P
         {
             "instance_json": '{"value":4}',
             "schema_json": (
-                '{"type":"object","properties":{"value":{"const":4}},'
-                '"required":["value"]}'
+                '{"type":"object","properties":{"value":{"const":4}},"required":["value"]}'
             ),
         },
     )
@@ -293,11 +361,7 @@ async def test_real_sdk_boundary_blocks_second_mutation_until_revision_closure(
     plan_payload = json.loads(response_text(plan_response))
 
     generated_path = "tests/test_generated_behavior.py"
-    generated_content = (
-        "def test_generated_behavior():\n"
-        "    value = 2 + 3\n"
-        "    assert value == 5\n"
-    )
+    generated_content = "def test_generated_behavior():\n    value = 2 + 3\n    assert value == 5\n"
     creation = await call_real_sdk_tool(
         server,
         "create_test_file",
