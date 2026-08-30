@@ -17,7 +17,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ai-qa-ci-${{ github.event_name == 'repository_dispatch' && github.run_id || github.ref }}
+  group: ai-qa-ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -387,7 +387,7 @@ jobs:
           trap 'rm -rf "$build_a" "$build_b" "$git_view" "$git_template"' EXIT
           mkdir -p artifacts/ci/wheel-a artifacts/ci/wheel-b
           git_clean_env=(env -i PATH="$PATH" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0)
-          git_object_format="$("${git_clean_env[@]}" /usr/bin/git rev-parse --show-object-format)"
+          git_object_format="$("${git_clean_env[@]}" /usr/bin/git rev-parse --show-object-format)"'
           git_object_directory="$(cd "$("${git_clean_env[@]}" /usr/bin/git rev-parse --git-path objects)" && pwd -P)"
           "${git_clean_env[@]}" /usr/bin/git init --bare --object-format="$git_object_format" --template="$git_template" "$git_view" > /dev/null
           "${git_clean_env[@]}" GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$CI_SUBJECT_SHA" | env -i PATH="$PATH" /usr/bin/tar -xf - -C "$build_a"
@@ -421,7 +421,7 @@ jobs:
           git_template="$(mktemp -d "$RUNNER_TEMP/aiqa-container-git-template.XXXXXX")"
           trap 'rm -rf "$git_view" "$git_template"' EXIT
           git_clean_env=(env -i PATH="$PATH" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0)
-          git_object_format="$("${git_clean_env[@]}" /usr/bin/git rev-parse --show-object-format)"
+          git_object_format="$("${git_clean_env[@]}" /usr/bin/git rev-parse --show-object-format)"'
           git_object_directory="$(cd "$("${git_clean_env[@]}" /usr/bin/git rev-parse --git-path objects)" && pwd -P)"
           "${git_clean_env[@]}" /usr/bin/git init --bare --object-format="$git_object_format" --template="$git_template" "$git_view" > /dev/null
           "${git_clean_env[@]}" GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$CI_SUBJECT_SHA" | docker build --tag "$image" -
