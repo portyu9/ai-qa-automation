@@ -37,7 +37,7 @@ flowchart LR
 
 | Provider | Trusted path | Default posture |
 |---|---|---|
-| **GitHub** | official `github/github-mcp-server` container pinned to `v1.0.5` | disabled; server-side read-only defense in depth |
+| **GitHub** | official `ghcr.io/github/github-mcp-server:v1.0.4@sha256:e3816a476a977cfb836e7d221510011436c654d11861db66ecfd826601aba6a4` container | disabled; server-side read-only defense in depth |
 | **Atlassian** | official Rovo MCP endpoint `/v1/mcp/authv2` | disabled; local action policy remains authoritative |
 
 Provider versions/endpoints are configuration contracts and should be reviewed deliberately when vendor behavior changes.
@@ -49,7 +49,7 @@ Provider versions/endpoints are configuration contracts and should be reviewed d
 Trusted container image:
 
 ```text
-ghcr.io/github/github-mcp-server:v1.0.5
+ghcr.io/github/github-mcp-server:v1.0.4@sha256:e3816a476a977cfb836e7d221510011436c654d11861db66ecfd826601aba6a4
 ```
 
 Defense-in-depth configuration:
