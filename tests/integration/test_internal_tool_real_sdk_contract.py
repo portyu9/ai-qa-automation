@@ -13,7 +13,6 @@ from ai_qa_automation.models import AgentRunState, ValidationStatus
 from ai_qa_automation.policy import PolicyEngine
 from ai_qa_automation.runtime import internal_tools
 
-
 EXPECTED_TOOL_NAMES = [
     "inspect_repository",
     "run_pytest",
