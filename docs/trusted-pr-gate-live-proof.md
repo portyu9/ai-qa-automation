@@ -1,0 +1,3 @@
+# Trusted PR Gate live proof
+
+Temporary disposable branch artifact used only to exercise and verify the dedicated GitHub App-backed `Trusted PR Gate` status publisher after PR #61 activation. This file must not be merged into `main`.
