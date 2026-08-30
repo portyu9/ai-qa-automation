@@ -252,9 +252,17 @@ The included Dockerfile defines a non-root control-plane image shape. Deployment
 
 ### CI/CD
 
-The activated protected path uses owner-authorized trusted `repository_dispatch` to run read-only, secret-free, revision-bound quality/evaluation/security/supply-chain/reference-browser validation. `Required PR Gate` is internal aggregate evidence; protected merge authority is `Trusted PR Gate` after live PR/merge-ref revalidation. Ordinary PR/push/merge-group execution is externally denied under the observed policy, while H-series readiness and credentialed model smoke require a separately trusted manual execution mechanism. Repository workflow logic and a green status still do not prove hosted-runner immutability, future platform configuration, credential availability, or release/deployment execution.
+Automatic `pull_request` CI is intentionally read-only, secret-free development evidence. It does **not** become protected merge authority merely because it runs automatically or reaches a green `Required PR Gate` aggregate.
 
-See [CI/CD and Repository Governance](CI_CD.md).
+The protected path uses owner `repository_dispatch` from the default-branch workflow definition to validate an exact prospective merge subject. Protected-root changes additionally require an exact owner-supplied base/subject Git-object manifest equal to the complete observed changed-root set before repository scripts execute.
+
+Terminal `Trusted PR Gate` is designed to be published through a dedicated GitHub App identity after live PR/head/base/merge-ref revalidation. The native GitHub Actions token remains read-only in that reporter. This source design does not itself prove the App exists, the App is least-privilege, Environment `trusted-pr-gate` is restricted to trusted refs, its private key is configured safely, the Actions Policy has the intended event boundary, or the protected ruleset requires the status from that App integration. Those are deployment-owned facts that must be observed before the independent-identity design can be treated as active merge authority.
+
+Historical evidence from the earlier dispatch-only control plane—including GitHub Actions integration ID `15368` publishing `Trusted PR Gate`—remains historical evidence only and does not certify the dedicated-App migration.
+
+H-series readiness and credentialed model smoke remain separate manual evidence classes and are never promoted into protected merge authority by their existence or success.
+
+See [CI/CD and Repository Governance](CI_CD.md) and [Trusted PR control plane](TRUSTED_PR_CONTROL_PLANE.md).
 
 ### Reference SUT
 
@@ -289,6 +297,7 @@ That discipline is part of the framework's quality model, not an apology for it.
 ## Related documentation
 
 - [CI/CD and repository governance](CI_CD.md)
+- [Trusted PR control plane](TRUSTED_PR_CONTROL_PLANE.md)
 - [Verification boundaries](VERIFICATION_BOUNDARIES.md)
 - [Production readiness](PRODUCTION_READINESS.md)
 - [Security architecture](SECURITY.md)
