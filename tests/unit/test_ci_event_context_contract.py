@@ -8,9 +8,7 @@ import pytest
 import scripts.verify_ci_contract as ci_contract
 
 ROOT = Path(__file__).resolve().parents[2]
-SAFE_CONCURRENCY_GROUP = (
-    "  group: ai-qa-ci-${{ github.event_name == 'repository_dispatch' && github.run_id || github.ref }}"
-)
+SAFE_CONCURRENCY_GROUP = "  group: ai-qa-ci-${{ github.event_name == 'repository_dispatch' && github.run_id || github.ref }}"
 OLD_EVENT_PAYLOAD_GROUP = (
     "  group: ai-qa-ci-${{ github.event.pull_request.number || "
     "github.event.client_payload.pr_number || github.ref }}"
