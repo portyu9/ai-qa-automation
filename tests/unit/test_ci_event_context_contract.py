@@ -8,10 +8,14 @@ import pytest
 import scripts.verify_ci_contract as ci_contract
 
 ROOT = Path(__file__).resolve().parents[2]
-SAFE_CONCURRENCY_GROUP = "  group: ai-qa-ci-${{ github.event_name == 'repository_dispatch' && github.run_id || github.ref }}"
+SAFE_CONCURRENCY_GROUP = "  group: ai-qa-ci-${{ github.event_name }}-${{ github.ref }}"
 OLD_EVENT_PAYLOAD_GROUP = (
     "  group: ai-qa-ci-${{ github.event.pull_request.number || "
     "github.event.client_payload.pr_number || github.ref }}"
+)
+UNIQUE_DISPATCH_GROUP = (
+    "  group: ai-qa-ci-${{ github.event_name == 'repository_dispatch' "
+    "&& github.run_id || github.ref }}"
 )
 
 
@@ -23,23 +27,29 @@ def _copy_workflows(tmp_path: Path) -> Path:
     return root
 
 
-def test_automatic_ci_concurrency_avoids_event_specific_nested_payloads() -> None:
+def test_automatic_ci_concurrency_uses_event_and_ref_only() -> None:
     text = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     concurrency = ci_contract._top_level_block(text, "concurrency")
 
     assert SAFE_CONCURRENCY_GROUP in concurrency
     assert OLD_EVENT_PAYLOAD_GROUP not in concurrency
+    assert UNIQUE_DISPATCH_GROUP not in concurrency
     assert "github.event.pull_request" not in concurrency
     assert "github.event.client_payload" not in concurrency
+    assert "github.run_id" not in concurrency
 
 
-def test_ci_contract_rejects_reintroduced_event_payload_concurrency(tmp_path: Path) -> None:
+@pytest.mark.parametrize("unsafe_group", [OLD_EVENT_PAYLOAD_GROUP, UNIQUE_DISPATCH_GROUP])
+def test_ci_contract_rejects_weakened_event_concurrency(
+    tmp_path: Path,
+    unsafe_group: str,
+) -> None:
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "ci.yml"
     text = path.read_text(encoding="utf-8")
     assert SAFE_CONCURRENCY_GROUP in text
     path.write_text(
-        text.replace(SAFE_CONCURRENCY_GROUP, OLD_EVENT_PAYLOAD_GROUP, 1),
+        text.replace(SAFE_CONCURRENCY_GROUP, unsafe_group, 1),
         encoding="utf-8",
     )
 
