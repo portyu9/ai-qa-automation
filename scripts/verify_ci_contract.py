@@ -384,15 +384,24 @@ def _require_exact_hosted_browser_step(job: str) -> None:
 
 def _require_exact_runtime_sbom_step(job: str) -> None:
     step = _semantic_text(_step_block(job, RUNTIME_SBOM_STEP_NAME)).strip("\n")
-    required = (
-        "          set -euo pipefail",
-        "          pip-audit --require-hashes -r requirements/runtime-py311.lock --format cyclonedx-json --output artifacts/ci/runtime-sbom.cdx.json",
-        "          assert data['bomFormat'] == 'CycloneDX'",
-        "          assert data.get('components')",
-        "          read -r runtime_sbom_sha256 _ < <(/usr/bin/sha256sum artifacts/ci/runtime-sbom.cdx.json)",
-        '          printf \'RUNTIME_SBOM_SHA256=%s\\n\' "$runtime_sbom_sha256" >> "$GITHUB_ENV"',
+    expected = "\n".join(
+        (
+            f"      - name: {RUNTIME_SBOM_STEP_NAME}",
+            "        run: |",
+            "          set -euo pipefail",
+            "          pip-audit --require-hashes -r requirements/runtime-py311.lock --format cyclonedx-json --output artifacts/ci/runtime-sbom.cdx.json",
+            "          python - <<'PY'",
+            "          import json",
+            "          from pathlib import Path",
+            "          data = json.loads(Path('artifacts/ci/runtime-sbom.cdx.json').read_text())",
+            "          assert data['bomFormat'] == 'CycloneDX'",
+            "          assert data.get('components')",
+            "          PY",
+            "          read -r runtime_sbom_sha256 _ < <(/usr/bin/sha256sum artifacts/ci/runtime-sbom.cdx.json)",
+            '          printf \'RUNTIME_SBOM_SHA256=%s\\n\' "$runtime_sbom_sha256" >> "$GITHUB_ENV"',
+        )
     )
-    if any(fragment not in step for fragment in required):
+    if step != expected:
         raise ValueError(
             "runtime SBOM audit must be the exact reviewed digest-exporting evidence step"
         )
@@ -400,27 +409,52 @@ def _require_exact_runtime_sbom_step(job: str) -> None:
 
 def _require_exact_reproducible_build_step(job: str) -> None:
     step = _semantic_text(_step_block(job, REPRODUCIBLE_BUILD_STEP_NAME)).strip("\n")
-    required = (
-        '          SOURCE_DATE_EPOCH: "315532800"',
-        "          set -euo pipefail",
-        '          test -n "${RUNTIME_SBOM_SHA256:-}"',
-        "GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 GIT_NO_REPLACE_OBJECTS=1",
-        'GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory"',
-        '--template="$git_template"',
-        '-c core.attributesFile=/dev/null archive --format=tar "$CI_SUBJECT_SHA"',
-        'env -i PATH="$PATH" /usr/bin/tar -xf - -C "$build_a"',
-        'env -i PATH="$PATH" /usr/bin/tar -xf - -C "$build_b"',
-        'python scripts/verify_build_authority.py --root "$build_a" > artifacts/ci/build-authority-archive-a.json',
-        'python scripts/verify_build_authority.py --root "$build_b" > artifacts/ci/build-authority-archive-b.json',
-        "cmp -s artifacts/ci/build-authority-archive-a.json artifacts/ci/build-authority-archive-b.json",
-        '--expected-source-sha "$CI_SUBJECT_SHA"',
-        'test "$observed_sbom_sha256" = "$RUNTIME_SBOM_SHA256"',
-    )
-    if any(fragment not in step for fragment in required):
-        raise ValueError(
-            "reproducible wheel build must be the exact reviewed validation-subject-bound step"
+    continuation = chr(92)
+    expected = "\n".join(
+        (
+            f"      - name: {REPRODUCIBLE_BUILD_STEP_NAME}",
+            "        env:",
+            '          SOURCE_DATE_EPOCH: "315532800"',
+            "        run: |",
+            "          set -euo pipefail",
+            '          test -n "${RUNTIME_SBOM_SHA256:-}"',
+            "          read -r observed_sbom_sha256 _ < <(/usr/bin/sha256sum artifacts/ci/runtime-sbom.cdx.json)",
+            '          test "$observed_sbom_sha256" = "$RUNTIME_SBOM_SHA256"',
+            '          build_a="$(mktemp -d "$RUNNER_TEMP/aiqa-build-a.XXXXXX")"',
+            '          build_b="$(mktemp -d "$RUNNER_TEMP/aiqa-build-b.XXXXXX")"',
+            '          git_view="$(mktemp -d "$RUNNER_TEMP/aiqa-git-view.XXXXXX")"',
+            '          git_template="$(mktemp -d "$RUNNER_TEMP/aiqa-git-template.XXXXXX")"',
+            '          trap \'rm -rf "$build_a" "$build_b" "$git_view" "$git_template"\' EXIT',
+            "          mkdir -p artifacts/ci/wheel-a artifacts/ci/wheel-b",
+            '          git_clean_env=(env -i PATH="$PATH" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0)',
+            '          git_object_format="$("${git_clean_env[@]}" /usr/bin/git rev-parse --show-object-format)"',
+            '          git_object_directory="$(cd "$("${git_clean_env[@]}" /usr/bin/git rev-parse --git-path objects)" && pwd -P)"',
+            '          "${git_clean_env[@]}" /usr/bin/git init --bare --object-format="$git_object_format" --template="$git_template" "$git_view" > /dev/null',
+            '          "${git_clean_env[@]}" GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$CI_SUBJECT_SHA" | env -i PATH="$PATH" /usr/bin/tar -xf - -C "$build_a"',
+            '          "${git_clean_env[@]}" GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$CI_SUBJECT_SHA" | env -i PATH="$PATH" /usr/bin/tar -xf - -C "$build_b"',
+            '          python scripts/verify_build_authority.py --root "$build_a" > artifacts/ci/build-authority-archive-a.json',
+            '          python -m pip wheel --no-deps --no-build-isolation "$build_a" --wheel-dir artifacts/ci/wheel-a',
+            '          python scripts/verify_build_authority.py --root "$build_b" > artifacts/ci/build-authority-archive-b.json',
+            '          python -m pip wheel --no-deps --no-build-isolation "$build_b" --wheel-dir artifacts/ci/wheel-b',
+            "          cmp -s artifacts/ci/build-authority-archive-a.json artifacts/ci/build-authority-archive-b.json",
+            "          read -r observed_sbom_sha256 _ < <(/usr/bin/sha256sum artifacts/ci/runtime-sbom.cdx.json)",
+            '          test "$observed_sbom_sha256" = "$RUNTIME_SBOM_SHA256"',
+            "          mapfile -t wheel_a < <(find artifacts/ci/wheel-a -maxdepth 1 -type f -name '*.whl' -print)",
+            "          mapfile -t wheel_b < <(find artifacts/ci/wheel-b -maxdepth 1 -type f -name '*.whl' -print)",
+            '          test "${#wheel_a[@]}" -eq 1',
+            '          test "${#wheel_b[@]}" -eq 1',
+            f"          python scripts/generate_build_manifest.py {continuation}",
+            f'            --wheel-a "${{wheel_a[0]}}" {continuation}',
+            f'            --wheel-b "${{wheel_b[0]}}" {continuation}',
+            f"            --sbom artifacts/ci/runtime-sbom.cdx.json {continuation}",
+            f'            --expected-source-sha "$CI_SUBJECT_SHA" {continuation}',
+            "            --output artifacts/ci/build-manifest.json",
+            "          read -r observed_sbom_sha256 _ < <(/usr/bin/sha256sum artifacts/ci/runtime-sbom.cdx.json)",
+            '          test "$observed_sbom_sha256" = "$RUNTIME_SBOM_SHA256"',
+            '          sha256sum "${wheel_a[0]}" artifacts/ci/runtime-sbom.cdx.json artifacts/ci/build-manifest.json > artifacts/ci/build-checksums.sha256',
         )
-    if step.count('test "$observed_sbom_sha256" = "$RUNTIME_SBOM_SHA256"') != 3:
+    )
+    if step != expected:
         raise ValueError(
             "reproducible wheel build must be the exact reviewed validation-subject-bound step"
         )
@@ -428,16 +462,22 @@ def _require_exact_reproducible_build_step(job: str) -> None:
 
 def _require_exact_supply_chain_upload_step(job: str) -> None:
     step = _semantic_text(_step_block(job, SUPPLY_CHAIN_UPLOAD_STEP_NAME)).strip("\n")
-    required = (
-        f"      - name: {SUPPLY_CHAIN_UPLOAD_STEP_NAME}",
-        "        if: always()",
-        f"        uses: actions/upload-artifact@{EXPECTED_ACTION_SHAS['actions/upload-artifact']} # v7",
-        "          name: supply-chain-evidence",
-        "          if-no-files-found: error",
-        "          retention-days: 30",
-        *(f"            {artifact}" for artifact in SUPPLY_CHAIN_ARTIFACTS),
+    artifact_lines = tuple(f"            {artifact}" for artifact in SUPPLY_CHAIN_ARTIFACTS)
+    expected = "\n".join(
+        (
+            f"      - name: {SUPPLY_CHAIN_UPLOAD_STEP_NAME}",
+            "        if: always()",
+            "        uses: actions/upload-artifact@"
+            f"{EXPECTED_ACTION_SHAS['actions/upload-artifact']} # v7",
+            "        with:",
+            "          name: supply-chain-evidence",
+            "          path: |",
+            *artifact_lines,
+            "          if-no-files-found: error",
+            "          retention-days: 30",
+        )
     )
-    if any(fragment not in step for fragment in required):
+    if step != expected:
         raise ValueError(
             "supply-chain evidence upload must be the exact reviewed pinned action step"
         )
@@ -450,7 +490,11 @@ def _require_exact_required_gate_step(job: str) -> None:
         for job in AUTOMATIC_REQUIRED_JOBS
     )
     expected = "\n".join(
-        (f"      - name: {REQUIRED_GATE_STEP_NAME}", "        run: |", *result_lines)
+        (
+            f"      - name: {REQUIRED_GATE_STEP_NAME}",
+            "        run: |",
+            *result_lines,
+        )
     )
     if step != expected:
         raise ValueError(
