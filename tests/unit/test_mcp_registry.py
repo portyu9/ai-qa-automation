@@ -9,7 +9,7 @@ from ai_qa_automation.integrations.atlassian_mcp import (
     ATLASSIAN_ROVO_MCP_URL,
     atlassian_mcp_config,
 )
-from ai_qa_automation.integrations.github_mcp import github_mcp_config
+from ai_qa_automation.integrations.github_mcp import GITHUB_MCP_IMAGE, github_mcp_config
 from ai_qa_automation.integrations.mcp_registry import build_external_mcp
 from ai_qa_automation.models import MCPStatus
 from ai_qa_automation.policy import PolicyEngine
@@ -64,7 +64,7 @@ def test_github_configuration_is_read_only_and_does_not_claim_availability(
     assert github["type"] == "stdio"
     assert github["command"] == "docker"
     assert "GITHUB_READ_ONLY=1" in github["args"]
-    assert "ghcr.io/github/github-mcp-server:v1.0.5" in github["args"]
+    assert GITHUB_MCP_IMAGE in github["args"]
     assert token not in github["args"]
     assert github["env"]["GITHUB_PERSONAL_ACCESS_TOKEN"] == token
     assert statuses.get("github") is not MCPStatus.AVAILABLE
