@@ -247,7 +247,6 @@ Deep dives: [Architecture](docs/ARCHITECTURE.md) · [Runtime Control](docs/RUNTI
 ---
 
 ## Quick start
-
 ### Local deterministic tooling
 
 Repository verification is intentionally bound to the committed interpreter-specific development lock. For the shortest reproducible path on macOS/Linux, use an exact supported interpreter and the repository-owned installer:
@@ -648,7 +647,7 @@ External MCP is restricted to explicitly approved vendor integrations.
 
 | Integration | Trusted path | Runtime posture |
 |---|---|---|
-| GitHub | `github/github-mcp-server:v1.0.5` | disabled by default; server-side read-only defense in depth |
+| GitHub | `ghcr.io/github/github-mcp-server:v1.0.4@sha256:e3816a476a977cfb836e7d221510011436c654d11861db66ecfd826601aba6a4` | disabled by default; server-side read-only defense in depth |
 | Jira / Confluence | Atlassian Rovo MCP `/v1/mcp/authv2` | disabled by default; action-level policy still applies |
 
 Server identity never grants blanket tool authority. External action names are normalized conservatively so destructive verbs dominate writes, writes dominate reads, and mixed names cannot smuggle higher authority behind a read prefix. Numeric business identifiers are not interpreted as HTTP/provider failure codes unless the surrounding evidence actually identifies them as such.
@@ -747,7 +746,6 @@ See [Evaluation Strategy](docs/EVALUATION.md).
 | `prompt-injection` | instruction-shaped DOM content remains untrusted evidence |
 
 The reference SUT is test data for the control architecture, never part of the trusted control plane.
-
 ---
 
 ## Operating modes
