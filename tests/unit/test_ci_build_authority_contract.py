@@ -275,7 +275,6 @@ def test_ci_contract_rejects_missing_archive_build_authority_evidence_upload(
 ) -> None:
     root = _copy_workflows(tmp_path)
     path = _ci_path(root)
-    text = path.read_text(encoding="utf-8")
     artifact = ci_contract.ARCHIVE_BUILD_AUTHORITY_ARTIFACTS[0]
     text = path.read_text(encoding="utf-8").replace(f"            {artifact}\n", "", 1)
     path.write_text(text, encoding="utf-8")
