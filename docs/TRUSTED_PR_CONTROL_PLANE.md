@@ -46,7 +46,7 @@ Normal trusted validation does not need to mutate or trust new control-plane byt
 
 The trusted dispatch preflight therefore uses an **exact protected-object manifest** rather than silently accepting or blanket-denying protected changes.
 
-The protected roots are fixed in the trusted default-branch workflow. For each protected root, the preflight observes the Git object ID at the trusted base and at the prospective merge subject. Missing paths are represented only by the literal `MISSING` sentinel.
+The protected roots are fixed in the trusted default-branch workflow. For each protected root, the preflight observes the Git object ID at the trusted base and at the prospective merge subject. Missing paths are represented only by the literal `MISSING` sentinel. A Git observation failure is fatal; `MISSING` is emitted only when an exact `git ls-tree` lookup succeeds and returns no object for that protected path.
 
 `client_payload.protected_manifest` must be a bounded JSON array. Every entry must contain exactly:
 
