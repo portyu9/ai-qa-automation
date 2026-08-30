@@ -29,7 +29,7 @@ EXPECTED_AUTOMATIC_PROJECT_INSTALL_COUNT = 5
 EXPECTED_AUTOMATIC_DEPENDENCY_INSTALL_COUNT = 5
 EXPECTED_AUTOMATIC_SUBJECT_CHECKOUT_COUNT = 5
 EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = (
-    "67c61006826f7138dc2a07a213989af0e6a20207"  # pragma: allowlist secret
+    "6a53946e17b5b71f4d755c8dc313c59411267423"  # pragma: allowlist secret
 )
 AUTOMATIC_PROJECT_INSTALL_COMMAND = (
     "          python -m pip install --no-deps --no-build-isolation ."
@@ -645,24 +645,33 @@ def _verify_dispatch_contract(text: str) -> None:
 def _verify_protected_manifest_contract(text: str) -> dict[str, Any]:
     job = _semantic_text(_job_block(text, "supply-chain"))
     required = (
+        "      - name: Validate trusted dispatch subject syntax",
+        '          [[ "$CI_SUBJECT_SHA" =~ $sha_re ]]',
         "          PROTECTED_MANIFEST_JSON: ${{ toJSON(github.event.client_payload.protected_manifest) }}",
-        '          changes_file="$RUNNER_TEMP/aiqa-protected-changes.tsv"',
+        '            oid="$("${git_clean_env[@]}" /usr/bin/git ls-tree --format=\'%(objectname)\' "$revision" -- "$path")"',
+        '          changes_file="$(mktemp "$RUNNER_TEMP/aiqa-protected-changes.XXXXXX")"',
+        '          trap \'rm -f "$changes_file"\' EXIT',
         '          chmod 600 "$changes_file"',
         '                  "protected_manifest does not exactly authorize the observed protected-path object changes"',
         '              if not isinstance(item, dict) or set(item) != {"path", "base_oid", "subject_oid"}:',
         "              if path not in allowed_paths or path in seen:",
         '              if oid != "MISSING" and (not isinstance(oid, str) or sha_re.fullmatch(oid) is None):',
+        "          observed_paths = set()",
         "          if normalized != observed:",
+        "          trap - EXIT",
     )
     if any(fragment not in job for fragment in required):
         raise ValueError(
             "ci.yml: protected change manifest contract differs from reviewed definition"
         )
+    if 'git rev-parse "$revision_path"' in job:
+        raise ValueError("ci.yml: protected path absence must not mask Git observation failure")
     return {
         "mode": "exact-owner-dispatch-object-manifest",
         "default": "empty-manifest-for-no-protected-changes",
         "object_identity": "base-and-subject-git-object-ids",
-        "missing_object": "explicit-MISSING-sentinel",
+        "missing_object": "successful-empty-ls-tree-only",
+        "scratch_authority": "mktemp-owned-with-cleanup-trap",
     }
 
 
