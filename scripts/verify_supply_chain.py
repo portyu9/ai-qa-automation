@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import errno
 import hashlib
 import json
@@ -34,6 +35,10 @@ EXPECTED_ACTION_SHAS = {
 EXPECTED_PRECOMMIT_REVISIONS = {
     "https://github.com/astral-sh/ruff-pre-commit": "7c55798a78262d14b2074abf623d8a992ebb70d4",  # pragma: allowlist secret
 }
+EXPECTED_GITHUB_MCP_IMAGE = (
+    "ghcr.io/github/github-mcp-server:v1.0.4@"
+    "sha256:e3816a476a977cfb836e7d221510011436c654d11861db66ecfd826601aba6a4"
+)
 BUILD_ONLY_RUNTIME_DENY = {
     "hatchling",
     "pathspec",
@@ -51,6 +56,9 @@ EDITABLE_INSTALL_RE = re.compile(
 )
 HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
 BASE_IMAGE_RE = re.compile(r"^python:3\.11\.16-slim@sha256:[0-9a-f]{64}$")
+GITHUB_MCP_IMAGE_RE = re.compile(
+    r"^ghcr\.io/github/github-mcp-server:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}$"
+)
 EXPECTED_DOCKERFILE_BLOB_SHA = (
     "cb343dd763dc17ce3f22179d1e94e1618b3cde38"  # pragma: allowlist secret
 )
@@ -473,6 +481,58 @@ def _verify_precommit(root: Path) -> dict[str, str]:
     return observed
 
 
+def _validate_github_mcp_image_reference(image: str) -> str:
+    if not GITHUB_MCP_IMAGE_RE.fullmatch(image):
+        raise ValueError(
+            "GitHub MCP image must be an immutable ghcr.io/github/github-mcp-server "
+            "semantic-version reference pinned with @sha256:<64 lowercase hex>"
+        )
+    if image != EXPECTED_GITHUB_MCP_IMAGE:
+        raise ValueError(f"unexpected immutable GitHub MCP image: {image}")
+    return image
+
+
+def _verify_github_mcp(root: Path) -> str:
+    config_text = _read_regular_text(root / ".mcp.json", max_bytes=64 * 1024)
+    try:
+        config = json.loads(config_text)
+        args = config["mcpServers"]["github"]["args"]
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise ValueError(".mcp.json must define the reviewed GitHub MCP stdio configuration") from exc
+    if not isinstance(args, list) or not all(isinstance(item, str) for item in args):
+        raise ValueError("GitHub MCP docker args must be a string list")
+    config_refs = [
+        item for item in args if item.startswith("ghcr.io/github/github-mcp-server")
+    ]
+    if len(config_refs) != 1:
+        raise ValueError(".mcp.json must contain exactly one GitHub MCP image reference")
+    config_image = _validate_github_mcp_image_reference(config_refs[0])
+    if args[-1] != config_image:
+        raise ValueError("GitHub MCP image must be the terminal docker run argument")
+
+    runtime_source = _read_regular_text(
+        root / "src" / "ai_qa_automation" / "integrations" / "github_mcp.py",
+        max_bytes=64 * 1024,
+    )
+    try:
+        tree = ast.parse(runtime_source, filename="src/ai_qa_automation/integrations/github_mcp.py")
+    except SyntaxError as exc:
+        raise ValueError("GitHub MCP runtime configuration source is not valid Python") from exc
+    runtime_refs = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and node.value.startswith("ghcr.io/github/github-mcp-server")
+    ]
+    if len(runtime_refs) != 1:
+        raise ValueError("runtime GitHub MCP configuration must contain exactly one image authority")
+    runtime_image = _validate_github_mcp_image_reference(runtime_refs[0])
+    if runtime_image != config_image:
+        raise ValueError("runtime and .mcp.json GitHub MCP image authorities differ")
+    return runtime_image
+
+
 def verify_repository(root: Path) -> dict[str, Any]:
     root = root.resolve()
     pyproject_path = root / "pyproject.toml"
@@ -481,6 +541,7 @@ def verify_repository(root: Path) -> dict[str, Any]:
     base_image = _verify_docker(root, base_image_lock)
     actions = _verify_workflow(root)
     precommit = _verify_precommit(root)
+    github_mcp_image = _verify_github_mcp(root)
     return {
         "schema_version": 1,
         "result": "PASS",
@@ -490,6 +551,7 @@ def verify_repository(root: Path) -> dict[str, Any]:
         "dockerfile_authority": "exact-reviewed-git-blob",
         "actions": actions,
         "precommit": precommit,
+        "github_mcp_image": github_mcp_image,
         "limitations": [
             "Package hashes bind accepted bytes but do not make the public package index continuously available.",
             "ubuntu-24.04 names a stable runner family, not an immutable GitHub-hosted runner image revision.",
