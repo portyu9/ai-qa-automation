@@ -66,7 +66,6 @@ def _verify_frozen_base() -> None:
 
 
 def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
-    name = "trusted-pr-auto.yml"
     semantic = _base._semantic_text(text)
     if _base._git_blob_sha1(text) != EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA:
         raise ValueError(
