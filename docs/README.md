@@ -44,9 +44,9 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 6. [`PERSISTENCE_RESOURCE_BOUNDARY.md`](PERSISTENCE_RESOURCE_BOUNDARY.md) — bounded canonical-state/evidence serialization before materialization and durable replacement
 7. [`API_OBSERVATION_BOUNDARY.md`](API_OBSERVATION_BOUNDARY.md) — raw-byte HTTP observation, compression/header/body bounds, complete-body JSON promotion, and explicit decoding truth
 8. [`BROWSER_VALIDATION.md`](BROWSER_VALIDATION.md) — exact-subject browser gates, evidence semantics, and URL confidentiality boundary
-9. [`SUPPLY_CHAIN.md`](SUPPLY_CHAIN.md) — dependency, build, Action, SBOM, and reproducibility trust boundaries
-10. [`CI_CD.md`](CI_CD.md) — trusted-dispatch workflow authority, exact-subject gates, manual-validation boundary, repository-setting authority
-11. [`TRUSTED_PR_CONTROL_PLANE.md`](TRUSTED_PR_CONTROL_PLANE.md) — activated externally policy-gated trusted PR merge authority and its evidence boundaries
+9. [`SUPPLY_CHAIN.md`](SUPPLY_CHAIN.md) — dependency, build, Action, SBOM, reproducibility, protected-root manifest, and trusted-status identity boundaries
+10. [`CI_CD.md`](CI_CD.md) — automatic PR evidence, trusted-dispatch exact-subject validation, dedicated App merge identity, and repository-setting authority
+11. [`TRUSTED_PR_CONTROL_PLANE.md`](TRUSTED_PR_CONTROL_PLANE.md) — independent trusted-status publisher design, external App/Environment/ruleset activation requirements, and historical control-plane evidence
 12. [`MCP.md`](MCP.md) — provider identity, action authorization, untrusted remote content
 13. [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md) — evidence ownership across trust domains
 14. [`WORKSPACE_FRESHNESS_BOUNDARY.md`](WORKSPACE_FRESHNESS_BOUNDARY.md) — local target-subject freshness, mutation ownership, and terminal-success binding
@@ -67,9 +67,9 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
 1. [`SETUP.md`](SETUP.md) — installation, configuration, credentials, trust roots
 2. [`BROWSER_VALIDATION.md`](BROWSER_VALIDATION.md) — browser gate identity, URL sanitation, and evidence non-claims
-3. [`PYTEST_EXECUTION_ISOLATION.md`](PYTEST_EXECUTION_ISOLATION.md) — deployment containment required before live target pytest execution
+3. [`PYTEST_EXECUTION_ISOLATION.md`](PYTEST_EXECUTION_ISOLATION.md) — deployment containment required before live target-controlled pytest code may execute
 4. [`OPERATIONS.md`](OPERATIONS.md) — operating ladder and artifact handling
-5. [`CI_CD.md`](CI_CD.md) — trusted PR validation, manual-validation boundary, and repository-governance authority
+5. [`CI_CD.md`](CI_CD.md) — automatic PR feedback, protected trusted dispatch, independent status identity, and repository-governance authority
 6. [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) — diagnose without weakening controls
 7. [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md) — recovery and mutation mechanics
 8. [`MCP.md`](MCP.md) — optional GitHub/Atlassian integration policy
@@ -92,9 +92,9 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 | [`PERSISTENCE_RESOURCE_BOUNDARY.md`](PERSISTENCE_RESOURCE_BOUNDARY.md) | How are canonical state and evidence manifests bounded before complete serialization/materialization and durable replacement? |
 | [`API_OBSERVATION_BOUNDARY.md`](API_OBSERVATION_BOUNDARY.md) | How are HTTP response bytes, headers, truncation, decoding, and strict JSON promotion bounded before becoming structured evidence? |
 | [`BROWSER_VALIDATION.md`](BROWSER_VALIDATION.md) | How are browser operations bound to exact subjects without confusing evidence collection with page correctness? |
-| [`SUPPLY_CHAIN.md`](SUPPLY_CHAIN.md) | How are dependency, build, Action, container-base, SBOM, and reproducibility inputs bound and evidenced? |
-| [`CI_CD.md`](CI_CD.md) | How are trusted dispatch validation, manual credentialed-validation boundaries, exact-subject binding, and repository-setting authority separated? |
-| [`TRUSTED_PR_CONTROL_PLANE.md`](TRUSTED_PR_CONTROL_PLANE.md) | How is protected PR merge authority bound to trusted-main workflow execution, live merge-ref verification, and external Actions Policy? |
+| [`SUPPLY_CHAIN.md`](SUPPLY_CHAIN.md) | How are dependency, build, Action, container-base, SBOM, reproducibility, protected-root, and trusted-status identity inputs bound and evidenced? |
+| [`CI_CD.md`](CI_CD.md) | How are automatic PR evidence, owner trusted-dispatch validation, dedicated App status authority, manual validation, and external repository settings separated? |
+| [`TRUSTED_PR_CONTROL_PLANE.md`](TRUSTED_PR_CONTROL_PLANE.md) | How is protected PR merge authority separated from candidate GitHub Actions workflows and bound to a main-only dedicated App reporter plus exact live merge-ref validation? |
 | [`CHANGE_INTELLIGENCE.md`](CHANGE_INTELLIGENCE.md) | How are committed changes, risk, ownership, test impact, and API drift analyzed? |
 | [`CONTRACT_DRIFT_BOUNDARY.md`](CONTRACT_DRIFT_BOUNDARY.md) | How are OpenAPI/Swagger bytes, JSON/YAML semantics, parser resources, and incomplete comparison bounded before compatibility evidence is emitted? |
 | [`EVALUATION.md`](EVALUATION.md) | How is the agent evaluated as software rather than prose? |
@@ -123,6 +123,7 @@ Minimal subprocess env  ≠ process/network sandbox
 Content hash            ≠ identity/signature
 Hash-locked package     ≠ publisher trust/availability
 Reproducible wheel      ≠ signed provenance
+Automatic PR green      ≠ protected merge authority
 Model success           ≠ deterministic SUCCESS
 ```
 
@@ -139,6 +140,7 @@ Every document is subordinate to the same rules:
 9. **Deployment controls are not simulated by application flags.**
 10. **A stronger model never replaces a missing deterministic control.**
 11. **Evidence collection cannot substitute for a deterministic acceptance condition.**
+12. **A candidate workflow cannot become merge authority merely by producing a same-named status; protected status identity is independently owned.**
 
 ## Terminology
 
