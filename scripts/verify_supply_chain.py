@@ -498,12 +498,12 @@ def _verify_github_mcp(root: Path) -> str:
         config = json.loads(config_text)
         args = config["mcpServers"]["github"]["args"]
     except (json.JSONDecodeError, KeyError, TypeError) as exc:
-        raise ValueError(".mcp.json must define the reviewed GitHub MCP stdio configuration") from exc
+        raise ValueError(
+            ".mcp.json must define the reviewed GitHub MCP stdio configuration"
+        ) from exc
     if not isinstance(args, list) or not all(isinstance(item, str) for item in args):
         raise ValueError("GitHub MCP docker args must be a string list")
-    config_refs = [
-        item for item in args if item.startswith("ghcr.io/github/github-mcp-server")
-    ]
+    config_refs = [item for item in args if item.startswith("ghcr.io/github/github-mcp-server")]
     if len(config_refs) != 1:
         raise ValueError(".mcp.json must contain exactly one GitHub MCP image reference")
     config_image = _validate_github_mcp_image_reference(config_refs[0])
@@ -526,7 +526,9 @@ def _verify_github_mcp(root: Path) -> str:
         and node.value.startswith("ghcr.io/github/github-mcp-server")
     ]
     if len(runtime_refs) != 1:
-        raise ValueError("runtime GitHub MCP configuration must contain exactly one image authority")
+        raise ValueError(
+            "runtime GitHub MCP configuration must contain exactly one image authority"
+        )
     runtime_image = _validate_github_mcp_image_reference(runtime_refs[0])
     if runtime_image != config_image:
         raise ValueError("runtime and .mcp.json GitHub MCP image authorities differ")
