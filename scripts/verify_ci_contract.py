@@ -650,7 +650,7 @@ def _verify_protected_manifest_contract(text: str) -> dict[str, Any]:
         "          PROTECTED_MANIFEST_JSON: ${{ toJSON(github.event.client_payload.protected_manifest) }}",
         '            oid="$("${git_clean_env[@]}" /usr/bin/git ls-tree --format=\'%(objectname)\' "$revision" -- "$path")"',
         '          changes_file="$(mktemp "$RUNNER_TEMP/aiqa-protected-changes.XXXXXX")"',
-        '          trap \'rm -f "$changes_file"\' EXIT',
+        "          trap 'rm -f \"$changes_file\"' EXIT",
         '          chmod 600 "$changes_file"',
         '                  "protected_manifest does not exactly authorize the observed protected-path object changes"',
         '              if not isinstance(item, dict) or set(item) != {"path", "base_oid", "subject_oid"}:',
