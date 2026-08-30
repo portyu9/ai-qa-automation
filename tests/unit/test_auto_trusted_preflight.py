@@ -62,7 +62,10 @@ def _responses(*, changed_path: str | None = None) -> dict[str, Any]:
             "sha": HEAD,
             "repo": {"full_name": preflight.EXPECTED_REPOSITORY},
         },
-        "base": {"ref": preflight.EXPECTED_DEFAULT_BRANCH},
+        "base": {
+            "ref": preflight.EXPECTED_DEFAULT_BRANCH,
+            "repo": {"full_name": preflight.EXPECTED_REPOSITORY},
+        },
     }
     pr = {
         **candidate,
@@ -70,21 +73,30 @@ def _responses(*, changed_path: str | None = None) -> dict[str, Any]:
         "base": {
             "ref": preflight.EXPECTED_DEFAULT_BRANCH,
             "sha": BASE,
+            "repo": {"full_name": preflight.EXPECTED_REPOSITORY},
         },
     }
     return {
         f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/{run_id}": live_run,
-        f"/repos/{preflight.EXPECTED_REPOSITORY}/commits/{HEAD}/pulls?per_page=10": [candidate],
-        f"/repos/{preflight.EXPECTED_REPOSITORY}/git/ref/heads/main": {"object": {"sha": BASE}},
+        f"/repos/{preflight.EXPECTED_REPOSITORY}/commits/{HEAD}/pulls?per_page={preflight.MAX_PULL_REQUEST_CANDIDATES}": [candidate],
+        f"/repos/{preflight.EXPECTED_REPOSITORY}/git/ref/heads/main": {
+            "ref": "refs/heads/main",
+            "object": {"sha": BASE, "type": "commit"},
+        },
         f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/{pr_number}": pr,
         f"/repos/{preflight.EXPECTED_REPOSITORY}/git/ref/pull/{pr_number}/merge": {
-            "object": {"sha": MERGE}
+            "ref": f"refs/pull/{pr_number}/merge",
+            "object": {"sha": MERGE, "type": "commit"},
         },
         f"/repos/{preflight.EXPECTED_REPOSITORY}/git/commits/{MERGE}": {
+            "sha": MERGE,
             "parents": [{"sha": BASE}, {"sha": HEAD}],
             "tree": {"sha": MERGE_TREE},
         },
-        f"/repos/{preflight.EXPECTED_REPOSITORY}/git/commits/{BASE}": {"tree": {"sha": BASE_TREE}},
+        f"/repos/{preflight.EXPECTED_REPOSITORY}/git/commits/{BASE}": {
+            "sha": BASE,
+            "tree": {"sha": BASE_TREE},
+        },
         f"/repos/{preflight.EXPECTED_REPOSITORY}/git/trees/{BASE_TREE}?recursive=1": {
             "truncated": False,
             "tree": _tree(),
@@ -98,6 +110,13 @@ def _responses(*, changed_path: str | None = None) -> dict[str, Any]:
 
 def _event() -> dict[str, Any]:
     return {"action": "completed", "workflow_run": {"id": 42, "head_sha": HEAD}}
+
+
+def _pulls_path() -> str:
+    return (
+        f"/repos/{preflight.EXPECTED_REPOSITORY}/commits/{HEAD}/pulls"
+        f"?per_page={preflight.MAX_PULL_REQUEST_CANDIDATES}"
+    )
 
 
 def test_exact_live_subject_without_protected_changes_is_auto_eligible() -> None:
@@ -140,11 +159,19 @@ def test_fork_head_is_rejected_before_pr_admission() -> None:
 
 def test_ambiguous_pull_request_resolution_fails_closed() -> None:
     responses = _responses()
-    path = f"/repos/{preflight.EXPECTED_REPOSITORY}/commits/{HEAD}/pulls?per_page=10"
-    responses[path].append(deepcopy(responses[path][0]))
-    responses[path][1]["number"] = 66
+    responses[_pulls_path()].append(deepcopy(responses[_pulls_path()][0]))
+    responses[_pulls_path()][1]["number"] = 66
 
     with pytest.raises(ValueError, match="exactly one"):
+        preflight.evaluate_admission(FakeAPI(responses), event=_event())
+
+
+def test_saturated_pull_request_page_fails_closed() -> None:
+    responses = _responses()
+    candidate = responses[_pulls_path()][0]
+    responses[_pulls_path()] = [deepcopy(candidate) for _ in range(preflight.MAX_PULL_REQUEST_CANDIDATES)]
+
+    with pytest.raises(ValueError, match="pagination limit"):
         preflight.evaluate_admission(FakeAPI(responses), event=_event())
 
 
@@ -155,6 +182,16 @@ def test_stale_base_relative_to_current_main_fails_closed() -> None:
     )
 
     with pytest.raises(ValueError, match="stale relative to current main"):
+        preflight.evaluate_admission(FakeAPI(responses), event=_event())
+
+
+def test_wrong_base_repository_fails_closed() -> None:
+    responses = _responses()
+    responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]["base"]["repo"]["full_name"] = (
+        "attacker/other"
+    )
+
+    with pytest.raises(ValueError, match="expected repository main branch"):
         preflight.evaluate_admission(FakeAPI(responses), event=_event())
 
 
@@ -176,6 +213,60 @@ def test_wrong_workflow_identity_or_result_fails_closed(
     responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"][field] = value
 
     with pytest.raises(ValueError, match=message):
+        preflight.evaluate_admission(FakeAPI(responses), event=_event())
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("ref", "refs/heads/release", "identify exactly"),
+        ("type", "tag", "point to a commit"),
+    ],
+)
+def test_main_ref_identity_and_type_fail_closed(field: str, value: str, message: str) -> None:
+    responses = _responses()
+    main_ref = responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/git/ref/heads/main"]
+    if field == "ref":
+        main_ref["ref"] = value
+    else:
+        main_ref["object"][field] = value
+
+    with pytest.raises(ValueError, match=message):
+        preflight.evaluate_admission(FakeAPI(responses), event=_event())
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("ref", "refs/pull/65/head", "identify exactly"),
+        ("type", "tag", "point to a commit"),
+    ],
+)
+def test_merge_ref_identity_and_type_fail_closed(field: str, value: str, message: str) -> None:
+    responses = _responses()
+    merge_ref = responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/git/ref/pull/65/merge"]
+    if field == "ref":
+        merge_ref["ref"] = value
+    else:
+        merge_ref["object"][field] = value
+
+    with pytest.raises(ValueError, match=message):
+        preflight.evaluate_admission(FakeAPI(responses), event=_event())
+
+
+def test_merge_commit_identity_mismatch_fails_closed() -> None:
+    responses = _responses()
+    responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/git/commits/{MERGE}"]["sha"] = "8" * 40
+
+    with pytest.raises(ValueError, match="identity drifted"):
+        preflight.evaluate_admission(FakeAPI(responses), event=_event())
+
+
+def test_base_commit_identity_mismatch_fails_closed() -> None:
+    responses = _responses()
+    responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/git/commits/{BASE}"]["sha"] = "8" * 40
+
+    with pytest.raises(ValueError, match="identity drifted"):
         preflight.evaluate_admission(FakeAPI(responses), event=_event())
 
 

@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import re
+import stat
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -19,6 +20,7 @@ EXPECTED_WORKFLOW_NAME = "CI — ƳƤ AI QA Automation Framework"
 EXPECTED_WORKFLOW_PATH = ".github/workflows/ci.yml"
 MAX_EVENT_BYTES = 2 * 1024 * 1024
 MAX_API_BYTES = 8 * 1024 * 1024
+MAX_PULL_REQUEST_CANDIDATES = 100
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 PROTECTED_PATHS = (
     ".github",
@@ -68,8 +70,8 @@ class GitHubAPI:
         self._repository = repository
 
     def get(self, path: str) -> Any:
-        if not path.startswith("/"):
-            raise ValueError("GitHub API path must be absolute")
+        if not path.startswith("/") or ".." in path:
+            raise ValueError("GitHub API path must be an absolute fixed-repository path")
         url = f"{self._api_url}{path}"
         request = urllib.request.Request(
             url,
@@ -131,14 +133,45 @@ def _require_positive_int(value: Any, *, label: str) -> int:
 
 
 def _read_json_file(path: Path, *, max_bytes: int, label: str) -> Any:
-    if path.is_symlink():
-        raise ValueError(f"{label} must not be a symlink")
-    stat_result = path.stat()
-    if not path.is_file() or stat_result.st_size > max_bytes:
-        raise ValueError(f"{label} is not a bounded regular file")
-    payload = path.read_bytes()
-    if len(payload) > max_bytes:
-        raise ValueError(f"{label} exceeds bounded ingestion limit")
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if not nofollow:
+        raise RuntimeError("trusted admission requires no-follow event-file ingestion")
+    flags = os.O_RDONLY | nofollow | getattr(os, "O_BINARY", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError(f"{label} cannot be opened as an owned regular file") from exc
+    try:
+        initial = os.fstat(fd)
+        if not stat.S_ISREG(initial.st_mode) or initial.st_size > max_bytes:
+            raise ValueError(f"{label} is not a bounded regular file")
+        payload = bytearray()
+        while len(payload) <= max_bytes:
+            chunk = os.read(fd, min(1024 * 1024, max_bytes + 1 - len(payload)))
+            if not chunk:
+                break
+            payload.extend(chunk)
+        if len(payload) > max_bytes:
+            raise ValueError(f"{label} exceeds bounded ingestion limit")
+        final = os.fstat(fd)
+        initial_signature = (
+            initial.st_dev,
+            initial.st_ino,
+            initial.st_size,
+            initial.st_mtime_ns,
+            initial.st_ctime_ns,
+        )
+        final_signature = (
+            final.st_dev,
+            final.st_ino,
+            final.st_size,
+            final.st_mtime_ns,
+            final.st_ctime_ns,
+        )
+        if final_signature != initial_signature:
+            raise ValueError(f"{label} changed during ingestion")
+    finally:
+        os.close(fd)
     try:
         return json.loads(payload)
     except json.JSONDecodeError as exc:
@@ -171,17 +204,21 @@ def _validate_live_run(run: dict[str, Any], *, expected_run_id: int) -> str:
 
 def _select_pull_request(candidates: Any, *, head_sha: str) -> int:
     rows = _require_list(candidates, label="commit pull requests")
+    if len(rows) >= MAX_PULL_REQUEST_CANDIDATES:
+        raise ValueError("commit pull-request resolution reached the bounded pagination limit")
     matching: list[int] = []
     for raw in rows:
         row = _require_dict(raw, label="pull request candidate")
         head = _require_dict(row.get("head"), label="pull request candidate head")
         base = _require_dict(row.get("base"), label="pull request candidate base")
         head_repo = _require_dict(head.get("repo"), label="pull request candidate head repository")
+        base_repo = _require_dict(base.get("repo"), label="pull request candidate base repository")
         if (
             row.get("state") == "open"
             and head.get("sha") == head_sha
             and head_repo.get("full_name") == EXPECTED_REPOSITORY
             and base.get("ref") == EXPECTED_DEFAULT_BRANCH
+            and base_repo.get("full_name") == EXPECTED_REPOSITORY
         ):
             matching.append(_require_positive_int(row.get("number"), label="pull request number"))
     if len(matching) != 1:
@@ -205,14 +242,33 @@ def _validate_pull_request(
     head = _require_dict(pr.get("head"), label="live pull request head")
     base = _require_dict(pr.get("base"), label="live pull request base")
     head_repo = _require_dict(head.get("repo"), label="live pull request head repository")
+    base_repo = _require_dict(base.get("repo"), label="live pull request base repository")
     if head.get("sha") != head_sha or head_repo.get("full_name") != EXPECTED_REPOSITORY:
         raise ValueError("live pull request head identity drifted")
-    if base.get("ref") != EXPECTED_DEFAULT_BRANCH:
-        raise ValueError("live pull request no longer targets main")
+    if base.get("ref") != EXPECTED_DEFAULT_BRANCH or base_repo.get("full_name") != EXPECTED_REPOSITORY:
+        raise ValueError("live pull request no longer targets the expected repository main branch")
     base_sha = _require_sha(base.get("sha"), label="live pull request base SHA")
     if base_sha != current_main_sha:
         raise ValueError("pull request base is stale relative to current main")
     return base_sha
+
+
+def _ref_commit_sha(payload: Any, *, expected_ref: str, label: str) -> str:
+    ref = _require_dict(payload, label=label)
+    if ref.get("ref") != expected_ref:
+        raise ValueError(f"{label} must identify exactly {expected_ref}")
+    obj = _require_dict(ref.get("object"), label=f"{label} object")
+    if obj.get("type") != "commit":
+        raise ValueError(f"{label} must point to a commit")
+    return _require_sha(obj.get("sha"), label=f"{label} SHA")
+
+
+def _validate_git_commit(payload: Any, *, expected_sha: str, label: str) -> dict[str, Any]:
+    commit = _require_dict(payload, label=label)
+    observed_sha = _require_sha(commit.get("sha"), label=f"{label} SHA")
+    if observed_sha != expected_sha:
+        raise ValueError(f"{label} identity drifted")
+    return commit
 
 
 def _tree_index(payload: Any, *, label: str) -> dict[str, str]:
@@ -256,17 +312,19 @@ def evaluate_admission(api: GitHubAPI, *, event: dict[str, Any]) -> Admission:
     if event_run.get("head_sha") != head_sha:
         raise ValueError("workflow_run event head SHA differs from live run")
 
-    pulls = api.get(f"/repos/{EXPECTED_REPOSITORY}/commits/{head_sha}/pulls?per_page=10")
+    pulls = api.get(
+        f"/repos/{EXPECTED_REPOSITORY}/commits/{head_sha}/pulls?per_page={MAX_PULL_REQUEST_CANDIDATES}"
+    )
     pr_number = _select_pull_request(pulls, head_sha=head_sha)
 
-    main_ref = _require_dict(
+    expected_main_ref = f"refs/heads/{EXPECTED_DEFAULT_BRANCH}"
+    trusted_sha = _ref_commit_sha(
         api.get(
             f"/repos/{EXPECTED_REPOSITORY}/git/ref/heads/{quote(EXPECTED_DEFAULT_BRANCH, safe='')}"
         ),
+        expected_ref=expected_main_ref,
         label="main ref",
     )
-    main_object = _require_dict(main_ref.get("object"), label="main ref object")
-    trusted_sha = _require_sha(main_object.get("sha"), label="current main SHA")
 
     pr = _require_dict(
         api.get(f"/repos/{EXPECTED_REPOSITORY}/pulls/{pr_number}"),
@@ -279,14 +337,15 @@ def evaluate_admission(api: GitHubAPI, *, event: dict[str, Any]) -> Admission:
         current_main_sha=trusted_sha,
     )
 
-    merge_ref = _require_dict(
+    expected_merge_ref = f"refs/pull/{pr_number}/merge"
+    merge_sha = _ref_commit_sha(
         api.get(f"/repos/{EXPECTED_REPOSITORY}/git/ref/pull/{pr_number}/merge"),
+        expected_ref=expected_merge_ref,
         label="pull request merge ref",
     )
-    merge_object = _require_dict(merge_ref.get("object"), label="merge ref object")
-    merge_sha = _require_sha(merge_object.get("sha"), label="prospective merge SHA")
-    merge_commit = _require_dict(
+    merge_commit = _validate_git_commit(
         api.get(f"/repos/{EXPECTED_REPOSITORY}/git/commits/{merge_sha}"),
+        expected_sha=merge_sha,
         label="prospective merge commit",
     )
     parents = _require_list(merge_commit.get("parents"), label="prospective merge parents")
@@ -299,8 +358,9 @@ def evaluate_admission(api: GitHubAPI, *, event: dict[str, Any]) -> Admission:
     if parent_shas != [base_sha, head_sha]:
         raise ValueError("prospective merge parent order does not match exact base/head")
 
-    base_commit = _require_dict(
+    base_commit = _validate_git_commit(
         api.get(f"/repos/{EXPECTED_REPOSITORY}/git/commits/{base_sha}"),
+        expected_sha=base_sha,
         label="base commit",
     )
     base_tree_ref = _require_dict(base_commit.get("tree"), label="base commit tree")
