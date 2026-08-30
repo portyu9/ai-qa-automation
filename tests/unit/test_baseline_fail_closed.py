@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +48,7 @@ async def test_unresolvable_configured_baseline_blocks_before_provider(
     )
 
     run_dir = artifact_root / report["run_id"]
-    journal = (run_dir / "journal.jsonl").read_text(encoding="utf-8")
-    assert '"event":"runtime_bootstrap_baseline_denied"' in journal
-    assert '"event":"agent_run_started"' not in journal
+    journal_lines = (run_dir / "journal.jsonl").read_text(encoding="utf-8").splitlines()
+    events = [json.loads(line)["event"] for line in journal_lines]
+    assert "runtime_bootstrap_baseline_denied" in events
+    assert "agent_run_started" not in events
