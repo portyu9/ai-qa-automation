@@ -1,21 +1,30 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
+import sys
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
-from scripts.trusted_pr_control import (
-    EXPECTED_WORKFLOW_REF,
-    GitHubApi,
-    PullRequestSubject,
-    TRUSTED_STATUS_CONTEXT,
-    _require_positive_int,
-    _require_sha,
-    parse_job_results,
-    resolve_current_subject,
-)
+_CONTROL_PATH = Path(__file__).with_name("trusted_pr_control.py")
+_CONTROL_SPEC = importlib.util.spec_from_file_location("aiqa_trusted_pr_control", _CONTROL_PATH)
+if _CONTROL_SPEC is None or _CONTROL_SPEC.loader is None:
+    raise RuntimeError("unable to load trusted PR control module")
+_control = importlib.util.module_from_spec(_CONTROL_SPEC)
+sys.modules[_CONTROL_SPEC.name] = _control
+_CONTROL_SPEC.loader.exec_module(_control)
+
+EXPECTED_WORKFLOW_REF = _control.EXPECTED_WORKFLOW_REF
+GitHubApi = _control.GitHubApi
+PullRequestSubject = _control.PullRequestSubject
+TRUSTED_STATUS_CONTEXT = _control.TRUSTED_STATUS_CONTEXT
+_require_positive_int = _control._require_positive_int
+_require_sha = _control._require_sha
+parse_job_results = _control.parse_job_results
+resolve_current_subject = _control.resolve_current_subject
 
 EXPECTED_WORKFLOW_EVENT = "workflow_run"
 
