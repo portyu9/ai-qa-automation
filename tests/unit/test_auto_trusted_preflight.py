@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -78,7 +80,10 @@ def _responses(*, changed_path: str | None = None) -> dict[str, Any]:
     }
     return {
         f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/{run_id}": live_run,
-        f"/repos/{preflight.EXPECTED_REPOSITORY}/commits/{HEAD}/pulls?per_page={preflight.MAX_PULL_REQUEST_CANDIDATES}": [candidate],
+        (
+            f"/repos/{preflight.EXPECTED_REPOSITORY}/commits/{HEAD}/pulls"
+            f"?per_page={preflight.MAX_PULL_REQUEST_CANDIDATES}"
+        ): [candidate],
         f"/repos/{preflight.EXPECTED_REPOSITORY}/git/ref/heads/main": {
             "ref": "refs/heads/main",
             "object": {"sha": BASE, "type": "commit"},
@@ -131,16 +136,17 @@ def test_exact_live_subject_without_protected_changes_is_auto_eligible() -> None
     assert admission.protected_changes == ()
 
 
-def test_protected_change_is_observed_but_not_auto_authorized() -> None:
+@pytest.mark.parametrize("changed_path", ["tests", ".gitattributes"])
+def test_protected_change_is_observed_but_not_auto_authorized(changed_path: str) -> None:
     admission = preflight.evaluate_admission(
-        FakeAPI(_responses(changed_path="tests")),
+        FakeAPI(_responses(changed_path=changed_path)),
         event=_event(),
     )
 
     assert admission.eligible is False
     assert admission.protected_changes == (
         {
-            "path": "tests",
+            "path": changed_path,
             "base_oid": UNCHANGED,
             "subject_oid": "7" * 40,
         },
@@ -169,7 +175,9 @@ def test_ambiguous_pull_request_resolution_fails_closed() -> None:
 def test_saturated_pull_request_page_fails_closed() -> None:
     responses = _responses()
     candidate = responses[_pulls_path()][0]
-    responses[_pulls_path()] = [deepcopy(candidate) for _ in range(preflight.MAX_PULL_REQUEST_CANDIDATES)]
+    responses[_pulls_path()] = [
+        deepcopy(candidate) for _ in range(preflight.MAX_PULL_REQUEST_CANDIDATES)
+    ]
 
     with pytest.raises(ValueError, match="pagination limit"):
         preflight.evaluate_admission(FakeAPI(responses), event=_event())
@@ -289,3 +297,24 @@ def test_merge_parent_order_must_bind_base_then_head() -> None:
 
     with pytest.raises(ValueError, match="parent order"):
         preflight.evaluate_admission(FakeAPI(responses), event=_event())
+
+
+def test_event_file_ingestion_rejects_symlink(tmp_path: Path) -> None:
+    source = tmp_path / "event-source.json"
+    source.write_text(json.dumps(_event()), encoding="utf-8")
+    link = tmp_path / "event.json"
+    link.symlink_to(source)
+
+    with pytest.raises(ValueError, match="cannot be opened"):
+        preflight._read_json_file(link, max_bytes=preflight.MAX_EVENT_BYTES, label="workflow event")
+
+
+def test_api_path_rejects_traversal_before_network() -> None:
+    api = preflight.GitHubAPI(
+        api_url="https://api.github.com",
+        token="token",
+        repository=preflight.EXPECTED_REPOSITORY,
+    )
+
+    with pytest.raises(ValueError, match="fixed-repository path"):
+        api.get("/repos/portyu9/ai-qa-automation/../other")

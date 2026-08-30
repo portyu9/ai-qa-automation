@@ -26,6 +26,7 @@ PROTECTED_PATHS = (
     ".github",
     ".claude",
     ".dockerignore",
+    ".gitattributes",
     ".mcp.json",
     ".pre-commit-config.yaml",
     "CLAUDE.md",
@@ -245,7 +246,10 @@ def _validate_pull_request(
     base_repo = _require_dict(base.get("repo"), label="live pull request base repository")
     if head.get("sha") != head_sha or head_repo.get("full_name") != EXPECTED_REPOSITORY:
         raise ValueError("live pull request head identity drifted")
-    if base.get("ref") != EXPECTED_DEFAULT_BRANCH or base_repo.get("full_name") != EXPECTED_REPOSITORY:
+    if (
+        base.get("ref") != EXPECTED_DEFAULT_BRANCH
+        or base_repo.get("full_name") != EXPECTED_REPOSITORY
+    ):
         raise ValueError("live pull request no longer targets the expected repository main branch")
     base_sha = _require_sha(base.get("sha"), label="live pull request base SHA")
     if base_sha != current_main_sha:
@@ -313,7 +317,8 @@ def evaluate_admission(api: GitHubAPI, *, event: dict[str, Any]) -> Admission:
         raise ValueError("workflow_run event head SHA differs from live run")
 
     pulls = api.get(
-        f"/repos/{EXPECTED_REPOSITORY}/commits/{head_sha}/pulls?per_page={MAX_PULL_REQUEST_CANDIDATES}"
+        f"/repos/{EXPECTED_REPOSITORY}/commits/{head_sha}/pulls"
+        f"?per_page={MAX_PULL_REQUEST_CANDIDATES}"
     )
     pr_number = _select_pull_request(pulls, head_sha=head_sha)
 
