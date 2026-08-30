@@ -11,7 +11,10 @@ from ai_qa_automation.evidence import EvidenceStore
 from ai_qa_automation.fs_authority import pin_directory_identity
 from ai_qa_automation.models import AgentRunState, ValidationStatus
 from ai_qa_automation.policy import PolicyEngine
-from ai_qa_automation.runtime.internal_tools import RuntimeServices, build_internal_mcp_server
+from ai_qa_automation.runtime.internal_tools import (
+    RuntimeServices,
+    build_internal_mcp_server,
+)
 
 
 EXPECTED_TOOL_NAMES = [
