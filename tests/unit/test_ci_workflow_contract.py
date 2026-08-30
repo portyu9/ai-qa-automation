@@ -33,9 +33,15 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     assert automatic["sbom_lineage"] == "parent-digest-bound-and-bracketed"
     assert automatic["supply_chain_evidence"] == "pinned-upload-action"
     assert automatic["subject"] == "github.sha-or-owner-default-branch-dispatch-exact-merge-sha"
-    assert automatic["reporter_identity"] == "ephemeral-github-actions-run"
+    assert automatic["reporter_identity"] == "dedicated-github-app-installation-token"
     assert automatic["trusted_status"]["authorization"] == (
-        "owner-default-branch-repository-dispatch-only"
+        "owner-default-branch-repository-dispatch-plus-main-only-environment"
+    )
+    assert automatic["trusted_status"]["write_authority"] == (
+        "dedicated-github-app:statuses-write"
+    )
+    assert automatic["protected_manifest"]["mode"] == (
+        "exact-owner-dispatch-object-manifest"
     )
     assert result["workflows"]["manual"]["credentialed_model"] == "manual-only"
 
@@ -145,18 +151,61 @@ def test_ci_contract_rejects_secret_in_validation_workflow(tmp_path: Path) -> No
         ci_contract.verify_ci_contract(root)
 
 
-def test_ci_contract_rejects_second_reporter_token_consumer(tmp_path: Path) -> None:
+def test_ci_contract_rejects_second_trusted_app_private_key_consumer(tmp_path: Path) -> None:
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "ci.yml"
     text = path.read_text(encoding="utf-8")
-    marker = "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n"
+    marker = "          TRUSTED_GATE_APP_PRIVATE_KEY: ${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}\n"
     assert text.count(marker) == 1
     path.write_text(
-        text.replace(marker, marker + "          SECOND_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n", 1),
+        text.replace(
+            marker,
+            marker + "          SECOND_PRIVATE_KEY: ${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}\n",
+            1,
+        ),
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="sole GITHUB_TOKEN secret consumer"):
+    with pytest.raises(ValueError, match="private key must be scoped to exactly one reporter step"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_rejects_native_status_write_in_trusted_reporter(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "ci.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = "    permissions:\n      contents: read\n"
+    assert marker in ci_contract._job_block(text, "trusted-status")
+    path.write_text(
+        text.replace(marker, marker + "      statuses: write\n", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="must not own trusted status write authority"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_rejects_missing_trusted_gate_environment(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "ci.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = "    environment:\n      name: trusted-pr-gate\n      deployment: false\n"
+    assert marker in text
+    path.write_text(text.replace(marker, "", 1), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="trusted reporter is missing reviewed fragment"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_ci_contract_rejects_weakened_protected_manifest_comparison(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "ci.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = "          if normalized != observed:\n"
+    assert marker in text
+    path.write_text(text.replace(marker, "          if False:\n", 1), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="protected change manifest contract"):
         ci_contract.verify_ci_contract(root)
 
 
