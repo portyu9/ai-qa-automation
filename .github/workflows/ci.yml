@@ -2,7 +2,7 @@ name: CI — ƳƤ AI QA Automation Framework
 
 # Designed and engineered by Ƴunior Ƥortal (ƳƤ).
 # Automatic gates are read-only, secret-free, and bound to the exact GitHub event subject.
-# Owner-authorized repository_dispatch is a dormant trusted-main path until external Actions Policy is active.
+# Owner-authorized repository_dispatch runs from main; protected changes require an exact object-ID manifest.
 on:
   pull_request:
     branches: [main]
@@ -174,6 +174,7 @@ jobs:
         env:
           EXPECTED_HEAD_SHA: ${{ github.event.client_payload.expected_head_sha }}
           EXPECTED_BASE_SHA: ${{ github.event.client_payload.expected_base_sha }}
+          PROTECTED_MANIFEST_JSON: ${{ toJSON(github.event.client_payload.protected_manifest) }}
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = "refs/heads/main"
@@ -205,11 +206,91 @@ jobs:
             src/ai_qa_automation/tools/__init__.py
             src/ai_qa_automation/tools/execution_env.py
           )
+          oid_for() {
+            local revision_path="$1"
+            local oid
+            if oid="$("${git_clean_env[@]}" /usr/bin/git rev-parse "$revision_path" 2>/dev/null)"; then
+              printf '%s' "$oid"
+            else
+              printf 'MISSING'
+            fi
+          }
+          changes_file="$RUNNER_TEMP/aiqa-protected-changes.tsv"
+          : > "$changes_file"
+          chmod 600 "$changes_file"
           for path in "${protected_paths[@]}"; do
-            trusted_oid="$("${git_clean_env[@]}" /usr/bin/git rev-parse "${GITHUB_SHA}:${path}")"
-            subject_oid="$("${git_clean_env[@]}" /usr/bin/git rev-parse "${CI_SUBJECT_SHA}:${path}")"
-            test "$trusted_oid" = "$subject_oid"
+            trusted_oid="$(oid_for "${GITHUB_SHA}:${path}")"
+            subject_oid="$(oid_for "${CI_SUBJECT_SHA}:${path}")"
+            if test "$trusted_oid" != "$subject_oid"; then
+              printf '%s\t%s\t%s\n' "$path" "$trusted_oid" "$subject_oid" >> "$changes_file"
+            fi
           done
+          PROTECTED_CHANGES_FILE="$changes_file" python - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          sha_re = re.compile(r"^[0-9a-f]{40}$")
+          allowed_paths = {
+              ".github",
+              ".claude",
+              ".dockerignore",
+              ".mcp.json",
+              ".pre-commit-config.yaml",
+              "CLAUDE.md",
+              "Dockerfile",
+              "evals",
+              "examples",
+              "pyproject.toml",
+              "requirements",
+              "scripts",
+              "tests",
+              "src/ai_qa_automation/__init__.py",
+              "src/ai_qa_automation/io_safety.py",
+              "src/ai_qa_automation/tools/__init__.py",
+              "src/ai_qa_automation/tools/execution_env.py",
+          }
+
+          raw_manifest = os.environ.get("PROTECTED_MANIFEST_JSON", "null")
+          manifest = json.loads(raw_manifest)
+          if manifest is None:
+              manifest = []
+          if not isinstance(manifest, list):
+              raise SystemExit("protected_manifest must be a JSON array")
+          if len(manifest) > len(allowed_paths):
+              raise SystemExit("protected_manifest exceeds the bounded protected-path set")
+
+          normalized = []
+          seen = set()
+          for item in manifest:
+              if not isinstance(item, dict) or set(item) != {"path", "base_oid", "subject_oid"}:
+                  raise SystemExit("protected_manifest entries must contain exactly path/base_oid/subject_oid")
+              path = item["path"]
+              base_oid = item["base_oid"]
+              subject_oid = item["subject_oid"]
+              if path not in allowed_paths or path in seen:
+                  raise SystemExit("protected_manifest contains an unknown or duplicate path")
+              for label, oid in (("base_oid", base_oid), ("subject_oid", subject_oid)):
+                  if oid != "MISSING" and (not isinstance(oid, str) or sha_re.fullmatch(oid) is None):
+                      raise SystemExit(f"protected_manifest {label} must be a full Git object ID or MISSING")
+              seen.add(path)
+              normalized.append({"path": path, "base_oid": base_oid, "subject_oid": subject_oid})
+          normalized.sort(key=lambda item: item["path"])
+
+          observed = []
+          for line in Path(os.environ["PROTECTED_CHANGES_FILE"]).read_text(encoding="utf-8").splitlines():
+              path, base_oid, subject_oid = line.split("\t")
+              observed.append({"path": path, "base_oid": base_oid, "subject_oid": subject_oid})
+          observed.sort(key=lambda item: item["path"])
+
+          if normalized != observed:
+              raise SystemExit(
+                  "protected_manifest does not exactly authorize the observed protected-path object changes"
+              )
+          print(json.dumps({"authorized_protected_changes": observed}, sort_keys=True))
+          PY
+          rm -f "$changes_file"
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
@@ -492,10 +573,11 @@ jobs:
     if: ${{ always() && github.event_name == 'repository_dispatch' && github.ref == 'refs/heads/main' && github.actor == github.repository_owner }}
     needs:
       - required-gate
+    environment:
+      name: trusted-pr-gate
+      deployment: false
     permissions:
       contents: read
-      pull-requests: read
-      statuses: write
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -508,9 +590,19 @@ jobs:
       - name: Verify trusted workflow revision
         run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
+      - name: Mint dedicated Trusted PR Gate token
+        id: trusted-app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.TRUSTED_GATE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}
+          permission-contents: read
+          permission-pull-requests: read
+          permission-statuses: write
+
       - name: Publish exact-subject trusted status
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.trusted-app.outputs.token }}
           PR_NUMBER: ${{ github.event.client_payload.pr_number }}
           EXPECTED_HEAD_SHA: ${{ github.event.client_payload.expected_head_sha }}
           EXPECTED_BASE_SHA: ${{ github.event.client_payload.expected_base_sha }}
