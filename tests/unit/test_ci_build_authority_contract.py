@@ -275,6 +275,7 @@ def test_ci_contract_rejects_missing_archive_build_authority_evidence_upload(
 ) -> None:
     root = _copy_workflows(tmp_path)
     path = _ci_path(root)
+    text = path.read_text(encoding="utf-8")
     artifact = ci_contract.ARCHIVE_BUILD_AUTHORITY_ARTIFACTS[0]
     text = path.read_text(encoding="utf-8").replace(f"            {artifact}\n", "", 1)
     path.write_text(text, encoding="utf-8")
@@ -313,7 +314,9 @@ def test_ci_contract_rejects_appended_runtime_sbom_command(tmp_path: Path) -> No
         ci_contract.RUNTIME_SBOM_STEP_NAME,
     )
     path.write_text(
-        _replace_supply_chain_step(text, ci_contract.RUNTIME_SBOM_STEP_NAME, step + "\n          true"),
+        _replace_supply_chain_step(
+            text, ci_contract.RUNTIME_SBOM_STEP_NAME, step + "\n          true"
+        ),
         encoding="utf-8",
     )
 
