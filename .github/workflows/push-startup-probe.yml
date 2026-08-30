@@ -1,0 +1,21 @@
+name: Diagnostic Push Startup Probe
+
+on:
+  push:
+    branches: [diagnostic-push-startup-probe]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Push startup probe
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Confirm runner scheduling
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = "push"
+          test "$GITHUB_REF" = "refs/heads/diagnostic-push-startup-probe"
+          printf 'push startup probe reached a runner for %s\n' "$GITHUB_SHA"
