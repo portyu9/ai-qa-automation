@@ -17,7 +17,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ai-qa-ci-${{ github.event.pull_request.number || github.event.client_payload.pr_number || github.ref }}
+  group: ai-qa-ci-${{ github.event_name == 'repository_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: true
 
 env:
