@@ -8,11 +8,11 @@ from ...intelligence.performance import PerformanceAssessor
 from ...models import EvidenceItem, EvidenceKind, ValidationResult, ValidationStatus
 from ...redaction import redact_text
 from ..k6_authority import k6_gate_payload
-from .common import RuntimeServices, stable_gate_id
+from .common import RuntimeServices, ToolDecorator, stable_gate_id
 
 
 def register_performance_tools(
-    services: RuntimeServices, tool: Any, *, k6_runner_cls: Any
+    services: RuntimeServices, tool: ToolDecorator, *, k6_runner_cls: Any
 ) -> dict[str, Any]:
     @tool(
         "run_k6",
