@@ -4,10 +4,10 @@ import json
 from typing import Any
 
 from ...tools.api_testing import ApiProbe, ApiProbeTransportError
-from .common import RuntimeServices
+from .common import RuntimeServices, ToolDecorator
 
 
-def register_network_tools(services: RuntimeServices, tool: Any) -> dict[str, Any]:
+def register_network_tools(services: RuntimeServices, tool: ToolDecorator) -> dict[str, Any]:
     @tool(
         "probe_api",
         "Make one policy-approved HTTP request and register sanitized response evidence.",
