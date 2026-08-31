@@ -8,10 +8,12 @@ from ...intelligence.failure_analysis import FailureAnalyzer
 from ...redaction import redact_text
 from ...tools.contracts import validate_json_schema
 from ...tools.mobile import MobileRuntimeInspector
-from .common import RuntimeServices, stable_gate_id
+from .common import RuntimeServices, ToolDecorator, stable_gate_id
 
 
-def register_validation_tools(services: RuntimeServices, tool: Any) -> dict[str, Any]:
+def register_validation_tools(
+    services: RuntimeServices, tool: ToolDecorator
+) -> dict[str, Any]:
     @tool(
         "classify_failure",
         "Classify currently collected evidence with a deterministic first-pass classifier.",
