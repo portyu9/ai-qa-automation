@@ -43,9 +43,9 @@ class DeliveryStore:
             raise ValueError("delivery database parent must be a directory")
         if st.st_uid != os.geteuid() or st.st_mode & 0o022:
             raise ValueError("delivery database parent must be owner-controlled and not group/world writable")
+        if path.is_symlink():
+            raise ValueError("delivery database must not be a symlink")
         if path.exists():
-            if path.is_symlink():
-                raise ValueError("delivery database must not be a symlink")
             fst = path.stat()
             if not stat.S_ISREG(fst.st_mode):
                 raise ValueError("delivery database must be a regular file")
@@ -53,9 +53,26 @@ class DeliveryStore:
                 raise ValueError("delivery database must be owner-controlled and not group/world writable")
             if fst.st_size > MAX_DB_BYTES:
                 raise ValueError("delivery database exceeds configured bound")
-        return parent / path.name
+        resolved = parent / path.name
+        if not resolved.exists():
+            flags = os.O_CREAT | os.O_EXCL | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(resolved, flags, 0o600)
+            os.close(fd)
+        created = resolved.stat(follow_symlinks=False)
+        if not stat.S_ISREG(created.st_mode) or created.st_uid != os.geteuid():
+            raise ValueError("delivery database must remain an owner-controlled regular file")
+        os.chmod(resolved, 0o600)
+        return resolved
 
     def _connect(self) -> sqlite3.Connection:
+        current = self._db_path.stat(follow_symlinks=False)
+        if (
+            not stat.S_ISREG(current.st_mode)
+            or current.st_uid != os.geteuid()
+            or current.st_mode & 0o077
+            or current.st_size > MAX_DB_BYTES
+        ):
+            raise RuntimeError("delivery database ownership, mode, or size changed")
         conn = sqlite3.connect(self._db_path, timeout=5, isolation_level=None)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
@@ -100,7 +117,6 @@ class DeliveryStore:
         now = int(time.time())
         with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            self._prune(conn, now=now)
             row = conn.execute(
                 "SELECT * FROM deliveries WHERE delivery_id = ?",
                 (delivery_id,),
@@ -137,7 +153,22 @@ class DeliveryStore:
                 return self._lease(row)
             attempt = int(row["attempt"])
             last_attempt = int(row["last_attempt_epoch"])
-            if attempt >= RETRY_LIMIT or now - last_attempt < RETRY_DELAY_SECONDS:
+            if attempt >= RETRY_LIMIT:
+                conn.execute(
+                    """
+                    UPDATE deliveries
+                    SET state='BLOCKED', terminal=1, error_code='retry_budget_exhausted',
+                        updated_epoch=?
+                    WHERE delivery_id=?
+                    """,
+                    (now, delivery_id),
+                )
+                exhausted = conn.execute(
+                    "SELECT * FROM deliveries WHERE delivery_id=?", (delivery_id,)
+                ).fetchone()
+                conn.execute("COMMIT")
+                return self._lease(exhausted)
+            if now - last_attempt < RETRY_DELAY_SECONDS:
                 conn.execute("COMMIT")
                 return self._lease(row)
             next_attempt = attempt + 1
@@ -149,11 +180,20 @@ class DeliveryStore:
                 """,
                 (next_attempt, now, now, delivery_id),
             )
-            row2 = conn.execute("SELECT * FROM deliveries WHERE delivery_id=?", (delivery_id,)).fetchone()
+            row2 = conn.execute(
+                "SELECT * FROM deliveries WHERE delivery_id=?", (delivery_id,)
+            ).fetchone()
             conn.execute("COMMIT")
             return self._lease(row2)
 
-    def bind_subject(self, *, delivery_id: str, subject: dict[str, Any], policy_id: str, target_url: str) -> None:
+    def bind_subject(
+        self,
+        *,
+        delivery_id: str,
+        subject: dict[str, Any],
+        policy_id: str,
+        target_url: str,
+    ) -> None:
         rendered = json.dumps(subject, separators=(",", ":"), sort_keys=True)
         now = int(time.time())
         with self._connection() as conn:
@@ -209,7 +249,11 @@ class DeliveryStore:
         with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = self._require_mutable(conn, delivery_id)
-            if row["state"] != "PROCESSING" or row["subject_json"] is None or row["policy_id"] is None:
+            if (
+                row["state"] != "PROCESSING"
+                or row["subject_json"] is None
+                or row["policy_id"] is None
+            ):
                 conn.execute("ROLLBACK")
                 raise RuntimeError("delivery lacks bound subject/policy before publication")
             conn.execute(
@@ -220,7 +264,9 @@ class DeliveryStore:
                 """,
                 (now, delivery_id),
             )
-            row2 = conn.execute("SELECT * FROM deliveries WHERE delivery_id=?", (delivery_id,)).fetchone()
+            row2 = conn.execute(
+                "SELECT * FROM deliveries WHERE delivery_id=?", (delivery_id,)
+            ).fetchone()
             conn.execute("COMMIT")
             return self._lease(row2)
 
@@ -228,7 +274,9 @@ class DeliveryStore:
         now = int(time.time())
         with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute("SELECT * FROM deliveries WHERE delivery_id=?", (delivery_id,)).fetchone()
+            row = conn.execute(
+                "SELECT * FROM deliveries WHERE delivery_id=?", (delivery_id,)
+            ).fetchone()
             if row is None or int(row["publication_started"]) != 1:
                 conn.execute("ROLLBACK")
                 raise RuntimeError("publication completion lacks durable publication intent")
@@ -244,7 +292,9 @@ class DeliveryStore:
 
     def load(self, delivery_id: str) -> DeliveryLease | None:
         with self._connection() as conn:
-            row = conn.execute("SELECT * FROM deliveries WHERE delivery_id=?", (delivery_id,)).fetchone()
+            row = conn.execute(
+                "SELECT * FROM deliveries WHERE delivery_id=?", (delivery_id,)
+            ).fetchone()
             return None if row is None else self._lease(row)
 
     @staticmethod
@@ -262,17 +312,11 @@ class DeliveryStore:
 
     @staticmethod
     def _require_mutable(conn: sqlite3.Connection, delivery_id: str) -> sqlite3.Row:
-        row = conn.execute("SELECT * FROM deliveries WHERE delivery_id=?", (delivery_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM deliveries WHERE delivery_id=?", (delivery_id,)
+        ).fetchone()
         if row is None:
             raise RuntimeError("delivery record does not exist")
         if int(row["terminal"]) == 1:
             raise RuntimeError("delivery is already terminal")
         return row
-
-    @staticmethod
-    def _prune(conn: sqlite3.Connection, *, now: int) -> None:
-        cutoff = now - 30 * 24 * 60 * 60
-        conn.execute(
-            "DELETE FROM deliveries WHERE terminal=1 AND updated_epoch < ?",
-            (cutoff,),
-        )
