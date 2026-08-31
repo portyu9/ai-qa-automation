@@ -24,7 +24,7 @@ del _export_name
 
 EXPECTED_WORKFLOW_NAMES = {"ci.yml", "manual-validation.yml", "trusted-pr-auto.yml"}
 EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
-    "7b587516273772f8c899eff97ee7abcc73b12c7f"  # pragma: allowlist secret
+    "44f15cfa9b844307d539d0e2c84405e1f74d56ee"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
     "c7aec0364b4c1c53220abe6a06674e59430707cb"  # pragma: allowlist secret
@@ -181,6 +181,18 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
             raise ValueError(f"trusted automatic validation job {job_id} must be secret-free")
         if "persist-credentials: false" not in job:
             raise ValueError(f"trusted automatic validation job {job_id} must disable credentials")
+
+    supply_chain = _base._semantic_text(_base._job_block(text, "supply-chain"))
+    mermaid_subject_binding = (
+        "      - name: Render Mermaid documentation with digest-pinned official CLI\n"
+        "        env:\n"
+        "          CI_SUBJECT_SHA: ${{ needs.preflight.outputs.merge_sha }}\n"
+        "        run: |"
+    )
+    if mermaid_subject_binding not in supply_chain:
+        raise ValueError(
+            "trusted Mermaid validation must bind CI_SUBJECT_SHA to the exact prospective merge"
+        )
 
     required_gate = _base._semantic_text(_base._job_block(text, "required-gate"))
     for dependency in (
