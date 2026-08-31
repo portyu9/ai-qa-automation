@@ -205,7 +205,6 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
     root = root.resolve()
     _verify_frozen_trusted_auto_extension()
     _trusted_auto._verify_frozen_base()
-    _verify_frozen_trusted_evidence_script(root)
     _trusted_auto.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
     _trusted_auto._base.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
 
@@ -215,6 +214,7 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
         snapshots["trusted-pr-auto.yml"].text
     )
     trusted_evidence = _verify_trusted_evidence_workflow(snapshots["trusted-pr-evidence.yml"].text)
+    _verify_frozen_trusted_evidence_script(root)
     result["workflows"]["trusted_auto"] = trusted_auto
     result["workflows"]["trusted_evidence"] = trusted_evidence
     result["limitations"].append(
