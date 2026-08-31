@@ -45,6 +45,18 @@ _TOOL_NAMES = (
 )
 
 
+def _api_probe_factory(*args: Any, **kwargs: Any) -> Any:
+    return ApiProbe(*args, **kwargs)
+
+
+def _browser_probe_factory(*args: Any, **kwargs: Any) -> Any:
+    return BrowserProbe(*args, **kwargs)
+
+
+def _k6_runner_factory(*args: Any, **kwargs: Any) -> Any:
+    return K6Runner(*args, **kwargs)
+
+
 def _merge_registered_tools(target: dict[str, Any], registered: dict[str, Any]) -> None:
     for name, handler in registered.items():
         if name in target:
@@ -65,16 +77,20 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
     _merge_registered_tools(registered, register_testing_tools(services, tool_decorator))
     _merge_registered_tools(
         registered,
-        register_network_tools(services, tool_decorator, api_probe_cls=ApiProbe),
+        register_network_tools(services, tool_decorator, api_probe_cls=_api_probe_factory),
     )
     _merge_registered_tools(
         registered,
-        register_browser_tools(services, tool_decorator, browser_probe_cls=BrowserProbe),
+        register_browser_tools(
+            services,
+            tool_decorator,
+            browser_probe_cls=_browser_probe_factory,
+        ),
     )
     _merge_registered_tools(registered, register_validation_tools(services, tool_decorator))
     _merge_registered_tools(
         registered,
-        register_performance_tools(services, tool_decorator, k6_runner_cls=K6Runner),
+        register_performance_tools(services, tool_decorator, k6_runner_cls=_k6_runner_factory),
     )
 
     expected = set(_TOOL_NAMES)
