@@ -11,9 +11,7 @@ from ..model_source_observation import read_model_source_confined
 from .common import MAX_MODEL_SOURCE_CHARS, RuntimeServices, ToolDecorator, coverage_search
 
 
-def register_repository_tools(
-    services: RuntimeServices, tool: ToolDecorator
-) -> dict[str, Any]:
+def register_repository_tools(services: RuntimeServices, tool: ToolDecorator) -> dict[str, Any]:
     @tool("inspect_repository", "Inspect target Git metadata without modifying it.", {})
     async def inspect_repository(args: dict[str, Any]) -> dict[str, Any]:
         services.consume("inspect_repository", args)
