@@ -32,7 +32,7 @@ EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
     "44f15cfa9b844307d539d0e2c84405e1f74d56ee"  # pragma: allowlist secret
 )
 EXPECTED_LOCK_CANDIDATE_WORKFLOW_BLOB_SHA = (
-    "52811fa28f5198adc362b84fbd132d7e89f5c0ff"  # pragma: allowlist secret
+    "71aa73d7e4c4c0dd9661979154c8664adb313faa"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
     "c7aec0364b4c1c53220abe6a06674e59430707cb"  # pragma: allowlist secret
@@ -298,7 +298,6 @@ def _verify_lock_candidate_workflow(text: str) -> dict[str, Any]:
     if _base.WRITE_PERMISSION_RE.search(semantic):
         raise ValueError("Python 3.14 lock candidate workflow must never request write authority")
     for forbidden in (
-        "actions/checkout@",
         "${{ secrets.",
         "${{ github.token }}",
         "GITHUB_TOKEN",
@@ -318,15 +317,23 @@ def _verify_lock_candidate_workflow(text: str) -> dict[str, Any]:
                 f"Python 3.14 lock candidate workflow contains forbidden authority token: {forbidden}"
             )
 
+    checkout_action = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
     required = (
         "    if: github.head_ref == 'ci-python-314-certification'",
         "    runs-on: ubuntu-24.04",
+        "      - name: Checkout exact PR head",
+        f"        uses: {checkout_action}",
+        "          ref: ${{ github.event.pull_request.head.sha }}",
+        "          persist-credentials: false",
+        "          fetch-depth: 1",
+        "      - name: Verify exact PR head",
+        "          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}",
+        '        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"',
         '          python-version: "3.14.7"',
-        "          SOURCE_SHA: ${{ github.event.pull_request.head.sha }}",
-        "https://raw.githubusercontent.com/{repository}/{source_sha}/pyproject.toml",
         "uv==0.12.1 --hash=sha256:27211df9b277f440dea438a4e525ba40250fb721ad39b8927eefc2d91f9aea15",
         "python -m pip install --no-deps --only-binary=:all: --require-hashes",
         "uv --version | grep -Eq '^uv 0\\.12\\.1($| )'",
+        "uv pip compile pyproject.toml generated/build-backend.in",
         "--python-version '3.14.7'",
         "--generate-hashes",
         "--no-header",
@@ -335,10 +342,16 @@ def _verify_lock_candidate_workflow(text: str) -> dict[str, Any]:
         "'source_sha': source_sha",
         "'pyproject_sha256': hashlib.sha256(pyproject).hexdigest()",
         "'lock_sha256': hashlib.sha256(lock).hexdigest()",
+        "python -m pip install --require-hashes -r generated/dev-py314.lock",
+        "python -m pip install --no-deps --no-build-isolation .",
+        "python -m pip check",
+        "run: python -m compileall -q src evals examples scripts",
+        "run: pytest -o addopts='' -q tests --junitxml=generated/junit-py314.xml",
         "      - name: Upload inert lock candidate evidence",
         "          name: python314-lock-candidate-${{ github.event.pull_request.head.sha }}",
         "            generated/dev-py314.lock",
         "            generated/lock-provenance.json",
+        "            generated/junit-py314.xml",
         "          retention-days: 3",
     )
     for fragment in required:
@@ -346,19 +359,26 @@ def _verify_lock_candidate_workflow(text: str) -> dict[str, Any]:
             raise ValueError(
                 f"Python 3.14 lock candidate workflow is missing reviewed fragment: {fragment}"
             )
+    if semantic.count("actions/checkout@") != 1 or semantic.count(checkout_action) != 1:
+        raise ValueError("Python 3.14 lock candidate must have exactly one pinned checkout")
+    if semantic.count("persist-credentials: false") != 1:
+        raise ValueError("Python 3.14 lock candidate checkout must disable persisted credentials")
     if semantic.count("actions/setup-python@") != 1:
         raise ValueError("Python 3.14 lock candidate must set up Python exactly once")
     if semantic.count("actions/upload-artifact@") != 1:
         raise ValueError("Python 3.14 lock candidate must upload evidence exactly once")
     if semantic.count("uv pip compile") != 2:
         raise ValueError("Python 3.14 lock candidate must independently resolve the lock twice")
+    if semantic.count("pytest -o addopts='' -q tests --junitxml=generated/junit-py314.xml") != 1:
+        raise ValueError("Python 3.14 lock candidate must execute the full deterministic test suite")
 
     return {
-        "purpose": "temporary-read-only-lock-candidate",
-        "source": "exact-pr-head-pyproject",
+        "purpose": "temporary-read-only-lock-and-compatibility-candidate",
+        "source": "exact-pr-head-tree",
         "python_version": "3.14.7",
         "uv_version": "0.12.1",
         "resolution": "double-compile-byte-identity",
+        "validation": "hash-locked-install-compile-full-deterministic-pytest",
         "mutation": "none",
         "workflow_definition": "exact-reviewed-git-blob",
     }
@@ -381,7 +401,7 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
         "Repository source can verify the workflow_run design but cannot prove external Actions Policy permits workflow_run until a post-merge live proof run is observed."
     )
     result["limitations"].append(
-        "The Python 3.14 lock-candidate workflow is temporary read-only generation evidence; its artifact is not merge authority and the workflow must be removed before certification closure."
+        "The Python 3.14 lock-candidate workflow is temporary read-only generation and compatibility evidence; its artifacts are not merge authority and the workflow must be removed before certification closure."
     )
     return result
 
