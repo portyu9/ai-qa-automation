@@ -39,8 +39,13 @@ class DeliveryResult:
 
 
 class TrustedGateService:
-    def __init__(self, *, config: ServiceConfig, store: DeliveryStore, github: GitHubClient) -> None:
-        if github.repository != EXPECTED_REPOSITORY or github.repository_id != EXPECTED_REPOSITORY_ID:
+    def __init__(
+        self, *, config: ServiceConfig, store: DeliveryStore, github: GitHubClient
+    ) -> None:
+        if (
+            github.repository != EXPECTED_REPOSITORY
+            or github.repository_id != EXPECTED_REPOSITORY_ID
+        ):
             raise ValueError("GitHub client is not bound to the reviewed repository")
         if github.installation_id != config.installation_id:
             raise ValueError("configured installation id differs from GitHub client")
@@ -55,7 +60,9 @@ class TrustedGateService:
     def _load_policy(path: Path, expected_sha256: str) -> OneShotPolicy:
         if not path.is_absolute():
             raise ValueError("maintenance policy path must be absolute")
-        if len(expected_sha256) != 64 or any(ch not in "0123456789abcdef" for ch in expected_sha256):
+        if len(expected_sha256) != 64 or any(
+            ch not in "0123456789abcdef" for ch in expected_sha256
+        ):
             raise ValueError("maintenance policy SHA-256 is malformed")
         nofollow = getattr(os, "O_NOFOLLOW", 0)
         if not nofollow:
@@ -64,7 +71,11 @@ class TrustedGateService:
         fd = os.open(path, flags)
         try:
             before = os.fstat(fd)
-            if not stat.S_ISREG(before.st_mode) or before.st_size < 1 or before.st_size > 256 * 1024:
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_size < 1
+                or before.st_size > 256 * 1024
+            ):
                 raise ValueError("maintenance policy must be a bounded regular file")
             payload = bytearray()
             while len(payload) <= before.st_size:
@@ -78,8 +89,20 @@ class TrustedGateService:
             os.close(fd)
         if len(data) != before.st_size:
             raise ValueError("maintenance policy changed or was incompletely read")
-        sig_before = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
-        sig_after = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+        sig_before = (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        )
+        sig_after = (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        )
         if sig_before != sig_after:
             raise ValueError("maintenance policy changed during ingestion")
         observed = hashlib.sha256(data).hexdigest()
@@ -105,7 +128,10 @@ class TrustedGateService:
             delivery_header=delivery_header,
             body=body,
         )
-        if wakeup.repository != EXPECTED_REPOSITORY or wakeup.repository_id != EXPECTED_REPOSITORY_ID:
+        if (
+            wakeup.repository != EXPECTED_REPOSITORY
+            or wakeup.repository_id != EXPECTED_REPOSITORY_ID
+        ):
             raise PermissionError("webhook repository identity is not authorized")
         if wakeup.installation_id != self._config.installation_id:
             raise PermissionError("webhook installation identity is not authorized")
@@ -191,7 +217,9 @@ class TrustedGateService:
             latest = self._store.load(wakeup.delivery_id)
             if latest is not None and latest.state == "PUBLISHING":
                 return self._recover_publishing(latest)
-            self._store.mark_retryable(delivery_id=wakeup.delivery_id, error_code="github_transport")
+            self._store.mark_retryable(
+                delivery_id=wakeup.delivery_id, error_code="github_transport"
+            )
             return DeliveryResult("RETRYABLE", wakeup.delivery_id, "github_transport", False)
         except (GitHubProtocolError, PermissionError, ValueError, RuntimeError) as exc:
             # No attacker-controlled detail is persisted or returned. If publication began, fail closed
@@ -204,11 +232,15 @@ class TrustedGateService:
 
     def _recover_publishing(self, lease: DeliveryLease) -> DeliveryResult:
         if not lease.subject_json or not lease.target_url or not lease.policy_id:
-            return DeliveryResult("BLOCKED", lease.delivery_id, "incomplete_publication_recovery_state", False)
+            return DeliveryResult(
+                "BLOCKED", lease.delivery_id, "incomplete_publication_recovery_state", False
+            )
         try:
             subject = self._subject_from_json(lease.subject_json)
             if lease.policy_id != self._policy.policy_id:
-                return DeliveryResult("BLOCKED", lease.delivery_id, "publication_policy_identity_drift", False)
+                return DeliveryResult(
+                    "BLOCKED", lease.delivery_id, "publication_policy_identity_drift", False
+                )
             live_subject = self._github.resolve_subject(
                 run_id=lease.run_id,
                 event_head_sha=subject.head_sha,
@@ -226,11 +258,21 @@ class TrustedGateService:
                 expected_creator_login=self._config.expected_creator_login,
             ):
                 self._store.complete_publication(delivery_id=lease.delivery_id)
-                return DeliveryResult("SUCCESS", lease.delivery_id, "recovered_existing_exact_status", True)
-        except (GitHubTransportError, GitHubProtocolError, PermissionError, ValueError, RuntimeError):
+                return DeliveryResult(
+                    "SUCCESS", lease.delivery_id, "recovered_existing_exact_status", True
+                )
+        except (
+            GitHubTransportError,
+            GitHubProtocolError,
+            PermissionError,
+            ValueError,
+            RuntimeError,
+        ):
             pass
         # Never replay a commit-status POST after durable publication intent.
-        return DeliveryResult("BLOCKED", lease.delivery_id, "publication_outcome_not_provable", False)
+        return DeliveryResult(
+            "BLOCKED", lease.delivery_id, "publication_outcome_not_provable", False
+        )
 
     @staticmethod
     def _assert_same_subject(left: Subject, right: Subject) -> None:
@@ -254,12 +296,29 @@ class TrustedGateService:
         raw = json.loads(rendered)
         if not isinstance(raw, dict):
             raise ValueError("persisted subject is malformed")
-        from .core import ProtectedTransition, require_list, require_positive_int, require_sha, require_str
+        from .core import (
+            ProtectedTransition,
+            require_list,
+            require_positive_int,
+            require_sha,
+            require_str,
+        )
 
-        expected = {"pr_number", "head_sha", "base_sha", "merge_sha", "merge_tree_sha", "head_ref", "protected_changes"}
+        expected = {
+            "pr_number",
+            "head_sha",
+            "base_sha",
+            "merge_sha",
+            "merge_tree_sha",
+            "head_ref",
+            "protected_changes",
+        }
         if set(raw) != expected:
             raise ValueError("persisted subject fields are not exact")
-        transitions = tuple(ProtectedTransition.from_json(item) for item in require_list(raw["protected_changes"], label="persisted protected changes"))
+        transitions = tuple(
+            ProtectedTransition.from_json(item)
+            for item in require_list(raw["protected_changes"], label="persisted protected changes")
+        )
         return Subject(
             pr_number=require_positive_int(raw["pr_number"], label="persisted PR number"),
             head_sha=require_sha(raw["head_sha"], label="persisted head SHA"),
