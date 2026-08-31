@@ -25,17 +25,13 @@ del _export_name
 EXPECTED_WORKFLOW_NAMES = {
     "ci.yml",
     "manual-validation.yml",
-    "python314-lock-candidate.yml",
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
-    "44f15cfa9b844307d539d0e2c84405e1f74d56ee"  # pragma: allowlist secret
-)
-EXPECTED_LOCK_CANDIDATE_WORKFLOW_BLOB_SHA = (
-    "b79156e8041038f69afb7bc9374f1bf4a4d6588c"  # pragma: allowlist secret
+    "87e94dd23a66d50b46ae8b6ed692151104a1be2e"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
-    "c7aec0364b4c1c53220abe6a06674e59430707cb"  # pragma: allowlist secret
+    "bf538a2efa1f895ef0a614e8118ba1b1ad2914f5"  # pragma: allowlist secret
 )
 TRUSTED_AUTO_WORKFLOW_NAME = "Trusted PR Auto Gate — ƳƤ AI QA Automation Framework"
 TRUSTED_AUTO_SOURCE_WORKFLOW = "CI — ƳƤ AI QA Automation Framework"
@@ -59,7 +55,7 @@ TRUSTED_AUTO_PROTECTED_PATHS = (
     "src/ai_qa_automation/tools/execution_env.py",
 )
 
-# The base verifier must accept the additional independently frozen workflow definitions
+# The base verifier must accept the additional independently frozen workflow definition
 # before it performs its existing exact workflow-set and immutable-action checks. No other
 # base invariant is changed.
 _base.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
@@ -116,6 +112,8 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
             raise ValueError(f"trusted-pr-auto.yml contains forbidden authority token: {forbidden}")
     if _base.CACHE_CONFIGURATION_RE.search(semantic):
         raise ValueError("trusted-pr-auto.yml dependency caching is forbidden")
+    if '"3.13.15"' in semantic or "dev-py313.lock" in semantic or "py313" in semantic:
+        raise ValueError("trusted-pr-auto.yml contains stale Python 3.13 CI authority")
 
     preflight = _base._semantic_text(_base._job_block(text, "preflight"))
     required_preflight = (
@@ -190,6 +188,8 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
             raise ValueError(f"trusted automatic validation job {job_id} must be secret-free")
         if "persist-credentials: false" not in job:
             raise ValueError(f"trusted automatic validation job {job_id} must disable credentials")
+
+    quality_lanes = _base._verify_quality_lane_contract(text, name="trusted-pr-auto.yml")
 
     supply_chain = _base._semantic_text(_base._job_block(text, "supply-chain"))
     mermaid_subject_binding = (
@@ -267,134 +267,10 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "protected_paths": list(TRUSTED_AUTO_PROTECTED_PATHS),
         "validation_subject": "live-prospective-merge-sha",
         "validation_authority": "read-only-secret-free-before-reporter",
+        "quality_lanes": quality_lanes,
         "terminal_revalidation": "fresh-live-admission-plus-shared-pr-head-base-merge-resolver",
         "status_writer": "dedicated-github-app",
         "maintenance_fallback": "owner-repository-dispatch-exact-object-manifest",
-        "workflow_definition": "exact-reviewed-git-blob",
-    }
-
-
-def _verify_lock_candidate_workflow(text: str) -> dict[str, Any]:
-    semantic = _base._semantic_text(text)
-    if _base._git_blob_sha1(text) != EXPECTED_LOCK_CANDIDATE_WORKFLOW_BLOB_SHA:
-        raise ValueError(
-            "python314-lock-candidate.yml bytes differ from the exact reviewed temporary definition"
-        )
-
-    on_block = _base._semantic_text(_base._top_level_block(text, "on")).strip("\n")
-    expected_on = "\n".join(
-        (
-            "on:",
-            "  pull_request:",
-            "    branches: [main]",
-            "    types: [opened, synchronize, reopened]",
-        )
-    )
-    if on_block != expected_on:
-        raise ValueError(
-            "Python 3.14 lock candidate workflow trigger differs from reviewed definition"
-        )
-    permissions = _base._permissions(_base._top_level_block(text, "permissions"))
-    if permissions != {"contents": "read"}:
-        raise ValueError("Python 3.14 lock candidate workflow must be read-only")
-    if _base.WRITE_PERMISSION_RE.search(semantic):
-        raise ValueError("Python 3.14 lock candidate workflow must never request write authority")
-    for forbidden in (
-        "${{ secrets.",
-        "${{ github.token }}",
-        "GITHUB_TOKEN",
-        "pull_request_target:",
-        "repository_dispatch:",
-        "workflow_dispatch:",
-        "continue-on-error: true",
-        "ubuntu-latest",
-        "cache:",
-        "sudo ",
-        "apt-get ",
-        "apt install ",
-        "git push",
-    ):
-        if forbidden in semantic:
-            raise ValueError(
-                f"Python 3.14 lock candidate workflow contains forbidden authority token: {forbidden}"
-            )
-
-    checkout_action = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
-    required = (
-        "    if: github.head_ref == 'ci-python-314-certification'",
-        "    runs-on: ubuntu-24.04",
-        "      - name: Checkout exact PR head",
-        f"        uses: {checkout_action}",
-        "          ref: ${{ github.event.pull_request.head.sha }}",
-        "          persist-credentials: false",
-        "          fetch-depth: 1",
-        "      - name: Verify exact PR head",
-        "          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}",
-        '        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"',
-        '          python-version: "3.14.7"',
-        "uv==0.12.1 --hash=sha256:27211df9b277f440dea438a4e525ba40250fb721ad39b8927eefc2d91f9aea15",
-        "python -m pip install --no-deps --only-binary=:all: --require-hashes",
-        "uv --version | grep -Eq '^uv 0\\.12\\.1($| )'",
-        "uv pip compile pyproject.toml generated/build-backend.in",
-        "--python-version '3.14.7'",
-        "--generate-hashes",
-        "--no-header",
-        "cmp -s generated/dev-py314-a.lock generated/dev-py314-b.lock",
-        'test "$(stat -c \'%s\' "$lock")" -le 1048576',
-        "'source_sha': source_sha",
-        "'pyproject_sha256': hashlib.sha256(pyproject).hexdigest()",
-        "'lock_sha256': hashlib.sha256(lock).hexdigest()",
-        "python -m pip install --require-hashes -r generated/dev-py314.lock",
-        "python -m pip install --no-deps --no-build-isolation .",
-        "python -m pip check",
-        "run: python -m compileall -q src evals examples scripts",
-        "      - name: Execute full deterministic compatibility suite",
-        "      - name: Upload inert lock candidate evidence",
-        "          name: python314-lock-candidate-${{ github.event.pull_request.head.sha }}",
-        "            generated/dev-py314.lock",
-        "            generated/lock-provenance.json",
-        "            generated/junit-py314.xml",
-        "          retention-days: 3",
-    )
-    for fragment in required:
-        if fragment not in semantic:
-            raise ValueError(
-                f"Python 3.14 lock candidate workflow is missing reviewed fragment: {fragment}"
-            )
-
-    subject_binding = "          CI_SUBJECT_SHA: ${{ github.event.pull_request.head.sha }}"
-    if semantic.count(subject_binding) != 1:
-        raise ValueError(
-            "Python 3.14 compatibility suite must bind CI_SUBJECT_SHA to the exact PR head"
-        )
-    if "-o addopts=" in semantic:
-        raise ValueError(
-            "Python 3.14 compatibility suite must preserve repository pytest selection"
-        )
-    pytest_command = "run: pytest --junitxml=generated/junit-py314.xml"
-    if semantic.count(pytest_command) != 1:
-        raise ValueError(
-            "Python 3.14 lock candidate must execute the full deterministic test suite"
-        )
-    if semantic.count("actions/checkout@") != 1 or semantic.count(checkout_action) != 1:
-        raise ValueError("Python 3.14 lock candidate must have exactly one pinned checkout")
-    if semantic.count("persist-credentials: false") != 1:
-        raise ValueError("Python 3.14 lock candidate checkout must disable persisted credentials")
-    if semantic.count("actions/setup-python@") != 1:
-        raise ValueError("Python 3.14 lock candidate must set up Python exactly once")
-    if semantic.count("actions/upload-artifact@") != 1:
-        raise ValueError("Python 3.14 lock candidate must upload evidence exactly once")
-    if semantic.count("uv pip compile") != 2:
-        raise ValueError("Python 3.14 lock candidate must independently resolve the lock twice")
-
-    return {
-        "purpose": "temporary-read-only-lock-and-compatibility-candidate",
-        "source": "exact-pr-head-tree",
-        "python_version": "3.14.7",
-        "uv_version": "0.12.1",
-        "resolution": "double-compile-byte-identity",
-        "validation": "hash-locked-install-compile-full-deterministic-pytest",
-        "mutation": "none",
         "workflow_definition": "exact-reviewed-git-blob",
     }
 
@@ -406,17 +282,12 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
     result = _base.verify_ci_contract(root)
     snapshots = _base._read_workflow_set(root / ".github" / "workflows")
     trusted_auto = _verify_trusted_auto_workflow(snapshots["trusted-pr-auto.yml"].text)
-    lock_candidate = _verify_lock_candidate_workflow(snapshots["python314-lock-candidate.yml"].text)
     result["workflows"]["trusted_auto"] = trusted_auto
-    result["workflows"]["python314_lock_candidate"] = lock_candidate
     result["limitations"].append(
         "Automatic trusted admission intentionally refuses any PR that changes a protected authority root; those maintenance changes still require the explicit owner repository_dispatch manifest path."
     )
     result["limitations"].append(
         "Repository source can verify the workflow_run design but cannot prove external Actions Policy permits workflow_run until a post-merge live proof run is observed."
-    )
-    result["limitations"].append(
-        "The Python 3.14 lock-candidate workflow is temporary read-only generation and compatibility evidence; its artifacts are not merge authority and the workflow must be removed before certification closure."
     )
     return result
 

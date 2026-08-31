@@ -29,7 +29,7 @@ EXPECTED_AUTOMATIC_PROJECT_INSTALL_COUNT = 5
 EXPECTED_AUTOMATIC_DEPENDENCY_INSTALL_COUNT = 5
 EXPECTED_AUTOMATIC_SUBJECT_CHECKOUT_COUNT = 5
 EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = (
-    "95318e2d1fe49b593196f161d4b08d42d7c4ffcd"  # pragma: allowlist secret
+    "fc6e2a184459df7cb6e816a9a4880f06a3d9a7a8"  # pragma: allowlist secret
 )
 AUTOMATIC_PROJECT_INSTALL_COMMAND = (
     "          python -m pip install --no-deps --no-build-isolation ."
@@ -614,6 +614,88 @@ def _verify_project_install_authority(text: str, *, name: str) -> int:
     return len(install_indices)
 
 
+def _verify_quality_lane_contract(text: str, *, name: str) -> dict[str, Any]:
+    quality_raw = _job_block(text, "quality")
+    quality = _semantic_text(quality_raw)
+    expected_matrix = "\n".join(
+        (
+            "        include:",
+            '          - python-version: "3.11.16"',
+            "            lock-file: requirements/dev-py311.lock",
+            "            evidence-suffix: py311",
+            '          - python-version: "3.14.7"',
+            "            lock-file: requirements/dev-py314.lock",
+            "            evidence-suffix: py314",
+        )
+    )
+    if quality.count(expected_matrix) != 1:
+        raise ValueError(f"{name}: quality matrix must be exactly Python 3.11/3.14 reviewed lanes")
+    for stale in ('"3.13.15"', "dev-py313.lock", "py313"):
+        if stale in quality:
+            raise ValueError(f"{name}: stale Python 3.13 quality authority is forbidden")
+
+    exact_steps = {
+        "Compile Python sources": "\n".join(
+            (
+                "      - name: Compile Python sources",
+                "        run: python -m compileall -q src evals examples scripts",
+            )
+        ),
+        "Ruff format": "\n".join(
+            (
+                "      - name: Ruff format",
+                "        if: matrix.python-version == '3.11.16'",
+                "        run: ruff format --check .",
+            )
+        ),
+        "Ruff lint": "\n".join(
+            (
+                "      - name: Ruff lint",
+                "        if: matrix.python-version == '3.11.16'",
+                "        run: ruff check .",
+            )
+        ),
+        "Mypy": "\n".join(
+            (
+                "      - name: Mypy",
+                "        if: matrix.python-version == '3.11.16'",
+                "        run: mypy src",
+            )
+        ),
+        "Deterministic pytest suite with coverage": "\n".join(
+            (
+                "      - name: Deterministic pytest suite with coverage",
+                "        if: matrix.python-version == '3.11.16'",
+                "        run: |",
+                "          mkdir -p artifacts/ci",
+                "          pytest --cov=ai_qa_automation --cov-report=term-missing --cov-report=xml:artifacts/ci/coverage-${{ matrix.evidence-suffix }}.xml --junitxml=artifacts/ci/junit-${{ matrix.evidence-suffix }}.xml",
+            )
+        ),
+        "Deterministic compatibility pytest suite": "\n".join(
+            (
+                "      - name: Deterministic compatibility pytest suite",
+                "        if: matrix.python-version == '3.14.7'",
+                "        run: |",
+                "          mkdir -p artifacts/ci",
+                "          pytest --junitxml=artifacts/ci/junit-${{ matrix.evidence-suffix }}.xml",
+            )
+        ),
+    }
+    for step_name, expected in exact_steps.items():
+        observed = _semantic_text(_step_block(quality_raw, step_name)).strip("\n")
+        if observed != expected:
+            raise ValueError(f"{name}: {step_name} differs from the reviewed quality-lane contract")
+    if quality.count("--cov=ai_qa_automation") != 1:
+        raise ValueError(f"{name}: coverage authority must exist only in the Python 3.11 lane")
+    if quality.count("pytest --junitxml=artifacts/ci/junit-${{ matrix.evidence-suffix }}.xml") != 1:
+        raise ValueError(f"{name}: Python 3.14 compatibility pytest must execute exactly once")
+    return {
+        "primary": "Python 3.11.16: compile+Ruff+Mypy+pytest+coverage",
+        "compatibility": "Python 3.14.7: compile+pytest",
+        "locks": ["requirements/dev-py311.lock", "requirements/dev-py314.lock"],
+    }
+
+
 def _verify_dispatch_contract(text: str) -> None:
     on_block = _semantic_text(_top_level_block(text, "on")).strip("\n")
     expected = "\n".join(
@@ -794,8 +876,10 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
         raise ValueError(f"{name}: dependency caching is forbidden before reviewed lock authority")
     if "ubuntu-latest" in semantic:
         raise ValueError(f"{name}: moving ubuntu-latest runner label is forbidden")
-    if '"3.11.16"' not in semantic or '"3.13.15"' not in semantic:
+    if '"3.11.16"' not in semantic or '"3.14.7"' not in semantic:
         raise ValueError(f"{name}: exact supported Python patch versions are required")
+    if '"3.13.15"' in semantic or "dev-py313.lock" in semantic or "py313" in semantic:
+        raise ValueError(f"{name}: stale Python 3.13 CI authority is forbidden")
     if "--require-hashes" not in semantic:
         raise ValueError(f"{name}: hash-required dependency installation is required")
     if "pip install --upgrade" in semantic or " --editable" in semantic or " -e ." in semantic:
@@ -807,6 +891,7 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
     checkout_count = _verify_automatic_checkout_binding(text, name=name)
     dependency_install_count = _verify_dependency_install_authority(text, name=name)
     project_install_count = _verify_project_install_authority(text, name=name)
+    quality_lanes = _verify_quality_lane_contract(text, name=name)
     protected_manifest = _verify_protected_manifest_contract(text)
     trusted_status = _verify_trusted_status_job(text)
 
@@ -878,6 +963,7 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
         "subject": "github.sha-or-owner-default-branch-dispatch-exact-merge-sha",
         "checkout_count": checkout_count,
         "required_gate": "Required PR Gate",
+        "quality_lanes": quality_lanes,
         "trusted_status": trusted_status,
         "protected_manifest": protected_manifest,
         "prebuild_authority": "exact-lock-and-build-authority-before-validation-installs",

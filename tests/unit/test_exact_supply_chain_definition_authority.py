@@ -24,6 +24,14 @@ def test_verifier_reports_exact_reviewed_definition_authority() -> None:
     supply_chain_result = supply_chain.verify_repository(ROOT)
 
     assert ci_result["workflows"]["automatic"]["workflow_definition"] == ("exact-reviewed-git-blob")
+    assert ci_result["workflows"]["automatic"]["quality_lanes"] == {
+        "primary": "Python 3.11.16: compile+Ruff+Mypy+pytest+coverage",
+        "compatibility": "Python 3.14.7: compile+pytest",
+        "locks": ["requirements/dev-py311.lock", "requirements/dev-py314.lock"],
+    }
+    assert ci_result["workflows"]["trusted_auto"]["quality_lanes"] == (
+        ci_result["workflows"]["automatic"]["quality_lanes"]
+    )
     assert supply_chain_result["dockerfile_authority"] == "exact-reviewed-git-blob"
 
 
@@ -70,6 +78,74 @@ def test_ci_contract_rejects_mutable_checkout_container_context(tmp_path: Path) 
 
     with pytest.raises(ValueError, match="exact reviewed automatic/trusted workflow definition"):
         ci_contract.verify_ci_contract(root)
+
+
+@pytest.mark.parametrize(
+    "workflow_name",
+    ["ci.yml", "trusted-pr-auto.yml"],
+)
+def test_quality_lane_contract_rejects_stale_python_313_lane(workflow_name: str) -> None:
+    text = (ROOT / ".github" / "workflows" / workflow_name).read_text(encoding="utf-8")
+    mutated = (
+        text.replace('python-version: "3.14.7"', 'python-version: "3.13.15"', 1)
+        .replace("requirements/dev-py314.lock", "requirements/dev-py313.lock", 1)
+        .replace("evidence-suffix: py314", "evidence-suffix: py313", 1)
+    )
+
+    with pytest.raises(ValueError, match="quality matrix|stale Python 3.13"):
+        ci_contract._verify_quality_lane_contract(mutated, name=workflow_name)
+
+
+@pytest.mark.parametrize(
+    "workflow_name",
+    ["ci.yml", "trusted-pr-auto.yml"],
+)
+def test_quality_lane_contract_rejects_ruff_authority_on_compatibility_lane(
+    workflow_name: str,
+) -> None:
+    text = (ROOT / ".github" / "workflows" / workflow_name).read_text(encoding="utf-8")
+    mutated = text.replace(
+        "      - name: Ruff format\n        if: matrix.python-version == '3.11.16'\n",
+        "      - name: Ruff format\n",
+        1,
+    )
+
+    with pytest.raises(ValueError, match="Ruff format differs"):
+        ci_contract._verify_quality_lane_contract(mutated, name=workflow_name)
+
+
+@pytest.mark.parametrize(
+    "workflow_name",
+    ["ci.yml", "trusted-pr-auto.yml"],
+)
+def test_quality_lane_contract_rejects_coverage_on_python_314(workflow_name: str) -> None:
+    text = (ROOT / ".github" / "workflows" / workflow_name).read_text(encoding="utf-8")
+    mutated = text.replace(
+        "          pytest --junitxml=artifacts/ci/junit-${{ matrix.evidence-suffix }}.xml",
+        "          pytest --cov=ai_qa_automation --junitxml=artifacts/ci/junit-${{ matrix.evidence-suffix }}.xml",
+        1,
+    )
+
+    with pytest.raises(ValueError, match="compatibility pytest|coverage authority"):
+        ci_contract._verify_quality_lane_contract(mutated, name=workflow_name)
+
+
+@pytest.mark.parametrize(
+    "workflow_name",
+    ["ci.yml", "trusted-pr-auto.yml"],
+)
+def test_quality_lane_contract_rejects_compatibility_pytest_selection_override(
+    workflow_name: str,
+) -> None:
+    text = (ROOT / ".github" / "workflows" / workflow_name).read_text(encoding="utf-8")
+    mutated = text.replace(
+        "          pytest --junitxml=artifacts/ci/junit-${{ matrix.evidence-suffix }}.xml",
+        "          pytest -o addopts='' --junitxml=artifacts/ci/junit-${{ matrix.evidence-suffix }}.xml",
+        1,
+    )
+
+    with pytest.raises(ValueError, match="compatibility pytest"):
+        ci_contract._verify_quality_lane_contract(mutated, name=workflow_name)
 
 
 @pytest.mark.parametrize(

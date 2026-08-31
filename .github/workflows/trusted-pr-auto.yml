@@ -329,9 +329,9 @@ jobs:
           - python-version: "3.11.16"
             lock-file: requirements/dev-py311.lock
             evidence-suffix: py311
-          - python-version: "3.13.15"
-            lock-file: requirements/dev-py313.lock
-            evidence-suffix: py313
+          - python-version: "3.14.7"
+            lock-file: requirements/dev-py314.lock
+            evidence-suffix: py314
     steps:
       - name: Checkout exact validation subject
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -362,19 +362,28 @@ jobs:
         run: python -m compileall -q src evals examples scripts
 
       - name: Ruff format
+        if: matrix.python-version == '3.11.16'
         run: ruff format --check .
 
       - name: Ruff lint
+        if: matrix.python-version == '3.11.16'
         run: ruff check .
 
       - name: Mypy
         if: matrix.python-version == '3.11.16'
         run: mypy src
 
-      - name: Deterministic pytest suite
+      - name: Deterministic pytest suite with coverage
+        if: matrix.python-version == '3.11.16'
         run: |
           mkdir -p artifacts/ci
           pytest --cov=ai_qa_automation --cov-report=term-missing --cov-report=xml:artifacts/ci/coverage-${{ matrix.evidence-suffix }}.xml --junitxml=artifacts/ci/junit-${{ matrix.evidence-suffix }}.xml
+
+      - name: Deterministic compatibility pytest suite
+        if: matrix.python-version == '3.14.7'
+        run: |
+          mkdir -p artifacts/ci
+          pytest --junitxml=artifacts/ci/junit-${{ matrix.evidence-suffix }}.xml
 
       - name: Upload trusted deterministic test evidence
         if: always()
