@@ -32,7 +32,7 @@ EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
     "44f15cfa9b844307d539d0e2c84405e1f74d56ee"  # pragma: allowlist secret
 )
 EXPECTED_LOCK_CANDIDATE_WORKFLOW_BLOB_SHA = (
-    "4597abb3c61b6369291d81a778494ecd65bde42b"  # pragma: allowlist secret
+    "52811fa28f5198adc362b84fbd132d7e89f5c0ff"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
     "c7aec0364b4c1c53220abe6a06674e59430707cb"  # pragma: allowlist secret
@@ -326,7 +326,7 @@ def _verify_lock_candidate_workflow(text: str) -> dict[str, Any]:
         "https://raw.githubusercontent.com/{repository}/{source_sha}/pyproject.toml",
         "uv==0.12.1 --hash=sha256:27211df9b277f440dea438a4e525ba40250fb721ad39b8927eefc2d91f9aea15",
         "python -m pip install --no-deps --only-binary=:all: --require-hashes",
-        "test \"$(uv --version)\" = 'uv 0.12.1'",
+        "uv --version | grep -Eq '^uv 0\\.12\\.1($| )'",
         "--python-version '3.14.7'",
         "--generate-hashes",
         "--no-header",
