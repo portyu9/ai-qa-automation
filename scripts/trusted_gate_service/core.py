@@ -314,7 +314,9 @@ def parse_workflow_run_wakeup(
     repository = require_dict(raw.get("repository"), label="webhook repository")
     installation = require_dict(raw.get("installation"), label="webhook installation")
     run = require_dict(raw.get("workflow_run"), label="webhook workflow run")
-    repo_name = require_str(repository.get("full_name"), label="webhook repository name", max_len=256)
+    repo_name = require_str(
+        repository.get("full_name"), label="webhook repository name", max_len=256
+    )
     repo_id = require_positive_int(repository.get("id"), label="webhook repository id")
     installation_id = require_positive_int(installation.get("id"), label="webhook installation id")
     run_id = require_positive_int(run.get("id"), label="webhook workflow run id")
