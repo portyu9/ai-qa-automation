@@ -145,7 +145,9 @@ jobs:
         run: python -m compileall -q src evals examples scripts
 
       - name: Execute full deterministic compatibility suite
-        run: pytest -o addopts='' -q tests --junitxml=generated/junit-py314.xml
+        env:
+          CI_SUBJECT_SHA: ${{ github.event.pull_request.head.sha }}
+        run: pytest --junitxml=generated/junit-py314.xml
 
       - name: Upload inert lock candidate evidence
         if: always()
