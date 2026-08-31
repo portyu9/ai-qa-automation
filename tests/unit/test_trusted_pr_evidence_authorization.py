@@ -28,16 +28,16 @@ def test_trusted_evidence_contract_is_exact_and_candidate_nonexecuting() -> None
     assert result["evidence_verifier"] == "exact-reviewed-git-blob"
     assert result["candidate_execution"] == "none"
 
-    text = (ROOT / ".github" / "workflows" / "trusted-pr-evidence.yml").read_text(
-        encoding="utf-8"
-    )
+    text = (ROOT / ".github" / "workflows" / "trusted-pr-evidence.yml").read_text(encoding="utf-8")
     assert text.count("ref: ${{ github.sha }}") == 2
     assert "ref: ${{ github.event.client_payload.expected_merge_sha }}" not in text
 
 
 def test_manifest_parser_rejects_unknown_duplicate_and_malformed_authority() -> None:
     with pytest.raises(ValueError, match="unknown or duplicate"):
-        evidence._parse_manifest('[{"path":"docs","base_oid":"' + SHA_A + '","subject_oid":"' + SHA_B + '"}]')
+        evidence._parse_manifest(
+            '[{"path":"docs","base_oid":"' + SHA_A + '","subject_oid":"' + SHA_B + '"}]'
+        )
 
     duplicate = [_manifest_item(), _manifest_item()]
     with pytest.raises(ValueError, match="unknown or duplicate"):
@@ -67,7 +67,9 @@ def test_run_match_requires_exact_pr_head_base_and_branch() -> None:
     }
 
     assert evidence._run_matches(run, expected=expected, head_ref="feature")
-    assert not evidence._run_matches(run | {"head_sha": SHA_D}, expected=expected, head_ref="feature")
+    assert not evidence._run_matches(
+        run | {"head_sha": SHA_D}, expected=expected, head_ref="feature"
+    )
     wrong_base = dict(run)
     wrong_base["pull_requests"] = [
         {
@@ -153,7 +155,9 @@ def test_candidate_workflow_binding_rejects_wrong_subject_or_missing_aggregate()
 
     with pytest.raises(ValueError, match="bound to github.sha"):
         evidence._verify_candidate_workflow_binding(
-            _WorkflowApi(valid.replace(evidence.EXPECTED_SUBJECT_BINDING, "CI_SUBJECT_SHA: deadbeef")),
+            _WorkflowApi(
+                valid.replace(evidence.EXPECTED_SUBJECT_BINDING, "CI_SUBJECT_SHA: deadbeef")
+            ),
             SHA_C,
         )
 
