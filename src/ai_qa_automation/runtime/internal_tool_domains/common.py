@@ -21,11 +21,11 @@ ToolHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 
 
 class ToolDecorator(Protocol):
-    """Static contract for the SDK's handler-preserving tool decorator boundary."""
+    """Static contract for the SDK tool decorator; produced tool objects stay opaque here."""
 
     def __call__(
         self, name: str, description: str, input_schema: dict[str, Any]
-    ) -> Callable[[ToolHandler], ToolHandler]: ...
+    ) -> Callable[[ToolHandler], object]: ...
 
 
 def stable_gate_id(prefix: str, payload: Any) -> str:
