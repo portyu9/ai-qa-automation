@@ -32,9 +32,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         content_type = self.headers.get("Content-Type", "")
         user_agent = self.headers.get("User-Agent", "")
-        if (
-            not content_type.lower().startswith("application/json")
-            or not user_agent.startswith("GitHub-Hookshot/")
+        if not content_type.lower().startswith("application/json") or not user_agent.startswith(
+            "GitHub-Hookshot/"
         ):
             self._respond(HTTPStatus.BAD_REQUEST, {"status": "rejected"})
             return
@@ -63,7 +62,9 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             self._respond(HTTPStatus.BAD_REQUEST, {"status": "rejected"})
             return
-        status = HTTPStatus.SERVICE_UNAVAILABLE if result.outcome == "RETRYABLE" else HTTPStatus.ACCEPTED
+        status = (
+            HTTPStatus.SERVICE_UNAVAILABLE if result.outcome == "RETRYABLE" else HTTPStatus.ACCEPTED
+        )
         self._respond(
             status,
             {
