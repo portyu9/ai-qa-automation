@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from ..tools.performance import K6Runner
 from .internal_tool_domains import common as _common
@@ -57,6 +57,7 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError("claude-agent-sdk is required for live agent mode") from exc
 
+    tool_decorator = cast(_common.ToolDecorator, tool)
     registered: dict[str, Any] = {}
     for registrar in (
         register_repository_tools,
@@ -65,10 +66,10 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
         register_browser_tools,
         register_validation_tools,
     ):
-        _merge_registered_tools(registered, registrar(services, tool))
+        _merge_registered_tools(registered, registrar(services, tool_decorator))
     _merge_registered_tools(
         registered,
-        register_performance_tools(services, tool, k6_runner_cls=K6Runner),
+        register_performance_tools(services, tool_decorator, k6_runner_cls=K6Runner),
     )
 
     expected = set(_TOOL_NAMES)
