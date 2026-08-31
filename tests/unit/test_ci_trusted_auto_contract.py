@@ -105,7 +105,7 @@ def test_trusted_auto_contract_rejects_missing_mermaid_subject_binding(
     mutated = text.replace(binding, "", 1)
     path.write_text(mutated, encoding="utf-8")
     monkeypatch.setattr(
-        ci_contract,
+        ci_contract._trusted_auto,
         "EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA",
         ci_contract._git_blob_sha1(mutated),
     )
