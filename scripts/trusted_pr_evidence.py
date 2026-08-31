@@ -2,11 +2,17 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
+import io
 import json
 import os
+import stat
+import urllib.error
 import urllib.parse
+import urllib.request
+import zipfile
 from collections.abc import Mapping
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 if __package__:
@@ -36,6 +42,8 @@ EXPECTED_WORKFLOW_EVENT = "pull_request"
 EXPECTED_REQUIRED_JOB = "Required PR Gate"
 EXPECTED_REQUIRED_STEP = "Require every automatic gate to succeed"
 EXPECTED_SUPPLY_CHAIN_JOB = "Supply Chain / Wheel + SBOM + Container"
+EXPECTED_SUPPLY_CHAIN_ARTIFACT = "supply-chain-evidence"
+EXPECTED_BUILD_MANIFEST = "build-manifest.json"
 EXPECTED_CI_CONTRACT_STEP = "Verify CI authority contract"
 EXPECTED_SUBJECT_BINDING = (
     "CI_SUBJECT_SHA: ${{ github.event_name == 'repository_dispatch' "
@@ -43,6 +51,10 @@ EXPECTED_SUBJECT_BINDING = (
 )
 MAX_WORKFLOW_RUNS = 20
 MAX_JOBS = 100
+MAX_ARTIFACT_BYTES = 4 * 1024 * 1024
+MAX_ARTIFACT_ENTRIES = 32
+MAX_ARTIFACT_UNCOMPRESSED_BYTES = 8 * 1024 * 1024
+MAX_BUILD_MANIFEST_BYTES = 256 * 1024
 PROTECTED_PATHS = (
     ".github",
     ".claude",
@@ -63,6 +75,20 @@ PROTECTED_PATHS = (
     "src/ai_qa_automation/tools/execution_env.py",
 )
 PROTECTED_PATH_SET = frozenset(PROTECTED_PATHS)
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        request: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
+        del request, fp, code, msg, headers, newurl
+        return None
 
 
 def _require_authorization_context() -> None:
@@ -341,6 +367,203 @@ def _select_evidence_run(
     return matches[0]
 
 
+def _artifact_digest(value: Any) -> str:
+    if not isinstance(value, str) or not value.startswith("sha256:"):
+        raise ValueError("supply-chain artifact must provide a SHA-256 digest")
+    digest = value.removeprefix("sha256:")
+    if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+        raise ValueError("supply-chain artifact SHA-256 digest is malformed")
+    return digest
+
+
+def _artifact_redirect_url(
+    *, repository: str, token: str, artifact_id: int
+) -> str:
+    request = urllib.request.Request(
+        f"https://api.github.com/repos/{repository}/actions/artifacts/{artifact_id}/zip",
+        method="GET",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2026-03-10",
+            "User-Agent": "yp-ai-qa-trusted-pr-evidence",
+        },
+    )
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        with opener.open(request, timeout=15):
+            raise RuntimeError("artifact download unexpectedly bypassed the reviewed redirect")
+    except urllib.error.HTTPError as exc:
+        if exc.code not in {302, 303, 307, 308}:
+            detail = exc.read(4096).decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"GitHub artifact redirect request failed with HTTP {exc.code}: {detail}"
+            ) from exc
+        location = exc.headers.get("Location")
+        exc.close()
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"GitHub artifact redirect transport failure: {exc}") from exc
+
+    if not isinstance(location, str) or not location:
+        raise RuntimeError("GitHub artifact redirect did not provide a location")
+    parsed = urllib.parse.urlsplit(location)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+        or parsed.hostname == "api.github.com"
+    ):
+        raise RuntimeError("GitHub artifact redirect target is not an isolated HTTPS storage URL")
+    return location
+
+
+def _download_artifact_archive(
+    *,
+    repository: str,
+    token: str,
+    artifact_id: int,
+    expected_size: int,
+    expected_digest: str,
+) -> bytes:
+    if expected_size < 1 or expected_size > MAX_ARTIFACT_BYTES:
+        raise ValueError("supply-chain artifact size is outside the bounded admission range")
+    location = _artifact_redirect_url(
+        repository=repository,
+        token=token,
+        artifact_id=artifact_id,
+    )
+    request = urllib.request.Request(
+        location,
+        method="GET",
+        headers={"User-Agent": "yp-ai-qa-trusted-pr-evidence"},
+    )
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        with opener.open(request, timeout=15) as response:
+            data = response.read(MAX_ARTIFACT_BYTES + 1)
+    except urllib.error.HTTPError as exc:
+        detail = exc.read(4096).decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"artifact storage download failed with HTTP {exc.code}: {detail}"
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"artifact storage transport failure: {exc}") from exc
+
+    if len(data) > MAX_ARTIFACT_BYTES or len(data) != expected_size:
+        raise ValueError("downloaded supply-chain artifact size does not match trusted metadata")
+    observed_digest = hashlib.sha256(data).hexdigest()
+    if observed_digest != expected_digest:
+        raise ValueError("downloaded supply-chain artifact digest does not match trusted metadata")
+    return data
+
+
+def _verify_build_manifest_archive(archive: bytes, expected_merge_sha: str) -> str:
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
+            infos = bundle.infolist()
+            if not infos or len(infos) > MAX_ARTIFACT_ENTRIES:
+                raise ValueError("supply-chain artifact entry count is outside the bounded range")
+            names: set[str] = set()
+            total_uncompressed = 0
+            manifest_info: zipfile.ZipInfo | None = None
+            for info in infos:
+                name = info.filename
+                path = PurePosixPath(name)
+                mode = info.external_attr >> 16
+                if (
+                    not name
+                    or "\\" in name
+                    or "\x00" in name
+                    or path.is_absolute()
+                    or ".." in path.parts
+                    or name in names
+                    or info.is_dir()
+                    or (mode and stat.S_ISLNK(mode))
+                    or info.flag_bits & 0x1
+                ):
+                    raise ValueError("supply-chain artifact contains an unsafe or duplicate entry")
+                names.add(name)
+                total_uncompressed += info.file_size
+                if total_uncompressed > MAX_ARTIFACT_UNCOMPRESSED_BYTES:
+                    raise ValueError("supply-chain artifact exceeds the uncompressed size bound")
+                if name == EXPECTED_BUILD_MANIFEST:
+                    manifest_info = info
+            if manifest_info is None:
+                raise ValueError("supply-chain artifact is missing build-manifest.json")
+            if manifest_info.file_size < 1 or manifest_info.file_size > MAX_BUILD_MANIFEST_BYTES:
+                raise ValueError("build-manifest.json size is outside the bounded admission range")
+            manifest_bytes = bundle.read(manifest_info)
+    except zipfile.BadZipFile as exc:
+        raise ValueError("supply-chain artifact is not a valid ZIP archive") from exc
+
+    try:
+        manifest = json.loads(manifest_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("build-manifest.json must be valid UTF-8 JSON") from exc
+    payload = _mapping(manifest, label="build manifest")
+    if payload.get("schema_version") != 1 or payload.get("kind") != "unsigned_reproducible_build_manifest":
+        raise ValueError("build manifest schema or kind is not the reviewed evidence format")
+    source = _mapping(payload.get("source"), label="build manifest source")
+    if source.get("commit_sha") != expected_merge_sha:
+        raise ValueError("build manifest is not bound to the authorized prospective merge SHA")
+    if source.get("tracked_worktree_clean") is not True:
+        raise ValueError("build manifest source worktree was not recorded as clean")
+    return _require_sha(source.get("tree_sha"), label="build manifest source tree SHA")
+
+
+def _verify_supply_chain_artifact(
+    api: GitHubApi,
+    *,
+    token: str,
+    run_id: int,
+    expected: PullRequestSubject,
+    head_ref: str,
+) -> dict[str, Any]:
+    artifact_name = urllib.parse.quote(EXPECTED_SUPPLY_CHAIN_ARTIFACT, safe="")
+    payload = api.get_json(
+        f"/repos/{api.repository}/actions/runs/{run_id}/artifacts?per_page=20&name={artifact_name}"
+    )
+    total = payload.get("total_count")
+    artifacts = payload.get("artifacts")
+    if total != 1 or not isinstance(artifacts, list) or len(artifacts) != 1:
+        raise ValueError("exactly one supply-chain evidence artifact is required")
+    artifact = _mapping(artifacts[0], label="supply-chain artifact")
+    if artifact.get("name") != EXPECTED_SUPPLY_CHAIN_ARTIFACT or artifact.get("expired") is not False:
+        raise ValueError("supply-chain evidence artifact is missing, expired, or misnamed")
+    artifact_id = _require_positive_int(artifact.get("id"), label="supply-chain artifact ID")
+    size = _require_positive_int(artifact.get("size_in_bytes"), label="supply-chain artifact size")
+    digest = _artifact_digest(artifact.get("digest"))
+    expected_download_url = (
+        f"https://api.github.com/repos/{api.repository}/actions/artifacts/{artifact_id}/zip"
+    )
+    if artifact.get("archive_download_url") != expected_download_url:
+        raise ValueError("supply-chain artifact download URL is not canonical")
+    workflow_run = _mapping(artifact.get("workflow_run"), label="supply-chain artifact workflow run")
+    if (
+        workflow_run.get("id") != run_id
+        or workflow_run.get("head_sha") != expected.head_sha
+        or workflow_run.get("head_branch") != head_ref
+    ):
+        raise ValueError("supply-chain artifact is not bound to the selected pull-request run")
+
+    archive = _download_artifact_archive(
+        repository=api.repository,
+        token=token,
+        artifact_id=artifact_id,
+        expected_size=size,
+        expected_digest=digest,
+    )
+    tree_sha = _verify_build_manifest_archive(archive, expected.merge_sha)
+    return {
+        "artifact_id": artifact_id,
+        "artifact_sha256": digest,
+        "build_manifest_source_commit": expected.merge_sha,
+        "build_manifest_source_tree": tree_sha,
+    }
+
+
 def verify_trusted_evidence(
     *,
     repository: str,
@@ -360,6 +583,13 @@ def verify_trusted_evidence(
     run = _select_evidence_run(api, expected=expected, head_ref=head_ref)
     run_id = _require_positive_int(run.get("id"), label="workflow run ID")
     job_summary = _verify_jobs(api, run_id)
+    artifact_summary = _verify_supply_chain_artifact(
+        api,
+        token=token,
+        run_id=run_id,
+        expected=expected,
+        head_ref=head_ref,
+    )
 
     # Re-resolve immediately after evidence admission so a head/base/merge change cannot
     # reuse a previously matching run as authorization for a different prospective merge.
@@ -382,6 +612,7 @@ def verify_trusted_evidence(
         "evidence_run_id": run_id,
         "evidence_target_url": expected_url,
         "jobs": job_summary,
+        "supply_chain_artifact": artifact_summary,
     }
 
 
