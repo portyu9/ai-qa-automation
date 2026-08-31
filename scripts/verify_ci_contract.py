@@ -37,7 +37,7 @@ EXPECTED_TRUSTED_EVIDENCE_WORKFLOW_BLOB_SHA = (
     "7cf510e5e345feb72f3e6e5e28d4029079db1876"  # pragma: allowlist secret
 )
 EXPECTED_TRUSTED_EVIDENCE_SCRIPT_BLOB_SHA = (
-    "e85c62b9f10eacb23545b0609d7229e979207c1e"  # pragma: allowlist secret
+    "d7faa4803d0d75f0b9e10c2f65cf6bbef78cce65"  # pragma: allowlist secret
 )
 TRUSTED_EVIDENCE_EVENT = "trusted-pr-evidence-authorization"
 
