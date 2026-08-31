@@ -34,6 +34,15 @@ def test_store_rejects_group_world_writable_parent() -> None:
             root.chmod(0o700)
 
 
+def test_store_rejects_dangling_symlink_database_path() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        link = root / "store.sqlite3"
+        link.symlink_to(root / "missing-target.sqlite3")
+        with pytest.raises(ValueError):
+            DeliveryStore(link)
+
+
 def test_delivery_id_cannot_be_reused_for_different_run() -> None:
     with tempfile.TemporaryDirectory() as td:
         store = DeliveryStore(Path(td) / "store.sqlite3")
@@ -58,3 +67,28 @@ def test_publication_intent_is_irreversible_without_observation() -> None:
         assert duplicate.state == "PUBLISHING"
         with pytest.raises(RuntimeError):
             store.mark_retryable(delivery_id=DELIVERY, error_code="transport")
+
+
+def test_retry_budget_exhaustion_becomes_terminal_blocked() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        store = DeliveryStore(Path(td) / "store.sqlite3")
+        first = store.acquire(delivery_id=DELIVERY, run_id=RUN_ID)
+        assert first.attempt == 1
+        for expected_attempt in (2, 3):
+            store.mark_retryable(delivery_id=DELIVERY, error_code="transport")
+            with store._connection() as conn:
+                conn.execute(
+                    "UPDATE deliveries SET last_attempt_epoch=0 WHERE delivery_id=?",
+                    (DELIVERY,),
+                )
+            lease = store.acquire(delivery_id=DELIVERY, run_id=RUN_ID)
+            assert lease.attempt == expected_attempt
+        store.mark_retryable(delivery_id=DELIVERY, error_code="transport")
+        with store._connection() as conn:
+            conn.execute(
+                "UPDATE deliveries SET last_attempt_epoch=0 WHERE delivery_id=?",
+                (DELIVERY,),
+            )
+        exhausted = store.acquire(delivery_id=DELIVERY, run_id=RUN_ID)
+        assert exhausted.state == "BLOCKED"
+        assert exhausted.terminal
