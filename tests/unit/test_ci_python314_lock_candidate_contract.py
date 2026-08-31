@@ -43,11 +43,12 @@ def test_python314_lock_candidate_contract_is_read_only_and_temporary() -> None:
     candidate = result["workflows"]["python314_lock_candidate"]
 
     assert candidate == {
-        "purpose": "temporary-read-only-lock-candidate",
-        "source": "exact-pr-head-pyproject",
+        "purpose": "temporary-read-only-lock-and-compatibility-candidate",
+        "source": "exact-pr-head-tree",
         "python_version": "3.14.7",
         "uv_version": "0.12.1",
         "resolution": "double-compile-byte-identity",
+        "validation": "hash-locked-install-compile-full-deterministic-pytest",
         "mutation": "none",
         "workflow_definition": "exact-reviewed-git-blob",
     }
@@ -69,7 +70,7 @@ def test_python314_lock_candidate_rejects_write_authority(
         ci_contract.verify_ci_contract(root)
 
 
-def test_python314_lock_candidate_rejects_checkout_authority(
+def test_python314_lock_candidate_rejects_additional_checkout_authority(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -82,7 +83,7 @@ def test_python314_lock_candidate_rejects_checkout_authority(
     )
     _rewrite_and_rebind(root, monkeypatch, old=marker, new=checkout)
 
-    with pytest.raises(ValueError, match="actions/checkout@"):
+    with pytest.raises(ValueError, match="exactly one pinned checkout"):
         ci_contract.verify_ci_contract(root)
 
 
@@ -93,7 +94,7 @@ def test_python314_lock_candidate_rejects_single_resolution(
     root = _copy_contract_repo(tmp_path)
     path = root / ".github" / "workflows" / WORKFLOW_NAME
     text = path.read_text(encoding="utf-8")
-    second = """          uv pip compile generated/pyproject.toml generated/build-backend.in \\
+    second = """          uv pip compile pyproject.toml generated/build-backend.in \\
             --python-version '3.14.7' \\
             --extra dev \\
             --generate-hashes \\
@@ -110,4 +111,36 @@ def test_python314_lock_candidate_rejects_single_resolution(
     )
 
     with pytest.raises(ValueError, match="independently resolve the lock twice"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_python314_lock_candidate_rejects_missing_ci_subject_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_contract_repo(tmp_path)
+    _rewrite_and_rebind(
+        root,
+        monkeypatch,
+        old="          CI_SUBJECT_SHA: ${{ github.event.pull_request.head.sha }}\n",
+        new="          CI_SUBJECT_SHA: ${{ github.sha }}\n",
+    )
+
+    with pytest.raises(ValueError, match="must bind CI_SUBJECT_SHA to the exact PR head"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_python314_lock_candidate_rejects_pytest_selection_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_contract_repo(tmp_path)
+    _rewrite_and_rebind(
+        root,
+        monkeypatch,
+        old="        run: pytest --junitxml=generated/junit-py314.xml\n",
+        new="        run: pytest -o addopts='' -q tests --junitxml=generated/junit-py314.xml\n",
+    )
+
+    with pytest.raises(ValueError, match="must preserve repository pytest selection"):
         ci_contract.verify_ci_contract(root)
