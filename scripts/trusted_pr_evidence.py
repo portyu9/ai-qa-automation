@@ -376,9 +376,7 @@ def _artifact_digest(value: Any) -> str:
     return digest
 
 
-def _artifact_redirect_url(
-    *, repository: str, token: str, artifact_id: int
-) -> str:
+def _artifact_redirect_url(*, repository: str, token: str, artifact_id: int) -> str:
     request = urllib.request.Request(
         f"https://api.github.com/repos/{repository}/actions/artifacts/{artifact_id}/zip",
         method="GET",
@@ -503,7 +501,10 @@ def _verify_build_manifest_archive(archive: bytes, expected_merge_sha: str) -> s
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("build-manifest.json must be valid UTF-8 JSON") from exc
     payload = _mapping(manifest, label="build manifest")
-    if payload.get("schema_version") != 1 or payload.get("kind") != "unsigned_reproducible_build_manifest":
+    if (
+        payload.get("schema_version") != 1
+        or payload.get("kind") != "unsigned_reproducible_build_manifest"
+    ):
         raise ValueError("build manifest schema or kind is not the reviewed evidence format")
     source = _mapping(payload.get("source"), label="build manifest source")
     if source.get("commit_sha") != expected_merge_sha:
@@ -530,7 +531,10 @@ def _verify_supply_chain_artifact(
     if total != 1 or not isinstance(artifacts, list) or len(artifacts) != 1:
         raise ValueError("exactly one supply-chain evidence artifact is required")
     artifact = _mapping(artifacts[0], label="supply-chain artifact")
-    if artifact.get("name") != EXPECTED_SUPPLY_CHAIN_ARTIFACT or artifact.get("expired") is not False:
+    if (
+        artifact.get("name") != EXPECTED_SUPPLY_CHAIN_ARTIFACT
+        or artifact.get("expired") is not False
+    ):
         raise ValueError("supply-chain evidence artifact is missing, expired, or misnamed")
     artifact_id = _require_positive_int(artifact.get("id"), label="supply-chain artifact ID")
     size = _require_positive_int(artifact.get("size_in_bytes"), label="supply-chain artifact size")
@@ -540,7 +544,9 @@ def _verify_supply_chain_artifact(
     )
     if artifact.get("archive_download_url") != expected_download_url:
         raise ValueError("supply-chain artifact download URL is not canonical")
-    workflow_run = _mapping(artifact.get("workflow_run"), label="supply-chain artifact workflow run")
+    workflow_run = _mapping(
+        artifact.get("workflow_run"), label="supply-chain artifact workflow run"
+    )
     if (
         workflow_run.get("id") != run_id
         or workflow_run.get("head_sha") != expected.head_sha
