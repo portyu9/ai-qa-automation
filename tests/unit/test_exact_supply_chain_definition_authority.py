@@ -93,7 +93,7 @@ def test_quality_lane_contract_rejects_stale_python_313_lane(workflow_name: str)
         .replace("evidence-suffix: py314", "evidence-suffix: py313", 1)
     )
 
-    with pytest.raises(ValueError, match="quality matrix|stale Python 3.13"):
+    with pytest.raises(ValueError, match=r"quality matrix|stale Python 3.13"):
         ci_contract._verify_quality_lane_contract(mutated, name=workflow_name)
 
 
@@ -127,7 +127,7 @@ def test_quality_lane_contract_rejects_coverage_on_python_314(workflow_name: str
         1,
     )
 
-    with pytest.raises(ValueError, match="compatibility pytest|coverage authority"):
+    with pytest.raises(ValueError, match=r"compatibility pytest|coverage authority"):
         ci_contract._verify_quality_lane_contract(mutated, name=workflow_name)
 
 
