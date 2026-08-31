@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..tools.performance import K6Runner
 from .internal_tool_domains.browser import register_browser_tools
 from .internal_tool_domains.common import (
     MAX_MODEL_SOURCE_CHARS as _MAX_MODEL_SOURCE_CHARS,
@@ -63,9 +64,12 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
         register_network_tools,
         register_browser_tools,
         register_validation_tools,
-        register_performance_tools,
     ):
         _merge_registered_tools(registered, registrar(services, tool))
+    _merge_registered_tools(
+        registered,
+        register_performance_tools(services, tool, k6_runner_cls=K6Runner),
+    )
 
     expected = set(_TOOL_NAMES)
     observed = set(registered)
