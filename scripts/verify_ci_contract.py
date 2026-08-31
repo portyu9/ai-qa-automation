@@ -291,7 +291,9 @@ def _verify_lock_candidate_workflow(text: str) -> dict[str, Any]:
         )
     )
     if on_block != expected_on:
-        raise ValueError("Python 3.14 lock candidate workflow trigger differs from reviewed definition")
+        raise ValueError(
+            "Python 3.14 lock candidate workflow trigger differs from reviewed definition"
+        )
     permissions = _base._permissions(_base._top_level_block(text, "permissions"))
     if permissions != {"contents": "read"}:
         raise ValueError("Python 3.14 lock candidate workflow must be read-only")
@@ -338,7 +340,7 @@ def _verify_lock_candidate_workflow(text: str) -> dict[str, Any]:
         "--generate-hashes",
         "--no-header",
         "cmp -s generated/dev-py314-a.lock generated/dev-py314-b.lock",
-        "test \"$(stat -c '%s' \"$lock\")\" -le 1048576",
+        'test "$(stat -c \'%s\' "$lock")" -le 1048576',
         "'source_sha': source_sha",
         "'pyproject_sha256': hashlib.sha256(pyproject).hexdigest()",
         "'lock_sha256': hashlib.sha256(lock).hexdigest()",
