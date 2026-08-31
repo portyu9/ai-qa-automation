@@ -7,12 +7,13 @@ from typing import Any
 from ...intelligence.performance import PerformanceAssessor
 from ...models import EvidenceItem, EvidenceKind, ValidationResult, ValidationStatus
 from ...redaction import redact_text
-from ...tools.performance import K6Runner
 from ..k6_authority import k6_gate_payload
 from .common import RuntimeServices, stable_gate_id
 
 
-def register_performance_tools(services: RuntimeServices, tool: Any) -> dict[str, Any]:
+def register_performance_tools(
+    services: RuntimeServices, tool: Any, *, k6_runner_cls: Any
+) -> dict[str, Any]:
     @tool(
         "run_k6",
         "Run a target-bound k6 script against an explicitly non-production environment and assess thresholds.",
@@ -51,7 +52,7 @@ def register_performance_tools(services: RuntimeServices, tool: Any) -> dict[str
                 ],
                 "is_error": True,
             }
-        runner = K6Runner(
+        runner = k6_runner_cls(
             services.workspace,
             services.policy,
             external_egress_enforced=services.k6_external_egress_enforced,
