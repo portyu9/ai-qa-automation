@@ -3,23 +3,23 @@ from __future__ import annotations
 from typing import Any
 
 from ..tools.performance import K6Runner
+from .internal_tool_domains import common as _common
 from .internal_tool_domains.browser import register_browser_tools
-from .internal_tool_domains.common import (
-    MAX_MODEL_SOURCE_CHARS as _MAX_MODEL_SOURCE_CHARS,
-    RuntimeServices,
-    change_revision_closed as _change_revision_closed,
-    coverage_search as _coverage_search,
-    pytest_scope as _pytest_scope,
-    pytest_validation_status as _pytest_validation_status,
-    record_patch_safety_validation as _record_patch_safety_validation,
-    require_closed_revision_before_mutation as _require_closed_revision_before_mutation,
-    stable_gate_id as _stable_gate_id,
-)
 from .internal_tool_domains.network import register_network_tools
 from .internal_tool_domains.performance import register_performance_tools
 from .internal_tool_domains.repository import register_repository_tools
 from .internal_tool_domains.testing import register_testing_tools
 from .internal_tool_domains.validation import register_validation_tools
+
+_MAX_MODEL_SOURCE_CHARS = _common.MAX_MODEL_SOURCE_CHARS
+RuntimeServices = _common.RuntimeServices
+_change_revision_closed = _common.change_revision_closed
+_coverage_search = _common.coverage_search
+_pytest_scope = _common.pytest_scope
+_pytest_validation_status = _common.pytest_validation_status
+_record_patch_safety_validation = _common.record_patch_safety_validation
+_require_closed_revision_before_mutation = _common.require_closed_revision_before_mutation
+_stable_gate_id = _common.stable_gate_id
 
 _TOOL_NAMES = (
     "inspect_repository",
