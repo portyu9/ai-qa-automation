@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import urlparse
 
 from ...evidence import EvidenceStore
@@ -16,6 +17,15 @@ from ..model_source_observation import CoverageSearchObservation, search_test_co
 from ..validation_truth import evaluate_revision_closure
 
 MAX_MODEL_SOURCE_CHARS = 12_000
+ToolHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
+
+
+class ToolDecorator(Protocol):
+    """Static contract for the SDK's handler-preserving tool decorator boundary."""
+
+    def __call__(
+        self, name: str, description: str, input_schema: dict[str, Any]
+    ) -> Callable[[ToolHandler], ToolHandler]: ...
 
 
 def stable_gate_id(prefix: str, payload: Any) -> str:
