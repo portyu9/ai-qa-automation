@@ -29,7 +29,12 @@ from .common import (
 )
 
 
-def register_browser_tools(services: RuntimeServices, tool: ToolDecorator) -> dict[str, Any]:
+def register_browser_tools(
+    services: RuntimeServices,
+    tool: ToolDecorator,
+    *,
+    browser_probe_cls: Any = BrowserProbe,
+) -> dict[str, Any]:
     @tool(
         "inspect_browser",
         "Collect allowlisted browser accessibility, screenshot, console, and network evidence.",
@@ -40,7 +45,7 @@ def register_browser_tools(services: RuntimeServices, tool: ToolDecorator) -> di
         subject = browser_inspection_subject(args["url"])
         allow_hosts = services.network_hosts(args["url"])
         try:
-            result = await BrowserProbe(services.evidence, allow_hosts=allow_hosts).inspect(
+            result = await browser_probe_cls(services.evidence, allow_hosts=allow_hosts).inspect(
                 args["url"]
             )
         except BrowserProbeExecutionError as exc:
@@ -152,7 +157,7 @@ def register_browser_tools(services: RuntimeServices, tool: ToolDecorator) -> di
                 args["url"], args["original_locator"], candidates
             )
             allow_hosts = services.network_hosts(args["url"])
-            verified, evidence_id = await BrowserProbe(
+            verified, evidence_id = await browser_probe_cls(
                 services.evidence, allow_hosts=allow_hosts
             ).verify_locator_candidates(args["url"], args["original_locator"], candidates)
         except BrowserProbeExecutionError as exc:
