@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+from ..tools.api_testing import ApiProbe
+from ..tools.browser_evidence import BrowserProbe
 from ..tools.performance import K6Runner
 from .internal_tool_domains import common as _common
 from .internal_tool_domains.browser import register_browser_tools
@@ -59,14 +61,17 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
 
     tool_decorator = cast(_common.ToolDecorator, tool)
     registered: dict[str, Any] = {}
-    for registrar in (
-        register_repository_tools,
-        register_testing_tools,
-        register_network_tools,
-        register_browser_tools,
-        register_validation_tools,
-    ):
-        _merge_registered_tools(registered, registrar(services, tool_decorator))
+    _merge_registered_tools(registered, register_repository_tools(services, tool_decorator))
+    _merge_registered_tools(registered, register_testing_tools(services, tool_decorator))
+    _merge_registered_tools(
+        registered,
+        register_network_tools(services, tool_decorator, api_probe_cls=ApiProbe),
+    )
+    _merge_registered_tools(
+        registered,
+        register_browser_tools(services, tool_decorator, browser_probe_cls=BrowserProbe),
+    )
+    _merge_registered_tools(registered, register_validation_tools(services, tool_decorator))
     _merge_registered_tools(
         registered,
         register_performance_tools(services, tool_decorator, k6_runner_cls=K6Runner),
