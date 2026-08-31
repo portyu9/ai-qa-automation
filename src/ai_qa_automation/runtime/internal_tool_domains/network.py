@@ -7,7 +7,12 @@ from ...tools.api_testing import ApiProbe, ApiProbeTransportError
 from .common import RuntimeServices, ToolDecorator
 
 
-def register_network_tools(services: RuntimeServices, tool: ToolDecorator) -> dict[str, Any]:
+def register_network_tools(
+    services: RuntimeServices,
+    tool: ToolDecorator,
+    *,
+    api_probe_cls: Any = ApiProbe,
+) -> dict[str, Any]:
     @tool(
         "probe_api",
         "Make one policy-approved HTTP request and register sanitized response evidence.",
@@ -32,7 +37,7 @@ def register_network_tools(services: RuntimeServices, tool: ToolDecorator) -> di
             }
         allow_hosts = services.network_hosts(args["url"])
         try:
-            result = await ApiProbe(
+            result = await api_probe_cls(
                 services.evidence,
                 allow_hosts=allow_hosts,
                 allowed_methods={args["method"]},
