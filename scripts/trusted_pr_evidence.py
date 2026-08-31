@@ -328,7 +328,9 @@ def _select_evidence_run(
         if isinstance(run, dict) and _run_matches(run, expected=expected, head_ref=head_ref)
     ]
     if not matches:
-        raise ValueError("no successful exact-head pull-request CI run matches the authorized subject")
+        raise ValueError(
+            "no successful exact-head pull-request CI run matches the authorized subject"
+        )
     matches.sort(
         key=lambda run: (
             _require_positive_int(run.get("run_attempt"), label="workflow run attempt"),
