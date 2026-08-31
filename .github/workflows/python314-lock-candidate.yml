@@ -73,7 +73,7 @@ jobs:
           uv==0.12.1 --hash=sha256:27211df9b277f440dea438a4e525ba40250fb721ad39b8927eefc2d91f9aea15
           EOF
           python -m pip install --no-deps --only-binary=:all: --require-hashes -r "$RUNNER_TEMP/uv-bootstrap.lock"
-          test "$(uv --version)" = 'uv 0.12.1'
+          uv --version | grep -Eq '^uv 0\.12\.1($| )'
 
       - name: Resolve lock twice and require byte identity
         run: |
@@ -147,7 +147,7 @@ jobs:
               'lock_sha256': hashlib.sha256(lock).hexdigest(),
               'lock_bytes': len(lock),
           }
-          if payload['python_version'] != '3.14.7' or uv_version != 'uv 0.12.1':
+          if payload['python_version'] != '3.14.7' or re.fullmatch(r'uv 0\.12\.1(?: .*)?', uv_version) is None:
               raise SystemExit('lock generator runtime identity drifted')
           Path('generated/lock-provenance.json').write_text(
               json.dumps(payload, indent=2, sort_keys=True) + '\n',
