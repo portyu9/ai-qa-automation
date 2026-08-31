@@ -204,6 +204,8 @@ jobs:
           python scripts/verify_docs.py | tee artifacts/ci/documentation-integrity.json
 
       - name: Render Mermaid documentation with digest-pinned official CLI
+        env:
+          CI_SUBJECT_SHA: ${{ needs.preflight.outputs.merge_sha }}
         run: |
           set -o pipefail
           python scripts/validate_mermaid.py | tee artifacts/ci/mermaid-validation.json
