@@ -23,12 +23,13 @@ from ..browser_validation import (
 )
 from .common import (
     RuntimeServices,
+    ToolDecorator,
     record_patch_safety_validation,
     require_closed_revision_before_mutation,
 )
 
 
-def register_browser_tools(services: RuntimeServices, tool: Any) -> dict[str, Any]:
+def register_browser_tools(services: RuntimeServices, tool: ToolDecorator) -> dict[str, Any]:
     @tool(
         "inspect_browser",
         "Collect allowlisted browser accessibility, screenshot, console, and network evidence.",
