@@ -1,7 +1,7 @@
 name: Temporary Python 3.14 Lock Candidate
 
-# Read-only, secret-free dependency-resolution evidence for the dedicated certification branch.
-# This workflow is temporary and must be removed before the certification PR can be merge-ready.
+# Read-only, secret-free dependency-resolution and compatibility evidence for the dedicated
+# certification branch. This workflow is temporary and must be removed before merge closure.
 on:
   pull_request:
     branches: [main]
@@ -22,53 +22,31 @@ env:
 jobs:
   lock-candidate:
     if: github.head_ref == 'ci-python-314-certification'
-    name: Resolve Python 3.14.7 development lock candidate
+    name: Resolve and prove Python 3.14.7 compatibility candidate
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify exact PR head
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+
       - name: Set up exact Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.14.7"
 
-      - name: Fetch exact revision dependency metadata
-        env:
-          SOURCE_REPOSITORY: ${{ github.repository }}
-          SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          test "$(python -c 'import platform; print(platform.python_version())')" = '3.14.7'
-          python - <<'PY'
-          from __future__ import annotations
-
-          import os
-          import re
-          import urllib.request
-          from pathlib import Path
-
-          repository = os.environ['SOURCE_REPOSITORY']
-          source_sha = os.environ['SOURCE_SHA']
-          if re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository) is None:
-              raise SystemExit('invalid repository identity')
-          if re.fullmatch(r'[0-9a-f]{40}', source_sha) is None:
-              raise SystemExit('invalid source SHA')
-          url = f'https://raw.githubusercontent.com/{repository}/{source_sha}/pyproject.toml'
-          request = urllib.request.Request(url, headers={'User-Agent': 'yp-ai-qa-lock-candidate'})
-          with urllib.request.urlopen(request, timeout=15) as response:
-              if response.geturl() != url:
-                  raise SystemExit('unexpected dependency-metadata redirect')
-              data = response.read(262145)
-          if not data or len(data) > 262144:
-              raise SystemExit('dependency metadata is empty or exceeds 256 KiB')
-          data.decode('utf-8')
-          output = Path('generated/pyproject.toml')
-          output.parent.mkdir(mode=0o700, exist_ok=True)
-          output.write_bytes(data)
-          PY
-
       - name: Install hash-bound lock compiler
         run: |
           set -euo pipefail
+          test "$(python -c 'import platform; print(platform.python_version())')" = '3.14.7'
           cat > "$RUNNER_TEMP/uv-bootstrap.lock" <<'EOF'
           uv==0.12.1 --hash=sha256:27211df9b277f440dea438a4e525ba40250fb721ad39b8927eefc2d91f9aea15
           EOF
@@ -78,14 +56,15 @@ jobs:
       - name: Resolve lock twice and require byte identity
         run: |
           set -euo pipefail
+          mkdir -m 0700 generated
           printf 'hatchling==1.32.0\n' > generated/build-backend.in
-          uv pip compile generated/pyproject.toml generated/build-backend.in \
+          uv pip compile pyproject.toml generated/build-backend.in \
             --python-version '3.14.7' \
             --extra dev \
             --generate-hashes \
             --no-header \
             --output-file generated/dev-py314-a.lock
-          uv pip compile generated/pyproject.toml generated/build-backend.in \
+          uv pip compile pyproject.toml generated/build-backend.in \
             --python-version '3.14.7' \
             --extra dev \
             --generate-hashes \
@@ -127,7 +106,7 @@ jobs:
           repository = os.environ['SOURCE_REPOSITORY']
           if re.fullmatch(r'[0-9a-f]{40}', source_sha) is None:
               raise SystemExit('invalid source SHA')
-          pyproject = Path('generated/pyproject.toml').read_bytes()
+          pyproject = Path('pyproject.toml').read_bytes()
           lock = Path('generated/dev-py314.lock').read_bytes()
           uv_version = subprocess.run(
               ['uv', '--version'],
@@ -154,14 +133,28 @@ jobs:
               encoding='utf-8',
           )
           PY
-          rm generated/pyproject.toml
+
+      - name: Install candidate lock and project
+        run: |
+          set -euo pipefail
+          python -m pip install --require-hashes -r generated/dev-py314.lock
+          python -m pip install --no-deps --no-build-isolation .
+          python -m pip check
+
+      - name: Compile Python sources
+        run: python -m compileall -q src evals examples scripts
+
+      - name: Execute full deterministic compatibility suite
+        run: pytest -o addopts='' -q tests --junitxml=generated/junit-py314.xml
 
       - name: Upload inert lock candidate evidence
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: python314-lock-candidate-${{ github.event.pull_request.head.sha }}
           path: |
             generated/dev-py314.lock
             generated/lock-provenance.json
+            generated/junit-py314.xml
           if-no-files-found: error
           retention-days: 3
