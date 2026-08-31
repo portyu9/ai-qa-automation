@@ -261,7 +261,7 @@ ai-qa doctor
 ai-qa demo
 ```
 
-`make install` selects the matching committed `requirements/dev-py311.lock` or `requirements/dev-py313.lock`, enforces package hashes, installs the project non-editably without dependency resolution, and runs `pip check`. Windows PowerShell and deliberate lock-update procedures are documented in [Setup](docs/SETUP.md) and [Supply-Chain Integrity](docs/SUPPLY_CHAIN.md).
+`make install` selects the matching committed `requirements/dev-py311.lock` or `requirements/dev-py314.lock`, enforces package hashes, installs the project non-editably without dependency resolution, and runs `pip check`. Windows PowerShell and deliberate lock-update procedures are documented in [Setup](docs/SETUP.md) and [Supply-Chain Integrity](docs/SUPPLY_CHAIN.md).
 
 `.env.example` is a reference template only; runtime settings do not automatically load a repository `.env` file.
 
