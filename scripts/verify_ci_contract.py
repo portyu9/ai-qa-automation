@@ -32,7 +32,7 @@ EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
     "44f15cfa9b844307d539d0e2c84405e1f74d56ee"  # pragma: allowlist secret
 )
 EXPECTED_LOCK_CANDIDATE_WORKFLOW_BLOB_SHA = (
-    "71aa73d7e4c4c0dd9661979154c8664adb313faa"  # pragma: allowlist secret
+    "b79156e8041038f69afb7bc9374f1bf4a4d6588c"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
     "c7aec0364b4c1c53220abe6a06674e59430707cb"  # pragma: allowlist secret
@@ -346,7 +346,7 @@ def _verify_lock_candidate_workflow(text: str) -> dict[str, Any]:
         "python -m pip install --no-deps --no-build-isolation .",
         "python -m pip check",
         "run: python -m compileall -q src evals examples scripts",
-        "run: pytest -o addopts='' -q tests --junitxml=generated/junit-py314.xml",
+        "      - name: Execute full deterministic compatibility suite",
         "      - name: Upload inert lock candidate evidence",
         "          name: python314-lock-candidate-${{ github.event.pull_request.head.sha }}",
         "            generated/dev-py314.lock",
@@ -359,6 +359,21 @@ def _verify_lock_candidate_workflow(text: str) -> dict[str, Any]:
             raise ValueError(
                 f"Python 3.14 lock candidate workflow is missing reviewed fragment: {fragment}"
             )
+
+    subject_binding = "          CI_SUBJECT_SHA: ${{ github.event.pull_request.head.sha }}"
+    if semantic.count(subject_binding) != 1:
+        raise ValueError(
+            "Python 3.14 compatibility suite must bind CI_SUBJECT_SHA to the exact PR head"
+        )
+    if "-o addopts=" in semantic:
+        raise ValueError(
+            "Python 3.14 compatibility suite must preserve repository pytest selection"
+        )
+    pytest_command = "run: pytest --junitxml=generated/junit-py314.xml"
+    if semantic.count(pytest_command) != 1:
+        raise ValueError(
+            "Python 3.14 lock candidate must execute the full deterministic test suite"
+        )
     if semantic.count("actions/checkout@") != 1 or semantic.count(checkout_action) != 1:
         raise ValueError("Python 3.14 lock candidate must have exactly one pinned checkout")
     if semantic.count("persist-credentials: false") != 1:
@@ -369,8 +384,6 @@ def _verify_lock_candidate_workflow(text: str) -> dict[str, Any]:
         raise ValueError("Python 3.14 lock candidate must upload evidence exactly once")
     if semantic.count("uv pip compile") != 2:
         raise ValueError("Python 3.14 lock candidate must independently resolve the lock twice")
-    if semantic.count("pytest -o addopts='' -q tests --junitxml=generated/junit-py314.xml") != 1:
-        raise ValueError("Python 3.14 lock candidate must execute the full deterministic test suite")
 
     return {
         "purpose": "temporary-read-only-lock-and-compatibility-candidate",
