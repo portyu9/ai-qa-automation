@@ -19,6 +19,7 @@ from ...tools.safe_patch import SafeTestPatcher
 from ..model_source_observation import read_model_source_confined
 from .common import (
     RuntimeServices,
+    ToolDecorator,
     pytest_scope,
     pytest_validation_status,
     record_patch_safety_validation,
@@ -27,7 +28,7 @@ from .common import (
 )
 
 
-def register_testing_tools(services: RuntimeServices, tool: Any) -> dict[str, Any]:
+def register_testing_tools(services: RuntimeServices, tool: ToolDecorator) -> dict[str, Any]:
     @tool(
         "run_pytest",
         "Execute pytest in the isolated target workspace and capture deterministic evidence.",
