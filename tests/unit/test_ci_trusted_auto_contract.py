@@ -100,10 +100,7 @@ def test_trusted_auto_contract_rejects_missing_mermaid_subject_binding(
     root = _copy_contract_repo(tmp_path)
     path = root / ".github" / "workflows" / "trusted-pr-auto.yml"
     text = path.read_text(encoding="utf-8")
-    binding = (
-        "        env:\n"
-        "          CI_SUBJECT_SHA: ${{ needs.preflight.outputs.merge_sha }}\n"
-    )
+    binding = "        env:\n          CI_SUBJECT_SHA: ${{ needs.preflight.outputs.merge_sha }}\n"
     assert binding in text
     mutated = text.replace(binding, "", 1)
     path.write_text(mutated, encoding="utf-8")
