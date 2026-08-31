@@ -37,7 +37,7 @@ EXPECTED_TRUSTED_EVIDENCE_WORKFLOW_BLOB_SHA = (
     "7cf510e5e345feb72f3e6e5e28d4029079db1876"  # pragma: allowlist secret
 )
 EXPECTED_TRUSTED_EVIDENCE_SCRIPT_BLOB_SHA = (
-    "d70003263b22e5c8be469d7c13c42b52ace3e8c7"  # pragma: allowlist secret
+    "d54d97c41156a289e5d7a771dc37b77a8c20dcf6"  # pragma: allowlist secret
 )
 TRUSTED_EVIDENCE_EVENT = "trusted-pr-evidence-authorization"
 
@@ -65,10 +65,7 @@ def _verify_frozen_trusted_evidence_script(root: Path) -> None:
 
 def _verify_trusted_evidence_workflow(text: str) -> dict[str, Any]:
     semantic = _trusted_auto._base._semantic_text(text)
-    if (
-        _trusted_auto._base._git_blob_sha1(text)
-        != EXPECTED_TRUSTED_EVIDENCE_WORKFLOW_BLOB_SHA
-    ):
+    if _trusted_auto._base._git_blob_sha1(text) != EXPECTED_TRUSTED_EVIDENCE_WORKFLOW_BLOB_SHA:
         raise ValueError(
             "trusted-pr-evidence.yml bytes differ from the exact reviewed evidence authorization definition"
         )
@@ -148,9 +145,7 @@ def _verify_trusted_evidence_workflow(text: str) -> dict[str, Any]:
     )
     for fragment in required_admission:
         if fragment not in admission:
-            raise ValueError(
-                f"trusted evidence admission is missing reviewed fragment: {fragment}"
-            )
+            raise ValueError(f"trusted evidence admission is missing reviewed fragment: {fragment}")
     if "${{ secrets." in admission:
         raise ValueError("trusted evidence admission must be completely secret-free")
 
@@ -165,7 +160,7 @@ def _verify_trusted_evidence_workflow(text: str) -> dict[str, Any]:
         "      - name: Revalidate exact pull-request evidence",
         "          GITHUB_TOKEN: ${{ github.token }}",
         "          EXPECTED_EVIDENCE_RUN_ID: ${{ needs.evidence-admission.outputs.evidence_run_id }}",
-        "          evidence_json=\"$(python scripts/trusted_pr_evidence.py \\",
+        '          evidence_json="$(python scripts/trusted_pr_evidence.py \\',
         '          test "$observed_run_id" = "$EXPECTED_EVIDENCE_RUN_ID"',
         "      - name: Mint dedicated Trusted PR Gate token",
         "          TRUSTED_GATE_APP_CLIENT_ID: ${{ vars.TRUSTED_GATE_APP_CLIENT_ID }}",
@@ -174,7 +169,7 @@ def _verify_trusted_evidence_workflow(text: str) -> dict[str, Any]:
         "      - name: Publish exact-evidence trusted status",
         "          GITHUB_TOKEN: ${{ steps.trusted-app.outputs.token }}",
         "          python scripts/trusted_pr_control.py report \\",
-        "            --job-results-json '{\"validation\":\"success\"}' \\",
+        '            --job-results-json \'{"validation":"success"}\' \\',
         '            --target-url "${{ needs.evidence-admission.outputs.evidence_target_url }}"',
     )
     for fragment in required_reporter:
@@ -219,9 +214,7 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
     trusted_auto = _trusted_auto._verify_trusted_auto_workflow(
         snapshots["trusted-pr-auto.yml"].text
     )
-    trusted_evidence = _verify_trusted_evidence_workflow(
-        snapshots["trusted-pr-evidence.yml"].text
-    )
+    trusted_evidence = _verify_trusted_evidence_workflow(snapshots["trusted-pr-evidence.yml"].text)
     result["workflows"]["trusted_auto"] = trusted_auto
     result["workflows"]["trusted_evidence"] = trusted_evidence
     result["limitations"].append(
