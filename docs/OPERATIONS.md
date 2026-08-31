@@ -304,7 +304,7 @@ The trusted dispatch path executes the prospective merge subject from the defaul
 
 The trusted validation domains cover:
 
-- CPython 3.11.16 and 3.13.15 quality/full deterministic pytest;
+- exact CPython 3.11.16 full-quality validation and exact CPython 3.14.7 deterministic compatibility validation; the 3.11 lane owns Ruff, strict Mypy, full deterministic pytest, and coverage, while the 3.14 lane runs compile plus full deterministic compatibility pytest without duplicating lint/type/coverage authority;
 - the fixed 34-case primary deterministic control evaluation;
 - security scanning;
 - supply-chain verification, runtime dependency audit, SBOM/repeatability/container evidence;

@@ -29,8 +29,9 @@ def test_verifier_reports_exact_reviewed_definition_authority() -> None:
         "compatibility": "Python 3.14.7: compile+pytest",
         "locks": ["requirements/dev-py311.lock", "requirements/dev-py314.lock"],
     }
-    assert ci_result["workflows"]["trusted_auto"]["quality_lanes"] == (
-        ci_result["workflows"]["automatic"]["quality_lanes"]
+    assert (
+        ci_result["workflows"]["trusted_auto"]["quality_lanes"]
+        == (ci_result["workflows"]["automatic"]["quality_lanes"])
     )
     assert supply_chain_result["dockerfile_authority"] == "exact-reviewed-git-blob"
 

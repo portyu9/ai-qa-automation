@@ -135,7 +135,7 @@ Until those external facts are configured and observed, source support for the i
 
 The five automatic validation domains remain:
 
-- exact CPython 3.11.16 and 3.13.15 quality/full deterministic pytest lanes;
+- exact CPython 3.11.16 full-quality validation plus exact CPython 3.14.7 deterministic compatibility validation; Python 3.11 owns Ruff, strict Mypy, full deterministic pytest, and coverage, while Python 3.14 runs compile plus the full deterministic compatibility pytest suite without duplicating lint/type/coverage authority;
 - the fixed 34-case deterministic control evaluation;
 - supply-chain, build-authority, documentation, Mermaid, runtime SBOM, reproducible-wheel, and container validation;
 - Bandit, hash-locked dependency audit, and secret scanning;
@@ -153,7 +153,7 @@ Automatic browser validation does **not** run `playwright install`, `--with-deps
 
 ### Exact workflow definition
 
-`scripts/verify_ci_contract.py` structurally constrains the reviewed `ci.yml` authority model and binds complete workflow bytes to the reviewed Git blob identity. It verifies the trigger/subject model, validation checkout binding, read-only native token authority, trusted Environment/App-token structure, protected-manifest contract, required aggregate, and supply-chain execution definition.
+`scripts/verify_ci_contract.py` structurally constrains the reviewed `ci.yml` authority model and binds complete workflow bytes to the reviewed Git blob identity. It verifies the trigger/subject model, validation checkout binding, read-only native token authority, trusted Environment/App-token structure, protected-manifest contract, required aggregate, quality-lane split, and supply-chain execution definition.
 
 That is source self-consistency evidence. It cannot attest the live Environment restriction, App installation, Actions Policy, or ruleset expected-source binding.
 
@@ -246,7 +246,7 @@ python scripts/verify_ci_contract.py
 
 The verifier fails closed unless the reviewed repository authority model remains intact. Among other invariants it requires:
 
-- exactly the reviewed automatic/manual workflow files;
+- exactly the reviewed automatic/manual/trusted-auto workflow files;
 - bounded no-follow workflow ingestion;
 - fixed `pull_request`, `push`, `merge_group`, and `trusted-pr-validation` trigger contract;
 - no `pull_request_target`;
@@ -256,6 +256,7 @@ The verifier fails closed unless the reviewed repository authority model remains
 - exactly one trusted App private-key/client-ID consumer in the main-only reporter;
 - exact protected-manifest comparison structure;
 - immutable reviewed Action SHAs and exact Python patch versions;
+- the exact Python 3.11 full-quality / Python 3.14 compatibility lane split;
 - five validation checkouts bound to `CI_SUBJECT_SHA` and one separate reporter checkout bound to `github.sha`;
 - reporter owner/main/event guards;
 - reviewed dependency/project-install authority brackets;
