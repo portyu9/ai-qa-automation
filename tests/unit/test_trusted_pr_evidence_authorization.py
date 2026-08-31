@@ -30,11 +30,18 @@ def test_trusted_evidence_contract_is_exact_and_candidate_nonexecuting() -> None
 
     assert result["workflow_definition"] == "exact-reviewed-git-blob"
     assert result["evidence_verifier"] == "exact-reviewed-git-blob"
+    assert result["automatic_evidence_verifier"] == "exact-reviewed-git-blob"
     assert result["candidate_execution"] == "none"
+    assert result["trigger"].startswith("workflow_run:")
 
     text = (ROOT / ".github" / "workflows" / "trusted-pr-evidence.yml").read_text(encoding="utf-8")
-    assert text.count("ref: ${{ github.sha }}") == 2
-    assert "ref: ${{ github.event.client_payload.expected_merge_sha }}" not in text
+    assert text.count("ref: ${{ github.sha }}") == 3
+    assert text.count("python scripts/auto_trusted_preflight.py") == 2
+    assert text.count("python scripts/auto_trusted_evidence.py") == 2
+    assert text.count("EVIDENCE_RUN_ID: ${{ github.event.workflow_run.id }}") == 2
+    assert "repository_dispatch:" not in text
+    assert "github.event.client_payload" not in text
+    assert "ref: ${{ github.event.workflow_run.head_sha }}" not in text
 
 
 def test_manifest_parser_rejects_unknown_duplicate_and_malformed_authority() -> None:
