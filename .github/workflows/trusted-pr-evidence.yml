@@ -1,12 +1,11 @@
-name: Trusted Protected PR Evidence Gate — ƳƤ AI QA Automation Framework
+name: Trusted PR Evidence Authorization — ƳƤ AI QA Automation Framework
 
-# Default-branch-owned automatic fallback for same-repository protected changes.
-# The originating pull_request CI run is evidence only. This workflow never executes
-# candidate bytes and publishes Trusted PR Gate only after exact live revalidation.
+# Owner-authorized maintenance fallback for protected changes.
+# This workflow never executes candidate bytes. It deterministically promotes an already-successful,
+# exact-subject read-only pull_request CI run only after live subject and protected-object admission.
 on:
-  workflow_run:
-    workflows: ["CI — ƳƤ AI QA Automation Framework"]
-    types: [completed]
+  repository_dispatch:
+    types: [trusted-pr-evidence-authorization]
 
 permissions:
   actions: read
@@ -14,68 +13,13 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: trusted-pr-evidence-${{ github.event.workflow_run.head_sha }}
-  cancel-in-progress: true
+  group: trusted-pr-evidence-${{ github.event.client_payload.pr_number }}
+  cancel-in-progress: false
 
 jobs:
-  preflight:
-    name: Automatic Protected-Change Admission
-    if: ${{ github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      eligible: ${{ steps.admission.outputs.eligible }}
-      pr_number: ${{ steps.admission.outputs.pr_number }}
-      head_sha: ${{ steps.admission.outputs.head_sha }}
-      base_sha: ${{ steps.admission.outputs.base_sha }}
-      merge_sha: ${{ steps.admission.outputs.merge_sha }}
-      trusted_sha: ${{ steps.admission.outputs.trusted_sha }}
-      protected_changes_json: ${{ steps.admission.outputs.protected_changes_json }}
-    steps:
-      - name: Checkout trusted default-branch control plane
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-          fetch-depth: 1
-
-      - name: Verify trusted workflow revision
-        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
-        with:
-          python-version: "3.11.16"
-
-      - name: Resolve live protected-change admission
-        id: admission
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          python scripts/auto_trusted_preflight.py \
-            --event "$GITHUB_EVENT_PATH" \
-            --github-output "$GITHUB_OUTPUT"
-
-      - name: Bind preflight to this trusted workflow revision
-        env:
-          ELIGIBLE: ${{ steps.admission.outputs.eligible }}
-          TRUSTED_SHA: ${{ steps.admission.outputs.trusted_sha }}
-          PROTECTED_CHANGES_JSON: ${{ steps.admission.outputs.protected_changes_json }}
-        run: |
-          set -euo pipefail
-          test "$TRUSTED_SHA" = "$GITHUB_SHA"
-          if test "$ELIGIBLE" = "true"; then
-            test "$PROTECTED_CHANGES_JSON" = "[]"
-          else
-            test "$ELIGIBLE" = "false"
-            test "$PROTECTED_CHANGES_JSON" != "[]"
-          fi
-
   evidence-admission:
-    name: Automatic Exact-Run Protected Evidence Admission
-    needs: preflight
-    if: ${{ needs.preflight.result == 'success' && needs.preflight.outputs.eligible == 'false' }}
+    name: Trusted Exact-Subject Evidence Admission
+    if: ${{ github.ref == 'refs/heads/main' && github.actor == github.repository_owner }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -87,47 +31,39 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-          fetch-depth: 1
 
       - name: Verify trusted control-plane revision
-        env:
-          EXPECTED_TRUSTED_SHA: ${{ needs.preflight.outputs.trusted_sha }}
-        run: |
-          set -euo pipefail
-          test "$EXPECTED_TRUSTED_SHA" = "$GITHUB_SHA"
-          test "$(git rev-parse HEAD)" = "$EXPECTED_TRUSTED_SHA"
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.11.16"
 
-      - name: Admit exact originating pull-request evidence
+      - name: Admit exact successful pull-request evidence
         id: admit
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ needs.preflight.outputs.pr_number }}
-          EXPECTED_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
-          EXPECTED_MERGE_SHA: ${{ needs.preflight.outputs.merge_sha }}
-          PROTECTED_MANIFEST_JSON: ${{ needs.preflight.outputs.protected_changes_json }}
-          EVIDENCE_RUN_ID: ${{ github.event.workflow_run.id }}
+          PR_NUMBER: ${{ github.event.client_payload.pr_number }}
+          EXPECTED_HEAD_SHA: ${{ github.event.client_payload.expected_head_sha }}
+          EXPECTED_BASE_SHA: ${{ github.event.client_payload.expected_base_sha }}
+          EXPECTED_MERGE_SHA: ${{ github.event.client_payload.expected_merge_sha }}
+          AUTHORIZED: ${{ github.event.client_payload.authorized }}
+          PROTECTED_MANIFEST_JSON: ${{ toJSON(github.event.client_payload.protected_manifest) }}
         run: |
-          set -euo pipefail
-          python scripts/auto_trusted_evidence.py \
+          test "$AUTHORIZED" = "true"
+          python scripts/trusted_pr_evidence.py \
             --pr-number "$PR_NUMBER" \
             --expected-head-sha "$EXPECTED_HEAD_SHA" \
             --expected-base-sha "$EXPECTED_BASE_SHA" \
             --expected-merge-sha "$EXPECTED_MERGE_SHA" \
             --protected-manifest-json "$PROTECTED_MANIFEST_JSON" \
-            --evidence-run-id "$EVIDENCE_RUN_ID" \
             --github-output "$GITHUB_OUTPUT"
 
   trusted-status:
-    name: Automatic Protected PR Gate Reporter
-    if: ${{ always() && needs.preflight.result == 'success' && needs.preflight.outputs.eligible == 'false' && needs.evidence-admission.result == 'success' }}
+    name: Trusted PR Evidence Gate Reporter
+    if: ${{ always() && needs.evidence-admission.result == 'success' && github.ref == 'refs/heads/main' && github.actor == github.repository_owner }}
     needs:
-      - preflight
       - evidence-admission
     environment:
       name: trusted-pr-gate
@@ -144,77 +80,36 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-          fetch-depth: 1
 
       - name: Verify trusted workflow revision
-        env:
-          EXPECTED_TRUSTED_SHA: ${{ needs.preflight.outputs.trusted_sha }}
-        run: |
-          set -euo pipefail
-          test "$EXPECTED_TRUSTED_SHA" = "$GITHUB_SHA"
-          test "$(git rev-parse HEAD)" = "$EXPECTED_TRUSTED_SHA"
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.11.16"
 
-      - name: Re-resolve automatic protected admission
-        id: final-admission
+      - name: Revalidate exact pull-request evidence
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          python scripts/auto_trusted_preflight.py \
-            --event "$GITHUB_EVENT_PATH" \
-            --github-output "$GITHUB_OUTPUT"
-
-      - name: Require exact final preflight identity
-        env:
-          EXPECTED_PR_NUMBER: ${{ needs.preflight.outputs.pr_number }}
-          EXPECTED_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
-          EXPECTED_MERGE_SHA: ${{ needs.preflight.outputs.merge_sha }}
-          EXPECTED_TRUSTED_SHA: ${{ needs.preflight.outputs.trusted_sha }}
-          EXPECTED_PROTECTED_CHANGES: ${{ needs.preflight.outputs.protected_changes_json }}
-          FINAL_ELIGIBLE: ${{ steps.final-admission.outputs.eligible }}
-          FINAL_PR_NUMBER: ${{ steps.final-admission.outputs.pr_number }}
-          FINAL_HEAD_SHA: ${{ steps.final-admission.outputs.head_sha }}
-          FINAL_BASE_SHA: ${{ steps.final-admission.outputs.base_sha }}
-          FINAL_MERGE_SHA: ${{ steps.final-admission.outputs.merge_sha }}
-          FINAL_TRUSTED_SHA: ${{ steps.final-admission.outputs.trusted_sha }}
-          FINAL_PROTECTED_CHANGES: ${{ steps.final-admission.outputs.protected_changes_json }}
-        run: |
-          set -euo pipefail
-          test "$FINAL_ELIGIBLE" = "false"
-          test "$FINAL_PR_NUMBER" = "$EXPECTED_PR_NUMBER"
-          test "$FINAL_HEAD_SHA" = "$EXPECTED_HEAD_SHA"
-          test "$FINAL_BASE_SHA" = "$EXPECTED_BASE_SHA"
-          test "$FINAL_MERGE_SHA" = "$EXPECTED_MERGE_SHA"
-          test "$FINAL_TRUSTED_SHA" = "$EXPECTED_TRUSTED_SHA"
-          test "$FINAL_TRUSTED_SHA" = "$GITHUB_SHA"
-          test "$FINAL_PROTECTED_CHANGES" = "$EXPECTED_PROTECTED_CHANGES"
-
-      - name: Revalidate exact originating pull-request evidence
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ needs.preflight.outputs.pr_number }}
-          EXPECTED_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
-          EXPECTED_MERGE_SHA: ${{ needs.preflight.outputs.merge_sha }}
-          PROTECTED_MANIFEST_JSON: ${{ needs.preflight.outputs.protected_changes_json }}
-          EVIDENCE_RUN_ID: ${{ github.event.workflow_run.id }}
+          PR_NUMBER: ${{ github.event.client_payload.pr_number }}
+          EXPECTED_HEAD_SHA: ${{ github.event.client_payload.expected_head_sha }}
+          EXPECTED_BASE_SHA: ${{ github.event.client_payload.expected_base_sha }}
+          EXPECTED_MERGE_SHA: ${{ github.event.client_payload.expected_merge_sha }}
+          AUTHORIZED: ${{ github.event.client_payload.authorized }}
+          PROTECTED_MANIFEST_JSON: ${{ toJSON(github.event.client_payload.protected_manifest) }}
           EXPECTED_EVIDENCE_RUN_ID: ${{ needs.evidence-admission.outputs.evidence_run_id }}
         run: |
           set -euo pipefail
-          test "$EVIDENCE_RUN_ID" = "$EXPECTED_EVIDENCE_RUN_ID"
-          python scripts/auto_trusted_evidence.py \
+          test "$AUTHORIZED" = "true"
+          evidence_json="$(python scripts/trusted_pr_evidence.py \
             --pr-number "$PR_NUMBER" \
             --expected-head-sha "$EXPECTED_HEAD_SHA" \
             --expected-base-sha "$EXPECTED_BASE_SHA" \
             --expected-merge-sha "$EXPECTED_MERGE_SHA" \
-            --protected-manifest-json "$PROTECTED_MANIFEST_JSON" \
-            --evidence-run-id "$EVIDENCE_RUN_ID"
+            --protected-manifest-json "$PROTECTED_MANIFEST_JSON")"
+          observed_run_id="$(EVIDENCE_JSON="$evidence_json" python -c 'import json, os; print(json.loads(os.environ["EVIDENCE_JSON"])["evidence_run_id"])')"
+          test "$observed_run_id" = "$EXPECTED_EVIDENCE_RUN_ID"
 
       - name: Mint dedicated Trusted PR Gate token
         id: trusted-app
@@ -260,18 +155,20 @@ jobs:
           echo "::add-mask::$token"
           printf 'token=%s\n' "$token" >> "$GITHUB_OUTPUT"
 
-      - name: Publish automatic exact-evidence trusted status
+      - name: Publish exact-evidence trusted status
         env:
           GITHUB_TOKEN: ${{ steps.trusted-app.outputs.token }}
-          PR_NUMBER: ${{ needs.preflight.outputs.pr_number }}
-          EXPECTED_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
-          EXPECTED_MERGE_SHA: ${{ needs.preflight.outputs.merge_sha }}
+          PR_NUMBER: ${{ github.event.client_payload.pr_number }}
+          EXPECTED_HEAD_SHA: ${{ github.event.client_payload.expected_head_sha }}
+          EXPECTED_BASE_SHA: ${{ github.event.client_payload.expected_base_sha }}
+          EXPECTED_MERGE_SHA: ${{ github.event.client_payload.expected_merge_sha }}
+          AUTHORIZED: ${{ github.event.client_payload.authorized }}
         run: |
-          python scripts/auto_trusted_report.py \
+          python scripts/trusted_pr_control.py report \
             --pr-number "$PR_NUMBER" \
             --expected-head-sha "$EXPECTED_HEAD_SHA" \
             --expected-base-sha "$EXPECTED_BASE_SHA" \
             --expected-merge-sha "$EXPECTED_MERGE_SHA" \
+            --authorized "$AUTHORIZED" \
             --job-results-json '{"validation":"success"}' \
             --target-url "${{ needs.evidence-admission.outputs.evidence_target_url }}"
