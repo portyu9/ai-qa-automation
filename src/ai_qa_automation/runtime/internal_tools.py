@@ -80,7 +80,26 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
             f"internal MCP tool registry mismatch: missing={missing!r} extra={extra!r}"
         )
 
-    tools = [registered[name] for name in _TOOL_NAMES]
+    tools = [
+        registered["inspect_repository"],
+        registered["run_pytest"],
+        registered["probe_api"],
+        registered["inspect_browser"],
+        registered["classify_failure"],
+        registered["read_test_file"],
+        registered["search_test_coverage"],
+        registered["plan_tests"],
+        registered["prioritize_regression"],
+        registered["review_python_test"],
+        registered["create_test_file"],
+        registered["verify_locator_candidates"],
+        registered["propose_locator_heal"],
+        registered["apply_locator_heal"],
+        registered["validate_json_contract"],
+        registered["analyze_ci_failure"],
+        registered["inspect_mobile_runtime"],
+        registered["run_k6"],
+    ]
     server = create_sdk_mcp_server(name="qa", version="1.0.0", tools=tools)
     names = [f"mcp__qa__{name}" for name in _TOOL_NAMES]
     return server, names
