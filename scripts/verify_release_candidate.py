@@ -180,7 +180,7 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
             handle.write(rendered)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
+        temporary.replace(path)
     finally:
         if temporary.exists():
             temporary.unlink()
