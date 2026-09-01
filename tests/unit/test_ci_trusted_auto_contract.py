@@ -93,6 +93,27 @@ def test_trusted_auto_contract_rejects_removed_protected_path(tmp_path: Path) ->
         ci_contract.verify_ci_contract(root)
 
 
+def test_trusted_auto_contract_rejects_missing_mermaid_subject_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_contract_repo(tmp_path)
+    path = root / ".github" / "workflows" / "trusted-pr-auto.yml"
+    text = path.read_text(encoding="utf-8")
+    binding = "        env:\n          CI_SUBJECT_SHA: ${{ needs.preflight.outputs.merge_sha }}\n"
+    assert binding in text
+    mutated = text.replace(binding, "", 1)
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract._trusted_auto,
+        "EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA",
+        ci_contract._git_blob_sha1(mutated),
+    )
+
+    with pytest.raises(ValueError, match="Mermaid validation must bind CI_SUBJECT_SHA"):
+        ci_contract.verify_ci_contract(root)
+
+
 def test_trusted_auto_contract_rejects_reporter_secret_before_final_revalidation(
     tmp_path: Path,
 ) -> None:

@@ -30,7 +30,7 @@ LOCK_NAMES = (
     "base-image.lock",
     "build-py311.lock",
     "dev-py311.lock",
-    "dev-py313.lock",
+    "dev-py314.lock",
     "runtime-py311.lock",
 )
 

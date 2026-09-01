@@ -24,7 +24,7 @@ EXPECTED_LOCK_NAMES = {
     "base-image.lock",
     "build-py311.lock",
     "dev-py311.lock",
-    "dev-py313.lock",
+    "dev-py314.lock",
     "runtime-py311.lock",
 }
 EXPECTED_ACTION_SHAS = {
@@ -365,9 +365,9 @@ def _verify_locks(root: Path, pyproject: dict[str, Any]) -> tuple[dict[str, Any]
         snapshots["dev-py311.lock"].text,
         source=str(requirements_dir / "dev-py311.lock"),
     )
-    dev313 = _parse_hash_lock_text(
-        snapshots["dev-py313.lock"].text,
-        source=str(requirements_dir / "dev-py313.lock"),
+    dev314 = _parse_hash_lock_text(
+        snapshots["dev-py314.lock"].text,
+        source=str(requirements_dir / "dev-py314.lock"),
     )
 
     project = pyproject["project"]
@@ -375,7 +375,7 @@ def _verify_locks(root: Path, pyproject: dict[str, Any]) -> tuple[dict[str, Any]
     dev_declared = runtime_declared + list(project.get("optional-dependencies", {}).get("dev", []))
     _assert_declared_requirements_satisfied(runtime_declared, runtime, context="runtime lock")
     _assert_declared_requirements_satisfied(dev_declared, dev311, context="Python 3.11 dev lock")
-    _assert_declared_requirements_satisfied(dev_declared, dev313, context="Python 3.13 dev lock")
+    _assert_declared_requirements_satisfied(dev_declared, dev314, context="Python 3.14 dev lock")
 
     build_requires = list(pyproject["build-system"].get("requires", []))
     if build_requires != ["hatchling==1.32.0"]:
@@ -396,7 +396,7 @@ def _verify_locks(root: Path, pyproject: dict[str, Any]) -> tuple[dict[str, Any]
     lock_summary["build-py311.lock"]["packages"] = len(build)
     lock_summary["runtime-py311.lock"]["packages"] = len(runtime)
     lock_summary["dev-py311.lock"]["packages"] = len(dev311)
-    lock_summary["dev-py313.lock"]["packages"] = len(dev313)
+    lock_summary["dev-py314.lock"]["packages"] = len(dev314)
     return lock_summary, snapshots["base-image.lock"].text.strip()
 
 
@@ -430,7 +430,7 @@ def _verify_workflow(root: Path) -> dict[str, str]:
     workflow = _read_regular_text(root / ".github" / "workflows" / "ci.yml", max_bytes=256 * 1024)
     if "ubuntu-latest" in workflow:
         raise ValueError("permanent CI must not use the moving ubuntu-latest label")
-    if '"3.11.16"' not in workflow or '"3.13.15"' not in workflow:
+    if '"3.11.16"' not in workflow or '"3.14.7"' not in workflow:
         raise ValueError("permanent CI must name exact supported Python patch versions")
     if (
         "pip install --upgrade" in workflow

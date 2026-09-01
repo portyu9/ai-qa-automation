@@ -16,7 +16,7 @@ The repository separates supply-chain subjects instead of treating â€œthe buildâ
 | Subject | Repository authority | Evidence produced |
 |---|---|---|
 | Python application/runtime graph | `requirements/runtime-py311.lock` | exact versions + accepted SHA-256 package hashes |
-| Development/verification graphs | `requirements/dev-py311.lock`, `requirements/dev-py313.lock` | exact interpreter-specific verification environments |
+| Development/verification graphs | `requirements/dev-py311.lock`, `requirements/dev-py314.lock` | exact interpreter-specific verification environments |
 | Automatic dependency-install definitions | exact reviewed Git-blob identities for all five committed `.lock` files | pre-install and post-install build-authority verification before project code or later CI tools run |
 | Python build backend graph | `requirements/build-py311.lock` + `hatchling==1.32.0` | isolated backend dependency graph, separate from runtime |
 | Project build/install authority | exact static `pyproject.toml` build/Hatch configuration, bounded README/license/source inputs, entry-point constraints, and no installed Hatch plugin surface | checkout and per-archive build-authority JSON evidence |
@@ -110,7 +110,7 @@ Hash-required installation is insufficient if an unreviewed candidate can first 
 
 `scripts/verify_build_authority.py` therefore validates the **exact five reviewed lock-file bytes before automatic dependency installation**. The standard-library-only boundary requires:
 
-- exactly `base-image.lock`, `build-py311.lock`, `dev-py311.lock`, `dev-py313.lock`, and `runtime-py311.lock`;
+- exactly `base-image.lock`, `build-py311.lock`, `dev-py311.lock`, `dev-py314.lock`, and `runtime-py311.lock`;
 - each file's reviewed Git blob identity;
 - descriptor-relative no-follow directory/file observation;
 - bounded requirements-directory enumeration;
@@ -218,7 +218,7 @@ Permanent CI uses exact reviewed GitHub Action commit SHAs for:
 
 The trusted App token is minted without introducing an additional marketplace Action. The Ruff pre-commit mirror remains pinned to an exact repository commit. Public Git/action/blob SHA literals use narrow secret-scan allowlist annotations only where necessary because they are provenance identifiers, not credentials.
 
-CI names exact CPython patch releases (`3.11.16`, `3.13.15`) and the `ubuntu-24.04` runner family instead of `ubuntu-latest`.
+CI names exact CPython patch releases `3.11.16` and `3.14.7` and the `ubuntu-24.04` runner family instead of `ubuntu-latest`. Python 3.11.16 is the full-quality authority; Python 3.14.7 is the deterministic compatibility lane.
 
 > [!CAUTION]
 > `ubuntu-24.04` is a hosted-runner family label, **not an immutable runner-image digest**. GitHub can service that label with newer runner/browser/tool images. The repository records this as an environment boundary rather than calling hosted CI hermetic.

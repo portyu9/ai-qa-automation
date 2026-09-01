@@ -26,7 +26,7 @@ Each mode has its own evidence source. Local configuration does not stand in for
 
 ## Install
 
-Package metadata declares runtime compatibility with **Python 3.11+**. That installer range is intentionally broader than the repository-certified development matrix: reproducible repository validation is currently lock-bound and continuously exercised only on exact **CPython 3.11.16** and **3.13.15**. Other accepted minors, including 3.12, are **not repository-certified environments** until a matching development lock and trusted CI evidence exist. Package acceptance must not be reported as repository verification.
+Package metadata declares runtime compatibility with **Python 3.11+**. That installer range is intentionally broader than the repository-certified development matrix: reproducible repository validation is lock-bound to exact **CPython 3.11.16** as the primary/full-quality authority and exact **CPython 3.14.7** as the compatibility lane. Python 3.11 owns compile, Ruff, strict Mypy, full deterministic pytest, and coverage; Python 3.14 owns compile and the full deterministic compatibility pytest suite without duplicating lint/type/coverage authority. Other accepted minors are **not repository-certified environments** until a matching development lock and trusted CI evidence exist. Package acceptance must not be reported as repository verification.
 
 Dependency installation is intentionally lock-bound. Do not replace the commands below with an editable `.[dev]` install or a live resolver upgrade when the goal is to reproduce repository-controlled verification.
 
@@ -38,7 +38,7 @@ source .venv/bin/activate
 make install
 ```
 
-`make install` selects the committed `requirements/dev-py311.lock` or `requirements/dev-py313.lock` from the active interpreter, installs it with `--require-hashes`, installs the local project non-editably with `--no-deps --no-build-isolation`, and runs `pip check`.
+`make install` selects the committed `requirements/dev-py311.lock` or `requirements/dev-py314.lock` from the active interpreter, installs it with `--require-hashes`, installs the local project non-editably with `--no-deps --no-build-isolation`, and runs `pip check`.
 
 ### Windows PowerShell
 
