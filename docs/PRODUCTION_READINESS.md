@@ -285,7 +285,7 @@ A mature production review should be able to answer these without appealing to â
 - Can one resource dimension be exhausted through another unbounded path?
 - Can a pull-request-controlled GitHub Actions workflow publish the identity required for `Trusted PR Gate`?
 - Can a candidate ref obtain the dedicated reporter App private key or bypass the `trusted-pr-gate` Environment restriction?
-- Can a stale or partial protected-path manifest authorize different control-plane bytes than the owner reviewed?
+- Can protected maintenance proceed without an independently administered exact one-shot policy for the current protected-object transition set?
 - Can a same-named status from GitHub Actions satisfy a ruleset intended to require the dedicated reporter App?
 
 A material weakness should produce a narrower deterministic control, a regression/security test, an adversarial evaluation, or an explicit deployment boundaryâ€”not stronger prompt wording alone.
@@ -294,27 +294,29 @@ A material weakness should produce a narrower deterministic control, a regressio
 
 ## CI/CD execution design
 
-`.github/workflows/ci.yml` supports automatic `pull_request` development feedback and fixed trusted `repository_dispatch`. Ordinary PR validation is read-only, secret-free, and bound to the exact GitHub event subject. Its result is useful deterministic evidence but not terminal merge authority.
+`.github/workflows/ci.yml` provides automatic `pull_request`, `push` to `main`, and `merge_group` validation. Those jobs are read-only, secret-free, bind execution to `github.sha`, and produce deterministic development evidence rather than terminal merge authority.
 
-The owner trusted-dispatch path executes the exact supplied prospective merge subject from the default-branch workflow definition. Before repository scripts run, the Supply Chain preflight verifies the exact `(base, head, merge)` relationship and requires an owner-supplied protected-root manifest to equal the complete observed base/subject Git-object changes for protected roots. An empty manifest authorizes no protected changes.
+The ordinary validation graph covers quality/full deterministic pytest, the fixed 34-case primary evaluator, security scanning, supply-chain/SBOM/repeatability/container evidence, and deterministic Playwright reference-SUT coverage. `Required PR Gate` uses `if: always()` and fails unless every prerequisite succeeds; it remains an internal aggregate of the evidence that actually ran.
 
-The trusted validation path covers quality/full deterministic pytest, the 34-case primary evaluator, security scanning, supply-chain/SBOM/repeatability/container evidence, and deterministic Playwright reference-SUT coverage. `Required PR Gate` uses `if: always()` and fails unless every prerequisite succeeds; it remains internal aggregate evidence.
+Routine source-only authorization is a separate default-branch trust path in `.github/workflows/trusted-pr-auto.yml`, woken by reviewed ordinary CI completion through `workflow_run`. The wake-up payload is not authority. Trusted bytes independently re-fetch the triggering run, current `main`, the live same-repository PR, prospective merge and ordered parents, and protected Git objects. Admission requires exact identity and zero protected-root drift. Deterministic validation executes under the trusted workflow, admission is re-run immediately before publication, and only the terminal reporter enters Environment `trusted-pr-gate` to obtain the dedicated GitHub App credential and publish `Trusted PR Gate`.
 
-Protected merge authority is intentionally separated from GitHub Actions. Job `trusted-status` runs only for owner `repository_dispatch` on `refs/heads/main`, enters Environment `trusted-pr-gate`, keeps native GitHub Actions permissions read-only, and mints a short-lived dedicated GitHub App installation token with only the read/write permissions needed for PR identity reads and commit-status publication. `scripts/trusted_pr_control.py` revalidates the live PR/head/base/merge-ref subject immediately before terminal status write.
+A PR that changes a protected authority root is deliberately ineligible for that routine path. Protected maintenance uses the independently deployed `scripts/trusted_gate_service/` service and an independently administered one-shot policy that pins the exact repository identity, PR number, head SHA, current `main` base SHA, prospective merge SHA, complete protected-object transitions, and bounded validity window. Only after policy admission may ordinary CI be accepted as execution evidence; the external service independently verifies the exact run, jobs, artifact and build-manifest subject, re-resolves the live subject before publication, and uses durable publication/reconciliation semantics that do not automatically replay an ambiguous status POST.
 
-The repository source cannot make that design active by itself. Deployment must separately establish and observe:
+The repository-owned `repository_dispatch` maintenance/reporting paths are retired. They are not an emergency or availability fallback for the external gate, and their removal does not authorize deletion of the Environment-held App credential while `trusted-pr-auto.yml` still depends on that credential for routine automatic terminal publication.
+
+Repository source cannot make either trusted path active by assertion. Deployment must separately establish and observe:
 
 - the dedicated App installation and least-privilege permission set;
-- Environment `trusted-pr-gate` restricted so candidate refs cannot obtain the private key;
-- the App client ID and private key stored in the Environment rather than repository content;
-- an Actions Policy that permits intended automatic read-only PR feedback and owner trusted dispatch without widening App credential access;
+- Environment `trusted-pr-gate` restrictions that keep the automatic App credential outside candidate refs;
+- the independently deployed protected-maintenance service, webhook binding, credential custody, and active exact one-shot policy when protected roots change;
+- an Actions Policy that permits intended read-only feedback and trusted default-branch automation without widening credential access; and
 - `Protect Main` requiring `Trusted PR Gate` from the **dedicated App integration** with strict/up-to-date semantics and no persistent bypass.
 
-Historical probe #50 / run #634 demonstrated an earlier dispatch-only control plane in which GitHub Actions integration ID `15368` published `Trusted PR Gate`. That evidence remains historical; it does not certify the dedicated-App migration.
+Historical statuses prove only the exact revisions and control planes that produced them. They cannot certify a newer base, head, prospective merge, deployment revision, policy, or ruleset state.
 
 `.github/workflows/manual-validation.yml` remains `workflow_dispatch` only and outside protected merge evidence. Repository-visible H-series readiness and credentialed Agent SDK smoke are separate evidence classes; the model credential remains step-scoped when that path is executable.
 
-`scripts/verify_ci_contract.py` deterministically checks repository-owned workflow authority and exact workflow bytes. It cannot attest the live App, Environment, Actions Policy, ruleset expected-source binding, or later administrative drift. See [CI/CD and Repository Governance](CI_CD.md) and [Trusted PR control plane](TRUSTED_PR_CONTROL_PLANE.md).
+`scripts/verify_ci_contract.py` deterministically checks repository-owned workflow authority and exact workflow bytes. It cannot attest the live App, Environment, external deployment, webhook, one-shot policy, Actions Policy, ruleset expected-source binding, or later administrative drift. See [CI/CD and Repository Governance](CI_CD.md) and [Trusted PR control plane](TRUSTED_PR_CONTROL_PLANE.md).
 
 ---
 
