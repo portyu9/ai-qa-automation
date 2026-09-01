@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from dataclasses import replace
-from typing import Any, Callable
+from typing import Any
 
-from .store import DeliveryLease, MAX_RECORDS, RETRY_DELAY_SECONDS, RETRY_LIMIT
+from .store import MAX_RECORDS, RETRY_DELAY_SECONDS, RETRY_LIMIT, DeliveryLease
 
 PROCESSING_LEASE_SECONDS = 60
 MAX_SUBJECT_JSON_BYTES = 64 * 1024
