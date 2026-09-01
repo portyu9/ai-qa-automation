@@ -302,7 +302,9 @@ def _verify_release_candidate_workflow(text: str) -> dict[str, Any]:
         " -e .",
     ):
         if forbidden in semantic:
-            raise ValueError(f"release-candidate.yml contains forbidden authority token: {forbidden}")
+            raise ValueError(
+                f"release-candidate.yml contains forbidden authority token: {forbidden}"
+            )
     if base.CACHE_CONFIGURATION_RE.search(semantic):
         raise ValueError("release-candidate.yml dependency caching is forbidden")
 
@@ -327,8 +329,8 @@ def _verify_release_candidate_workflow(text: str) -> dict[str, Any]:
         'test "$GITHUB_REF" = "refs/heads/main"',
         'test "$(git rev-parse HEAD)" = "$RELEASE_SUBJECT_SHA"',
         'evidence_root="$RUNNER_TEMP/aiqa-release-candidate"',
-        "mkdir -m 700 \"$evidence_root\"",
-        "printf 'RELEASE_EVIDENCE_DIR=%s\\n' \"$evidence_root\" >> \"$GITHUB_ENV\"",
+        'mkdir -m 700 "$evidence_root"',
+        'printf \'RELEASE_EVIDENCE_DIR=%s\\n\' "$evidence_root" >> "$GITHUB_ENV"',
         f"uses: actions/setup-python@{base.EXPECTED_ACTION_SHAS['actions/setup-python']}",
         'python-version: "3.11.16"',
         "python scripts/verify_release_candidate.py",
@@ -342,7 +344,7 @@ def _verify_release_candidate_workflow(text: str) -> dict[str, Any]:
         '--wheel-b "${wheel_b[0]}"',
         '--output "$RELEASE_EVIDENCE_DIR/release-manifest.json"',
         "/usr/bin/sha256sum",
-        "/usr/bin/git ls-remote \"https://github.com/${GITHUB_REPOSITORY}.git\" refs/heads/main",
+        '/usr/bin/git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" refs/heads/main',
         'test "$live_main" = "$RELEASE_SUBJECT_SHA"',
         '"$RELEASE_EVIDENCE_DIR/main-revalidation.json"',
         f"uses: actions/upload-artifact@{base.EXPECTED_ACTION_SHAS['actions/upload-artifact']}",
@@ -355,16 +357,23 @@ def _verify_release_candidate_workflow(text: str) -> dict[str, Any]:
     for snippet in required:
         if snippet not in semantic:
             raise ValueError(f"release-candidate.yml missing reviewed invariant: {snippet}")
-    if semantic.count(f"uses: actions/checkout@{base.EXPECTED_ACTION_SHAS['actions/checkout']}") != 1:
+    if (
+        semantic.count(f"uses: actions/checkout@{base.EXPECTED_ACTION_SHAS['actions/checkout']}")
+        != 1
+    ):
         raise ValueError("release-candidate.yml must have exactly one exact-subject checkout")
     if semantic.count("python scripts/verify_release_candidate.py") != 2:
-        raise ValueError("release-candidate.yml must verify identity before and after package build")
+        raise ValueError(
+            "release-candidate.yml must verify identity before and after package build"
+        )
     if semantic.count("python -m pip wheel --no-deps --no-build-isolation") != 2:
         raise ValueError("release-candidate.yml must build exactly two reviewed wheels")
     if semantic.count("python scripts/verify_build_authority.py --root") != 2:
         raise ValueError("release-candidate.yml must independently verify both archive roots")
     if semantic.count("/usr/bin/git ls-remote") != 1:
-        raise ValueError("release-candidate.yml must terminally revalidate current main exactly once")
+        raise ValueError(
+            "release-candidate.yml must terminally revalidate current main exactly once"
+        )
 
     return {
         "trigger": "workflow_dispatch",
