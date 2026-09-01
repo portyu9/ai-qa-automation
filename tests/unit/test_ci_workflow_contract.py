@@ -181,8 +181,7 @@ def test_ci_contract_rejects_legacy_trusted_status_job_reintroduction(tmp_path: 
             "    runs-on: ubuntu-24.04\n"
             "    steps:\n"
             "      - name: Forbidden legacy reporter\n"
-            "        run: true\n\n"
-            + marker,
+            "        run: true\n\n" + marker,
             1,
         ),
         encoding="utf-8",
