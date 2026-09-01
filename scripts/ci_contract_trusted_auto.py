@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -14,9 +13,9 @@ _base = importlib.util.module_from_spec(_BASE_SPEC)
 sys.modules[_BASE_SPEC.name] = _base
 _BASE_SPEC.loader.exec_module(_base)
 
-# Preserve the complete hardened verifier API because the existing adversarial tests import
-# its private helpers directly. This wrapper adds independently frozen workflow contracts
-# without weakening any pre-existing invariant.
+# Preserve the complete hardened verifier helper API because the top-level contract and
+# adversarial tests import private helpers directly. This extension owns only the automatic
+# trusted workflow contract; ordinary CI authority is verified by verify_ci_contract.py.
 for _export_name in dir(_base):
     if not _export_name.startswith("__"):
         globals()[_export_name] = getattr(_base, _export_name)
@@ -55,9 +54,6 @@ TRUSTED_AUTO_PROTECTED_PATHS = (
     "src/ai_qa_automation/tools/execution_env.py",
 )
 
-# The base verifier must accept the additional independently frozen workflow definition
-# before it performs its existing exact workflow-set and immutable-action checks. No other
-# base invariant is changed.
 _base.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
 
 
@@ -271,32 +267,6 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "quality_lanes": quality_lanes,
         "terminal_revalidation": "fresh-live-admission-plus-shared-pr-head-base-merge-resolver",
         "status_writer": "dedicated-github-app",
-        "maintenance_fallback": "owner-repository-dispatch-exact-object-manifest",
+        "maintenance_authority": "independent-external-one-shot-exact-subject-gate",
         "workflow_definition": "exact-reviewed-git-blob",
     }
-
-
-def verify_ci_contract(root: Path) -> dict[str, Any]:
-    root = root.resolve()
-    _verify_frozen_base()
-    _base.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
-    result = _base.verify_ci_contract(root)
-    snapshots = _base._read_workflow_set(root / ".github" / "workflows")
-    trusted_auto = _verify_trusted_auto_workflow(snapshots["trusted-pr-auto.yml"].text)
-    result["workflows"]["trusted_auto"] = trusted_auto
-    result["limitations"].append(
-        "Automatic trusted admission intentionally refuses any PR that changes a protected authority root; those maintenance changes still require the explicit owner repository_dispatch manifest path."
-    )
-    result["limitations"].append(
-        "Repository source can verify the workflow_run design but cannot prove external Actions Policy permits workflow_run until a post-merge live proof run is observed."
-    )
-    return result
-
-
-def main() -> None:
-    root = Path(__file__).resolve().parents[1]
-    print(json.dumps(verify_ci_contract(root), indent=2, sort_keys=True))
-
-
-if __name__ == "__main__":
-    main()
