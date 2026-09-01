@@ -30,7 +30,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
-    "3297ca8b26f0eb038fea12a6ba01d2474b6ae8b5"  # pragma: allowlist secret
+    "9f85471d3c8f27a134b60274a248d2bc8a654d06"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
     "66c0bf8aee2633bfb51c83029b0251f2d81dae29"  # pragma: allowlist secret
@@ -57,9 +57,7 @@ def _verify_ordinary_checkout_binding(text: str) -> int:
     checkout = f"uses: actions/checkout@{base.EXPECTED_ACTION_SHAS['actions/checkout']}"
     checkout_count = semantic.count(checkout)
     if checkout_count != base.EXPECTED_AUTOMATIC_SUBJECT_CHECKOUT_COUNT:
-        raise ValueError(
-            "ci.yml: checkout count must equal the five ordinary validation subjects"
-        )
+        raise ValueError("ci.yml: checkout count must equal the five ordinary validation subjects")
     if semantic.count("ref: ${{ env.CI_SUBJECT_SHA }}") != checkout_count:
         raise ValueError("ci.yml: every validation checkout must bind to env.CI_SUBJECT_SHA")
     if semantic.count("persist-credentials: false") != checkout_count:
@@ -268,9 +266,7 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
     actions = base._verify_action_revisions(workflows)
     ordinary = _verify_ordinary_ci_workflow(workflows["ci.yml"])
     manual = base._verify_manual_workflow(workflows["manual-validation.yml"])
-    trusted_auto = _trusted_auto._verify_trusted_auto_workflow(
-        workflows["trusted-pr-auto.yml"]
-    )
+    trusted_auto = _trusted_auto._verify_trusted_auto_workflow(workflows["trusted-pr-auto.yml"])
     return {
         "schema_version": 1,
         "result": "PASS",
