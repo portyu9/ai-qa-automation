@@ -308,7 +308,6 @@ class RunJournal:
             with self._pinned_parent() as parent_fd:
                 self._assert_owned_path(parent_fd)
                 fd = self._open_entry(parent_fd, flags)
-                initial: os.stat_result | None = None
                 try:
                     initial = os.fstat(fd)
                     self._assert_opened_entry_current(
@@ -316,6 +315,7 @@ class RunJournal:
                         opened=initial,
                         label="append open",
                     )
+                    self._revalidate_parent(parent_fd)
                     if initial.st_size + len(rendered_bytes) > _MAX_JOURNAL_BYTES:
                         raise BudgetExceededError("run-journal byte budget exhausted")
                     with os.fdopen(fd, "a", encoding="utf-8") as stream:
@@ -411,6 +411,7 @@ class RunJournal:
                         opened=initial,
                         label="verification open",
                     )
+                    self._revalidate_parent(parent_fd)
                     initial_signature = _stable_file_signature(initial)
                     stream = os.fdopen(fd, "rb", closefd=False)
                     try:
