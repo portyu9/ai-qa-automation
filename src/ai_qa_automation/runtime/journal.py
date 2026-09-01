@@ -326,10 +326,9 @@ class RunJournal:
                         # Regulated mode may add policy, but durability is not optional.
                         os.fsync(stream.fileno())
                     final_current = self._stat_entry(parent_fd)
-                    if (
-                        not stat.S_ISREG(final_current.st_mode)
-                        or _identity(final_current) != _identity(initial)
-                    ):
+                    if not stat.S_ISREG(final_current.st_mode) or _identity(
+                        final_current
+                    ) != _identity(initial):
                         raise RuntimeError("run journal changed identity during append")
                     if initial.st_size == 0:
                         if parent_fd is not None:
