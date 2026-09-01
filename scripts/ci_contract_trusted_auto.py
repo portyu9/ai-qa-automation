@@ -28,7 +28,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
-    "87e94dd23a66d50b46ae8b6ed692151104a1be2e"  # pragma: allowlist secret
+    "b5fcbc889dba8f2d0c4049e1b0d5cd86b149828a"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
     "bf538a2efa1f895ef0a614e8118ba1b1ad2914f5"  # pragma: allowlist secret
@@ -136,6 +136,8 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
             )
     if "needs.preflight.outputs.merge_sha" in preflight:
         raise ValueError("trusted automatic preflight must not checkout or execute candidate bytes")
+    if "CI_SUBJECT_SHA:" in preflight:
+        raise ValueError("trusted automatic preflight must retain trusted workflow identity")
 
     subject_guard = _base._semantic_text(_base._job_block(text, "subject-guard"))
     required_guard = (
@@ -171,6 +173,10 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     if semantic.count("persist-credentials: false") != 8:
         raise ValueError("every trusted automatic checkout must disable persisted credentials")
 
+    candidate_subject_binding = (
+        "    env:\n"
+        "      CI_SUBJECT_SHA: ${{ needs.preflight.outputs.merge_sha }}\n"
+    )
     validation_jobs = (
         "supply-chain",
         "quality",
@@ -184,24 +190,17 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
             raise ValueError(
                 f"trusted automatic validation job {job_id} is not merge-subject-bound"
             )
+        if candidate_subject_binding not in job:
+            raise ValueError(
+                f"trusted automatic validation job {job_id} must bind CI_SUBJECT_SHA "
+                "to the exact prospective merge"
+            )
         if "${{ secrets." in job:
             raise ValueError(f"trusted automatic validation job {job_id} must be secret-free")
         if "persist-credentials: false" not in job:
             raise ValueError(f"trusted automatic validation job {job_id} must disable credentials")
 
     quality_lanes = _base._verify_quality_lane_contract(text, name="trusted-pr-auto.yml")
-
-    supply_chain = _base._semantic_text(_base._job_block(text, "supply-chain"))
-    mermaid_subject_binding = (
-        "      - name: Render Mermaid documentation with digest-pinned official CLI\n"
-        "        env:\n"
-        "          CI_SUBJECT_SHA: ${{ needs.preflight.outputs.merge_sha }}\n"
-        "        run: |"
-    )
-    if mermaid_subject_binding not in supply_chain:
-        raise ValueError(
-            "trusted Mermaid validation must bind CI_SUBJECT_SHA to the exact prospective merge"
-        )
 
     required_gate = _base._semantic_text(_base._job_block(text, "required-gate"))
     for dependency in (
@@ -243,6 +242,8 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     for fragment in required_reporter:
         if fragment not in reporter:
             raise ValueError(f"automatic trusted reporter is missing reviewed fragment: {fragment}")
+    if "CI_SUBJECT_SHA:" in reporter:
+        raise ValueError("trusted automatic reporter must retain trusted workflow identity")
     if semantic.count("${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}") != 1:
         raise ValueError("automatic trusted App private key must have exactly one consumer")
     if semantic.count("${{ vars.TRUSTED_GATE_APP_CLIENT_ID }}") != 1:
@@ -266,6 +267,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "candidate_execution_guard": "exact-merge-parents-plus-zero-protected-object-drift",
         "protected_paths": list(TRUSTED_AUTO_PROTECTED_PATHS),
         "validation_subject": "live-prospective-merge-sha",
+        "candidate_subject_binding": "job-level-exact-prospective-merge",
         "validation_authority": "read-only-secret-free-before-reporter",
         "quality_lanes": quality_lanes,
         "terminal_revalidation": "fresh-live-admission-plus-shared-pr-head-base-merge-resolver",
