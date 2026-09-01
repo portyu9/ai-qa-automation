@@ -117,6 +117,7 @@ jobs:
             .github
             .claude
             .dockerignore
+            .gitattributes
             .mcp.json
             .pre-commit-config.yaml
             CLAUDE.md

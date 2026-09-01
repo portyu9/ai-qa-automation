@@ -26,10 +26,7 @@ EXPECTED_SUPPLY_CHAIN_ARTIFACT = "supply-chain-evidence"
 EXPECTED_BUILD_MANIFEST = "build-manifest.json"
 EXPECTED_CI_CONTRACT_STEP = "Verify CI authority contract"
 EXPECTED_STATUS_CONTEXT = "Trusted PR Gate"
-EXPECTED_SUBJECT_BINDING = (
-    "CI_SUBJECT_SHA: ${{ github.event_name == 'repository_dispatch' "
-    "&& github.event.client_payload.expected_merge_sha || github.sha }}"
-)
+EXPECTED_SUBJECT_BINDING = "CI_SUBJECT_SHA: ${{ github.sha }}"
 MAX_WEBHOOK_BYTES = 2 * 1024 * 1024
 MAX_API_BYTES = 8 * 1024 * 1024
 MAX_ARTIFACT_BYTES = 4 * 1024 * 1024

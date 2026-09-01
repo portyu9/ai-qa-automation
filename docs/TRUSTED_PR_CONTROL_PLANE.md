@@ -37,6 +37,8 @@ Automatic admission requires all of the following:
 
 Any API failure, malformed or truncated response, PR-resolution saturation, ambiguity, fork head, stale base, identity drift, merge-parent mismatch, or protected-root change fails closed.
 
+The automatic workflow is the only repository-hosted consumer of Environment `trusted-pr-gate` and its App credential. Candidate-executing validation jobs are read-only and secret-free. The App credential is exposed only after final live admission revalidation in the trusted default-branch reporter.
+
 ### Protected-maintenance external path
 
 A PR that changes a protected authority root is deliberately not eligible for routine automatic authorization.
@@ -45,7 +47,9 @@ The protected-maintenance chain is:
 
 **ordinary PR CI completion → external App webhook ingress → exact live PR/head/base/merge resolution → independently administered protected-object policy → exact run/job/artifact verification → terminal live re-resolution → dedicated App status → strict protected-branch enforcement**
 
-The external service implementation lives under the already-protected `scripts/trusted_gate_service/` root. Repository presence does not create authority. Authority exists only when an independently administered deployment is pinned to reviewed bytes, holds the App credential outside candidate Actions, loads an independently administered one-shot policy, and is observed publishing through the App integration required by the live ruleset.
+The external service implementation lives under the already-protected `scripts/trusted_gate_service/` root. Repository presence does not create authority. Authority exists only when an independently administered deployment is pinned to reviewed bytes, holds its App credential outside candidate Actions, loads an independently administered one-shot policy, and is observed publishing through the App integration required by the live ruleset.
+
+Repository `repository_dispatch` is not a protected-maintenance authority and no normal-use dispatch path remains in `ci.yml`.
 
 ## Protected authority roots
 
@@ -122,6 +126,8 @@ The external service independently requires:
 
 Ambiguity, stale base, fork identity, API truncation/failure, malformed Git data, or merge-parent drift is non-PASS truth.
 
+The candidate `ci.yml` must bind `CI_SUBJECT_SHA` directly to `github.sha`. The external service independently verifies that binding before accepting ordinary CI as execution evidence; candidate event payloads cannot select an alternate merge subject.
+
 ## Independent one-shot policy
 
 Protected transitions are deny-by-default. The service must not implement a generic rule equivalent to “owner PR + ordinary CI green + protected changes = PASS.” That would recreate candidate self-certification.
@@ -171,11 +177,11 @@ Only after exact policy admission may ordinary PR CI be considered execution evi
 - successful supply-chain, security, Playwright reference SUT, deterministic evaluation, and `Required PR Gate` jobs;
 - exactly two successful Python quality/compatibility lanes;
 - expected CI-contract verification and aggregate-gate steps;
-- candidate workflow subject-binding and aggregate structure;
+- candidate workflow subject binding and aggregate structure;
 - exactly one unexpired `supply-chain-evidence` artifact for the selected run;
 - canonical artifact metadata, run/head/ref binding, bounded size, and SHA-256;
 - safe bounded ZIP ingestion with traversal, duplicate, symlink/special-file, encryption, entry-count, archive-size, and uncompressed-size rejection;
-- `build-manifest.json` exact schema/kind, prospective merge SHA, merge tree SHA, and clean tracked worktree identity.
+- `build-manifest.json` exact schema/kind, prospective merge SHA, merge tree SHA, and clean tracked-worktree identity.
 
 Candidate CI proves execution against bytes that an independent policy already authorized. It does not authorize those bytes.
 
@@ -264,34 +270,39 @@ The integration binding is critical. A same-named status from another actor is n
 
 For the external webhook service, the dedicated App additionally needs the reviewed `workflow_run` subscription and Actions-read permission. These platform facts must be independently observed after configuration; source cannot attest them.
 
-## Legacy repository-dispatch path
+## Repository-dispatch retirement
 
-The existing owner `repository_dispatch` maintenance workflow remains repository source during bootstrap, but it is no longer an accepted normal operator step for protected maintenance. It must not be used to manufacture progress merely because the external service is not yet deployed.
+The former repository-owned protected-maintenance paths are retired:
 
-Do not remove the legacy path or its Environment-held App credential until the external path has produced live exact-subject evidence through the same dedicated App identity. Retirement is a separate protected-maintenance revision requiring full ordinary CI, external policy admission, exact App status, and completion audit.
+- `ci.yml` has no `repository_dispatch` trigger, client-payload subject selector, protected-manifest admission block, or repository-hosted maintenance status reporter;
+- the superseded `trusted-pr-evidence.yml` workflow and `trusted_pr_evidence.py` verifier are absent;
+- `trusted_pr_control.py` retains only shared bounded GitHub/subject primitives used by the routine automatic reporter; its former owner-dispatch CLI/status publisher is absent;
+- CI-contract tests fail closed if repository dispatch, client-payload subject authority, legacy reporter jobs, or App credentials are reintroduced into ordinary CI.
 
-## Activation sequence
+The `trusted-pr-gate` Environment and its App credential are **not** retired by this change. They remain required by the live routine `trusted-pr-auto.yml` reporter. Removing them while that path depends on them would disable a proven trust root. Credential retirement requires a separate independently validated replacement for the automatic reporter.
 
-The external service does not become merge authority when its source lands. Activation requires:
+## Maintenance sequence
 
-1. comprehensive audit and exact packaging of a service revision;
-2. deployment outside the candidate repository's Actions trust domain;
-3. minimum App permissions and `workflow_run` webhook subscription;
-4. independently installed digest-pinned one-shot policy for the exact protected subject;
-5. qualifying ordinary CI evidence for that subject;
-6. external service admission and publication;
-7. independent read-back proving `Trusted PR Gate: success` on the exact head from the App integration required by the live ruleset;
-8. fresh PR/main/merge/ruleset/App/deployment-identity revalidation before merge;
-9. merge only the exact validated revision;
-10. separate retirement of obsolete repository-dispatch credential/status publication after the external path is already proven.
+Protected-maintenance changes follow this order:
 
-For AWS, deployment proof additionally includes exact deployment-ZIP and Lambda code-digest binding, runtime smoke verification, runtime-version control, least-privilege IAM read-back, DynamoDB configuration read-back, Function URL configuration read-back, log-retention read-back, and no-VPC verification before the App webhook is pointed at the endpoint.
+1. keep the candidate exact and review its protected transition set;
+2. run ordinary exact-revision CI as development/execution evidence;
+3. independently install a short-lived one-shot external policy bound to the exact PR/head/base/prospective-merge/protected transitions;
+4. let the external App service re-fetch and validate the exact run, jobs, artifact, manifest, and candidate workflow binding;
+5. observe exact App-authored `Trusted PR Gate: success` from the integration required by the live ruleset;
+6. revoke the one-shot policy in fail-closed order before merge;
+7. re-fetch PR identity, prospective merge, ruleset, App/deployment identity, and status immediately before merge;
+8. merge only the exact validated revision with merge-commit semantics;
+9. verify the resulting exact `main` SHA/tree and post-merge CI;
+10. confirm the external gate has returned to its fail-closed idle policy state.
+
+For AWS, deployment proof additionally includes exact deployment-ZIP and Lambda code-digest binding, runtime smoke verification, runtime-version control, least-privilege IAM read-back, DynamoDB configuration read-back, Function URL configuration read-back, log-retention read-back, and no-VPC verification before the App webhook is treated as live authority.
 
 If any external host, App, webhook, policy, credential, status, ruleset, runtime, or deployment fact is unavailable or unobserved, terminal truth is **BLOCKED**, not PASS.
 
 ## Verification and non-claims
 
-Repository tests exercise webhook authentication, wrong repository/installation/actor/fork/workflow identity, policy expiry and malformed/duplicate/empty transitions, multi-root protected transitions, replay/idempotency, SQLite ownership, DynamoDB concurrent ownership, stale-processing recovery, transaction record bounds, transport/race separation, Lambda request parsing, private SSM configuration binding, HMAC-before-private-key admission, policy digest binding, transient-before-publication retries, no-replay publication recovery, lost/ambiguous status responses, post-publication drift, unsafe artifact ZIPs, duplicate JSON, and exact build-manifest binding.
+Repository tests exercise webhook authentication, wrong repository/installation/actor/fork/workflow identity, policy expiry and malformed/duplicate/empty transitions, multi-root protected transitions, replay/idempotency, SQLite ownership, DynamoDB concurrent ownership, stale-processing recovery, transaction record bounds, transport/race separation, Lambda request parsing, private SSM configuration binding, HMAC-before-private-key admission, policy digest binding, transient-before-publication retries, no-replay publication recovery, lost/ambiguous status responses, post-publication drift, unsafe artifact ZIPs, duplicate JSON, exact build-manifest binding, routine automatic admission, and shared live merge-ref resolution.
 
 Those tests prove implementation behavior only. They do not prove an external deployment, webhook endpoint, App credential, one-shot policy installation, live integration permissions, ruleset binding, AWS runtime properties, runtime-version control, or App-authored status exists.
 

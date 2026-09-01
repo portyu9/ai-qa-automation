@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import argparse
 import json
-import os
 import re
 import urllib.error
 import urllib.request
@@ -13,7 +11,6 @@ from typing import Any
 API_ROOT = "https://api.github.com"
 API_VERSION = "2026-03-10"
 EXPECTED_BASE_REF = "main"
-EXPECTED_WORKFLOW_EVENT = "repository_dispatch"
 EXPECTED_WORKFLOW_REF = "refs/heads/main"
 TRUSTED_STATUS_CONTEXT = "Trusted PR Gate"
 MAX_API_RESPONSE_BYTES = 1024 * 1024
@@ -290,115 +287,3 @@ def parse_job_results(raw: str) -> dict[str, str]:
     if result not in TERMINAL_JOB_RESULTS:
         raise ValueError("trusted validation job has an invalid terminal result")
     return {"validation": result}
-
-
-def _parse_bool(value: str) -> bool:
-    if value == "true":
-        return True
-    if value == "false":
-        return False
-    raise ValueError("authorization value must be exactly 'true' or 'false'")
-
-
-def report_authorized_result(
-    *,
-    repository: str,
-    token: str,
-    actor: str,
-    repository_owner: str,
-    workflow_event: str,
-    workflow_ref: str,
-    expected: PullRequestSubject,
-    authorized: bool,
-    job_results: Mapping[str, str],
-    target_url: str,
-) -> dict[str, Any]:
-    if workflow_event != EXPECTED_WORKFLOW_EVENT:
-        raise PermissionError("trusted status publication requires repository_dispatch")
-    if workflow_ref != EXPECTED_WORKFLOW_REF:
-        raise PermissionError("trusted status publication requires refs/heads/main")
-    if not repository_owner or actor != repository_owner:
-        raise PermissionError("trusted merge authorization must be dispatched by repository owner")
-
-    api = GitHubApi(repository=repository, token=token)
-    current = resolve_current_subject(api, expected)
-    if not authorized:
-        return {
-            "result": "DIAGNOSTIC_ONLY",
-            "status_posted": False,
-            "subject": {
-                "pr_number": str(current.number),
-                "expected_head_sha": current.head_sha,
-                "expected_base_sha": current.base_sha,
-                "expected_merge_sha": current.merge_sha,
-            },
-        }
-    if set(job_results) != {"validation"}:
-        raise ValueError("trusted validation results must contain exactly the validation job")
-    validation_result = job_results["validation"]
-    if validation_result not in TERMINAL_JOB_RESULTS:
-        raise ValueError("trusted validation job has an invalid terminal result")
-    if validation_result == "success":
-        state = "success"
-        description = "Owner-authorized exact-subject validation passed"
-    else:
-        state = "failure"
-        description = f"Owner-authorized validation ended {validation_result}"
-    api.post_status(
-        sha=current.head_sha,
-        state=state,
-        description=description,
-        target_url=target_url,
-    )
-    return {
-        "result": state.upper(),
-        "status_posted": True,
-        "status_context": TRUSTED_STATUS_CONTEXT,
-        "status_subject": current.head_sha,
-        "validation_result": validation_result,
-    }
-
-
-def _subject_from_args(args: argparse.Namespace) -> PullRequestSubject:
-    return PullRequestSubject(
-        number=_require_positive_int(args.pr_number, label="pull-request number"),
-        head_sha=_require_sha(args.expected_head_sha, label="expected head SHA"),
-        base_sha=_require_sha(args.expected_base_sha, label="expected base SHA"),
-        merge_sha=_require_sha(args.expected_merge_sha, label="expected merge SHA"),
-    )
-
-
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Trusted PR status reporter")
-    parser.add_argument("command", nargs="?", default="report", choices=("report",))
-    parser.add_argument("--pr-number", required=True)
-    parser.add_argument("--expected-head-sha", required=True)
-    parser.add_argument("--expected-base-sha", required=True)
-    parser.add_argument("--expected-merge-sha", required=True)
-    parser.add_argument("--authorized", required=True)
-    parser.add_argument("--job-results-json", required=True)
-    parser.add_argument("--target-url", required=True)
-    return parser
-
-
-def main() -> None:
-    args = _parser().parse_args()
-    result = report_authorized_result(
-        repository=os.environ.get("GITHUB_REPOSITORY", ""),
-        token=os.environ.get("GITHUB_TOKEN", ""),
-        actor=os.environ.get("GITHUB_ACTOR", ""),
-        repository_owner=os.environ.get("GITHUB_REPOSITORY_OWNER", ""),
-        workflow_event=os.environ.get("GITHUB_EVENT_NAME", ""),
-        workflow_ref=os.environ.get("GITHUB_REF", ""),
-        expected=_subject_from_args(args),
-        authorized=_parse_bool(args.authorized),
-        job_results=parse_job_results(args.job_results_json),
-        target_url=args.target_url,
-    )
-    print(json.dumps(result, indent=2, sort_keys=True))
-    if result["result"] == "FAILURE":
-        raise SystemExit(1)
-
-
-if __name__ == "__main__":
-    main()

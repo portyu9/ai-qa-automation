@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 MANUAL_WORKFLOW = ROOT / ".github" / "workflows" / "manual-validation.yml"
+TRUSTED_AUTO_WORKFLOW = ROOT / ".github" / "workflows" / "trusted-pr-auto.yml"
 
 
 def test_all_repository_python_workflows_enable_safe_path() -> None:
@@ -39,42 +40,32 @@ def test_python_safe_path_blocks_repository_local_pip_module_shadow(tmp_path: Pa
     assert "pip " in result.stdout
 
 
-def test_trusted_dispatch_preflight_freezes_control_plane_before_python() -> None:
+def test_ordinary_ci_has_no_repository_dispatch_authority() -> None:
+    text = CI_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "repository_dispatch:" not in text
+    assert "trusted-pr-validation" not in text
+    assert "github.event.client_payload" not in text
+    assert "  trusted-status:" not in text
+    assert "Trusted PR Gate Reporter" not in text
+    assert "TRUSTED_GATE_APP_CLIENT_ID" not in text
+    assert "TRUSTED_GATE_APP_PRIVATE_KEY" not in text
+    assert "  CI_SUBJECT_SHA: ${{ github.sha }}" in text
+
+
+def test_supply_chain_binds_event_subject_before_python() -> None:
     text = CI_WORKFLOW.read_text(encoding="utf-8")
     supply_chain = text[text.index("  supply-chain:") : text.index("  security:")]
-    preflight = supply_chain[
-        supply_chain.index(
-            "      - name: Verify trusted control-plane subject"
-        ) : supply_chain.index("      - name: Set up Python")
-    ]
+    pre_python = supply_chain[: supply_chain.index("      - name: Set up Python")]
 
-    assert "if: github.event_name == 'repository_dispatch'" in preflight
-    assert 'test "$GITHUB_REF" = "refs/heads/main"' in preflight
-    assert 'test "$GITHUB_ACTOR" = "$GITHUB_REPOSITORY_OWNER"' in preflight
-    assert '/usr/bin/git rev-list --parents -n 1 "$CI_SUBJECT_SHA"' in preflight
-    assert 'test "$base_sha" = "$GITHUB_SHA"' in preflight
-    assert 'test -z "$extra_parent"' in preflight
-    for path in (
-        ".github",
-        ".claude",
-        ".dockerignore",
-        ".mcp.json",
-        ".pre-commit-config.yaml",
-        "CLAUDE.md",
-        "Dockerfile",
-        "evals",
-        "examples",
-        "pyproject.toml",
-        "requirements",
-        "scripts",
-        "tests",
-        "src/ai_qa_automation/__init__.py",
-        "src/ai_qa_automation/io_safety.py",
-        "src/ai_qa_automation/tools/__init__.py",
-        "src/ai_qa_automation/tools/execution_env.py",
-    ):
-        assert f"            {path}\n" in preflight
-    assert preflight.index("/usr/bin/git rev-list") < preflight.index("protected_paths=(")
+    assert "      - name: Checkout exact validation subject" in pre_python
+    assert "          ref: ${{ env.CI_SUBJECT_SHA }}" in pre_python
+    assert "          persist-credentials: false" in pre_python
+    assert "          fetch-depth: 2" in pre_python
+    assert 'run: test "$(git rev-parse HEAD)" = "$CI_SUBJECT_SHA"' in pre_python
+    assert "repository_dispatch" not in pre_python
+    assert "github.event.client_payload" not in pre_python
+    assert "${{ secrets." not in pre_python
 
 
 def test_validation_jobs_wait_for_supply_chain_preflight() -> None:
@@ -92,29 +83,22 @@ def test_validation_jobs_wait_for_supply_chain_preflight() -> None:
     assert "          fetch-depth: 2\n" in supply_chain
 
 
-def test_trusted_reporter_treats_dispatch_payload_as_data() -> None:
-    text = CI_WORKFLOW.read_text(encoding="utf-8")
-    trusted_status = text[text.index("  trusted-status:") :]
-    publish_step = trusted_status[
-        trusted_status.index("      - name: Publish exact-subject trusted status") :
-    ]
-    run_script = publish_step[publish_step.index("        run: |\n") :]
+def test_trusted_app_credential_remains_isolated_to_automatic_reporter() -> None:
+    ordinary = CI_WORKFLOW.read_text(encoding="utf-8")
+    trusted_auto = TRUSTED_AUTO_WORKFLOW.read_text(encoding="utf-8")
 
-    for variable, expression in (
-        ("PR_NUMBER", "${{ github.event.client_payload.pr_number }}"),
-        ("EXPECTED_HEAD_SHA", "${{ github.event.client_payload.expected_head_sha }}"),
-        ("EXPECTED_BASE_SHA", "${{ github.event.client_payload.expected_base_sha }}"),
-        ("EXPECTED_MERGE_SHA", "${{ github.event.client_payload.expected_merge_sha }}"),
-        ("AUTHORIZED", "${{ github.event.client_payload.authorized }}"),
-        ("VALIDATION_RESULT", "${{ needs.required-gate.result }}"),
-    ):
-        assert f"          {variable}: {expression}\n" in publish_step
+    assert "TRUSTED_GATE_APP_CLIENT_ID" not in ordinary
+    assert "TRUSTED_GATE_APP_PRIVATE_KEY" not in ordinary
+    assert trusted_auto.count("${{ vars.TRUSTED_GATE_APP_CLIENT_ID }}") == 1
+    assert trusted_auto.count("${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}") == 1
 
-    assert "${{ github.event.client_payload." not in run_script
-    assert 'printf -v job_results_json \'{"validation":"%s"}\' "$VALIDATION_RESULT"' in run_script
-    assert '--pr-number "$PR_NUMBER"' in run_script
-    assert '--expected-head-sha "$EXPECTED_HEAD_SHA"' in run_script
-    assert '--expected-base-sha "$EXPECTED_BASE_SHA"' in run_script
-    assert '--expected-merge-sha "$EXPECTED_MERGE_SHA"' in run_script
-    assert '--authorized "$AUTHORIZED"' in run_script
-    assert '--job-results-json "$job_results_json"' in run_script
+    reporter = trusted_auto[trusted_auto.index("  trusted-status:") :]
+    assert "    environment:\n      name: trusted-pr-gate\n      deployment: false" in reporter
+    assert "      - name: Revalidate automatic trusted admission" in reporter
+    assert "      - name: Mint dedicated Trusted PR Gate token" in reporter
+    assert "      - name: Publish automatic exact-subject trusted status" in reporter
+    assert (
+        reporter.index("Revalidate automatic trusted admission")
+        < reporter.index("Mint dedicated Trusted PR Gate token")
+        < reporter.index("Publish automatic exact-subject trusted status")
+    )

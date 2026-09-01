@@ -15,23 +15,22 @@ The repository and external control plane intentionally separate these surfaces:
 
 | Surface | Trigger / wake-up | Authority | Intended role |
 |---|---|---|---|
-| `.github/workflows/ci.yml` | `pull_request`, `push` to `main`, `merge_group`; legacy exact owner dispatch remains source | read-only, secret-free validation jobs | ordinary deterministic development evidence and exact build/test artifacts |
+| `.github/workflows/ci.yml` | `pull_request`, `push` to `main`, `merge_group` | read-only, secret-free validation jobs | ordinary deterministic development evidence and exact build/test artifacts |
 | `.github/workflows/trusted-pr-auto.yml` | reviewed CI completion through `workflow_run` | trusted default-branch admission, then Environment-held App credential only in the terminal reporter | routine source-only authorization when protected roots have zero drift |
 | external `scripts/trusted_gate_service/` deployment | GitHub App `workflow_run` webhook | independently deployed code, independently administered one-shot policy, durable external state, dedicated App credential | protected-maintenance authorization for exact reviewed protected-root transitions |
-| `.github/workflows/trusted-pr-evidence.yml` and owner `repository_dispatch` maintenance paths | explicit owner dispatch | legacy/emergency repository maintenance authority | retained compatibility path; **not accepted normal protected-maintenance operation** |
 | `.github/workflows/manual-validation.yml` | `workflow_dispatch` | `credentialed-validation` Environment for selected provider evidence | optional live/model evidence; never protected merge authority |
 
-Candidate execution never receives the external protected-maintenance App private key or a terminal status-write token. Repository source cannot self-attest live GitHub App installation state, Environment restrictions, webhook configuration, external deployment identity, one-shot policy, ruleset binding, or later administrative drift.
+There is no repository-owned `repository_dispatch` protected-maintenance authority. Candidate execution never receives the external protected-maintenance App private key or a terminal status-write token. Repository source cannot self-attest live GitHub App installation state, Environment restrictions, webhook configuration, external deployment identity, one-shot policy, ruleset binding, or later administrative drift.
 
 ## Ordinary CI subject and evidence
 
 `ci.yml` binds automatic validation to one explicit subject:
 
 ```text
-CI_SUBJECT_SHA = repository_dispatch ? client_payload.expected_merge_sha : github.sha
+CI_SUBJECT_SHA = github.sha
 ```
 
-For ordinary GitHub events, `github.sha` is the event subject. Every automatic validation domain checks out that exact subject with persisted credentials disabled and verifies `git rev-parse HEAD == CI_SUBJECT_SHA` before project execution.
+For each supported GitHub event, `github.sha` is the event subject. Every automatic validation domain checks out that exact subject with persisted credentials disabled and verifies `git rev-parse HEAD == CI_SUBJECT_SHA` before project execution. No client payload may select another source or prospective-merge identity.
 
 Ordinary CI produces deterministic evidence, including:
 
@@ -58,7 +57,7 @@ The automatic quality matrix has two exact, independently hash-locked lanes:
 
 `requires-python >=3.11` remains package metadata. It does not imply that every intermediate interpreter version is independently certified by CI. Repository certification claims are limited to the exact patch versions that actually execute.
 
-Before hash-locked dependency installation, `scripts/verify_build_authority.py` verifies the reviewed lock set and build authority. `scripts/verify_ci_contract.py` freezes the exact lane structure, immutable action identities, subject binding, install ordering, and aggregate behavior. Stale Python 3.13 lane authority is rejected by the reviewed CI contract.
+Before hash-locked dependency installation, `scripts/verify_build_authority.py` verifies the reviewed lock set and build authority. `scripts/verify_ci_contract.py` freezes the exact lane structure, immutable action identities, subject binding, install ordering, aggregate behavior, absence of repository-dispatch authority, and the separate automatic trusted-workflow contract. Stale Python 3.13 lane authority is rejected.
 
 ## Routine source-only trusted path
 
@@ -66,13 +65,15 @@ For an eligible same-repository PR with no protected-root drift, a successful re
 
 The wake-up payload is not authorization. Trusted default-branch admission independently re-fetches the triggering run, current `main`, the live PR, the live prospective merge, ordered merge parents, and protected Git objects. Automatic admission requires exact identity and **zero protected authority-root drift**.
 
-Before candidate scripts run, trusted workflow bytes independently verify the prospective-merge subject and protected-object guard. Validation remains read-only and secret-free. The terminal reporter re-runs admission before it may obtain the dedicated App credential and publish `Trusted PR Gate`.
+Before candidate scripts run, trusted workflow bytes independently verify the prospective-merge subject and protected-object guard. Validation remains read-only and secret-free. The terminal reporter re-runs admission before it may enter Environment `trusted-pr-gate`, obtain the dedicated App credential, and publish `Trusted PR Gate`.
+
+The shared Environment/App credential remains live because this proven routine reporter still depends on it. It is not a legacy-only credential and must not be retired without an independently validated replacement for this path.
 
 Any API failure, ambiguity, fork, stale base, malformed/truncated response, parent mismatch, or protected-root change makes the routine path non-PASS.
 
 ## Protected-maintenance external path
 
-A PR that changes a protected authority root is deliberately ineligible for routine source-only authorization. Normal protected maintenance uses the independently deployed external service described in [Trusted PR control plane](TRUSTED_PR_CONTROL_PLANE.md).
+A PR that changes a protected authority root is deliberately ineligible for routine source-only authorization. Protected maintenance uses the independently deployed external service described in [Trusted PR control plane](TRUSTED_PR_CONTROL_PLANE.md).
 
 The authority chain is:
 
@@ -80,19 +81,27 @@ The authority chain is:
 
 The external one-shot policy pins the exact repository identity, PR number, head SHA, current `main` base SHA, prospective merge SHA, complete protected-object transitions, and bounded validity window. Base/head/merge or object drift creates a different subject and requires new independent admission.
 
-Only after policy admission may ordinary CI be used as execution evidence. The service independently verifies the exact reviewed run, required jobs, exactly two successful Python quality/compatibility lanes, supply-chain artifact identity/digest, bounded safe ZIP contents, and exact `build-manifest.json` subject/tree binding.
+Only after policy admission may ordinary CI be used as execution evidence. The service independently verifies the exact reviewed run, required jobs, exactly two successful Python quality/compatibility lanes, supply-chain artifact identity/digest, bounded safe ZIP contents, exact `build-manifest.json` subject/tree binding, and candidate `CI_SUBJECT_SHA: ${{ github.sha }}` workflow authority.
 
 Immediately before publication it resolves the live subject again and re-runs the same policy. Publication intent is persisted before the irreversible status POST. Ambiguous publication outcomes are reconciled by read-back; the POST is not automatically replayed after durable publication intent.
 
 Live bootstrap evidence has proven this external path can publish the required App-authored status for an exact protected subject. That observation is historical evidence for the proven revision only; every newer protected subject still requires fresh exact policy, CI evidence, App status, and pre-merge revalidation.
 
-## Legacy repository-dispatch paths
+## Repository-dispatch retirement
 
-The repository still contains owner `repository_dispatch` maintenance workflows and Environment-held reporter support from earlier control-plane generations. They are retained as legacy/emergency source while retirement is handled as its own protected revision.
+Earlier control-plane generations included owner `repository_dispatch` maintenance paths in `ci.yml` and a separate evidence-authorization workflow. They are retired from repository authority.
 
-They are **not accepted normal operator steps** for current protected-maintenance progress. A blocked or unavailable external gate must remain blocked; it must not be converted to PASS by falling back to an easier candidate-controlled or stale historical path.
+The current contract requires:
 
-Removing legacy dispatch/reporting authority is itself a protected control-plane change and requires full ordinary CI, independent protected-object admission, fresh App-authored status, adversarial review, and completion audit.
+- no `repository_dispatch` trigger in ordinary CI;
+- no client-payload subject selector;
+- no repository-hosted protected-manifest admission block;
+- no repository-hosted maintenance App reporter;
+- no superseded `trusted-pr-evidence.yml` workflow or evidence verifier;
+- no legacy owner-dispatch reporter CLI in `trusted_pr_control.py`; and
+- fail-closed tests that reject reintroduction of those authorities.
+
+A blocked or unavailable external protected-maintenance gate remains blocked. It must not be converted to PASS by restoring an easier candidate-controlled or stale historical path.
 
 ## Deterministic aggregate versus protected status
 
@@ -127,7 +136,7 @@ python scripts/verify_ci_contract.py
 python scripts/verify_docs.py
 ```
 
-The CI-contract verifier fails closed on drift in the reviewed repository workflow authority, including immutable Action SHAs, exact Python patch versions, quality-lane split, exact checkouts, protected-root guards, read-only validation permissions, build/install ordering, evidence uploads, and deterministic aggregate structure.
+The CI-contract verifier fails closed on drift in the reviewed repository workflow authority, including immutable Action SHAs, exact Python patch versions, quality-lane split, exact checkouts, absence of repository dispatch/client-payload authority, read-only validation permissions, build/install ordering, evidence uploads, deterministic aggregate structure, automatic zero-protected-drift admission, and final App-credential isolation.
 
 The documentation verifier checks repository-owned structural and selected implementation-coupled claims. It does not turn external GitHub/AWS/provider facts into source-certified truth; those remain externally observed evidence.
 

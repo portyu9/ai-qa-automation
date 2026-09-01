@@ -298,11 +298,9 @@ See [`TRACEABILITY.md`](TRACEABILITY.md).
 
 ## GitHub Actions
 
-`.github/workflows/ci.yml` keeps automatic `pull_request` feedback and the fixed owner `repository_dispatch` event `trusted-pr-validation`. Ordinary PR validation is read-only, secret-free, exact-subject development evidence. It can be used continuously without being treated as the protected merge oracle.
+`.github/workflows/ci.yml` provides read-only, secret-free `pull_request`, `push` to `main`, and `merge_group` validation. Those jobs bind execution to `github.sha` and remain deterministic development evidence rather than protected merge authority.
 
-The trusted dispatch path executes the prospective merge subject from the default-branch workflow definition. It verifies the exact merge/base/head tuple and requires an exact bounded base/subject Git-object manifest for any changed protected control-plane root before repository scripts execute.
-
-The trusted validation domains cover:
+The validation domains cover:
 
 - exact CPython 3.11.16 full-quality validation and exact CPython 3.14.7 deterministic compatibility validation; the 3.11 lane owns Ruff, strict Mypy, full deterministic pytest, and coverage, while the 3.14 lane runs compile plus full deterministic compatibility pytest without duplicating lint/type/coverage authority;
 - the fixed 34-case primary deterministic control evaluation;
@@ -312,9 +310,11 @@ The trusted validation domains cover:
 
 `Required PR Gate` executes with `if: always()` and fails unless every validation prerequisite succeeds. It is deterministic aggregate evidence, not protected merge authority.
 
-Terminal `Trusted PR Gate` publication is intentionally a different identity boundary. Job `trusted-status` is owner/default-branch/repository-dispatch only, enters Environment `trusted-pr-gate`, keeps its native GitHub Actions token read-only, mints a short-lived least-privilege dedicated GitHub App installation token, and publishes only after `scripts/trusted_pr_control.py` revalidates the live PR/head/base/merge-ref subject.
+Routine source-only PR authorization is a separate default-branch trust path in `.github/workflows/trusted-pr-auto.yml`, woken by reviewed ordinary CI completion through `workflow_run`. It independently resolves current `main`, the live same-repository PR, prospective merge and ordered parents, requires zero protected-root drift, reruns deterministic validation, and revalidates immediately before terminal publication. Only the terminal reporter enters Environment `trusted-pr-gate` and uses the dedicated GitHub App credential to publish `Trusted PR Gate`.
 
-The independent-identity design becomes active merge authority only after the external GitHub App installation/permissions, Environment trusted-ref restriction, App client ID/private-key configuration, Actions Policy, and `Protect Main` required-status binding to the dedicated App integration have been independently observed. Repository source cannot certify those platform facts. Historical `Trusted PR Gate` evidence from GitHub Actions integration ID `15368` belongs to the earlier control plane and does not prove the new App boundary.
+Protected-root changes are deliberately ineligible for that routine path. Protected maintenance uses the independently deployed `scripts/trusted_gate_service/` implementation plus an independently administered one-shot policy bound to the exact repository, PR, head, base, prospective merge, complete protected-object transitions, and bounded validity window. The repository-owned `repository_dispatch` maintenance/reporting paths are retired and are not an emergency fallback.
+
+Repository source cannot certify the external deployment, App installation/permissions, webhook binding, one-shot policy, Environment restriction, App client ID/private key custody, Actions Policy, or `Protect Main` required-status integration binding. Those are deployment-owned facts that must be observed on the active subject. The Environment-held App credential remains live because the routine automatic reporter still depends on it.
 
 `.github/workflows/manual-validation.yml` is `workflow_dispatch` only and remains outside protected merge evidence. H-series/model evidence is separate; the optional model smoke consumes `ANTHROPIC_API_KEY` only when explicitly selected and available.
 
@@ -337,7 +337,7 @@ Before a live provider/target run:
 - [ ] external provider permissions are least privilege;
 - [ ] evidence/artifacts fit approved data-access and retention policy.
 
-For protected PR operation after the independent-status migration, also require the dedicated App installation, `trusted-pr-gate` Environment restriction, required-status App binding, strict/up-to-date branch protection, and current exact-subject trusted-dispatch evidence to be independently observed.
+For a routine source-only protected merge, additionally require a current App-authored `Trusted PR Gate` from the automatic path and independently observe the strict App-bound ruleset. For protected maintenance, require the external deployment, exact active one-shot policy, exact ordinary CI evidence, App-authored terminal status, strict/up-to-date ruleset, and live subject revalidation to all bind to the same revision.
 
 ---
 

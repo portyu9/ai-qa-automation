@@ -39,10 +39,20 @@ def test_automatic_ci_concurrency_uses_event_and_ref_only() -> None:
     assert "github.run_id" not in concurrency
 
 
-@pytest.mark.parametrize("unsafe_group", [OLD_EVENT_PAYLOAD_GROUP, UNIQUE_DISPATCH_GROUP])
+@pytest.mark.parametrize(
+    ("unsafe_group", "expected_error"),
+    [
+        (OLD_EVENT_PAYLOAD_GROUP, "forbidden authority token: github.event.client_payload"),
+        (
+            UNIQUE_DISPATCH_GROUP,
+            "ci.yml bytes differ from the exact reviewed ordinary CI definition",
+        ),
+    ],
+)
 def test_ci_contract_rejects_weakened_event_concurrency(
     tmp_path: Path,
     unsafe_group: str,
+    expected_error: str,
 ) -> None:
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "ci.yml"
@@ -53,5 +63,5 @@ def test_ci_contract_rejects_weakened_event_concurrency(
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="exact reviewed automatic/trusted workflow definition"):
+    with pytest.raises(ValueError, match=expected_error):
         ci_contract.verify_ci_contract(root)

@@ -20,10 +20,10 @@ The repository separates supply-chain subjects instead of treating “the build�
 | Automatic dependency-install definitions | exact reviewed Git-blob identities for all five committed `.lock` files | pre-install and post-install build-authority verification before project code or later CI tools run |
 | Python build backend graph | `requirements/build-py311.lock` + `hatchling==1.32.0` | isolated backend dependency graph, separate from runtime |
 | Project build/install authority | exact static `pyproject.toml` build/Hatch configuration, bounded README/license/source inputs, entry-point constraints, and no installed Hatch plugin surface | checkout and per-archive build-authority JSON evidence |
-| CI validation subject | `CI_SUBJECT_SHA`: `github.sha` for ordinary event execution or `repository_dispatch.client_payload.expected_merge_sha` for trusted validation | exact-subject checkout, archive, manifest, wheel, SBOM lineage, and container-context evidence |
-| Trusted dispatch control-plane changes | owner-supplied exact protected-root base/subject Git-object manifest that must equal the complete observed protected-root change set | deterministic admission or fail-closed rejection before repository scripts execute |
-| Trusted reporter implementation | default-branch `repository_dispatch` `github.sha`, separate from `CI_SUBJECT_SHA` | exact reporter source checkout plus live PR/head/base/merge-ref revalidation |
-| Trusted reporter credential | Environment-protected dedicated GitHub App private key; short-lived installation token | terminal status identity separated from native GitHub Actions identity once externally activated |
+| Ordinary CI validation subject | `CI_SUBJECT_SHA = github.sha` | exact-subject checkout, archive, manifest, wheel, SBOM lineage, and container-context evidence |
+| Routine source-only trusted admission | default-branch `trusted-pr-auto.yml` independently resolves current main, live PR, prospective merge, ordered parents, and protected objects; protected-root drift must be zero | exact live subject admission, trusted deterministic validation, terminal App-authored status |
+| Protected-maintenance authorization | independently deployed `scripts/trusted_gate_service/` plus an independently administered exact one-shot protected-object policy | external exact-policy admission, CI/job/artifact/build-manifest verification, durable terminal publication/reconciliation |
+| Trusted reporter credential | Environment-protected dedicated GitHub App private key for the routine automatic reporter; independently held App authority for the external protected-maintenance deployment | terminal status identity separated from candidate/native GitHub Actions identity |
 | Automatic browser runtime | hosted `/usr/bin/google-chrome`, observed before the reference test; no automatic browser/OS installer authority | observed Chrome version + deterministic localhost reference-SUT JUnit evidence |
 | Container base | `requirements/base-image.lock` | exact `python:3.11.16-slim` OCI digest used by every Docker stage |
 | Container runtime-composition definition | exact reviewed `Dockerfile` Git blob identity | deterministic denial of unreviewed Dockerfile byte/instruction drift |
@@ -41,12 +41,10 @@ The dependency lock files are repository-owned resolution snapshots derived from
 `ci.yml` defines the repository build/evidence subject once:
 
 ```text
-CI_SUBJECT_SHA = repository_dispatch ? client_payload.expected_merge_sha : github.sha
+CI_SUBJECT_SHA = github.sha
 ```
 
-For trusted `repository_dispatch`, `expected_merge_sha` is untrusted dispatch data used only to select the read-only validation subject. It does not select the trusted reporter implementation, release credentials, or status identity.
-
-All five validation jobs:
+All five ordinary validation jobs:
 
 - check out `CI_SUBJECT_SHA`;
 - disable persisted checkout credentials;
@@ -59,27 +57,35 @@ The same subject is used for:
 - the isolated runtime-container tar context;
 - persisted subject-bound supply-chain evidence.
 
-No reviewed build/evidence step derives the accepted subject from mutable `HEAD`.
+No reviewed build/evidence step derives the accepted subject from mutable `HEAD` or client-controlled dispatch payload data.
 
-The reporter is deliberately separate. On owner `repository_dispatch`, it checks out and verifies trusted default-branch `github.sha`. Before any terminal status write, `scripts/trusted_pr_control.py` independently revalidates the live PR identity, `refs/pull/<number>/merge`, and the merge commit's ordered parents, then repeats the live PR/ref read.
+Routine source-only trusted admission is deliberately separate from ordinary CI. Default-branch `trusted-pr-auto.yml` treats the `workflow_run` event only as a wake-up, re-fetches the triggering run and current PR/base/merge/protected-object state, requires zero protected-root drift, reruns deterministic validation under trusted workflow bytes, and revalidates immediately before terminal App publication.
+
+For protected maintenance, the independently deployed external gate derives the exact live base/prospective-merge protected-object transition set itself. An independently administered one-shot policy must authorize that exact subject before ordinary CI artifacts may be admitted as execution evidence.
 
 ---
 
 ## Protected control-plane maintenance
 
-A blanket “protected paths must equal main” rule prevents legitimate maintenance of workflows, tests, dependency authority, and verifier code. The trusted preflight instead compares the protected root object identities between trusted base and prospective merge subject.
+A blanket “protected paths must equal main” rule prevents legitimate maintenance of workflows, tests, dependency authority, and verifier code. Routine automatic authorization therefore denies any protected-root drift, while the external protected-maintenance service handles intentional transitions through an independent exact policy.
 
-If a protected root differs, the owner dispatch must supply exactly the observed tuple:
+The one-shot policy pins at least:
 
 ```text
-path
-base_oid
-subject_oid
+repository + repository_id
+pr_number
+head_sha
+base_sha
+merge_sha
+complete protected_changes[path, base_oid, subject_oid]
+not_before + expires_at
 ```
 
-The manifest is bounded to the reviewed protected-root set, rejects duplicates and unknown paths, and accepts only full 40-hex Git object IDs or the explicit `MISSING` sentinel. The normalized supplied manifest must equal the complete observed changed-root set. An empty manifest authorizes no protected changes.
+The external service derives the complete transition set from live Git trees, uses only full Git object IDs or the explicit `MISSING` sentinel after successful absence observation, and rejects unknown, duplicate, stale, malformed, or policy-mismatched transitions. Base/head/merge/object drift creates a different subject and requires new independent admission.
 
-This is an explicit owner trust transition for exact Git objects. It is **not** independent proof that changed control-plane bytes are correct. Exact-revision testing, source review, adversarial audit, and external control-plane validation remain necessary before merge.
+This is an explicit independent trust transition for exact Git objects. It is **not** proof that changed control-plane bytes are correct by itself. Exact-revision ordinary CI, source review, adversarial audit, external policy admission, terminal live revalidation, and App-authored status are all still required before protected merge.
+
+The former repository-owned `repository_dispatch` protected-manifest/reporting path is retired and must not be used as fallback when external protected-maintenance authority is unavailable.
 
 ---
 
@@ -89,18 +95,20 @@ Automatic PR CI and protected merge identity are different trust domains.
 
 Ordinary `pull_request` validation is intentionally automatic, read-only, and secret-free. A candidate workflow may prove internal consistency for its exact event subject but must not acquire the identity that satisfies the protected `Trusted PR Gate` rule.
 
-The trusted reporter therefore keeps native GitHub Actions permissions at `contents: read` and obtains terminal status authority only through Environment `trusted-pr-gate`:
+For routine source-only PRs, trusted default-branch automation obtains terminal status authority only in the final reporter through Environment `trusted-pr-gate`:
 
-1. trusted default-branch reporter code verifies `github.sha`;
-2. the Environment supplies `TRUSTED_GATE_APP_CLIENT_ID` and `TRUSTED_GATE_APP_PRIVATE_KEY` only to the eligible reporter job;
-3. the reporter constructs a short-lived GitHub App JWT;
-4. it exchanges that JWT for the repository installation token with requested `contents: read`, `pull_requests: read`, and `statuses: write` permissions;
-5. the token is masked and passed to the standard-library trusted reporter helper;
-6. the helper publishes `Trusted PR Gate` only after exact live subject revalidation.
+1. trusted `workflow_run` admission independently resolves the exact live PR/base/prospective merge and requires zero protected-root drift;
+2. deterministic trusted validation executes without exposing the App private key to candidate execution;
+3. admission is re-run immediately before publication;
+4. the Environment supplies `TRUSTED_GATE_APP_CLIENT_ID` and `TRUSTED_GATE_APP_PRIVATE_KEY` only to the eligible terminal reporter;
+5. the reporter constructs a short-lived GitHub App JWT and installation token with the reviewed least-privilege request;
+6. the helper publishes `Trusted PR Gate` only after final exact live subject revalidation.
 
-For that separation to be real merge authority, the external branch ruleset must require `Trusted PR Gate` from the **dedicated App integration**. Repository code cannot self-attest the App installation, its effective permissions, Environment trusted-ref protection, App secret configuration, Actions Policy, or ruleset expected-source binding.
+Protected-maintenance publication uses the independently deployed external service rather than repository dispatch. Its App credential, webhook secret, deployment identity, durable state, and one-shot policy are deployment-owned authorities outside candidate Actions.
 
-Historical activation evidence in which GitHub Actions integration ID `15368` published `Trusted PR Gate` remains valid historical evidence for the earlier control plane. It does not prove the independent App boundary is active.
+For either path to be real merge authority, the branch ruleset must require `Trusted PR Gate` from the **dedicated App integration** with strict/up-to-date semantics. Repository code cannot self-attest the App installation, effective permissions, Environment protection, external deployment, webhook/policy state, Actions Policy, or ruleset expected-source binding.
+
+Historical status evidence remains valid only for the exact revision and control plane that produced it. It cannot certify a newer subject or current deployment/ruleset state.
 
 ---
 
@@ -247,19 +255,18 @@ Automatic browser validation consumes hosted `/usr/bin/google-chrome` instead of
 
 `scripts/verify_ci_contract.py` binds those controls into the workflow definition and additionally constrains:
 
-- fixed ordinary + `repository_dispatch` trigger contract;
-- five `CI_SUBJECT_SHA` validation checkouts;
-- one separate trusted `github.sha` reporter checkout;
-- read-only native GitHub Actions permissions;
-- no native `GITHUB_TOKEN` terminal status publication;
-- one Environment-scoped App private-key/client-ID consumer;
-- exact protected-manifest comparison structure;
+- the exact ordinary trigger set: `pull_request`, `push`, and `merge_group`;
+- `CI_SUBJECT_SHA` to direct `github.sha` binding;
+- every validation checkout to the exact subject;
+- read-only native GitHub Actions permissions and absence of secret/status-write authority in ordinary CI;
+- explicit rejection of repository dispatch, client-payload authority, legacy reporter jobs, and App credentials in ordinary CI;
 - dependency/project-install authority brackets;
 - cache denial;
 - reviewed SBOM/reproducible-wheel/container/evidence structure;
-- complete `ci.yml` Git blob identity.
+- complete `ci.yml` Git blob identity;
+- the separately reviewed routine `trusted-pr-auto.yml` trust boundary.
 
-These verifiers are deterministic repository controls. They cannot independently attest the external App installation, Environment protection, Actions Policy, ruleset expected-source binding, hosted bootstrap bytes, or later administrative drift.
+These verifiers are deterministic repository controls. They cannot independently attest the external App installation, Environment protection, external trusted-gate deployment, webhook or policy state, Actions Policy, ruleset expected-source binding, hosted bootstrap bytes, or later administrative drift.
 
 ---
 
@@ -289,12 +296,12 @@ A deliberate supply-chain or control-plane change should follow this order:
 1. change the declared dependency/build/workflow source intentionally;
 2. update exact locks/blob authority rather than weakening the verifier;
 3. review new packages/actions/images/permissions and transitive effects;
-4. if a protected root changes, compute the exact base/subject protected manifest for trusted validation;
+4. if a protected root changes, derive the exact live protected-object transitions and obtain independently administered one-shot policy admission for that exact subject;
 5. run formatting/lint/type checks and the full deterministic suite;
 6. run supply-chain, security, evaluator, browser, and reproducibility gates;
 7. audit the exact revision adversarially for authority expansion and false-green paths;
 8. re-run exact-revision evidence after remediation;
-9. for reporter/App/ruleset changes, re-observe the external Environment/App/Actions/ruleset configuration and live trusted path before claiming activation;
+9. for reporter/App/ruleset/external-gate changes, re-observe the Environment/App/Actions/ruleset configuration, external deployment/policy state, and live trusted path before claiming activation;
 10. merge only the revision bound to the accepted evidence.
 
 Do not weaken hashes, assertions, exact subject binding, verification thresholds, or status-source requirements merely to obtain green output.

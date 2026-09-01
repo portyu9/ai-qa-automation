@@ -18,7 +18,7 @@ sys.modules[_TRUSTED_AUTO_SPEC.name] = _trusted_auto
 _TRUSTED_AUTO_SPEC.loader.exec_module(_trusted_auto)
 
 # Preserve the complete hardened verifier API because adversarial tests import private
-# helpers directly. The frozen trusted-auto extension itself re-exports the hardened base.
+# helpers directly. The trusted-auto extension itself re-exports the hardened base.
 for _export_name in dir(_trusted_auto):
     if not _export_name.startswith("__"):
         globals()[_export_name] = getattr(_trusted_auto, _export_name)
@@ -28,18 +28,15 @@ EXPECTED_WORKFLOW_NAMES = {
     "ci.yml",
     "manual-validation.yml",
     "trusted-pr-auto.yml",
-    "trusted-pr-evidence.yml",
 }
 EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
-    "9bb246ff58d004f64f8fe27d26222451f72f9fad"  # pragma: allowlist secret
+    "9f85471d3c8f27a134b60274a248d2bc8a654d06"  # pragma: allowlist secret
 )
-EXPECTED_TRUSTED_EVIDENCE_WORKFLOW_BLOB_SHA = (
-    "7cf510e5e345feb72f3e6e5e28d4029079db1876"  # pragma: allowlist secret
+EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
+    "66c0bf8aee2633bfb51c83029b0251f2d81dae29"  # pragma: allowlist secret
 )
-EXPECTED_TRUSTED_EVIDENCE_SCRIPT_BLOB_SHA = (
-    "d7faa4803d0d75f0b9e10c2f65cf6bbef78cce65"  # pragma: allowlist secret
-)
-TRUSTED_EVIDENCE_EVENT = "trusted-pr-evidence-authorization"
+# Compatibility alias for adversarial tests and callers that imported the historical helper name.
+EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA
 
 _trusted_auto.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
 _trusted_auto._base.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
@@ -54,179 +51,265 @@ def _verify_frozen_trusted_auto_extension() -> None:
         raise ValueError("trusted-auto CI contract extension differs from the frozen definition")
 
 
-def _verify_frozen_trusted_evidence_script(root: Path) -> None:
-    path = root / "scripts" / "trusted_pr_evidence.py"
-    if path.is_symlink() or not path.is_file():
-        raise ValueError("trusted PR evidence verifier must be a regular non-symlink file")
-    text = path.read_text(encoding="utf-8")
-    if _trusted_auto._base._git_blob_sha1(text) != EXPECTED_TRUSTED_EVIDENCE_SCRIPT_BLOB_SHA:
-        raise ValueError("trusted PR evidence verifier differs from the frozen reviewed definition")
+def _verify_ordinary_checkout_binding(text: str) -> int:
+    base = _trusted_auto._base
+    semantic = base._semantic_text(text)
+    checkout = f"uses: actions/checkout@{base.EXPECTED_ACTION_SHAS['actions/checkout']}"
+    checkout_count = semantic.count(checkout)
+    if checkout_count != base.EXPECTED_AUTOMATIC_SUBJECT_CHECKOUT_COUNT:
+        raise ValueError("ci.yml: checkout count must equal the five ordinary validation subjects")
+    if semantic.count("ref: ${{ env.CI_SUBJECT_SHA }}") != checkout_count:
+        raise ValueError("ci.yml: every validation checkout must bind to env.CI_SUBJECT_SHA")
+    if semantic.count("persist-credentials: false") != checkout_count:
+        raise ValueError("ci.yml: every checkout must disable persisted credentials")
+    if semantic.count('test "$(git rev-parse HEAD)" = "$CI_SUBJECT_SHA"') != checkout_count:
+        raise ValueError("ci.yml: every checkout must verify CI_SUBJECT_SHA")
+    if "ref: ${{ github.sha }}" in semantic:
+        raise ValueError("ci.yml: checkout authority must flow only through CI_SUBJECT_SHA")
+    return checkout_count
 
 
-def _verify_trusted_evidence_workflow(text: str) -> dict[str, Any]:
-    semantic = _trusted_auto._base._semantic_text(text)
-    if _trusted_auto._base._git_blob_sha1(text) != EXPECTED_TRUSTED_EVIDENCE_WORKFLOW_BLOB_SHA:
-        raise ValueError(
-            "trusted-pr-evidence.yml bytes differ from the exact reviewed evidence authorization definition"
-        )
+def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
+    base = _trusted_auto._base
+    name = "ci.yml"
+    semantic = base._semantic_text(text)
 
-    on_block = _trusted_auto._base._semantic_text(
-        _trusted_auto._base._top_level_block(text, "on")
-    ).strip("\n")
     expected_on = "\n".join(
         (
             "on:",
-            "  repository_dispatch:",
-            f"    types: [{TRUSTED_EVIDENCE_EVENT}]",
+            "  pull_request:",
+            "    branches: [main]",
+            "    types: [opened, synchronize, reopened, ready_for_review]",
+            "  push:",
+            "    branches: [main]",
+            "  merge_group:",
         )
     )
+    on_block = base._semantic_text(base._top_level_block(text, "on")).strip("\n")
     if on_block != expected_on:
-        raise ValueError(
-            "trusted-pr-evidence.yml must be triggered only by the reviewed owner evidence event"
-        )
+        raise ValueError("ci.yml: trigger set must be exactly pull_request/push/merge_group")
+    if base._top_level_keys(base._top_level_block(text, "on")) != {
+        "pull_request",
+        "push",
+        "merge_group",
+    }:
+        raise ValueError("ci.yml: unreviewed trigger authority is forbidden")
 
-    permissions = _trusted_auto._base._permissions(
-        _trusted_auto._base._top_level_block(text, "permissions")
-    )
-    if permissions != {"actions": "read", "contents": "read", "pull-requests": "read"}:
-        raise ValueError("trusted-pr-evidence.yml top-level token must be exactly read-only")
-    if _trusted_auto._base.WRITE_PERMISSION_RE.search(semantic):
-        raise ValueError(
-            "trusted-pr-evidence.yml native GitHub token must never request write authority"
-        )
+    # Secrets and the legacy App credential are independently forbidden authority even if
+    # their injection also perturbs the exact reviewed environment block.
     for forbidden in (
-        "pull_request_target:",
-        "workflow_run:",
+        "TRUSTED_GATE_APP_CLIENT_ID",
+        "TRUSTED_GATE_APP_PRIVATE_KEY",
+        "${{ secrets.",
+        "ANTHROPIC_API_KEY",
+    ):
+        if forbidden in semantic:
+            raise ValueError(f"{name}: forbidden authority token: {forbidden}")
+
+    env_block = base._semantic_text(base._top_level_block(text, "env")).strip("\n")
+    expected_env = "\n".join(
+        (
+            "env:",
+            '  PYTHONUNBUFFERED: "1"',
+            '  PYTHONSAFEPATH: "1"',
+            '  PIP_DISABLE_PIP_VERSION_CHECK: "1"',
+            "  CI_SUBJECT_SHA: ${{ github.sha }}",
+        )
+    )
+    if env_block != expected_env:
+        raise ValueError("ci.yml: environment/subject binding differs from reviewed definition")
+
+    base._verify_top_level_read_only_permissions(text, name=name)
+    for forbidden in (
+        "repository_dispatch:",
         "workflow_dispatch:",
+        "pull_request_target:",
+        "github.event.client_payload",
+        "trusted-pr-validation",
+        "trusted-status:",
+        "Trusted PR Gate Reporter",
+        "TRUSTED_GATE_APP_CLIENT_ID",
+        "TRUSTED_GATE_APP_PRIVATE_KEY",
+        "${{ secrets.",
+        "ANTHROPIC_API_KEY",
         "continue-on-error: true",
-        "ubuntu-latest",
         "playwright install",
         "sudo ",
         "apt-get ",
         "apt install ",
-        "${{ secrets.GITHUB_TOKEN }}",
-        "ref: ${{ github.event.client_payload.expected_merge_sha }}",
     ):
         if forbidden in semantic:
-            raise ValueError(
-                f"trusted-pr-evidence.yml contains forbidden authority token: {forbidden}"
-            )
-    if _trusted_auto._base.CACHE_CONFIGURATION_RE.search(semantic):
-        raise ValueError("trusted-pr-evidence.yml dependency caching is forbidden")
-    if semantic.count("ref: ${{ github.sha }}") != 2:
-        raise ValueError("trusted evidence authorization must checkout only trusted main twice")
-    if semantic.count("persist-credentials: false") != 2:
-        raise ValueError("every trusted evidence checkout must disable persisted credentials")
-    if "needs.evidence-admission.outputs.evidence_run_id" not in semantic:
-        raise ValueError("trusted evidence reporter must bind to the admitted evidence run")
-    if semantic.count("python scripts/trusted_pr_evidence.py") != 2:
-        raise ValueError("trusted evidence must be admitted and freshly revalidated exactly twice")
-    if (
-        semantic.count(
-            "PROTECTED_MANIFEST_JSON: ${{ toJSON(github.event.client_payload.protected_manifest) }}"
+            raise ValueError(f"{name}: forbidden authority token: {forbidden}")
+    if base.WRITE_PERMISSION_RE.search(semantic):
+        raise ValueError(f"{name}: write permission is forbidden")
+    if base.CACHE_CONFIGURATION_RE.search(semantic):
+        raise ValueError(f"{name}: dependency caching is forbidden before reviewed lock authority")
+    if "ubuntu-latest" in semantic:
+        raise ValueError(f"{name}: moving ubuntu-latest runner label is forbidden")
+    if '"3.11.16"' not in semantic or '"3.14.7"' not in semantic:
+        raise ValueError(f"{name}: exact supported Python patch versions are required")
+    if '"3.13.15"' in semantic or "dev-py313.lock" in semantic or "py313" in semantic:
+        raise ValueError(f"{name}: stale Python 3.13 CI authority is forbidden")
+    if "--require-hashes" not in semantic:
+        raise ValueError(f"{name}: hash-required dependency installation is required")
+    if "pip install --upgrade" in semantic or " --editable" in semantic or " -e ." in semantic:
+        raise ValueError(f"{name}: live/editable dependency installation is forbidden")
+    if "cancel-in-progress: true" not in base._top_level_block(text, "concurrency"):
+        raise ValueError(f"{name}: stale executions must be cancelled on superseding revisions")
+
+    checkout_count = _verify_ordinary_checkout_binding(text)
+    dependency_install_count = base._verify_dependency_install_authority(text, name=name)
+    project_install_count = base._verify_project_install_authority(text, name=name)
+    quality_lanes = base._verify_quality_lane_contract(text, name=name)
+
+    supply_chain_raw = base._job_block(text, "supply-chain")
+    supply_chain = base._semantic_text(supply_chain_raw)
+    base._require_exact_build_authority_step(supply_chain_raw)
+    base._require_exact_verification_install_step(supply_chain_raw)
+    base._require_exact_script_step(
+        supply_chain_raw,
+        step_name=base.DOCUMENTATION_STEP_NAME,
+        command=base.DOCUMENTATION_INTEGRITY_COMMAND,
+    )
+    base._require_exact_script_step(
+        supply_chain_raw,
+        step_name=base.MERMAID_STEP_NAME,
+        command=base.MERMAID_RENDER_COMMAND,
+    )
+    base._require_exact_runtime_sbom_step(supply_chain_raw)
+    base._require_exact_reproducible_build_step(supply_chain_raw)
+    base._require_exact_supply_chain_upload_step(supply_chain_raw)
+
+    ordered_steps = (
+        base.BUILD_AUTHORITY_STEP_NAME,
+        base.VERIFICATION_INSTALL_STEP_NAME,
+        base.SUPPLY_CHAIN_VERIFY_STEP_NAME,
+        base.RUNTIME_SBOM_STEP_NAME,
+        base.REPRODUCIBLE_BUILD_STEP_NAME,
+    )
+    positions = [supply_chain.index(f"      - name: {step_name}") for step_name in ordered_steps]
+    if positions != sorted(positions):
+        raise ValueError(
+            "ci.yml: supply-chain authority, installation, verification, SBOM, and build steps "
+            "are out of reviewed order"
         )
-        != 2
-    ):
-        raise ValueError("protected manifest must be supplied to both evidence admission passes")
+    if supply_chain.count(base.BUILD_AUTHORITY_COMMAND) != 1:
+        raise ValueError("ci.yml: build-authority evidence command must execute exactly once")
+    if supply_chain.count(base.DOCUMENTATION_INTEGRITY_COMMAND) != 1:
+        raise ValueError("ci.yml: documentation integrity command must execute exactly once")
+    if supply_chain.count(base.MERMAID_RENDER_COMMAND) != 1:
+        raise ValueError("ci.yml: Mermaid render command must execute exactly once")
 
-    admission = _trusted_auto._base._semantic_text(
-        _trusted_auto._base._job_block(text, "evidence-admission")
-    )
-    required_admission = (
-        "    name: Trusted Exact-Subject Evidence Admission",
-        "    if: ${{ github.ref == 'refs/heads/main' && github.actor == github.repository_owner }}",
-        "          ref: ${{ github.sha }}",
-        "          GITHUB_TOKEN: ${{ github.token }}",
-        '          test "$AUTHORIZED" = "true"',
-        "          python scripts/trusted_pr_evidence.py \\",
-        '            --expected-merge-sha "$EXPECTED_MERGE_SHA" \\',
-        '            --protected-manifest-json "$PROTECTED_MANIFEST_JSON" \\',
-        '            --github-output "$GITHUB_OUTPUT"',
-    )
-    for fragment in required_admission:
-        if fragment not in admission:
-            raise ValueError(f"trusted evidence admission is missing reviewed fragment: {fragment}")
-    if "${{ secrets." in admission:
-        raise ValueError("trusted evidence admission must be completely secret-free")
+    browser_reference_raw = base._job_block(text, "browser-reference-sut")
+    base._require_exact_hosted_browser_step(browser_reference_raw)
 
-    reporter = _trusted_auto._base._semantic_text(
-        _trusted_auto._base._job_block(text, "trusted-status")
-    )
-    required_reporter = (
-        "    name: Trusted PR Evidence Gate Reporter",
-        "    if: ${{ always() && needs.evidence-admission.result == 'success' && github.ref == 'refs/heads/main' && github.actor == github.repository_owner }}",
-        "    environment:\n      name: trusted-pr-gate\n      deployment: false",
-        "    permissions:\n      actions: read\n      contents: read\n      pull-requests: read",
-        "      - name: Revalidate exact pull-request evidence",
-        "          GITHUB_TOKEN: ${{ github.token }}",
-        "          EXPECTED_EVIDENCE_RUN_ID: ${{ needs.evidence-admission.outputs.evidence_run_id }}",
-        '          evidence_json="$(python scripts/trusted_pr_evidence.py \\',
-        '          test "$observed_run_id" = "$EXPECTED_EVIDENCE_RUN_ID"',
-        "      - name: Mint dedicated Trusted PR Gate token",
-        "          TRUSTED_GATE_APP_CLIENT_ID: ${{ vars.TRUSTED_GATE_APP_CLIENT_ID }}",
-        "          TRUSTED_GATE_APP_PRIVATE_KEY: ${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}",
-        '"permissions":{"contents":"read","pull_requests":"read","statuses":"write"}',
-        "      - name: Publish exact-evidence trusted status",
-        "          GITHUB_TOKEN: ${{ steps.trusted-app.outputs.token }}",
-        "          python scripts/trusted_pr_control.py report \\",
-        '            --job-results-json \'{"validation":"success"}\' \\',
-        '            --target-url "${{ needs.evidence-admission.outputs.evidence_target_url }}"',
-    )
-    for fragment in required_reporter:
-        if fragment not in reporter:
-            raise ValueError(f"trusted evidence reporter is missing reviewed fragment: {fragment}")
-    if semantic.count("${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}") != 1:
-        raise ValueError("trusted evidence App private key must have exactly one consumer")
-    if semantic.count("${{ vars.TRUSTED_GATE_APP_CLIENT_ID }}") != 1:
-        raise ValueError("trusted evidence App client ID must have exactly one consumer")
-    if "${{ secrets." in semantic.replace(reporter, ""):
-        raise ValueError("trusted evidence environment secrets must be isolated to reporter")
+    required_gate_raw = base._job_block(text, "required-gate")
+    required_gate = base._semantic_text(required_gate_raw)
+    if "    name: Required PR Gate" not in required_gate:
+        raise ValueError("ci.yml: stable Required PR Gate name is missing")
+    if "    if: ${{ always() }}" not in required_gate:
+        raise ValueError("ci.yml: Required PR Gate must execute with if: always()")
+    base._require_exact_required_gate_step(required_gate_raw)
+    for job in base.AUTOMATIC_REQUIRED_JOBS:
+        if f"      - {job}\n" not in required_gate:
+            raise ValueError(f"ci.yml: Required PR Gate does not depend on {job}")
 
-    revalidate_position = reporter.index("      - name: Revalidate exact pull-request evidence")
-    mint_position = reporter.index("      - name: Mint dedicated Trusted PR Gate token")
-    publish_position = reporter.index("      - name: Publish exact-evidence trusted status")
-    if not revalidate_position < mint_position < publish_position:
-        raise ValueError("trusted evidence reporter authority steps are out of reviewed order")
+    if base._git_blob_sha1(text) != EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA:
+        raise ValueError(
+            "ci.yml bytes differ from the exact reviewed ordinary CI definition; "
+            "exact reviewed automatic/trusted workflow definition is not satisfied"
+        )
 
     return {
-        "trigger": f"repository_dispatch:{TRUSTED_EVIDENCE_EVENT}",
-        "trusted_definition": "default-branch-owner-dispatch-workflow",
-        "candidate_execution": "none",
-        "evidence_subject": "successful-pull-request-ci-bound-to-live-head-base-and-persisted-merge-manifest",
-        "protected_authority": "exact-owner-provided-object-manifest",
-        "terminal_revalidation": "fresh-evidence-admission-before-app-mint-plus-live-subject-report",
-        "status_writer": "dedicated-github-app",
+        "triggers": ["merge_group", "pull_request", "push"],
+        "subject": "github.sha",
+        "checkout_count": checkout_count,
+        "required_gate": "Required PR Gate",
+        "quality_lanes": quality_lanes,
+        "prebuild_authority": "exact-lock-and-build-authority-before-validation-installs",
+        "dependency_install_count": dependency_install_count,
+        "dependency_install_authority": "exact-reviewed-locks-preinstall-and-postinstall-revalidated",
+        "project_install_count": project_install_count,
+        "project_install_authority": "immediate-static-revalidation",
         "workflow_definition": "exact-reviewed-git-blob",
-        "evidence_verifier": "exact-reviewed-git-blob",
+        "python_safe_path": True,
+        "setup_python_cache": False,
+        "browser_runtime_authority": "hosted-system-chrome-observed-without-automatic-installer",
+        "archive_build_authority": "verified-and-matched-before-wheel-builds",
+        "documentation_integrity": "required-via-supply-chain",
+        "mermaid_render": "required-via-supply-chain",
+        "build_provenance_subject": "CI_SUBJECT_SHA/isolated-git-view",
+        "archive_attribute_authority": "versioned-tree-only",
+        "sbom_lineage": "parent-digest-bound-and-bracketed",
+        "supply_chain_evidence": "pinned-upload-action",
+        "permissions": "contents:read",
+        "status_write_authority": "none",
+        "protected_maintenance_authority": "external-trusted-gate-only",
     }
+
+
+# Preserve the long-standing helper name for adversarial callers while changing its authority
+# contract from ordinary+owner-dispatch to ordinary CI only.
+_verify_automatic_workflow = _verify_ordinary_ci_workflow
 
 
 def verify_ci_contract(root: Path) -> dict[str, Any]:
     root = root.resolve()
+    base = _trusted_auto._base
     _verify_frozen_trusted_auto_extension()
     _trusted_auto._verify_frozen_base()
     _trusted_auto.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
-    _trusted_auto._base.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
+    base.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
 
-    result = _trusted_auto._base.verify_ci_contract(root)
-    snapshots = _trusted_auto._base._read_workflow_set(root / ".github" / "workflows")
-    trusted_auto = _trusted_auto._verify_trusted_auto_workflow(
-        snapshots["trusted-pr-auto.yml"].text
-    )
-    trusted_evidence = _verify_trusted_evidence_workflow(snapshots["trusted-pr-evidence.yml"].text)
-    _verify_frozen_trusted_evidence_script(root)
-    result["workflows"]["trusted_auto"] = trusted_auto
-    result["workflows"]["trusted_evidence"] = trusted_evidence
-    result["limitations"].append(
-        "Automatic trusted admission intentionally refuses any PR that changes a protected authority root; protected maintenance changes require explicit owner authorization."
-    )
-    result["limitations"].append(
-        "The owner evidence-authorization fallback promotes only a successful pull_request CI run after live head/base/merge, exact protected-object admission, and digest-verified persisted build-manifest evidence bound to the authorized merge SHA; it intentionally does not execute candidate bytes under privileged authority."
-    )
-    result["limitations"].append(
-        "Repository source can verify the workflow_run and evidence-authorization designs but cannot prove external Actions Policy or trusted Environment/App configuration until live runs are observed."
-    )
-    return result
+    snapshots = base._read_workflow_set(root / ".github" / "workflows")
+    workflows = {name: snapshot.text for name, snapshot in snapshots.items()}
+    actions = base._verify_action_revisions(workflows)
+    ordinary = _verify_ordinary_ci_workflow(workflows["ci.yml"])
+    manual = base._verify_manual_workflow(workflows["manual-validation.yml"])
+    trusted_auto = _trusted_auto._verify_trusted_auto_workflow(workflows["trusted-pr-auto.yml"])
+    return {
+        "schema_version": 1,
+        "result": "PASS",
+        "claim": "repository workflow definitions satisfy deterministic CI authority invariants",
+        "workflows": {
+            "automatic": ordinary,
+            "manual": manual,
+            "trusted_auto": trusted_auto,
+        },
+        "workflow_sizes": {
+            name: snapshot.size_bytes for name, snapshot in sorted(snapshots.items())
+        },
+        "actions": actions,
+        "limitations": [
+            (
+                "Ordinary pull_request execution is automatic read-only development evidence, not "
+                "protected merge authority."
+            ),
+            (
+                "Automatic Trusted PR Gate admission intentionally refuses any PR that changes a "
+                "protected authority root; its candidate validation remains read-only and "
+                "secret-free until the final trusted reporter."
+            ),
+            (
+                "Protected maintenance is authorized only by the independently deployed external "
+                "Trusted PR Gate with exact subject/protected-transition policy; repository "
+                "repository_dispatch is not a maintenance authority."
+            ),
+            (
+                "The trusted-pr-gate Environment/App credential remains required by the routine "
+                "automatic reporter and must not be retired while that live path depends on it."
+            ),
+            (
+                "Repository code cannot attest external deployment, one-shot policy, Environment "
+                "protection, App installation, ruleset binding, or hosted infrastructure state; "
+                "those require live external evidence."
+            ),
+            (
+                "Trusted PR Gate is published on the PR head after exact head/base/merge "
+                "revalidation, so protected-branch enforcement must remain strict/up-to-date."
+            ),
+        ],
+    }
 
 
 def main() -> None:

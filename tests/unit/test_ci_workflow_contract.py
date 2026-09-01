@@ -32,13 +32,12 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     assert automatic["archive_attribute_authority"] == "versioned-tree-only"
     assert automatic["sbom_lineage"] == "parent-digest-bound-and-bracketed"
     assert automatic["supply_chain_evidence"] == "pinned-upload-action"
-    assert automatic["subject"] == "github.sha-or-owner-default-branch-dispatch-exact-merge-sha"
-    assert automatic["reporter_identity"] == "dedicated-github-app-installation-token"
-    assert automatic["trusted_status"]["authorization"] == (
-        "owner-default-branch-repository-dispatch-plus-main-only-environment"
+    assert automatic["subject"] == "github.sha"
+    assert automatic["status_write_authority"] == "none"
+    assert automatic["protected_maintenance_authority"] == "external-trusted-gate-only"
+    assert result["workflows"]["trusted_auto"]["maintenance_authority"] == (
+        "independent-external-one-shot-exact-subject-gate"
     )
-    assert automatic["trusted_status"]["write_authority"] == ("dedicated-github-app:statuses-write")
-    assert automatic["protected_manifest"]["mode"] == ("exact-owner-dispatch-object-manifest")
     assert result["workflows"]["manual"]["credentialed_model"] == "manual-only"
 
 
@@ -77,14 +76,18 @@ def test_ci_contract_rejects_pull_request_target_even_with_spoof_comment(tmp_pat
         ci_contract.verify_ci_contract(root)
 
 
-def test_ci_contract_rejects_workflow_dispatch_for_trusted_validation(tmp_path: Path) -> None:
+def test_ci_contract_rejects_repository_dispatch_reintroduction(tmp_path: Path) -> None:
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "ci.yml"
     text = path.read_text(encoding="utf-8")
-    marker = "  repository_dispatch:\n    types: [trusted-pr-validation]\n"
+    marker = "  merge_group:\n"
     assert marker in text
     path.write_text(
-        text.replace(marker, "  workflow_dispatch:\n", 1),
+        text.replace(
+            marker,
+            marker + "  repository_dispatch:\n    types: [trusted-pr-validation]\n",
+            1,
+        ),
         encoding="utf-8",
     )
 
@@ -92,33 +95,31 @@ def test_ci_contract_rejects_workflow_dispatch_for_trusted_validation(tmp_path: 
         ci_contract.verify_ci_contract(root)
 
 
-def test_ci_contract_rejects_unreviewed_repository_dispatch_event_type(tmp_path: Path) -> None:
+def test_ci_contract_rejects_workflow_dispatch_in_ordinary_ci(tmp_path: Path) -> None:
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "ci.yml"
     text = path.read_text(encoding="utf-8")
-    marker = "    types: [trusted-pr-validation]\n"
+    marker = "  merge_group:\n"
     assert marker in text
-    path.write_text(text.replace(marker, "    types: [arbitrary]\n", 1), encoding="utf-8")
+    path.write_text(text.replace(marker, marker + "  workflow_dispatch:\n", 1), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="trigger/owner-dispatch contract"):
+    with pytest.raises(ValueError, match="trigger set must be exactly"):
         ci_contract.verify_ci_contract(root)
 
 
-def test_ci_contract_rejects_client_payload_subject_bypass(tmp_path: Path) -> None:
+def test_ci_contract_rejects_client_payload_subject_reintroduction(tmp_path: Path) -> None:
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "ci.yml"
     text = path.read_text(encoding="utf-8")
-    marker = (
+    marker = "  CI_SUBJECT_SHA: ${{ github.sha }}\n"
+    replacement = (
         "  CI_SUBJECT_SHA: ${{ github.event_name == 'repository_dispatch' "
         "&& github.event.client_payload.expected_merge_sha || github.sha }}\n"
     )
     assert marker in text
-    path.write_text(
-        text.replace(marker, "  CI_SUBJECT_SHA: ${{ github.sha }}\n", 1),
-        encoding="utf-8",
-    )
+    path.write_text(text.replace(marker, replacement, 1), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="CI_SUBJECT_SHA must select only"):
+    with pytest.raises(ValueError, match="environment/subject binding differs"):
         ci_contract.verify_ci_contract(root)
 
 
@@ -128,7 +129,7 @@ def test_ci_contract_rejects_write_permission(tmp_path: Path) -> None:
     text = path.read_text(encoding="utf-8").replace("  contents: read", "  contents: write", 1)
     path.write_text(text, encoding="utf-8")
 
-    with pytest.raises(ValueError, match="write permission is forbidden outside trusted reporter"):
+    with pytest.raises(ValueError, match="workflow permissions must be exactly contents: read"):
         ci_contract.verify_ci_contract(root)
 
 
@@ -143,87 +144,50 @@ def test_ci_contract_rejects_secret_in_validation_workflow(tmp_path: Path) -> No
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="forbidden validation authority token"):
+    with pytest.raises(ValueError, match="forbidden authority token"):
         ci_contract.verify_ci_contract(root)
 
 
-def test_ci_contract_rejects_second_trusted_app_private_key_consumer(tmp_path: Path) -> None:
+def test_ci_contract_rejects_legacy_app_credential_in_ordinary_ci(tmp_path: Path) -> None:
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "ci.yml"
     text = path.read_text(encoding="utf-8")
-    marker = "          TRUSTED_GATE_APP_PRIVATE_KEY: ${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}\n"
-    assert text.count(marker) == 1
+    marker = '  PIP_DISABLE_PIP_VERSION_CHECK: "1"\n'
+    assert marker in text
     path.write_text(
         text.replace(
             marker,
-            marker + "          SECOND_PRIVATE_KEY: ${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}\n",
+            marker + "  LEGACY_KEY: ${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}\n",
             1,
         ),
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="private key must be scoped to exactly one reporter step"):
+    with pytest.raises(ValueError, match="forbidden authority token"):
         ci_contract.verify_ci_contract(root)
 
 
-def test_ci_contract_rejects_native_status_write_in_trusted_reporter(tmp_path: Path) -> None:
+def test_ci_contract_rejects_legacy_trusted_status_job_reintroduction(tmp_path: Path) -> None:
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "ci.yml"
     text = path.read_text(encoding="utf-8")
-    marker = "    permissions:\n      contents: read\n"
-    assert marker in ci_contract._job_block(text, "trusted-status")
-    path.write_text(
-        text.replace(marker, marker + "      statuses: write\n", 1),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(ValueError, match="must not own trusted status write authority"):
-        ci_contract.verify_ci_contract(root)
-
-
-def test_ci_contract_rejects_missing_trusted_gate_environment(tmp_path: Path) -> None:
-    root = _copy_workflows(tmp_path)
-    path = root / ".github" / "workflows" / "ci.yml"
-    text = path.read_text(encoding="utf-8")
-    marker = "    environment:\n      name: trusted-pr-gate\n      deployment: false\n"
+    marker = "  required-gate:\n"
     assert marker in text
-    path.write_text(text.replace(marker, "", 1), encoding="utf-8")
-
-    with pytest.raises(ValueError, match="trusted reporter is missing reviewed fragment"):
-        ci_contract.verify_ci_contract(root)
-
-
-def test_ci_contract_rejects_weakened_protected_manifest_comparison(tmp_path: Path) -> None:
-    root = _copy_workflows(tmp_path)
-    path = root / ".github" / "workflows" / "ci.yml"
-    text = path.read_text(encoding="utf-8")
-    marker = "          if normalized != observed:\n"
-    assert marker in text
-    path.write_text(text.replace(marker, "          if False:\n", 1), encoding="utf-8")
-
-    with pytest.raises(ValueError, match="protected change manifest contract"):
-        ci_contract.verify_ci_contract(root)
-
-
-def test_ci_contract_rejects_trusted_reporter_without_main_owner_guard(tmp_path: Path) -> None:
-    root = _copy_workflows(tmp_path)
-    path = root / ".github" / "workflows" / "ci.yml"
-    text = path.read_text(encoding="utf-8")
-    exact = (
-        "    if: ${{ always() && github.event_name == 'repository_dispatch' "
-        "&& github.ref == 'refs/heads/main' && github.actor == github.repository_owner }}\n"
-    )
-    assert exact in text
     path.write_text(
         text.replace(
-            exact,
-            "    if: ${{ always() && github.event_name == 'repository_dispatch' }}\n",
+            marker,
+            "  trusted-status:\n"
+            "    name: Trusted PR Gate Reporter\n"
+            "    runs-on: ubuntu-24.04\n"
+            "    steps:\n"
+            "      - name: Forbidden legacy reporter\n"
+            "        run: true\n\n" + marker,
             1,
         ),
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="trusted reporter is missing reviewed fragment"):
+    with pytest.raises(ValueError, match="forbidden authority token"):
         ci_contract.verify_ci_contract(root)
 
 
@@ -293,18 +257,6 @@ def test_ci_contract_rejects_unbound_validation_checkout(tmp_path: Path) -> None
     path.write_text(text.replace(marker, "ref: main", 1), encoding="utf-8")
 
     with pytest.raises(ValueError, match="every validation checkout must bind"):
-        ci_contract.verify_ci_contract(root)
-
-
-def test_ci_contract_rejects_unbound_trusted_reporter_checkout(tmp_path: Path) -> None:
-    root = _copy_workflows(tmp_path)
-    path = root / ".github" / "workflows" / "ci.yml"
-    text = path.read_text(encoding="utf-8")
-    marker = "ref: ${{ github.sha }}"
-    assert text.count(marker) == 1
-    path.write_text(text.replace(marker, "ref: main", 1), encoding="utf-8")
-
-    with pytest.raises(ValueError, match=r"trusted reporter must be the sole github\.sha checkout"):
         ci_contract.verify_ci_contract(root)
 
 
