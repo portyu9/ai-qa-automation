@@ -111,7 +111,7 @@ class AppTokenProvider:
         for root in ("/proc/self/fd", "/dev/fd"):
             candidate = f"{root}/{fd}"
             try:
-                descriptor_stat = os.stat(candidate)
+                descriptor_stat = Path(candidate).stat()
             except OSError:
                 continue
             if stat.S_ISREG(descriptor_stat.st_mode):

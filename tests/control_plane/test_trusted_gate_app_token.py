@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import stat
 import subprocess
 import sys
@@ -77,7 +76,8 @@ def test_inherited_fd_path_falls_back_only_to_reviewed_dev_fd(
 ) -> None:
     observed: list[str] = []
 
-    def fake_stat(path: str) -> SimpleNamespace:
+    def fake_stat(candidate: Path) -> SimpleNamespace:
+        path = str(candidate)
         observed.append(path)
         if path == "/proc/self/fd/7":
             raise FileNotFoundError(path)
@@ -85,7 +85,7 @@ def test_inherited_fd_path_falls_back_only_to_reviewed_dev_fd(
             return SimpleNamespace(st_mode=stat.S_IFREG | 0o600)
         raise AssertionError(path)
 
-    monkeypatch.setattr(os, "stat", fake_stat)
+    monkeypatch.setattr(Path, "stat", fake_stat)
     assert AppTokenProvider._inherited_fd_path(7) == "/dev/fd/7"
     assert observed == ["/proc/self/fd/7", "/dev/fd/7"]
 
@@ -93,10 +93,10 @@ def test_inherited_fd_path_falls_back_only_to_reviewed_dev_fd(
 def test_inherited_fd_path_fails_closed_when_descriptor_namespaces_are_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def missing(path: str) -> None:
-        raise FileNotFoundError(path)
+    def missing(candidate: Path) -> None:
+        raise FileNotFoundError(candidate)
 
-    monkeypatch.setattr(os, "stat", missing)
+    monkeypatch.setattr(Path, "stat", missing)
     with pytest.raises(RuntimeError, match="anonymous inherited key descriptor"):
         AppTokenProvider._inherited_fd_path(7)
 
