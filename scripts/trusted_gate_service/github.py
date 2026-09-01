@@ -228,6 +228,31 @@ def _b64url(payload: bytes) -> str:
     return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
 
 
+def _decode_github_contents_base64_utf8(encoded: str) -> str:
+    error = "candidate workflow content is not canonical base64 UTF-8"
+    try:
+        rendered = encoded.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise GitHubProtocolError(error) from exc
+
+    lines = rendered.split(b"\n")
+    if lines and lines[-1] == b"":
+        lines.pop()
+    if not lines or any(not line for line in lines):
+        raise GitHubProtocolError(error)
+    compact = b"".join(lines)
+    try:
+        decoded = base64.b64decode(compact, validate=True)
+    except ValueError as exc:
+        raise GitHubProtocolError(error) from exc
+    if base64.b64encode(decoded) != compact:
+        raise GitHubProtocolError(error)
+    try:
+        return decoded.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise GitHubProtocolError(error) from exc
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(
         self,
@@ -513,12 +538,7 @@ class GitHubClient:
             label="candidate workflow content",
             max_len=1024 * 1024,
         )
-        try:
-            workflow_text = base64.b64decode(encoded, validate=True).decode("utf-8")
-        except (ValueError, UnicodeDecodeError) as exc:
-            raise GitHubProtocolError(
-                "candidate workflow content is not canonical base64 UTF-8"
-            ) from exc
+        workflow_text = _decode_github_contents_base64_utf8(encoded)
         verify_candidate_workflow(workflow_text)
         artifact_meta = self._artifact_metadata(run_id=run_id, subject=subject)
         archive = self._download_artifact(
