@@ -97,6 +97,8 @@ def test_trusted_app_credential_remains_isolated_to_automatic_reporter() -> None
     assert "      - name: Revalidate automatic trusted admission" in reporter
     assert "      - name: Mint dedicated Trusted PR Gate token" in reporter
     assert "      - name: Publish automatic exact-subject trusted status" in reporter
-    assert reporter.index("Revalidate automatic trusted admission") < reporter.index(
-        "Mint dedicated Trusted PR Gate token"
-    ) < reporter.index("Publish automatic exact-subject trusted status")
+    assert (
+        reporter.index("Revalidate automatic trusted admission")
+        < reporter.index("Mint dedicated Trusted PR Gate token")
+        < reporter.index("Publish automatic exact-subject trusted status")
+    )
