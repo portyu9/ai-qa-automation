@@ -123,6 +123,23 @@ def test_release_candidate_rejects_tracked_worktree_drift(tmp_path: Path) -> Non
         )
 
 
+def test_release_candidate_rejects_symlinked_project_metadata(tmp_path: Path) -> None:
+    root, head = _repository(tmp_path)
+    metadata = root / "pyproject.toml"
+    replacement = tmp_path / "replacement.toml"
+    replacement.write_bytes(metadata.read_bytes())
+    metadata.unlink()
+    metadata.symlink_to(replacement)
+
+    with pytest.raises(ValueError, match="regular non-symlink"):
+        verify_release_candidate(
+            root=root,
+            release_tag="v0.1.0",
+            expected_source_sha=head,
+            expected_ref="refs/heads/main",
+        )
+
+
 def test_release_candidate_requires_two_identical_wheels(tmp_path: Path) -> None:
     root, head = _repository(tmp_path)
     wheel_a = tmp_path / "a" / "ai_qa_automation-0.1.0-py3-none-any.whl"
@@ -146,6 +163,28 @@ def test_release_candidate_requires_two_identical_wheels(tmp_path: Path) -> None
 
     wheel_b.write_bytes(b"different wheel bytes")
     with pytest.raises(ValueError, match="not byte-identical"):
+        verify_release_candidate(
+            root=root,
+            release_tag="v0.1.0",
+            expected_source_sha=head,
+            expected_ref="refs/heads/main",
+            wheel_a=wheel_a,
+            wheel_b=wheel_b,
+        )
+
+
+def test_release_candidate_rejects_symlinked_wheel(tmp_path: Path) -> None:
+    root, head = _repository(tmp_path)
+    actual = tmp_path / "actual.whl"
+    actual.write_bytes(b"same wheel bytes")
+    wheel_a = tmp_path / "a" / "ai_qa_automation-0.1.0-py3-none-any.whl"
+    wheel_b = tmp_path / "b" / "ai_qa_automation-0.1.0-py3-none-any.whl"
+    wheel_a.parent.mkdir()
+    wheel_b.parent.mkdir()
+    wheel_a.symlink_to(actual)
+    wheel_b.write_bytes(b"same wheel bytes")
+
+    with pytest.raises(ValueError, match="regular non-symlink"):
         verify_release_candidate(
             root=root,
             release_tag="v0.1.0",
