@@ -43,7 +43,10 @@ def test_automatic_ci_concurrency_uses_event_and_ref_only() -> None:
     ("unsafe_group", "expected_error"),
     [
         (OLD_EVENT_PAYLOAD_GROUP, "forbidden authority token: github.event.client_payload"),
-        (UNIQUE_DISPATCH_GROUP, "ci.yml bytes differ from the exact reviewed ordinary CI definition"),
+        (
+            UNIQUE_DISPATCH_GROUP,
+            "ci.yml bytes differ from the exact reviewed ordinary CI definition",
+        ),
     ],
 )
 def test_ci_contract_rejects_weakened_event_concurrency(
