@@ -42,7 +42,9 @@ def test_trusted_auto_contract_is_frozen_and_read_only() -> None:
     assert auto["candidate_subject_binding"] == "job-level-exact-prospective-merge"
     assert auto["validation_authority"] == "read-only-secret-free-before-reporter"
     assert auto["status_writer"] == "dedicated-github-app"
-    assert auto["maintenance_fallback"] == "owner-repository-dispatch-exact-object-manifest"
+    assert auto["maintenance_authority"] == (
+        "independent-external-one-shot-exact-subject-gate"
+    )
 
 
 def test_ci_verifier_executes_under_python_safe_path() -> None:
