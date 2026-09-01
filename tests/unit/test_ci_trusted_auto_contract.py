@@ -22,6 +22,14 @@ def _copy_contract_repo(tmp_path: Path) -> Path:
     return root
 
 
+def _accept_mutated_workflow_hash(monkeypatch: pytest.MonkeyPatch, text: str) -> None:
+    monkeypatch.setattr(
+        ci_contract._trusted_auto,
+        "EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA",
+        ci_contract._git_blob_sha1(text),
+    )
+
+
 def test_trusted_auto_contract_is_frozen_and_read_only() -> None:
     ci_contract._verify_frozen_base()
     result = ci_contract.verify_ci_contract(ROOT)
@@ -31,6 +39,7 @@ def test_trusted_auto_contract_is_frozen_and_read_only() -> None:
     assert auto["candidate_execution_guard"] == (
         "exact-merge-parents-plus-zero-protected-object-drift"
     )
+    assert auto["candidate_subject_binding"] == "job-level-exact-prospective-merge"
     assert auto["validation_authority"] == "read-only-secret-free-before-reporter"
     assert auto["status_writer"] == "dedicated-github-app"
     assert auto["maintenance_fallback"] == "owner-repository-dispatch-exact-object-manifest"
@@ -93,24 +102,58 @@ def test_trusted_auto_contract_rejects_removed_protected_path(tmp_path: Path) ->
         ci_contract.verify_ci_contract(root)
 
 
-def test_trusted_auto_contract_rejects_missing_mermaid_subject_binding(
+@pytest.mark.parametrize(
+    "job_id",
+    ("supply-chain", "quality", "deterministic-evals", "security", "browser-reference-sut"),
+)
+def test_trusted_auto_contract_rejects_missing_candidate_subject_binding(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    job_id: str,
 ) -> None:
     root = _copy_contract_repo(tmp_path)
     path = root / ".github" / "workflows" / "trusted-pr-auto.yml"
     text = path.read_text(encoding="utf-8")
-    binding = "        env:\n          CI_SUBJECT_SHA: ${{ needs.preflight.outputs.merge_sha }}\n"
-    assert binding in text
-    mutated = text.replace(binding, "", 1)
+    binding = "    env:\n      CI_SUBJECT_SHA: ${{ needs.preflight.outputs.merge_sha }}\n"
+    job = ci_contract._job_block(text, job_id)
+    assert binding in job
+    mutated_job = job.replace(binding, "", 1)
+    mutated = text.replace(job, mutated_job, 1)
     path.write_text(mutated, encoding="utf-8")
-    monkeypatch.setattr(
-        ci_contract._trusted_auto,
-        "EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA",
-        ci_contract._git_blob_sha1(mutated),
-    )
+    _accept_mutated_workflow_hash(monkeypatch, mutated)
 
-    with pytest.raises(ValueError, match="Mermaid validation must bind CI_SUBJECT_SHA"):
+    with pytest.raises(ValueError, match=rf"validation job {job_id} must bind CI_SUBJECT_SHA"):
+        ci_contract.verify_ci_contract(root)
+
+
+@pytest.mark.parametrize(
+    ("job_id", "message"),
+    (
+        ("preflight", "preflight must retain trusted workflow identity"),
+        ("trusted-status", "reporter must retain trusted workflow identity"),
+    ),
+)
+def test_trusted_auto_contract_rejects_candidate_identity_in_trusted_jobs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    job_id: str,
+    message: str,
+) -> None:
+    root = _copy_contract_repo(tmp_path)
+    path = root / ".github" / "workflows" / "trusted-pr-auto.yml"
+    text = path.read_text(encoding="utf-8")
+    job = ci_contract._job_block(text, job_id)
+    marker = "    runs-on: ubuntu-24.04\n"
+    assert marker in job
+    injected = (
+        marker + "    env:\n" + "      CI_SUBJECT_SHA: ${{ github.event.workflow_run.head_sha }}\n"
+    )
+    mutated_job = job.replace(marker, injected, 1)
+    mutated = text.replace(job, mutated_job, 1)
+    path.write_text(mutated, encoding="utf-8")
+    _accept_mutated_workflow_hash(monkeypatch, mutated)
+
+    with pytest.raises(ValueError, match=message):
         ci_contract.verify_ci_contract(root)
 
 
