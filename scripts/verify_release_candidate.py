@@ -29,7 +29,9 @@ def _read_stable_regular_file(path: Path, *, max_bytes: int) -> bytes:
     try:
         descriptor = os.open(path, flags)
     except OSError as exc:
-        raise ValueError(f"release authority file must be a regular non-symlink: {path.name}") from exc
+        raise ValueError(
+            f"release authority file must be a regular non-symlink: {path.name}"
+        ) from exc
 
     try:
         before = os.fstat(descriptor)
