@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from scripts import auto_trusted_preflight
 import scripts.verify_ci_contract as ci_contract
+from scripts import auto_trusted_preflight
 from scripts.trusted_gate_service import core as external_gate
 
 ROOT = Path(__file__).resolve().parents[2]
