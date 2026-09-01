@@ -1,0 +1,130 @@
+name: Release Candidate Evidence — ƳƤ AI QA Automation Framework
+
+# Non-publishing release preparation only. This workflow never creates tags/releases,
+# writes packages, signs artifacts, deploys, or participates in protected merge authority.
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Stable release tag matching pyproject.toml, for example v0.1.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-candidate-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+  PYTHONSAFEPATH: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  RELEASE_SUBJECT_SHA: ${{ github.sha }}
+
+jobs:
+  release-candidate:
+    name: Deterministic Release Candidate Evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact release subject
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.RELEASE_SUBJECT_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify exact main release subject
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SUBJECT_SHA"
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.11.16"
+
+      - name: Verify release identity
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/release
+          python scripts/verify_release_candidate.py \
+            --release-tag "$RELEASE_TAG" \
+            --expected-source-sha "$RELEASE_SUBJECT_SHA" \
+            --expected-ref "$GITHUB_REF" \
+            | tee artifacts/release/release-identity.json
+
+      - name: Verify static project build authority
+        run: python scripts/verify_build_authority.py > artifacts/release/build-authority-verification.json
+
+      - name: Install hash-locked build environment
+        run: |
+          set -euo pipefail
+          python scripts/verify_build_authority.py > /dev/null
+          python -m pip install --require-hashes -r requirements/build-py311.lock
+          python scripts/verify_build_authority.py > /dev/null
+
+      - name: Build release wheel twice from exact source
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_DATE_EPOCH: "315532800"
+        run: |
+          set -euo pipefail
+          build_a="$(mktemp -d "$RUNNER_TEMP/aiqa-release-a.XXXXXX")"
+          build_b="$(mktemp -d "$RUNNER_TEMP/aiqa-release-b.XXXXXX")"
+          git_view="$(mktemp -d "$RUNNER_TEMP/aiqa-release-git-view.XXXXXX")"
+          git_template="$(mktemp -d "$RUNNER_TEMP/aiqa-release-git-template.XXXXXX")"
+          trap 'rm -rf "$build_a" "$build_b" "$git_view" "$git_template"' EXIT
+          mkdir -p artifacts/release/wheel-a artifacts/release/wheel-b artifacts/release/package
+          git_clean_env=(env -i PATH="$PATH" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0)
+          git_object_format="$("${git_clean_env[@]}" /usr/bin/git rev-parse --show-object-format)"
+          git_object_directory="$(cd "$("${git_clean_env[@]}" /usr/bin/git rev-parse --git-path objects)" && pwd -P)"
+          "${git_clean_env[@]}" /usr/bin/git init --bare --object-format="$git_object_format" --template="$git_template" "$git_view" > /dev/null
+          "${git_clean_env[@]}" GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$RELEASE_SUBJECT_SHA" | env -i PATH="$PATH" /usr/bin/tar -xf - -C "$build_a"
+          "${git_clean_env[@]}" GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$RELEASE_SUBJECT_SHA" | env -i PATH="$PATH" /usr/bin/tar -xf - -C "$build_b"
+          python scripts/verify_build_authority.py --root "$build_a" > artifacts/release/build-authority-archive-a.json
+          python -m pip wheel --no-deps --no-build-isolation "$build_a" --wheel-dir artifacts/release/wheel-a
+          python scripts/verify_build_authority.py --root "$build_b" > artifacts/release/build-authority-archive-b.json
+          python -m pip wheel --no-deps --no-build-isolation "$build_b" --wheel-dir artifacts/release/wheel-b
+          cmp -s artifacts/release/build-authority-archive-a.json artifacts/release/build-authority-archive-b.json
+          mapfile -t wheel_a < <(find artifacts/release/wheel-a -maxdepth 1 -type f -name '*.whl' -print)
+          mapfile -t wheel_b < <(find artifacts/release/wheel-b -maxdepth 1 -type f -name '*.whl' -print)
+          test "${#wheel_a[@]}" -eq 1
+          test "${#wheel_b[@]}" -eq 1
+          python scripts/verify_release_candidate.py \
+            --release-tag "$RELEASE_TAG" \
+            --expected-source-sha "$RELEASE_SUBJECT_SHA" \
+            --expected-ref "$GITHUB_REF" \
+            --wheel-a "${wheel_a[0]}" \
+            --wheel-b "${wheel_b[0]}" \
+            --output artifacts/release/release-manifest.json \
+            > /dev/null
+          cp "${wheel_a[0]}" artifacts/release/package/
+          mapfile -t release_wheel < <(find artifacts/release/package -maxdepth 1 -type f -name '*.whl' -print)
+          test "${#release_wheel[@]}" -eq 1
+          /usr/bin/sha256sum \
+            "${release_wheel[0]}" \
+            artifacts/release/release-identity.json \
+            artifacts/release/release-manifest.json \
+            > artifacts/release/release-checksums.sha256
+
+      - name: Upload release candidate evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-candidate-evidence
+          path: |
+            artifacts/release/build-authority-verification.json
+            artifacts/release/build-authority-archive-a.json
+            artifacts/release/build-authority-archive-b.json
+            artifacts/release/release-identity.json
+            artifacts/release/release-manifest.json
+            artifacts/release/release-checksums.sha256
+            artifacts/release/package/*.whl
+          if-no-files-found: error
+          retention-days: 30
