@@ -40,3 +40,40 @@ def test_journal_refuses_path_replaced_by_symlink_after_initialization(tmp_path:
         subject.verify()
 
     assert outside.read_text(encoding="utf-8") == "outside\n"
+
+
+def test_journal_refuses_replacement_parent_during_append(tmp_path: Path) -> None:
+    journal_path = tmp_path / "run" / "journal.jsonl"
+    subject = RunJournal(journal_path)
+    subject.append("started")
+
+    original_parent = tmp_path / "original-run"
+    journal_path.parent.rename(original_parent)
+    journal_path.parent.mkdir()
+    replacement = journal_path.parent / journal_path.name
+    replacement.write_text("attacker-controlled\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="journal directory changed identity"):
+        subject.append("should-not-write")
+
+    assert replacement.read_text(encoding="utf-8") == "attacker-controlled\n"
+    assert "should-not-write" not in (original_parent / journal_path.name).read_text(
+        encoding="utf-8"
+    )
+
+
+def test_journal_refuses_replacement_parent_during_verify(tmp_path: Path) -> None:
+    journal_path = tmp_path / "run" / "journal.jsonl"
+    subject = RunJournal(journal_path)
+    subject.append("started")
+
+    original_parent = tmp_path / "original-run"
+    journal_path.parent.rename(original_parent)
+    journal_path.parent.mkdir()
+    replacement = journal_path.parent / journal_path.name
+    replacement.write_bytes((original_parent / journal_path.name).read_bytes())
+
+    with pytest.raises(RuntimeError, match="journal directory changed identity"):
+        subject.verify()
+
+    assert replacement.read_bytes() == (original_parent / journal_path.name).read_bytes()
