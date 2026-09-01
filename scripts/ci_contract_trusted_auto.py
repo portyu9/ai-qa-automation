@@ -173,10 +173,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     if semantic.count("persist-credentials: false") != 8:
         raise ValueError("every trusted automatic checkout must disable persisted credentials")
 
-    candidate_subject_binding = (
-        "    env:\n"
-        "      CI_SUBJECT_SHA: ${{ needs.preflight.outputs.merge_sha }}\n"
-    )
+    candidate_subject_binding = "    env:\n      CI_SUBJECT_SHA: ${{ needs.preflight.outputs.merge_sha }}\n"
     validation_jobs = (
         "supply-chain",
         "quality",
