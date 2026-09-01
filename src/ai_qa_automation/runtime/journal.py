@@ -391,46 +391,45 @@ class RunJournal:
         return {"valid": True, "events": count, "head_hash": previous}
 
     def verify(self) -> dict[str, Any]:
-        with self._lock:
-            with self._pinned_parent() as parent_fd:
-                self._assert_owned_path(parent_fd)
-                if not self._entry_exists(parent_fd):
-                    return {"valid": True, "events": 0, "head_hash": None}
+        with self._lock, self._pinned_parent() as parent_fd:
+            self._assert_owned_path(parent_fd)
+            if not self._entry_exists(parent_fd):
+                return {"valid": True, "events": 0, "head_hash": None}
 
-                if parent_fd is None:
-                    with open_regular_binary(self.path, label="run journal") as stream:
-                        return self._verify_stream(stream)
+            if parent_fd is None:
+                with open_regular_binary(self.path, label="run journal") as stream:
+                    return self._verify_stream(stream)
 
-                flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
-                fd = self._open_entry(parent_fd, flags)
+            flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+            fd = self._open_entry(parent_fd, flags)
+            try:
+                initial = os.fstat(fd)
+                self._assert_opened_entry_current(
+                    parent_fd=parent_fd,
+                    opened=initial,
+                    label="verification open",
+                )
+                self._revalidate_parent(parent_fd)
+                initial_signature = _stable_file_signature(initial)
+                stream = os.fdopen(fd, "rb", closefd=False)
                 try:
-                    initial = os.fstat(fd)
-                    self._assert_opened_entry_current(
-                        parent_fd=parent_fd,
-                        opened=initial,
-                        label="verification open",
-                    )
-                    self._revalidate_parent(parent_fd)
-                    initial_signature = _stable_file_signature(initial)
-                    stream = os.fdopen(fd, "rb", closefd=False)
-                    try:
-                        result = self._verify_stream(stream)
-                    finally:
-                        stream.close()
-                    final_opened = os.fstat(fd)
-                    final_current = self._assert_opened_entry_current(
-                        parent_fd=parent_fd,
-                        opened=final_opened,
-                        label="verification",
-                    )
-                    if (
-                        _stable_file_signature(final_opened) != initial_signature
-                        or _stable_file_signature(final_current) != initial_signature
-                    ):
-                        raise RuntimeError("run journal changed during verification")
-                    return result
+                    result = self._verify_stream(stream)
                 finally:
-                    os.close(fd)
+                    stream.close()
+                final_opened = os.fstat(fd)
+                final_current = self._assert_opened_entry_current(
+                    parent_fd=parent_fd,
+                    opened=final_opened,
+                    label="verification",
+                )
+                if (
+                    _stable_file_signature(final_opened) != initial_signature
+                    or _stable_file_signature(final_current) != initial_signature
+                ):
+                    raise RuntimeError("run journal changed during verification")
+                return result
+            finally:
+                os.close(fd)
 
     def _inspect_existing(self) -> tuple[int, str | None]:
         result = self.verify()
