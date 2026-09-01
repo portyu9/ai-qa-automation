@@ -80,11 +80,7 @@ class FakeDynamo:
         state = item["state"]["S"]
         if ":expected" in values and state != values[":expected"]["S"]:
             raise AwsError("ConditionalCheckFailedException")
-        if (
-            ":processing" in values
-            and "#state=:processing" in condition
-            and state != "PROCESSING"
-        ):
+        if ":processing" in values and "#state=:processing" in condition and state != "PROCESSING":
             raise AwsError("ConditionalCheckFailedException")
         if ":attempt" in values and item["attempt"] != values[":attempt"]:
             raise AwsError("ConditionalCheckFailedException")
