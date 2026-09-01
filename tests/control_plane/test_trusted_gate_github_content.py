@@ -12,7 +12,9 @@ from scripts.trusted_gate_service.github import (
 
 def _wrapped(payload: bytes, *, width: int = 8) -> str:
     encoded = base64.b64encode(payload).decode("ascii")
-    return "\n".join(encoded[index : index + width] for index in range(0, len(encoded), width)) + "\n"
+    return (
+        "\n".join(encoded[index : index + width] for index in range(0, len(encoded), width)) + "\n"
+    )
 
 
 def test_github_line_wrapped_base64_is_strictly_admitted() -> None:
