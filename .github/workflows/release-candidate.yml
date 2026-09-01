@@ -42,6 +42,14 @@ jobs:
           test "$GITHUB_REF" = "refs/heads/main"
           test "$(git rev-parse HEAD)" = "$RELEASE_SUBJECT_SHA"
 
+      - name: Initialize runner-owned evidence root
+        run: |
+          set -euo pipefail
+          evidence_root="$RUNNER_TEMP/aiqa-release-candidate"
+          rm -rf "$evidence_root"
+          mkdir -m 700 "$evidence_root"
+          printf 'RELEASE_EVIDENCE_DIR=%s\n' "$evidence_root" >> "$GITHUB_ENV"
+
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
@@ -52,15 +60,15 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
-          mkdir -p artifacts/release
+          test -n "$RELEASE_EVIDENCE_DIR"
           python scripts/verify_release_candidate.py \
             --release-tag "$RELEASE_TAG" \
             --expected-source-sha "$RELEASE_SUBJECT_SHA" \
             --expected-ref "$GITHUB_REF" \
-            | tee artifacts/release/release-identity.json
+            | tee "$RELEASE_EVIDENCE_DIR/release-identity.json"
 
       - name: Verify static project build authority
-        run: python scripts/verify_build_authority.py > artifacts/release/build-authority-verification.json
+        run: python scripts/verify_build_authority.py > "$RELEASE_EVIDENCE_DIR/build-authority-verification.json"
 
       - name: Install hash-locked build environment
         run: |
@@ -75,25 +83,26 @@ jobs:
           SOURCE_DATE_EPOCH: "315532800"
         run: |
           set -euo pipefail
+          test -n "$RELEASE_EVIDENCE_DIR"
           build_a="$(mktemp -d "$RUNNER_TEMP/aiqa-release-a.XXXXXX")"
           build_b="$(mktemp -d "$RUNNER_TEMP/aiqa-release-b.XXXXXX")"
           git_view="$(mktemp -d "$RUNNER_TEMP/aiqa-release-git-view.XXXXXX")"
           git_template="$(mktemp -d "$RUNNER_TEMP/aiqa-release-git-template.XXXXXX")"
           trap 'rm -rf "$build_a" "$build_b" "$git_view" "$git_template"' EXIT
-          mkdir -p artifacts/release/wheel-a artifacts/release/wheel-b artifacts/release/package
+          mkdir -m 700 "$RELEASE_EVIDENCE_DIR/wheel-a" "$RELEASE_EVIDENCE_DIR/wheel-b" "$RELEASE_EVIDENCE_DIR/package"
           git_clean_env=(env -i PATH="$PATH" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0)
           git_object_format="$("${git_clean_env[@]}" /usr/bin/git rev-parse --show-object-format)"
           git_object_directory="$(cd "$("${git_clean_env[@]}" /usr/bin/git rev-parse --git-path objects)" && pwd -P)"
           "${git_clean_env[@]}" /usr/bin/git init --bare --object-format="$git_object_format" --template="$git_template" "$git_view" > /dev/null
           "${git_clean_env[@]}" GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$RELEASE_SUBJECT_SHA" | env -i PATH="$PATH" /usr/bin/tar -xf - -C "$build_a"
           "${git_clean_env[@]}" GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$RELEASE_SUBJECT_SHA" | env -i PATH="$PATH" /usr/bin/tar -xf - -C "$build_b"
-          python scripts/verify_build_authority.py --root "$build_a" > artifacts/release/build-authority-archive-a.json
-          python -m pip wheel --no-deps --no-build-isolation "$build_a" --wheel-dir artifacts/release/wheel-a
-          python scripts/verify_build_authority.py --root "$build_b" > artifacts/release/build-authority-archive-b.json
-          python -m pip wheel --no-deps --no-build-isolation "$build_b" --wheel-dir artifacts/release/wheel-b
-          cmp -s artifacts/release/build-authority-archive-a.json artifacts/release/build-authority-archive-b.json
-          mapfile -t wheel_a < <(find artifacts/release/wheel-a -maxdepth 1 -type f -name '*.whl' -print)
-          mapfile -t wheel_b < <(find artifacts/release/wheel-b -maxdepth 1 -type f -name '*.whl' -print)
+          python scripts/verify_build_authority.py --root "$build_a" > "$RELEASE_EVIDENCE_DIR/build-authority-archive-a.json"
+          python -m pip wheel --no-deps --no-build-isolation "$build_a" --wheel-dir "$RELEASE_EVIDENCE_DIR/wheel-a"
+          python scripts/verify_build_authority.py --root "$build_b" > "$RELEASE_EVIDENCE_DIR/build-authority-archive-b.json"
+          python -m pip wheel --no-deps --no-build-isolation "$build_b" --wheel-dir "$RELEASE_EVIDENCE_DIR/wheel-b"
+          cmp -s "$RELEASE_EVIDENCE_DIR/build-authority-archive-a.json" "$RELEASE_EVIDENCE_DIR/build-authority-archive-b.json"
+          mapfile -t wheel_a < <(find "$RELEASE_EVIDENCE_DIR/wheel-a" -maxdepth 1 -type f -name '*.whl' -print)
+          mapfile -t wheel_b < <(find "$RELEASE_EVIDENCE_DIR/wheel-b" -maxdepth 1 -type f -name '*.whl' -print)
           test "${#wheel_a[@]}" -eq 1
           test "${#wheel_b[@]}" -eq 1
           python scripts/verify_release_candidate.py \
@@ -102,29 +111,44 @@ jobs:
             --expected-ref "$GITHUB_REF" \
             --wheel-a "${wheel_a[0]}" \
             --wheel-b "${wheel_b[0]}" \
-            --output artifacts/release/release-manifest.json \
+            --output "$RELEASE_EVIDENCE_DIR/release-manifest.json" \
             > /dev/null
-          cp "${wheel_a[0]}" artifacts/release/package/
-          mapfile -t release_wheel < <(find artifacts/release/package -maxdepth 1 -type f -name '*.whl' -print)
+          cp "${wheel_a[0]}" "$RELEASE_EVIDENCE_DIR/package/"
+          mapfile -t release_wheel < <(find "$RELEASE_EVIDENCE_DIR/package" -maxdepth 1 -type f -name '*.whl' -print)
           test "${#release_wheel[@]}" -eq 1
           /usr/bin/sha256sum \
             "${release_wheel[0]}" \
-            artifacts/release/release-identity.json \
-            artifacts/release/release-manifest.json \
-            > artifacts/release/release-checksums.sha256
+            "$RELEASE_EVIDENCE_DIR/release-identity.json" \
+            "$RELEASE_EVIDENCE_DIR/release-manifest.json" \
+            > "$RELEASE_EVIDENCE_DIR/release-checksums.sha256"
+
+      - name: Revalidate current main before evidence publication
+        run: |
+          set -euo pipefail
+          read -r live_main live_ref extra < <(
+            env -i PATH="$PATH" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 \
+              /usr/bin/git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" refs/heads/main
+          )
+          test -z "${extra:-}"
+          test "$live_ref" = "refs/heads/main"
+          test "$live_main" = "$RELEASE_SUBJECT_SHA"
+          printf '{"observed_main_sha":"%s","source_ref":"refs/heads/main"}\n' "$live_main" \
+            > "$RELEASE_EVIDENCE_DIR/main-revalidation.json"
+          /usr/bin/sha256sum "$RELEASE_EVIDENCE_DIR/main-revalidation.json" \
+            >> "$RELEASE_EVIDENCE_DIR/release-checksums.sha256"
 
       - name: Upload release candidate evidence
-        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-candidate-evidence
           path: |
-            artifacts/release/build-authority-verification.json
-            artifacts/release/build-authority-archive-a.json
-            artifacts/release/build-authority-archive-b.json
-            artifacts/release/release-identity.json
-            artifacts/release/release-manifest.json
-            artifacts/release/release-checksums.sha256
-            artifacts/release/package/*.whl
+            ${{ env.RELEASE_EVIDENCE_DIR }}/build-authority-verification.json
+            ${{ env.RELEASE_EVIDENCE_DIR }}/build-authority-archive-a.json
+            ${{ env.RELEASE_EVIDENCE_DIR }}/build-authority-archive-b.json
+            ${{ env.RELEASE_EVIDENCE_DIR }}/release-identity.json
+            ${{ env.RELEASE_EVIDENCE_DIR }}/release-manifest.json
+            ${{ env.RELEASE_EVIDENCE_DIR }}/main-revalidation.json
+            ${{ env.RELEASE_EVIDENCE_DIR }}/release-checksums.sha256
+            ${{ env.RELEASE_EVIDENCE_DIR }}/package/*.whl
           if-no-files-found: error
           retention-days: 30
