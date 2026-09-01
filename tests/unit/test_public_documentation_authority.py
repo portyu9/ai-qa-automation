@@ -12,7 +12,7 @@ def test_ci_cd_documents_certified_python_lanes_and_external_maintenance_path() 
     assert "Python 3.14.7" in text
     assert "Python 3.13.15" not in text
     assert "external App webhook ingress" in text
-    assert "repository_dispatch is not a maintenance authority" in text
+    assert "There is no repository-owned `repository_dispatch` protected-maintenance authority." in text
 
 
 def test_trusted_control_plane_documents_exact_dynamodb_runtime_authority() -> None:
