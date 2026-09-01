@@ -6,10 +6,13 @@ import json
 import os
 import stat
 from _thread import RLock
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
+from ..fs_authority import descriptor_relative_authority_supported, pin_directory_identity
 from ..io_safety import fsync_directory, open_regular_binary, parse_json_object_strict
 from ..redaction import sanitize
 from ..telemetry import (
@@ -24,6 +27,20 @@ _MAX_JOURNAL_LINE_BYTES = 1_000_000
 _MAX_JOURNAL_BYTES = 64_000_000
 _MAX_RESTORE_EVENTS = 100_000
 _LOWER_HEX = frozenset("0123456789abcdef")
+
+
+def _identity(value: os.stat_result) -> tuple[int, int]:
+    return value.st_dev, value.st_ino
+
+
+def _stable_file_signature(value: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
 
 
 def validate_runtime_journal_binding(
@@ -142,6 +159,15 @@ class RunJournal:
         if raw_parent.is_symlink():
             raise ValueError("run journal directory became a symlink")
         self.path = raw_parent.resolve() / requested.name
+        parent_status = self.path.parent.stat(follow_symlinks=False)
+        if not stat.S_ISDIR(parent_status.st_mode):
+            raise ValueError("run journal directory must remain a regular directory")
+        self._descriptor_relative_parent = descriptor_relative_authority_supported()
+        self._parent_identity = (
+            pin_directory_identity(self.path.parent, label="run journal directory")
+            if self._descriptor_relative_parent
+            else _identity(parent_status)
+        )
         self.regulated_mode = regulated_mode
         self.max_events = max_events
         self._lock = RLock()
@@ -157,16 +183,109 @@ class RunJournal:
         with self._lock:
             return self._head
 
-    def _assert_owned_path(self) -> None:
-        if self.path.parent.is_symlink():
-            raise RuntimeError("run journal directory became a symlink and ownership is ambiguous")
-        if self.path.is_symlink():
+    def _revalidate_parent(self, parent_fd: int | None = None) -> None:
+        try:
+            current = self.path.parent.stat(follow_symlinks=False)
+        except OSError as exc:
+            raise RuntimeError(
+                "run journal directory changed identity and ownership is ambiguous"
+            ) from exc
+        if not stat.S_ISDIR(current.st_mode) or _identity(current) != self._parent_identity:
+            raise RuntimeError("run journal directory changed identity and ownership is ambiguous")
+        if parent_fd is None:
+            return
+        opened = os.fstat(parent_fd)
+        if not stat.S_ISDIR(opened.st_mode) or _identity(opened) != self._parent_identity:
+            raise RuntimeError("run journal directory changed identity and ownership is ambiguous")
+
+    @contextmanager
+    def _pinned_parent(self) -> Iterator[int | None]:
+        if not self._descriptor_relative_parent:
+            self._revalidate_parent()
+            try:
+                yield None
+            except BaseException:
+                raise
+            else:
+                self._revalidate_parent()
+            return
+
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        try:
+            parent_fd = os.open(self.path.parent, flags)
+        except OSError as exc:
+            raise RuntimeError(
+                "run journal directory changed identity and ownership is ambiguous"
+            ) from exc
+        try:
+            self._revalidate_parent(parent_fd)
+            try:
+                yield parent_fd
+            except BaseException:
+                raise
+            else:
+                self._revalidate_parent(parent_fd)
+        finally:
+            os.close(parent_fd)
+
+    def _stat_entry(self, parent_fd: int | None) -> os.stat_result:
+        if parent_fd is None:
+            return self.path.stat(follow_symlinks=False)
+        return os.stat(self.path.name, dir_fd=parent_fd, follow_symlinks=False)
+
+    def _entry_exists(self, parent_fd: int | None) -> bool:
+        try:
+            self._stat_entry(parent_fd)
+        except FileNotFoundError:
+            return False
+        return True
+
+    def _assert_owned_path(self, parent_fd: int | None = None) -> None:
+        self._revalidate_parent(parent_fd)
+        try:
+            current = self._stat_entry(parent_fd)
+        except FileNotFoundError:
+            return
+        if stat.S_ISLNK(current.st_mode):
             raise RuntimeError("run journal path became a symlink and ownership is ambiguous")
+
+    def _open_entry(self, parent_fd: int | None, flags: int, mode: int = 0o600) -> int:
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        if nofollow:
+            flags |= nofollow
+        try:
+            if parent_fd is None:
+                return os.open(self.path, flags, mode)
+            return os.open(self.path.name, flags, mode, dir_fd=parent_fd)
+        except OSError as exc:
+            if nofollow and exc.errno == errno.ELOOP:
+                raise RuntimeError(
+                    "run journal became a symlink during open and ownership is ambiguous"
+                ) from exc
+            raise
+
+    def _assert_opened_entry_current(
+        self,
+        *,
+        parent_fd: int | None,
+        opened: os.stat_result,
+        label: str,
+    ) -> os.stat_result:
+        try:
+            current = self._stat_entry(parent_fd)
+        except OSError as exc:
+            raise RuntimeError(f"run journal changed identity during {label}") from exc
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or not stat.S_ISREG(current.st_mode)
+            or _identity(opened) != _identity(current)
+        ):
+            raise RuntimeError(f"run journal changed identity during {label}")
+        return current
 
     def append(self, event: str, **payload: Any) -> str:
         safe_payload = sanitize(payload)
         with self._lock:
-            self._assert_owned_path()
             if self._seq >= self.max_events:
                 raise BudgetExceededError("run-journal event budget exhausted")
             body = {
@@ -186,35 +305,39 @@ class RunJournal:
                 raise ValueError("run-journal event exceeds line-size bound")
 
             flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0)
-            nofollow = getattr(os, "O_NOFOLLOW", 0)
-            if nofollow:
-                flags |= nofollow
-            try:
-                fd = os.open(self.path, flags, 0o600)
-            except OSError as exc:
-                if nofollow and exc.errno == errno.ELOOP:
-                    raise RuntimeError(
-                        "run journal became a symlink during append and ownership is ambiguous"
-                    ) from exc
-                raise
-            try:
-                opened = os.fstat(fd)
-                if not stat.S_ISREG(opened.st_mode):
-                    raise RuntimeError("run journal must remain a regular file")
-                if opened.st_size + len(rendered_bytes) > _MAX_JOURNAL_BYTES:
-                    raise BudgetExceededError("run-journal byte budget exhausted")
-                with os.fdopen(fd, "a", encoding="utf-8") as stream:
-                    fd = -1
-                    stream.write(rendered)
-                    stream.flush()
-                    # Journal lineage is authority-bearing in every runtime mode.
-                    # Regulated mode may add policy, but durability is not optional.
-                    os.fsync(stream.fileno())
-                if opened.st_size == 0:
-                    fsync_directory(self.path.parent)
-            finally:
-                if fd >= 0:
-                    os.close(fd)
+            with self._pinned_parent() as parent_fd:
+                self._assert_owned_path(parent_fd)
+                fd = self._open_entry(parent_fd, flags)
+                try:
+                    initial = os.fstat(fd)
+                    self._assert_opened_entry_current(
+                        parent_fd=parent_fd,
+                        opened=initial,
+                        label="append open",
+                    )
+                    self._revalidate_parent(parent_fd)
+                    if initial.st_size + len(rendered_bytes) > _MAX_JOURNAL_BYTES:
+                        raise BudgetExceededError("run-journal byte budget exhausted")
+                    with os.fdopen(fd, "a", encoding="utf-8") as stream:
+                        fd = -1
+                        stream.write(rendered)
+                        stream.flush()
+                        # Journal lineage is authority-bearing in every runtime mode.
+                        # Regulated mode may add policy, but durability is not optional.
+                        os.fsync(stream.fileno())
+                    final_current = self._stat_entry(parent_fd)
+                    if not stat.S_ISREG(final_current.st_mode) or _identity(
+                        final_current
+                    ) != _identity(initial):
+                        raise RuntimeError("run journal changed identity during append")
+                    if initial.st_size == 0:
+                        if parent_fd is not None:
+                            os.fsync(parent_fd)
+                        else:
+                            fsync_directory(self.path.parent)
+                finally:
+                    if fd >= 0:
+                        os.close(fd)
             self._seq += 1
             self._head = record_hash
         if isinstance(safe_payload, dict):
@@ -228,53 +351,85 @@ class RunJournal:
             return False
         return True
 
+    def _verify_stream(self, stream: BinaryIO) -> dict[str, Any]:
+        previous: str | None = None
+        count = 0
+        total_bytes = 0
+        expected_seq = 1
+        restore_limit = max(self.max_events, _MAX_RESTORE_EVENTS)
+        while True:
+            raw = stream.readline(_MAX_JOURNAL_LINE_BYTES + 1)
+            if not raw:
+                break
+            total_bytes += len(raw)
+            if total_bytes > _MAX_JOURNAL_BYTES:
+                return {"valid": False, "events": count, "head_hash": previous}
+            if len(raw) > _MAX_JOURNAL_LINE_BYTES:
+                return {"valid": False, "events": count, "head_hash": previous}
+            if not raw.strip():
+                continue
+            if count >= restore_limit:
+                return {"valid": False, "events": count, "head_hash": previous}
+            try:
+                record = parse_json_object_strict(
+                    raw.decode("utf-8"),
+                    label=f"run journal record {expected_seq}",
+                )
+                sequence = record.get("seq")
+                if type(sequence) is not int or sequence != expected_seq:
+                    return {"valid": False, "events": count, "head_hash": previous}
+                body = {key: value for key, value in record.items() if key != "record_hash"}
+                canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
+            except (UnicodeDecodeError, ValueError, TypeError, RecursionError):
+                return {"valid": False, "events": count, "head_hash": previous}
+            actual = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            if record.get("prev_hash") != previous or record.get("record_hash") != actual:
+                return {"valid": False, "events": count, "head_hash": previous}
+            previous = actual
+            count += 1
+            expected_seq += 1
+        return {"valid": True, "events": count, "head_hash": previous}
+
     def verify(self) -> dict[str, Any]:
-        with self._lock:
-            self._assert_owned_path()
-            previous: str | None = None
-            count = 0
-            total_bytes = 0
-            expected_seq = 1
-            if not self.path.exists():
+        with self._lock, self._pinned_parent() as parent_fd:
+            self._assert_owned_path(parent_fd)
+            if not self._entry_exists(parent_fd):
                 return {"valid": True, "events": 0, "head_hash": None}
-            # Read byte-bounded lines so a corrupted or adversarial JSONL record cannot
-            # turn recovery/attestation into an unbounded-memory or unbounded-I/O operation.
-            restore_limit = max(self.max_events, _MAX_RESTORE_EVENTS)
-            with open_regular_binary(self.path, label="run journal") as stream:
-                while True:
-                    raw = stream.readline(_MAX_JOURNAL_LINE_BYTES + 1)
-                    if not raw:
-                        break
-                    total_bytes += len(raw)
-                    if total_bytes > _MAX_JOURNAL_BYTES:
-                        return {"valid": False, "events": count, "head_hash": previous}
-                    if len(raw) > _MAX_JOURNAL_LINE_BYTES:
-                        return {"valid": False, "events": count, "head_hash": previous}
-                    if not raw.strip():
-                        continue
-                    if count >= restore_limit:
-                        return {"valid": False, "events": count, "head_hash": previous}
-                    try:
-                        record = parse_json_object_strict(
-                            raw.decode("utf-8"),
-                            label=f"run journal record {expected_seq}",
-                        )
-                        sequence = record.get("seq")
-                        if type(sequence) is not int or sequence != expected_seq:
-                            return {"valid": False, "events": count, "head_hash": previous}
-                        body = {key: value for key, value in record.items() if key != "record_hash"}
-                        canonical = json.dumps(
-                            body, sort_keys=True, separators=(",", ":"), default=str
-                        )
-                    except (UnicodeDecodeError, ValueError, TypeError, RecursionError):
-                        return {"valid": False, "events": count, "head_hash": previous}
-                    actual = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-                    if record.get("prev_hash") != previous or record.get("record_hash") != actual:
-                        return {"valid": False, "events": count, "head_hash": previous}
-                    previous = actual
-                    count += 1
-                    expected_seq += 1
-            return {"valid": True, "events": count, "head_hash": previous}
+
+            if parent_fd is None:
+                with open_regular_binary(self.path, label="run journal") as stream:
+                    return self._verify_stream(stream)
+
+            flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+            fd = self._open_entry(parent_fd, flags)
+            try:
+                initial = os.fstat(fd)
+                self._assert_opened_entry_current(
+                    parent_fd=parent_fd,
+                    opened=initial,
+                    label="verification open",
+                )
+                self._revalidate_parent(parent_fd)
+                initial_signature = _stable_file_signature(initial)
+                stream = os.fdopen(fd, "rb", closefd=False)
+                try:
+                    result = self._verify_stream(stream)
+                finally:
+                    stream.close()
+                final_opened = os.fstat(fd)
+                final_current = self._assert_opened_entry_current(
+                    parent_fd=parent_fd,
+                    opened=final_opened,
+                    label="verification",
+                )
+                if (
+                    _stable_file_signature(final_opened) != initial_signature
+                    or _stable_file_signature(final_current) != initial_signature
+                ):
+                    raise RuntimeError("run journal changed during verification")
+                return result
+            finally:
+                os.close(fd)
 
     def _inspect_existing(self) -> tuple[int, str | None]:
         result = self.verify()
