@@ -42,7 +42,7 @@ EXPECTED_LOCK_BLOB_SHAS = {
     "base-image.lock": "ba4fdd5d0944e5cefe925743d21d661f2eed0d7d",  # pragma: allowlist secret
     "build-py311.lock": "3b7da9eed4eaede5653c54133cf15da9ee06390e",  # pragma: allowlist secret
     "dev-py311.lock": "d34c0fafd46403aeb93877d19fa03628278375c4",  # pragma: allowlist secret
-    "dev-py313.lock": "154dc600a2ff24766da3267ceb047751f02cd33c",  # pragma: allowlist secret
+    "dev-py314.lock": "b03147fb5b26ddcdf426299ff46b58533a6ddca8",  # pragma: allowlist secret
     "runtime-py311.lock": "ae2856b5bde92b398454081058f6082af915b532",  # pragma: allowlist secret
 }
 

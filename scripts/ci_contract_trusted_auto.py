@@ -15,19 +15,23 @@ sys.modules[_BASE_SPEC.name] = _base
 _BASE_SPEC.loader.exec_module(_base)
 
 # Preserve the complete hardened verifier API because the existing adversarial tests import
-# its private helpers directly. This wrapper adds one independently frozen workflow contract
+# its private helpers directly. This wrapper adds independently frozen workflow contracts
 # without weakening any pre-existing invariant.
 for _export_name in dir(_base):
     if not _export_name.startswith("__"):
         globals()[_export_name] = getattr(_base, _export_name)
 del _export_name
 
-EXPECTED_WORKFLOW_NAMES = {"ci.yml", "manual-validation.yml", "trusted-pr-auto.yml"}
+EXPECTED_WORKFLOW_NAMES = {
+    "ci.yml",
+    "manual-validation.yml",
+    "trusted-pr-auto.yml",
+}
 EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
-    "44f15cfa9b844307d539d0e2c84405e1f74d56ee"  # pragma: allowlist secret
+    "87e94dd23a66d50b46ae8b6ed692151104a1be2e"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
-    "c7aec0364b4c1c53220abe6a06674e59430707cb"  # pragma: allowlist secret
+    "bf538a2efa1f895ef0a614e8118ba1b1ad2914f5"  # pragma: allowlist secret
 )
 TRUSTED_AUTO_WORKFLOW_NAME = "Trusted PR Auto Gate — ƳƤ AI QA Automation Framework"
 TRUSTED_AUTO_SOURCE_WORKFLOW = "CI — ƳƤ AI QA Automation Framework"
@@ -51,8 +55,9 @@ TRUSTED_AUTO_PROTECTED_PATHS = (
     "src/ai_qa_automation/tools/execution_env.py",
 )
 
-# The base verifier must accept the third reviewed workflow before it performs its existing
-# exact workflow-set and immutable-action checks. No other base invariant is changed.
+# The base verifier must accept the additional independently frozen workflow definition
+# before it performs its existing exact workflow-set and immutable-action checks. No other
+# base invariant is changed.
 _base.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
 
 
@@ -107,6 +112,8 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
             raise ValueError(f"trusted-pr-auto.yml contains forbidden authority token: {forbidden}")
     if _base.CACHE_CONFIGURATION_RE.search(semantic):
         raise ValueError("trusted-pr-auto.yml dependency caching is forbidden")
+    if '"3.13.15"' in semantic or "dev-py313.lock" in semantic or "py313" in semantic:
+        raise ValueError("trusted-pr-auto.yml contains stale Python 3.13 CI authority")
 
     preflight = _base._semantic_text(_base._job_block(text, "preflight"))
     required_preflight = (
@@ -181,6 +188,8 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
             raise ValueError(f"trusted automatic validation job {job_id} must be secret-free")
         if "persist-credentials: false" not in job:
             raise ValueError(f"trusted automatic validation job {job_id} must disable credentials")
+
+    quality_lanes = _base._verify_quality_lane_contract(text, name="trusted-pr-auto.yml")
 
     supply_chain = _base._semantic_text(_base._job_block(text, "supply-chain"))
     mermaid_subject_binding = (
@@ -258,6 +267,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "protected_paths": list(TRUSTED_AUTO_PROTECTED_PATHS),
         "validation_subject": "live-prospective-merge-sha",
         "validation_authority": "read-only-secret-free-before-reporter",
+        "quality_lanes": quality_lanes,
         "terminal_revalidation": "fresh-live-admission-plus-shared-pr-head-base-merge-resolver",
         "status_writer": "dedicated-github-app",
         "maintenance_fallback": "owner-repository-dispatch-exact-object-manifest",
