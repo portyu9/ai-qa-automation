@@ -22,15 +22,43 @@ _EXPECTED_WHEEL_PREFIX = "ai_qa_automation"
 
 
 def _read_stable_regular_file(path: Path, *, max_bytes: int) -> bytes:
-    before = path.lstat()
-    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
-        raise ValueError(f"release authority file must be a regular non-symlink: {path.name}")
-    if before.st_size > max_bytes:
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    if nofollow is None:
+        raise RuntimeError("release authority requires O_NOFOLLOW file-descriptor semantics")
+    flags = os.O_RDONLY | nofollow | getattr(os, "O_CLOEXEC", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError(f"release authority file must be a regular non-symlink: {path.name}") from exc
+
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError(f"release authority file must be regular: {path.name}")
+        if before.st_size > max_bytes:
+            raise ValueError(f"release authority file exceeds {max_bytes} bytes: {path.name}")
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            data = handle.read(max_bytes + 1)
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+
+    if len(data) > max_bytes:
         raise ValueError(f"release authority file exceeds {max_bytes} bytes: {path.name}")
-    data = path.read_bytes()
-    after = path.lstat()
-    identity_before = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
-    identity_after = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+    identity_before = (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+    identity_after = (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    )
     if identity_before != identity_after or len(data) != before.st_size:
         raise ValueError(f"release authority file changed while being read: {path.name}")
     return data
