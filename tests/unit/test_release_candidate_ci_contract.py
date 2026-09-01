@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import scripts.verify_ci_contract as ci_contract
 import pytest
+
+import scripts.verify_ci_contract as ci_contract
 
 
 ROOT = Path(__file__).resolve().parents[2]
