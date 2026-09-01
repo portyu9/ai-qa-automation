@@ -6,7 +6,6 @@ import pytest
 
 import scripts.verify_ci_contract as ci_contract
 
-
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "release-candidate.yml"
 
