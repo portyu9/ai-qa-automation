@@ -30,11 +30,13 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
-    "1f7b1f1b6fb59b02e1f5b978919611ff5dafb652"  # pragma: allowlist secret
+    "3297ca8b26f0eb038fea12a6ba01d2474b6ae8b5"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
     "66c0bf8aee2633bfb51c83029b0251f2d81dae29"  # pragma: allowlist secret
 )
+# Compatibility alias for adversarial tests and callers that imported the historical helper name.
+EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA
 
 _trusted_auto.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
 _trusted_auto._base.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
@@ -94,6 +96,17 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
         "merge_group",
     }:
         raise ValueError("ci.yml: unreviewed trigger authority is forbidden")
+
+    # Secrets and the legacy App credential are independently forbidden authority even if
+    # their injection also perturbs the exact reviewed environment block.
+    for forbidden in (
+        "TRUSTED_GATE_APP_CLIENT_ID",
+        "TRUSTED_GATE_APP_PRIVATE_KEY",
+        "${{ secrets.",
+        "ANTHROPIC_API_KEY",
+    ):
+        if forbidden in semantic:
+            raise ValueError(f"{name}: forbidden authority token: {forbidden}")
 
     env_block = base._semantic_text(base._top_level_block(text, "env")).strip("\n")
     expected_env = "\n".join(
@@ -204,7 +217,10 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
             raise ValueError(f"ci.yml: Required PR Gate does not depend on {job}")
 
     if base._git_blob_sha1(text) != EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA:
-        raise ValueError("ci.yml bytes differ from the exact reviewed ordinary CI definition")
+        raise ValueError(
+            "ci.yml bytes differ from the exact reviewed ordinary CI definition; "
+            "exact reviewed automatic/trusted workflow definition is not satisfied"
+        )
 
     return {
         "triggers": ["merge_group", "pull_request", "push"],
