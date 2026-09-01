@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+
 import scripts.verify_ci_contract as ci_contract
 
 
