@@ -7,7 +7,7 @@
 **Evidence-First Agentic Quality Engineering**  
 Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
-[Repository](../README.md) · [Architecture](ARCHITECTURE.md) · [Result Contract](RESULT_CONTRACT.md) · [Security](SECURITY.md) · [CI/CD](CI_CD.md) · [Setup](SETUP.md)
+[Repository](../README.md) · [Architecture](ARCHITECTURE.md) · [Result Contract](RESULT_CONTRACT.md) · [Security](SECURITY.md) · [CI/CD](CI_CD.md) · [Release Candidate](RELEASE_CANDIDATE.md) · [Setup](SETUP.md)
 
 </div>
 
@@ -21,9 +21,9 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 | Reviewer goal | Recommended path |
 |---|---|
 | **Architecture / principal engineering** | [Architecture](ARCHITECTURE.md) → [Result Contract](RESULT_CONTRACT.md) → [Runtime Control](RUNTIME_CONTROL.md) → [Workspace Freshness Boundary](WORKSPACE_FRESHNESS_BOUNDARY.md) → [Traceability](TRACEABILITY.md) → [Technical Walkthrough](TECHNICAL_WALKTHROUGH.md) |
-| **Security / red team** | [Security](SECURITY.md) → [Threat Model](THREAT_MODEL.md) → [Tool Input Boundaries](TOOL_INPUT_BOUNDARIES.md) → [Objective Input Boundary](OBJECTIVE_INPUT_BOUNDARY.md) → [Agent SDK Result Boundary](SDK_RESULT_BOUNDARY.md) → [Persistence Resource Boundary](PERSISTENCE_RESOURCE_BOUNDARY.md) → [API Observation Boundary](API_OBSERVATION_BOUNDARY.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Supply Chain](SUPPLY_CHAIN.md) → [CI/CD](CI_CD.md) → [Trusted PR Control Plane](TRUSTED_PR_CONTROL_PLANE.md) → [MCP](MCP.md) → [Verification Boundaries](VERIFICATION_BOUNDARIES.md) → [Workspace Freshness Boundary](WORKSPACE_FRESHNESS_BOUNDARY.md) → [Pytest Execution Isolation](PYTEST_EXECUTION_ISOLATION.md) → [Limitations](LIMITATIONS.md) |
+| **Security / red team** | [Security](SECURITY.md) → [Threat Model](THREAT_MODEL.md) → [Tool Input Boundaries](TOOL_INPUT_BOUNDARIES.md) → [Objective Input Boundary](OBJECTIVE_INPUT_BOUNDARY.md) → [Agent SDK Result Boundary](SDK_RESULT_BOUNDARY.md) → [Persistence Resource Boundary](PERSISTENCE_RESOURCE_BOUNDARY.md) → [API Observation Boundary](API_OBSERVATION_BOUNDARY.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Supply Chain](SUPPLY_CHAIN.md) → [CI/CD](CI_CD.md) → [Release Candidate](RELEASE_CANDIDATE.md) → [Trusted PR Control Plane](TRUSTED_PR_CONTROL_PLANE.md) → [MCP](MCP.md) → [Verification Boundaries](VERIFICATION_BOUNDARIES.md) → [Workspace Freshness Boundary](WORKSPACE_FRESHNESS_BOUNDARY.md) → [Pytest Execution Isolation](PYTEST_EXECUTION_ISOLATION.md) → [Limitations](LIMITATIONS.md) |
 | **QA automation / AI engineering** | [Change Intelligence](CHANGE_INTELLIGENCE.md) → [Contract Drift Boundary](CONTRACT_DRIFT_BOUNDARY.md) → [Skills](SKILLS.md) → [Evaluation](EVALUATION.md) → [Result Contract](RESULT_CONTRACT.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Production Readiness](PRODUCTION_READINESS.md) |
-| **Operator / adopter** | [Setup](SETUP.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Pytest Execution Isolation](PYTEST_EXECUTION_ISOLATION.md) → [Operations](OPERATIONS.md) → [CI/CD](CI_CD.md) → [Troubleshooting](TROUBLESHOOTING.md) → [Runtime Control](RUNTIME_CONTROL.md) → [MCP](MCP.md) |
+| **Operator / adopter** | [Setup](SETUP.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Pytest Execution Isolation](PYTEST_EXECUTION_ISOLATION.md) → [Operations](OPERATIONS.md) → [CI/CD](CI_CD.md) → [Release Candidate](RELEASE_CANDIDATE.md) → [Troubleshooting](TROUBLESHOOTING.md) → [Runtime Control](RUNTIME_CONTROL.md) → [MCP](MCP.md) |
 
 ### Architecture / principal engineering
 
@@ -45,13 +45,14 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 7. [`API_OBSERVATION_BOUNDARY.md`](API_OBSERVATION_BOUNDARY.md) — raw-byte HTTP observation, compression/header/body bounds, complete-body JSON promotion, and explicit decoding truth
 8. [`BROWSER_VALIDATION.md`](BROWSER_VALIDATION.md) — exact-subject browser gates, evidence semantics, and URL confidentiality boundary
 9. [`SUPPLY_CHAIN.md`](SUPPLY_CHAIN.md) — dependency, build, Action, SBOM, reproducibility, protected-root manifest, and trusted-status identity boundaries
-10. [`CI_CD.md`](CI_CD.md) — automatic PR evidence, trusted-dispatch exact-subject validation, dedicated App merge identity, and repository-setting authority
-11. [`TRUSTED_PR_CONTROL_PLANE.md`](TRUSTED_PR_CONTROL_PLANE.md) — independent trusted-status publisher design, external App/Environment/ruleset activation requirements, and historical control-plane evidence
-12. [`MCP.md`](MCP.md) — provider identity, action authorization, untrusted remote content
-13. [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md) — evidence ownership across trust domains
-14. [`WORKSPACE_FRESHNESS_BOUNDARY.md`](WORKSPACE_FRESHNESS_BOUNDARY.md) — local target-subject freshness, mutation ownership, and terminal-success binding
-15. [`PYTEST_EXECUTION_ISOLATION.md`](PYTEST_EXECUTION_ISOLATION.md) — fail-closed deployment prerequisites for target-controlled Python
-16. [`LIMITATIONS.md`](LIMITATIONS.md) — explicit design boundaries and non-claims
+10. [`CI_CD.md`](CI_CD.md) — automatic PR evidence, routine source-only admission, external protected-maintenance admission, and repository-setting authority
+11. [`RELEASE_CANDIDATE.md`](RELEASE_CANDIDATE.md) — exact-main/version/package release-preparation evidence and explicit non-publishing authority
+12. [`TRUSTED_PR_CONTROL_PLANE.md`](TRUSTED_PR_CONTROL_PLANE.md) — independent trusted-status publisher design, external App/Environment/ruleset activation requirements, and historical control-plane evidence
+13. [`MCP.md`](MCP.md) — provider identity, action authorization, untrusted remote content
+14. [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md) — evidence ownership across trust domains
+15. [`WORKSPACE_FRESHNESS_BOUNDARY.md`](WORKSPACE_FRESHNESS_BOUNDARY.md) — local target-subject freshness, mutation ownership, and terminal-success binding
+16. [`PYTEST_EXECUTION_ISOLATION.md`](PYTEST_EXECUTION_ISOLATION.md) — fail-closed deployment prerequisites for target-controlled Python
+17. [`LIMITATIONS.md`](LIMITATIONS.md) — explicit design boundaries and non-claims
 
 ### QA automation / AI engineering
 
@@ -69,10 +70,11 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 2. [`BROWSER_VALIDATION.md`](BROWSER_VALIDATION.md) — browser gate identity, URL sanitation, and evidence non-claims
 3. [`PYTEST_EXECUTION_ISOLATION.md`](PYTEST_EXECUTION_ISOLATION.md) — deployment containment required before live target-controlled pytest code may execute
 4. [`OPERATIONS.md`](OPERATIONS.md) — operating ladder and artifact handling
-5. [`CI_CD.md`](CI_CD.md) — automatic PR feedback, protected trusted dispatch, independent status identity, and repository-governance authority
-6. [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) — diagnose without weakening controls
-7. [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md) — recovery and mutation mechanics
-8. [`MCP.md`](MCP.md) — optional GitHub/Atlassian integration policy
+5. [`CI_CD.md`](CI_CD.md) — automatic PR feedback, routine trusted admission, external protected maintenance, and repository-governance authority
+6. [`RELEASE_CANDIDATE.md`](RELEASE_CANDIDATE.md) — manual deterministic release-preparation evidence without publishing authority
+7. [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) — diagnose without weakening controls
+8. [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md) — recovery and mutation mechanics
+9. [`MCP.md`](MCP.md) — optional GitHub/Atlassian integration policy
 
 ---
 
@@ -93,8 +95,9 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 | [`API_OBSERVATION_BOUNDARY.md`](API_OBSERVATION_BOUNDARY.md) | How are HTTP response bytes, headers, truncation, decoding, and strict JSON promotion bounded before becoming structured evidence? |
 | [`BROWSER_VALIDATION.md`](BROWSER_VALIDATION.md) | How are browser operations bound to exact subjects without confusing evidence collection with page correctness? |
 | [`SUPPLY_CHAIN.md`](SUPPLY_CHAIN.md) | How are dependency, build, Action, container-base, SBOM, reproducibility, protected-root, and trusted-status identity inputs bound and evidenced? |
-| [`CI_CD.md`](CI_CD.md) | How are automatic PR evidence, owner trusted-dispatch validation, dedicated App status authority, manual validation, and external repository settings separated? |
-| [`TRUSTED_PR_CONTROL_PLANE.md`](TRUSTED_PR_CONTROL_PLANE.md) | How is protected PR merge authority separated from candidate GitHub Actions workflows and bound to a main-only dedicated App reporter plus exact live merge-ref validation? |
+| [`CI_CD.md`](CI_CD.md) | How are ordinary CI, routine source-only admission, external protected-maintenance admission, manual validation, and external repository settings separated? |
+| [`RELEASE_CANDIDATE.md`](RELEASE_CANDIDATE.md) | How is a non-publishing candidate package bound to exact current `main`, static version identity, reproducible bytes, and checksums? |
+| [`TRUSTED_PR_CONTROL_PLANE.md`](TRUSTED_PR_CONTROL_PLANE.md) | How is protected PR merge authority separated from candidate GitHub Actions workflows and bound to a dedicated external App plus exact live subject validation? |
 | [`CHANGE_INTELLIGENCE.md`](CHANGE_INTELLIGENCE.md) | How are committed changes, risk, ownership, test impact, and API drift analyzed? |
 | [`CONTRACT_DRIFT_BOUNDARY.md`](CONTRACT_DRIFT_BOUNDARY.md) | How are OpenAPI/Swagger bytes, JSON/YAML semantics, parser resources, and incomplete comparison bounded before compatibility evidence is emitted? |
 | [`EVALUATION.md`](EVALUATION.md) | How is the agent evaluated as software rather than prose? |
@@ -124,6 +127,7 @@ Content hash            ≠ identity/signature
 Hash-locked package     ≠ publisher trust/availability
 Reproducible wheel      ≠ signed provenance
 Automatic PR green      ≠ protected merge authority
+Release candidate green ≠ publication/signature/deployment authority
 Model success           ≠ deterministic SUCCESS
 ```
 
@@ -141,6 +145,7 @@ Every document is subordinate to the same rules:
 10. **A stronger model never replaces a missing deterministic control.**
 11. **Evidence collection cannot substitute for a deterministic acceptance condition.**
 12. **A candidate workflow cannot become merge authority merely by producing a same-named status; protected status identity is independently owned.**
+13. **A reproducible release-candidate artifact cannot become publisher identity merely by carrying hashes or a version label.**
 
 ## Terminology
 
