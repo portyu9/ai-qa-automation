@@ -53,5 +53,5 @@ def test_ci_contract_rejects_weakened_event_concurrency(
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="exact reviewed automatic/trusted workflow definition"):
+    with pytest.raises(ValueError, match="ci.yml bytes differ from the exact reviewed ordinary CI definition"):
         ci_contract.verify_ci_contract(root)
