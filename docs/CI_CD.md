@@ -1,11 +1,11 @@
 # CI/CD and Repository Governance
 
 > [!IMPORTANT]
-> **Workflow definition, workflow execution, validation subject, evidence admission, status identity, and merge enforcement are separate authorities.** Ordinary pull-request CI is development evidence. Routine source-only admission and protected-maintenance admission use different trust roots, and neither may let candidate-controlled bytes certify their own protected authority.
+> **Workflow definition, workflow execution, validation subject, evidence admission, status identity, merge enforcement, and release preparation are separate authorities.** Ordinary pull-request CI is development evidence. Routine source-only admission and protected-maintenance admission use different trust roots, and neither may let candidate-controlled bytes certify their own protected authority. Release-candidate evidence is separately non-publishing and cannot become publisher identity by carrying hashes or version metadata.
 
 **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
-[Documentation home](README.md) · [Supply chain](SUPPLY_CHAIN.md) · [Trusted PR control plane](TRUSTED_PR_CONTROL_PLANE.md) · [Operations](OPERATIONS.md) · [Verification boundaries](VERIFICATION_BOUNDARIES.md)
+[Documentation home](README.md) · [Supply chain](SUPPLY_CHAIN.md) · [Release candidate](RELEASE_CANDIDATE.md) · [Trusted PR control plane](TRUSTED_PR_CONTROL_PLANE.md) · [Operations](OPERATIONS.md) · [Verification boundaries](VERIFICATION_BOUNDARIES.md)
 
 ---
 
@@ -18,9 +18,10 @@ The repository and external control plane intentionally separate these surfaces:
 | `.github/workflows/ci.yml` | `pull_request`, `push` to `main`, `merge_group` | read-only, secret-free validation jobs | ordinary deterministic development evidence and exact build/test artifacts |
 | `.github/workflows/trusted-pr-auto.yml` | reviewed CI completion through `workflow_run` | trusted default-branch admission, then Environment-held App credential only in the terminal reporter | routine source-only authorization when protected roots have zero drift |
 | external `scripts/trusted_gate_service/` deployment | GitHub App `workflow_run` webhook | independently deployed code, independently administered one-shot policy, durable external state, dedicated App credential | protected-maintenance authorization for exact reviewed protected-root transitions |
+| `.github/workflows/release-candidate.yml` | explicit `workflow_dispatch` from `main` | read-only, secret-free, non-publishing package verification | exact-current-main/version/reproducible-wheel release-preparation evidence |
 | `.github/workflows/manual-validation.yml` | `workflow_dispatch` | `credentialed-validation` Environment for selected provider evidence | optional live/model evidence; never protected merge authority |
 
-There is no repository-owned `repository_dispatch` protected-maintenance authority. Candidate execution never receives the external protected-maintenance App private key or a terminal status-write token. Repository source cannot self-attest live GitHub App installation state, Environment restrictions, webhook configuration, external deployment identity, one-shot policy, ruleset binding, or later administrative drift.
+There is no repository-owned `repository_dispatch` protected-maintenance authority. Candidate execution never receives the external protected-maintenance App private key or a terminal status-write token. Repository source cannot self-attest live GitHub App installation state, Environment restrictions, webhook configuration, external deployment identity, one-shot policy, ruleset binding, publisher identity, or later administrative drift.
 
 ## Ordinary CI subject and evidence
 
@@ -57,7 +58,7 @@ The automatic quality matrix has two exact, independently hash-locked lanes:
 
 `requires-python >=3.11` remains package metadata. It does not imply that every intermediate interpreter version is independently certified by CI. Repository certification claims are limited to the exact patch versions that actually execute.
 
-Before hash-locked dependency installation, `scripts/verify_build_authority.py` verifies the reviewed lock set and build authority. `scripts/verify_ci_contract.py` freezes the exact lane structure, immutable action identities, subject binding, install ordering, aggregate behavior, absence of repository-dispatch authority, and the separate automatic trusted-workflow contract. Stale Python 3.13 lane authority is rejected.
+Before hash-locked dependency installation, `scripts/verify_build_authority.py` verifies the reviewed lock set and build authority. `scripts/verify_ci_contract.py` freezes the exact lane structure, immutable action identities, subject binding, install ordering, aggregate behavior, absence of repository-dispatch authority, the separate automatic trusted-workflow contract, and the separate non-publishing release-candidate contract. Stale Python 3.13 lane authority is rejected.
 
 ## Routine source-only trusted path
 
@@ -111,6 +112,18 @@ A blocked or unavailable external protected-maintenance gate remains blocked. It
 
 Strict/up-to-date enforcement matters because a base change can alter the prospective merge while leaving the head SHA unchanged. A prior status never certifies a new base/merge subject.
 
+## Release-candidate evidence path
+
+`release-candidate.yml` is an explicit, manual release-preparation workflow. It is deliberately not triggered by tag creation or push, has top-level `contents: read` only, receives no release/package/signing credential, and does not participate in `Trusted PR Gate`.
+
+A release-candidate run must be dispatched from `refs/heads/main`. It binds `RELEASE_SUBJECT_SHA` to the workflow's exact `github.sha`, checks out that exact commit with persisted credentials disabled, and requires the requested stable `vMAJOR.MINOR.PATCH` label to equal `v` plus the static `pyproject.toml` project version. The verifier rejects dynamic version authority, wrong project identity, wrong ref/source, tracked/staged drift, malformed object IDs, symlink/special metadata inputs, and ambiguous wheel arguments.
+
+Build authority is verified before the hash-locked build environment is installed. Two fresh archives are then produced from the exact source object through an isolated Git view with versioned attributes only. Each archive independently passes build-authority verification, produces exactly one expected wheel, and the two wheel byte streams must match exactly.
+
+Release evidence is persisted under a fresh runner-owned `RUNNER_TEMP` directory rather than the repository checkout. Immediately before artifact upload, the workflow resolves live remote `refs/heads/main` and requires it still to equal `RELEASE_SUBJECT_SHA`. A stale run therefore fails rather than publishing release-candidate evidence for a no-longer-current `main`.
+
+Only successful runs publish the single `release-candidate-evidence` artifact. Its manifest/checksums bind the exact source SHA/tree, static version label, `pyproject.toml` Git-blob identity, retained wheel filename/size/SHA-256, two-build reproducibility, and terminal observed `main` SHA. This remains integrity evidence only: it is not a real Git tag, release creation, package publication, publisher identity, signing/notarization, deployment approval, or production observation. See [Release Candidate Integrity](RELEASE_CANDIDATE.md).
+
 ## Supply-chain and browser authority
 
 Automatic dependency caching is forbidden where it could precede reviewed lock/build authority. Hash-required dependency installation is bracketed by exact build-authority checks, and project installation is revalidated against the same authority.
@@ -136,7 +149,7 @@ python scripts/verify_ci_contract.py
 python scripts/verify_docs.py
 ```
 
-The CI-contract verifier fails closed on drift in the reviewed repository workflow authority, including immutable Action SHAs, exact Python patch versions, quality-lane split, exact checkouts, absence of repository dispatch/client-payload authority, read-only validation permissions, build/install ordering, evidence uploads, deterministic aggregate structure, automatic zero-protected-drift admission, and final App-credential isolation.
+The CI-contract verifier fails closed on drift in the reviewed repository workflow authority, including immutable Action SHAs, exact Python patch versions, quality-lane split, exact checkouts, absence of repository dispatch/client-payload authority, read-only validation permissions, build/install ordering, evidence uploads, deterministic aggregate structure, automatic zero-protected-drift admission, final App-credential isolation, and the release-candidate workflow's exact trigger/subject/build/reproducibility/live-main/no-write/no-secret boundaries.
 
 The documentation verifier checks repository-owned structural and selected implementation-coupled claims. It does not turn external GitHub/AWS/provider facts into source-certified truth; those remain externally observed evidence.
 
@@ -158,18 +171,19 @@ Merge only the exact validated head using the configured protected merge method.
 
 ## Release and deployment non-authority
 
-A green ordinary run, trusted validation run, or `Trusted PR Gate` is not a release signature, package publication, deployment approval, or proof that a production environment changed. Release/deployment authority requires its own controlled evidence and is outside these CI merge gates.
+A green ordinary run, trusted validation run, or `Trusted PR Gate` is not release-candidate evidence. A green release-candidate run is not a release signature, Git tag, GitHub Release, package publication, publisher identity, deployment approval, or proof that a production environment changed. Each stronger authority requires its own controlled evidence and must remain separately administered.
 
 ## Evidence semantics
 
 - ordinary green = deterministic execution evidence for one exact subject;
 - routine trusted green = exact zero-protected-drift admission plus deterministic execution and terminal App publication;
 - external protected-maintenance green = exact independent policy admission plus exact execution/artifact evidence, terminal revalidation, and App publication;
+- release-candidate green = exact-current-main/static-version/reproducible-package integrity evidence with no publishing authority;
 - historical green = evidence for the older revision/control plane only;
 - blocked, failed, missing, stale, wrong-integration, or unobserved evidence = non-PASS truth.
 
 ---
 
-[← Supply chain](SUPPLY_CHAIN.md) · [Trusted PR control plane →](TRUSTED_PR_CONTROL_PLANE.md)
+[← Supply chain](SUPPLY_CHAIN.md) · [Release candidate](RELEASE_CANDIDATE.md) · [Trusted PR control plane →](TRUSTED_PR_CONTROL_PLANE.md)
 
 Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
