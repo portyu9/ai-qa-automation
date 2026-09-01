@@ -27,6 +27,7 @@ del _export_name
 EXPECTED_WORKFLOW_NAMES = {
     "ci.yml",
     "manual-validation.yml",
+    "release-candidate.yml",
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
@@ -34,6 +35,9 @@ EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
     "66c0bf8aee2633bfb51c83029b0251f2d81dae29"  # pragma: allowlist secret
+)
+EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
+    "6600d9a798b48da3a63be8865bfccac52186eb81"  # pragma: allowlist secret
 )
 # Compatibility alias for adversarial tests and callers that imported the historical helper name.
 EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA
@@ -248,6 +252,128 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
     }
 
 
+def _verify_release_candidate_workflow(text: str) -> dict[str, Any]:
+    base = _trusted_auto._base
+    name = "release-candidate.yml"
+    semantic = base._semantic_text(text)
+    if base._git_blob_sha1(text) != EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA:
+        raise ValueError("release-candidate.yml bytes differ from the exact reviewed definition")
+
+    expected_on = "\n".join(
+        (
+            "on:",
+            "  workflow_dispatch:",
+            "    inputs:",
+            "      release_tag:",
+            "        description: Stable release tag matching pyproject.toml, for example v0.1.0",
+            "        required: true",
+            "        type: string",
+        )
+    )
+    on_block = base._semantic_text(base._top_level_block(text, "on")).strip("\n")
+    if on_block != expected_on:
+        raise ValueError("release-candidate.yml must be explicit workflow_dispatch only")
+    if base._top_level_keys(base._top_level_block(text, "on")) != {"workflow_dispatch"}:
+        raise ValueError("release-candidate.yml contains unreviewed trigger authority")
+
+    base._verify_top_level_read_only_permissions(text, name=name)
+    if base.WRITE_PERMISSION_RE.search(semantic):
+        raise ValueError("release-candidate.yml native token must remain read-only")
+    for forbidden in (
+        "pull_request:",
+        "pull_request_target:",
+        "push:",
+        "schedule:",
+        "repository_dispatch:",
+        "workflow_run:",
+        "${{ secrets.",
+        "TRUSTED_GATE_APP_PRIVATE_KEY",
+        "ANTHROPIC_API_KEY",
+        "packages: write",
+        "contents: write",
+        "id-token: write",
+        "gh release",
+        "twine ",
+        "pypi",
+        "sigstore",
+        "continue-on-error: true",
+        "ubuntu-latest",
+        "pip install --upgrade",
+        " --editable",
+        " -e .",
+    ):
+        if forbidden in semantic:
+            raise ValueError(f"release-candidate.yml contains forbidden authority token: {forbidden}")
+    if base.CACHE_CONFIGURATION_RE.search(semantic):
+        raise ValueError("release-candidate.yml dependency caching is forbidden")
+
+    env_block = base._semantic_text(base._top_level_block(text, "env")).strip("\n")
+    expected_env = "\n".join(
+        (
+            "env:",
+            '  PYTHONUNBUFFERED: "1"',
+            '  PYTHONSAFEPATH: "1"',
+            '  PIP_DISABLE_PIP_VERSION_CHECK: "1"',
+            "  RELEASE_SUBJECT_SHA: ${{ github.sha }}",
+        )
+    )
+    if env_block != expected_env:
+        raise ValueError("release-candidate.yml release subject environment differs from review")
+
+    required = (
+        "    name: Deterministic Release Candidate Evidence",
+        f"uses: actions/checkout@{base.EXPECTED_ACTION_SHAS['actions/checkout']}",
+        "ref: ${{ env.RELEASE_SUBJECT_SHA }}",
+        "persist-credentials: false",
+        'test "$GITHUB_REF" = "refs/heads/main"',
+        'test "$(git rev-parse HEAD)" = "$RELEASE_SUBJECT_SHA"',
+        f"uses: actions/setup-python@{base.EXPECTED_ACTION_SHAS['actions/setup-python']}",
+        'python-version: "3.11.16"',
+        "python scripts/verify_release_candidate.py",
+        '--expected-ref "$GITHUB_REF"',
+        "python scripts/verify_build_authority.py",
+        "python -m pip install --require-hashes -r requirements/build-py311.lock",
+        "SOURCE_DATE_EPOCH: \"315532800\"",
+        'archive --format=tar "$RELEASE_SUBJECT_SHA"',
+        "cmp -s artifacts/release/build-authority-archive-a.json artifacts/release/build-authority-archive-b.json",
+        '--wheel-a "${wheel_a[0]}"',
+        '--wheel-b "${wheel_b[0]}"',
+        "--output artifacts/release/release-manifest.json",
+        "/usr/bin/sha256sum",
+        f"uses: actions/upload-artifact@{base.EXPECTED_ACTION_SHAS['actions/upload-artifact']}",
+        "name: release-candidate-evidence",
+        "if-no-files-found: error",
+        "retention-days: 30",
+    )
+    for snippet in required:
+        if snippet not in semantic:
+            raise ValueError(f"release-candidate.yml missing reviewed invariant: {snippet}")
+    if semantic.count(f"uses: actions/checkout@{base.EXPECTED_ACTION_SHAS['actions/checkout']}") != 1:
+        raise ValueError("release-candidate.yml must have exactly one exact-subject checkout")
+    if semantic.count("python scripts/verify_release_candidate.py") != 2:
+        raise ValueError("release-candidate.yml must verify identity before and after package build")
+    if semantic.count("python -m pip wheel --no-deps --no-build-isolation") != 2:
+        raise ValueError("release-candidate.yml must build exactly two reviewed wheels")
+    if semantic.count("python scripts/verify_build_authority.py --root") != 2:
+        raise ValueError("release-candidate.yml must independently verify both archive roots")
+
+    return {
+        "trigger": "workflow_dispatch",
+        "source_ref": "refs/heads/main",
+        "subject": "github.sha",
+        "release_identity": "explicit-vMAJOR.MINOR.PATCH/static-project-version",
+        "builds": 2,
+        "package_reproducibility": "byte-identical-wheel-required",
+        "build_authority": "hash-locked-and-archive-revalidated",
+        "evidence": "canonical-manifest-plus-sha256-checksums",
+        "permissions": "contents:read",
+        "publishing_authority": "none",
+        "signature_claim": "none",
+        "merge_authority": "none",
+        "workflow_definition": "exact-reviewed-git-blob",
+    }
+
+
 # Preserve the long-standing helper name for adversarial callers while changing its authority
 # contract from ordinary+owner-dispatch to ordinary CI only.
 _verify_automatic_workflow = _verify_ordinary_ci_workflow
@@ -266,6 +392,7 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
     actions = base._verify_action_revisions(workflows)
     ordinary = _verify_ordinary_ci_workflow(workflows["ci.yml"])
     manual = base._verify_manual_workflow(workflows["manual-validation.yml"])
+    release_candidate = _verify_release_candidate_workflow(workflows["release-candidate.yml"])
     trusted_auto = _trusted_auto._verify_trusted_auto_workflow(workflows["trusted-pr-auto.yml"])
     return {
         "schema_version": 1,
@@ -274,6 +401,7 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
         "workflows": {
             "automatic": ordinary,
             "manual": manual,
+            "release_candidate": release_candidate,
             "trusted_auto": trusted_auto,
         },
         "workflow_sizes": {
@@ -284,6 +412,11 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
             (
                 "Ordinary pull_request execution is automatic read-only development evidence, not "
                 "protected merge authority."
+            ),
+            (
+                "The release-candidate workflow is manual, read-only, and non-publishing; its "
+                "manifest/checksums are integrity evidence, not publisher identity, signing, "
+                "deployment approval, or protected merge authority."
             ),
             (
                 "Automatic Trusted PR Gate admission intentionally refuses any PR that changes a "
