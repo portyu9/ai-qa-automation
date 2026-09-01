@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 import scripts.verify_ci_contract as ci_contract
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -33,7 +32,7 @@ def test_release_candidate_workflow_rejects_push_trigger(
         "on:\n  push:\n    branches: [main]\n  workflow_dispatch:\n",
         1,
     )
-    with pytest.raises(ValueError, match="workflow_dispatch only|unreviewed trigger"):
+    with pytest.raises(ValueError, match=r"workflow_dispatch only|unreviewed trigger"):
         _verify_mutation(monkeypatch, text)
 
 
