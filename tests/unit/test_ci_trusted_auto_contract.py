@@ -145,7 +145,9 @@ def test_trusted_auto_contract_rejects_candidate_identity_in_trusted_jobs(
     job = ci_contract._job_block(text, job_id)
     marker = "    runs-on: ubuntu-24.04\n"
     assert marker in job
-    injected = marker + "    env:\n" + "      CI_SUBJECT_SHA: ${{ needs.preflight.outputs.merge_sha }}\n"
+    injected = (
+        marker + "    env:\n" + "      CI_SUBJECT_SHA: ${{ needs.preflight.outputs.merge_sha }}\n"
+    )
     mutated_job = job.replace(marker, injected, 1)
     mutated = text.replace(job, mutated_job, 1)
     path.write_text(mutated, encoding="utf-8")
