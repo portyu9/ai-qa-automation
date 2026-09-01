@@ -92,7 +92,9 @@ def _validate_tag(tag: str, *, version: str) -> None:
         raise ValueError("release tag does not match static project version")
 
 
-def _validate_subject(root: Path, *, expected_source_sha: str, expected_ref: str) -> tuple[str, str]:
+def _validate_subject(
+    root: Path, *, expected_source_sha: str, expected_ref: str
+) -> tuple[str, str]:
     if expected_ref != "refs/heads/main":
         raise ValueError("release candidate evidence may run only from refs/heads/main")
     if _OBJECT_ID_RE.fullmatch(expected_source_sha) is None:
