@@ -30,7 +30,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
-    "9bb246ff58d004f64f8fe27d26222451f72f9fad"  # pragma: allowlist secret
+    "1f7b1f1b6fb59b02e1f5b978919611ff5dafb652"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
     "66c0bf8aee2633bfb51c83029b0251f2d81dae29"  # pragma: allowlist secret
@@ -59,7 +59,7 @@ def _verify_ordinary_checkout_binding(text: str) -> int:
             "ci.yml: checkout count must equal the five ordinary validation subjects"
         )
     if semantic.count("ref: ${{ env.CI_SUBJECT_SHA }}") != checkout_count:
-        raise ValueError("ci.yml: every checkout must bind to env.CI_SUBJECT_SHA")
+        raise ValueError("ci.yml: every validation checkout must bind to env.CI_SUBJECT_SHA")
     if semantic.count("persist-credentials: false") != checkout_count:
         raise ValueError("ci.yml: every checkout must disable persisted credentials")
     if semantic.count('test "$(git rev-parse HEAD)" = "$CI_SUBJECT_SHA"') != checkout_count:
@@ -87,7 +87,7 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
     )
     on_block = base._semantic_text(base._top_level_block(text, "on")).strip("\n")
     if on_block != expected_on:
-        raise ValueError("ci.yml: trigger contract must be exactly pull_request/push/merge_group")
+        raise ValueError("ci.yml: trigger set must be exactly pull_request/push/merge_group")
     if base._top_level_keys(base._top_level_block(text, "on")) != {
         "pull_request",
         "push",
@@ -218,10 +218,25 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
         "project_install_count": project_install_count,
         "project_install_authority": "immediate-static-revalidation",
         "workflow_definition": "exact-reviewed-git-blob",
+        "python_safe_path": True,
+        "setup_python_cache": False,
+        "browser_runtime_authority": "hosted-system-chrome-observed-without-automatic-installer",
+        "archive_build_authority": "verified-and-matched-before-wheel-builds",
+        "documentation_integrity": "required-via-supply-chain",
+        "mermaid_render": "required-via-supply-chain",
+        "build_provenance_subject": "CI_SUBJECT_SHA/isolated-git-view",
+        "archive_attribute_authority": "versioned-tree-only",
+        "sbom_lineage": "parent-digest-bound-and-bracketed",
+        "supply_chain_evidence": "pinned-upload-action",
         "permissions": "contents:read",
         "status_write_authority": "none",
         "protected_maintenance_authority": "external-trusted-gate-only",
     }
+
+
+# Preserve the long-standing helper name for adversarial callers while changing its authority
+# contract from ordinary+owner-dispatch to ordinary CI only.
+_verify_automatic_workflow = _verify_ordinary_ci_workflow
 
 
 def verify_ci_contract(root: Path) -> dict[str, Any]:
