@@ -14,6 +14,7 @@ from typing import Any
 
 MAX_METADATA_BYTES = 2 * 1024 * 1024
 MAX_WHEEL_BYTES = 64 * 1024 * 1024
+_GIT_EXECUTABLE = Path("/usr/bin/git")
 _RELEASE_TAG_RE = re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 _OBJECT_ID_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _EXPECTED_PROJECT_NAME = "ai-qa-automation"
@@ -36,8 +37,10 @@ def _read_stable_regular_file(path: Path, *, max_bytes: int) -> bytes:
 
 
 def _git_output(root: Path, *args: str) -> str:
+    if not _GIT_EXECUTABLE.is_file() or not os.access(_GIT_EXECUTABLE, os.X_OK):
+        raise RuntimeError("reviewed release Git executable is unavailable")
     env = {
-        "PATH": os.environ.get("PATH", ""),
+        "PATH": "/usr/bin:/bin",
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_CONFIG_GLOBAL": os.devnull,
         "GIT_ATTR_NOSYSTEM": "1",
@@ -46,7 +49,7 @@ def _git_output(root: Path, *args: str) -> str:
         "GIT_OPTIONAL_LOCKS": "0",
     }
     result = subprocess.run(
-        ["git", "-C", str(root), *args],
+        [str(_GIT_EXECUTABLE), "-C", str(root), *args],
         check=True,
         capture_output=True,
         text=True,
@@ -55,9 +58,9 @@ def _git_output(root: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def _sha256(path: Path) -> str:
+def _sha256_and_size(path: Path) -> tuple[str, int]:
     data = _read_stable_regular_file(path, max_bytes=MAX_WHEEL_BYTES)
-    return hashlib.sha256(data).hexdigest()
+    return hashlib.sha256(data).hexdigest(), len(data)
 
 
 def _project_metadata(root: Path) -> tuple[str, str]:
@@ -77,12 +80,13 @@ def _project_metadata(root: Path) -> tuple[str, str]:
     dynamic = project.get("dynamic", [])
     if not isinstance(dynamic, list) or "version" in dynamic:
         raise ValueError("dynamic project version is forbidden for release evidence")
-    return version, hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest()
+    blob_header = b"blob " + str(len(raw)).encode() + b"\0"
+    blob_sha1 = hashlib.sha1(blob_header + raw, usedforsecurity=False).hexdigest()
+    return version, blob_sha1
 
 
 def _validate_tag(tag: str, *, version: str) -> None:
-    match = _RELEASE_TAG_RE.fullmatch(tag)
-    if match is None:
+    if _RELEASE_TAG_RE.fullmatch(tag) is None:
         raise ValueError("release tag must use stable vMAJOR.MINOR.PATCH form")
     if tag != f"v{version}":
         raise ValueError("release tag does not match static project version")
@@ -110,14 +114,10 @@ def _verify_wheels(*, wheel_a: Path, wheel_b: Path, version: str) -> dict[str, A
     expected_name = f"{_EXPECTED_WHEEL_PREFIX}-{version}-py3-none-any.whl"
     if wheel_a.name != expected_name or wheel_b.name != expected_name:
         raise ValueError("release wheel filename does not match reviewed project/version identity")
-    digest_a = _sha256(wheel_a)
-    digest_b = _sha256(wheel_b)
-    if digest_a != digest_b:
+    digest_a, size_a = _sha256_and_size(wheel_a)
+    digest_b, size_b = _sha256_and_size(wheel_b)
+    if digest_a != digest_b or size_a != size_b:
         raise ValueError("release wheel builds are not byte-identical")
-    size_a = wheel_a.stat().st_size
-    size_b = wheel_b.stat().st_size
-    if size_a != size_b:
-        raise ValueError("release wheel sizes differ")
     return {
         "filename": expected_name,
         "sha256": digest_a,
