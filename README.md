@@ -39,7 +39,7 @@
 | **Network posture** | exact host allowlists, read-only API default, browser routing controls, independent k6 egress prerequisite |
 | **External MCP** | explicitly approved vendor integrations; server identity never grants blanket authority and returned content remains untrusted evidence |
 | **Evaluation** | deterministic tests, adversarial primary corpus, repository-visible sequestered H-series readiness corpus, frozen safety thresholds |
-| **Workflow governance** | automatic PR validation is read-only development evidence; owner trusted dispatch validates exact prospective merges, while protected `Trusted PR Gate` is designed for a main-only dedicated GitHub App identity with exact live subject revalidation |
+| **Workflow governance** | ordinary PR CI is read-only development evidence; routine source-only merge authority uses trusted default-branch `workflow_run` admission with zero protected-root drift, while protected maintenance requires an independently deployed exact one-shot gate; terminal `Trusted PR Gate` remains bound to the dedicated GitHub App identity |
 | **License** | MIT |
 
 **On this page:** [Engineering thesis](#engineering-thesis) · [Architecture](#architecture-at-a-glance) · [Quick start](#quick-start) · [Control model](#production-control-model) · [Runtime truth](#runtime-result-contract) · [AI-assisted QA](#ai-assisted-qa-with-deterministic-closure) · [Safety boundaries](#safety-critical-boundaries) · [Evidence](#evidence-traceability-and-attestation) · [Evaluation](#evaluation-architecture) · [Documentation](#documentation-map)
@@ -781,7 +781,8 @@ The reference SUT is test data for the control architecture, never part of the t
 ├── .github/
 │   ├── CODEOWNERS
 │   └── workflows/
-│       ├── ci.yml                  # automatic read-only PR validation + trusted dispatch/App reporter
+│       ├── ci.yml                  # automatic read-only PR/push/merge-group validation
+│       ├── trusted-pr-auto.yml     # default-branch workflow_run routine source-only trusted path
 │       └── manual-validation.yml   # workflow_dispatch-only H-series + optional model path
 ├── src/ai_qa_automation/
 │   ├── agent.py                    # Agent SDK orchestration + terminal truth
@@ -830,13 +831,13 @@ Start with the [documentation hub](docs/README.md) for reviewer-specific reading
 
 ## GitHub Actions
 
-`.github/workflows/ci.yml` keeps automatic `pull_request` validation as read-only, secret-free development evidence and also defines the owner-controlled `repository_dispatch` event `trusted-pr-validation` for protected exact-subject validation. Ordinary PR green—including `Required PR Gate`—does not by itself authorize merge because candidate workflow bytes are not an independent trust root.
+`.github/workflows/ci.yml` provides automatic `pull_request`, `push` to `main`, and `merge_group` validation. Those jobs are read-only, secret-free, bind execution to `github.sha`, and produce deterministic development evidence—including `Required PR Gate`—rather than protected merge authority.
 
-The trusted dispatch path executes the exact prospective merge subject from the default-branch workflow definition, verifies its expected base/head parentage, and requires an exact owner-supplied base/subject Git-object manifest for any changed protected control-plane root before repository scripts run.
+For routine same-repository source-only PRs, `.github/workflows/trusted-pr-auto.yml` is the separate default-branch `workflow_run` trust root. It independently re-fetches the triggering run, current `main`, live PR/head/base/prospective merge and ordered parents, requires zero protected-root drift, reruns deterministic validation, and revalidates immediately before terminal publication. Only the terminal reporter enters Environment `trusted-pr-gate` and uses the dedicated GitHub App credential to publish `Trusted PR Gate`.
 
-Terminal `Trusted PR Gate` publication is designed for a separate status identity. The main-only reporter enters Environment `trusted-pr-gate`, keeps its native GitHub Actions token read-only, mints a short-lived least-privilege dedicated GitHub App installation token, and publishes only after `scripts/trusted_pr_control.py` revalidates the live PR/head/base/merge ref and exact merge parents.
+PRs that change protected authority roots are deliberately ineligible for that routine path. Protected maintenance requires the independently deployed `scripts/trusted_gate_service/` service and an independently administered one-shot policy bound to the exact repository, PR, head, current `main` base, prospective merge, complete protected-object transition set, and validity window. Repository-owned `repository_dispatch` maintenance/reporting authority is retired and cannot be used as fallback when the external gate is unavailable.
 
-That independent identity is deployment-owned until observed. Repository source cannot prove the App installation/permissions, Environment trusted-ref restriction, App credential, Actions Policy, or `Protect Main` expected status source. Historical activation evidence using GitHub Actions integration ID `15368` remains evidence for the earlier dispatch-only control plane and does not certify the dedicated-App migration.
+Terminal `Trusted PR Gate` authority remains deployment-owned until independently observed: repository source cannot prove the dedicated App installation/permissions, Environment restriction and credential custody, external deployment/webhook/policy state, Actions Policy, or `Protect Main` expected-status source. The Environment-held App credential remains required by the live routine automatic reporter until that publication architecture is independently replaced. Historical statuses prove only the exact revisions and control planes that produced them.
 
 `.github/workflows/manual-validation.yml` remains `workflow_dispatch` only and outside protected merge evidence. H-series/model validation stays separately scoped; credentialed model execution does not gain protected status authority by succeeding. See [CI/CD and Repository Governance](docs/CI_CD.md) and [Trusted PR Control Plane](docs/TRUSTED_PR_CONTROL_PLANE.md).
 
