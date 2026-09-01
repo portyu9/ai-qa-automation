@@ -27,7 +27,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
-    "b5fcbc889dba8f2d0c4049e1b0d5cd86b149828a"  # pragma: allowlist secret
+    "e924ea2e86128706dda8cced48ce2281f9a50c78"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
     "bf538a2efa1f895ef0a614e8118ba1b1ad2914f5"  # pragma: allowlist secret
@@ -38,6 +38,7 @@ TRUSTED_AUTO_PROTECTED_PATHS = (
     ".github",
     ".claude",
     ".dockerignore",
+    ".gitattributes",
     ".mcp.json",
     ".pre-commit-config.yaml",
     "CLAUDE.md",
