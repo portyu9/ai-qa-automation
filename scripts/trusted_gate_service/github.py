@@ -104,6 +104,20 @@ class AppTokenProvider:
             raise ValueError("openssl path must be an executable regular file")
         return str(resolved)
 
+    @staticmethod
+    def _inherited_fd_path(fd: int) -> str:
+        if isinstance(fd, bool) or not isinstance(fd, int) or fd < 0:
+            raise ValueError("inherited descriptor must be a non-negative integer")
+        for root in ("/proc/self/fd", "/dev/fd"):
+            candidate = f"{root}/{fd}"
+            try:
+                descriptor_stat = os.stat(candidate)
+            except OSError:
+                continue
+            if stat.S_ISREG(descriptor_stat.st_mode):
+                return candidate
+        raise GitHubProtocolError("anonymous inherited key descriptor is not addressable")
+
     def installation_token(self) -> str:
         now = int(time.time())
         if self._cached is not None and self._cached.expires_at_epoch - 120 > now:
@@ -177,16 +191,17 @@ class AppTokenProvider:
         proc: subprocess.CompletedProcess[bytes] | None = None
         try:
             # TemporaryFile is anonymous/unlinked on the supported POSIX deployment model. Passing
-            # its inherited descriptor to OpenSSL avoids ever creating a named private-key file that
-            # could survive abrupt process termination.
+            # its inherited descriptor through a runtime-proven descriptor namespace avoids ever
+            # creating a named private-key file that could survive abrupt process termination.
             with tempfile.TemporaryFile(mode="w+b") as key_file:
                 key_fd = key_file.fileno()
                 os.fchmod(key_fd, 0o600)
                 key_file.write(self._private_key_pem)
                 key_file.flush()
                 key_file.seek(0)
+                key_path = self._inherited_fd_path(key_fd)
                 proc = subprocess.run(
-                    [self._openssl, "dgst", "-sha256", "-sign", f"/dev/fd/{key_fd}"],
+                    [self._openssl, "dgst", "-sha256", "-sign", key_path],
                     input=unsigned,
                     capture_output=True,
                     check=False,

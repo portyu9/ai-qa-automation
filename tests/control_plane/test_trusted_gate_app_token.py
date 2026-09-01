@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import os
+import stat
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -49,7 +52,7 @@ def test_app_jwt_signing_uses_only_anonymous_inherited_key_fd(
         assert args[:4] == [str(Path(sys.executable).resolve()), "dgst", "-sha256", "-sign"]
         assert len(pass_fds) == 1
         key_fd = pass_fds[0]
-        assert args[4] == f"/dev/fd/{key_fd}"
+        assert args[4] == f"/proc/self/fd/{key_fd}"
         assert list(tmp_path.iterdir()) == []
         assert Path(args[4]).read_bytes() == PRIVATE_KEY.encode("ascii")
         assert input.count(b".") == 1
@@ -67,6 +70,35 @@ def test_app_jwt_signing_uses_only_anonymous_inherited_key_fd(
     assert token.count(".") == 2
     assert observed["pass_fds"]
     assert list(tmp_path.iterdir()) == []
+
+
+def test_inherited_fd_path_falls_back_only_to_reviewed_dev_fd(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[str] = []
+
+    def fake_stat(path: str) -> SimpleNamespace:
+        observed.append(path)
+        if path == "/proc/self/fd/7":
+            raise FileNotFoundError(path)
+        if path == "/dev/fd/7":
+            return SimpleNamespace(st_mode=stat.S_IFREG | 0o600)
+        raise AssertionError(path)
+
+    monkeypatch.setattr(os, "stat", fake_stat)
+    assert AppTokenProvider._inherited_fd_path(7) == "/dev/fd/7"
+    assert observed == ["/proc/self/fd/7", "/dev/fd/7"]
+
+
+def test_inherited_fd_path_fails_closed_when_descriptor_namespaces_are_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def missing(path: str) -> None:
+        raise FileNotFoundError(path)
+
+    monkeypatch.setattr(os, "stat", missing)
+    with pytest.raises(RuntimeError, match="anonymous inherited key descriptor"):
+        AppTokenProvider._inherited_fd_path(7)
 
 
 @pytest.mark.parametrize(

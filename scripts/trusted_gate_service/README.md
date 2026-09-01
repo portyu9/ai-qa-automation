@@ -15,7 +15,7 @@ The AWS adapter does **not** rely on Lambda single-threading. A delivery has one
 
 ## AWS authority boundary
 
-The AWS deployment is intentionally outside candidate GitHub Actions and uses no VPC, NAT gateway, API Gateway, load balancer, EC2 instance, or container service. The intended deployment is Python 3.13 on Amazon Linux 2023 with a Lambda Function URL and a small on-demand DynamoDB table.
+The AWS deployment is intentionally outside candidate GitHub Actions and uses no VPC, NAT gateway, API Gateway, load balancer, EC2 instance, or container service. The intended deployment is Python 3.13 on Amazon Linux 2023 with a Lambda Function URL and a small DynamoDB table whose billing/capacity mode is independently observed.
 
 Public source defines only the configuration interface. **Deployment values stay private in the AWS account and GitHub App settings.** Do not commit an AWS account ID, ARN, resource name, Function URL, SSM namespace, App installation identity, credential, webhook secret, one-shot policy, or deployment digest.
 
@@ -33,6 +33,6 @@ For dependency/revision control, deployment evidence must record the exact sourc
 
 ## POSIX signing invariant
 
-The shared GitHub App token provider requires a POSIX/Linux runtime with `/dev/fd` and an absolute OpenSSL executable. GitHub App JWT signing passes the bounded ASCII private key through an anonymous/unlinked temporary file descriptor (`/dev/fd/<n>`); it does not create a named PEM file that can remain after abrupt process termination. The AWS deployment must prove this runtime assumption before activation.
+The shared GitHub App token provider requires a POSIX/Linux runtime with an addressable inherited-descriptor namespace and an absolute OpenSSL executable. It prefers `/proc/self/fd/<n>` (the path proven on AWS Lambda Python 3.13 / Amazon Linux 2023) and permits `/dev/fd/<n>` only as an explicitly checked compatibility fallback. GitHub App JWT signing passes the bounded ASCII private key through that anonymous/unlinked descriptor; it never creates a named PEM file that can remain after abrupt process termination. Activation requires real runtime proof of the selected descriptor namespace.
 
 The persistent reference service exposes `GET /healthz` and `POST /github/webhook`. The Lambda adapter accepts only `POST /github/webhook`. TLS, GitHub webhook configuration, AWS account controls, one-shot policy administration, and the dedicated GitHub App credentials remain deployment-owned and must not be placed in candidate GitHub Actions.
