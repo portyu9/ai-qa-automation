@@ -41,7 +41,7 @@ def test_release_candidate_workflow_rejects_write_permission(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     text = WORKFLOW.read_text(encoding="utf-8").replace("contents: read", "contents: write", 1)
-    with pytest.raises(ValueError, match="read-only|forbidden authority"):
+    with pytest.raises(ValueError, match="permissions must be exactly contents: read"):
         _verify_mutation(monkeypatch, text)
 
 
@@ -73,7 +73,7 @@ def test_release_candidate_workflow_rejects_single_build(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     text = WORKFLOW.read_text(encoding="utf-8").replace(
-        '          python -m pip wheel --no-deps --no-build-isolation "$build_b" --wheel-dir artifacts/release/wheel-b\n',
+        '          python -m pip wheel --no-deps --no-build-isolation "$build_b" --wheel-dir "$RELEASE_EVIDENCE_DIR/wheel-b"\n',
         "",
         1,
     )
@@ -89,5 +89,5 @@ def test_release_candidate_workflow_rejects_oidc_signing_authority(
         "permissions:\n  contents: read\n  id-token: write\n",
         1,
     )
-    with pytest.raises(ValueError, match="read-only|forbidden authority"):
+    with pytest.raises(ValueError, match="permissions must be exactly contents: read"):
         _verify_mutation(monkeypatch, text)
