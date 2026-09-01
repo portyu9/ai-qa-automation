@@ -37,7 +37,7 @@ EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
     "66c0bf8aee2633bfb51c83029b0251f2d81dae29"  # pragma: allowlist secret
 )
 EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
-    "6600d9a798b48da3a63be8865bfccac52186eb81"  # pragma: allowlist secret
+    "fbe47dcf9a201dfb9da390b01e68f5b662689538"  # pragma: allowlist secret
 )
 # Compatibility alias for adversarial tests and callers that imported the historical helper name.
 EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA
@@ -99,8 +99,6 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
     }:
         raise ValueError("ci.yml: unreviewed trigger authority is forbidden")
 
-    # Secrets and the legacy App credential are independently forbidden authority even if
-    # their injection also perturbs the exact reviewed environment block.
     for forbidden in (
         "TRUSTED_GATE_APP_CLIENT_ID",
         "TRUSTED_GATE_APP_PRIVATE_KEY",
@@ -297,6 +295,7 @@ def _verify_release_candidate_workflow(text: str) -> dict[str, Any]:
         "pypi",
         "sigstore",
         "continue-on-error: true",
+        "if: always()",
         "ubuntu-latest",
         "pip install --upgrade",
         " --editable",
@@ -327,21 +326,29 @@ def _verify_release_candidate_workflow(text: str) -> dict[str, Any]:
         "persist-credentials: false",
         'test "$GITHUB_REF" = "refs/heads/main"',
         'test "$(git rev-parse HEAD)" = "$RELEASE_SUBJECT_SHA"',
+        'evidence_root="$RUNNER_TEMP/aiqa-release-candidate"',
+        "mkdir -m 700 \"$evidence_root\"",
+        "printf 'RELEASE_EVIDENCE_DIR=%s\\n' \"$evidence_root\" >> \"$GITHUB_ENV\"",
         f"uses: actions/setup-python@{base.EXPECTED_ACTION_SHAS['actions/setup-python']}",
         'python-version: "3.11.16"',
         "python scripts/verify_release_candidate.py",
         '--expected-ref "$GITHUB_REF"',
         "python scripts/verify_build_authority.py",
         "python -m pip install --require-hashes -r requirements/build-py311.lock",
-        "SOURCE_DATE_EPOCH: \"315532800\"",
+        'SOURCE_DATE_EPOCH: "315532800"',
         'archive --format=tar "$RELEASE_SUBJECT_SHA"',
-        "cmp -s artifacts/release/build-authority-archive-a.json artifacts/release/build-authority-archive-b.json",
+        'cmp -s "$RELEASE_EVIDENCE_DIR/build-authority-archive-a.json" "$RELEASE_EVIDENCE_DIR/build-authority-archive-b.json"',
         '--wheel-a "${wheel_a[0]}"',
         '--wheel-b "${wheel_b[0]}"',
-        "--output artifacts/release/release-manifest.json",
+        '--output "$RELEASE_EVIDENCE_DIR/release-manifest.json"',
         "/usr/bin/sha256sum",
+        "/usr/bin/git ls-remote \"https://github.com/${GITHUB_REPOSITORY}.git\" refs/heads/main",
+        'test "$live_main" = "$RELEASE_SUBJECT_SHA"',
+        '"$RELEASE_EVIDENCE_DIR/main-revalidation.json"',
         f"uses: actions/upload-artifact@{base.EXPECTED_ACTION_SHAS['actions/upload-artifact']}",
         "name: release-candidate-evidence",
+        "${{ env.RELEASE_EVIDENCE_DIR }}/release-manifest.json",
+        "${{ env.RELEASE_EVIDENCE_DIR }}/main-revalidation.json",
         "if-no-files-found: error",
         "retention-days: 30",
     )
@@ -356,6 +363,8 @@ def _verify_release_candidate_workflow(text: str) -> dict[str, Any]:
         raise ValueError("release-candidate.yml must build exactly two reviewed wheels")
     if semantic.count("python scripts/verify_build_authority.py --root") != 2:
         raise ValueError("release-candidate.yml must independently verify both archive roots")
+    if semantic.count("/usr/bin/git ls-remote") != 1:
+        raise ValueError("release-candidate.yml must terminally revalidate current main exactly once")
 
     return {
         "trigger": "workflow_dispatch",
@@ -365,7 +374,9 @@ def _verify_release_candidate_workflow(text: str) -> dict[str, Any]:
         "builds": 2,
         "package_reproducibility": "byte-identical-wheel-required",
         "build_authority": "hash-locked-and-archive-revalidated",
-        "evidence": "canonical-manifest-plus-sha256-checksums",
+        "evidence": "runner-owned-canonical-manifest-plus-sha256-checksums",
+        "terminal_main_revalidation": True,
+        "failed_run_artifact_publication": "forbidden",
         "permissions": "contents:read",
         "publishing_authority": "none",
         "signature_claim": "none",
@@ -374,8 +385,6 @@ def _verify_release_candidate_workflow(text: str) -> dict[str, Any]:
     }
 
 
-# Preserve the long-standing helper name for adversarial callers while changing its authority
-# contract from ordinary+owner-dispatch to ordinary CI only.
 _verify_automatic_workflow = _verify_ordinary_ci_workflow
 
 
