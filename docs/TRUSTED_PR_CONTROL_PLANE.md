@@ -237,7 +237,7 @@ Under the private SSM prefix the adapter uses reviewed suffixes for App ID, bot 
 The runtime IAM contract is deliberately narrow:
 
 - SSM: only reads required by the private parameter namespace;
-- DynamoDB: `GetItem`, `UpdateItem`, and `TransactWriteItems` on the exact state table;
+- DynamoDB: `GetItem`, `PutItem`, and `UpdateItem` on the exact state table. The adapter calls `TransactWriteItems`, but AWS authorizes that request through the underlying `PutItem`/`UpdateItem` actions used by this transaction; no `DeleteItem`, `Query`, or `Scan` runtime authority is required;
 - CloudWatch Logs: stream creation and writes only for the function's own log group.
 
 No VPC, NAT gateway, API Gateway, load balancer, EC2, Fargate, container registry, or repository/cloud administration permission is required by the runtime.
