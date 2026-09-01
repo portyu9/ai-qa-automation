@@ -62,7 +62,7 @@ def test_release_candidate_binds_tag_version_main_and_exact_subject(tmp_path: Pa
 def test_release_candidate_rejects_noncanonical_tag(tmp_path: Path, tag: str) -> None:
     root, head = _repository(tmp_path)
 
-    with pytest.raises(ValueError, match="stable vMAJOR.MINOR.PATCH"):
+    with pytest.raises(ValueError, match=r"stable vMAJOR\.MINOR\.PATCH"):
         verify_release_candidate(
             root=root,
             release_tag=tag,
