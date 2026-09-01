@@ -156,6 +156,8 @@ jobs:
     if: ${{ needs.preflight.outputs.eligible == 'true' && needs.subject-guard.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      CI_SUBJECT_SHA: ${{ needs.preflight.outputs.merge_sha }}
     steps:
       - name: Checkout exact validation subject
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -204,8 +206,6 @@ jobs:
           python scripts/verify_docs.py | tee artifacts/ci/documentation-integrity.json
 
       - name: Render Mermaid documentation with digest-pinned official CLI
-        env:
-          CI_SUBJECT_SHA: ${{ needs.preflight.outputs.merge_sha }}
         run: |
           set -o pipefail
           python scripts/validate_mermaid.py | tee artifacts/ci/mermaid-validation.json
@@ -322,6 +322,8 @@ jobs:
     if: ${{ needs.preflight.outputs.eligible == 'true' && needs.subject-guard.result == 'success' && needs.supply-chain.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    env:
+      CI_SUBJECT_SHA: ${{ needs.preflight.outputs.merge_sha }}
     strategy:
       fail-fast: false
       matrix:
@@ -400,6 +402,8 @@ jobs:
     if: ${{ needs.preflight.outputs.eligible == 'true' && needs.subject-guard.result == 'success' && needs.supply-chain.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      CI_SUBJECT_SHA: ${{ needs.preflight.outputs.merge_sha }}
     steps:
       - name: Checkout exact validation subject
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -464,6 +468,8 @@ jobs:
     if: ${{ needs.preflight.outputs.eligible == 'true' && needs.subject-guard.result == 'success' && needs.supply-chain.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    env:
+      CI_SUBJECT_SHA: ${{ needs.preflight.outputs.merge_sha }}
     steps:
       - name: Checkout exact validation subject
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -526,6 +532,8 @@ jobs:
     if: ${{ needs.preflight.outputs.eligible == 'true' && needs.subject-guard.result == 'success' && needs.supply-chain.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    env:
+      CI_SUBJECT_SHA: ${{ needs.preflight.outputs.merge_sha }}
     steps:
       - name: Checkout exact validation subject
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
