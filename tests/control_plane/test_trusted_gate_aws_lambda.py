@@ -4,6 +4,10 @@ import base64
 import hashlib
 import hmac
 import json
+import subprocess
+import sys
+import zipfile
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -54,6 +58,41 @@ def _event(
         "body": rendered,
         "isBase64Encoded": encoded,
     }
+
+
+def test_lambda_deployment_zip_imports_reviewed_handler(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[2]
+    package_files = (
+        Path("scripts/__init__.py"),
+        Path("scripts/trusted_gate_service/__init__.py"),
+        Path("scripts/trusted_gate_service/aws_lambda.py"),
+        Path("scripts/trusted_gate_service/core.py"),
+        Path("scripts/trusted_gate_service/dynamodb_store.py"),
+        Path("scripts/trusted_gate_service/github.py"),
+        Path("scripts/trusted_gate_service/service.py"),
+        Path("scripts/trusted_gate_service/store.py"),
+    )
+    archive = tmp_path / "trusted-gate-lambda.zip"
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+        for relative in package_files:
+            bundle.write(root / relative, relative.as_posix())
+
+    command = (
+        "import sys; "
+        f"sys.path.insert(0, {str(archive)!r}); "
+        "from scripts.trusted_gate_service.aws_lambda import handler; "
+        "assert callable(handler)"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-S", "-c", command],
+        cwd=tmp_path,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_function_url_parser_preserves_raw_webhook_bytes() -> None:
