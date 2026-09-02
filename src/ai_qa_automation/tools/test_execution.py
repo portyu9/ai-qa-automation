@@ -131,7 +131,7 @@ class TestRunner:
 
         sandbox_blocked = process_result is None
         timed_out = False if process_result is None else process_result.timed_out
-        if sandbox_blocked:
+        if process_result is None:
             exit_code = self._SANDBOX_BLOCKED_EXIT_CODE
             raw_stdout = ""
             raw_stderr = preflight.reason or "pytest sandbox is unavailable"
