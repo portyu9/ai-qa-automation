@@ -91,7 +91,10 @@ class StateStore:
             if self._descriptor_relative_parent
             else _identity(parent_status)
         )
-        if expected_parent_identity is not None and self._parent_identity != expected_parent_identity:
+        if (
+            expected_parent_identity is not None
+            and self._parent_identity != expected_parent_identity
+        ):
             raise ValueError("state directory does not match authorized run persistence root")
         self._lock = threading.RLock()
         self._assert_owned()
