@@ -56,7 +56,10 @@ def test_required_direct_action_cannot_be_omitted(missing_action: str) -> None:
 def test_transactional_put_cannot_be_omitted() -> None:
     policy = _valid_policy()
     del policy["Statement"][1]
-    with pytest.raises(IamContractError, match="transaction-only PutItem authority is missing"):
+    with pytest.raises(
+        IamContractError,
+        match="transaction-only PutItem authority is missing",
+    ):
         validate_dynamodb_runtime_policy(policy, table_resource=TABLE_RESOURCE)
 
 
@@ -119,7 +122,10 @@ def test_unreviewed_or_broad_dynamodb_actions_are_rejected(action: str) -> None:
         validate_dynamodb_runtime_policy(policy, table_resource=TABLE_RESOURCE)
 
 
-@pytest.mark.parametrize("resource", ["*", "OTHER_TABLE_RESOURCE", [TABLE_RESOURCE, "OTHER"]])
+@pytest.mark.parametrize(
+    "resource",
+    ["*", "OTHER_TABLE_RESOURCE", [TABLE_RESOURCE, "OTHER"]],
+)
 def test_dynamodb_authority_must_target_exact_table(resource: Any) -> None:
     policy = _valid_policy()
     policy["Statement"][0]["Resource"] = resource
@@ -149,7 +155,10 @@ def test_direct_actions_cannot_be_conditioned_or_mixed_with_transactional_put() 
 
     mixed = _valid_policy()
     mixed["Statement"][0]["Action"].append("dynamodb:PutItem")
-    with pytest.raises(IamContractError, match="transaction-only PutItem must be isolated"):
+    with pytest.raises(
+        IamContractError,
+        match="transaction-only PutItem must be isolated",
+    ):
         validate_dynamodb_runtime_policy(mixed, table_resource=TABLE_RESOURCE)
 
 
