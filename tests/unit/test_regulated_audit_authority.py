@@ -172,8 +172,7 @@ def test_regulated_registry_audit_reconciliation_is_attested(tmp_path: Path) -> 
     assert attestation["integrity"]["manifest"]["valid"] is True
     assert attestation["integrity"]["regulated_audit"]["valid"] is False
     assert (
-        "evidence integrity check failed"
-        in attestation["integrity"]["regulated_audit"]["reason"]
+        "evidence integrity check failed" in attestation["integrity"]["regulated_audit"]["reason"]
     )
     assert attestation["integrity"]["integrity_verified"] is False
 
