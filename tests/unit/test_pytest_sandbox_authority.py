@@ -112,6 +112,7 @@ def test_bubblewrap_command_has_no_host_root_or_network_share_and_mounts_target_
         "--new-session",
         "--unshare-user",
         "--disable-userns",
+        "--assert-userns-disabled",
         "--unshare-pid",
         "--unshare-net",
         "--unshare-ipc",
@@ -119,6 +120,7 @@ def test_bubblewrap_command_has_no_host_root_or_network_share_and_mounts_target_
         "--cap-drop",
         "--clearenv",
         "--json-status-fd",
+        "--size",
     ):
         assert required in command
     assert "--share-net" not in command
@@ -184,6 +186,11 @@ def test_bubblewrap_preflight_requires_all_observed_isolation_facts(
     assert result.parent_namespaces == {"mnt": "m1", "pid": "p1", "net": "n1", "user": "u1"}
     assert result.child_namespaces == {"mnt": "m2", "pid": "p2", "net": "n2", "user": "u2"}
     assert result.executable_sha256 is not None
+    assert result.max_processes == 16
+    assert result.max_address_space_bytes == 512 * 1024 * 1024
+    assert result.max_file_bytes == 64 * 1024 * 1024
+    assert result.max_open_files == 256
+    assert result.tmpfs_bytes == 64 * 1024 * 1024
 
 
 def test_bubblewrap_run_requires_status_proof_that_child_started(
@@ -297,6 +304,13 @@ def test_execution_guard_script_revalidates_before_exec() -> None:
         "forbidden_root.exists",
         "socket.if_nameindex",
         "CapEff:",
+        "resource.RLIMIT_CPU",
+        "resource.RLIMIT_NPROC",
+        "resource.RLIMIT_AS",
+        "resource.RLIMIT_FSIZE",
+        "resource.RLIMIT_NOFILE",
+        "resource.RLIMIT_CORE",
+        "resource.setrlimit",
         "os.execv",
     ):
         assert required in script
