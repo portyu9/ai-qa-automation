@@ -196,10 +196,16 @@ Static JavaScript inspection is defense in depth, not a sandbox.
 ### 11. Reliability and recovery
 
 - exclusive workspace lease with trusted lease-path ownership;
+- one shared enforceable run-persistence-root `(device, inode)` identity across canonical state, process metadata, journal, and evidence/artifact persistence on descriptor-relative no-follow platforms;
+- descriptor-confined/root-revalidated authority-bearing persistence so ordinary directory replacement cannot silently redirect successful reads/writes;
 - atomic canonical/process state persistence;
 - append-only hash-chained journal with symlink-resistant ownership;
 - rollback-backed mutation transactions;
-- stale recovery only under exact fingerprint/path/backup ownership;
+- workspace lease persistence of the enforceable run-root identity as historical stale-recovery authority;
+- stale recovery only under exact prior run-root identity, workspace fingerprint/root identity, target path, rollback ownership, and backup integrity where those authorities are enforceable;
+- missing, malformed, or mismatched historical run-root identity blocks automatic rollback before target writes on supported platforms;
+- attestation/lineage/recovery inspection pins one observed run-root identity for each multi-file inspection and rejects substitution without pretending that observation is historical authority;
+- platforms without descriptor-relative no-follow root authority retain conservative non-equivalent fallback semantics rather than persisting a best-effort stat tuple as proof;
 - recovery inspection uses the same exact-path validation bar as terminal truth;
 - recovery never claims hidden model-conversation replay.
 
@@ -275,6 +281,7 @@ A mature production review should be able to answer these without appealing to â
 - Can target `CLAUDE.md`, `.claude/`, `.mcp.json`, DOM, logs, or provider content redefine authority?
 - Can a mixed MCP action hide a write/delete behind a read-looking prefix?
 - Can a symlink redirect target mutation, rollback, journal, lease, or artifact verification?
+- Can an ordinary-directory replacement redirect state/runtime/journal/evidence authority or forge a coherent prior-run recovery subject at the same pathname?
 - Can a stale rollback overwrite newer human work?
 - Can same-revision retries hide contradiction?
 - Can a provider outage manufacture remote evidence?
