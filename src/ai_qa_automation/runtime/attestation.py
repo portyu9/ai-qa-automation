@@ -50,7 +50,6 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
     manifest_path = _owned_subject(root, "evidence-manifest.json")
     runtime_path = _owned_subject(root, "runtime.json")
     journal_path = _owned_subject(root, "journal.jsonl")
-    audit_path = _owned_subject(root, "audit-log.jsonl")
     if not state_path.is_file():
         raise FileNotFoundError("state.json is required for attestation")
 
@@ -97,10 +96,11 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
         root_identity_present="workspace_root_identity" in runtime,
     )
 
-    regulated_mode = bool(manifest_integrity.get("regulated_mode"))
+    regulated_mode = manifest.get("regulated_mode") is True
     regulated_audit: dict[str, Any] | None = None
     audit_subject: dict[str, object] | None = None
     if regulated_mode:
+        audit_path = _owned_subject(root, "audit-log.jsonl")
         regulated_audit, audit_subject = _validate_regulated_audit(
             root,
             audit_path,
