@@ -93,7 +93,9 @@ class RuntimeControl:
         self.metadata_path = self.metadata_path.expanduser()
         metadata_parent = self.metadata_path.parent
         if metadata_parent.is_symlink():
-            raise ValueError("runtime persistence directory is a symlink and has ambiguous ownership")
+            raise ValueError(
+                "runtime persistence directory is a symlink and has ambiguous ownership"
+            )
         metadata_parent.mkdir(parents=True, exist_ok=True)
         if descriptor_relative_authority_supported():
             self._workspace_identity = pin_directory_identity(
@@ -610,7 +612,9 @@ def atomic_write_json(
             create_only=False,
             label="runtime metadata",
             expected_root_identity=(
-                expected_parent_identity if expected_parent_identity is not None else current_identity
+                expected_parent_identity
+                if expected_parent_identity is not None
+                else current_identity
             ),
         )
         return
@@ -628,7 +632,9 @@ def atomic_write_json(
         if expected_parent_identity is not None:
             before_replace = path.parent.stat(follow_symlinks=False)
             if (before_replace.st_dev, before_replace.st_ino) != expected_parent_identity:
-                raise RuntimeError("runtime metadata directory changed identity since authorization")
+                raise RuntimeError(
+                    "runtime metadata directory changed identity since authorization"
+                )
         temp.replace(path)
         fsync_directory(path.parent)
         if expected_parent_identity is not None:
