@@ -8,9 +8,9 @@ import pytest
 from ai_qa_automation.fs_authority import pin_directory_identity
 from ai_qa_automation.models import AgentRunState, TerminalStatus, ValidationStatus
 from ai_qa_automation.runtime.budget import ExecutionBudget
-from ai_qa_automation.runtime.journal import RunJournal
 from ai_qa_automation.runtime.internal_tool_domains.common import RuntimeServices
 from ai_qa_automation.runtime.internal_tool_domains.testing import register_testing_tools
+from ai_qa_automation.runtime.journal import RunJournal
 from ai_qa_automation.runtime.live_services import LiveRuntimeServices
 from ai_qa_automation.runtime.run_control import RuntimeControl
 from ai_qa_automation.state import StateStore
@@ -28,10 +28,24 @@ class FakeTestRunner:
             executable="/usr/bin/bwrap" if sandbox_ready else None,
             executable_sha256="sha256:" + "a" * 64 if sandbox_ready else None,
             version="bubblewrap 0.12.0" if sandbox_ready else None,
-            parent_namespaces={"mnt": "1", "pid": "2", "net": "3", "user": "4"}
+            parent_namespaces={
+                "mnt": "1",
+                "pid": "2",
+                "net": "3",
+                "user": "4",
+                "ipc": "5",
+                "uts": "6",
+            }
             if sandbox_ready
             else None,
-            child_namespaces={"mnt": "5", "pid": "6", "net": "7", "user": "8"}
+            child_namespaces={
+                "mnt": "7",
+                "pid": "8",
+                "net": "9",
+                "user": "10",
+                "ipc": "11",
+                "uts": "12",
+            }
             if sandbox_ready
             else None,
             workspace_identity_bound=sandbox_ready,
