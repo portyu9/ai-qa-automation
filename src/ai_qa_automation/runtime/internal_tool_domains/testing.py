@@ -12,7 +12,9 @@ from ...models import (
     EvidenceKind,
     EvidenceNature,
     RegressionCandidate,
+    TerminalStatus,
     ValidationResult,
+    ValidationStatus,
 )
 from ...redaction import redact_text
 from ...tools.safe_patch import SafeTestPatcher
@@ -42,22 +44,35 @@ def register_testing_tools(services: RuntimeServices, tool: ToolDecorator) -> di
         services.state.evidence_ids.extend(
             eid for eid in result.evidence_ids if eid not in services.state.evidence_ids
         )
-        status = pytest_validation_status(result.exit_code)
+        status = (
+            ValidationStatus.BLOCKED
+            if not result.execution_started
+            else pytest_validation_status(result.exit_code)
+        )
+        summary = (
+            (result.block_reason or "pytest sandbox blocked target-code execution")
+            if not result.execution_started
+            else f"pytest exited with {result.exit_code}"
+        )
         services.state.validation_results.append(
             ValidationResult(
                 name="pytest",
                 gate_id=stable_gate_id("pytest", pytest_args),
                 revision=services.state.change_revision,
                 status=status,
-                summary=f"pytest exited with {result.exit_code}",
+                summary=summary,
                 evidence_ids=list(result.evidence_ids),
                 details={
                     "duration_seconds": result.duration_seconds,
                     "scope": pytest_scope(pytest_args),
                     "args": pytest_args,
+                    "execution_started": result.execution_started,
                 },
             )
         )
+        if not result.execution_started:
+            services.state.terminal_status = TerminalStatus.BLOCKED
+            services.state.terminal_reason = summary
         services.checkpoint()
         text = {
             "exit_code": result.exit_code,

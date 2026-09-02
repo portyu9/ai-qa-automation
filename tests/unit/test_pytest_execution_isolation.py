@@ -8,11 +8,57 @@ import pytest
 from ai_qa_automation.fs_authority import pin_directory_identity
 from ai_qa_automation.models import AgentRunState, TerminalStatus, ValidationStatus
 from ai_qa_automation.runtime.budget import ExecutionBudget
+from ai_qa_automation.runtime.internal_tool_domains.common import RuntimeServices
+from ai_qa_automation.runtime.internal_tool_domains.testing import register_testing_tools
 from ai_qa_automation.runtime.journal import RunJournal
 from ai_qa_automation.runtime.live_services import LiveRuntimeServices
 from ai_qa_automation.runtime.run_control import RuntimeControl
 from ai_qa_automation.state import StateStore
+from ai_qa_automation.tools.pytest_sandbox import PytestSandboxPreflight
 from ai_qa_automation.tools.repository import RepositoryInspector
+from ai_qa_automation.tools.test_execution import TestExecutionResult as ExecutionResult
+
+
+class FakeTestRunner:
+    def __init__(self, *, sandbox_ready: bool = True, reason: str | None = None) -> None:
+        self.result = PytestSandboxPreflight(
+            ready=sandbox_ready,
+            backend="bubblewrap",
+            reason=reason if not sandbox_ready else None,
+            executable="/usr/bin/bwrap" if sandbox_ready else None,
+            executable_sha256="sha256:" + "a" * 64 if sandbox_ready else None,
+            version="bubblewrap 0.12.0" if sandbox_ready else None,
+            parent_namespaces={
+                "mnt": "1",
+                "pid": "2",
+                "net": "3",
+                "user": "4",
+                "ipc": "5",
+                "uts": "6",
+            }
+            if sandbox_ready
+            else None,
+            child_namespaces={
+                "mnt": "7",
+                "pid": "8",
+                "net": "9",
+                "user": "10",
+                "ipc": "11",
+                "uts": "12",
+            }
+            if sandbox_ready
+            else None,
+            workspace_identity_bound=sandbox_ready,
+            workspace_read_only=sandbox_ready,
+            forbidden_roots_hidden=sandbox_ready,
+            no_non_loopback_interfaces=sandbox_ready,
+            effective_capabilities_zero=sandbox_ready,
+        )
+        self.preflight_calls = 0
+
+    def sandbox_preflight(self) -> PytestSandboxPreflight:
+        self.preflight_calls += 1
+        return self.result
 
 
 def make_services(
@@ -20,7 +66,9 @@ def make_services(
     *,
     process_isolation: bool = False,
     external_egress: bool = False,
-) -> tuple[LiveRuntimeServices, RuntimeControl, StateStore]:
+    sandbox_ready: bool = True,
+    sandbox_reason: str | None = None,
+) -> tuple[LiveRuntimeServices, RuntimeControl, StateStore, FakeTestRunner]:
     workspace = tmp_path / "sut"
     workspace.mkdir()
     run_dir = tmp_path / "run"
@@ -45,12 +93,13 @@ def make_services(
     ).snapshot()
     assert snapshot.fingerprint_complete is True
     control.set_workspace_fingerprint(snapshot.fingerprint)
+    runner = FakeTestRunner(sandbox_ready=sandbox_ready, reason=sandbox_reason)
     services = LiveRuntimeServices(
         workspace=workspace,
         state=state,
         evidence=cast(Any, object()),
         policy=cast(Any, object()),
-        test_runner=cast(Any, object()),
+        test_runner=cast(Any, runner),
         max_tool_calls=10,
         max_repeated_action=3,
         state_store=store,
@@ -59,7 +108,7 @@ def make_services(
         pytest_process_isolation_enforced=process_isolation,
         pytest_external_egress_enforced=external_egress,
     )
-    return services, control, store
+    return services, control, store, runner
 
 
 @pytest.mark.parametrize(
@@ -70,13 +119,13 @@ def make_services(
         (True, False, "outbound-egress enforcement"),
     ],
 )
-def test_live_pytest_blocks_before_execution_when_deployment_prerequisite_is_missing(
+def test_live_pytest_blocks_before_sandbox_probe_when_deployment_intent_is_missing(
     tmp_path: Path,
     process_isolation: bool,
     external_egress: bool,
     missing_text: str,
 ) -> None:
-    services, control, store = make_services(
+    services, control, store, runner = make_services(
         tmp_path,
         process_isolation=process_isolation,
         external_egress=external_egress,
@@ -86,6 +135,7 @@ def test_live_pytest_blocks_before_execution_when_deployment_prerequisite_is_mis
     with pytest.raises(PermissionError, match="pytest target-code execution requires"):
         services.consume("run_pytest", {"args": ["tests/test_checkout.py"]})
 
+    assert runner.preflight_calls == 0
     assert services.state.tool_call_count == 1
     assert services.state.terminal_status is TerminalStatus.BLOCKED
     assert services.state.terminal_reason is not None
@@ -95,13 +145,12 @@ def test_live_pytest_blocks_before_execution_when_deployment_prerequisite_is_mis
     validation = services.state.validation_results[0]
     assert validation.name == "pytest"
     assert validation.status is ValidationStatus.BLOCKED
-    assert validation.details == {
-        "scope": "targeted",
-        "args": ["tests/test_checkout.py"],
-        "execution_started": False,
-        "process_isolation_enforced": process_isolation,
-        "external_egress_enforced": external_egress,
-    }
+    assert validation.details["scope"] == "targeted"
+    assert validation.details["args"] == ["tests/test_checkout.py"]
+    assert validation.details["execution_started"] is False
+    assert validation.details["process_isolation_enforced"] is process_isolation
+    assert validation.details["external_egress_enforced"] is external_egress
+    assert validation.details["sandbox"]["preflight_attempted"] is False
     assert validation.gate_id is not None and validation.gate_id.startswith("pytest:")
 
     persisted = store.load()
@@ -111,22 +160,49 @@ def test_live_pytest_blocks_before_execution_when_deployment_prerequisite_is_mis
     assert persisted.validation_results[0].details["execution_started"] is False
 
 
-def test_live_pytest_guard_allows_existing_execution_path_only_when_both_assertions_hold(
+def test_true_deployment_assertions_do_not_authorize_pytest_without_real_sandbox(
     tmp_path: Path,
 ) -> None:
-    services, control, _ = make_services(
+    services, control, store, runner = make_services(
         tmp_path,
         process_isolation=True,
         external_egress=True,
+        sandbox_ready=False,
+        sandbox_reason="Bubblewrap executable is not available on the controlled PATH",
+    )
+    control.budget.charge_tool()
+
+    with pytest.raises(PermissionError, match="verified OS sandbox"):
+        services.consume("run_pytest", {"args": []})
+
+    assert runner.preflight_calls == 1
+    assert services.state.terminal_status is TerminalStatus.BLOCKED
+    validation = services.state.validation_results[-1]
+    assert validation.status is ValidationStatus.BLOCKED
+    assert validation.details["execution_started"] is False
+    assert validation.details["sandbox"]["preflight_attempted"] is True
+    assert validation.details["sandbox"]["ready"] is False
+    persisted = store.load()
+    assert persisted.validation_results[-1].status is ValidationStatus.BLOCKED
+
+
+def test_live_pytest_reaches_existing_execution_path_only_after_sandbox_proof(
+    tmp_path: Path,
+) -> None:
+    services, control, _, runner = make_services(
+        tmp_path,
+        process_isolation=True,
+        external_egress=True,
+        sandbox_ready=True,
     )
     control.budget.charge_tool()
 
     services.consume("run_pytest", {"args": []})
 
+    assert runner.preflight_calls == 1
     assert services.state.tool_call_count == 1
     assert services.state.terminal_status is None
     assert services.state.validation_results == []
-    assert services.pytest_execution_block_reason() is None
 
 
 @pytest.mark.parametrize(
@@ -164,7 +240,7 @@ def test_live_pytest_isolation_assertions_require_real_booleans(
             state=state,
             evidence=cast(Any, object()),
             policy=cast(Any, object()),
-            test_runner=cast(Any, object()),
+            test_runner=cast(Any, FakeTestRunner()),
             max_tool_calls=10,
             max_repeated_action=3,
             state_store=state_store,
@@ -201,9 +277,54 @@ def test_live_runtime_requires_lease_bound_workspace_identity(tmp_path: Path) ->
             state=state,
             evidence=cast(Any, object()),
             policy=cast(Any, object()),
-            test_runner=cast(Any, object()),
+            test_runner=cast(Any, FakeTestRunner()),
             max_tool_calls=10,
             max_repeated_action=3,
             state_store=state_store,
             control=control,
         )
+
+
+class BlockedResultRunner:
+    def run_pytest(self, _args: list[str]) -> ExecutionResult:
+        return ExecutionResult(
+            command=("python", "-m", "pytest"),
+            exit_code=126,
+            stdout="",
+            stderr="sandbox disappeared after admission",
+            duration_seconds=0.01,
+            evidence_ids=("evidence-sandbox-blocked",),
+            execution_started=False,
+            block_reason="sandbox disappeared after admission",
+        )
+
+
+@pytest.mark.asyncio
+async def test_internal_pytest_tool_latches_blocked_when_sandbox_fails_after_admission(
+    tmp_path: Path,
+) -> None:
+    state = AgentRunState(objective="race", workspace=str(tmp_path))
+    services = RuntimeServices(
+        workspace=tmp_path,
+        state=state,
+        evidence=cast(Any, object()),
+        policy=cast(Any, object()),
+        test_runner=cast(Any, BlockedResultRunner()),
+        max_tool_calls=5,
+        max_repeated_action=2,
+    )
+
+    def tool(_name: str, _description: str, _schema: dict[str, Any]):
+        def decorate(function: Any) -> Any:
+            return function
+
+        return decorate
+
+    registered = register_testing_tools(services, cast(Any, tool))
+    response = await cast(Any, registered["run_pytest"])({"args": []})
+
+    assert response["is_error"] is True
+    assert state.terminal_status is TerminalStatus.BLOCKED
+    assert state.terminal_reason == "sandbox disappeared after admission"
+    assert state.validation_results[-1].status is ValidationStatus.BLOCKED
+    assert state.validation_results[-1].details["execution_started"] is False

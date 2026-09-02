@@ -25,10 +25,10 @@ class LiveRuntimeServices(RuntimeServices):
     owning the target-subject checks that must occur immediately before an
     in-process internal tool body proceeds.
 
-    Target-controlled pytest code is additionally fail-closed unless trusted
-    deployment infrastructure explicitly asserts both process/filesystem
-    containment and outbound-egress enforcement. These booleans are prerequisite
-    assertions only; they do not implement the isolation themselves.
+    Target-controlled pytest code is fail-closed unless trusted deployment
+    infrastructure explicitly asserts the intended containment policy *and* the
+    concrete TestRunner proves a usable OS sandbox immediately before the tool
+    body proceeds. The assertions alone can never authorize direct host pytest.
 
     Target-controlled k6 code is fail-closed at this live-service boundary until
     process/filesystem isolation, executable module-loading isolation, bounded
@@ -64,19 +64,51 @@ class LiveRuntimeServices(RuntimeServices):
         self.control.rollback_lineage_before_close = before_close
         self.control.rollback_lineage_after_close = after_close
 
-    def pytest_execution_block_reason(self) -> str | None:
+    def _pytest_execution_authority(self) -> tuple[str | None, dict[str, object]]:
         missing: list[str] = []
         if not self.pytest_process_isolation_enforced:
             missing.append("process/filesystem isolation")
         if not self.pytest_external_egress_enforced:
             missing.append("outbound-egress enforcement")
-        if not missing:
-            return None
-        return (
-            "pytest target-code execution requires trusted deployment enforcement for "
-            + " and ".join(missing)
-            + "; configuration flags are prerequisite assertions, not sandbox implementations"
-        )
+        if missing:
+            return (
+                "pytest target-code execution requires trusted deployment enforcement for "
+                + " and ".join(missing)
+                + "; configuration assertions alone never authorize target execution",
+                {
+                    "preflight_attempted": False,
+                    "backend": "bubblewrap",
+                    "ready": False,
+                    "reason": "deployment intent prerequisite is missing",
+                },
+            )
+
+        try:
+            sandbox = self.test_runner.sandbox_preflight()
+        except (OSError, RuntimeError, ValueError) as exc:
+            return (
+                "pytest target-code execution requires a verified OS sandbox; "
+                f"sandbox preflight failed with {type(exc).__name__}",
+                {
+                    "preflight_attempted": True,
+                    "backend": "bubblewrap",
+                    "ready": False,
+                    "reason": f"sandbox preflight failed with {type(exc).__name__}",
+                },
+            )
+        details = sandbox.details()
+        details["preflight_attempted"] = True
+        if not sandbox.ready:
+            return (
+                "pytest target-code execution requires a verified OS sandbox; "
+                + (sandbox.reason or "sandbox capability proof was incomplete"),
+                details,
+            )
+        return None, details
+
+    def pytest_execution_block_reason(self) -> str | None:
+        reason, _details = self._pytest_execution_authority()
+        return reason
 
     def k6_execution_block_reason(self) -> str:
         missing = [
@@ -212,7 +244,7 @@ class LiveRuntimeServices(RuntimeServices):
         super().checkpoint()
 
         if tool_name == "run_pytest":
-            pytest_block_reason = self.pytest_execution_block_reason()
+            pytest_block_reason, sandbox_details = self._pytest_execution_authority()
             if pytest_block_reason is not None:
                 pytest_args = [str(item) for item in (tool_input.get("args") or [])]
                 self.state.validation_results.append(
@@ -228,6 +260,7 @@ class LiveRuntimeServices(RuntimeServices):
                             "execution_started": False,
                             "process_isolation_enforced": self.pytest_process_isolation_enforced,
                             "external_egress_enforced": self.pytest_external_egress_enforced,
+                            "sandbox": sandbox_details,
                         },
                     )
                 )
