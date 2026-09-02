@@ -147,9 +147,19 @@ class TrustedGateService:
             self._policy.repository != EXPECTED_REPOSITORY
             or self._policy.repository_id != EXPECTED_REPOSITORY_ID
         ):
-            raise PermissionError("maintenance policy is not bound to the reviewed repository")
+            return DeliveryResult(
+                "BLOCKED",
+                wakeup.delivery_id,
+                "policy_repository_mismatch",
+                False,
+            )
         if wakeup.event_head_sha != self._policy.head_sha:
-            raise PermissionError("webhook workflow head does not match active maintenance policy")
+            return DeliveryResult(
+                "BLOCKED",
+                wakeup.delivery_id,
+                "policy_head_mismatch",
+                False,
+            )
 
         lease = self._store.acquire(delivery_id=wakeup.delivery_id, run_id=wakeup.run_id)
         if lease.terminal:
