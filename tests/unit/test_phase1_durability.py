@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-import ai_qa_automation.evidence as evidence_module
 import ai_qa_automation.fs_authority as fs_authority
 import ai_qa_automation.runtime.journal as journal_module
 import ai_qa_automation.runtime.run_control as run_control_module
