@@ -146,7 +146,14 @@ def _record_event_metrics(event: str, payload: dict[str, Any]) -> None:
 class RunJournal:
     """Append-only hash-chained JSONL lifecycle journal."""
 
-    def __init__(self, path: Path, *, regulated_mode: bool = False, max_events: int = 5000) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        regulated_mode: bool = False,
+        max_events: int = 5000,
+        expected_parent_identity: tuple[int, int] | None = None,
+    ) -> None:
         if isinstance(max_events, bool) or not isinstance(max_events, int) or max_events < 1:
             raise ValueError("max_events must be a positive integer")
         requested = path.expanduser()
@@ -168,6 +175,8 @@ class RunJournal:
             if self._descriptor_relative_parent
             else _identity(parent_status)
         )
+        if expected_parent_identity is not None and self._parent_identity != expected_parent_identity:
+            raise ValueError("run journal directory does not match authorized run persistence root")
         self.regulated_mode = regulated_mode
         self.max_events = max_events
         self._lock = RLock()
