@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import stat
 from pathlib import Path
 
 import pytest
 
 import ai_qa_automation.evidence as evidence_module
+import ai_qa_automation.fs_authority as fs_authority
 import ai_qa_automation.runtime.journal as journal_module
 import ai_qa_automation.runtime.run_control as run_control_module
-import ai_qa_automation.state as state_module
 import ai_qa_automation.tools.safe_patch as safe_patch_module
 from ai_qa_automation.evidence import EvidenceStore
 from ai_qa_automation.models import AgentRunState
@@ -15,6 +16,25 @@ from ai_qa_automation.runtime.journal import RunJournal
 from ai_qa_automation.runtime.run_control import _atomic_write_bytes, atomic_write_json
 from ai_qa_automation.state import StateStore
 from ai_qa_automation.tools.safe_patch import SafeTestPatcher
+
+
+def _directory_identity(path: Path) -> tuple[int, int]:
+    status = path.stat(follow_symlinks=False)
+    return status.st_dev, status.st_ino
+
+
+def _record_directory_fsyncs(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, int]]:
+    calls: list[tuple[int, int]] = []
+    real_fsync = fs_authority.os.fsync
+
+    def record_fsync(fd: int) -> None:
+        status = fs_authority.os.fstat(fd)
+        if stat.S_ISDIR(status.st_mode):
+            calls.append((status.st_dev, status.st_ino))
+        real_fsync(fd)
+
+    monkeypatch.setattr(fs_authority.os, "fsync", record_fsync)
+    return calls
 
 
 def test_non_regulated_journal_fsyncs_authoritative_append(
@@ -38,15 +58,21 @@ def test_atomic_runtime_writes_fsync_parent_directory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[Path] = []
-    monkeypatch.setattr(run_control_module, "fsync_directory", lambda path: calls.append(path))
+    fallback_calls: list[Path] = []
+    descriptor_calls = _record_directory_fsyncs(monkeypatch)
+    monkeypatch.setattr(
+        run_control_module,
+        "fsync_directory",
+        lambda path: fallback_calls.append(path),
+    )
 
     metadata = tmp_path / "run" / "runtime.json"
     backup = tmp_path / "run" / "rollback" / "backup.bin"
     atomic_write_json(metadata, {"pending_mutation": None})
     _atomic_write_bytes(backup, b"rollback")
 
-    assert calls == [metadata.parent.resolve(), backup.parent.resolve()]
+    assert _directory_identity(metadata.parent.resolve()) in descriptor_calls
+    assert fallback_calls == [backup.parent.resolve()]
 
 
 def test_state_store_fsyncs_parent_after_atomic_replace(
@@ -54,12 +80,11 @@ def test_state_store_fsyncs_parent_after_atomic_replace(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store = StateStore(tmp_path / "run" / "state.json")
-    calls: list[Path] = []
-    monkeypatch.setattr(state_module, "fsync_directory", lambda path: calls.append(path))
+    descriptor_calls = _record_directory_fsyncs(monkeypatch)
 
     store.save(AgentRunState(run_id="run-durable", objective="durability", workspace=str(tmp_path)))
 
-    assert calls == [store.path.parent]
+    assert _directory_identity(store.path.parent) in descriptor_calls
 
 
 def test_safe_patch_atomic_replace_and_create_fsync_target_directory(
@@ -85,8 +110,7 @@ def test_artifact_registration_fsyncs_link_and_manifest_directories(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[Path] = []
-    monkeypatch.setattr(evidence_module, "fsync_directory", lambda path: calls.append(path))
+    descriptor_calls = _record_directory_fsyncs(monkeypatch)
     store = EvidenceStore(tmp_path / "artifacts", "run-durable")
 
     path, _digest = store.register_artifact(
@@ -97,5 +121,5 @@ def test_artifact_registration_fsyncs_link_and_manifest_directories(
 
     assert path == "screens/shot.bin"
     assert (store.run_root / path).read_bytes() == b"artifact"
-    assert (store.run_root / "screens") in calls
-    assert store.run_root in calls
+    assert _directory_identity(store.run_root / "screens") in descriptor_calls
+    assert _directory_identity(store.run_root) in descriptor_calls
