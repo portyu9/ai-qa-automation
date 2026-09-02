@@ -251,7 +251,13 @@ def test_stale_recovery_retains_backup_until_runtime_closure_is_durable(
         )
     )
 
-    def fail_runtime_close(_path: Path, _payload: dict[str, object]) -> None:
+    def fail_runtime_close(
+        _path: Path,
+        _payload: dict[str, object],
+        *,
+        expected_parent_identity: tuple[int, int] | None = None,
+    ) -> None:
+        assert expected_parent_identity == (prior_status.st_dev, prior_status.st_ino)
         raise OSError("simulated durable metadata failure")
 
     monkeypatch.setattr(stale_recovery_module, "atomic_write_json", fail_runtime_close)
