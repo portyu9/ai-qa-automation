@@ -247,14 +247,17 @@ def _open_confined_parent(
         os.close(current_fd)
 
 
-def stat_confined_entry(
+def _verify_confined_path_current(
     root: Path,
     relative_path: str | Path,
     *,
+    expected_parent_identity: tuple[int, int],
+    expected_entry_signature: tuple[int, int, int, int, int] | None,
+    expect_missing: bool,
     label: str,
-    expected_root_identity: tuple[int, int] | None = None,
-) -> os.stat_result:
-    """Return no-follow metadata for one entry below a descriptor-pinned root."""
+    expected_root_identity: tuple[int, int] | None,
+) -> None:
+    """Re-open a rooted path and prove the same parent/entry is still current."""
 
     with _open_confined_parent(
         root,
@@ -263,11 +266,57 @@ def stat_confined_entry(
         label=label,
         expected_root_identity=expected_root_identity,
     ) as (parent_fd, name):
+        current_parent = os.fstat(parent_fd)
+        if _identity(current_parent) != expected_parent_identity:
+            raise ValueError(f"{label} parent changed identity during confined operation")
+        try:
+            current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            if expect_missing:
+                return
+            raise ValueError(f"{label} is no longer reachable at its authorized path") from None
+        if expect_missing:
+            raise ValueError(f"{label} target reappeared at its authorized path")
+        if expected_entry_signature is None:
+            raise RuntimeError("expected entry signature is required for confined path verification")
+        if not stat.S_ISREG(current.st_mode):
+            raise ValueError(f"{label} must remain a regular file")
+        if _stable_file_signature(current) != expected_entry_signature:
+            raise ValueError(f"{label} changed at its authorized path during confined operation")
+
+
+def stat_confined_entry(
+    root: Path,
+    relative_path: str | Path,
+    *,
+    label: str,
+    expected_root_identity: tuple[int, int] | None = None,
+) -> os.stat_result:
+    """Return no-follow metadata for one stable entry below a descriptor-pinned root."""
+
+    with _open_confined_parent(
+        root,
+        relative_path,
+        create_parents=False,
+        label=label,
+        expected_root_identity=expected_root_identity,
+    ) as (parent_fd, name):
+        parent_identity = _identity(os.fstat(parent_fd))
         current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
         repeated = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-        if _stable_file_signature(current) != _stable_file_signature(repeated):
+        signature = _stable_file_signature(repeated)
+        if _stable_file_signature(current) != signature:
             raise ValueError(f"{label} changed during confined stat")
-        return repeated
+    _verify_confined_path_current(
+        root,
+        relative_path,
+        expected_parent_identity=parent_identity,
+        expected_entry_signature=signature,
+        expect_missing=False,
+        label=label,
+        expected_root_identity=expected_root_identity,
+    )
+    return repeated
 
 
 def read_bytes_confined(
@@ -290,6 +339,7 @@ def read_bytes_confined(
         label=label,
         expected_root_identity=expected_root_identity,
     ) as (parent_fd, name):
+        parent_identity = _identity(os.fstat(parent_fd))
         flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | os.O_NOFOLLOW
         try:
             file_fd = os.open(name, flags, dir_fd=parent_fd)
@@ -319,15 +369,26 @@ def read_bytes_confined(
 
             final_opened = os.fstat(file_fd)
             final_current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            final_signature = _stable_file_signature(final_opened)
             if (
-                _stable_file_signature(final_opened) != initial_signature
+                final_signature != initial_signature
                 or not stat.S_ISREG(final_current.st_mode)
                 or _identity(final_opened) != _identity(final_current)
             ):
                 raise ValueError(f"{label} changed during confined read")
-            return b"".join(chunks)
+            data = b"".join(chunks)
         finally:
             os.close(file_fd)
+    _verify_confined_path_current(
+        root,
+        relative_path,
+        expected_parent_identity=parent_identity,
+        expected_entry_signature=final_signature,
+        expect_missing=False,
+        label=label,
+        expected_root_identity=expected_root_identity,
+    )
+    return data
 
 
 def atomic_write_bytes_confined(
@@ -342,8 +403,9 @@ def atomic_write_bytes_confined(
 ) -> None:
     """Atomically publish bytes below a descriptor-pinned root.
 
-    The final rename/link is descriptor-relative, so replacing a pathname parent
-    with a symlink after validation cannot redirect publication into another tree.
+    Publication occurs relative to the pinned parent and is then re-opened from
+    the authorized root. A renamed/replaced descendant parent therefore cannot
+    redirect bytes or leave a successful publication bound to a different path.
     """
 
     with _open_confined_parent(
@@ -353,8 +415,15 @@ def atomic_write_bytes_confined(
         label=label,
         expected_root_identity=expected_root_identity,
     ) as (parent_fd, name):
+        parent_identity = _identity(os.fstat(parent_fd))
         temp_name = f".{name}.{uuid4().hex}.aiqa.tmp"
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0) | os.O_NOFOLLOW
+        flags = (
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_BINARY", 0)
+            | os.O_NOFOLLOW
+        )
         temp_fd = os.open(temp_name, flags, 0o600, dir_fd=parent_fd)
         temp_exists = True
         try:
@@ -393,6 +462,19 @@ def atomic_write_bytes_confined(
                 )
                 temp_exists = False
             os.fsync(parent_fd)
+            published = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            if not stat.S_ISREG(published.st_mode):
+                raise ValueError(f"{label} publication must be a regular file")
+            published_signature = _stable_file_signature(published)
+            _verify_confined_path_current(
+                root,
+                relative_path,
+                expected_parent_identity=parent_identity,
+                expected_entry_signature=published_signature,
+                expect_missing=False,
+                label=label,
+                expected_root_identity=expected_root_identity,
+            )
         finally:
             if temp_fd >= 0:
                 os.close(temp_fd)
@@ -412,7 +494,8 @@ def append_bytes_confined(
 ) -> None:
     """Durably append bounded bytes below one descriptor-pinned root.
 
-    The opened file must remain the current regular entry for the pinned parent.
+    The opened file must remain the current regular entry for the pinned parent
+    and that exact parent/file must remain reachable through the authorized root.
     A partial or subsequently ambiguous append is truncated back to its original
     size before an error is propagated; inability to prove that rollback is
     reported as an I/O failure.
@@ -427,6 +510,7 @@ def append_bytes_confined(
         label=label,
         expected_root_identity=expected_root_identity,
     ) as (parent_fd, name):
+        parent_identity = _identity(os.fstat(parent_fd))
         flags = (
             os.O_WRONLY
             | os.O_APPEND
@@ -462,6 +546,7 @@ def append_bytes_confined(
                 os.fsync(file_fd)
                 final_opened = os.fstat(file_fd)
                 final_current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+                final_signature = _stable_file_signature(final_opened)
                 if (
                     not stat.S_ISREG(final_current.st_mode)
                     or _identity(final_opened) != _identity(final_current)
@@ -470,6 +555,15 @@ def append_bytes_confined(
                     raise ValueError(f"{label} changed identity during confined append")
                 if original_size == 0:
                     os.fsync(parent_fd)
+                _verify_confined_path_current(
+                    root,
+                    relative_path,
+                    expected_parent_identity=parent_identity,
+                    expected_entry_signature=final_signature,
+                    expect_missing=False,
+                    label=label,
+                    expected_root_identity=expected_root_identity,
+                )
             except BaseException:
                 try:
                     os.ftruncate(file_fd, original_size)
@@ -503,6 +597,7 @@ def unlink_file_confined(
         label=label,
         expected_root_identity=expected_root_identity,
     ) as (parent_fd, name):
+        parent_identity = _identity(os.fstat(parent_fd))
         try:
             current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
         except FileNotFoundError:
@@ -515,4 +610,13 @@ def unlink_file_confined(
             raise ValueError(f"{label} target must be a regular file")
         os.unlink(name, dir_fd=parent_fd)
         os.fsync(parent_fd)
+        _verify_confined_path_current(
+            root,
+            relative_path,
+            expected_parent_identity=parent_identity,
+            expected_entry_signature=None,
+            expect_missing=True,
+            label=label,
+            expected_root_identity=expected_root_identity,
+        )
         return True
