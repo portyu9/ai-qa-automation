@@ -6,8 +6,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from ..fs_authority import descriptor_relative_authority_supported, pin_directory_identity
-from ..io_safety import read_json_object_bounded, sha256_file_bounded
+from ..fs_authority import (
+    descriptor_relative_authority_supported,
+    pin_directory_identity,
+    read_bytes_confined,
+)
+from ..io_safety import parse_json_object_strict, read_json_object_bounded, sha256_file_bounded
 from ..models import ArtifactRecord, EvidenceItem
 from ..state import StateStore
 from .journal import RunJournal, validate_runtime_journal_binding
@@ -34,6 +38,11 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
     if requested_root.is_symlink():
         raise ValueError("run directory is a symlink and has ambiguous ownership")
     root = requested_root.resolve()
+    run_root_identity = (
+        pin_directory_identity(root, label="attestation run directory")
+        if descriptor_relative_authority_supported()
+        else None
+    )
     state_path = _owned_subject(root, "state.json")
     manifest_path = _owned_subject(root, "evidence-manifest.json")
     runtime_path = _owned_subject(root, "runtime.json")
@@ -44,12 +53,27 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
     # Canonical state must have one interpretation everywhere. Reuse StateStore's
     # ambiguity guard and strict JSON-mode schema validation rather than treating
     # attestation as a weaker parallel state reader.
-    state = StateStore(state_path).load().model_dump(mode="json")
+    state = StateStore(
+        state_path,
+        expected_parent_identity=run_root_identity,
+    ).load().model_dump(mode="json")
     runtime = (
-        _load_object(runtime_path, max_bytes=_MAX_RUNTIME_BYTES) if runtime_path.is_file() else {}
+        _load_object(
+            runtime_path,
+            max_bytes=_MAX_RUNTIME_BYTES,
+            root=root,
+            expected_root_identity=run_root_identity,
+        )
+        if runtime_path.is_file()
+        else {}
     )
     manifest = (
-        _load_object(manifest_path, max_bytes=_MAX_MANIFEST_BYTES)
+        _load_object(
+            manifest_path,
+            max_bytes=_MAX_MANIFEST_BYTES,
+            root=root,
+            expected_root_identity=run_root_identity,
+        )
         if manifest_path.is_file()
         else {}
     )
@@ -69,13 +93,21 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
         if journal_path.is_file() and journal_path.stat().st_size > _MAX_JOURNAL_BYTES:
             journal = {"valid": False, "reason": "journal exceeds attestation size bound"}
         else:
-            journal = RunJournal(journal_path, regulated_mode=False).verify()
+            journal = RunJournal(
+                journal_path,
+                regulated_mode=False,
+                expected_parent_identity=run_root_identity,
+            ).verify()
     except (OSError, UnicodeError, json.JSONDecodeError, RuntimeError, ValueError) as exc:
         journal = {"valid": False, "reason": f"{type(exc).__name__}"}
     journal_binding = validate_runtime_journal_binding(runtime, journal)
 
     artifact_integrity = (
-        _verify_manifest_artifacts(root, artifact_records)
+        _verify_manifest_artifacts(
+            root,
+            artifact_records,
+            expected_root_identity=run_root_identity,
+        )
         if manifest_integrity["valid"]
         else {
             "valid": False,
@@ -84,19 +116,39 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
         }
     )
     subjects = {
-        "state.json": _file_digest(state_path, max_bytes=_MAX_STATE_BYTES),
+        "state.json": _file_digest(
+            state_path,
+            max_bytes=_MAX_STATE_BYTES,
+            root=root,
+            expected_root_identity=run_root_identity,
+        ),
         "evidence-manifest.json": (
-            _file_digest(manifest_path, max_bytes=_MAX_MANIFEST_BYTES)
+            _file_digest(
+                manifest_path,
+                max_bytes=_MAX_MANIFEST_BYTES,
+                root=root,
+                expected_root_identity=run_root_identity,
+            )
             if manifest_path.is_file()
             else None
         ),
         "runtime.json": (
-            _file_digest(runtime_path, max_bytes=_MAX_RUNTIME_BYTES)
+            _file_digest(
+                runtime_path,
+                max_bytes=_MAX_RUNTIME_BYTES,
+                root=root,
+                expected_root_identity=run_root_identity,
+            )
             if runtime_path.is_file()
             else None
         ),
         "journal.jsonl": (
-            _file_digest(journal_path, max_bytes=_MAX_JOURNAL_BYTES)
+            _file_digest(
+                journal_path,
+                max_bytes=_MAX_JOURNAL_BYTES,
+                root=root,
+                expected_root_identity=run_root_identity,
+            )
             if journal_path.is_file()
             else None
         ),
@@ -331,7 +383,12 @@ def _owned_artifact_path(root: Path, relative_path: str) -> Path:
     return resolved
 
 
-def _verify_manifest_artifacts(root: Path, artifacts: list[ArtifactRecord]) -> dict[str, Any]:
+def _verify_manifest_artifacts(
+    root: Path,
+    artifacts: list[ArtifactRecord],
+    *,
+    expected_root_identity: tuple[int, int] | None,
+) -> dict[str, Any]:
     checked = 0
     total_bytes = 0
     for record in artifacts:
@@ -354,11 +411,22 @@ def _verify_manifest_artifacts(root: Path, artifacts: list[ArtifactRecord]) -> d
                 "reason": f"registered artifact is missing: {relative_path}",
             }
         try:
-            actual_hash, size = sha256_file_bounded(
-                path,
-                max_bytes=_MAX_ARTIFACT_BYTES,
-                label=f"registered artifact {relative_path}",
-            )
+            if expected_root_identity is not None:
+                content = read_bytes_confined(
+                    root,
+                    relative_path,
+                    max_bytes=_MAX_ARTIFACT_BYTES,
+                    label=f"registered artifact {relative_path}",
+                    expected_root_identity=expected_root_identity,
+                )
+                actual_hash = hashlib.sha256(content).hexdigest()
+                size = len(content)
+            else:
+                actual_hash, size = sha256_file_bounded(
+                    path,
+                    max_bytes=_MAX_ARTIFACT_BYTES,
+                    label=f"registered artifact {relative_path}",
+                )
         except (OSError, ValueError):
             return {
                 "valid": False,
@@ -382,7 +450,25 @@ def _verify_manifest_artifacts(root: Path, artifacts: list[ArtifactRecord]) -> d
     return {"valid": True, "checked": checked, "total_bytes": total_bytes}
 
 
-def _load_object(path: Path, *, max_bytes: int) -> dict[str, Any]:
+def _load_object(
+    path: Path,
+    *,
+    max_bytes: int,
+    root: Path,
+    expected_root_identity: tuple[int, int] | None,
+) -> dict[str, Any]:
+    if expected_root_identity is not None:
+        raw = read_bytes_confined(
+            root,
+            path.relative_to(root),
+            max_bytes=max_bytes,
+            label=f"attestation subject {path.name}",
+            expected_root_identity=expected_root_identity,
+        )
+        return parse_json_object_strict(
+            raw.decode("utf-8"),
+            label=f"attestation subject {path.name}",
+        )
     return read_json_object_bounded(
         path,
         max_bytes=max_bytes,
@@ -390,7 +476,22 @@ def _load_object(path: Path, *, max_bytes: int) -> dict[str, Any]:
     )
 
 
-def _file_digest(path: Path, *, max_bytes: int) -> dict[str, object]:
+def _file_digest(
+    path: Path,
+    *,
+    max_bytes: int,
+    root: Path,
+    expected_root_identity: tuple[int, int] | None,
+) -> dict[str, object]:
+    if expected_root_identity is not None:
+        content = read_bytes_confined(
+            root,
+            path.relative_to(root),
+            max_bytes=max_bytes,
+            label=f"attestation subject {path.name}",
+            expected_root_identity=expected_root_identity,
+        )
+        return {"size": len(content), "sha256": hashlib.sha256(content).hexdigest()}
     digest, size = sha256_file_bounded(
         path,
         max_bytes=max_bytes,
