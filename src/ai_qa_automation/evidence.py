@@ -22,7 +22,6 @@ from .fs_authority import (
     pin_directory_identity,
     read_bytes_confined,
     stat_confined_entry,
-    unlink_file_confined,
 )
 from .io_safety import (
     JsonSerializationBoundsError,
@@ -344,8 +343,34 @@ class EvidenceStore:
                 raise ValueError("artifact registry exceeds persistence count limit")
             if self._registered_artifact_bytes() + len(content) > _MAX_TOTAL_ARTIFACT_BYTES:
                 raise ValueError("artifact registry exceeds cumulative persistence byte limit")
+
             destination = self._owned_artifact_path(relative_path)
             normalized_relative = Path(relative_path).as_posix()
+            digest = self.hash_bytes(content)
+            record = ArtifactRecord(
+                type=destination.suffix.lstrip(".") or "binary",
+                path=normalized_relative,
+                originating_tool=originating_tool,
+                content_hash=digest,
+                sanitization_status=sanitization_status,
+                retention_classification=(
+                    retention_classification
+                    if retention_classification is not None
+                    else ("regulated" if self.regulated_mode else "standard")
+                ),
+            )
+            if record.artifact_id in self._artifacts:
+                raise ValueError("artifact id collision prevents deterministic registration")
+
+            # Capacity failures are deterministic and must be rejected before bytes are published.
+            self._artifacts[record.artifact_id] = record
+            try:
+                self._assert_manifest_capacity(
+                    reserve_bytes=_MANIFEST_AUDIT_RESERVE_BYTES if self.regulated_mode else 0
+                )
+            finally:
+                self._artifacts.pop(record.artifact_id, None)
+
             if self._descriptor_relative_root:
                 try:
                     atomic_write_bytes_confined(
@@ -387,25 +412,9 @@ class EvidenceStore:
                 finally:
                     temp.unlink(missing_ok=True)
 
-            digest = self.hash_bytes(content)
-            record = ArtifactRecord(
-                type=destination.suffix.lstrip(".") or "binary",
-                path=normalized_relative,
-                originating_tool=originating_tool,
-                content_hash=digest,
-                sanitization_status=sanitization_status,
-                retention_classification=(
-                    retention_classification
-                    if retention_classification is not None
-                    else ("regulated" if self.regulated_mode else "standard")
-                ),
-            )
             audit_sequence_before = self._audit_sequence
             self._artifacts[record.artifact_id] = record
             try:
-                self._assert_manifest_capacity(
-                    reserve_bytes=_MANIFEST_AUDIT_RESERVE_BYTES if self.regulated_mode else 0
-                )
                 self._append_audit_event(
                     "artifact_registered",
                     {
@@ -420,20 +429,9 @@ class EvidenceStore:
             except BaseException:
                 if self._audit_sequence == audit_sequence_before:
                     self._artifacts.pop(record.artifact_id, None)
-                    if self._descriptor_relative_root:
-                        try:
-                            unlink_file_confined(
-                                self.run_root,
-                                normalized_relative,
-                                missing_ok=True,
-                                label="evidence artifact cleanup",
-                                expected_root_identity=self._run_root_identity,
-                            )
-                        except (OSError, RuntimeError, ValueError):
-                            pass
-                    else:
-                        destination.unlink(missing_ok=True)
-                        fsync_directory(destination.parent)
+                # Published bytes are intentionally never removed by pathname here. A closure
+                # failure may coincide with parent replacement; deletion could otherwise target
+                # bytes no longer owned by this transaction. Leave an orphan and fail closed.
                 raise
             return record.path, digest
 
