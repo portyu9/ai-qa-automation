@@ -42,20 +42,21 @@ Bubblewrap is used because it starts from an empty filesystem namespace and can 
 The repository-owned command contract requires:
 
 - a new user namespace;
-- further user-namespace creation disabled inside the sandbox;
+- further user-namespace creation disabled and explicitly re-asserted inside the sandbox;
 - separate PID, network, IPC, and UTS namespaces;
 - a new mount namespace (Bubblewrap's normal execution model);
 - all effective capabilities dropped;
 - a new terminal session and parent-death cleanup;
 - a fresh `/proc` scoped to the sandbox PID namespace;
 - a fresh minimal `/dev`;
-- private writable tmpfs for `/tmp` and `/home`;
+- private writable tmpfs for `/tmp` and `/home`, each size-bounded to 64 MiB;
 - only Python runtime/system executable/library roots mounted read-only;
 - the target workspace mounted read-only at `/workspace`;
 - no host-root bind and no evidence-root bind;
 - a cleared environment rebuilt from a small deterministic set;
 - no host network namespace (`--unshare-net`), with the probe requiring no non-loopback interface;
-- bounded stdout/stderr, wall time, and process-tree cleanup through the existing subprocess authority.
+- bounded stdout/stderr, wall time, and process-tree cleanup through the existing subprocess authority;
+- hard pre-exec resource ceilings: at most 16 processes for the runtime identity, 512 MiB virtual address space per process, 64 MiB per regular output file, 256 open descriptors, no core dumps, and a CPU-time ceiling tied to the tool timeout.
 
 The target workspace remains read-only even when autonomous test-writing is enabled. Framework-owned mutations happen through the separate transaction/rollback authority, never from pytest itself.
 
@@ -74,9 +75,11 @@ The sandbox launches a repository-owned isolated Python probe and requires all o
 5. effective Linux capabilities are zero;
 6. the Bubblewrap executable remains the same regular-file identity and SHA-256 before and after the probe.
 
-Actual pytest execution uses the same command builder. Bubblewrap's `--json-status-fd` channel must prove that the sandbox child started. On non-timeout completion, its reported child exit code must equal the controller's observed process result. Missing, malformed, contradictory, or oversized status evidence cannot become a pytest result.
+Actual pytest execution uses the same command builder. Immediately before `exec`, the trusted guard revalidates namespace/workspace/network/capability facts and lowers hard Linux `RLIMIT_*` ceilings; failure to apply those ceilings exits through the sandbox-authority code instead of starting pytest. Bubblewrap's `--json-status-fd` channel must prove that the sandbox child started. On non-timeout completion, its reported child exit code must equal the controller's observed process result. Missing, malformed, contradictory, or oversized status evidence cannot become a pytest result.
 
-The observed Bubblewrap path, version, SHA-256, namespace identities, and capability facts are persisted with pytest evidence. These fields bind what was observed; they are not a claim that the host package manager or kernel is immutable.
+The observed Bubblewrap path, version, SHA-256, namespace identities, capability facts, configured process/memory/file/descriptor/tmpfs ceilings, and execution CPU ceiling are persisted with pytest evidence. These fields bind what was observed; they are not a claim that the host package manager or kernel is immutable.
+
+The `RLIMIT_*` ceilings are per-process/runtime-identity controls inherited by descendants inside the sandbox. They are not cgroup quotas, aggregate host resource attestation, or proof that other workloads on the host cannot consume resources. Deployments that require stronger aggregate CPU/memory/I/O guarantees must add environment-owned cgroup/VM/container limits outside this repository boundary.
 
 ---
 
@@ -134,8 +137,8 @@ Before enabling live pytest execution, verify that:
 4. framework evidence/control roots are outside the sandbox filesystem view;
 5. target dependencies required by pytest are present in the read-only interpreter/runtime roots;
 6. tests do not require external network access, because the initial sandbox intentionally provides no host/external network namespace;
-7. the runtime identity is least-privileged;
-8. the persisted preflight/evidence records show the required namespace, filesystem, network, and capability facts.
+7. the runtime identity is least-privileged and the fixed pytest resource ceilings are appropriate for the target test workload;
+8. the persisted preflight/evidence records show the required namespace, filesystem, network, capability, and resource-policy facts.
 
 If any item is unknown, leave execution blocked. `BLOCKED` is the correct runtime truth.
 
