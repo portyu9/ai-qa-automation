@@ -40,7 +40,7 @@ MAX_SECURESTRING_CIPHERTEXT_BYTES = 16 * 1024
 MAX_PARAMETER_PREFIX_BYTES = 768
 MAX_PARAMETER_PREFIX_DEPTH = 12
 WEBHOOK_SECRET_CACHE_TTL_SECONDS = 300.0
-WEBHOOK_SECRET_CACHE_MAX_USES = 32
+WEBHOOK_SECRET_CACHE_MAX_USES = 1024
 PARAMETER_PREFIX_RE = re.compile(r"^/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$")
 WEBHOOK_SIGNATURE_RE = re.compile(r"^sha256=[0-9a-f]{64}$")
 DELIVERY_HEADER_RE = re.compile(r"^[A-Za-z0-9._:-]+$")
@@ -63,9 +63,8 @@ ZERO_POLICY_SHA = "0" * 64
 
 FailureStage = Literal[
     "webhook_auth",
+    "static_config",
     "policy_load",
-    "public_config",
-    "private_key",
     "service_construct",
     "delivery_acquire_or_handle",
 ]
@@ -133,12 +132,10 @@ def handler(event: Any, context: Any) -> dict[str, Any]:
         )
         _prefilter_authenticated_wakeup(policy, wakeup)
 
-        stage = "public_config"
+        stage = "static_config"
         public = _load_public_config()
         if wakeup.installation_id != public.installation_id:
             raise PermissionError("webhook installation identity is not authorized")
-
-        stage = "private_key"
         private_key_pem = _load_private_key()
         config = StaticConfig(
             webhook_secret=webhook_secret,
@@ -528,10 +525,6 @@ def _parameter_name(suffix: str) -> str:
 
 def _public_parameter_names() -> dict[str, str]:
     return {key: _parameter_name(suffix) for key, suffix in PUBLIC_PARAMETER_SUFFIXES.items()}
-
-
-def _static_parameter_names() -> dict[str, str]:
-    return {key: _parameter_name(suffix) for key, suffix in STATIC_PARAMETER_SUFFIXES.items()}
 
 
 def _ssm() -> Any:
