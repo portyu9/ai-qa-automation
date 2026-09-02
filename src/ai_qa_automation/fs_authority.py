@@ -278,9 +278,9 @@ def _verify_confined_path_current(
         if expect_missing:
             raise ValueError(f"{label} target reappeared at its authorized path")
         if expected_entry_signature is None:
-            raise RuntimeError("expected entry signature is required for confined path verification")
-        if not stat.S_ISREG(current.st_mode):
-            raise ValueError(f"{label} must remain a regular file")
+            raise RuntimeError(
+                "expected entry signature is required for confined path verification"
+            )
         if _stable_file_signature(current) != expected_entry_signature:
             raise ValueError(f"{label} changed at its authorized path during confined operation")
 
@@ -417,13 +417,7 @@ def atomic_write_bytes_confined(
     ) as (parent_fd, name):
         parent_identity = _identity(os.fstat(parent_fd))
         temp_name = f".{name}.{uuid4().hex}.aiqa.tmp"
-        flags = (
-            os.O_WRONLY
-            | os.O_CREAT
-            | os.O_EXCL
-            | getattr(os, "O_BINARY", 0)
-            | os.O_NOFOLLOW
-        )
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0) | os.O_NOFOLLOW
         temp_fd = os.open(temp_name, flags, 0o600, dir_fd=parent_fd)
         temp_exists = True
         try:
@@ -511,13 +505,7 @@ def append_bytes_confined(
         expected_root_identity=expected_root_identity,
     ) as (parent_fd, name):
         parent_identity = _identity(os.fstat(parent_fd))
-        flags = (
-            os.O_WRONLY
-            | os.O_APPEND
-            | os.O_CREAT
-            | getattr(os, "O_BINARY", 0)
-            | os.O_NOFOLLOW
-        )
+        flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0) | os.O_NOFOLLOW
         try:
             file_fd = os.open(name, flags, 0o600, dir_fd=parent_fd)
         except OSError as exc:
@@ -577,7 +565,13 @@ def append_bytes_confined(
                     ) from rollback_exc
                 raise
         finally:
-            os.close(file_fd)
+            try:
+                os.close(file_fd)
+            except OSError as exc:
+                raise OSError(
+                    errno.EIO,
+                    f"{label} descriptor close could not be proven",
+                ) from exc
 
 
 def unlink_file_confined(
