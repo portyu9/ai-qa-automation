@@ -61,7 +61,10 @@ def test_regulated_store_rejects_audit_log_replaced_by_symlink_before_append(
     except OSError as exc:  # pragma: no cover - platform/filesystem capability
         pytest.skip(f"symlink creation unavailable: {exc}")
 
-    with pytest.raises(ValueError, match=r"audit log.*symlink"):
+    with pytest.raises(
+        ValueError,
+        match=r"control file.*symlink.*audit-log\.jsonl",
+    ):
         store.register_artifact(
             relative_path="logs/result.txt",
             content=b"result",
