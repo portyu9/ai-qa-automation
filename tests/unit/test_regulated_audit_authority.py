@@ -78,11 +78,10 @@ def test_replaced_regular_audit_file_is_rejected_before_mutation(tmp_path: Path)
     run_dir, store = _prepare_run(tmp_path, regulated=True)
     audit_path = run_dir / "audit-log.jsonl"
     manifest_path = run_dir / "evidence-manifest.json"
-    original = run_dir / "audit-original.jsonl"
-    manifest_before = manifest_path.read_bytes()
-    audit_path.rename(original)
+    audit_path.rename(run_dir / "audit-original.jsonl")
     replacement = b'{"replacement":true}\n'
     audit_path.write_bytes(replacement)
+    manifest_before = manifest_path.read_bytes()
 
     with pytest.raises(ValueError, match="changed identity since authorization"):
         store.add(_item("run-1", "second"))
@@ -98,8 +97,10 @@ def test_regulated_attestation_binds_valid_audit_subject(tmp_path: Path) -> None
     if not descriptor_relative_authority_supported():
         pytest.skip("full attestation authority is unavailable")
     run_dir, _store = _prepare_run(tmp_path, regulated=True)
+
     attestation = build_run_attestation(run_dir)
     audit = attestation["integrity"]["regulated_audit"]
+
     assert attestation["integrity"]["integrity_verified"] is True
     assert audit["applicable"] is True
     assert audit["valid"] is True
@@ -114,7 +115,9 @@ def test_regulated_attestation_binds_valid_audit_subject(tmp_path: Path) -> None
 def test_missing_regulated_audit_file_cannot_attest_green(tmp_path: Path) -> None:
     run_dir, _store = _prepare_run(tmp_path, regulated=True)
     (run_dir / "audit-log.jsonl").unlink()
+
     attestation = build_run_attestation(run_dir)
+
     assert attestation["integrity"]["integrity_verified"] is False
     assert attestation["integrity"]["regulated_audit"]["valid"] is False
     assert "missing" in attestation["integrity"]["regulated_audit"]["reason"]
@@ -123,7 +126,8 @@ def test_missing_regulated_audit_file_cannot_attest_green(tmp_path: Path) -> Non
 
 @pytest.mark.parametrize("field", ["events", "last_event_hash", "content_hash"])
 def test_mismatched_regulated_manifest_audit_binding_cannot_attest_green(
-    tmp_path: Path, field: str
+    tmp_path: Path,
+    field: str,
 ) -> None:
     run_dir, _store = _prepare_run(tmp_path, regulated=True)
     manifest_path = run_dir / "evidence-manifest.json"
@@ -135,6 +139,7 @@ def test_mismatched_regulated_manifest_audit_binding_cannot_attest_green(
     _write_json(manifest_path, manifest)
 
     attestation = build_run_attestation(run_dir)
+
     assert attestation["integrity"]["integrity_verified"] is False
     assert attestation["integrity"]["regulated_audit"]["valid"] is False
     assert "manifest binding" in attestation["integrity"]["regulated_audit"]["reason"]
@@ -149,6 +154,7 @@ def test_corrupted_regulated_audit_chain_cannot_attest_green(tmp_path: Path) -> 
     audit_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     attestation = build_run_attestation(run_dir)
+
     assert attestation["integrity"]["integrity_verified"] is False
     assert attestation["integrity"]["regulated_audit"]["valid"] is False
     assert "sequence" in attestation["integrity"]["regulated_audit"]["reason"]
@@ -162,9 +168,13 @@ def test_regulated_registry_audit_reconciliation_is_attested(tmp_path: Path) -> 
     _write_json(manifest_path, manifest)
 
     attestation = build_run_attestation(run_dir)
+
     assert attestation["integrity"]["manifest"]["valid"] is True
     assert attestation["integrity"]["regulated_audit"]["valid"] is False
-    assert "evidence integrity check failed" in attestation["integrity"]["regulated_audit"]["reason"]
+    assert (
+        "evidence integrity check failed"
+        in attestation["integrity"]["regulated_audit"]["reason"]
+    )
     assert attestation["integrity"]["integrity_verified"] is False
 
 
@@ -174,28 +184,82 @@ def test_non_regulated_attestation_does_not_require_or_fabricate_audit_authority
     if not descriptor_relative_authority_supported():
         pytest.skip("full attestation authority is unavailable")
     run_dir, _store = _prepare_run(tmp_path, regulated=False)
+
     attestation = build_run_attestation(run_dir)
+
     assert attestation["integrity"]["integrity_verified"] is True
     assert "regulated_audit" not in attestation["integrity"]
     assert "audit-log.jsonl" not in attestation["integrity"]["persisted_subjects"]
 
 
-def test_regulated_attestation_fallback_does_not_claim_file_identity_continuity(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_non_regulated_attestation_ignores_stray_audit_symlink(tmp_path: Path) -> None:
+    if not descriptor_relative_authority_supported():
+        pytest.skip("full attestation authority is unavailable")
+    run_dir, _store = _prepare_run(tmp_path, regulated=False)
+    outside = tmp_path / "outside-audit.jsonl"
+    outside.write_text("outside\n", encoding="utf-8")
+    try:
+        (run_dir / "audit-log.jsonl").symlink_to(outside)
+    except OSError as exc:
+        pytest.skip(f"symlink creation is unavailable: {type(exc).__name__}")
+
+    attestation = build_run_attestation(run_dir)
+
+    assert attestation["integrity"]["integrity_verified"] is True
+    assert "regulated_audit" not in attestation["integrity"]
+    assert "audit-log.jsonl" not in attestation["integrity"]["persisted_subjects"]
+
+
+def test_malformed_regulated_audit_binding_remains_applicable_and_fails_closed(
+    tmp_path: Path,
 ) -> None:
     run_dir, _store = _prepare_run(tmp_path, regulated=True)
-    monkeypatch.setattr(attestation_module, "descriptor_relative_authority_supported", lambda: False)
+    manifest_path = run_dir / "evidence-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["audit_log"].pop("content_hash")
+    _write_json(manifest_path, manifest)
+
     attestation = build_run_attestation(run_dir)
-    assert attestation["integrity"]["regulated_audit"]["final_file_identity_continuity_enforced"] is False
+
+    assert attestation["integrity"]["manifest"]["valid"] is False
+    assert attestation["integrity"]["regulated_audit"]["applicable"] is True
+    assert attestation["integrity"]["regulated_audit"]["valid"] is False
+    assert attestation["integrity"]["integrity_verified"] is False
+
+
+def test_regulated_attestation_fallback_does_not_claim_file_identity_continuity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir, _store = _prepare_run(tmp_path, regulated=True)
+    monkeypatch.setattr(
+        attestation_module,
+        "descriptor_relative_authority_supported",
+        lambda: False,
+    )
+
+    attestation = build_run_attestation(run_dir)
+
+    assert (
+        attestation["integrity"]["regulated_audit"]["final_file_identity_continuity_enforced"]
+        is False
+    )
     assert attestation["integrity"]["integrity_verified"] is False
 
 
 def _capture_audit_descriptor(monkeypatch: pytest.MonkeyPatch) -> dict[str, int | None]:
     import ai_qa_automation.fs_authority as fs_authority_module
+
     real_open = fs_authority_module.os.open
     captured: dict[str, int | None] = {"fd": None}
 
-    def capture_open(path: object, flags: int, mode: int = 0o777, *, dir_fd: int | None = None) -> int:
+    def capture_open(
+        path: object,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
         if dir_fd is None:
             fd = real_open(path, flags, mode)
         else:
@@ -208,10 +272,12 @@ def _capture_audit_descriptor(monkeypatch: pytest.MonkeyPatch) -> dict[str, int 
     return captured
 
 
-def test_existing_first_audit_directory_fsync_failure_remains_recoverable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_first_audit_directory_fsync_failure_remains_recoverable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import ai_qa_automation.fs_authority as fs_authority_module
+
     store = EvidenceStore(tmp_path, "run", regulated_mode=True)
     captured = _capture_audit_descriptor(monkeypatch)
     real_fsync = fs_authority_module.os.fsync
@@ -230,15 +296,18 @@ def test_existing_first_audit_directory_fsync_failure_remains_recoverable(
     monkeypatch.setattr(fs_authority_module.os, "fsync", fail_directory_fsync)
     with pytest.raises(OSError, match="simulated directory fsync failure"):
         store.add(_item("run", "first"))
+
     assert store.all() == []
     restored = EvidenceStore(tmp_path, "run", regulated_mode=True)
     assert restored.all() == []
 
 
-def test_existing_descriptor_close_failure_restore_still_fails_closed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_descriptor_close_failure_restore_still_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import ai_qa_automation.fs_authority as fs_authority_module
+
     store = EvidenceStore(tmp_path, "run", regulated_mode=True)
     captured = _capture_audit_descriptor(monkeypatch)
     real_close = fs_authority_module.os.close
@@ -256,6 +325,7 @@ def test_existing_descriptor_close_failure_restore_still_fails_closed(
     monkeypatch.setattr(fs_authority_module.os, "close", fail_audit_close)
     with pytest.raises(OSError, match="descriptor close could not be proven"):
         store.add(_item("run", "first"))
+
     assert store.all() == []
     assert store.verify_audit_chain() is True
     with pytest.raises(ValueError, match="registry does not match audit log"):
