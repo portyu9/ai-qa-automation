@@ -64,7 +64,13 @@ def test_failed_stale_recovery_close_retains_authority_but_requires_reconciliati
         )
     )
 
-    def fail_runtime_close(_path: Path, _payload: dict[str, object]) -> None:
+    def fail_runtime_close(
+        _path: Path,
+        _payload: dict[str, object],
+        *,
+        expected_parent_identity: tuple[int, int] | None = None,
+    ) -> None:
+        assert expected_parent_identity == (prior_status.st_dev, prior_status.st_ino)
         raise OSError("simulated durable metadata failure")
 
     with monkeypatch.context() as patch:
