@@ -11,7 +11,14 @@ from ..evidence import EvidenceStore
 from ..models import EvidenceItem, EvidenceKind, EvidenceNature
 from ..redaction import redact_text
 from .artifacts import text_artifact
-from .execution_env import restricted_subprocess_env, run_bounded_subprocess
+from .execution_env import restricted_subprocess_env
+from .pytest_sandbox import (
+    BubblewrapPytestSandbox,
+    PytestSandbox,
+    PytestSandboxExecutionUnverified,
+    PytestSandboxPreflight,
+    PytestSandboxUnavailable,
+)
 from .repository import RepositoryInspector
 
 
@@ -26,12 +33,12 @@ class TestExecutionResult:
 
 
 class TestRunner:
-    """Runs pytest through a bounded argument surface inside one target workspace.
+    """Run target pytest only through a verified OS sandbox boundary.
 
-    A zero pytest exit code is retained only when the Git-backed workspace is
-    completely fingerprinted and unchanged across execution. Target tests are
-    executable repository code; they therefore cannot be allowed to modify the
-    repository and still certify their own result.
+    The target repository is executable untrusted content. A zero pytest exit code
+    is retained only when a concrete Bubblewrap capability proof succeeded, the
+    sandboxed target process completed, and the Git-backed workspace is completely
+    fingerprinted and unchanged across execution. There is no direct-host fallback.
     """
 
     _SAFE_FLAGS: ClassVar[set[str]] = {
@@ -46,10 +53,16 @@ class TestRunner:
     _SAFE_VALUE_OPTIONS: ClassVar[set[str]] = {"-k", "-m", "--maxfail", "--tb"}
     _SAFE_VALUE_PREFIXES = ("--maxfail=", "--tb=")
     _WORKSPACE_INTEGRITY_EXIT_CODE = 125
+    _SANDBOX_BLOCKED_EXIT_CODE = 126
     _TIMEOUT_EXIT_CODE = 124
 
     def __init__(
-        self, workspace: Path, evidence: EvidenceStore, timeout_seconds: int = 120
+        self,
+        workspace: Path,
+        evidence: EvidenceStore,
+        timeout_seconds: int = 120,
+        *,
+        sandbox: PytestSandbox | None = None,
     ) -> None:
         if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int):
             raise ValueError("pytest timeout_seconds must be an integer")
@@ -58,6 +71,14 @@ class TestRunner:
         self.workspace = workspace.expanduser().resolve()
         self.evidence = evidence
         self.timeout_seconds = timeout_seconds
+        self.sandbox = sandbox or BubblewrapPytestSandbox(
+            self.workspace,
+            evidence_root=self.evidence.run_root,
+        )
+
+    def sandbox_preflight(self) -> PytestSandboxPreflight:
+        """Execute the concrete isolation capability proof used by live admission."""
+        return self.sandbox.preflight()
 
     def run_pytest(self, args: list[str] | None = None) -> TestExecutionResult:
         safe_args = self._validate_pytest_args(args or [])
@@ -68,13 +89,13 @@ class TestRunner:
             if not command or command[0] != "pytest":
                 raise PermissionError("only pytest execution is supported by this narrow tool")
             safe_args = self._validate_pytest_args(command[1:])
-            command = ["pytest", *safe_args]
         else:
             safe_args = self._validate_pytest_args(command[3:])
-            command = [*command[:3], *safe_args]
+        logical_command = ["python", "-m", "pytest", *safe_args]
 
         before = RepositoryInspector(self.workspace).snapshot()
         start = time.monotonic()
+        preflight: PytestSandboxPreflight
         with tempfile.TemporaryDirectory(prefix="aiqa-pytest-home-") as temp_home:
             env = restricted_subprocess_env(
                 home=Path(temp_home),
@@ -83,19 +104,49 @@ class TestRunner:
                     "PYTHONDONTWRITEBYTECODE": "1",
                 },
             )
-            process_result = run_bounded_subprocess(
-                command,
-                cwd=self.workspace,
-                env=env,
-                timeout_seconds=self.timeout_seconds,
-            )
+            sandbox_postflight_reason: str | None = None
+            try:
+                preflight, process_result = self.sandbox.run(
+                    [self.sandbox_python_executable(), "-m", "pytest", *safe_args],
+                    env=env,
+                    timeout_seconds=self.timeout_seconds,
+                )
+            except PytestSandboxUnavailable as exc:
+                preflight = exc.preflight
+                process_result = None
+            except PytestSandboxExecutionUnverified as exc:
+                preflight = exc.preflight
+                process_result = exc.result
+                sandbox_postflight_reason = exc.reason
+            except (OSError, RuntimeError, ValueError) as exc:
+                preflight = PytestSandboxPreflight(
+                    ready=False,
+                    backend="bubblewrap",
+                    reason=f"sandbox execution authority became unavailable: {type(exc).__name__}",
+                )
+                process_result = None
         duration = time.monotonic() - start
-        timed_out = process_result.timed_out
-        exit_code = self._TIMEOUT_EXIT_CODE if timed_out else process_result.returncode
-        raw_stdout = process_result.stdout
-        raw_stderr = process_result.stderr
-        if timed_out:
-            raw_stderr += f"\npytest exceeded {self.timeout_seconds}s execution budget"
+
+        sandbox_blocked = process_result is None
+        timed_out = False if process_result is None else process_result.timed_out
+        if sandbox_blocked:
+            exit_code = self._SANDBOX_BLOCKED_EXIT_CODE
+            raw_stdout = ""
+            raw_stderr = preflight.reason or "pytest sandbox is unavailable"
+            stdout_truncated = False
+            stderr_truncated = False
+        else:
+            exit_code = self._TIMEOUT_EXIT_CODE if timed_out else process_result.returncode
+            raw_stdout = process_result.stdout
+            raw_stderr = process_result.stderr
+            stdout_truncated = process_result.stdout_truncated
+            stderr_truncated = process_result.stderr_truncated
+            if timed_out:
+                raw_stderr += f"\npytest exceeded {self.timeout_seconds}s execution budget"
+            if sandbox_postflight_reason is not None:
+                raw_stderr += f"\nsandbox-integrity: {sandbox_postflight_reason}"
+                if exit_code == 0:
+                    exit_code = self._WORKSPACE_INTEGRITY_EXIT_CODE
 
         after = RepositoryInspector(self.workspace).snapshot()
         integrity_reason = self._workspace_integrity_failure(before, after)
@@ -109,35 +160,44 @@ class TestRunner:
         artifact_path, artifact_hash = text_artifact(
             self.evidence,
             f"pytest/{uuid4().hex}.log",
-            f"$ {' '.join(command)}\n\nSTDOUT\n{safe_stdout}\n\nSTDERR\n{safe_stderr}\n",
+            f"$ {' '.join(logical_command)}\n\nSTDOUT\n{safe_stdout}\n\nSTDERR\n{safe_stderr}\n",
             originating_tool="pytest",
         )
+        isolation_details = preflight.details()
+        isolation_details["execution_started"] = not sandbox_blocked
+        isolation_details["postflight_verified"] = sandbox_postflight_reason is None
+        isolation_details["postflight_reason"] = sandbox_postflight_reason
         exit_item = self.evidence.add(
             EvidenceItem(
                 run_id=self.evidence.run_id,
                 kind=EvidenceKind.EXIT_CODE,
                 nature=EvidenceNature.OBSERVED_FACT,
                 source="pytest",
-                source_identifier=" ".join(command),
+                source_identifier=" ".join(logical_command),
                 summary=(
-                    f"pytest workspace-integrity gate failed: {integrity_reason}"
-                    if integrity_reason and not timed_out
+                    f"pytest sandbox blocked execution: {preflight.reason}"
+                    if sandbox_blocked
                     else (
-                        f"pytest exceeded {self.timeout_seconds}s execution budget"
-                        if timed_out
-                        else f"pytest exited with code {exit_code}"
+                        f"pytest workspace-integrity gate failed: {integrity_reason}"
+                        if integrity_reason and not timed_out
+                        else (
+                            f"pytest exceeded {self.timeout_seconds}s execution budget"
+                            if timed_out
+                            else f"pytest exited with code {exit_code}"
+                        )
                     )
                 ),
                 structured_data={
                     "exit_code": exit_code,
                     "duration_seconds": duration,
                     "timeout": timed_out,
-                    "stdout_truncated": process_result.stdout_truncated,
-                    "stderr_truncated": process_result.stderr_truncated,
+                    "stdout_truncated": stdout_truncated,
+                    "stderr_truncated": stderr_truncated,
                     "workspace_integrity_verified": integrity_reason is None,
                     "workspace_integrity_reason": integrity_reason,
                     "workspace_fingerprint_before": before.fingerprint,
                     "workspace_fingerprint_after": after.fingerprint,
+                    "sandbox": isolation_details,
                 },
                 artifact_reference=artifact_path,
                 content_hash=artifact_hash,
@@ -151,15 +211,20 @@ class TestRunner:
                     kind=EvidenceKind.EXCEPTION,
                     source="pytest",
                     summary=(
-                        "pytest execution timed out"
-                        if timed_out
+                        "pytest sandbox blocked target-code execution"
+                        if sandbox_blocked
                         else (
-                            "pytest changed or could not completely fingerprint the target workspace"
-                            if integrity_reason
+                            "pytest execution timed out"
+                            if timed_out
                             else (
-                                "pytest tests failed"
-                                if exit_code == 1
-                                else "pytest execution did not produce a valid test result"
+                                "pytest changed or could not completely fingerprint "
+                                "the target workspace"
+                                if integrity_reason
+                                else (
+                                    "pytest tests failed"
+                                    if exit_code == 1
+                                    else "pytest execution did not produce a valid test result"
+                                )
                             )
                         )
                     ),
@@ -168,10 +233,11 @@ class TestRunner:
                         "stderr": safe_stderr[-4000:],
                         "stdout": safe_stdout[-4000:],
                         "timeout": timed_out,
-                        "stdout_truncated": process_result.stdout_truncated,
-                        "stderr_truncated": process_result.stderr_truncated,
+                        "stdout_truncated": stdout_truncated,
+                        "stderr_truncated": stderr_truncated,
                         "workspace_integrity_verified": integrity_reason is None,
                         "workspace_integrity_reason": integrity_reason,
+                        "sandbox": isolation_details,
                     },
                     artifact_reference=artifact_path,
                     content_hash=artifact_hash,
@@ -181,13 +247,16 @@ class TestRunner:
         else:
             ids = (exit_item.id,)
         return TestExecutionResult(
-            command=tuple(command),
+            command=tuple(logical_command),
             exit_code=exit_code,
             stdout=safe_stdout,
             stderr=safe_stderr,
             duration_seconds=duration,
             evidence_ids=ids,
         )
+
+    def sandbox_python_executable(self) -> str:
+        return str(self.sandbox.python_executable)
 
     @staticmethod
     def _workspace_integrity_failure(before: object, after: object) -> str | None:
