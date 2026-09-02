@@ -21,6 +21,7 @@ from .core import (
     MAX_POLICY_BYTES,
     MAX_WEBHOOK_BYTES,
     OneShotPolicy,
+    Wakeup,
     parse_workflow_run_wakeup,
     verify_webhook_signature,
 )
@@ -35,6 +36,7 @@ EXPECTED_PATH = "/github/webhook"
 MIN_WEBHOOK_SECRET_BYTES = 32
 MAX_WEBHOOK_SECRET_BYTES = 4096
 MAX_SSM_STANDARD_VALUE_BYTES = 4096
+MAX_SECURESTRING_CIPHERTEXT_BYTES = 16 * 1024
 MAX_PARAMETER_PREFIX_BYTES = 768
 MAX_PARAMETER_PREFIX_DEPTH = 12
 WEBHOOK_SECRET_CACHE_TTL_SECONDS = 300.0
@@ -94,6 +96,7 @@ class StaticConfig:
 class _WebhookSecretCache:
     secret: bytes
     version: int
+    ciphertext_sha256: bytes
     expires_at: float
     remaining_uses: int
 
@@ -265,6 +268,16 @@ def _parameter_row(
     return parameter
 
 
+def _secure_string_ciphertext_sha256(parameter: dict[str, Any]) -> bytes:
+    value = parameter.get("Value")
+    if not isinstance(value, str):
+        raise RuntimeError("SecureString ciphertext is missing or malformed")
+    encoded = value.encode("utf-8")
+    if not encoded or len(encoded) > MAX_SECURESTRING_CIPHERTEXT_BYTES:
+        raise RuntimeError("SecureString ciphertext is outside bounds")
+    return hashlib.sha256(encoded).digest()
+
+
 def _load_webhook_secret() -> bytes:
     global _webhook_secret_cache
 
@@ -274,14 +287,16 @@ def _load_webhook_secret() -> bytes:
             _ssm().get_parameter(Name=name, WithDecryption=False),
             expected_name=name,
             expected_type="SecureString",
-            require_value=False,
+            require_value=True,
         )
         version = int(metadata["Version"])
+        ciphertext_sha256 = _secure_string_ciphertext_sha256(metadata)
         now = time.monotonic()
         cached = _webhook_secret_cache
         if (
             cached is not None
             and cached.version == version
+            and cached.ciphertext_sha256 == ciphertext_sha256
             and now < cached.expires_at
             and cached.remaining_uses > 0
         ):
@@ -303,9 +318,24 @@ def _load_webhook_secret() -> bytes:
         if not MIN_WEBHOOK_SECRET_BYTES <= len(secret) <= MAX_WEBHOOK_SECRET_BYTES:
             _webhook_secret_cache = None
             raise RuntimeError("configured webhook secret is outside bounds")
+
+        confirmed = _parameter_row(
+            _ssm().get_parameter(Name=name, WithDecryption=False),
+            expected_name=name,
+            expected_type="SecureString",
+            require_value=True,
+        )
+        if (
+            int(confirmed["Version"]) != version
+            or _secure_string_ciphertext_sha256(confirmed) != ciphertext_sha256
+        ):
+            _webhook_secret_cache = None
+            raise RuntimeError("webhook secret parameter changed during refresh")
+
         _webhook_secret_cache = _WebhookSecretCache(
             secret=secret,
             version=version,
+            ciphertext_sha256=ciphertext_sha256,
             expires_at=now + WEBHOOK_SECRET_CACHE_TTL_SECONDS,
             remaining_uses=WEBHOOK_SECRET_CACHE_MAX_USES - 1,
         )
@@ -414,7 +444,7 @@ def _load_private_key() -> str:
     return private_key_pem
 
 
-def _prefilter_authenticated_wakeup(policy: OneShotPolicy, wakeup: Any) -> None:
+def _prefilter_authenticated_wakeup(policy: OneShotPolicy, wakeup: Wakeup) -> None:
     if policy.repository != EXPECTED_REPOSITORY or policy.repository_id != EXPECTED_REPOSITORY_ID:
         raise PermissionError("maintenance policy is not bound to the reviewed repository")
     if wakeup.repository != EXPECTED_REPOSITORY or wakeup.repository_id != EXPECTED_REPOSITORY_ID:
