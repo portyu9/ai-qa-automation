@@ -100,10 +100,10 @@ class StateStore:
         self._assert_owned()
 
     @property
-    def parent_identity(self) -> tuple[int, int]:
-        """Return the run-root identity bound to this canonical state store."""
+    def parent_identity(self) -> tuple[int, int] | None:
+        """Return enforceable run-root identity, or ``None`` on the fallback path."""
 
-        return self._parent_identity
+        return self._parent_identity if self._descriptor_relative_parent else None
 
     def _revalidate_parent(self) -> None:
         try:
