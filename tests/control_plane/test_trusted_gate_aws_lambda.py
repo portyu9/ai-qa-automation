@@ -219,9 +219,42 @@ def test_authenticated_policy_head_mismatch_avoids_private_authority(
 
     def forbidden(*args: Any, **kwargs: Any) -> Any:
         del args, kwargs
-        raise AssertionError("head mismatch must reject before App authority or service construction")
+        raise AssertionError(
+            "head mismatch must reject before App authority or service construction"
+        )
 
     monkeypatch.setattr(aws_lambda, "_load_public_config", forbidden)
+    monkeypatch.setattr(aws_lambda, "_load_private_key", forbidden)
+    monkeypatch.setattr(aws_lambda, "_build_service", forbidden)
+    response = aws_lambda.handler(_event(), object())
+    assert response["statusCode"] == 403
+    assert json.loads(response["body"]) == {"outcome": "REJECTED"}
+
+
+def test_installation_mismatch_avoids_private_key_and_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy = _policy_bytes()
+    digest = hashlib.sha256(policy).hexdigest()
+    monkeypatch.setenv(aws_lambda.POLICY_SHA_ENV, digest)
+    monkeypatch.setattr(aws_lambda, "_load_webhook_secret", lambda: SECRET)
+    monkeypatch.setattr(aws_lambda, "_load_policy", lambda *, expected_sha: (policy, expected_sha))
+    monkeypatch.setattr(
+        aws_lambda,
+        "_load_public_config",
+        lambda: aws_lambda.PublicConfig(
+            app_id=TEST_APP_ID,
+            installation_id=TEST_INSTALLATION_ID + 1,
+            repository=EXPECTED_REPOSITORY,
+            repository_id=EXPECTED_REPOSITORY_ID,
+            bot_login=TEST_BOT_LOGIN,
+        ),
+    )
+
+    def forbidden(*args: Any, **kwargs: Any) -> Any:
+        del args, kwargs
+        raise AssertionError("installation mismatch must reject before signing authority")
+
     monkeypatch.setattr(aws_lambda, "_load_private_key", forbidden)
     monkeypatch.setattr(aws_lambda, "_build_service", forbidden)
     response = aws_lambda.handler(_event(), object())
@@ -371,6 +404,21 @@ def test_webhook_secret_version_change_forces_refresh(monkeypatch: pytest.Monkey
     assert client.get_parameter_calls.count((name, True)) == 2
 
 
+def test_webhook_secret_same_version_ciphertext_change_forces_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_prefix(monkeypatch)
+    name = aws_lambda._parameter_name(aws_lambda.WEBHOOK_SECRET_SUFFIX)
+    client = FakeSsm({name: SECRET.decode()})
+    monkeypatch.setattr(aws_lambda, "_ssm_client", client)
+
+    assert aws_lambda._load_webhook_secret() == SECRET
+    client.values[name] = ROTATED_SECRET.decode()
+    client.ciphertexts[name] = "replacement-ciphertext"
+    assert aws_lambda._load_webhook_secret() == ROTATED_SECRET
+    assert client.get_parameter_calls.count((name, True)) == 2
+
+
 def test_webhook_secret_version_race_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     _configure_prefix(monkeypatch)
     name = aws_lambda._parameter_name(aws_lambda.WEBHOOK_SECRET_SUFFIX)
@@ -440,9 +488,28 @@ def test_public_config_uses_plain_reads_and_excludes_private_key(
     assert f"{TEST_PREFIX}/{aws_lambda.APP_SIGNING_PARAMETER_SUFFIX}" not in names
 
 
+@pytest.mark.parametrize(
+    ("suffix", "value"),
+    [
+        ("app-id", "00123"),
+        ("bot-login", "not-a-bot"),
+        ("installation-id", "0"),
+    ],
+)
 def test_public_config_rejects_malformed_deployment_identity(
     monkeypatch: pytest.MonkeyPatch,
+    suffix: str,
+    value: str,
 ) -> None:
+    _configure_prefix(monkeypatch)
+    values = _public_values()
+    values[f"{TEST_PREFIX}/{suffix}"] = value
+    monkeypatch.setattr(aws_lambda, "_ssm_client", FakeSsm(values))
+    with pytest.raises(RuntimeError):
+        aws_lambda._load_public_config()
+
+
+def test_public_config_rejects_wrong_repository_id(monkeypatch: pytest.MonkeyPatch) -> None:
     _configure_prefix(monkeypatch)
     values = _public_values()
     values[f"{TEST_PREFIX}/repository-id"] = str(EXPECTED_REPOSITORY_ID + 1)
