@@ -401,6 +401,91 @@ def atomic_write_bytes_confined(
                     os.unlink(temp_name, dir_fd=parent_fd)
 
 
+def append_bytes_confined(
+    root: Path,
+    relative_path: str | Path,
+    data: bytes,
+    *,
+    max_total_bytes: int,
+    label: str,
+    expected_root_identity: tuple[int, int] | None = None,
+) -> None:
+    """Durably append bounded bytes below one descriptor-pinned root.
+
+    The opened file must remain the current regular entry for the pinned parent.
+    A partial or subsequently ambiguous append is truncated back to its original
+    size before an error is propagated; inability to prove that rollback is
+    reported as an I/O failure.
+    """
+
+    if type(max_total_bytes) is not int or max_total_bytes < 1:
+        raise ValueError("max_total_bytes must be a positive integer")
+    with _open_confined_parent(
+        root,
+        relative_path,
+        create_parents=False,
+        label=label,
+        expected_root_identity=expected_root_identity,
+    ) as (parent_fd, name):
+        flags = (
+            os.O_WRONLY
+            | os.O_APPEND
+            | os.O_CREAT
+            | getattr(os, "O_BINARY", 0)
+            | os.O_NOFOLLOW
+        )
+        try:
+            file_fd = os.open(name, flags, 0o600, dir_fd=parent_fd)
+        except OSError as exc:
+            if exc.errno == errno.ELOOP:
+                raise ValueError(f"{label} is a symlink and has ambiguous ownership") from exc
+            raise
+        try:
+            opened = os.fstat(file_fd)
+            current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or not stat.S_ISREG(current.st_mode)
+                or _identity(opened) != _identity(current)
+            ):
+                raise ValueError(f"{label} changed identity during confined append")
+            original_size = opened.st_size
+            if original_size + len(data) > max_total_bytes:
+                raise ValueError(f"{label} exceeds persistence size bound")
+            try:
+                offset = 0
+                while offset < len(data):
+                    written = os.write(file_fd, data[offset:])
+                    if written <= 0:
+                        raise OSError(errno.EIO, "confined append made no forward progress")
+                    offset += written
+                os.fsync(file_fd)
+                final_opened = os.fstat(file_fd)
+                final_current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+                if (
+                    not stat.S_ISREG(final_current.st_mode)
+                    or _identity(final_opened) != _identity(final_current)
+                    or final_opened.st_size != original_size + len(data)
+                ):
+                    raise ValueError(f"{label} changed identity during confined append")
+                if original_size == 0:
+                    os.fsync(parent_fd)
+            except BaseException:
+                try:
+                    os.ftruncate(file_fd, original_size)
+                    os.fsync(file_fd)
+                    if os.fstat(file_fd).st_size != original_size:
+                        raise OSError(errno.EIO, "confined append rollback length mismatch")
+                except BaseException as rollback_exc:
+                    raise OSError(
+                        errno.EIO,
+                        f"{label} append failed and rollback could not be durably proven",
+                    ) from rollback_exc
+                raise
+        finally:
+            os.close(file_fd)
+
+
 def unlink_file_confined(
     root: Path,
     relative_path: str | Path,
