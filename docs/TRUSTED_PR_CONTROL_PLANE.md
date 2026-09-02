@@ -111,6 +111,8 @@ The webhook body never supplies terminal authority. Every PR, ref, commit, tree,
 
 For the AWS Lambda adapter, unauthenticated requests may read only the deployment-owned webhook secret needed for HMAC verification. App identity, private key, installation identity, repository binding, policy, and GitHub evidence are read only after HMAC admission.
 
+Lambda failure diagnostics are deliberately bounded and non-authoritative. The adapter emits only the fixed stage identifier and exception class for `webhook_auth`, `static_config`, `policy_load`, `service_construct`, or `delivery_acquire_or_handle`; it never logs exception messages, request bodies, headers/signatures, parameter names, policy bytes/digests, private configuration values, or cloud resource identity. The existing 403/400/503 response semantics remain unchanged, and a diagnostic stage is never evidence of PASS.
+
 ## Exact subject resolution
 
 The external service independently requires:
@@ -243,8 +245,14 @@ Under the private SSM prefix the adapter uses reviewed suffixes for App ID, bot 
 The runtime IAM contract is deliberately narrow:
 
 - SSM: only reads required by the private parameter namespace;
-- DynamoDB: `GetItem`, `UpdateItem`, and `TransactWriteItems` on the exact state table; no `PutItem`, `DeleteItem`, `Query`, `Scan`, or table-administration runtime authority is required;
+- DynamoDB: direct `GetItem` for strongly consistent reads and direct `UpdateItem` for conditional state transitions on the exact state table;
+- DynamoDB creation: `PutItem` on that exact table only when `dynamodb:EnclosingOperation` equals `TransactWriteItems`, because `_create()` uses a transaction containing the bounded counter `Update` and new-delivery `Put`;
+- DynamoDB exclusions: standalone `PutItem`, `DeleteItem`, `Query`, `Scan`, table administration, wildcard actions/resources, and other broad DynamoDB authority remain denied; a generic `dynamodb:TransactWriteItems` IAM action is not a substitute for the underlying item permissions and is not required by this implementation;
 - CloudWatch Logs: stream creation and writes only for the function's own log group.
+
+`scripts.trusted_gate_service.iam_contract.validate_dynamodb_runtime_policy` provides a deterministic repository-side linter for reviewed policy-document shape. It accepts an externally supplied policy document and exact table resource identifier, rejects authority expansion or a missing transaction-only `PutItem`, and deliberately does **not** claim to evaluate effective IAM. Deployment activation and revalidation still require live IAM read-back/simulation against the real execution principal and exact table: direct `GetItem`/`UpdateItem` must be allowed, transaction-enclosed `PutItem` must be allowed, standalone `PutItem` must be denied, and the forbidden/broad actions above must remain denied.
+
+Candidate-controlled workflows have no authority to administer this external runtime IAM policy. Repository tests and the linter can constrain reviewed source behavior; they cannot mutate or attest the independently administered deployment.
 
 No VPC, NAT gateway, API Gateway, load balancer, EC2, Fargate, container registry, or repository/cloud administration permission is required by the runtime.
 
@@ -302,9 +310,9 @@ If any external host, App, webhook, policy, credential, status, ruleset, runtime
 
 ## Verification and non-claims
 
-Repository tests exercise webhook authentication, wrong repository/installation/actor/fork/workflow identity, policy expiry and malformed/duplicate/empty transitions, multi-root protected transitions, replay/idempotency, SQLite ownership, DynamoDB concurrent ownership, stale-processing recovery, transaction record bounds, transport/race separation, Lambda request parsing, private SSM configuration binding, HMAC-before-private-key admission, policy digest binding, transient-before-publication retries, no-replay publication recovery, lost/ambiguous status responses, post-publication drift, unsafe artifact ZIPs, duplicate JSON, exact build-manifest binding, routine automatic admission, and shared live merge-ref resolution.
+Repository tests exercise webhook authentication, wrong repository/installation/actor/fork/workflow identity, policy expiry and malformed/duplicate/empty transitions, multi-root protected transitions, replay/idempotency, SQLite ownership, DynamoDB concurrent ownership, stale-processing recovery, transaction record bounds, transport/race separation, the exact DynamoDB IAM contract, Lambda request parsing, private SSM configuration binding, HMAC-before-private-key admission, policy digest binding, secret-safe fixed-stage Lambda failure diagnostics, transient-before-publication retries, no-replay publication recovery, lost/ambiguous status responses, post-publication drift, unsafe artifact ZIPs, duplicate JSON, exact build-manifest binding, routine automatic admission, and shared live merge-ref resolution.
 
-Those tests prove implementation behavior only. They do not prove an external deployment, webhook endpoint, App credential, one-shot policy installation, live integration permissions, ruleset binding, AWS runtime properties, runtime-version control, or App-authored status exists.
+Those tests prove implementation behavior and reviewed policy shape only. They do not prove effective deployed IAM, an external deployment, webhook endpoint, App credential, one-shot policy installation, live integration permissions, ruleset binding, AWS runtime properties, runtime-version control, or App-authored status exists. Effective AWS authority still requires live deployment observation and IAM simulation/read-back.
 
 The terminal evidence rule remains:
 

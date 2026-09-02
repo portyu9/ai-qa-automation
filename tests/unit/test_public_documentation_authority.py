@@ -21,5 +21,12 @@ def test_ci_cd_documents_certified_python_lanes_and_external_maintenance_path() 
 def test_trusted_control_plane_documents_exact_dynamodb_runtime_authority() -> None:
     text = (ROOT / "docs" / "TRUSTED_PR_CONTROL_PLANE.md").read_text(encoding="utf-8")
 
-    assert "DynamoDB: `GetItem`, `UpdateItem`, and `TransactWriteItems`" in text
-    assert "underlying `PutItem`/`UpdateItem` actions" not in text
+    assert "DynamoDB: direct `GetItem`" in text
+    assert "direct `UpdateItem`" in text
+    assert (
+        "`PutItem` on that exact table only when `dynamodb:EnclosingOperation` equals "
+        "`TransactWriteItems`"
+    ) in text
+    assert "standalone `PutItem`" in text
+    assert "generic `dynamodb:TransactWriteItems` IAM action is not a substitute" in text
+    assert "DynamoDB: `GetItem`, `UpdateItem`, and `TransactWriteItems`" not in text
