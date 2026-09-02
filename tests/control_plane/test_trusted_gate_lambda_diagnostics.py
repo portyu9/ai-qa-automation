@@ -4,8 +4,9 @@ import hashlib
 import hmac
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NoReturn
 
 import pytest
 
@@ -57,6 +58,19 @@ def _secret_error() -> RuntimeError:
     return RuntimeError(" | ".join(SENSITIVE_MARKERS))
 
 
+def _raise_secret_error(*args: Any, **kwargs: Any) -> NoReturn:
+    del args, kwargs
+    raise _secret_error()
+
+
+def _raiser(exc: Exception) -> Callable[..., NoReturn]:
+    def raise_exception(*args: Any, **kwargs: Any) -> NoReturn:
+        del args, kwargs
+        raise exc
+
+    return raise_exception
+
+
 def _assert_secret_safe_failure(
     response: dict[str, Any],
     caplog: pytest.LogCaptureFixture,
@@ -102,27 +116,23 @@ def test_handler_logs_only_fixed_stage_and_exception_class(
     caplog.set_level(logging.WARNING, logger=aws_lambda.__name__)
 
     if stage == "webhook_auth":
-        monkeypatch.setattr(aws_lambda, "_load_webhook_secret", lambda: (_ for _ in ()).throw(_secret_error()))
+        monkeypatch.setattr(aws_lambda, "_load_webhook_secret", _raise_secret_error)
     else:
         monkeypatch.setattr(aws_lambda, "_load_webhook_secret", lambda: SECRET)
         if stage == "static_config":
+            monkeypatch.setattr(aws_lambda, "_load_static_config", _raise_secret_error)
+        else:
             monkeypatch.setattr(
                 aws_lambda,
                 "_load_static_config",
-                lambda *, webhook_secret: (_ for _ in ()).throw(_secret_error()),
+                lambda *, webhook_secret: object(),
             )
-        else:
-            monkeypatch.setattr(aws_lambda, "_load_static_config", lambda *, webhook_secret: object())
             if stage == "policy_load":
-                monkeypatch.setattr(aws_lambda, "_load_policy", lambda: (_ for _ in ()).throw(_secret_error()))
+                monkeypatch.setattr(aws_lambda, "_load_policy", _raise_secret_error)
             else:
                 monkeypatch.setattr(aws_lambda, "_load_policy", lambda: (b"{}", "0" * 64))
                 if stage == "service_construct":
-                    monkeypatch.setattr(
-                        aws_lambda,
-                        "_build_service",
-                        lambda config, *, policy_bytes, policy_sha256: (_ for _ in ()).throw(_secret_error()),
-                    )
+                    monkeypatch.setattr(aws_lambda, "_build_service", _raise_secret_error)
                 else:
                     monkeypatch.setattr(
                         aws_lambda,
@@ -150,11 +160,7 @@ def test_existing_error_mapping_is_preserved_without_message_leakage(
 ) -> None:
     caplog.set_level(logging.WARNING, logger=aws_lambda.__name__)
     monkeypatch.setattr(aws_lambda, "_load_webhook_secret", lambda: SECRET)
-    monkeypatch.setattr(
-        aws_lambda,
-        "_load_static_config",
-        lambda *, webhook_secret: (_ for _ in ()).throw(exc),
-    )
+    monkeypatch.setattr(aws_lambda, "_load_static_config", _raiser(exc))
 
     response = aws_lambda.handler(_event(), object())
     _assert_secret_safe_failure(
