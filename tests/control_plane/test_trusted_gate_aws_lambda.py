@@ -236,10 +236,12 @@ class FakeSsm:
         *,
         types: dict[str, str] | None = None,
         versions: dict[str, int] | None = None,
+        ciphertexts: dict[str, str] | None = None,
     ) -> None:
         self.values = values
         self.types = types or {}
         self.versions = versions or {}
+        self.ciphertexts = ciphertexts or {}
         self.get_parameter_calls: list[tuple[str, bool]] = []
         self.get_parameters_calls: list[tuple[tuple[str, ...], bool]] = []
 
@@ -256,7 +258,7 @@ class FakeSsm:
         parameter_type = self._type(name)
         value = self.values[name]
         if parameter_type == "SecureString" and not decrypt:
-            value = "ciphertext-placeholder"
+            value = self.ciphertexts.get(name, "ciphertext-placeholder")
         return {
             "Name": name,
             "Value": value,
@@ -291,6 +293,20 @@ class VersionRaceSsm(FakeSsm):
         return {"Parameter": row}
 
 
+class CiphertextRaceSsm(FakeSsm):
+    def __init__(self, values: dict[str, str]) -> None:
+        super().__init__(values)
+        self.metadata_reads = 0
+
+    def get_parameter(self, *, Name: str, WithDecryption: bool) -> dict[str, Any]:
+        row = self._row(Name, decrypt=WithDecryption)
+        if not WithDecryption:
+            self.metadata_reads += 1
+            row["Value"] = "ciphertext-before" if self.metadata_reads == 1 else "ciphertext-after"
+        self.get_parameter_calls.append((Name, WithDecryption))
+        return {"Parameter": row}
+
+
 def _public_values(prefix: str = TEST_PREFIX) -> dict[str, str]:
     return {
         f"{prefix}/app-id": TEST_APP_ID,
@@ -319,11 +335,11 @@ def test_webhook_secret_first_read_decrypts_once(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(aws_lambda, "_ssm_client", client)
 
     assert aws_lambda._load_webhook_secret() == SECRET
-    assert client.get_parameter_calls == [(name, False), (name, True)]
+    assert client.get_parameter_calls == [(name, False), (name, True), (name, False)]
     assert client.get_parameters_calls == []
 
 
-def test_webhook_secret_cache_reuses_unchanged_version_without_decrypt(
+def test_webhook_secret_cache_reuses_unchanged_identity_without_decrypt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_prefix(monkeypatch)
@@ -333,7 +349,12 @@ def test_webhook_secret_cache_reuses_unchanged_version_without_decrypt(
 
     assert aws_lambda._load_webhook_secret() == SECRET
     assert aws_lambda._load_webhook_secret() == SECRET
-    assert client.get_parameter_calls == [(name, False), (name, True), (name, False)]
+    assert client.get_parameter_calls == [
+        (name, False),
+        (name, True),
+        (name, False),
+        (name, False),
+    ]
 
 
 def test_webhook_secret_version_change_forces_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -345,6 +366,7 @@ def test_webhook_secret_version_change_forces_refresh(monkeypatch: pytest.Monkey
     assert aws_lambda._load_webhook_secret() == SECRET
     client.values[name] = ROTATED_SECRET.decode()
     client.versions[name] = 2
+    client.ciphertexts[name] = "rotated-ciphertext"
     assert aws_lambda._load_webhook_secret() == ROTATED_SECRET
     assert client.get_parameter_calls.count((name, True)) == 2
 
@@ -358,6 +380,20 @@ def test_webhook_secret_version_race_fails_closed(monkeypatch: pytest.MonkeyPatc
     with pytest.raises(RuntimeError, match="version changed during refresh"):
         aws_lambda._load_webhook_secret()
     assert aws_lambda._webhook_secret_cache is None
+
+
+def test_webhook_secret_same_version_replacement_race_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_prefix(monkeypatch)
+    name = aws_lambda._parameter_name(aws_lambda.WEBHOOK_SECRET_SUFFIX)
+    client = CiphertextRaceSsm({name: SECRET.decode()})
+    monkeypatch.setattr(aws_lambda, "_ssm_client", client)
+
+    with pytest.raises(RuntimeError, match="changed during refresh"):
+        aws_lambda._load_webhook_secret()
+    assert aws_lambda._webhook_secret_cache is None
+    assert client.get_parameter_calls == [(name, False), (name, True), (name, False)]
 
 
 def test_webhook_secret_cache_use_bound_forces_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
