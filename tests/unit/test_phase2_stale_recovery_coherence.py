@@ -58,10 +58,14 @@ def test_stale_recovery_requires_canonical_state_before_target_write(tmp_path: P
     prior_run.mkdir(parents=True)
     journal = RunJournal(prior_run / "journal.jsonl")
     journal.append("mutation_prepared")
-    stat = workspace.stat(follow_symlinks=False)
+    workspace_stat = workspace.stat(follow_symlinks=False)
+    run_root_stat = prior_run.stat(follow_symlinks=False)
     runtime = {
         "workspace": str(workspace.resolve()),
-        "workspace_root_identity": {"device": stat.st_dev, "inode": stat.st_ino},
+        "workspace_root_identity": {
+            "device": workspace_stat.st_dev,
+            "inode": workspace_stat.st_ino,
+        },
         "workspace_fingerprint": "fp",
         "journal_event_count": journal.event_count,
         "journal_head_hash": journal.head_hash,
@@ -81,7 +85,13 @@ def test_stale_recovery_requires_canonical_state_before_target_write(tmp_path: P
     result = recover_stale_mutation(
         artifact_root=artifact_root,
         workspace=workspace,
-        previous_lease={"run_id": "run-old"},
+        previous_lease={
+            "run_id": "run-old",
+            "run_root_identity": {
+                "device": run_root_stat.st_dev,
+                "inode": run_root_stat.st_ino,
+            },
+        },
         current_workspace_fingerprint="fp",
         recovering_run_id="run-new",
     )
