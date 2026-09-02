@@ -208,5 +208,8 @@ def test_lineage_rejects_invalid_event_bound(tmp_path: Path, bound: object) -> N
 
 
 def test_lineage_requires_persisted_state(tmp_path: Path) -> None:
+    run_dir = tmp_path / "missing-state"
+    run_dir.mkdir()
+
     with pytest.raises(FileNotFoundError, match=r"state\.json"):
-        build_run_lineage(tmp_path / "missing")
+        build_run_lineage(run_dir)
