@@ -672,7 +672,8 @@ class BubblewrapPytestSandbox:
 
     @staticmethod
     def _namespace_identities() -> dict[str, str]:
-        return {name: os.readlink(f"/proc/self/ns/{name}") for name in _NAMESPACE_NAMES}
+        namespace_root = Path("/proc/self/ns")
+        return {name: str((namespace_root / name).readlink()) for name in _NAMESPACE_NAMES}
 
     @staticmethod
     def _path_within(candidate: Path, root: Path) -> bool:
