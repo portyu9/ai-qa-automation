@@ -152,10 +152,14 @@ def build_run_lineage(run_dir: Path, *, max_journal_events: int = 500) -> RunLin
     # Canonical state must be interpreted identically by runtime recovery,
     # attestation, and lineage. Reuse the strict StateStore authority rather than
     # accepting a weaker graph-only dictionary representation.
-    state = StateStore(
-        state_path,
-        expected_parent_identity=run_root_identity,
-    ).load().model_dump(mode="json")
+    state = (
+        StateStore(
+            state_path,
+            expected_parent_identity=run_root_identity,
+        )
+        .load()
+        .model_dump(mode="json")
+    )
     manifest = _load_object(
         manifest_path,
         required=False,
