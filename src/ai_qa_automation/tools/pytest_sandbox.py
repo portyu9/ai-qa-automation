@@ -25,6 +25,11 @@ _SANDBOX_PROBE_OUTPUT_BYTES = 64 * 1024
 _NAMESPACE_NAMES = ("mnt", "pid", "net", "user")
 _BWRAP_SEARCH_PATH = "/usr/bin:/bin"
 _SANDBOX_AUTHORITY_EXIT_CODE = 126
+_SANDBOX_MAX_PROCESSES = 16
+_SANDBOX_MAX_ADDRESS_SPACE_BYTES = 512 * 1024 * 1024
+_SANDBOX_MAX_FILE_BYTES = 64 * 1024 * 1024
+_SANDBOX_MAX_OPEN_FILES = 256
+_SANDBOX_TMPFS_BYTES = 64 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -42,6 +47,11 @@ class PytestSandboxPreflight:
     forbidden_roots_hidden: bool = False
     no_non_loopback_interfaces: bool = False
     effective_capabilities_zero: bool = False
+    max_processes: int = _SANDBOX_MAX_PROCESSES
+    max_address_space_bytes: int = _SANDBOX_MAX_ADDRESS_SPACE_BYTES
+    max_file_bytes: int = _SANDBOX_MAX_FILE_BYTES
+    max_open_files: int = _SANDBOX_MAX_OPEN_FILES
+    tmpfs_bytes: int = _SANDBOX_TMPFS_BYTES
 
     def details(self) -> dict[str, object]:
         return {
@@ -58,6 +68,11 @@ class PytestSandboxPreflight:
             "forbidden_roots_hidden": self.forbidden_roots_hidden,
             "no_non_loopback_interfaces": self.no_non_loopback_interfaces,
             "effective_capabilities_zero": self.effective_capabilities_zero,
+            "max_processes": self.max_processes,
+            "max_address_space_bytes": self.max_address_space_bytes,
+            "max_file_bytes": self.max_file_bytes,
+            "max_open_files": self.max_open_files,
+            "tmpfs_bytes": self.tmpfs_bytes,
         }
 
 
@@ -100,8 +115,10 @@ class BubblewrapPytestSandbox:
 
     The sandbox starts from Bubblewrap's empty filesystem namespace, exposes only
     the interpreter/runtime roots required to launch pytest plus the target
-    workspace as a read-only mount, creates private writable home/tmp filesystems,
-    and unshares user/PID/network/IPC/UTS namespaces. No host root bind exists.
+    workspace as a read-only mount, creates bounded private writable home/tmp
+    filesystems, and unshares user/PID/network/IPC/UTS namespaces. No host root
+    bind exists. Immediately before target execution, a trusted guard also applies
+    per-process resource ceilings and revalidates the mounted subject/isolation.
     """
 
     backend_name = "bubblewrap"
@@ -345,7 +362,11 @@ class BubblewrapPytestSandbox:
                 )
             )
 
-        execution_command = self._execution_guard_command(preflight, command)
+        execution_command = self._execution_guard_command(
+            preflight,
+            command,
+            cpu_limit_seconds=max(1, int(float(timeout_seconds)) + 1),
+        )
         with tempfile.TemporaryDirectory(prefix="aiqa-bwrap-run-") as host_home:
             host_env = restricted_subprocess_env(home=Path(host_home))
             with tempfile.TemporaryFile(mode="w+b") as status_stream:
@@ -389,54 +410,52 @@ class BubblewrapPytestSandbox:
             for item in status_events
             if "child-pid" in item and type(item.get("child-pid")) is int and item["child-pid"] > 0
         ]
-        if not child_events:
+        if len(child_events) != 1:
             raise PytestSandboxUnavailable(
                 self._blocked(
-                    "Bubblewrap did not prove that the sandbox child started",
+                    "Bubblewrap did not prove exactly one sandbox child started",
                     executable=executable_path,
                     executable_sha256=digest_before,
                     version=preflight.version,
                 )
-            )
-        if len(child_events) != 1:
-            raise PytestSandboxExecutionUnverified(
-                preflight,
-                result,
-                "Bubblewrap status evidence contained ambiguous child-start events",
             )
         exit_events = [
             item
             for item in status_events
             if "exit-code" in item and type(item.get("exit-code")) is int
         ]
-        if not result.timed_out:
-            if len(exit_events) != 1 or exit_events[0]["exit-code"] != result.returncode:
+        if result.timed_out:
+            if len(exit_events) > 1:
                 raise PytestSandboxExecutionUnverified(
-                    preflight,
-                    result,
-                    "Bubblewrap status evidence did not bind the observed child exit code",
+                    preflight, result, "Bubblewrap reported duplicate child exit status"
                 )
-            if result.returncode == _SANDBOX_AUTHORITY_EXIT_CODE:
-                raise PytestSandboxUnavailable(
-                    self._blocked(
-                        "Bubblewrap execution-time isolation revalidation failed",
-                        executable=executable_path,
-                        executable_sha256=digest_before,
-                        version=preflight.version,
-                        parent_namespaces=preflight.parent_namespaces,
-                    )
-                )
+        elif len(exit_events) != 1 or exit_events[0]["exit-code"] != result.returncode:
+            raise PytestSandboxExecutionUnverified(
+                preflight,
+                result,
+                "Bubblewrap child exit code did not match controller-observed completion",
+            )
 
         try:
             identity_after = self._stable_regular_identity(executable_path)
             digest_after = self._hash_executable(executable_path)
         except (OSError, ValueError) as exc:
             raise PytestSandboxExecutionUnverified(
-                preflight, result, "Bubblewrap executable became unavailable after pytest execution"
+                preflight,
+                result,
+                "Bubblewrap executable identity was unavailable after target execution",
             ) from exc
-        if identity_before != identity_after or digest_before != digest_after:
+        if identity_after != identity_before or digest_after != digest_before:
             raise PytestSandboxExecutionUnverified(
-                preflight, result, "Bubblewrap executable changed identity during pytest execution"
+                preflight,
+                result,
+                "Bubblewrap executable changed identity after target execution",
+            )
+        if result.returncode == _SANDBOX_AUTHORITY_EXIT_CODE and not result.timed_out:
+            raise PytestSandboxExecutionUnverified(
+                preflight,
+                result,
+                "sandbox authority guard rejected target execution",
             )
         return preflight, result
 
@@ -444,48 +463,50 @@ class BubblewrapPytestSandbox:
         self,
         preflight: PytestSandboxPreflight,
         command: Sequence[str],
+        *,
+        cpu_limit_seconds: int,
     ) -> list[str]:
-        parent_namespaces = preflight.parent_namespaces or {}
-        if set(parent_namespaces) != set(_NAMESPACE_NAMES):
-            raise PytestSandboxUnavailable(
-                self._blocked("pytest sandbox preflight lost parent namespace authority")
-            )
-        workspace_identity = self.workspace.stat(follow_symlinks=False)
-        if not stat.S_ISDIR(workspace_identity.st_mode):
-            raise PytestSandboxUnavailable(
-                self._blocked("target workspace is no longer a directory")
-            )
-        probe_name = f".aiqa-sandbox-run-probe-{uuid4().hex}"
+        if preflight.parent_namespaces is None:
+            raise ValueError("sandbox preflight omitted parent namespace identity")
+        expected = self.workspace.stat(follow_symlinks=False)
+        if not stat.S_ISDIR(expected.st_mode):
+            raise ValueError("target workspace is no longer a directory")
+        guard_probe_name = f".aiqa-sandbox-run-write-probe-{uuid4().hex}"
         return [
             str(self._python_executable),
             "-I",
             "-S",
             "-c",
             _EXECUTION_GUARD_SCRIPT,
-            probe_name,
-            str(workspace_identity.st_dev),
-            str(workspace_identity.st_ino),
-            *(parent_namespaces[name] for name in _NAMESPACE_NAMES),
+            guard_probe_name,
+            str(expected.st_dev),
+            str(expected.st_ino),
             str(self.evidence_root),
+            *(preflight.parent_namespaces[name] for name in _NAMESPACE_NAMES),
+            str(cpu_limit_seconds),
+            str(_SANDBOX_MAX_PROCESSES),
+            str(_SANDBOX_MAX_ADDRESS_SPACE_BYTES),
+            str(_SANDBOX_MAX_FILE_BYTES),
+            str(_SANDBOX_MAX_OPEN_FILES),
             "--",
-            *(str(item) for item in command),
+            *[str(item) for item in command],
         ]
 
     def _build_command(
         self,
         executable: Path,
-        command: Sequence[str],
+        inner_command: Sequence[str],
         *,
         extra_env: Mapping[str, str] | None = None,
         status_fd: int | None = None,
     ) -> list[str]:
-        runtime_roots = self._runtime_roots()
-        args = [
+        command = [
             str(executable),
             "--die-with-parent",
             "--new-session",
             "--unshare-user",
             "--disable-userns",
+            "--assert-userns-disabled",
             "--unshare-pid",
             "--unshare-net",
             "--unshare-ipc",
@@ -497,25 +518,24 @@ class BubblewrapPytestSandbox:
             "/proc",
             "--dev",
             "/dev",
+            "--dir",
+            "/tmp",
+            "--size",
+            str(_SANDBOX_TMPFS_BYTES),
             "--tmpfs",
             "/tmp",
+            "--dir",
+            "/home",
+            "--size",
+            str(_SANDBOX_TMPFS_BYTES),
             "--tmpfs",
             "/home",
             "--dir",
             "/home/aiqa",
         ]
-        for root in runtime_roots:
-            args.extend(["--ro-bind", str(root), str(root)])
-        for path in (
-            Path("/bin"),
-            Path("/usr/bin"),
-            Path("/lib"),
-            Path("/lib64"),
-            Path("/usr/lib"),
-        ):
-            if path.exists() and not any(self._path_within(path, root) for root in runtime_roots):
-                args.extend(["--ro-bind", str(path), str(path)])
-        args.extend(
+        for source in self._runtime_roots():
+            command.extend(["--ro-bind", str(source), str(source)])
+        command.extend(
             [
                 "--ro-bind",
                 str(self.workspace),
@@ -529,8 +549,11 @@ class BubblewrapPytestSandbox:
                 "USERPROFILE",
                 "/home/aiqa",
                 "--setenv",
-                "TMPDIR",
-                "/tmp",
+                "XDG_CONFIG_HOME",
+                "/home/aiqa/.config",
+                "--setenv",
+                "XDG_CACHE_HOME",
+                "/home/aiqa/.cache",
                 "--setenv",
                 "PYTEST_DISABLE_PLUGIN_AUTOLOAD",
                 "1",
@@ -538,83 +561,64 @@ class BubblewrapPytestSandbox:
                 "PYTHONDONTWRITEBYTECODE",
                 "1",
                 "--setenv",
+                "PIP_CONFIG_FILE",
+                "/dev/null",
+                "--setenv",
+                "GIT_TERMINAL_PROMPT",
+                "0",
+                "--setenv",
+                "GIT_PAGER",
+                "cat",
+                "--setenv",
                 "PATH",
                 self._sandbox_path(),
             ]
         )
-        for key in ("LANG", "LC_ALL", "LC_CTYPE"):
-            value = (extra_env or {}).get(key)
-            if value:
-                args.extend(["--setenv", key, str(value)])
+        if extra_env:
+            for key in ("LANG", "LC_ALL", "LC_CTYPE"):
+                value = extra_env.get(key)
+                if value:
+                    command.extend(["--setenv", key, str(value)])
         if status_fd is not None:
-            args.extend(["--json-status-fd", str(status_fd)])
-        args.append("--")
-        args.extend(str(item) for item in command)
-        return args
+            command.extend(["--json-status-fd", str(status_fd)])
+        command.extend(["--", *[str(item) for item in inner_command]])
+        return command
 
     def _runtime_roots(self) -> tuple[Path, ...]:
-        candidates = [Path(sys.prefix), Path(sys.base_prefix)]
+        candidates = {
+            self._python_executable.parent,
+            self._python_executable.parent.parent,
+            Path(sys.prefix).resolve(),
+            Path(sys.base_prefix).resolve(),
+        }
+        for fixed in ("/usr/bin", "/bin", "/usr/lib", "/lib", "/lib64"):
+            path = Path(fixed)
+            if path.exists():
+                candidates.add(path.resolve())
         roots: list[Path] = []
-        for candidate in candidates:
-            resolved = candidate.expanduser().resolve()
-            if not resolved.is_dir():
-                raise ValueError("Python runtime prefix is unavailable for sandbox binding")
-            if self._path_within(self.workspace, resolved) or self._path_within(
-                self.evidence_root, resolved
-            ):
-                raise ValueError("Python runtime prefix overlaps target/evidence authority")
-            if any(self._path_within(resolved, existing) for existing in roots):
+        for candidate in sorted(candidates, key=lambda item: (len(item.parts), str(item))):
+            if not candidate.exists() or self._path_within(candidate, self.workspace):
                 continue
-            roots = [existing for existing in roots if not self._path_within(existing, resolved)]
-            roots.append(resolved)
-        if not any(self._path_within(self._python_executable, root) for root in roots):
-            raise ValueError("Python executable is outside the sandbox runtime prefixes")
-        return tuple(sorted(roots, key=str))
+            if self._path_within(candidate, self.evidence_root):
+                continue
+            if any(candidate == existing or existing in candidate.parents for existing in roots):
+                continue
+            roots.append(candidate)
+        return tuple(roots)
 
     def _sandbox_path(self) -> str:
-        bins = [str(Path(sys.prefix).resolve() / "bin")]
-        base_bin = str(Path(sys.base_prefix).resolve() / "bin")
-        if base_bin not in bins:
-            bins.append(base_bin)
-        bins.extend(["/usr/bin", "/bin"])
-        return ":".join(bins)
-
-    @staticmethod
-    def _namespace_identities() -> dict[str, str]:
-        result: dict[str, str] = {}
-        for name in _NAMESPACE_NAMES:
-            result[name] = os.readlink(f"/proc/self/ns/{name}")
-        return result
-
-    @staticmethod
-    def _stable_regular_identity(path: Path) -> tuple[int, int, int, int, int]:
-        before = path.stat(follow_symlinks=False)
-        if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
-            raise ValueError("sandbox executable must be a non-symlink regular file")
-        return (
-            before.st_dev,
-            before.st_ino,
-            before.st_size,
-            before.st_mtime_ns,
-            before.st_ctime_ns,
-        )
-
-    @staticmethod
-    def _hash_executable(path: Path) -> str:
-        content = read_bytes_bounded(
-            path,
-            max_bytes=_SANDBOX_EXECUTABLE_MAX_BYTES,
-            label="Bubblewrap executable",
-        )
-        return f"sha256:{hashlib.sha256(content).hexdigest()}"
-
-    @staticmethod
-    def _path_within(path: Path, root: Path) -> bool:
-        try:
-            path.relative_to(root)
-        except ValueError:
-            return False
-        return True
+        entries: list[str] = []
+        for candidate in (
+            self._python_executable.parent,
+            Path(sys.prefix).resolve() / "bin",
+            Path(sys.base_prefix).resolve() / "bin",
+            Path("/usr/bin"),
+            Path("/bin"),
+        ):
+            rendered = str(candidate)
+            if candidate.exists() and rendered not in entries:
+                entries.append(rendered)
+        return os.pathsep.join(entries)
 
     def _blocked(
         self,
@@ -637,10 +641,41 @@ class BubblewrapPytestSandbox:
             child_namespaces=child_namespaces,
         )
 
+    @staticmethod
+    def _stable_regular_identity(path: Path) -> tuple[int, int, int, int, int]:
+        observed = path.stat(follow_symlinks=False)
+        if not stat.S_ISREG(observed.st_mode):
+            raise ValueError("sandbox executable must remain a regular file")
+        return (
+            observed.st_dev,
+            observed.st_ino,
+            observed.st_size,
+            observed.st_mtime_ns,
+            observed.st_ctime_ns,
+        )
+
+    @staticmethod
+    def _hash_executable(path: Path) -> str:
+        content = read_bytes_bounded(
+            path,
+            max_bytes=_SANDBOX_EXECUTABLE_MAX_BYTES,
+            label="Bubblewrap executable",
+        )
+        return f"sha256:{hashlib.sha256(content).hexdigest()}"
+
+    @staticmethod
+    def _namespace_identities() -> dict[str, str]:
+        return {name: os.readlink(f"/proc/self/ns/{name}") for name in _NAMESPACE_NAMES}
+
+    @staticmethod
+    def _path_within(candidate: Path, root: Path) -> bool:
+        return candidate == root or root in candidate.parents
+
 
 _EXECUTION_GUARD_SCRIPT = r'''
 import os
 import pathlib
+import resource
 import socket
 import sys
 
@@ -648,11 +683,16 @@ AUTHORITY_EXIT = 126
 NAMESPACE_NAMES = ("mnt", "pid", "net", "user")
 probe_name = sys.argv[1]
 expected_workspace_identity = (int(sys.argv[2]), int(sys.argv[3]))
-parent_namespaces = dict(zip(NAMESPACE_NAMES, sys.argv[4:8], strict=True))
-forbidden_root = pathlib.Path(sys.argv[8])
-if sys.argv[9] != "--":
+forbidden_root = pathlib.Path(sys.argv[4])
+parent_namespaces = dict(zip(NAMESPACE_NAMES, sys.argv[5:9], strict=True))
+cpu_seconds = int(sys.argv[9])
+max_processes = int(sys.argv[10])
+max_address_space = int(sys.argv[11])
+max_file_bytes = int(sys.argv[12])
+max_open_files = int(sys.argv[13])
+if sys.argv[14] != "--":
     raise SystemExit(AUTHORITY_EXIT)
-command = sys.argv[10:]
+command = sys.argv[15:]
 if not command:
     raise SystemExit(AUTHORITY_EXIT)
 current_namespaces = {name: os.readlink(f"/proc/self/ns/{name}") for name in NAMESPACE_NAMES}
@@ -688,6 +728,19 @@ with open("/proc/self/status", encoding="utf-8") as stream:
             break
 if cap_eff != 0:
     raise SystemExit(AUTHORITY_EXIT)
+limits = (
+    (resource.RLIMIT_CPU, cpu_seconds),
+    (resource.RLIMIT_NPROC, max_processes),
+    (resource.RLIMIT_AS, max_address_space),
+    (resource.RLIMIT_FSIZE, max_file_bytes),
+    (resource.RLIMIT_NOFILE, max_open_files),
+    (resource.RLIMIT_CORE, 0),
+)
+try:
+    for resource_id, value in limits:
+        resource.setrlimit(resource_id, (value, value))
+except (OSError, ValueError):
+    raise SystemExit(AUTHORITY_EXIT)
 os.execv(command[0], command)
 '''
 
@@ -701,16 +754,17 @@ import sys
 
 probe_name = sys.argv[1]
 expected_workspace_identity = (int(sys.argv[2]), int(sys.argv[3]))
-forbidden_roots = [pathlib.Path(item) for item in sys.argv[4:] if item]
-namespaces = {name: os.readlink(f"/proc/self/ns/{name}") for name in ("mnt", "pid", "net", "user")}
+forbidden_root = pathlib.Path(sys.argv[4])
+namespace_names = ("mnt", "pid", "net", "user")
 workspace = pathlib.Path("/workspace")
-workspace_identity_bound = False
 try:
     observed_workspace = workspace.stat()
 except OSError:
     observed_workspace = None
-else:
-    workspace_identity_bound = (observed_workspace.st_dev, observed_workspace.st_ino) == expected_workspace_identity
+workspace_identity_bound = (
+    observed_workspace is not None
+    and (observed_workspace.st_dev, observed_workspace.st_ino) == expected_workspace_identity
+)
 probe = workspace / probe_name
 workspace_read_only = False
 if workspace_identity_bound:
@@ -723,21 +777,31 @@ if workspace_identity_bound:
             probe.unlink()
         except OSError:
             pass
-forbidden_roots_hidden = all(not path.exists() for path in forbidden_roots)
+forbidden_roots_hidden = not forbidden_root.exists()
 interfaces = [name for _index, name in socket.if_nameindex()]
 no_non_loopback_interfaces = all(name == "lo" for name in interfaces)
 cap_eff = None
-with open("/proc/self/status", encoding="utf-8") as stream:
-    for line in stream:
-        if line.startswith("CapEff:"):
-            cap_eff = int(line.split(":", 1)[1].strip(), 16)
-            break
-print(json.dumps({
-    "namespaces": namespaces,
-    "workspace_identity_bound": workspace_identity_bound,
-    "workspace_read_only": workspace_read_only,
-    "forbidden_roots_hidden": forbidden_roots_hidden,
-    "no_non_loopback_interfaces": no_non_loopback_interfaces,
-    "effective_capabilities_zero": cap_eff == 0,
-}, sort_keys=True, separators=(",", ":")))
+try:
+    with open("/proc/self/status", encoding="utf-8") as stream:
+        for line in stream:
+            if line.startswith("CapEff:"):
+                cap_eff = int(line.split(":", 1)[1].strip(), 16)
+                break
+except OSError:
+    pass
+print(
+    json.dumps(
+        {
+            "namespaces": {
+                name: os.readlink(f"/proc/self/ns/{name}") for name in namespace_names
+            },
+            "workspace_identity_bound": workspace_identity_bound,
+            "workspace_read_only": workspace_read_only,
+            "forbidden_roots_hidden": forbidden_roots_hidden,
+            "no_non_loopback_interfaces": no_non_loopback_interfaces,
+            "effective_capabilities_zero": cap_eff == 0,
+        },
+        sort_keys=True,
+    )
+)
 '''
