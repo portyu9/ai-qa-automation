@@ -175,7 +175,10 @@ class RunJournal:
             if self._descriptor_relative_parent
             else _identity(parent_status)
         )
-        if expected_parent_identity is not None and self._parent_identity != expected_parent_identity:
+        if (
+            expected_parent_identity is not None
+            and self._parent_identity != expected_parent_identity
+        ):
             raise ValueError("run journal directory does not match authorized run persistence root")
         self.regulated_mode = regulated_mode
         self.max_events = max_events
