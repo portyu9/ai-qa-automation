@@ -214,6 +214,11 @@ def test_stale_recovery_rejects_impossible_revision_gap_before_target_write(
     prior_run = artifact_root / "run-old"
     backup = prior_run / "rollback" / "checkout.bin"
     backup.parent.mkdir(parents=True)
+    prior_status = prior_run.stat(follow_symlinks=False)
+    prior_lease = {
+        "run_id": "run-old",
+        "run_root_identity": {"device": prior_status.st_dev, "inode": prior_status.st_ino},
+    }
     original = b"original\n"
     backup.write_bytes(original)
     journal = RunJournal(prior_run / "journal.jsonl")
@@ -250,7 +255,7 @@ def test_stale_recovery_rejects_impossible_revision_gap_before_target_write(
     result = recover_stale_mutation(
         artifact_root=artifact_root,
         workspace=workspace,
-        previous_lease={"run_id": "run-old"},
+        previous_lease=prior_lease,
         current_workspace_fingerprint="fp",
         recovering_run_id="run-new",
     )
