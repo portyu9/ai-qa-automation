@@ -27,7 +27,20 @@ The Lambda environment provides only deployment-owned bindings:
 
 Under the private SSM prefix, the adapter reads reviewed suffixes for App ID, bot login, installation ID, private key, repository identity, webhook secret, and the active one-shot policy. The concrete prefix and values are deliberately absent from repository source and tests. The adapter enforces the 4 KiB SSM **Standard-tier** value bound so this deployment contract does not silently require paid Advanced parameters.
 
-The webhook HMAC is checked before private App authority configuration, the policy, or GitHub evidence is read. Missing, malformed, stale, mismatched, concurrent, infrastructure-failed, or unverifiable state never becomes `SUCCESS`.
+The webhook HMAC is checked before one-shot policy admission, private App signing authority, DynamoDB acquisition, or GitHub evidence access. Missing, malformed, stale, mismatched, concurrent, infrastructure-failed, or unverifiable state never becomes `SUCCESS`.
+
+### KMS-decrypt minimization without authority reduction
+
+The Lambda adapter deliberately separates cheap rejection and non-secret configuration from the two `SecureString` values that require plaintext access:
+
+1. Function URL shape, GitHub Hookshot sender shape, exact `workflow_run` event header, delivery-header bounds, and `sha256=<64 lowercase hex>` signature shape are reject-only checks performed before any SSM read. They never establish authentication.
+2. The webhook secret remains the first cryptographic authority. For a syntactically admissible request, the adapter reads the `SecureString` without decryption to observe its exact SSM `Version`. A bounded warm cache may reuse the already decrypted secret only while that version is unchanged, the cache is younger than five minutes, and fewer than 32 total admitted uses have occurred. A cache miss, version change, age expiry, or use exhaustion requires a fresh decrypt. The decrypted response must report the same version observed immediately before the decrypt; a version race fails closed.
+3. A valid HMAC is required before the deployment policy pin is consulted for admission. An all-zero policy pin is a deterministic idle state and returns `BLOCKED` without reading the policy parameter, App configuration/private key, DynamoDB, or GitHub.
+4. An active one-shot policy is a non-secret `String` parameter and is read with `WithDecryption=False`; its bytes must match the deployment SHA-256 pin and parse as the exact reviewed policy schema.
+5. The authenticated workflow wake-up is parsed and compared with the active policy's reviewed repository identity, activation interval, and exact head SHA before private App authority is read. `TrustedGateService` repeats the policy-head rejection before durable delivery acquisition.
+6. App/repository identity values are non-secret `String` parameters and are read without decryption. The GitHub App private key remains a `SecureString` and is decrypted only after HMAC, active-policy, wake-up, and installation admission. The private key is intentionally **not** cached across warm invocations.
+
+This optimization reduces recurring **KMS Decrypt** pressure; it does not claim zero SSM requests. A syntactically admissible request still performs a non-decrypt webhook-secret metadata read so secret rotation is observed instead of trusting a stale warm value. The second HMAC check inside `TrustedGateService`, repeated live GitHub subject resolution, exact CI evidence checks, one-shot policy admission, durable publication recovery, and App-origin status validation remain unchanged authority controls.
 
 For dependency/revision control, deployment evidence must record the exact source revision, deployment ZIP SHA-256, Lambda code SHA-256, and Lambda runtime version ARN. After a smoke invocation establishes the actual runtime version, runtime-management changes must be explicit maintenance events rather than silent changes beneath authority-bearing code.
 
