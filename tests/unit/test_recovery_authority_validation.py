@@ -44,6 +44,14 @@ def _prepare_run(tmp_path: Path, runtime_payload: dict[str, object]) -> Path:
     return run_dir
 
 
+def _lease_for(prior_run: Path) -> dict[str, object]:
+    status = prior_run.stat(follow_symlinks=False)
+    return {
+        "run_id": prior_run.name,
+        "run_root_identity": {"device": status.st_dev, "inode": status.st_ino},
+    }
+
+
 def _recover_stale_with_pending(tmp_path: Path, pending_mutation: object) -> dict[str, object]:
     artifact_root = tmp_path / "artifacts"
     prior_run = artifact_root / "run-old"
@@ -65,7 +73,7 @@ def _recover_stale_with_pending(tmp_path: Path, pending_mutation: object) -> dic
     return recover_stale_mutation(
         artifact_root=artifact_root,
         workspace=workspace,
-        previous_lease={"run_id": "run-old"},
+        previous_lease=_lease_for(prior_run),
         current_workspace_fingerprint="fp",
         recovering_run_id="run-new",
     )
@@ -189,7 +197,7 @@ def test_stale_recovery_rejects_missing_pending_mutation_authority(tmp_path: Pat
     result = recover_stale_mutation(
         artifact_root=artifact_root,
         workspace=workspace,
-        previous_lease={"run_id": "run-old"},
+        previous_lease=_lease_for(prior_run),
         current_workspace_fingerprint="fp",
         recovering_run_id="run-new",
     )
