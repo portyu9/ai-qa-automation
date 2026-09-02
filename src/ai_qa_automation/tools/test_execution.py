@@ -30,6 +30,8 @@ class TestExecutionResult:
     stderr: str
     duration_seconds: float
     evidence_ids: tuple[str, ...]
+    execution_started: bool
+    block_reason: str | None
 
 
 class TestRunner:
@@ -167,6 +169,9 @@ class TestRunner:
         isolation_details["execution_started"] = not sandbox_blocked
         isolation_details["postflight_verified"] = sandbox_postflight_reason is None
         isolation_details["postflight_reason"] = sandbox_postflight_reason
+        isolation_details["cpu_limit_seconds"] = (
+            self.timeout_seconds + 1 if preflight.backend == "bubblewrap" else None
+        )
         exit_item = self.evidence.add(
             EvidenceItem(
                 run_id=self.evidence.run_id,
@@ -253,6 +258,8 @@ class TestRunner:
             stderr=safe_stderr,
             duration_seconds=duration,
             evidence_ids=ids,
+            execution_started=not sandbox_blocked,
+            block_reason=(preflight.reason if sandbox_blocked else None),
         )
 
     def sandbox_python_executable(self) -> str:
