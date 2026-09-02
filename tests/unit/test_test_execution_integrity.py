@@ -120,6 +120,8 @@ def test_pytest_zero_exit_requires_unchanged_complete_git_fingerprint(
     result = runner.run_pytest([])
 
     assert result.exit_code == 0
+    assert result.execution_started is True
+    assert result.block_reason is None
     assert "workspace-integrity" not in result.stderr
 
 
@@ -230,6 +232,8 @@ def test_direct_test_runner_has_no_unsandboxed_fallback_when_backend_is_unavaila
     result = runner.run_pytest([])
 
     assert result.exit_code == 126
+    assert result.execution_started is False
+    assert result.block_reason == "Bubblewrap executable is unavailable"
     assert result.stdout == ""
     assert "Bubblewrap executable is unavailable" in result.stderr
     exit_item = evidence.get(result.evidence_ids[0])
