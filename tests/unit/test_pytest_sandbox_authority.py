@@ -152,7 +152,7 @@ def test_bubblewrap_command_has_no_host_root_or_network_share_and_mounts_target_
     evidence.mkdir()
     sandbox = BubblewrapPytestSandbox(workspace, evidence_root=evidence)
 
-    command = sandbox._build_command(  # noqa: SLF001 - authority contract test
+    command = sandbox._build_command(
         Path("/usr/bin/bwrap"),
         [str(sandbox.python_executable), "-m", "pytest", "tests/test_demo.py"],
         status_fd=9,
@@ -283,7 +283,7 @@ def test_bubblewrap_run_rejects_executable_mutation_after_preflight_before_spawn
     executable.write_bytes(b"bubblewrap-before")
     executable.chmod(0o755)
     sandbox = BubblewrapPytestSandbox(workspace, evidence_root=evidence)
-    digest = sandbox._hash_executable(executable)  # noqa: SLF001
+    digest = sandbox._hash_executable(executable)
     preflight = ready_preflight(executable)
     preflight = PytestSandboxPreflight(**{**preflight.__dict__, "executable_sha256": digest})
 
@@ -319,7 +319,7 @@ def test_bubblewrap_run_requires_status_proof_that_child_started(
     executable.chmod(0o755)
     sandbox = BubblewrapPytestSandbox(workspace, evidence_root=evidence)
     preflight = ready_preflight(executable)
-    digest = sandbox._hash_executable(executable)  # noqa: SLF001
+    digest = sandbox._hash_executable(executable)
     preflight = PytestSandboxPreflight(**{**preflight.__dict__, "executable_sha256": digest})
     monkeypatch.setattr(sandbox, "preflight", lambda: preflight)
 
@@ -349,7 +349,7 @@ def test_bubblewrap_run_rejects_status_exit_mismatch_after_child_started(
     executable.write_bytes(b"bubblewrap")
     executable.chmod(0o755)
     sandbox = BubblewrapPytestSandbox(workspace, evidence_root=evidence)
-    digest = sandbox._hash_executable(executable)  # noqa: SLF001
+    digest = sandbox._hash_executable(executable)
     preflight = ready_preflight(executable)
     preflight = PytestSandboxPreflight(**{**preflight.__dict__, "executable_sha256": digest})
     monkeypatch.setattr(sandbox, "preflight", lambda: preflight)
@@ -380,7 +380,7 @@ def test_bubblewrap_run_rejects_duplicate_exit_status_injection(
     executable.write_bytes(b"bubblewrap")
     executable.chmod(0o755)
     sandbox = BubblewrapPytestSandbox(workspace, evidence_root=evidence)
-    digest = sandbox._hash_executable(executable)  # noqa: SLF001
+    digest = sandbox._hash_executable(executable)
     preflight = ready_preflight(executable)
     preflight = PytestSandboxPreflight(**{**preflight.__dict__, "executable_sha256": digest})
     monkeypatch.setattr(sandbox, "preflight", lambda: preflight)
@@ -404,12 +404,12 @@ def test_bubblewrap_run_rejects_duplicate_exit_status_injection(
 
 
 def test_probe_script_keeps_its_json_runtime_dependency_explicit() -> None:
-    assert "import json" in sandbox_module._PROBE_SCRIPT  # noqa: SLF001
-    compile(sandbox_module._PROBE_SCRIPT, "<pytest-sandbox-probe>", "exec")  # noqa: SLF001
+    assert "import json" in sandbox_module._PROBE_SCRIPT
+    compile(sandbox_module._PROBE_SCRIPT, "<pytest-sandbox-probe>", "exec")
 
 
 def test_execution_guard_script_revalidates_before_exec() -> None:
-    script = sandbox_module._EXECUTION_GUARD_SCRIPT  # noqa: SLF001
+    script = sandbox_module._EXECUTION_GUARD_SCRIPT
     compile(script, "<pytest-sandbox-execution-guard>", "exec")
     for required in (
         "/proc/self/ns/",
@@ -443,7 +443,7 @@ def test_bubblewrap_run_wraps_pytest_with_execution_time_guard(
     executable.write_bytes(b"bubblewrap")
     executable.chmod(0o755)
     sandbox = BubblewrapPytestSandbox(workspace, evidence_root=evidence)
-    digest = sandbox._hash_executable(executable)  # noqa: SLF001
+    digest = sandbox._hash_executable(executable)
     preflight = ready_preflight(executable)
     preflight = PytestSandboxPreflight(**{**preflight.__dict__, "executable_sha256": digest})
     monkeypatch.setattr(sandbox, "preflight", lambda: preflight)
@@ -464,7 +464,7 @@ def test_bubblewrap_run_wraps_pytest_with_execution_time_guard(
     )
 
     command = observed["command"]
-    assert sandbox_module._EXECUTION_GUARD_SCRIPT in command  # noqa: SLF001
-    guard_index = command.index(sandbox_module._EXECUTION_GUARD_SCRIPT)  # noqa: SLF001
+    assert sandbox_module._EXECUTION_GUARD_SCRIPT in command
+    guard_index = command.index(sandbox_module._EXECUTION_GUARD_SCRIPT)
     assert "--" in command[guard_index:]
     assert command[-3:] == [str(sandbox.python_executable), "-m", "pytest"]
