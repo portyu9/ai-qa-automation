@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-import ai_qa_automation.state as state_module
+import ai_qa_automation.fs_authority as fs_authority
 from ai_qa_automation.models import (
     AgentRunState,
     MCPStatus,
@@ -114,10 +114,18 @@ def test_failed_atomic_replace_preserves_last_known_good_state_and_cleans_temp(
     store.save(first)
     original_bytes = path.read_bytes()
 
-    def fail_replace(_src: object, _dst: object) -> None:
+    def fail_replace(
+        _src: str | bytes,
+        _dst: str | bytes,
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+    ) -> None:
+        assert src_dir_fd is not None
+        assert dst_dir_fd is not None
         raise OSError("simulated atomic replace failure")
 
-    monkeypatch.setattr(state_module.os, "replace", fail_replace)
+    monkeypatch.setattr(fs_authority.os, "rename", fail_replace)
     second = first.model_copy(update={"objective": "second"})
 
     with pytest.raises(OSError, match="simulated"):
@@ -125,7 +133,7 @@ def test_failed_atomic_replace_preserves_last_known_good_state_and_cleans_temp(
 
     assert path.read_bytes() == original_bytes
     assert StateStore(path).load().objective == "first"
-    assert not list(tmp_path.glob(".state.json.*.tmp"))
+    assert not list(tmp_path.glob(".state.json.*.aiqa.tmp"))
 
 
 def test_loading_missing_state_is_explicit_failure(tmp_path: Path) -> None:
