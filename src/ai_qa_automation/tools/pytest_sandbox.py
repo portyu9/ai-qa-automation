@@ -8,7 +8,7 @@ import sys
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Protocol
 from uuid import uuid4
 
@@ -30,6 +30,7 @@ _SANDBOX_MAX_ADDRESS_SPACE_BYTES = 512 * 1024 * 1024
 _SANDBOX_MAX_FILE_BYTES = 64 * 1024 * 1024
 _SANDBOX_MAX_OPEN_FILES = 256
 _SANDBOX_TMPFS_BYTES = 64 * 1024 * 1024
+_SANDBOX_TMP_PATH = str(PurePosixPath("/") / "tmp")
 
 
 @dataclass(frozen=True)
@@ -519,11 +520,11 @@ class BubblewrapPytestSandbox:
             "--dev",
             "/dev",
             "--dir",
-            "/tmp",
+            _SANDBOX_TMP_PATH,
             "--size",
             str(_SANDBOX_TMPFS_BYTES),
             "--tmpfs",
-            "/tmp",
+            _SANDBOX_TMP_PATH,
             "--dir",
             "/home",
             "--size",
@@ -672,7 +673,7 @@ class BubblewrapPytestSandbox:
         return candidate == root or root in candidate.parents
 
 
-_EXECUTION_GUARD_SCRIPT = r'''
+_EXECUTION_GUARD_SCRIPT = r"""
 import os
 import pathlib
 import resource
@@ -742,10 +743,10 @@ try:
 except (OSError, ValueError):
     raise SystemExit(AUTHORITY_EXIT)
 os.execv(command[0], command)
-'''
+"""
 
 
-_PROBE_SCRIPT = r'''
+_PROBE_SCRIPT = r"""
 import json
 import os
 import pathlib
@@ -804,4 +805,4 @@ print(
         sort_keys=True,
     )
 )
-'''
+"""
