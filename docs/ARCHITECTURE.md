@@ -48,7 +48,7 @@ The architecture is deliberately asymmetric: **capability may be probabilistic; 
 | Model confidence cannot authorize mutation | locator uniqueness, semantic eligibility, stability, and patch safety are independently constrained |
 | Uncertainty remains visible | missing, contradictory, stale, or blocked evidence produces explicit non-PASS outcomes |
 | Runtime truth is revision-aware | older evidence cannot silently certify newer bytes |
-| Recovery obeys live ownership rules | stale rollback requires the same confinement, non-symlink ownership, hash, and fingerprint guarantees |
+| Recovery obeys live ownership rules | stale rollback requires the same workspace and run-persistence identities, confinement, non-symlink ownership, hash, and fingerprint guarantees |
 | Resource use is independently bounded | turns, tools, network, mutations, repetition, time, and model cost have distinct controls |
 | Static script checks are not a sandbox | every k6 execution requires independently enforced infrastructure egress |
 | Integrity is not correctness | hashes/journals/attestations preserve provenance but never override validation |
@@ -253,6 +253,8 @@ Keeping these states separate prevents recovery mechanics from becoming QA concl
 `EvidenceStore` provides:
 
 - run-root confinement;
+- one shared run-persistence-root `(device, inode)` identity with state, runtime metadata, and journal authority on descriptor-relative no-follow platforms;
+- descriptor-confined/root-revalidated manifest, audit, artifact publication, and artifact reads beneath that identity;
 - duplicate-ID/path immutability;
 - model-facing text sanitization where applicable;
 - artifact hashing;
@@ -261,7 +263,7 @@ Keeping these states separate prevents recovery mechanics from becoming QA concl
 - explicit `RAW` treatment for binary artifacts;
 - non-symlink ownership checks for evidence control files and registered artifact paths.
 
-The operational journal applies the same ownership philosophy: a journal path that is or becomes a symlink is rejected rather than followed.
+The operational journal and canonical/process state use the same run-persistence-root authority where the operating system can enforce it. An ordinary directory replacement therefore cannot silently redirect a successful authority-bearing read/write merely because the replacement is not a symlink. On platforms without descriptor-relative no-follow authority, the runtime keeps its conservative ownership checks but does not serialize a best-effort stat tuple as equivalent historical run-root authority.
 
 Evidence integrity and evidence meaning remain separate concerns.
 
@@ -319,7 +321,7 @@ Lease files, rollback directories, rollback backups, evidence files, and recover
 
 Mutation becomes a rollback-backed transaction. Existing bytes are snapshotted under trusted artifact storage and hash-bound. The candidate revision must close deterministic validation before the backup is discarded.
 
-Crash recovery reuses the same ownership philosophy: previous run directory, journal, target path, runtime metadata, rollback directory/backup, fingerprint, and backup hash must remain trustworthy. Ambiguity blocks automatic restoration.
+Crash recovery reuses the same ownership philosophy. On descriptor-relative no-follow platforms, the live run pins one run-persistence-root identity and the workspace lease persists that identity as historical recovery authority. A later stale-recovery owner must match the exact recorded prior run `(device, inode)` before it accepts that run's state/runtime/journal/rollback authority or touches target bytes; missing, malformed, or mismatched historical identity blocks automatic recovery. Attestation, lineage, and recovery inspection pin one observed run-root identity for the duration of an inspection and reject mid-inspection substitution, but do not fabricate a historical identity they do not possess. Platforms without enforceable descriptor-relative root authority retain conservative non-equivalent fallback semantics.
 
 See [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md).
 
