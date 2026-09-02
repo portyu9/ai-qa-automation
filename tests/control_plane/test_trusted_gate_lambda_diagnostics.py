@@ -103,7 +103,7 @@ def _prepare_authenticated_policy_path(monkeypatch: pytest.MonkeyPatch) -> None:
         "_load_policy",
         lambda *, expected_sha: (b"{}", expected_sha),
     )
-    monkeypatch.setattr(aws_lambda.OneShotPolicy, "parse", lambda raw: object())
+    monkeypatch.setattr(aws_lambda.OneShotPolicy, "parse", staticmethod(lambda raw: object()))
     monkeypatch.setattr(
         aws_lambda,
         "parse_workflow_run_wakeup",
