@@ -9,11 +9,14 @@ from ai_qa_automation.fs_authority import pin_directory_identity
 from ai_qa_automation.models import AgentRunState, TerminalStatus, ValidationStatus
 from ai_qa_automation.runtime.budget import ExecutionBudget
 from ai_qa_automation.runtime.journal import RunJournal
+from ai_qa_automation.runtime.internal_tool_domains.common import RuntimeServices
+from ai_qa_automation.runtime.internal_tool_domains.testing import register_testing_tools
 from ai_qa_automation.runtime.live_services import LiveRuntimeServices
 from ai_qa_automation.runtime.run_control import RuntimeControl
 from ai_qa_automation.state import StateStore
 from ai_qa_automation.tools.pytest_sandbox import PytestSandboxPreflight
 from ai_qa_automation.tools.repository import RepositoryInspector
+from ai_qa_automation.tools.test_execution import TestExecutionResult as ExecutionResult
 
 
 class FakeTestRunner:
@@ -266,3 +269,48 @@ def test_live_runtime_requires_lease_bound_workspace_identity(tmp_path: Path) ->
             state_store=state_store,
             control=control,
         )
+
+
+class BlockedResultRunner:
+    def run_pytest(self, _args: list[str]) -> ExecutionResult:
+        return ExecutionResult(
+            command=("python", "-m", "pytest"),
+            exit_code=126,
+            stdout="",
+            stderr="sandbox disappeared after admission",
+            duration_seconds=0.01,
+            evidence_ids=("evidence-sandbox-blocked",),
+            execution_started=False,
+            block_reason="sandbox disappeared after admission",
+        )
+
+
+@pytest.mark.asyncio
+async def test_internal_pytest_tool_latches_blocked_when_sandbox_fails_after_admission(
+    tmp_path: Path,
+) -> None:
+    state = AgentRunState(objective="race", workspace=str(tmp_path))
+    services = RuntimeServices(
+        workspace=tmp_path,
+        state=state,
+        evidence=cast(Any, object()),
+        policy=cast(Any, object()),
+        test_runner=cast(Any, BlockedResultRunner()),
+        max_tool_calls=5,
+        max_repeated_action=2,
+    )
+
+    def tool(_name: str, _description: str, _schema: dict[str, Any]):
+        def decorate(function: Any) -> Any:
+            return function
+
+        return decorate
+
+    registered = register_testing_tools(services, cast(Any, tool))
+    response = await cast(Any, registered["run_pytest"])({"args": []})
+
+    assert response["is_error"] is True
+    assert state.terminal_status is TerminalStatus.BLOCKED
+    assert state.terminal_reason == "sandbox disappeared after admission"
+    assert state.validation_results[-1].status is ValidationStatus.BLOCKED
+    assert state.validation_results[-1].details["execution_started"] is False
