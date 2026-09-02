@@ -53,10 +53,14 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
     # Canonical state must have one interpretation everywhere. Reuse StateStore's
     # ambiguity guard and strict JSON-mode schema validation rather than treating
     # attestation as a weaker parallel state reader.
-    state = StateStore(
-        state_path,
-        expected_parent_identity=run_root_identity,
-    ).load().model_dump(mode="json")
+    state = (
+        StateStore(
+            state_path,
+            expected_parent_identity=run_root_identity,
+        )
+        .load()
+        .model_dump(mode="json")
+    )
     runtime = (
         _load_object(
             runtime_path,
