@@ -167,10 +167,14 @@ class TestRunner:
         )
         isolation_details = preflight.details()
         isolation_details["execution_started"] = not sandbox_blocked
-        isolation_details["postflight_verified"] = sandbox_postflight_reason is None
+        isolation_details["postflight_verified"] = (
+            not sandbox_blocked and sandbox_postflight_reason is None
+        )
         isolation_details["postflight_reason"] = sandbox_postflight_reason
         isolation_details["cpu_limit_seconds"] = (
-            self.timeout_seconds + 1 if preflight.backend == "bubblewrap" else None
+            self.timeout_seconds + 1
+            if not sandbox_blocked and preflight.backend == "bubblewrap"
+            else None
         )
         exit_item = self.evidence.add(
             EvidenceItem(
