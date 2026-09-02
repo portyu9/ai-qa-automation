@@ -176,7 +176,9 @@ class EvidenceStore:
         try:
             current = self.run_root.stat(follow_symlinks=False)
         except OSError as exc:
-            raise ValueError("evidence run root changed identity and ownership is ambiguous") from exc
+            raise ValueError(
+                "evidence run root changed identity and ownership is ambiguous"
+            ) from exc
         if not stat.S_ISDIR(current.st_mode) or _identity(current) != self._run_root_identity:
             raise ValueError("evidence run root changed identity and ownership is ambiguous")
 
