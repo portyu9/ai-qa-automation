@@ -3,12 +3,13 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import os
 import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from .core import (
     EXPECTED_REPOSITORY,
@@ -44,6 +45,15 @@ STATIC_PARAMETER_SUFFIXES = {
 WEBHOOK_SECRET_SUFFIX = HOOK_AUTH_PARAMETER_SUFFIX
 POLICY_PARAMETER_SUFFIX = "policy"
 
+FailureStage = Literal[
+    "webhook_auth",
+    "static_config",
+    "policy_load",
+    "service_construct",
+    "delivery_acquire_or_handle",
+]
+LOGGER = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class StaticConfig:
@@ -62,6 +72,7 @@ _dynamodb_client: Any | None = None
 
 def handler(event: Any, context: Any) -> dict[str, Any]:
     del context
+    stage: FailureStage = "webhook_auth"
     try:
         headers, body = _parse_function_url_event(event)
         webhook_secret = _load_webhook_secret()
@@ -70,20 +81,27 @@ def handler(event: Any, context: Any) -> dict[str, Any]:
             body=body,
             signature_header=headers.get("x-hub-signature-256"),
         )
+        stage = "static_config"
         config = _load_static_config(webhook_secret=webhook_secret)
+        stage = "policy_load"
         policy_bytes, policy_sha256 = _load_policy()
+        stage = "service_construct"
         service = _build_service(config, policy_bytes=policy_bytes, policy_sha256=policy_sha256)
+        stage = "delivery_acquire_or_handle"
         result = service.handle_delivery(
             event_header=headers.get("x-github-event"),
             delivery_header=headers.get("x-github-delivery"),
             signature_header=headers.get("x-hub-signature-256"),
             body=body,
         )
-    except PermissionError:
+    except PermissionError as exc:
+        _log_failure(stage, exc)
         return _response(403, {"outcome": "REJECTED"})
-    except ValueError:
+    except ValueError as exc:
+        _log_failure(stage, exc)
         return _response(400, {"outcome": "INVALID"})
-    except Exception:
+    except Exception as exc:
+        _log_failure(stage, exc)
         return _response(503, {"outcome": "INFRASTRUCTURE_FAILURE"}, retry_after=True)
 
     payload = {
@@ -356,6 +374,14 @@ def _bounded_ascii(value: str, label: str, *, max_bytes: int) -> str:
     if not value or not value.isascii() or len(value.encode("ascii")) > max_bytes:
         raise RuntimeError(f"configured {label} is malformed")
     return value
+
+
+def _log_failure(stage: FailureStage, exc: Exception) -> None:
+    LOGGER.warning(
+        "trusted_gate_lambda_failure stage=%s exception=%s",
+        stage,
+        type(exc).__name__,
+    )
 
 
 def _response(status: int, payload: dict[str, Any], *, retry_after: bool = False) -> dict[str, Any]:
