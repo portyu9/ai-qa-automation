@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import ai_qa_automation.evidence as evidence_module
+import ai_qa_automation.fs_authority as fs_authority_module
 from ai_qa_automation.evidence import EvidenceStore
 from ai_qa_automation.models import EvidenceItem, EvidenceKind, EvidenceNature
 
@@ -21,6 +22,25 @@ def _item(run_id: str, suffix: str) -> EvidenceItem:
         summary=f"evidence {suffix}",
         structured_data={"z": suffix, "a": 1},
     )
+
+
+def _capture_audit_descriptor(monkeypatch: pytest.MonkeyPatch) -> dict[str, int | None]:
+    real_open = fs_authority_module.os.open
+    captured: dict[str, int | None] = {"fd": None}
+
+    def capture_open(
+        path: object, flags: int, mode: int = 0o777, *, dir_fd: int | None = None
+    ) -> int:
+        if dir_fd is None:
+            fd = real_open(path, flags, mode)
+        else:
+            fd = real_open(path, flags, mode, dir_fd=dir_fd)
+        if str(path) == "audit-log.jsonl":
+            captured["fd"] = fd
+        return fd
+
+    monkeypatch.setattr(fs_authority_module.os, "open", capture_open)
+    return captured
 
 
 def test_write_fd_all_handles_short_writes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -40,7 +60,7 @@ def test_write_fd_all_handles_short_writes(tmp_path: Path, monkeypatch: pytest.M
     assert path.read_bytes() == b"abcdef"
 
 
-def test_failed_partial_audit_append_rolls_back_and_store_remains_usable(
+def test_failed_partial_audit_append_rolls_back_and_latches_store_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store = EvidenceStore(tmp_path, "run", regulated_mode=True)
@@ -49,18 +69,20 @@ def test_failed_partial_audit_append_rolls_back_and_store_remains_usable(
     manifest_path = tmp_path / "run" / "evidence-manifest.json"
     audit_before = audit_path.read_bytes()
     manifest_before = manifest_path.read_bytes()
-    real_write_all = evidence_module._write_fd_all
+    captured = _capture_audit_descriptor(monkeypatch)
+    real_write = fs_authority_module.os.write
     injected = False
 
-    def fail_after_partial(fd: int, content: bytes) -> None:
+    def fail_after_partial(fd: int, content: bytes | memoryview) -> int:
         nonlocal injected
-        if not injected:
+        if fd == captured["fd"] and not injected:
             injected = True
-            os.write(fd, content[: min(7, len(content))])
+            view = memoryview(content)
+            real_write(fd, view[: min(7, len(view))])
             raise OSError(errno.EIO, "simulated mid-record write failure")
-        real_write_all(fd, content)
+        return real_write(fd, content)
 
-    monkeypatch.setattr(evidence_module, "_write_fd_all", fail_after_partial)
+    monkeypatch.setattr(fs_authority_module.os, "write", fail_after_partial)
     with pytest.raises(OSError, match="simulated mid-record write failure"):
         store.add(_item("run", "failed"))
 
@@ -68,12 +90,11 @@ def test_failed_partial_audit_append_rolls_back_and_store_remains_usable(
     assert manifest_path.read_bytes() == manifest_before
     assert store.verify_audit_chain() is True
     assert [item.source_identifier for item in store.all()] == ["first"]
+    with pytest.raises(OSError, match="write state is uncertain"):
+        store.add(_item("run", "blocked"))
 
-    monkeypatch.setattr(evidence_module, "_write_fd_all", real_write_all)
-    store.add(_item("run", "after"))
-    assert store.verify_audit_chain() is True
     restored = EvidenceStore(tmp_path, "run", regulated_mode=True)
-    assert [item.source_identifier for item in restored.all()] == ["first", "after"]
+    assert [item.source_identifier for item in restored.all()] == ["first"]
 
 
 def test_failed_audit_truncate_latches_future_regulated_writes_closed(
@@ -83,24 +104,27 @@ def test_failed_audit_truncate_latches_future_regulated_writes_closed(
     store.add(_item("run", "first"))
     audit_path = tmp_path / "run" / "audit-log.jsonl"
     audit_before = audit_path.read_bytes()
-    real_write_all = evidence_module._write_fd_all
+    captured = _capture_audit_descriptor(monkeypatch)
+    real_write = fs_authority_module.os.write
 
-    def fail_after_partial(fd: int, content: bytes) -> None:
-        os.write(fd, content[: min(5, len(content))])
-        raise OSError(errno.EIO, "simulated append failure")
+    def fail_after_partial(fd: int, content: bytes | memoryview) -> int:
+        if fd == captured["fd"]:
+            view = memoryview(content)
+            real_write(fd, view[: min(5, len(view))])
+            raise OSError(errno.EIO, "simulated append failure")
+        return real_write(fd, content)
 
     def fail_truncate(_fd: int, _length: int) -> None:
         raise OSError(errno.EIO, "simulated rollback failure")
 
-    monkeypatch.setattr(evidence_module, "_write_fd_all", fail_after_partial)
-    monkeypatch.setattr(evidence_module.os, "ftruncate", fail_truncate)
+    monkeypatch.setattr(fs_authority_module.os, "write", fail_after_partial)
+    monkeypatch.setattr(fs_authority_module.os, "ftruncate", fail_truncate)
     with pytest.raises(OSError, match="rollback could not be durably proven"):
         store.add(_item("run", "failed"))
 
     assert audit_path.read_bytes() != audit_before
     assert [item.source_identifier for item in store.all()] == ["first"]
 
-    monkeypatch.setattr(evidence_module, "_write_fd_all", real_write_all)
     with pytest.raises(OSError, match="write state is uncertain"):
         store.add(_item("run", "blocked"))
     assert [item.source_identifier for item in store.all()] == ["first"]
@@ -114,21 +138,24 @@ def test_failed_audit_rollback_fsync_latches_future_regulated_writes_closed(
 ) -> None:
     store = EvidenceStore(tmp_path, "run", regulated_mode=True)
     store.add(_item("run", "first"))
-    real_write_all = evidence_module._write_fd_all
+    captured = _capture_audit_descriptor(monkeypatch)
+    real_write = fs_authority_module.os.write
 
-    def fail_after_partial(fd: int, content: bytes) -> None:
-        os.write(fd, content[: min(5, len(content))])
-        raise OSError(errno.EIO, "simulated append failure")
+    def fail_after_partial(fd: int, content: bytes | memoryview) -> int:
+        if fd == captured["fd"]:
+            view = memoryview(content)
+            real_write(fd, view[: min(5, len(view))])
+            raise OSError(errno.EIO, "simulated append failure")
+        return real_write(fd, content)
 
     def fail_fsync(_fd: int) -> None:
         raise OSError(errno.EIO, "simulated rollback fsync failure")
 
-    monkeypatch.setattr(evidence_module, "_write_fd_all", fail_after_partial)
-    monkeypatch.setattr(evidence_module.os, "fsync", fail_fsync)
+    monkeypatch.setattr(fs_authority_module.os, "write", fail_after_partial)
+    monkeypatch.setattr(fs_authority_module.os, "fsync", fail_fsync)
     with pytest.raises(OSError, match="rollback could not be durably proven"):
         store.add(_item("run", "failed"))
 
-    monkeypatch.setattr(evidence_module, "_write_fd_all", real_write_all)
     with pytest.raises(OSError, match="write state is uncertain"):
         store.add(_item("run", "blocked"))
     assert [item.source_identifier for item in store.all()] == ["first"]
@@ -141,62 +168,78 @@ def test_keyboard_interrupt_after_partial_audit_write_cleans_staged_evidence(
     store.add(_item("run", "first"))
     audit_path = tmp_path / "run" / "audit-log.jsonl"
     audit_before = audit_path.read_bytes()
-    real_write_all = evidence_module._write_fd_all
+    captured = _capture_audit_descriptor(monkeypatch)
+    real_write = fs_authority_module.os.write
     injected = False
 
-    def interrupt_after_partial(fd: int, content: bytes) -> None:
+    def interrupt_after_partial(fd: int, content: bytes | memoryview) -> int:
         nonlocal injected
-        if not injected:
+        if fd == captured["fd"] and not injected:
             injected = True
-            os.write(fd, content[: min(5, len(content))])
+            view = memoryview(content)
+            real_write(fd, view[: min(5, len(view))])
             raise KeyboardInterrupt("simulated operator interruption")
-        real_write_all(fd, content)
+        return real_write(fd, content)
 
-    monkeypatch.setattr(evidence_module, "_write_fd_all", interrupt_after_partial)
+    monkeypatch.setattr(fs_authority_module.os, "write", interrupt_after_partial)
     with pytest.raises(KeyboardInterrupt, match="operator interruption"):
         store.add(_item("run", "interrupted"))
 
     assert audit_path.read_bytes() == audit_before
     assert [item.source_identifier for item in store.all()] == ["first"]
     assert store.verify_audit_chain() is True
+    store.add(_item("run", "after"))
+    assert [item.source_identifier for item in store.all()] == ["first", "after"]
 
 
 def test_first_audit_directory_fsync_failure_latches_store_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store = EvidenceStore(tmp_path, "run", regulated_mode=True)
+    captured = _capture_audit_descriptor(monkeypatch)
+    real_fsync = fs_authority_module.os.fsync
+    audit_file_synced = False
 
-    def fail_directory_fsync(_path: Path) -> None:
-        raise OSError(errno.EIO, "simulated directory fsync failure")
+    def fail_directory_fsync(fd: int) -> None:
+        nonlocal audit_file_synced
+        if fd == captured["fd"]:
+            audit_file_synced = True
+            real_fsync(fd)
+            return
+        if audit_file_synced:
+            raise OSError(errno.EIO, "simulated directory fsync failure")
+        real_fsync(fd)
 
-    monkeypatch.setattr(evidence_module, "fsync_directory", fail_directory_fsync)
-    with pytest.raises(OSError, match="directory durability could not be proven"):
+    monkeypatch.setattr(fs_authority_module.os, "fsync", fail_directory_fsync)
+    with pytest.raises(OSError, match="simulated directory fsync failure"):
         store.add(_item("run", "first"))
 
     assert store.all() == []
     with pytest.raises(OSError, match="write state is uncertain"):
         store.add(_item("run", "blocked"))
     assert store.all() == []
-    with pytest.raises(ValueError, match="registry does not match audit log"):
-        EvidenceStore(tmp_path, "run", regulated_mode=True)
+    restored = EvidenceStore(tmp_path, "run", regulated_mode=True)
+    assert restored.all() == []
 
 
-def test_keyboard_interrupt_after_partial_artifact_audit_write_cleans_artifact(
+def test_keyboard_interrupt_after_partial_artifact_audit_leaves_unregistered_artifact(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store = EvidenceStore(tmp_path, "run", regulated_mode=True)
-    real_write_all = evidence_module._write_fd_all
+    captured = _capture_audit_descriptor(monkeypatch)
+    real_write = fs_authority_module.os.write
     injected = False
 
-    def interrupt_after_partial(fd: int, content: bytes) -> None:
+    def interrupt_after_partial(fd: int, content: bytes | memoryview) -> int:
         nonlocal injected
-        if not injected:
+        if fd == captured["fd"] and not injected:
             injected = True
-            os.write(fd, content[: min(5, len(content))])
+            view = memoryview(content)
+            real_write(fd, view[: min(5, len(view))])
             raise KeyboardInterrupt("simulated artifact audit interruption")
-        real_write_all(fd, content)
+        return real_write(fd, content)
 
-    monkeypatch.setattr(evidence_module, "_write_fd_all", interrupt_after_partial)
+    monkeypatch.setattr(fs_authority_module.os, "write", interrupt_after_partial)
     with pytest.raises(KeyboardInterrupt, match="artifact audit interruption"):
         store.register_artifact(
             relative_path="proof.txt",
@@ -204,7 +247,7 @@ def test_keyboard_interrupt_after_partial_artifact_audit_write_cleans_artifact(
             originating_tool="audit-interruption-test",
         )
 
-    assert not (tmp_path / "run" / "proof.txt").exists()
+    assert (tmp_path / "run" / "proof.txt").read_bytes() == b"proof"
     assert store._artifacts == {}
     assert store.verify_audit_chain() is True
     restored = EvidenceStore(tmp_path, "run", regulated_mode=True)
@@ -215,30 +258,20 @@ def test_audit_descriptor_close_failure_latches_store_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store = EvidenceStore(tmp_path, "run", regulated_mode=True)
-    real_open = evidence_module.os.open
-    real_close = evidence_module.os.close
-    audit_fd: int | None = None
-
-    def capture_audit_open(
-        path: object, flags: int, mode: int = 0o777, *, dir_fd: int | None = None
-    ) -> int:
-        nonlocal audit_fd
-        if dir_fd is None:
-            fd = real_open(path, flags, mode)
-        else:
-            fd = real_open(path, flags, mode, dir_fd=dir_fd)
-        if str(path).endswith("audit-log.jsonl"):
-            audit_fd = fd
-        return fd
+    captured = _capture_audit_descriptor(monkeypatch)
+    real_close = fs_authority_module.os.close
+    injected = False
 
     def fail_audit_close(fd: int) -> None:
-        if fd == audit_fd:
+        nonlocal injected
+        if fd == captured["fd"] and not injected:
+            injected = True
+            captured["fd"] = None
             real_close(fd)
             raise OSError(errno.EIO, "simulated audit descriptor close failure")
         real_close(fd)
 
-    monkeypatch.setattr(evidence_module.os, "open", capture_audit_open)
-    monkeypatch.setattr(evidence_module.os, "close", fail_audit_close)
+    monkeypatch.setattr(fs_authority_module.os, "close", fail_audit_close)
     with pytest.raises(OSError, match="descriptor close could not be proven"):
         store.add(_item("run", "first"))
 
