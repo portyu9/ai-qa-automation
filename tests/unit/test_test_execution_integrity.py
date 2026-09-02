@@ -239,6 +239,8 @@ def test_direct_test_runner_has_no_unsandboxed_fallback_when_backend_is_unavaila
     exit_item = evidence.get(result.evidence_ids[0])
     assert exit_item.structured_data["sandbox"]["execution_started"] is False
     assert exit_item.structured_data["sandbox"]["ready"] is False
+    assert exit_item.structured_data["sandbox"]["postflight_verified"] is False
+    assert exit_item.structured_data["sandbox"]["cpu_limit_seconds"] is None
 
 
 def test_sandbox_postflight_uncertainty_invalidates_zero_exit(
