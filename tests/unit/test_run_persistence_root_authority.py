@@ -196,6 +196,43 @@ def test_nested_artifact_parent_replacement_cannot_redirect_publication(
     assert not (store.run_root / "evidence-manifest.json").exists()
 
 
+def test_artifact_closure_failure_never_unlinks_replacement_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_descriptor_authority()
+    root = tmp_path / "artifacts"
+    store = EvidenceStore(root, "run-closure")
+    attack_bytes = b"attacker-owned"
+    trusted_bytes = b"trusted-bytes"
+    swapped = False
+
+    def fail_after_parent_replacement() -> None:
+        nonlocal swapped
+        parent = store.run_root / "browser"
+        moved = parent.with_name("browser-original")
+        parent.rename(moved)
+        parent.mkdir()
+        (parent / "context.bin").write_bytes(attack_bytes)
+        swapped = True
+        raise OSError("simulated manifest closure failure")
+
+    monkeypatch.setattr(store, "_flush_manifest", fail_after_parent_replacement)
+
+    with pytest.raises(OSError, match="simulated manifest closure failure"):
+        store.register_artifact(
+            relative_path="browser/context.bin",
+            content=trusted_bytes,
+            originating_tool="test",
+        )
+
+    assert swapped is True
+    assert store._artifacts == {}
+    assert (store.run_root / "browser" / "context.bin").read_bytes() == attack_bytes
+    assert (store.run_root / "browser-original" / "context.bin").read_bytes() == trusted_bytes
+    assert not (store.run_root / "evidence-manifest.json").exists()
+
+
 def test_runtime_metadata_cannot_close_in_replacement_run_root(tmp_path: Path) -> None:
     _require_descriptor_authority()
     workspace = tmp_path / "sut"
