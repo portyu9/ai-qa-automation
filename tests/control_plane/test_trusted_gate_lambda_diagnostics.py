@@ -6,14 +6,17 @@ import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, NoReturn
 
 import pytest
 
 from scripts.trusted_gate_service import aws_lambda
+from scripts.trusted_gate_service.core import EXPECTED_REPOSITORY, EXPECTED_REPOSITORY_ID
 
 SECRET = b"test-webhook-secret-with-32-bytes!!"
 DELIVERY = "00000000-0000-0000-0000-000000000089"
+TEST_INSTALLATION_ID = 67890
 SENSITIVE_MARKERS = (
     "PRIVATE-KEY-MATERIAL",
     "WEBHOOK-SECRET-MATERIAL",
@@ -91,6 +94,34 @@ def _assert_secret_safe_failure(
         assert marker not in rendered
 
 
+def _prepare_authenticated_policy_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    policy_sha = "1" * 64
+    monkeypatch.setattr(aws_lambda, "_load_webhook_secret", lambda: SECRET)
+    monkeypatch.setattr(aws_lambda, "_policy_pin", lambda: policy_sha)
+    monkeypatch.setattr(
+        aws_lambda,
+        "_load_policy",
+        lambda *, expected_sha: (b"{}", expected_sha),
+    )
+    monkeypatch.setattr(aws_lambda.OneShotPolicy, "parse", lambda raw: object())
+    monkeypatch.setattr(
+        aws_lambda,
+        "parse_workflow_run_wakeup",
+        lambda **kwargs: SimpleNamespace(installation_id=TEST_INSTALLATION_ID),
+    )
+    monkeypatch.setattr(aws_lambda, "_prefilter_authenticated_wakeup", lambda policy, wakeup: None)
+
+
+def _public_config() -> aws_lambda.PublicConfig:
+    return aws_lambda.PublicConfig(
+        app_id="12345",
+        installation_id=TEST_INSTALLATION_ID,
+        repository=EXPECTED_REPOSITORY,
+        repository_id=EXPECTED_REPOSITORY_ID,
+        bot_login="trusted-pr-gate[bot]",
+    )
+
+
 @dataclass
 class _FailingService:
     def handle_delivery(self, **kwargs: Any) -> Any:
@@ -99,38 +130,40 @@ class _FailingService:
 
 
 @pytest.mark.parametrize(
-    "stage",
+    ("stage", "static_failure_point"),
     [
-        "webhook_auth",
-        "static_config",
-        "policy_load",
-        "service_construct",
-        "delivery_acquire_or_handle",
+        ("webhook_auth", None),
+        ("policy_load", None),
+        ("static_config", "public"),
+        ("static_config", "signing"),
+        ("service_construct", None),
+        ("delivery_acquire_or_handle", None),
     ],
 )
 def test_handler_logs_only_fixed_stage_and_exception_class(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     stage: str,
+    static_failure_point: str | None,
 ) -> None:
     caplog.set_level(logging.WARNING, logger=aws_lambda.__name__)
 
     if stage == "webhook_auth":
         monkeypatch.setattr(aws_lambda, "_load_webhook_secret", _raise_secret_error)
-    else:
+    elif stage == "policy_load":
         monkeypatch.setattr(aws_lambda, "_load_webhook_secret", lambda: SECRET)
-        if stage == "static_config":
-            monkeypatch.setattr(aws_lambda, "_load_static_config", _raise_secret_error)
+        monkeypatch.setattr(aws_lambda, "_policy_pin", lambda: "1" * 64)
+        monkeypatch.setattr(aws_lambda, "_load_policy", _raise_secret_error)
+    else:
+        _prepare_authenticated_policy_path(monkeypatch)
+        if static_failure_point == "public":
+            monkeypatch.setattr(aws_lambda, "_load_public_config", _raise_secret_error)
         else:
-            monkeypatch.setattr(
-                aws_lambda,
-                "_load_static_config",
-                lambda *, webhook_secret: object(),
-            )
-            if stage == "policy_load":
-                monkeypatch.setattr(aws_lambda, "_load_policy", _raise_secret_error)
+            monkeypatch.setattr(aws_lambda, "_load_public_config", _public_config)
+            if static_failure_point == "signing":
+                monkeypatch.setattr(aws_lambda, "_load_private_key", _raise_secret_error)
             else:
-                monkeypatch.setattr(aws_lambda, "_load_policy", lambda: (b"{}", "0" * 64))
+                monkeypatch.setattr(aws_lambda, "_load_private_key", lambda: "placeholder")
                 if stage == "service_construct":
                     monkeypatch.setattr(aws_lambda, "_build_service", _raise_secret_error)
                 else:
@@ -145,22 +178,27 @@ def test_handler_logs_only_fixed_stage_and_exception_class(
 
 
 @pytest.mark.parametrize(
-    ("exc", "status_code", "outcome"),
+    ("loader", "exc", "status_code", "outcome"),
     [
-        (PermissionError("WEBHOOK-SECRET-MATERIAL"), 403, "REJECTED"),
-        (ValueError("PRIVATE-KEY-MATERIAL"), 400, "INVALID"),
+        ("public", PermissionError("WEBHOOK-SECRET-MATERIAL"), 403, "REJECTED"),
+        ("signing", ValueError("PRIVATE-KEY-MATERIAL"), 400, "INVALID"),
     ],
 )
 def test_existing_error_mapping_is_preserved_without_message_leakage(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    loader: str,
     exc: Exception,
     status_code: int,
     outcome: str,
 ) -> None:
     caplog.set_level(logging.WARNING, logger=aws_lambda.__name__)
-    monkeypatch.setattr(aws_lambda, "_load_webhook_secret", lambda: SECRET)
-    monkeypatch.setattr(aws_lambda, "_load_static_config", _raiser(exc))
+    _prepare_authenticated_policy_path(monkeypatch)
+    if loader == "public":
+        monkeypatch.setattr(aws_lambda, "_load_public_config", _raiser(exc))
+    else:
+        monkeypatch.setattr(aws_lambda, "_load_public_config", _public_config)
+        monkeypatch.setattr(aws_lambda, "_load_private_key", _raiser(exc))
 
     response = aws_lambda.handler(_event(), object())
     _assert_secret_safe_failure(
