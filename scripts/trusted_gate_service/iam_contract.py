@@ -65,16 +65,12 @@ def validate_dynamodb_runtime_policy(
 
         actions = _string_set(raw_statement.get("Action"), label=f"statement {index} Action")
         dynamodb_actions = {
-            action
-            for action in actions
-            if action == "*" or action.lower().startswith("dynamodb:")
+            action for action in actions if action == "*" or action.lower().startswith("dynamodb:")
         }
         if not dynamodb_actions:
             continue
         if dynamodb_actions != actions:
-            raise IamContractError(
-                f"statement {index} mixes DynamoDB and non-DynamoDB actions"
-            )
+            raise IamContractError(f"statement {index} mixes DynamoDB and non-DynamoDB actions")
 
         resources = _string_set(
             raw_statement.get("Resource"),
@@ -101,9 +97,7 @@ def validate_dynamodb_runtime_policy(
             continue
 
         if "Condition" in raw_statement:
-            raise IamContractError(
-                f"statement {index} conditions required direct DynamoDB actions"
-            )
+            raise IamContractError(f"statement {index} conditions required direct DynamoDB actions")
         direct_actions.update(actions)
 
     missing = REQUIRED_DIRECT_ACTIONS - direct_actions
