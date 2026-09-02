@@ -2,9 +2,15 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+from ..fs_authority import (
+    descriptor_relative_authority_supported,
+    pin_directory_identity,
+    read_bytes_confined,
+)
 from ..io_safety import open_regular_binary, parse_json_object_strict, read_json_object_bounded
 from ..models import ArtifactRecord, EvidenceItem
 from ..state import StateStore
@@ -13,6 +19,7 @@ from .journal import RunJournal
 _MAX_LINEAGE_CONTROL_BYTES = 10_000_000
 _MAX_LINEAGE_JOURNAL_LINE_BYTES = 1_000_000
 _MAX_LINEAGE_JOURNAL_EVENTS = 10_000
+_MAX_LINEAGE_JOURNAL_BYTES = 64_000_000
 _MAX_LINEAGE_EVIDENCE_RECORDS = 10_000
 _MAX_LINEAGE_ARTIFACT_RECORDS = 5_000
 
@@ -132,6 +139,11 @@ def build_run_lineage(run_dir: Path, *, max_journal_events: int = 500) -> RunLin
     if requested_root.is_symlink():
         raise ValueError("run directory is a symlink and has ambiguous ownership")
     root = requested_root.resolve()
+    run_root_identity = (
+        pin_directory_identity(root, label="lineage run directory")
+        if descriptor_relative_authority_supported()
+        else None
+    )
     state_path = _owned_subject(root, "state.json")
     manifest_path = _owned_subject(root, "evidence-manifest.json")
     journal_path = _owned_subject(root, "journal.jsonl")
@@ -140,8 +152,16 @@ def build_run_lineage(run_dir: Path, *, max_journal_events: int = 500) -> RunLin
     # Canonical state must be interpreted identically by runtime recovery,
     # attestation, and lineage. Reuse the strict StateStore authority rather than
     # accepting a weaker graph-only dictionary representation.
-    state = StateStore(state_path).load().model_dump(mode="json")
-    manifest = _load_object(manifest_path, required=False)
+    state = StateStore(
+        state_path,
+        expected_parent_identity=run_root_identity,
+    ).load().model_dump(mode="json")
+    manifest = _load_object(
+        manifest_path,
+        required=False,
+        root=root,
+        expected_root_identity=run_root_identity,
+    )
     run_id = state["run_id"]
     evidence_rows, artifact_rows = _validated_manifest_rows(manifest, run_id=run_id)
     nodes: dict[str, LineageNode] = {}
@@ -286,7 +306,11 @@ def build_run_lineage(run_dir: Path, *, max_journal_events: int = 500) -> RunLin
 
     if journal_path.is_file():
         try:
-            journal_status = RunJournal(journal_path, regulated_mode=False).verify()
+            journal_status = RunJournal(
+                journal_path,
+                regulated_mode=False,
+                expected_parent_identity=run_root_identity,
+            ).verify()
         except (OSError, json.JSONDecodeError, RuntimeError, ValueError) as exc:
             warnings.append(f"journal could not be verified for lineage: {type(exc).__name__}")
         else:
@@ -295,7 +319,18 @@ def build_run_lineage(run_dir: Path, *, max_journal_events: int = 500) -> RunLin
             else:
                 count = 0
                 try:
-                    with open_regular_binary(journal_path, label="lineage journal") as stream:
+                    if run_root_identity is not None:
+                        raw_journal = read_bytes_confined(
+                            root,
+                            journal_path.name,
+                            max_bytes=_MAX_LINEAGE_JOURNAL_BYTES,
+                            label="lineage journal",
+                            expected_root_identity=run_root_identity,
+                        )
+                        stream: Any = BytesIO(raw_journal)
+                    else:
+                        stream = open_regular_binary(journal_path, label="lineage journal")
+                    try:
                         while True:
                             raw_line = stream.readline(_MAX_LINEAGE_JOURNAL_LINE_BYTES + 1)
                             if not raw_line:
@@ -335,6 +370,8 @@ def build_run_lineage(run_dir: Path, *, max_journal_events: int = 500) -> RunLin
                             )
                             edges.add((run_node, node_id, "RUNTIME_EVENT"))
                             count += 1
+                    finally:
+                        stream.close()
                 except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
                     warnings.append(f"journal could not be graphed: {type(exc).__name__}")
 
@@ -355,7 +392,30 @@ def _owned_subject(root: Path, name: str) -> Path:
     return path
 
 
-def _load_object(path: Path, *, required: bool) -> dict[str, Any]:
+def _load_object(
+    path: Path,
+    *,
+    required: bool,
+    root: Path,
+    expected_root_identity: tuple[int, int] | None,
+) -> dict[str, Any]:
+    if expected_root_identity is not None:
+        try:
+            raw = read_bytes_confined(
+                root,
+                path.relative_to(root),
+                max_bytes=_MAX_LINEAGE_CONTROL_BYTES,
+                label=f"lineage control file {path.name}",
+                expected_root_identity=expected_root_identity,
+            )
+        except FileNotFoundError:
+            if required:
+                raise
+            return {}
+        return parse_json_object_strict(
+            raw.decode("utf-8"),
+            label=f"lineage control file {path.name}",
+        )
     if not path.is_file():
         if required:
             raise FileNotFoundError(path.name)
