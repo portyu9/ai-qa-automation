@@ -29,6 +29,28 @@ def process_result(
     )
 
 
+def parent_namespaces() -> dict[str, str]:
+    return {
+        "mnt": "m1",
+        "pid": "p1",
+        "net": "n1",
+        "user": "u1",
+        "ipc": "i1",
+        "uts": "t1",
+    }
+
+
+def child_namespaces() -> dict[str, str]:
+    return {
+        "mnt": "m2",
+        "pid": "p2",
+        "net": "n2",
+        "user": "u2",
+        "ipc": "i2",
+        "uts": "t2",
+    }
+
+
 def ready_preflight(executable: Path) -> PytestSandboxPreflight:
     return PytestSandboxPreflight(
         ready=True,
@@ -37,14 +59,25 @@ def ready_preflight(executable: Path) -> PytestSandboxPreflight:
         executable=str(executable),
         executable_sha256="sha256:" + "a" * 64,
         version="bubblewrap 0.12.0",
-        parent_namespaces={"mnt": "1", "pid": "2", "net": "3", "user": "4"},
-        child_namespaces={"mnt": "5", "pid": "6", "net": "7", "user": "8"},
+        parent_namespaces=parent_namespaces(),
+        child_namespaces=child_namespaces(),
         workspace_identity_bound=True,
         workspace_read_only=True,
         forbidden_roots_hidden=True,
         no_non_loopback_interfaces=True,
         effective_capabilities_zero=True,
     )
+
+
+def isolation_payload(*, namespaces: dict[str, str] | None = None) -> dict[str, object]:
+    return {
+        "namespaces": namespaces or child_namespaces(),
+        "workspace_identity_bound": True,
+        "workspace_read_only": True,
+        "forbidden_roots_hidden": True,
+        "no_non_loopback_interfaces": True,
+        "effective_capabilities_zero": True,
+    }
 
 
 def test_bubblewrap_preflight_fails_closed_when_executable_is_missing(
@@ -70,6 +103,24 @@ def test_bubblewrap_preflight_fails_closed_when_executable_is_missing(
     assert result.backend == "bubblewrap"
     assert result.executable is None
     assert "not available" in (result.reason or "")
+
+
+def test_bubblewrap_preflight_rejects_evidence_root_overlapping_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "sut"
+    evidence = workspace / "evidence"
+    evidence.mkdir(parents=True)
+    monkeypatch.setattr(
+        sandbox_module.shutil,
+        "which",
+        lambda *args, **kwargs: pytest.fail("overlap must block before executable discovery"),
+    )
+
+    result = BubblewrapPytestSandbox(workspace, evidence_root=evidence).preflight()
+
+    assert result.ready is False
+    assert "must be disjoint" in (result.reason or "")
 
 
 def test_bubblewrap_preflight_rejects_symlink_executable_before_resolution(
@@ -150,23 +201,12 @@ def test_bubblewrap_preflight_requires_all_observed_isolation_facts(
     monkeypatch.setattr(
         BubblewrapPytestSandbox,
         "_namespace_identities",
-        staticmethod(lambda: {"mnt": "m1", "pid": "p1", "net": "n1", "user": "u1"}),
+        staticmethod(parent_namespaces),
     )
     responses = iter(
         [
             process_result(stdout="bubblewrap 0.12.0\n"),
-            process_result(
-                stdout=json.dumps(
-                    {
-                        "namespaces": {"mnt": "m2", "pid": "p2", "net": "n2", "user": "u2"},
-                        "workspace_identity_bound": True,
-                        "workspace_read_only": True,
-                        "forbidden_roots_hidden": True,
-                        "no_non_loopback_interfaces": True,
-                        "effective_capabilities_zero": True,
-                    }
-                )
-            ),
+            process_result(stdout=json.dumps(isolation_payload())),
         ]
     )
     monkeypatch.setattr(
@@ -183,14 +223,88 @@ def test_bubblewrap_preflight_requires_all_observed_isolation_facts(
     assert result.forbidden_roots_hidden is True
     assert result.no_non_loopback_interfaces is True
     assert result.effective_capabilities_zero is True
-    assert result.parent_namespaces == {"mnt": "m1", "pid": "p1", "net": "n1", "user": "u1"}
-    assert result.child_namespaces == {"mnt": "m2", "pid": "p2", "net": "n2", "user": "u2"}
+    assert result.parent_namespaces == parent_namespaces()
+    assert result.child_namespaces == child_namespaces()
     assert result.executable_sha256 is not None
     assert result.max_processes == 16
     assert result.max_address_space_bytes == 512 * 1024 * 1024
     assert result.max_file_bytes == 64 * 1024 * 1024
     assert result.max_open_files == 256
     assert result.tmpfs_bytes == 64 * 1024 * 1024
+
+
+def test_bubblewrap_preflight_rejects_ipc_namespace_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "sut"
+    evidence = tmp_path / "evidence"
+    workspace.mkdir()
+    evidence.mkdir()
+    executable = tmp_path / "bwrap"
+    executable.write_bytes(b"bubblewrap")
+    executable.chmod(0o755)
+    monkeypatch.setattr(sandbox_module.shutil, "which", lambda *args, **kwargs: str(executable))
+    monkeypatch.setattr(
+        BubblewrapPytestSandbox,
+        "_namespace_identities",
+        staticmethod(parent_namespaces),
+    )
+    drifted = child_namespaces()
+    drifted["ipc"] = parent_namespaces()["ipc"]
+    responses = iter(
+        [
+            process_result(stdout="bubblewrap 0.12.0\n"),
+            process_result(stdout=json.dumps(isolation_payload(namespaces=drifted))),
+        ]
+    )
+    monkeypatch.setattr(
+        sandbox_module,
+        "run_bounded_subprocess",
+        lambda *args, **kwargs: next(responses),
+    )
+
+    result = BubblewrapPytestSandbox(workspace, evidence_root=evidence).preflight()
+
+    assert result.ready is False
+    assert "did not establish every isolation invariant" in (result.reason or "")
+    assert result.parent_namespaces is not None
+    assert result.child_namespaces is not None
+    assert result.parent_namespaces["ipc"] == result.child_namespaces["ipc"]
+
+
+def test_bubblewrap_run_rejects_executable_mutation_after_preflight_before_spawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "sut"
+    evidence = tmp_path / "evidence"
+    workspace.mkdir()
+    evidence.mkdir()
+    executable = tmp_path / "bwrap"
+    executable.write_bytes(b"bubblewrap-before")
+    executable.chmod(0o755)
+    sandbox = BubblewrapPytestSandbox(workspace, evidence_root=evidence)
+    digest = sandbox._hash_executable(executable)  # noqa: SLF001
+    preflight = ready_preflight(executable)
+    preflight = PytestSandboxPreflight(**{**preflight.__dict__, "executable_sha256": digest})
+
+    def stale_preflight() -> PytestSandboxPreflight:
+        executable.write_bytes(b"bubblewrap-after")
+        executable.chmod(0o755)
+        return preflight
+
+    monkeypatch.setattr(sandbox, "preflight", stale_preflight)
+    monkeypatch.setattr(
+        sandbox_module,
+        "run_bounded_subprocess",
+        lambda *args, **kwargs: pytest.fail("mutated executable must block before spawn"),
+    )
+
+    with pytest.raises(PytestSandboxUnavailable, match="changed after capability proof"):
+        sandbox.run(
+            [str(sandbox.python_executable), "-m", "pytest"],
+            env={"LANG": "C.UTF-8"},
+            timeout_seconds=5,
+        )
 
 
 def test_bubblewrap_run_requires_status_proof_that_child_started(
@@ -299,6 +413,8 @@ def test_execution_guard_script_revalidates_before_exec() -> None:
     compile(script, "<pytest-sandbox-execution-guard>", "exec")
     for required in (
         "/proc/self/ns/",
+        '"ipc"',
+        '"uts"',
         "observed_workspace.st_dev",
         "probe.write_text",
         "forbidden_root.exists",
