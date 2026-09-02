@@ -236,8 +236,17 @@ def test_hash_valid_journal_growth_after_runtime_snapshot_is_not_recoverable(
     )
 
 
+def test_missing_run_directory_is_not_recoverable(tmp_path: Path) -> None:
+    result = inspect_recovery(tmp_path / "missing-run")
+
+    assert result == {"recoverable": False, "reason": "run directory is missing"}
+
+
 def test_missing_state_is_not_recoverable(tmp_path: Path) -> None:
-    result = inspect_recovery(tmp_path / "missing")
+    run_dir = tmp_path / "missing-state"
+    run_dir.mkdir()
+
+    result = inspect_recovery(run_dir)
 
     assert result == {"recoverable": False, "reason": "state.json is missing"}
 

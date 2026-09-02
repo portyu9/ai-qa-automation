@@ -20,7 +20,7 @@ def write_json(path: Path, value: object) -> None:
 def base_state(*, workspace: str) -> dict[str, object]:
     return {
         "run_id": "run-1",
-        "objective": "Investigate checkout",
+        "objective": "Investigate checkout failure",
         "workspace": workspace,
         "terminal_status": "NOT_VERIFIED",
         "terminal_reason": "full regression not executed",
@@ -407,5 +407,8 @@ def test_attestation_rejects_symlinked_subject(tmp_path: Path) -> None:
 
 
 def test_attestation_requires_state(tmp_path: Path) -> None:
+    run_dir = tmp_path / "missing-state"
+    run_dir.mkdir()
+
     with pytest.raises(FileNotFoundError, match=r"state\.json"):
-        build_run_attestation(tmp_path / "missing")
+        build_run_attestation(run_dir)

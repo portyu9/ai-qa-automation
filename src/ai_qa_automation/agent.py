@@ -83,7 +83,13 @@ async def run_agent(
         raise RuntimeError("artifact_root was not resolved")
     run_dir = artifact_root / state.run_id
     state_store = StateStore(run_dir / "state.json")
-    evidence = EvidenceStore(artifact_root, state.run_id, regulated_mode=cfg.regulated_mode)
+    run_root_identity = state_store.parent_identity
+    evidence = EvidenceStore(
+        artifact_root,
+        state.run_id,
+        regulated_mode=cfg.regulated_mode,
+        expected_run_root_identity=run_root_identity,
+    )
     budget = ExecutionBudget(
         max_tool_calls=cfg.max_tool_calls,
         max_network_calls=cfg.max_network_calls,
@@ -94,8 +100,14 @@ async def run_agent(
         run_dir / "journal.jsonl",
         regulated_mode=cfg.regulated_mode,
         max_events=max(1000, cfg.max_tool_calls * 50),
+        expected_parent_identity=run_root_identity,
     )
-    lease = WorkspaceLease(artifact_root, workspace, state.run_id)
+    lease = WorkspaceLease(
+        artifact_root,
+        workspace,
+        state.run_id,
+        run_root_identity=run_root_identity,
+    )
     control = RuntimeControl(
         workspace=workspace,
         budget=budget,
@@ -103,6 +115,7 @@ async def run_agent(
         metadata_path=run_dir / "runtime.json",
         lease_id=lease.lease_id,
         max_repeated_action=cfg.max_repeated_action,
+        persistence_root_identity=run_root_identity,
     )
     control.persist()
     state_store.save(state)
@@ -228,13 +241,6 @@ async def run_agent(
         state.mcp_status = {name: MCPStatus(status) for name, status in statuses.items()}
         mcp_servers: dict[str, Any] = {"qa": internal_server, **external}
 
-        # `allowed_tools` is an SDK auto-approval rule, not an availability list.
-        # Internal QA tools are pre-approved only because their in-process service
-        # boundary re-proves workspace freshness and tool-specific authority before
-        # side effects. External MCP tools remain unlisted so any policy-allowed read
-        # reaches `can_use_tool`, which independently re-proves workspace freshness.
-        # PreToolUse remains the bounded attempt/repetition/budget/policy accounting
-        # hook and deliberately does not run repository inspection inside its 10s hook.
         allowed_tools = list(internal_tool_names)
 
         options = ClaudeAgentOptions(

@@ -38,6 +38,14 @@ def _write_duplicate_pending_runtime(path: Path, *, workspace: Path) -> None:
     )
 
 
+def _lease_for(prior_run: Path) -> dict[str, object]:
+    status = prior_run.stat(follow_symlinks=False)
+    return {
+        "run_id": prior_run.name,
+        "run_root_identity": {"device": status.st_dev, "inode": status.st_ino},
+    }
+
+
 @pytest.mark.parametrize(
     "raw",
     [
@@ -84,14 +92,13 @@ def test_stale_recovery_does_not_hide_pending_mutation_behind_duplicate_key(
     artifact_root = tmp_path / "artifacts"
     workspace = tmp_path / "sut"
     workspace.mkdir()
-    _write_duplicate_pending_runtime(
-        artifact_root / "run-old" / "runtime.json", workspace=workspace
-    )
+    prior_run = artifact_root / "run-old"
+    _write_duplicate_pending_runtime(prior_run / "runtime.json", workspace=workspace)
 
     result = recover_stale_mutation(
         artifact_root=artifact_root,
         workspace=workspace,
-        previous_lease={"run_id": "run-old"},
+        previous_lease=_lease_for(prior_run),
         current_workspace_fingerprint="fp",
         recovering_run_id="run-new",
     )
@@ -151,7 +158,7 @@ def test_stale_recovery_rejects_coercive_existed_flag_before_touching_target(
     result = recover_stale_mutation(
         artifact_root=artifact_root,
         workspace=workspace,
-        previous_lease={"run_id": "run-old"},
+        previous_lease=_lease_for(prior_run),
         current_workspace_fingerprint="fp",
         recovering_run_id="run-new",
     )

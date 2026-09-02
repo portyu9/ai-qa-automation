@@ -32,13 +32,25 @@ The lease prevents cooperating framework processes from simultaneously holding m
 
 Trusted artifact storage remains a deployment-owned control-plane boundary. Repository code rejects ambiguous/symlinked control paths and validates persisted authority, but it does not claim to defend against an already-compromised operating-system account with arbitrary write authority over the trusted artifact root.
 
+### Run-persistence-root authority
+
+The run directory beneath trusted artifact storage is an authority-bearing subject distinct from the target workspace. On platforms with descriptor-relative no-follow support, `StateStore` establishes one exact run-persistence-root `(device, inode)` identity when canonical state storage is created. That identity binds canonical-state persistence and the same enforceable tuple is supplied to the operational journal, process-control metadata, evidence/artifact persistence, and workspace lease rather than letting each component independently trust the same pathname.
+
+Authority-bearing I/O below that root is descriptor-confined or revalidated through the pinned root before success is returned. Nested artifact and rollback parents are therefore not allowed to redirect a successful read, append, publication, or closure merely because an ordinary directory was renamed and replaced without a symlink. If the rooted path no longer resolves to the authorized directory/entry after I/O, the operation fails closed; an already-published object may remain orphaned rather than being deleted through a now-ambiguous pathname.
+
+The workspace lease durably records that enforceable current run-root identity—or `null` when equivalent descriptor-relative authority is unavailable—for future stale recovery. On descriptor-capable platforms, automatic recovery of a prior run requires a valid lease-recorded prior run-root identity and an exact current `(device, inode)` match **before prior transaction authority is accepted and before target rollback can be authorized**. Missing, malformed, or mismatched historical run-root identity is `BLOCKED`, even if a replacement prior-run tree is internally coherent.
+
+Attestation, lineage, and recovery inspection have a different evidence boundary: they pin the one run-root identity they actually observe for that inspection and reject substitution during the multi-file read. They do not claim a historical identity that is absent from their input authority. Automatic stale recovery is stronger because the prior lease supplies the historical identity needed to compare the observed directory with the run that originally held mutation authority.
+
+On platforms where descriptor-relative no-follow authority cannot be enforced, the runtime retains conservative symlink/path ownership checks but does **not** persist or consume a best-effort stat tuple as equivalent run-root authority. That fallback is intentionally weaker and must not be represented as the same proof.
+
 ## Mutation transaction state machine
 
 ```mermaid
 stateDiagram-v2
     direction LR
     accTitle: Autonomous mutation transaction and crash-recovery state machine
-    accDescr: A mutation starts only from an owned baseline. Exact-path patch safety, exact-path-bound targeted pytest, and full regression must pass before commit. Failed or incomplete proof enters rollback only after an advanced revision is durably marked NOT_VERIFIED. A crashed transaction is automatically recovered only when workspace root identity, fingerprint, canonical state lineage, paths, and backup integrity remain provable; otherwise the runtime blocks for manual review.
+    accDescr: A mutation starts only from an owned baseline. Exact-path patch safety, exact-path-bound targeted pytest, and full regression must pass before commit. Failed or incomplete proof enters rollback only after an advanced revision is durably marked NOT_VERIFIED. A crashed transaction is automatically recovered only when run-persistence identity, workspace root identity, fingerprint, canonical state lineage, paths, and backup integrity remain provable; otherwise the runtime blocks for manual review.
 
     [*] --> Baseline: owned lease + root identity + fingerprint
 
@@ -188,11 +200,16 @@ Recovery validates the complete ownership and lineage chain before touching the 
 
 - prior `run_id` is a non-traversing relative path beneath trusted artifact storage;
 - run-directory components are not symlinks;
-- prior `journal.jsonl` ownership is checked before recovery mutation;
-- `runtime.json` is a regular non-symlink file;
-- canonical `state.json` must load under its strict schema/JSON bounds;
+- on descriptor-relative no-follow platforms, the prior lease must contain the exact historical run-persistence-root `(device, inode)` identity;
+- the current prior-run directory must match that recorded identity before `runtime.json`, canonical state, journal, rollback backup, or other transaction authority is accepted;
+- missing, malformed, or mismatched historical run-root identity blocks automatic rollback before any target write;
+- prior `journal.jsonl` ownership is checked before recovery mutation and is opened under the authorized prior run root where enforceable;
+- `runtime.json` is a regular non-symlink file and is read under the authorized prior run root where enforceable;
+- canonical `state.json` must load under its strict schema/JSON bounds and the same prior run-root authority where enforceable;
 - prior state `run_id` and workspace must match lease/runtime authority; and
 - runtime workspace exactly matches the newly leased workspace.
+
+A coherent replacement `artifacts/<prior-run-id>` directory therefore cannot manufacture stale-recovery authority merely by presenting mutually consistent state/runtime/journal/backup bytes at the expected pathname.
 
 ### Workspace-state ownership
 
@@ -250,12 +267,12 @@ A later successful invocation resets the circuit. A broken provider/tool therefo
 
 | Record | Purpose | Ownership rule |
 |---|---|---|
-| `state.json` | canonical QA decision/evidence state, including rollback-intent/rolled-back validation lineage | recovery/attestation reject ambiguous symlink ownership; rollback cannot clear runtime authority ahead of required canonical lineage persistence; trusted artifact storage remains deployment-owned |
-| `runtime.json` | lease, workspace-root identity, fingerprint, budgets, circuits, mutation metadata, journal head | stale recovery requires owned metadata plus root/fingerprint/state-revision subject binding; writes/restores are size-bounded |
-| `journal.jsonl` | append-only hash-chained lifecycle/tool events | journal rejects pre-existing and post-init symlink substitution and byte-bounds records |
-| `evidence-manifest.json` | evidence/artifact identities and hashes | evidence store rejects symlink control-file substitution, strict-JSON ambiguity, cross-run records, and bounded-registry violations |
-| `rollback/` | temporary authoritative prior bytes | directory + backup ownership, size, and hashes are revalidated |
-| `.leases/*.lock` | cross-process workspace ownership | lease-directory/file identities are revalidated; POSIX-capable runtimes additionally lock the target workspace inode |
+| `state.json` | canonical QA decision/evidence state, including rollback-intent/rolled-back validation lineage | on descriptor-capable platforms, shares the pinned run-persistence-root identity; recovery/attestation reject ambiguous ownership; rollback cannot clear runtime authority ahead of required canonical lineage persistence |
+| `runtime.json` | lease, workspace-root identity, fingerprint, budgets, circuits, mutation metadata, journal head | shares the pinned run-persistence-root identity where enforceable; stale recovery requires lease-bound historical run-root authority plus root/fingerprint/state-revision subject binding |
+| `journal.jsonl` | append-only hash-chained lifecycle/tool events | shares the pinned run-persistence-root identity where enforceable; final entry and parent substitution are rejected and records remain byte-bounded |
+| `evidence-manifest.json` | evidence/artifact identities and hashes | evidence shares the pinned run-persistence-root identity where enforceable and rejects root/nested-parent substitution, strict-JSON ambiguity, cross-run records, and bounded-registry violations |
+| `rollback/` | temporary authoritative prior bytes | backup reads/cleanup are bound beneath the authorized run root where enforceable; directory + backup ownership, size, and hashes are revalidated |
+| `.leases/*.lock` | cross-process workspace ownership + historical recovery metadata | lease-directory/file identities are revalidated; POSIX-capable runtimes additionally lock the target workspace inode; the lease records enforceable run-root identity for later stale recovery or `null` when equivalent authority is unavailable |
 
 Keeping these concerns separate prevents process recovery metadata from becoming test evidence or a QA conclusion while still requiring their authority-bearing transitions to remain coherent.
 
@@ -267,7 +284,9 @@ ai-qa recover artifacts/run-<id>
 
 Recovery inspection uses the same subject-bound closure rule as live terminal evaluation and mutation authorization. A changed revision is closed only when one exact patch target has patch-safety PASS, targeted pytest is bound to that target, regression passed, no non-PASS current-revision transaction gate remains, and no pending mutation remains.
 
-The inspection path also rejects symlinked run/state/runtime/journal control paths and, where descriptor-relative identity is available, requires persisted workspace-root identity to match the current workspace before declaring the run recoverable. Recreating byte-equivalent content at the same pathname is not sufficient subject identity.
+On descriptor-relative no-follow platforms, one observed run-root identity is pinned for the complete inspection and threaded across state/runtime/journal reads; ordinary-directory replacement during that inspection is rejected rather than allowing authority from two different roots to be combined. This is inspection-time consistency, not a claim that the inspector possesses the historical run-root identity. Automatic stale recovery separately obtains that historical identity from prior lease metadata before it may authorize rollback.
+
+The inspection path also rejects symlinked run/state/runtime/journal control paths and, where descriptor-relative workspace identity is available, requires persisted workspace-root identity to match the current workspace before declaring the run recoverable. Recreating byte-equivalent content at the same pathname is not sufficient subject identity when an applicable identity authority exists.
 
 It does not replay or reconstruct hidden Claude conversational state; it decides whether a **new** session may safely begin from persisted evidence.
 
@@ -277,6 +296,8 @@ It does not replay or reconstruct hidden Claude conversational state; it decides
 |---|---|
 | Another process owns target lease/inode | `BLOCKED` |
 | Lease path ownership is ambiguous | infrastructure/lease failure before agent execution |
+| Live run-persistence root changes after authority is pinned | authority-bearing persistence/inspection fails closed |
+| Prior lease run-root identity missing/invalid/mismatched where enforceable | stale recovery `BLOCKED` before target write |
 | Workspace root identity changes after authorization | `BLOCKED` / manual reconciliation |
 | Workspace drift before mutation | `BLOCKED` |
 | Target path has traversal/symlink ambiguity | `BLOCKED` |

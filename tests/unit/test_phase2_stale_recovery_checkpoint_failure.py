@@ -73,6 +73,7 @@ def test_stale_recovery_state_checkpoint_failure_keeps_runtime_pending_after_res
     journal = RunJournal(prior_run / "journal.jsonl")
     journal.append("mutation_prepared")
     root_stat = workspace.stat(follow_symlinks=False)
+    run_root_stat = prior_run.stat(follow_symlinks=False)
     runtime = {
         "workspace": str(workspace.resolve()),
         "workspace_root_identity": {
@@ -127,7 +128,13 @@ def test_stale_recovery_state_checkpoint_failure_keeps_runtime_pending_after_res
     result = recover_stale_mutation(
         artifact_root=artifact_root,
         workspace=workspace,
-        previous_lease={"run_id": "run-old"},
+        previous_lease={
+            "run_id": "run-old",
+            "run_root_identity": {
+                "device": run_root_stat.st_dev,
+                "inode": run_root_stat.st_ino,
+            },
+        },
         current_workspace_fingerprint="fp-after-mutation",
         recovering_run_id="run-new",
     )

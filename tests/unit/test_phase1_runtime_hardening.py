@@ -215,6 +215,11 @@ def test_stale_recovery_retains_backup_until_runtime_closure_is_durable(
     prior_run = artifact_root / "run-old"
     backup = prior_run / "rollback" / "checkout.bin"
     backup.parent.mkdir(parents=True)
+    prior_status = prior_run.stat(follow_symlinks=False)
+    prior_lease = {
+        "run_id": "run-old",
+        "run_root_identity": {"device": prior_status.st_dev, "inode": prior_status.st_ino},
+    }
     original = b"original\n"
     backup.write_bytes(original)
     journal = RunJournal(prior_run / "journal.jsonl")
@@ -246,14 +251,20 @@ def test_stale_recovery_retains_backup_until_runtime_closure_is_durable(
         )
     )
 
-    def fail_runtime_close(_path: Path, _payload: dict[str, object]) -> None:
+    def fail_runtime_close(
+        _path: Path,
+        _payload: dict[str, object],
+        *,
+        expected_parent_identity: tuple[int, int] | None = None,
+    ) -> None:
+        assert expected_parent_identity == (prior_status.st_dev, prior_status.st_ino)
         raise OSError("simulated durable metadata failure")
 
     monkeypatch.setattr(stale_recovery_module, "atomic_write_json", fail_runtime_close)
     result = recover_stale_mutation(
         artifact_root=artifact_root,
         workspace=workspace,
-        previous_lease={"run_id": "run-old"},
+        previous_lease=prior_lease,
         current_workspace_fingerprint="fp-after-mutation",
         recovering_run_id="run-new",
     )

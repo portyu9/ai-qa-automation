@@ -14,7 +14,7 @@ from ..fs_authority import (
     read_bytes_confined,
     unlink_file_confined,
 )
-from ..io_safety import read_json_object_bounded
+from ..io_safety import parse_json_object_strict, read_json_object_bounded
 from ..state import StateStore
 from .journal import RunJournal, validate_runtime_journal_binding
 from .mutation_lineage import reconcile_rolled_back_mutation
@@ -61,8 +61,60 @@ def _validated_backup_relative(prior_run_dir: Path, backup_raw: str) -> Path:
     return relative
 
 
-def _load_runtime_metadata(runtime_path: Path) -> dict[str, Any]:
+def _validated_run_root_identity(previous_lease: dict[str, Any]) -> tuple[int, int] | None:
+    """Validate prior lease authority over the run-persistence directory."""
+
+    if "run_root_identity" not in previous_lease:
+        if descriptor_relative_authority_supported():
+            raise ValueError("prior lease run-root identity authority is missing")
+        return None
+    raw = previous_lease["run_root_identity"]
+    if raw is None:
+        if descriptor_relative_authority_supported():
+            raise ValueError("prior lease run-root identity authority is missing")
+        return None
+    if not isinstance(raw, dict) or set(raw) != {"device", "inode"}:
+        raise ValueError("prior lease run-root identity authority is invalid")
+    device = raw.get("device")
+    inode = raw.get("inode")
+    if type(device) is not int or type(inode) is not int or device < 0 or inode < 0:
+        raise ValueError("prior lease run-root identity authority is invalid")
+    return device, inode
+
+
+def _current_run_root_identity(
+    prior_run_dir: Path,
+    expected: tuple[int, int] | None,
+) -> tuple[int, int] | None:
+    if expected is None:
+        return None
     try:
+        current = pin_directory_identity(prior_run_dir, label="prior run persistence directory")
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ValueError("prior run persistence directory identity could not be verified") from exc
+    if current != expected:
+        raise ValueError(
+            "prior run persistence directory changed identity after lease publication; automatic recovery is blocked"
+        )
+    return current
+
+
+def _load_runtime_metadata(
+    runtime_path: Path,
+    *,
+    prior_run_dir: Path,
+    expected_run_root_identity: tuple[int, int] | None,
+) -> dict[str, Any]:
+    try:
+        if descriptor_relative_authority_supported():
+            raw = read_bytes_confined(
+                prior_run_dir,
+                runtime_path.name,
+                max_bytes=_MAX_RUNTIME_METADATA_BYTES,
+                label="prior runtime metadata",
+                expected_root_identity=expected_run_root_identity,
+            )
+            return parse_json_object_strict(raw.decode("utf-8"), label="prior runtime metadata")
         return read_json_object_bounded(
             runtime_path,
             max_bytes=_MAX_RUNTIME_METADATA_BYTES,
@@ -95,13 +147,7 @@ def _validated_journal_event_count(metadata: dict[str, Any]) -> int:
 
 
 def _validated_workspace_root_identity(metadata: dict[str, Any]) -> tuple[int, int] | None:
-    """Validate persisted workspace-root authority before automatic rollback.
-
-    On platforms that can enforce descriptor-relative filesystem authority, an
-    absent or null identity is ambiguous and therefore blocks automatic recovery.
-    Older metadata without this authority remains recoverable only on platforms
-    where descriptor-relative root identity cannot be enforced in the first place.
-    """
+    """Validate persisted workspace-root authority before automatic rollback."""
 
     if "workspace_root_identity" not in metadata:
         if descriptor_relative_authority_supported():
@@ -148,13 +194,8 @@ def recover_stale_mutation(
     current_workspace_fingerprint_complete: bool = True,
     current_workspace_fingerprint_reasons: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    """Rollback a crashed mutation only when ownership and fingerprint still match.
+    """Rollback a crashed mutation only when ownership and fingerprint still match."""
 
-    Fingerprint completeness is relevant only after a real pending transaction is
-    discovered. A normal prior lease record with no pending mutation must not block
-    a new run merely because its current worktree is too complex to authorize an
-    autonomous write.
-    """
     if not previous_lease:
         return {"status": "NONE"}
     raw_previous_run_id = previous_lease.get("run_id")
@@ -171,22 +212,42 @@ def recover_stale_mutation(
             Path(previous_run_id),
             label="prior run directory",
         )
+        expected_run_root_identity = _validated_run_root_identity(previous_lease)
+        _current_run_root_identity(prior_run_dir, expected_run_root_identity)
         journal_path = _confined_non_symlink_path(
             prior_run_dir,
             Path("journal.jsonl"),
             label="prior run journal",
         )
-    except ValueError as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         return {"status": "BLOCKED", "reason": str(exc)}
     runtime_path = prior_run_dir / "runtime.json"
-    if runtime_path.is_symlink():
-        return {"status": "BLOCKED", "reason": "prior runtime metadata is a symlink"}
-    if not runtime_path.is_file():
-        return {"status": "NONE", "previous_run_id": previous_run_id}
     try:
-        metadata = _load_runtime_metadata(runtime_path)
+        if descriptor_relative_authority_supported():
+            metadata = _load_runtime_metadata(
+                runtime_path,
+                prior_run_dir=prior_run_dir,
+                expected_run_root_identity=expected_run_root_identity,
+            )
+        else:
+            if runtime_path.is_symlink():
+                return {"status": "BLOCKED", "reason": "prior runtime metadata is a symlink"}
+            if not runtime_path.is_file():
+                return {"status": "NONE", "previous_run_id": previous_run_id}
+            metadata = _load_runtime_metadata(
+                runtime_path,
+                prior_run_dir=prior_run_dir,
+                expected_run_root_identity=expected_run_root_identity,
+            )
+    except FileNotFoundError:
+        return {"status": "NONE", "previous_run_id": previous_run_id}
     except ValueError as exc:
         return {"status": "BLOCKED", "reason": str(exc)}
+    try:
+        _current_run_root_identity(prior_run_dir, expected_run_root_identity)
+    except ValueError as exc:
+        return {"status": "BLOCKED", "reason": str(exc)}
+
     metadata_workspace = metadata.get("workspace")
     if not isinstance(metadata_workspace, str) or metadata_workspace != str(workspace):
         return {
@@ -204,9 +265,6 @@ def recover_stale_mutation(
     if not isinstance(pending, dict) or not pending:
         return {"status": "BLOCKED", "reason": "prior pending mutation metadata is invalid"}
 
-    # A real pending mutation is authority-bearing and may trigger a workspace write.
-    # Bind the journal to the exact count/head captured in runtime.json before any
-    # fingerprint/path/rollback action can touch the target workspace.
     try:
         journal_event_count = _validated_journal_event_count(metadata)
         journal = RunJournal(
@@ -215,6 +273,7 @@ def recover_stale_mutation(
                 _MAX_RECOVERY_JOURNAL_EVENTS,
                 max(5000, journal_event_count + 10),
             ),
+            expected_parent_identity=expected_run_root_identity,
         )
         journal_status = journal.verify()
     except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
@@ -237,7 +296,10 @@ def recover_stale_mutation(
         }
     state_path = prior_run_dir / "state.json"
     try:
-        prior_state_store = StateStore(state_path)
+        prior_state_store = StateStore(
+            state_path,
+            expected_parent_identity=expected_run_root_identity,
+        )
         prior_state = prior_state_store.load()
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
         return {
@@ -293,6 +355,7 @@ def recover_stale_mutation(
     try:
         expected_workspace_identity = _validated_workspace_root_identity(metadata)
         _current_workspace_identity(workspace, expected_workspace_identity)
+        _current_run_root_identity(prior_run_dir, expected_run_root_identity)
     except ValueError as exc:
         return {
             "status": "BLOCKED",
@@ -333,7 +396,9 @@ def recover_stale_mutation(
                 backup_relative,
                 max_bytes=_MAX_ROLLBACK_BYTES,
                 label="prior rollback backup",
+                expected_root_identity=expected_run_root_identity,
             )
+            _current_run_root_identity(prior_run_dir, expected_run_root_identity)
         except OSError:
             return {"status": "BLOCKED", "reason": "prior rollback backup is unavailable"}
         except RuntimeError as exc:
@@ -354,6 +419,7 @@ def recover_stale_mutation(
                 "reason": "prior rollback backup failed integrity verification",
             }
         try:
+            _current_run_root_identity(prior_run_dir, expected_run_root_identity)
             atomic_write_bytes_confined(
                 workspace,
                 relative_path,
@@ -371,6 +437,7 @@ def recover_stale_mutation(
         backup_to_cleanup = backup_relative
     else:
         try:
+            _current_run_root_identity(prior_run_dir, expected_run_root_identity)
             unlink_file_confined(
                 workspace,
                 relative_path,
@@ -379,8 +446,6 @@ def recover_stale_mutation(
                 expected_root_identity=expected_workspace_identity,
             )
         except FileNotFoundError:
-            # The failed mutation may never have created a missing nested parent.
-            # A missing parent therefore means there is no target entry to remove.
             pass
         except (OSError, RuntimeError, ValueError) as exc:
             return {
@@ -390,21 +455,17 @@ def recover_stale_mutation(
 
     try:
         _current_workspace_identity(workspace, expected_workspace_identity)
+        _current_run_root_identity(prior_run_dir, expected_run_root_identity)
     except ValueError:
         return {
             "status": "BLOCKED",
             "previous_run_id": previous_run_id,
             "reason": (
-                "stale mutation bytes were restored but workspace root identity changed before "
-                "recovery closure; rollback authority was retained and manual reconciliation is required"
+                "stale mutation bytes were restored but an authority root changed before recovery "
+                "closure; rollback authority was retained and manual reconciliation is required"
             ),
         }
 
-    # Recovery journal augmentation remains observational: inability to append the
-    # event does not undo already-restored target bytes. But runtime closure must be
-    # bound to the journal state that actually exists after the attempt. If the
-    # journal becomes unverifiable, preserve pending authority and require manual
-    # reconciliation rather than certifying a clean recovery transition.
     with suppress(OSError, RuntimeError, ValueError, json.JSONDecodeError):
         journal.try_append(
             "stale_mutation_recovered",
@@ -413,6 +474,7 @@ def recover_stale_mutation(
         )
     try:
         post_recovery_journal = journal.verify()
+        _current_run_root_identity(prior_run_dir, expected_run_root_identity)
     except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
         return {
             "status": "BLOCKED",
@@ -432,9 +494,6 @@ def recover_stale_mutation(
             ),
         }
 
-    # Canonical state must reflect the restored bytes before runtime pending
-    # authority can be closed. This prevents a prior run from retaining SUCCESS or
-    # a closed validation revision for bytes that stale recovery has reverted.
     reconcile_rolled_back_mutation(
         prior_state,
         relative_path=relative_path,
@@ -442,6 +501,7 @@ def recover_stale_mutation(
     )
     try:
         prior_state_store.save(prior_state)
+        _current_run_root_identity(prior_run_dir, expected_run_root_identity)
     except (OSError, RuntimeError, ValueError):
         return {
             "status": "BLOCKED",
@@ -453,18 +513,18 @@ def recover_stale_mutation(
             ),
         }
 
-    # The restored target and rollback bytes intentionally coexist until runtime
-    # metadata durably closes the pending transaction. If closure fails, preserve
-    # the backup and fail closed. The persisted journal count/head are updated in
-    # the same runtime transition so future inspection cannot accept a valid but
-    # different journal chain as the prior run's authority.
     metadata["pending_mutation"] = None
     metadata["recovered_by_run_id"] = recovering_run_id
     metadata["recovered_at"] = datetime.now(UTC).isoformat()
     metadata["journal_event_count"] = post_recovery_journal["events"]
     metadata["journal_head_hash"] = post_recovery_journal["head_hash"]
     try:
-        atomic_write_json(runtime_path, metadata)
+        atomic_write_json(
+            runtime_path,
+            metadata,
+            expected_parent_identity=expected_run_root_identity,
+        )
+        _current_run_root_identity(prior_run_dir, expected_run_root_identity)
     except (OSError, RuntimeError, ValueError):
         return {
             "status": "BLOCKED",
@@ -477,14 +537,13 @@ def recover_stale_mutation(
         }
 
     if backup_to_cleanup is not None:
-        # Runtime authority is already durably closed. An orphaned rollback
-        # snapshot is safer than weakening the completed recovery transition.
         with suppress(OSError, RuntimeError, ValueError):
             unlink_file_confined(
                 prior_run_dir,
                 backup_to_cleanup,
                 missing_ok=True,
                 label="stale recovery backup cleanup",
+                expected_root_identity=expected_run_root_identity,
             )
 
     return {"status": "RECOVERED", "previous_run_id": previous_run_id, "path": relative_path}

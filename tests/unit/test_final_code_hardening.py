@@ -49,6 +49,14 @@ def _control(tmp_path: Path) -> RuntimeControl:
     )
 
 
+def _lease_for(prior_run: Path) -> dict[str, object]:
+    status = prior_run.stat(follow_symlinks=False)
+    return {
+        "run_id": prior_run.name,
+        "run_root_identity": {"device": status.st_dev, "inode": status.st_ino},
+    }
+
+
 def test_fingerprint_marks_changed_file_overflow_incomplete(tmp_path: Path) -> None:
     inspector = RepositoryInspector(tmp_path)
     changed = tuple(f"tests/test_{index:04d}.py" for index in range(1001))
@@ -278,7 +286,7 @@ def test_incomplete_fingerprint_does_not_block_prior_run_without_pending_mutatio
     result = recover_stale_mutation(
         artifact_root=artifact_root,
         workspace=workspace,
-        previous_lease={"run_id": "run-old"},
+        previous_lease=_lease_for(prior_run),
         current_workspace_fingerprint="sha256:current",
         current_workspace_fingerprint_complete=False,
         current_workspace_fingerprint_reasons=("changed-file-limit-exceeded",),
@@ -328,7 +336,7 @@ def test_incomplete_fingerprint_blocks_real_stale_pending_mutation(tmp_path: Pat
     result = recover_stale_mutation(
         artifact_root=artifact_root,
         workspace=workspace,
-        previous_lease={"run_id": "run-old"},
+        previous_lease=_lease_for(prior_run),
         current_workspace_fingerprint="sha256:prior",
         current_workspace_fingerprint_complete=False,
         current_workspace_fingerprint_reasons=("changed-file-limit-exceeded",),

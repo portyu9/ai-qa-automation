@@ -83,10 +83,11 @@ def test_runtime_rollback_cannot_be_redirected_by_parent_directory_swap(
 
     monkeypatch.setattr(fs_authority.os, "rename", swap_parent_before_publish)
 
-    rolled_back = control.rollback_pending_mutation(reason="adversarial parent swap")
+    with pytest.raises(ValueError, match="symlinked parent component"):
+        control.rollback_pending_mutation(reason="adversarial parent swap")
 
     assert swapped is True
-    assert rolled_back == "tests/test_checkout.py"
+    assert control.pending_mutation is not None
     assert outside_target.read_text(encoding="utf-8") == "outside-owned\n"
     assert (workspace / "tests-owned" / target.name).read_text(encoding="utf-8") == "original\n"
     assert (workspace / "tests").is_symlink()
@@ -143,19 +144,19 @@ def test_safe_patcher_replace_cannot_be_redirected_by_parent_directory_swap(
 
     monkeypatch.setattr(fs_authority.os, "rename", swap_parent_before_publish)
 
-    result = patcher.replace_once(
-        relative_path="tests/test_ui.py",
-        expected_sha256=digest,
-        old_text="locate('#old')",
-        new_text="locate('#new')",
-    )
+    with pytest.raises(ValueError, match="symlinked parent component"):
+        patcher.replace_once(
+            relative_path="tests/test_ui.py",
+            expected_sha256=digest,
+            old_text="locate('#old')",
+            new_text="locate('#new')",
+        )
 
     assert swapped is True
-    assert result.old_sha256 == digest
     assert outside_target.read_text(encoding="utf-8") == "outside-owned\n"
-    restored = (workspace / "tests-owned" / target.name).read_text(encoding="utf-8")
-    assert "locate('#new')" in restored
-    assert "locate('#old')" not in restored
+    detached = (workspace / "tests-owned" / target.name).read_text(encoding="utf-8")
+    assert "locate('#new')" in detached
+    assert "locate('#old')" not in detached
     assert (workspace / "tests").is_symlink()
 
 
