@@ -4,8 +4,12 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ..fs_authority import descriptor_relative_authority_supported, pin_directory_identity
-from ..io_safety import read_json_object_bounded
+from ..fs_authority import (
+    descriptor_relative_authority_supported,
+    pin_directory_identity,
+    read_bytes_confined,
+)
+from ..io_safety import parse_json_object_strict, read_json_object_bounded
 from ..state import StateStore
 from .journal import RunJournal, validate_runtime_journal_binding
 from .validation_truth import evaluate_revision_closure
@@ -61,6 +65,19 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
     if requested_run_dir.is_symlink():
         return {"recoverable": False, "reason": "run directory has ambiguous symlink ownership"}
     run_dir = requested_run_dir.resolve()
+    if not run_dir.is_dir():
+        return {"recoverable": False, "reason": "run directory is missing"}
+    try:
+        run_root_identity = (
+            pin_directory_identity(run_dir, label="recovery run directory")
+            if descriptor_relative_authority_supported()
+            else None
+        )
+    except (OSError, RuntimeError, ValueError):
+        return {
+            "recoverable": False,
+            "reason": "run directory identity could not be verified",
+        }
     state_path = run_dir / "state.json"
     journal_path = run_dir / "journal.jsonl"
     runtime_path = run_dir / "runtime.json"
@@ -75,11 +92,18 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
             return {"recoverable": False, "reason": f"{label} is missing"}
 
     try:
-        state = StateStore(state_path).load()
+        state = StateStore(
+            state_path,
+            expected_parent_identity=run_root_identity,
+        ).load()
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         return {"recoverable": False, "reason": f"state could not be loaded: {type(exc).__name__}"}
     try:
-        journal_status = RunJournal(journal_path, regulated_mode=False).verify()
+        journal_status = RunJournal(
+            journal_path,
+            regulated_mode=False,
+            expected_parent_identity=run_root_identity,
+        ).verify()
     except (OSError, UnicodeError, json.JSONDecodeError, RuntimeError, ValueError) as exc:
         return {
             "recoverable": False,
@@ -89,11 +113,24 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
         return {"recoverable": False, "reason": "journal hash chain is invalid"}
 
     try:
-        runtime_metadata = read_json_object_bounded(
-            runtime_path,
-            max_bytes=_MAX_RUNTIME_METADATA_BYTES,
-            label="runtime.json",
-        )
+        if run_root_identity is not None:
+            raw_runtime = read_bytes_confined(
+                run_dir,
+                runtime_path.name,
+                max_bytes=_MAX_RUNTIME_METADATA_BYTES,
+                label="runtime.json",
+                expected_root_identity=run_root_identity,
+            )
+            runtime_metadata = parse_json_object_strict(
+                raw_runtime.decode("utf-8"),
+                label="runtime.json",
+            )
+        else:
+            runtime_metadata = read_json_object_bounded(
+                runtime_path,
+                max_bytes=_MAX_RUNTIME_METADATA_BYTES,
+                label="runtime.json",
+            )
     except UnicodeError:
         return {"recoverable": False, "reason": "runtime.json is not valid UTF-8"}
     except OSError:
