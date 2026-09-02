@@ -235,7 +235,11 @@ def verify_regulated_audit_subject(
                 if event_type == "evidence_registered":
                     evidence_id = payload.get("evidence_id")
                     content = payload.get("content_hash")
-                    if not isinstance(evidence_id, str) or not evidence_id or not isinstance(content, str):
+                    if (
+                        not isinstance(evidence_id, str)
+                        or not evidence_id
+                        or not isinstance(content, str)
+                    ):
                         raise ValueError("regulated audit evidence registration is invalid")
                     if evidence_id in evidence_hashes:
                         raise ValueError("regulated audit contains duplicate evidence registration")
@@ -245,7 +249,11 @@ def verify_regulated_audit_subject(
                 else:
                     artifact_id = payload.get("artifact_id")
                     content = payload.get("content_hash")
-                    if not isinstance(artifact_id, str) or not artifact_id or not isinstance(content, str):
+                    if (
+                        not isinstance(artifact_id, str)
+                        or not artifact_id
+                        or not isinstance(content, str)
+                    ):
                         raise ValueError("regulated audit artifact registration is invalid")
                     if artifact_id in artifact_hashes:
                         raise ValueError("regulated audit contains duplicate artifact registration")
@@ -1057,7 +1065,9 @@ class EvidenceStore:
             return
         status = self._current_audit_status(reconcile_registry=True)
         if not status.get("valid"):
-            raise ValueError(str(status.get("reason") or "regulated registry audit reconciliation failed"))
+            raise ValueError(
+                str(status.get("reason") or "regulated registry audit reconciliation failed")
+            )
 
     def verify_audit_chain(self) -> bool:
         """Verify the current regulated audit subject against its pinned file identity."""
@@ -1071,9 +1081,7 @@ class EvidenceStore:
             return bool(status.get("valid"))
 
     def _restore_audit_tail(self) -> None:
-        manifest_exists = self._entry_exists(
-            "evidence-manifest.json", label="evidence manifest"
-        )
+        manifest_exists = self._entry_exists("evidence-manifest.json", label="evidence manifest")
         audit_exists = self._entry_exists("audit-log.jsonl", label="regulated audit log")
         if not audit_exists:
             if manifest_exists:
@@ -1219,11 +1227,11 @@ class EvidenceStore:
                     audit_status.get("events") != self._audit_sequence
                     or audit_status.get("head_hash") != self._audit_previous_hash
                 ):
-                    raise ValueError("regulated audit persisted tail does not match in-memory authority")
+                    raise ValueError(
+                        "regulated audit persisted tail does not match in-memory authority"
+                    )
                 self._audit_content_hash = str(audit_status["content_hash"])
-                audit_binding = validate_regulated_audit_binding(
-                    self._manifest_data()["audit_log"]
-                )
+                audit_binding = validate_regulated_audit_binding(self._manifest_data()["audit_log"])
             except BaseException:
                 self._audit_write_uncertain = True
                 raise
@@ -1246,7 +1254,9 @@ class EvidenceStore:
                         chunks.append(chunk.encode("utf-8"))
                 except JsonSerializationBoundsError as exc:
                     if exc.code == "bytes":
-                        raise ValueError("evidence manifest exceeds persistence size bound") from exc
+                        raise ValueError(
+                            "evidence manifest exceeds persistence size bound"
+                        ) from exc
                     raise ValueError(
                         f"evidence manifest violates persistence serialization bound: {exc.code}"
                     ) from exc
@@ -1312,4 +1322,3 @@ class EvidenceStore:
             if self.regulated_mode:
                 self._audit_write_uncertain = True
             raise
-
