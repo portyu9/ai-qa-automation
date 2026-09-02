@@ -117,12 +117,14 @@ def handler(event: Any, context: Any) -> dict[str, Any]:
             body=body,
             signature_header=headers.get("x-hub-signature-256"),
         )
+        if not MIN_WEBHOOK_SECRET_BYTES <= len(webhook_secret) <= MAX_WEBHOOK_SECRET_BYTES:
+            raise RuntimeError("admitted webhook secret is outside bounds")
 
+        stage = "policy_load"
         expected_policy_sha = _policy_pin()
         if expected_policy_sha == ZERO_POLICY_SHA:
             return _response(202, {"outcome": "BLOCKED"})
 
-        stage = "policy_load"
         policy_bytes, policy_sha256 = _load_policy(expected_sha=expected_policy_sha)
         policy = OneShotPolicy.parse(policy_bytes)
         wakeup = parse_workflow_run_wakeup(
