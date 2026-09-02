@@ -54,6 +54,14 @@ def _write_pending_runtime(
     )
 
 
+def _previous_lease(prior_run: Path) -> dict[str, object]:
+    status = prior_run.stat(follow_symlinks=False)
+    return {
+        "run_id": prior_run.name,
+        "run_root_identity": {"device": status.st_dev, "inode": status.st_ino},
+    }
+
+
 def test_stale_recovery_rejects_byte_equivalent_workspace_root_replacement(
     tmp_path: Path,
 ) -> None:
@@ -79,6 +87,7 @@ def test_stale_recovery_rejects_byte_equivalent_workspace_root_replacement(
         backup=backup,
         fingerprint="same-fingerprint",
     )
+    previous_lease = _previous_lease(prior_run)
 
     original_workspace = tmp_path / "sut-original"
     workspace.rename(original_workspace)
@@ -89,7 +98,7 @@ def test_stale_recovery_rejects_byte_equivalent_workspace_root_replacement(
     result = recover_stale_mutation(
         artifact_root=artifact_root,
         workspace=workspace,
-        previous_lease={"run_id": "run-old"},
+        previous_lease=previous_lease,
         current_workspace_fingerprint="same-fingerprint",
         recovering_run_id="run-new",
     )
@@ -130,6 +139,7 @@ def test_stale_recovery_rejects_missing_workspace_root_identity_authority(
         backup=backup,
         fingerprint="same-fingerprint",
     )
+    previous_lease = _previous_lease(prior_run)
     runtime_path = prior_run / "runtime.json"
     payload = json.loads(runtime_path.read_text(encoding="utf-8"))
     del payload["workspace_root_identity"]
@@ -141,7 +151,7 @@ def test_stale_recovery_rejects_missing_workspace_root_identity_authority(
     result = recover_stale_mutation(
         artifact_root=artifact_root,
         workspace=workspace,
-        previous_lease={"run_id": "run-old"},
+        previous_lease=previous_lease,
         current_workspace_fingerprint="same-fingerprint",
         recovering_run_id="run-new",
     )
@@ -177,11 +187,12 @@ def test_stale_recovery_accepts_matching_persisted_workspace_root_identity(
         backup=backup,
         fingerprint="same-fingerprint",
     )
+    previous_lease = _previous_lease(prior_run)
 
     result = recover_stale_mutation(
         artifact_root=artifact_root,
         workspace=workspace,
-        previous_lease={"run_id": "run-old"},
+        previous_lease=previous_lease,
         current_workspace_fingerprint="same-fingerprint",
         recovering_run_id="run-new",
     )
