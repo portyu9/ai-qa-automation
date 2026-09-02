@@ -79,10 +79,15 @@ def stale_runtime_payload(
 
 
 def recover(artifact_root: Path, workspace: Path, *, fingerprint: str = "fp") -> dict[str, object]:
+    prior_run = artifact_root / "run-old"
+    status = prior_run.stat(follow_symlinks=False)
     return recover_stale_mutation(
         artifact_root=artifact_root,
         workspace=workspace,
-        previous_lease={"run_id": "run-old"},
+        previous_lease={
+            "run_id": "run-old",
+            "run_root_identity": {"device": status.st_dev, "inode": status.st_ino},
+        },
         current_workspace_fingerprint=fingerprint,
         recovering_run_id="run-new",
     )
