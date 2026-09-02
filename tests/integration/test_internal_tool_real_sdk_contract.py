@@ -107,6 +107,8 @@ class FakeTestRunner:
             duration_seconds=0.01,
             stdout="1 passed",
             stderr="",
+            execution_started=True,
+            block_reason=None,
         )
 
 
