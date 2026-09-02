@@ -65,6 +65,7 @@ class RuntimeControl:
     open_circuits: set[str] = field(default_factory=set)
     repeated_action_counts: dict[str, int] = field(default_factory=dict)
     pending_mutation: PendingMutation | None = None
+    persistence_root_identity: tuple[int, int] | None = None
     rollback_lineage_before_close: Callable[[PendingMutation], None] | None = field(
         default=None,
         repr=False,
@@ -90,11 +91,38 @@ class RuntimeControl:
             raise ValueError("max_repeated_action must be a positive integer")
         self.workspace = self.workspace.expanduser().resolve()
         self.metadata_path = self.metadata_path.expanduser()
+        metadata_parent = self.metadata_path.parent
+        if metadata_parent.is_symlink():
+            raise ValueError("runtime persistence directory is a symlink and has ambiguous ownership")
+        metadata_parent.mkdir(parents=True, exist_ok=True)
         if descriptor_relative_authority_supported():
             self._workspace_identity = pin_directory_identity(
                 self.workspace,
                 label="runtime workspace",
             )
+            current_persistence_identity = pin_directory_identity(
+                metadata_parent,
+                label="runtime persistence directory",
+            )
+            if (
+                self.persistence_root_identity is not None
+                and current_persistence_identity != self.persistence_root_identity
+            ):
+                raise ValueError(
+                    "runtime persistence directory does not match authorized run persistence root"
+                )
+            self.persistence_root_identity = current_persistence_identity
+        else:
+            observed = metadata_parent.stat(follow_symlinks=False)
+            current_persistence_identity = (observed.st_dev, observed.st_ino)
+            if (
+                self.persistence_root_identity is not None
+                and current_persistence_identity != self.persistence_root_identity
+            ):
+                raise ValueError(
+                    "runtime persistence directory does not match authorized run persistence root"
+                )
+            self.persistence_root_identity = current_persistence_identity
 
     @property
     def workspace_identity(self) -> tuple[int, int] | None:
@@ -221,6 +249,7 @@ class RuntimeControl:
                         create_parents=True,
                         create_only=False,
                         label="mutation rollback directory backup",
+                        expected_root_identity=self.persistence_root_identity,
                     )
                 except (OSError, RuntimeError, ValueError) as exc:
                     raise MutationPendingError(
@@ -428,6 +457,7 @@ class RuntimeControl:
                 relative,
                 max_bytes=_MAX_ROLLBACK_BYTES,
                 label="pending rollback directory backup",
+                expected_root_identity=self.persistence_root_identity,
             )
         except FileNotFoundError as exc:
             raise RuntimeError("pending rollback backup is missing or not a regular file") from exc
@@ -459,6 +489,7 @@ class RuntimeControl:
                 relative,
                 missing_ok=True,
                 label="mutation rollback directory backup cleanup",
+                expected_root_identity=self.persistence_root_identity,
             )
         except (OSError, RuntimeError, ValueError):
             return False
@@ -471,7 +502,11 @@ class RuntimeControl:
 
     def persist(self) -> None:
         with self._lock:
-            atomic_write_json(self.metadata_path, self.snapshot(include_pending_details=True))
+            atomic_write_json(
+                self.metadata_path,
+                self.snapshot(include_pending_details=True),
+                expected_parent_identity=self.persistence_root_identity,
+            )
 
     def snapshot(self, *, include_pending_details: bool = False) -> dict[str, Any]:
         with self._lock:
@@ -553,20 +588,53 @@ def _owned_atomic_target(path: Path) -> Path:
     return target
 
 
-def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+def atomic_write_json(
+    path: Path,
+    payload: dict[str, Any],
+    *,
+    expected_parent_identity: tuple[int, int] | None = None,
+) -> None:
     path = _owned_atomic_target(path)
-    rendered = json.dumps(payload, indent=2, sort_keys=True, default=str)
-    if len(rendered.encode("utf-8")) > _MAX_RUNTIME_METADATA_BYTES:
+    rendered_bytes = json.dumps(payload, indent=2, sort_keys=True, default=str).encode("utf-8")
+    if len(rendered_bytes) > _MAX_RUNTIME_METADATA_BYTES:
         raise ValueError("runtime metadata exceeds persistence size bound")
+    if descriptor_relative_authority_supported():
+        current_identity = pin_directory_identity(path.parent, label="runtime metadata directory")
+        if expected_parent_identity is not None and current_identity != expected_parent_identity:
+            raise RuntimeError("runtime metadata directory changed identity since authorization")
+        atomic_write_bytes_confined(
+            path.parent,
+            path.name,
+            rendered_bytes,
+            create_parents=False,
+            create_only=False,
+            label="runtime metadata",
+            expected_root_identity=(
+                expected_parent_identity if expected_parent_identity is not None else current_identity
+            ),
+        )
+        return
+    if expected_parent_identity is not None:
+        before = path.parent.stat(follow_symlinks=False)
+        if (before.st_dev, before.st_ino) != expected_parent_identity:
+            raise RuntimeError("runtime metadata directory changed identity since authorization")
     fd, raw = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     temp = Path(raw)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            stream.write(rendered)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(rendered_bytes)
             stream.flush()
             os.fsync(stream.fileno())
+        if expected_parent_identity is not None:
+            before_replace = path.parent.stat(follow_symlinks=False)
+            if (before_replace.st_dev, before_replace.st_ino) != expected_parent_identity:
+                raise RuntimeError("runtime metadata directory changed identity since authorization")
         temp.replace(path)
         fsync_directory(path.parent)
+        if expected_parent_identity is not None:
+            after = path.parent.stat(follow_symlinks=False)
+            if (after.st_dev, after.st_ino) != expected_parent_identity:
+                raise RuntimeError("runtime metadata directory changed identity during persistence")
     finally:
         temp.unlink(missing_ok=True)
 
