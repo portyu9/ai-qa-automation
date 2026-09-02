@@ -22,7 +22,7 @@ from .execution_env import (
 _SANDBOX_EXECUTABLE_MAX_BYTES = 32 * 1024 * 1024
 _SANDBOX_PROBE_TIMEOUT_SECONDS = 10
 _SANDBOX_PROBE_OUTPUT_BYTES = 64 * 1024
-_NAMESPACE_NAMES = ("mnt", "pid", "net", "user")
+_NAMESPACE_NAMES = ("mnt", "pid", "net", "user", "ipc", "uts")
 _BWRAP_SEARCH_PATH = "/usr/bin:/bin"
 _SANDBOX_AUTHORITY_EXIT_CODE = 126
 _SANDBOX_MAX_PROCESSES = 16
@@ -136,6 +136,10 @@ class BubblewrapPytestSandbox:
     def preflight(self) -> PytestSandboxPreflight:
         if os.name != "posix" or not sys.platform.startswith("linux"):
             return self._blocked("Bubblewrap pytest isolation requires Linux")
+        if self._path_within(self.workspace, self.evidence_root) or self._path_within(
+            self.evidence_root, self.workspace
+        ):
+            return self._blocked("target workspace and runtime evidence root must be disjoint")
 
         with tempfile.TemporaryDirectory(prefix="aiqa-bwrap-preflight-") as host_home:
             env = restricted_subprocess_env(home=Path(host_home))
@@ -600,7 +604,9 @@ class BubblewrapPytestSandbox:
         for candidate in sorted(candidates, key=lambda item: (len(item.parts), str(item))):
             if not candidate.exists() or self._path_within(candidate, self.workspace):
                 continue
-            if self._path_within(candidate, self.evidence_root):
+            if self._path_within(candidate, self.evidence_root) or self._path_within(
+                self.evidence_root, candidate
+            ):
                 continue
             if any(candidate == existing or existing in candidate.parents for existing in roots):
                 continue
@@ -681,19 +687,24 @@ import socket
 import sys
 
 AUTHORITY_EXIT = 126
-NAMESPACE_NAMES = ("mnt", "pid", "net", "user")
+NAMESPACE_NAMES = ("mnt", "pid", "net", "user", "ipc", "uts")
 probe_name = sys.argv[1]
 expected_workspace_identity = (int(sys.argv[2]), int(sys.argv[3]))
 forbidden_root = pathlib.Path(sys.argv[4])
-parent_namespaces = dict(zip(NAMESPACE_NAMES, sys.argv[5:9], strict=True))
-cpu_seconds = int(sys.argv[9])
-max_processes = int(sys.argv[10])
-max_address_space = int(sys.argv[11])
-max_file_bytes = int(sys.argv[12])
-max_open_files = int(sys.argv[13])
-if sys.argv[14] != "--":
+namespace_start = 5
+namespace_end = namespace_start + len(NAMESPACE_NAMES)
+parent_namespaces = dict(
+    zip(NAMESPACE_NAMES, sys.argv[namespace_start:namespace_end], strict=True)
+)
+cpu_seconds = int(sys.argv[namespace_end])
+max_processes = int(sys.argv[namespace_end + 1])
+max_address_space = int(sys.argv[namespace_end + 2])
+max_file_bytes = int(sys.argv[namespace_end + 3])
+max_open_files = int(sys.argv[namespace_end + 4])
+separator_index = namespace_end + 5
+if sys.argv[separator_index] != "--":
     raise SystemExit(AUTHORITY_EXIT)
-command = sys.argv[15:]
+command = sys.argv[separator_index + 1 :]
 if not command:
     raise SystemExit(AUTHORITY_EXIT)
 current_namespaces = {name: os.readlink(f"/proc/self/ns/{name}") for name in NAMESPACE_NAMES}
@@ -756,7 +767,7 @@ import sys
 probe_name = sys.argv[1]
 expected_workspace_identity = (int(sys.argv[2]), int(sys.argv[3]))
 forbidden_root = pathlib.Path(sys.argv[4])
-namespace_names = ("mnt", "pid", "net", "user")
+namespace_names = ("mnt", "pid", "net", "user", "ipc", "uts")
 workspace = pathlib.Path("/workspace")
 try:
     observed_workspace = workspace.stat()
