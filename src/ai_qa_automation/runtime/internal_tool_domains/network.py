@@ -42,6 +42,9 @@ def register_network_tools(
             result = await api_probe_cls(
                 services.evidence,
                 allow_hosts=allow_hosts,
+                external_egress_enforced=getattr(
+                    services, "api_browser_external_egress_enforced", False
+                ),
             ).request(args["method"], args["url"])
         except ApiProbeTransportError as exc:
             if exc.evidence_id not in services.state.evidence_ids:
