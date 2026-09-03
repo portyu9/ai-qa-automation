@@ -223,3 +223,11 @@ The structured report carries the identifiers needed to reason about its conclus
 ## Core invariant
 
 > **Unknown is not PASS. Validator uncertainty is not FAIL. Model completion is not PASS. An unrelated green gate is not objective success. Configuration is not PASS. Historical evidence is not current-revision PASS. Integrity is not PASS. Only deterministic closure can produce verified success.**
+
+---
+
+Related: [`ARCHITECTURE.md`](ARCHITECTURE.md) · [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md) · [`TRACEABILITY.md`](TRACEABILITY.md) · [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md)
+
+[← Documentation home](README.md)
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
