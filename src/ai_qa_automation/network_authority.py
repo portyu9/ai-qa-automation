@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from enum import StrEnum
 from urllib.parse import urlparse
@@ -29,19 +30,22 @@ class NetworkAuthorityCode(StrEnum):
     EXTERNAL_EGRESS_UNVERIFIED = "external_egress_unverified"
 
 
-class AuthorizedNetworkHosts(set[str]):
-    """Allowlisted hosts carrying trusted post-resolution egress authority."""
+class AuthorizedNetworkHosts(frozenset[str]):
+    """Immutable allowlisted hosts carrying trusted post-resolution egress authority."""
 
-    def __init__(
-        self,
-        values: set[str],
+    external_egress_enforced: bool
+
+    def __new__(
+        cls,
+        values: AbstractSet[str],
         *,
         external_egress_enforced: bool,
-    ) -> None:
+    ) -> AuthorizedNetworkHosts:
         if not isinstance(external_egress_enforced, bool):
             raise ValueError("external_egress_enforced must be a boolean")
-        super().__init__(values)
-        self.external_egress_enforced = external_egress_enforced
+        instance = super().__new__(cls, values)
+        instance.external_egress_enforced = external_egress_enforced
+        return instance
 
 
 class NetworkAuthorityError(PermissionError):
@@ -171,7 +175,7 @@ def network_url_destination(url: str) -> NetworkDestination:
 def authorize_network_url(
     url: str,
     *,
-    allowed_hosts: set[str],
+    allowed_hosts: AbstractSet[str],
     allow_external_network: bool,
     external_egress_enforced: bool,
 ) -> NetworkDestination:
