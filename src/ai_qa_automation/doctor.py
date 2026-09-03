@@ -121,20 +121,17 @@ def _base_ref_readiness() -> dict[str, str]:
 
 
 def _runtime_write_posture(settings: Settings) -> dict[str, str]:
-    if settings.allow_test_writes or settings.allow_mutating_api_methods:
-        enabled: list[str] = []
-        if settings.allow_test_writes:
-            enabled.append("test writes")
-        if settings.allow_mutating_api_methods:
-            enabled.append("mutating API methods")
+    if settings.allow_test_writes:
         return {
             "status": "ELEVATED_EXPLICIT",
-            "detail": ", ".join(enabled)
-            + " explicitly enabled; deterministic policy still applies",
+            "detail": "test writes explicitly enabled; deterministic mutation policy still applies",
         }
     return {
         "status": "SAFE_DEFAULT",
-        "detail": "autonomous test writes and mutating API methods are disabled",
+        "detail": (
+            "autonomous test writes are disabled; generic mutating API methods are not a "
+            "supported runtime capability"
+        ),
     }
 
 

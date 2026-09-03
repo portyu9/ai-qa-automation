@@ -15,13 +15,15 @@ def register_network_tools(
 ) -> dict[str, Any]:
     @tool(
         "probe_api",
-        "Make one policy-approved HTTP request and register sanitized response evidence.",
+        "Make one policy-approved read-only HTTP observation and register sanitized "
+        "response evidence.",
         {"method": str, "url": str},
     )
     async def probe_api(args: dict[str, Any]) -> dict[str, Any]:
         services.consume("probe_api", args)
         method_decision = services.policy.authorize_api_method(
-            args["method"], allow_mutating=services.allow_mutating_api_methods
+            args["method"],
+            url=args["url"],
         )
         services.state.policy_decisions.append(method_decision)
         if method_decision.decision.value != "ALLOW":
@@ -40,7 +42,6 @@ def register_network_tools(
             result = await api_probe_cls(
                 services.evidence,
                 allow_hosts=allow_hosts,
-                allowed_methods={args["method"]},
             ).request(args["method"], args["url"])
         except ApiProbeTransportError as exc:
             if exc.evidence_id not in services.state.evidence_ids:

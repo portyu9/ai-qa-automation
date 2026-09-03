@@ -10,6 +10,10 @@ from urllib.parse import urlparse
 
 import httpx
 
+from ..api_authority import (
+    SAFE_API_OBSERVATION_METHODS,
+    classify_api_observation_request,
+)
 from ..evidence import EvidenceStore
 from ..models import EvidenceItem, EvidenceKind
 from ..redaction import redact_text, sanitize
@@ -155,26 +159,42 @@ class ApiProbe:
         self.allow_hosts = {
             str(host).strip().lower() for host in (allow_hosts or set()) if str(host).strip()
         }
+        configured_methods = (
+            set(SAFE_API_OBSERVATION_METHODS) if allowed_methods is None else set(allowed_methods)
+        )
         self.allowed_methods = {
             str(method).strip().upper()
-            for method in (allowed_methods or {"GET", "HEAD", "OPTIONS"})
+            for method in configured_methods
             if str(method).strip()
         }
+        if not self.allowed_methods:
+            raise ValueError(
+                "allowed_methods must contain at least one read-only observation method"
+            )
+        unsupported_methods = self.allowed_methods - SAFE_API_OBSERVATION_METHODS
+        if unsupported_methods:
+            rendered = ", ".join(sorted(unsupported_methods))
+            raise ValueError(
+                "ApiProbe is observation-only; allowed_methods cannot include mutating or "
+                "unsupported "
+                f"methods: {rendered}"
+            )
         self.timeout_seconds = float(timeout_seconds)
         self.max_response_bytes = max_response_bytes
         self.transport = transport
 
     async def request(self, method: str, url: str, **kwargs: Any) -> ApiProbeResult:
+        authority = classify_api_observation_request(method, url)
+        normalized_method = authority.normalized_method
+        if not authority.allowed:
+            raise PermissionError(authority.reason or "API observation request is denied")
         parsed = urlparse(url)
         host = (parsed.hostname or "").lower()
-        normalized_method = method.upper().strip()
-        if parsed.scheme not in {"http", "https"}:
-            raise PermissionError("API probe supports HTTP(S) URLs only")
         if not self.allow_hosts or host not in self.allow_hosts:
             raise PermissionError(f"network host is not allowlisted: {host or '<missing>'}")
         if normalized_method not in self.allowed_methods:
             raise PermissionError(
-                f"HTTP method is not allowlisted: {normalized_method or '<missing>'}"
+                f"HTTP method is not allowlisted for this probe: {normalized_method or '<missing>'}"
             )
         if kwargs.get("follow_redirects") not in (None, False):
             raise PermissionError("API probe redirects are disabled by adapter policy")
