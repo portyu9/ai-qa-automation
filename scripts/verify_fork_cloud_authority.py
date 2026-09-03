@@ -60,7 +60,7 @@ _SECRET_REFERENCE_RE = re.compile(r"\$\{\{\s*secrets\.([A-Za-z_][A-Za-z0-9_]*)\s
 _REQUIRED_PREFLIGHT_FRAGMENTS = (
     f'EXPECTED_REPOSITORY = "{EXPECTED_REPOSITORY}"',
     f'EXPECTED_OWNER = "{EXPECTED_OWNER}"',
-    'if repository != EXPECTED_REPOSITORY:',
+    "if repository != EXPECTED_REPOSITORY:",
     'if repository.get("full_name") != EXPECTED_REPOSITORY:',
     'if head_repository.get("full_name") != EXPECTED_REPOSITORY:',
     'raise ValueError("fork/external-head workflow runs are not auto-authorized")',
@@ -116,9 +116,7 @@ def _read_regular_text(path: Path, *, max_bytes: int, label: str) -> str:
 
 
 def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
-    violations = [
-        label for label, pattern in _FORBIDDEN_WORKFLOW_TOKENS if pattern.search(text)
-    ]
+    violations = [label for label, pattern in _FORBIDDEN_WORKFLOW_TOKENS if pattern.search(text)]
     if violations:
         raise ValueError(f"{name}: forbidden cloud/fork authority tokens: {', '.join(violations)}")
 
