@@ -94,6 +94,16 @@ class Settings(BaseSettings):
     global_timeout_seconds: int = Field(default=600, ge=10, le=3600)
     max_cost_usd: float = Field(default=5.0, gt=0, le=100)
 
+    @field_validator("allow_mutating_api_methods")
+    @classmethod
+    def reject_generic_api_mutation(cls, value: bool) -> bool:
+        if value:
+            raise ValueError(
+                "generic mutating API methods are not supported; use a separately typed operation "
+                "with explicit reversible side-effect authority"
+            )
+        return False
+
     @field_validator("base_ref")
     @classmethod
     def normalize_base_ref(cls, value: str | None) -> str | None:

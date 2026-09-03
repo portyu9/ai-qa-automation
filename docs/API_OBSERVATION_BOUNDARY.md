@@ -1,8 +1,8 @@
 # API Observation Boundary
 
-`ApiProbe` is a controlled SUT observation adapter. Its job is to collect one policy-approved HTTP response without allowing compression, response shape, ambiguous JSON, truncation, malformed bytes, or hostile response metadata to silently become stronger evidence than was actually observed.
+`ApiProbe` is a controlled SUT observation adapter. Its job is to submit one deterministically classified **read-only** HTTP observation and collect bounded response evidence without allowing request-shape expansion, compression, response shape, ambiguous JSON, truncation, malformed bytes, or hostile metadata to silently become stronger authority or evidence than was actually admitted.
 
-This boundary governs **framework interpretation after HTTPX has produced a response object**. It does not grant network authority, certify the remote system, or turn an HTTP response into deterministic validation `PASS`.
+This boundary owns both the final request shape presented to HTTPX and the framework's interpretation after HTTPX produces a response object. It does not grant deployment network authority, certify the remote system, or turn an HTTP response into deterministic validation `PASS`.
 
 ## Authority position
 
@@ -11,28 +11,56 @@ The runtime authority chain remains:
 ```text
 objective
   -> model/advisory reasoning
-  -> deterministic network + method policy
-  -> ApiProbe transport
+  -> deterministic network + observation-request policy
+  -> ApiProbe request confinement
+  -> controlled HTTPX transport
   -> bounded response observation
   -> persisted evidence
   -> deterministic validation
   -> terminal truth
 ```
 
-`ApiProbe` can create observed HTTP evidence. It cannot authorize a host or method, validate an objective, certify a response as correct, or produce terminal `SUCCESS` by itself.
+`ApiProbe` can create observed HTTP evidence. It cannot authorize a new host, validate an objective, certify a response as correct, or produce terminal `SUCCESS` by itself. The runtime wrapper first applies framework policy to the exact method + URL and supplies the already trusted host allowlist; the adapter then independently refuses to widen that request at transport time.
+
+Generic remote mutation is intentionally absent from this surface. `POST`, `PUT`, `PATCH`, and `DELETE` are denied regardless of the legacy mutating-method flag, and direct `ApiProbe` construction cannot restore them through `allowed_methods`. Any future remote-mutation capability must be a separately typed operation with explicit side-effect/recovery authority rather than a wider mode of this observation primitive.
 
 ## Request-side invariants
 
-At the `ApiProbe` boundary itself, HTTP execution requires:
+At the `ApiProbe` boundary itself, HTTP execution requires all of the following:
 
-- `http` or `https` scheme;
+- `http` or `https` scheme with an explicit host;
 - an explicitly supplied allowlisted host;
-- an allowlisted HTTP method;
-- redirect following disabled.
+- method in exactly `GET`, `HEAD`, or `OPTIONS`;
+- URL length no greater than the source-owned 8,192-character ceiling;
+- no explicit mutation/action token detected in the bounded decoded path/query classification;
+- no more than 64 parsed query fields;
+- redirect following disabled;
+- no caller request modifier remaining after the reviewed header surface is extracted.
 
-In the internal agent path, the runtime wrapper separately establishes network/method authorization before it constructs `ApiProbe`. Direct library callers do not inherit that wrapper proof merely by instantiating the adapter; they must supply equivalent trusted authorization context themselves.
+### Method and URL classification
 
-`ApiProbe` additionally owns the request's `Accept-Encoding` header and forces it to `identity`, overriding a caller-supplied compression preference. This is a resource-safety invariant, not a claim that the remote server will obey the request.
+Method classification is fail closed. Unsupported methods are denied; known mutating methods never become approval-eligible generic transport.
+
+For otherwise read-only methods, the exact URL is classified before transport. The path and query are tokenized after bounded repeated percent-decoding. Explicit action semantics such as `delete`, `reset`, `trigger`, `deploy`, `create`, `update`, or similar reviewed tokens are denied. Query parsing is field-bounded, and decoding that does not converge inside the fixed round limit fails closed.
+
+This classification is defense in depth, not a proof that every possible `GET`, `HEAD`, or `OPTIONS` implementation is side-effect free. Observation-safe endpoint design remains a target/deployment responsibility, and resolved-destination/DNS authority is a separate network boundary.
+
+### Post-classification request confinement
+
+After method + URL authorization, callers cannot alter the target or attach a body through arbitrary HTTPX keyword arguments. In particular, post-classification `params`, `json`, `data`, `content`, `cookies`, auth helpers, extensions, and other request modifiers are rejected before transport. Query parameters must therefore be present in the exact URL that deterministic policy classified.
+
+The only reviewed caller-modifiable request surface is a bounded header collection. Header ingestion happens **before** HTTPX normalization/materialization and accepts only a bounded mapping or finite sequence:
+
+| Request-header limit | Ceiling |
+|---|---:|
+| Caller header entries | 64 |
+| Aggregate caller header-name/value bytes | 16,384 bytes |
+
+Header names and values must be ASCII. Names must satisfy HTTP token syntax; values containing control characters—including CR/LF injection—are rejected. Only the reviewed observation-header names are accepted: `Accept`, `Accept-Encoding`, `Accept-Language`, `Authorization`, `Cache-Control`, conditional request headers, `Range`, and `User-Agent`. Target-rewriting, body/framing, cookie, arbitrary `X-*`, and method-override headers are outside that allowlist and fail closed.
+
+`Authorization` remains an explicitly reviewed observation header because authenticated read-only SUT observations can require it; arbitrary HTTPX auth helpers are not accepted because they would expand request construction outside the bounded header contract.
+
+`ApiProbe` owns the final `Accept-Encoding` value and forces it to `identity`, overriding a caller-supplied compression preference. This is a resource-safety invariant, not a claim that the remote server will obey the request.
 
 ## Compression and raw-body handling
 
@@ -48,9 +76,9 @@ The adapter reads in bounded chunks. The default retained body ceiling is 100,00
 
 The default network transaction timeout is 10 seconds and is capped by a source-owned maximum of 900 seconds. The HTTP transaction and raw-body streaming phase is enclosed by `asyncio.timeout` in addition to HTTPX operation timeouts, so a peer cannot keep that phase alive indefinitely by sending progress just often enough to reset per-read timeouts. Timeout expiry is recorded as `NETWORK_ERROR` evidence and retains the attempt evidence ID. Bounded UTF-8/JSON interpretation, sanitization, and evidence persistence happen after transport closure and are not claimed to be covered by this async wall-clock timeout.
 
-## Header boundary
+## Response-header boundary
 
-After HTTPX has created the response object, `ApiProbe` rejects the observation when either application-level header limit is exceeded:
+After HTTPX has created the response object, `ApiProbe` rejects the observation when either application-level response-header limit is exceeded:
 
 | Limit | Ceiling |
 |---|---:|
@@ -121,6 +149,8 @@ Transport failure and deterministic observation rejection are different truths.
 
 HTTPX request/transport errors create `NETWORK_ERROR` evidence and raise `ApiProbeTransportError`. The internal `probe_api` adapter reports the existing `NETWORK_ERROR` failure envelope and retains the evidence identifier.
 
+Because this primitive never submits a generic mutating method, its transport-failure evidence does not need to infer or reconcile a generic remote mutation. A future typed mutation capability cannot reuse this assumption: after mutating submission, timeout/connection failure would require durable unknown-side-effect truth and deterministic reconciliation before replay or later mutation authority.
+
 ### Observation rejection
 
 A response may be reached while its body cannot safely be admitted under deterministic observation policy. Examples include:
@@ -168,6 +198,9 @@ Operators must treat API response evidence as potentially sensitive test data an
 
 This implementation deliberately does **not** claim that:
 
+- every target implementation of `GET`, `HEAD`, or `OPTIONS` is truly side-effect free;
+- the bounded action-token classifier can prove arbitrary application business semantics;
+- exact hostname policy proves the resolved destination/IP is authorized;
 - HTTPX/httpcore cannot allocate or parse protocol data before the application receives a response object;
 - the adapter timeout controls DNS/TCP/TLS implementation internals after cancellation beyond requiring the probe coroutine to stop waiting;
 - DNS, TLS, sockets, proxies, firewalls, service meshes, or kernel buffers are bounded by this Python adapter;
@@ -178,6 +211,6 @@ This implementation deliberately does **not** claim that:
 - sanitization removes all sensitive information;
 - a normal internal-tool return envelope means the SUT succeeded;
 - SUT-controlled response-body keys can act as framework rejection markers;
-- successful observation grants network/mutation authority or terminal PASS.
+- successful observation grants new network/mutation authority or terminal PASS.
 
-The invariant is narrower and stronger: **after a response reaches the application boundary, encoded, oversized, truncated, malformed, ambiguous, or invalidly decoded observations cannot silently masquerade as complete trusted structured evidence.**
+The invariant is narrower and stronger: **the generic API primitive can submit only the exact bounded observation request that deterministic policy classified, and encoded, oversized, truncated, malformed, ambiguous, or invalidly decoded responses cannot silently masquerade as complete trusted structured evidence.**

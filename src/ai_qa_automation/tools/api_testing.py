@@ -3,13 +3,19 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import math
+import re
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
 
+from ..api_authority import (
+    SAFE_API_OBSERVATION_METHODS,
+    classify_api_observation_request,
+)
 from ..evidence import EvidenceStore
 from ..models import EvidenceItem, EvidenceKind
 from ..redaction import redact_text, sanitize
@@ -19,7 +25,25 @@ _MAX_API_RESPONSE_BYTES = 5_000_000
 _MAX_API_TIMEOUT_SECONDS = 900
 _MAX_API_RESPONSE_HEADERS = 200
 _MAX_API_RESPONSE_HEADER_BYTES = 64_000
+_MAX_API_REQUEST_HEADERS = 64
+_MAX_API_REQUEST_HEADER_BYTES = 16_384
 _API_RAW_CHUNK_BYTES = 64_000
+_HTTP_HEADER_NAME_RE = re.compile(rb"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+_ALLOWED_OBSERVATION_REQUEST_HEADERS = frozenset(
+    {
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "cache-control",
+        "if-match",
+        "if-modified-since",
+        "if-none-match",
+        "if-unmodified-since",
+        "range",
+        "user-agent",
+    }
+)
 
 
 class ApiProbeTransportError(RuntimeError):
@@ -117,8 +141,92 @@ def _bounded_headers(headers: httpx.Headers) -> dict[str, str]:
     return result
 
 
-def _identity_request_headers(value: Any) -> httpx.Headers:
-    headers = httpx.Headers(value)
+def _bounded_ascii_header_component(value: Any, *, remaining: int, label: str) -> bytes:
+    if isinstance(value, bytes):
+        encoded = value
+    elif isinstance(value, str):
+        if len(value) > remaining:
+            raise PermissionError("API observation request headers exceed the aggregate byte bound")
+        try:
+            encoded = value.encode("ascii")
+        except UnicodeEncodeError as exc:
+            raise PermissionError(f"API observation request {label} must be ASCII") from exc
+    else:
+        raise PermissionError(f"API observation request {label} must be text or bytes")
+    if len(encoded) > remaining:
+        raise PermissionError("API observation request headers exceed the aggregate byte bound")
+    try:
+        encoded.decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise PermissionError(f"API observation request {label} must be ASCII") from exc
+    if label == "header name":
+        if not _HTTP_HEADER_NAME_RE.fullmatch(encoded):
+            raise PermissionError("API observation request header name is malformed")
+    elif any(byte < 0x20 or byte == 0x7F for byte in encoded):
+        raise PermissionError("API observation request header value contains control characters")
+    return encoded
+
+
+def _bounded_request_header_pairs(value: Any) -> list[tuple[bytes, bytes]]:
+    """Ingest caller headers with limits before HTTPX may normalize/materialize them."""
+
+    if value is None:
+        return []
+    if isinstance(value, httpx.Headers):
+        source: Any = value.raw
+    elif isinstance(value, Mapping):
+        source = value.items()
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        source = value
+    else:
+        raise PermissionError(
+            "API observation request headers must be a bounded mapping or sequence"
+        )
+
+    try:
+        declared_count = len(value)
+    except TypeError:
+        declared_count = None
+    if declared_count is not None and declared_count > _MAX_API_REQUEST_HEADERS:
+        raise PermissionError(
+            f"API observation request exceeds the {_MAX_API_REQUEST_HEADERS}-header bound"
+        )
+
+    pairs: list[tuple[bytes, bytes]] = []
+    total = 0
+    for index, item in enumerate(source):
+        if index >= _MAX_API_REQUEST_HEADERS:
+            raise PermissionError(
+                f"API observation request exceeds the {_MAX_API_REQUEST_HEADERS}-header bound"
+            )
+        if not isinstance(item, Sequence) or isinstance(item, (str, bytes, bytearray)):
+            raise PermissionError("API observation request header entries must be name/value pairs")
+        if len(item) != 2:
+            raise PermissionError("API observation request header entries must be name/value pairs")
+        raw_name = _bounded_ascii_header_component(
+            item[0],
+            remaining=_MAX_API_REQUEST_HEADER_BYTES - total,
+            label="header name",
+        )
+        total += len(raw_name)
+        raw_value = _bounded_ascii_header_component(
+            item[1],
+            remaining=_MAX_API_REQUEST_HEADER_BYTES - total,
+            label="header value",
+        )
+        total += len(raw_value)
+        normalized_name = raw_name.decode("ascii").casefold()
+        if normalized_name not in _ALLOWED_OBSERVATION_REQUEST_HEADERS:
+            raise PermissionError(
+                f"API observation request header is not authorized: {normalized_name}"
+            )
+        pairs.append((raw_name, raw_value))
+    return pairs
+
+
+def _observation_request_headers(value: Any) -> httpx.Headers:
+    pairs = _bounded_request_header_pairs(value)
+    headers = httpx.Headers(pairs)
     headers["Accept-Encoding"] = "identity"
     return headers
 
@@ -155,31 +263,51 @@ class ApiProbe:
         self.allow_hosts = {
             str(host).strip().lower() for host in (allow_hosts or set()) if str(host).strip()
         }
+        configured_methods = (
+            set(SAFE_API_OBSERVATION_METHODS) if allowed_methods is None else set(allowed_methods)
+        )
         self.allowed_methods = {
-            str(method).strip().upper()
-            for method in (allowed_methods or {"GET", "HEAD", "OPTIONS"})
-            if str(method).strip()
+            str(method).strip().upper() for method in configured_methods if str(method).strip()
         }
+        if not self.allowed_methods:
+            raise ValueError(
+                "allowed_methods must contain at least one read-only observation method"
+            )
+        unsupported_methods = self.allowed_methods - SAFE_API_OBSERVATION_METHODS
+        if unsupported_methods:
+            rendered = ", ".join(sorted(unsupported_methods))
+            raise ValueError(
+                "ApiProbe is observation-only; allowed_methods cannot include mutating or "
+                "unsupported "
+                f"methods: {rendered}"
+            )
         self.timeout_seconds = float(timeout_seconds)
         self.max_response_bytes = max_response_bytes
         self.transport = transport
 
     async def request(self, method: str, url: str, **kwargs: Any) -> ApiProbeResult:
+        authority = classify_api_observation_request(method, url)
+        normalized_method = authority.normalized_method
+        if not authority.allowed:
+            raise PermissionError(authority.reason or "API observation request is denied")
         parsed = urlparse(url)
         host = (parsed.hostname or "").lower()
-        normalized_method = method.upper().strip()
-        if parsed.scheme not in {"http", "https"}:
-            raise PermissionError("API probe supports HTTP(S) URLs only")
         if not self.allow_hosts or host not in self.allow_hosts:
             raise PermissionError(f"network host is not allowlisted: {host or '<missing>'}")
         if normalized_method not in self.allowed_methods:
             raise PermissionError(
-                f"HTTP method is not allowlisted: {normalized_method or '<missing>'}"
+                f"HTTP method is not allowlisted for this probe: {normalized_method or '<missing>'}"
             )
         if kwargs.get("follow_redirects") not in (None, False):
             raise PermissionError("API probe redirects are disabled by adapter policy")
         kwargs.pop("follow_redirects", None)
-        kwargs["headers"] = _identity_request_headers(kwargs.get("headers"))
+        request_headers = _observation_request_headers(kwargs.pop("headers", None))
+        if kwargs:
+            modifiers = ", ".join(sorted(str(key) for key in kwargs))
+            raise PermissionError(
+                "API observation request modifiers are not authorized after URL classification: "
+                f"{modifiers}"
+            )
 
         started = time.monotonic()
         content = bytearray()
@@ -199,8 +327,8 @@ class ApiProbe:
                 client.stream(
                     normalized_method,
                     url,
+                    headers=request_headers,
                     follow_redirects=False,
-                    **kwargs,
                 ) as response,
             ):
                 status_code = response.status_code

@@ -153,6 +153,10 @@ class RuntimeServices:
         }.items():
             if not isinstance(value, bool):
                 raise ValueError(f"{name} must be a boolean")
+        if self.allow_mutating_api_methods:
+            raise ValueError(
+                "allow_mutating_api_methods=true cannot authorize generic remote mutation"
+            )
         if self.workspace_root_identity is not None and (
             not isinstance(self.workspace_root_identity, tuple)
             or len(self.workspace_root_identity) != 2

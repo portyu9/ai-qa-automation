@@ -50,7 +50,7 @@ flowchart LR
 | Zone | Trust posture | Security responsibility |
 |---|---|---|
 | **Control plane** | trusted authority | policy, hooks, Skills, schemas, thresholds, runtime code |
-| **Target / SUT** | untrusted evidence source | source, tests, DOM, logs, API data, target agent files |
+| **Target / SUT** | untrusted evidence source | source, tests, DOM, logs, API data, target `CLAUDE.md`, `.claude/`, `.mcp.json` |
 | **External providers** | approved transport/provider; returned content untrusted | authenticated retrieval + local action authorization |
 | **Deployment infrastructure** | independent enforcement boundary | process/container isolation, egress, identity, secrets, storage, devices |
 
@@ -229,12 +229,16 @@ Unsigned run attestations deliberately distinguish **content integrity** from **
 ### API
 
 - exact host allowlist;
-- read-only `GET` / `HEAD` / `OPTIONS` default;
-- separate opt-in for mutating methods;
+- generic observation admits only `GET` / `HEAD` / `OPTIONS`; `POST` / `PUT` / `PATCH` / `DELETE` are deterministically denied and the legacy mutating-method flag cannot widen authority;
+- the exact method + URL is classified before transport, including bounded action-semantics checks over decoded path/query tokens;
+- caller request modifiers that could alter the classified target or add a body/auth-cookie helper are rejected; query parameters must be present in the classified URL;
+- caller request headers are ingested under count/byte/ASCII/control-character bounds and restricted to a reviewed observation-header allowlist before HTTPX materialization;
 - redirects disabled;
 - ambient proxy inheritance disabled;
-- response bytes bounded;
+- response bytes and headers bounded;
 - textual evidence sanitized before persistence/model return.
+
+A future remote-mutation capability must be a separately typed operation with explicit subject, replay, pending-side-effect, reconciliation, compensation, and deterministic postcondition authority. It must not widen `probe_api`.
 
 ### Browser / Playwright
 

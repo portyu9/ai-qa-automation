@@ -109,7 +109,7 @@ Inject configuration through:
 | `AI_QA_ALLOW_EXTERNAL_NETWORK` | `false` | non-local target access disabled until explicitly enabled |
 | `AI_QA_ALLOWED_NETWORK_HOSTS` | `["127.0.0.1","localhost"]` | canonical exact host/IP allowlist |
 | `AI_QA_ALLOW_TEST_WRITES` | `false` | enables only policy-eligible live autonomous Python test writes |
-| `AI_QA_ALLOW_MUTATING_API_METHODS` | `false` | enables policy-eligible API mutation; read-only remains default |
+| `AI_QA_ALLOW_MUTATING_API_METHODS` | `false` | legacy compatibility tripwire; setting `true` is rejected because generic remote API mutation is unsupported |
 | `AI_QA_K6_EXTERNAL_EGRESS_ENFORCED` | `false` | asserts deployment-level egress containment for k6; necessary but not sufficient for execution |
 
 The live MCP configuration currently exposes the k6 egress prerequisite only. The controlled runner additionally requires separate trusted **process/filesystem isolation**, **executable module-loading isolation**, **runner CPU/memory/process resource limits**, and **target workload/concurrency/rate limits** before process spawn. Because none of those four additional assertions is wired through live MCP configuration, live `run_k6` remains intentionally fail-closed rather than treating static JavaScript inspection, a validated snapshot, wall-clock/output bounds, or the egress flag as an execution/module/resource/load sandbox.
@@ -248,7 +248,7 @@ export AI_QA_ALLOW_EXTERNAL_NETWORK=true
 export AI_QA_ALLOWED_NETWORK_HOSTS='["qa.checkout.example"]'
 ```
 
-API mutation remains independently disabled unless `AI_QA_ALLOW_MUTATING_API_METHODS=true` is deliberately set.
+Generic API mutation is not an autonomous runtime capability. `AI_QA_ALLOW_MUTATING_API_METHODS=true` is rejected during trusted configuration validation; a future mutation capability must use a separately typed operation with explicit side-effect, recovery, and deterministic validation authority. See [`REMOTE_API_MUTATION_AUTHORITY.md`](REMOTE_API_MUTATION_AUTHORITY.md).
 
 ---
 

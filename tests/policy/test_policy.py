@@ -234,11 +234,15 @@ def test_assertion_replacement_with_equal_or_stronger_assertion_is_not_removal(
     assert "assertion_removal" not in make_policy(tmp_path).validate_patch(diff)
 
 
-def test_mutating_api_methods_require_explicit_enablement(tmp_path: Path) -> None:
+def test_mutating_api_methods_are_never_generic_runtime_authority(tmp_path: Path) -> None:
     policy = make_policy(tmp_path)
     assert policy.authorize_api_method("GET").decision is ToolDecision.ALLOW
-    assert policy.authorize_api_method(" post ").decision is ToolDecision.REQUIRE_APPROVAL
-    assert policy.authorize_api_method("POST", allow_mutating=True).decision is ToolDecision.ALLOW
+    denied = policy.authorize_api_method(" post ")
+    assert denied.decision is ToolDecision.DENY
+    assert denied.rule_id == "API-WRITE-001"
+    legacy = policy.authorize_api_method("POST", allow_mutating=True)
+    assert legacy.decision is ToolDecision.DENY
+    assert legacy.rule_id == "API-WRITE-001"
     assert policy.authorize_api_method("TRACE").decision is ToolDecision.DENY
 
 

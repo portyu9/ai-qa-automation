@@ -5,6 +5,10 @@ from pathlib import Path
 from typing import Any, ClassVar
 from urllib.parse import urlparse
 
+from .api_authority import (
+    classify_api_observation_method,
+    classify_api_observation_request,
+)
 from .models import PolicyDecision, RiskLevel, ToolDecision
 
 
@@ -354,36 +358,54 @@ class PolicyEngine:
             risk=RiskLevel.MEDIUM,
         )
 
-    def authorize_api_method(self, method: str, *, allow_mutating: bool = False) -> PolicyDecision:
-        normalized = method.upper().strip()
-        safe_methods = {"GET", "HEAD", "OPTIONS"}
-        mutating_methods = {"POST", "PUT", "PATCH", "DELETE"}
-        if normalized in safe_methods:
+    def authorize_api_method(
+        self,
+        method: str,
+        *,
+        allow_mutating: bool = False,
+        url: str | None = None,
+    ) -> PolicyDecision:
+        authority = (
+            classify_api_observation_method(method)
+            if url is None
+            else classify_api_observation_request(method, url)
+        )
+        if authority.allowed:
             return PolicyDecision(
                 decision=ToolDecision.ALLOW,
-                reason="Read-only HTTP method allowed.",
+                reason="Read-only HTTP observation request allowed.",
                 rule_id="API-READ",
                 risk=RiskLevel.LOW,
             )
-        if normalized in mutating_methods and allow_mutating:
+        if authority.code == "mutating_method":
             return PolicyDecision(
-                decision=ToolDecision.ALLOW,
-                reason="Mutating HTTP method explicitly enabled for this runtime.",
-                rule_id="API-WRITE-ALLOW",
-                risk=RiskLevel.HIGH,
-            )
-        if normalized in mutating_methods:
-            return PolicyDecision(
-                decision=ToolDecision.REQUIRE_APPROVAL,
-                reason="Mutating HTTP methods are disabled unless explicitly enabled.",
+                decision=ToolDecision.DENY,
+                reason=authority.reason or "Generic remote mutation is denied.",
                 rule_id="API-WRITE-001",
-                risk=RiskLevel.HIGH,
+                risk=RiskLevel.CRITICAL,
             )
+        if authority.code == "action_semantics":
+            return PolicyDecision(
+                decision=ToolDecision.DENY,
+                reason=authority.reason or "Action-oriented API request is denied.",
+                rule_id="API-ACTION-001",
+                risk=RiskLevel.CRITICAL,
+            )
+        rule_id = "API-METHOD-001" if authority.code == "unsupported_method" else "API-REQUEST-001"
         return PolicyDecision(
             decision=ToolDecision.DENY,
-            reason="HTTP method is outside the supported API-testing allowlist.",
-            rule_id="API-METHOD-001",
+            reason=authority.reason or "API request is outside the supported observation boundary.",
+            rule_id=rule_id,
             risk=RiskLevel.CRITICAL,
+        )
+
+    def authorize_api_request(
+        self, method: str, url: str, *, allow_mutating: bool = False
+    ) -> PolicyDecision:
+        return self.authorize_api_method(
+            method,
+            allow_mutating=allow_mutating,
+            url=url,
         )
 
     def authorize_performance_target(self, target_url: str, *, environment: str) -> PolicyDecision:

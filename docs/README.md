@@ -21,7 +21,7 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 | Reviewer goal | Recommended path |
 |---|---|
 | **Architecture / principal engineering** | [Architecture](ARCHITECTURE.md) → [Result Contract](RESULT_CONTRACT.md) → [Runtime Control](RUNTIME_CONTROL.md) → [Workspace Freshness Boundary](WORKSPACE_FRESHNESS_BOUNDARY.md) → [Traceability](TRACEABILITY.md) → [Technical Walkthrough](TECHNICAL_WALKTHROUGH.md) |
-| **Security / red team** | [Security](SECURITY.md) → [Threat Model](THREAT_MODEL.md) → [Tool Input Boundaries](TOOL_INPUT_BOUNDARIES.md) → [Objective Input Boundary](OBJECTIVE_INPUT_BOUNDARY.md) → [Agent SDK Result Boundary](SDK_RESULT_BOUNDARY.md) → [Persistence Resource Boundary](PERSISTENCE_RESOURCE_BOUNDARY.md) → [API Observation Boundary](API_OBSERVATION_BOUNDARY.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Supply Chain](SUPPLY_CHAIN.md) → [CI/CD](CI_CD.md) → [Release Candidate](RELEASE_CANDIDATE.md) → [Trusted PR Control Plane](TRUSTED_PR_CONTROL_PLANE.md) → [MCP](MCP.md) → [Verification Boundaries](VERIFICATION_BOUNDARIES.md) → [Workspace Freshness Boundary](WORKSPACE_FRESHNESS_BOUNDARY.md) → [Pytest Execution Isolation](PYTEST_EXECUTION_ISOLATION.md) → [Limitations](LIMITATIONS.md) |
+| **Security / red team** | [Security](SECURITY.md) → [Threat Model](THREAT_MODEL.md) → [Tool Input Boundaries](TOOL_INPUT_BOUNDARIES.md) → [Objective Input Boundary](OBJECTIVE_INPUT_BOUNDARY.md) → [Agent SDK Result Boundary](SDK_RESULT_BOUNDARY.md) → [Persistence Resource Boundary](PERSISTENCE_RESOURCE_BOUNDARY.md) → [API Observation Boundary](API_OBSERVATION_BOUNDARY.md) → [Remote API Mutation Authority](REMOTE_API_MUTATION_AUTHORITY.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Supply Chain](SUPPLY_CHAIN.md) → [CI/CD](CI_CD.md) → [Release Candidate](RELEASE_CANDIDATE.md) → [Trusted PR Control Plane](TRUSTED_PR_CONTROL_PLANE.md) → [MCP](MCP.md) → [Verification Boundaries](VERIFICATION_BOUNDARIES.md) → [Workspace Freshness Boundary](WORKSPACE_FRESHNESS_BOUNDARY.md) → [Pytest Execution Isolation](PYTEST_EXECUTION_ISOLATION.md) → [Limitations](LIMITATIONS.md) |
 | **QA automation / AI engineering** | [Change Intelligence](CHANGE_INTELLIGENCE.md) → [Contract Drift Boundary](CONTRACT_DRIFT_BOUNDARY.md) → [Skills](SKILLS.md) → [Evaluation](EVALUATION.md) → [Result Contract](RESULT_CONTRACT.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Production Readiness](PRODUCTION_READINESS.md) |
 | **Operator / adopter** | [Setup](SETUP.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Pytest Execution Isolation](PYTEST_EXECUTION_ISOLATION.md) → [Operations](OPERATIONS.md) → [CI/CD](CI_CD.md) → [Release Candidate](RELEASE_CANDIDATE.md) → [Troubleshooting](TROUBLESHOOTING.md) → [Runtime Control](RUNTIME_CONTROL.md) → [MCP](MCP.md) |
 
@@ -43,16 +43,17 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 5. [`SDK_RESULT_BOUNDARY.md`](SDK_RESULT_BOUNDARY.md) — bounded provider terminal-result ingestion, error semantics, and cost authority
 6. [`PERSISTENCE_RESOURCE_BOUNDARY.md`](PERSISTENCE_RESOURCE_BOUNDARY.md) — bounded canonical-state/evidence serialization before materialization and durable replacement
 7. [`API_OBSERVATION_BOUNDARY.md`](API_OBSERVATION_BOUNDARY.md) — raw-byte HTTP observation, compression/header/body bounds, complete-body JSON promotion, and explicit decoding truth
-8. [`BROWSER_VALIDATION.md`](BROWSER_VALIDATION.md) — exact-subject browser gates, evidence semantics, and URL confidentiality boundary
-9. [`SUPPLY_CHAIN.md`](SUPPLY_CHAIN.md) — dependency, build, Action, SBOM, reproducibility, protected-root manifest, and trusted-status identity boundaries
-10. [`CI_CD.md`](CI_CD.md) — automatic PR evidence, routine source-only admission, external protected-maintenance admission, and repository-setting authority
-11. [`RELEASE_CANDIDATE.md`](RELEASE_CANDIDATE.md) — exact-main/version/package release-preparation evidence and explicit non-publishing authority
-12. [`TRUSTED_PR_CONTROL_PLANE.md`](TRUSTED_PR_CONTROL_PLANE.md) — independent trusted-status publisher design, external App/Environment/ruleset activation requirements, and historical control-plane evidence
-13. [`MCP.md`](MCP.md) — provider identity, action authorization, untrusted remote content
-14. [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md) — evidence ownership across trust domains
-15. [`WORKSPACE_FRESHNESS_BOUNDARY.md`](WORKSPACE_FRESHNESS_BOUNDARY.md) — local target-subject freshness, mutation ownership, and terminal-success binding
-16. [`PYTEST_EXECUTION_ISOLATION.md`](PYTEST_EXECUTION_ISOLATION.md) — fail-closed deployment prerequisites for target-controlled Python
-17. [`LIMITATIONS.md`](LIMITATIONS.md) — explicit design boundaries and non-claims
+8. [`REMOTE_API_MUTATION_AUTHORITY.md`](REMOTE_API_MUTATION_AUTHORITY.md) — fail-closed generic remote mutation denial and final-request authority binding
+9. [`BROWSER_VALIDATION.md`](BROWSER_VALIDATION.md) — exact-subject browser gates, evidence semantics, and URL confidentiality boundary
+10. [`SUPPLY_CHAIN.md`](SUPPLY_CHAIN.md) — dependency, build, Action, SBOM, reproducibility, protected-root manifest, and trusted-status identity boundaries
+11. [`CI_CD.md`](CI_CD.md) — automatic PR evidence, routine source-only admission, external protected-maintenance admission, and repository-setting authority
+12. [`RELEASE_CANDIDATE.md`](RELEASE_CANDIDATE.md) — exact-main/version/package release-preparation evidence and explicit non-publishing authority
+13. [`TRUSTED_PR_CONTROL_PLANE.md`](TRUSTED_PR_CONTROL_PLANE.md) — independent trusted-status publisher design, external App/Environment/ruleset activation requirements, and historical control-plane evidence
+14. [`MCP.md`](MCP.md) — provider identity, action authorization, untrusted remote content
+15. [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md) — evidence ownership across trust domains
+16. [`WORKSPACE_FRESHNESS_BOUNDARY.md`](WORKSPACE_FRESHNESS_BOUNDARY.md) — local target-subject freshness, mutation ownership, and terminal-success binding
+17. [`PYTEST_EXECUTION_ISOLATION.md`](PYTEST_EXECUTION_ISOLATION.md) — fail-closed deployment prerequisites for target-controlled Python
+18. [`LIMITATIONS.md`](LIMITATIONS.md) — explicit design boundaries and non-claims
 
 ### QA automation / AI engineering
 
@@ -93,6 +94,7 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 | [`SDK_RESULT_BOUNDARY.md`](SDK_RESULT_BOUNDARY.md) | How are Agent SDK terminal results bounded before retention, accounting, and terminal truth? |
 | [`PERSISTENCE_RESOURCE_BOUNDARY.md`](PERSISTENCE_RESOURCE_BOUNDARY.md) | How are canonical state and evidence manifests bounded before complete serialization/materialization and durable replacement? |
 | [`API_OBSERVATION_BOUNDARY.md`](API_OBSERVATION_BOUNDARY.md) | How are HTTP response bytes, headers, truncation, decoding, and strict JSON promotion bounded before becoming structured evidence? |
+| [`REMOTE_API_MUTATION_AUTHORITY.md`](REMOTE_API_MUTATION_AUTHORITY.md) | Why can generic HTTP observation never become autonomous remote-mutation authority, including through post-classification request modifiers? |
 | [`BROWSER_VALIDATION.md`](BROWSER_VALIDATION.md) | How are browser operations bound to exact subjects without confusing evidence collection with page correctness? |
 | [`SUPPLY_CHAIN.md`](SUPPLY_CHAIN.md) | How are dependency, build, Action, container-base, SBOM, reproducibility, protected-root, and trusted-status identity inputs bound and evidenced? |
 | [`CI_CD.md`](CI_CD.md) | How are ordinary CI, routine source-only admission, external protected-maintenance admission, manual validation, and external repository settings separated? |
