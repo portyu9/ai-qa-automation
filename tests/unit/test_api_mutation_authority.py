@@ -155,6 +155,7 @@ async def test_api_probe_rejects_post_classification_request_modifiers_before_tr
     probe = ApiProbe(
         EvidenceStore(tmp_path, "request-modifiers"),
         allow_hosts={"example.com"},
+        external_egress_enforced=True,
         transport=httpx.MockTransport(handler),
     )
 
@@ -194,6 +195,7 @@ async def test_api_probe_rejects_unreviewed_request_headers_before_transport(
     probe = ApiProbe(
         EvidenceStore(tmp_path, "request-headers"),
         allow_hosts={"example.com"},
+        external_egress_enforced=True,
         transport=httpx.MockTransport(handler),
     )
 
@@ -217,6 +219,7 @@ async def test_api_probe_rejects_request_header_resource_exhaustion_before_trans
     probe = ApiProbe(
         EvidenceStore(tmp_path, "request-header-bounds"),
         allow_hosts={"example.com"},
+        external_egress_enforced=True,
         transport=httpx.MockTransport(handler),
     )
 
@@ -255,6 +258,7 @@ async def test_api_probe_rejects_unbounded_header_iterables_without_consuming_th
     probe = ApiProbe(
         EvidenceStore(tmp_path, "unbounded-request-headers"),
         allow_hosts={"example.com"},
+        external_egress_enforced=True,
         transport=httpx.MockTransport(handler),
     )
 
@@ -281,6 +285,7 @@ async def test_api_probe_allows_only_reviewed_observation_headers(tmp_path: Path
     probe = ApiProbe(
         EvidenceStore(tmp_path, "allowed-request-headers"),
         allow_hosts={"example.com"},
+        external_egress_enforced=True,
         transport=httpx.MockTransport(handler),
     )
     await probe.request(
@@ -327,6 +332,7 @@ async def test_read_only_probe_semantics_remain_operational(tmp_path: Path) -> N
     probe = ApiProbe(
         EvidenceStore(tmp_path, "read-compatible"),
         allow_hosts={"example.com"},
+        external_egress_enforced=True,
         transport=httpx.MockTransport(handler),
     )
     result = await probe.request("GET", "https://example.com/v1/items?limit=1")
