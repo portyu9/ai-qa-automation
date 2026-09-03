@@ -29,7 +29,11 @@ async def test_api_probe_rejects_non_http_scheme(tmp_path):
 
 @pytest.mark.asyncio
 async def test_api_probe_caller_cannot_enable_redirect_following(tmp_path):
-    probe = ApiProbe(EvidenceStore(tmp_path, "run-redirect"), allow_hosts={"example.com"})
+    probe = ApiProbe(
+        EvidenceStore(tmp_path, "run-redirect"),
+        allow_hosts={"example.com"},
+        external_egress_enforced=True,
+    )
 
     with pytest.raises(PermissionError, match="redirects are disabled"):
         await probe.request("GET", "https://example.com", follow_redirects=True)
@@ -45,6 +49,7 @@ async def test_api_probe_bounds_response_body_and_marks_truncation(tmp_path):
     probe = ApiProbe(
         EvidenceStore(tmp_path, "run-bounded"),
         allow_hosts={"example.com"},
+        external_egress_enforced=True,
         max_response_bytes=16,
         transport=httpx.MockTransport(handler),
     )
@@ -84,6 +89,7 @@ async def test_api_probe_preserves_transport_failure_as_evidence(tmp_path):
     probe = ApiProbe(
         evidence,
         allow_hosts={"example.com"},
+        external_egress_enforced=True,
         transport=httpx.MockTransport(handler),
     )
     with pytest.raises(ApiProbeTransportError) as caught:

@@ -18,6 +18,7 @@ from ..api_authority import (
 )
 from ..evidence import EvidenceStore
 from ..models import EvidenceItem, EvidenceKind
+from ..network_authority import AuthorizedNetworkHosts, authorize_network_url
 from ..redaction import redact_text, sanitize
 from ..runtime.tool_input_bounds import ToolInputBoundsError, bounded_json_loads
 
@@ -240,6 +241,7 @@ class ApiProbe:
         allowed_methods: set[str] | None = None,
         timeout_seconds: float = 10,
         max_response_bytes: int = 100_000,
+        external_egress_enforced: bool | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         if (
@@ -260,6 +262,11 @@ class ApiProbe:
                 f"max_response_bytes must be an integer between 1 and {_MAX_API_RESPONSE_BYTES}"
             )
         self.evidence = evidence
+        inherited_egress = (
+            allow_hosts.external_egress_enforced
+            if isinstance(allow_hosts, AuthorizedNetworkHosts)
+            else False
+        )
         self.allow_hosts = {
             str(host).strip().lower() for host in (allow_hosts or set()) if str(host).strip()
         }
@@ -281,8 +288,17 @@ class ApiProbe:
                 "unsupported "
                 f"methods: {rendered}"
             )
+        if external_egress_enforced is not None and not isinstance(
+            external_egress_enforced, bool
+        ):
+            raise ValueError("external_egress_enforced must be a boolean or None")
         self.timeout_seconds = float(timeout_seconds)
         self.max_response_bytes = max_response_bytes
+        self.external_egress_enforced = (
+            inherited_egress
+            if external_egress_enforced is None
+            else external_egress_enforced
+        )
         self.transport = transport
 
     async def request(self, method: str, url: str, **kwargs: Any) -> ApiProbeResult:
@@ -292,8 +308,12 @@ class ApiProbe:
             raise PermissionError(authority.reason or "API observation request is denied")
         parsed = urlparse(url)
         host = (parsed.hostname or "").lower()
-        if not self.allow_hosts or host not in self.allow_hosts:
-            raise PermissionError(f"network host is not allowlisted: {host or '<missing>'}")
+        authorize_network_url(
+            url,
+            allowed_hosts=self.allow_hosts,
+            allow_external_network=True,
+            external_egress_enforced=self.external_egress_enforced,
+        )
         if normalized_method not in self.allowed_methods:
             raise PermissionError(
                 f"HTTP method is not allowlisted for this probe: {normalized_method or '<missing>'}"

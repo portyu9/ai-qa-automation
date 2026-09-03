@@ -238,6 +238,7 @@ async def run_agent(
             max_repeated_action=cfg.max_repeated_action,
             allowed_network_hosts={host.lower() for host in cfg.allowed_network_hosts},
             allow_external_network=cfg.allow_external_network,
+            api_browser_external_egress_enforced=cfg.api_browser_external_egress_enforced,
             allow_mutating_api_methods=cfg.allow_mutating_api_methods,
             k6_external_egress_enforced=cfg.k6_external_egress_enforced,
             state_store=state_store,

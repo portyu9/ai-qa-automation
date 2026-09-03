@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..models import TerminalStatus, ValidationResult, ValidationStatus
+from ..network_authority import NetworkAuthorityCode, NetworkAuthorityError
 from .internal_tools import RuntimeServices, _pytest_scope, _stable_gate_id
 from .k6_authority import k6_gate_payload, k6_persisted_subject
 from .mutation_lineage import build_rollback_lineage_checkpoints
@@ -63,6 +64,27 @@ class LiveRuntimeServices(RuntimeServices):
         )
         self.control.rollback_lineage_before_close = before_close
         self.control.rollback_lineage_after_close = after_close
+
+    def network_hosts(self, url: str) -> set[str]:
+        try:
+            return super().network_hosts(url)
+        except NetworkAuthorityError as exc:
+            if exc.code is NetworkAuthorityCode.EXTERNAL_EGRESS_UNVERIFIED:
+                reason = str(exc)
+                if self.state.terminal_status in {None, TerminalStatus.SUCCESS}:
+                    self.state.terminal_status = TerminalStatus.BLOCKED
+                    self.state.terminal_reason = reason
+                if self.control is None or self.state_store is None:  # pragma: no cover
+                    raise RuntimeError(
+                        "live runtime services lost durable network authority"
+                    ) from exc
+                self.control.journal.try_append(
+                    "external_network_authority_blocked",
+                    reason_code=exc.code.value,
+                )
+                self.state_store.save(self.state)
+                self.control.persist()
+            raise
 
     def _pytest_execution_authority(self) -> tuple[str | None, dict[str, object]]:
         missing: list[str] = []
