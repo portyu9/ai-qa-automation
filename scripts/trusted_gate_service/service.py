@@ -143,6 +143,23 @@ class TrustedGateService:
             raise PermissionError("webhook repository identity is not authorized")
         if wakeup.installation_id != self._config.installation_id:
             raise PermissionError("webhook installation identity is not authorized")
+        if (
+            self._policy.repository != EXPECTED_REPOSITORY
+            or self._policy.repository_id != EXPECTED_REPOSITORY_ID
+        ):
+            return DeliveryResult(
+                "BLOCKED",
+                wakeup.delivery_id,
+                "policy_repository_mismatch",
+                False,
+            )
+        if wakeup.event_head_sha != self._policy.head_sha:
+            return DeliveryResult(
+                "BLOCKED",
+                wakeup.delivery_id,
+                "policy_head_mismatch",
+                False,
+            )
 
         lease = self._store.acquire(delivery_id=wakeup.delivery_id, run_id=wakeup.run_id)
         if lease.terminal:
