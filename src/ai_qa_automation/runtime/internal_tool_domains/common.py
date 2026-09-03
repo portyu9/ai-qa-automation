@@ -10,6 +10,7 @@ from typing import Any, Protocol
 from ...evidence import EvidenceStore
 from ...models import AgentRunState, ValidationResult, ValidationStatus
 from ...network_authority import (
+    AuthorizedNetworkHosts,
     NetworkDestinationClass,
     authorize_network_url,
     canonicalize_network_host,
@@ -205,4 +206,7 @@ class RuntimeServices:
             allow_external_network=self.allow_external_network,
             external_egress_enforced=self.api_browser_external_egress_enforced,
         )
-        return set(self.allowed_network_hosts)
+        return AuthorizedNetworkHosts(
+            set(self.allowed_network_hosts),
+            external_egress_enforced=self.api_browser_external_egress_enforced,
+        )
