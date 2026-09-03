@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..models import TerminalStatus, ValidationResult, ValidationStatus
+from ..network_authority import NetworkAuthorityCode, NetworkAuthorityError
 from .internal_tools import RuntimeServices, _pytest_scope, _stable_gate_id
 from .k6_authority import k6_gate_payload, k6_persisted_subject
 from .mutation_lineage import build_rollback_lineage_checkpoints
@@ -63,6 +64,27 @@ class LiveRuntimeServices(RuntimeServices):
         )
         self.control.rollback_lineage_before_close = before_close
         self.control.rollback_lineage_after_close = after_close
+
+    def network_hosts(self, url: str) -> set[str]:
+        try:
+            return super().network_hosts(url)
+        except NetworkAuthorityError as exc:
+            if exc.code is NetworkAuthorityCode.EXTERNAL_EGRESS_UNVERIFIED:
+                reason = str(exc)
+                if self.state.terminal_status in {None, TerminalStatus.SUCCESS}:
+                    self.state.terminal_status = TerminalStatus.BLOCKED
+                    self.state.terminal_reason = reason
+                if self.control is None or self.state_store is None:  # pragma: no cover
+                    raise RuntimeError(
+                        "live runtime services lost durable network authority"
+                    ) from exc
+                self.control.journal.try_append(
+                    "external_network_authority_blocked",
+                    reason_code=exc.code.value,
+                )
+                self.state_store.save(self.state)
+                self.control.persist()
+            raise
 
     def _pytest_execution_authority(self) -> tuple[str | None, dict[str, object]]:
         missing: list[str] = []
@@ -183,23 +205,11 @@ class LiveRuntimeServices(RuntimeServices):
         if self.control is None:  # pragma: no cover - guarded by __post_init__
             raise RuntimeError("live runtime services lost RuntimeControl")
 
-        # Defense in depth for direct live-service invocation. A tool body may never
-        # receive an unbounded input even if the SDK hook path is unavailable.
         validate_tool_request(tool_name, tool_input)
-
-        # PreToolUse normally charged the canonical runtime budget. Mirror that
-        # authority before any tool-specific fail-closed return so persisted
-        # AgentRunState cannot undercount an already-accounted request.
         self.state.tool_call_count = self.control.budget.snapshot().tool_calls
-
-        # Re-prove target freshness at the application-owned internal execution
-        # boundary. This deliberately avoids RepositoryInspector work inside the
-        # shorter SDK PreToolUse timeout.
         self._require_workspace_freshness(stage="pre_tool", tool_name=tool_name)
 
         if tool_name in _LIVE_MUTATION_TOOL_NAMES:
-            # A skipped/broken SDK hook must not widen rollback authority. Re-run
-            # deterministic mutation policy before reading target bytes for backup.
             policy_decision = self.policy.authorize_tool(
                 f"mcp__qa__{tool_name}",
                 tool_input,
@@ -215,7 +225,7 @@ class LiveRuntimeServices(RuntimeServices):
                     tool_name=f"mcp__qa__{tool_name}",
                     rule_id=policy_decision.rule_id,
                 )
-                if self.state_store is not None:  # pragma: no branch - required in __post_init__
+                if self.state_store is not None:
                     self.state_store.save(self.state)
                 self.control.persist()
                 raise PermissionError(reason)
@@ -228,13 +238,11 @@ class LiveRuntimeServices(RuntimeServices):
                     "mutation_blocked_non_git_workspace",
                     tool_name=f"mcp__qa__{tool_name}",
                 )
-                if self.state_store is not None:  # pragma: no branch - required in __post_init__
+                if self.state_store is not None:
                     self.state_store.save(self.state)
                 self.control.persist()
                 raise PermissionError(reason)
 
-            # Capture rollback authority only after the exact workspace baseline and
-            # mutation policy have both been re-proved.
             self.control.prepare_mutation(
                 str(tool_input.get("path") or ""),
                 change_revision_before=self.state.change_revision,
@@ -273,8 +281,6 @@ class LiveRuntimeServices(RuntimeServices):
             try:
                 gate_payload = k6_gate_payload(tool_input)
             except ValueError:
-                # The canonical attempt was already charged. Persist that accounting,
-                # but do not manufacture a validation gate for an invalid subject.
                 super().checkpoint()
                 raise
             reason = self.k6_execution_block_reason()
