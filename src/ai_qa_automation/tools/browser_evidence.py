@@ -9,6 +9,11 @@ from uuid import uuid4
 
 from ..evidence import EvidenceStore
 from ..models import EvidenceItem, EvidenceKind, LocatorCandidate, SanitizationStatus
+from ..network_authority import (
+    AuthorizedNetworkHosts,
+    NetworkAuthorityError,
+    authorize_network_url,
+)
 from ..redaction import redact_text
 from .locators import (
     LocatorSpec,
@@ -58,6 +63,7 @@ class BrowserProbe:
         allow_hosts: set[str],
         timeout_ms: int = 15_000,
         use_system_chrome: bool = False,
+        external_egress_enforced: bool | None = None,
     ) -> None:
         if (
             isinstance(timeout_ms, bool)
@@ -67,10 +73,24 @@ class BrowserProbe:
             raise ValueError("browser timeout_ms must be an integer between 1 and 120000")
         if not isinstance(use_system_chrome, bool):
             raise ValueError("use_system_chrome must be a boolean")
+        if external_egress_enforced is not None and not isinstance(
+            external_egress_enforced, bool
+        ):
+            raise ValueError("external_egress_enforced must be a boolean or None")
+        inherited_egress = (
+            allow_hosts.external_egress_enforced
+            if isinstance(allow_hosts, AuthorizedNetworkHosts)
+            else False
+        )
         self.evidence = evidence
         self.allow_hosts = {str(host).strip().lower() for host in allow_hosts if str(host).strip()}
         self.timeout_ms = timeout_ms
         self.use_system_chrome = use_system_chrome
+        self.external_egress_enforced = (
+            inherited_egress
+            if external_egress_enforced is None
+            else external_egress_enforced
+        )
 
     def _launch_options(self) -> dict[str, Any]:
         options: dict[str, Any] = {
@@ -87,7 +107,16 @@ class BrowserProbe:
             return True
         if parsed.scheme not in {"http", "https", "ws", "wss"}:
             return False
-        return bool(parsed.hostname and parsed.hostname.lower() in self.allow_hosts)
+        try:
+            authorize_network_url(
+                url,
+                allowed_hosts=self.allow_hosts,
+                allow_external_network=True,
+                external_egress_enforced=self.external_egress_enforced,
+            )
+        except NetworkAuthorityError:
+            return False
+        return True
 
     @staticmethod
     def _page_locator(page: Any, spec: LocatorSpec) -> Any:
