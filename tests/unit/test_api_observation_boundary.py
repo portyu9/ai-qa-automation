@@ -13,6 +13,7 @@ def _probe(tmp_path, run_id: str, handler, *, max_response_bytes: int = 100_000)
     return ApiProbe(
         EvidenceStore(tmp_path, run_id),
         allow_hosts={"example.com"},
+        external_egress_enforced=True,
         max_response_bytes=max_response_bytes,
         transport=httpx.MockTransport(handler),
     )
@@ -69,6 +70,7 @@ async def test_api_probe_rejects_encoded_response_before_decompression_or_body_r
     probe = ApiProbe(
         evidence,
         allow_hosts={"example.com"},
+        external_egress_enforced=True,
         max_response_bytes=16,
         transport=httpx.MockTransport(handler),
     )
@@ -91,7 +93,12 @@ async def test_api_probe_rejects_excessive_header_count(tmp_path):
         return httpx.Response(200, headers=headers, stream=httpx.ByteStream(b"ok"), request=request)
 
     evidence = EvidenceStore(tmp_path, "headers-count")
-    probe = ApiProbe(evidence, allow_hosts={"example.com"}, transport=httpx.MockTransport(handler))
+    probe = ApiProbe(
+        evidence,
+        allow_hosts={"example.com"},
+        external_egress_enforced=True,
+        transport=httpx.MockTransport(handler),
+    )
     result = await probe.request("GET", "https://example.com/data")
 
     _assert_rejected_observation(result)
@@ -112,7 +119,12 @@ async def test_api_probe_rejects_excessive_aggregate_header_text(tmp_path):
         )
 
     evidence = EvidenceStore(tmp_path, "headers-bytes")
-    probe = ApiProbe(evidence, allow_hosts={"example.com"}, transport=httpx.MockTransport(handler))
+    probe = ApiProbe(
+        evidence,
+        allow_hosts={"example.com"},
+        external_egress_enforced=True,
+        transport=httpx.MockTransport(handler),
+    )
     result = await probe.request("GET", "https://example.com/data")
 
     _assert_rejected_observation(result)
@@ -238,6 +250,7 @@ async def test_api_probe_total_timeout_bounds_stalled_body_stream(tmp_path):
     probe = ApiProbe(
         evidence,
         allow_hosts={"example.com"},
+        external_egress_enforced=True,
         timeout_seconds=0.02,
         transport=httpx.MockTransport(handler),
     )
