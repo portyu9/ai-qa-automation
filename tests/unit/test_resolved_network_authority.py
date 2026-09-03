@@ -119,20 +119,25 @@ def test_runtime_returns_authority_bearing_host_set_only_after_egress_prerequisi
     assert hosts.external_egress_enforced is True
 
 
-def test_runtime_rejects_unsafe_literal_even_if_directly_constructed(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="unsafe non-global IP literals"):
-        RuntimeServices(
-            workspace=tmp_path,
-            state=AgentRunState(objective="observe metadata", workspace=str(tmp_path)),
-            evidence=cast(Any, object()),
-            policy=cast(Any, object()),
-            test_runner=cast(Any, object()),
-            max_tool_calls=5,
-            max_repeated_action=2,
-            allowed_network_hosts={"169.254.169.254"},
-            allow_external_network=True,
-            api_browser_external_egress_enforced=True,
-        )
+def test_private_literal_remains_configurable_but_api_browser_use_is_denied(
+    tmp_path: Path,
+) -> None:
+    services = RuntimeServices(
+        workspace=tmp_path,
+        state=AgentRunState(objective="observe metadata", workspace=str(tmp_path)),
+        evidence=cast(Any, object()),
+        policy=cast(Any, object()),
+        test_runner=cast(Any, object()),
+        max_tool_calls=5,
+        max_repeated_action=2,
+        allowed_network_hosts={"169.254.169.254"},
+        allow_external_network=True,
+        api_browser_external_egress_enforced=True,
+    )
+    assert services.generic_network_hosts("http://169.254.169.254/") == {"169.254.169.254"}
+    with pytest.raises(NetworkAuthorityError) as caught:
+        services.network_hosts("http://169.254.169.254/")
+    assert caught.value.code is NetworkAuthorityCode.DISALLOWED_LITERAL
 
 
 @pytest.mark.asyncio
