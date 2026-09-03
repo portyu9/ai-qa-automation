@@ -130,6 +130,106 @@ async def test_api_probe_rejects_mutation_and_action_semantics_before_transport(
     assert calls == 0
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_kwargs",
+    [
+        {"params": {"action": "delete"}},
+        {"json": {"action": "delete"}},
+        {"data": {"action": "delete"}},
+        {"content": b'{"action":"delete"}'},
+        {"cookies": {"action": "delete"}},
+    ],
+)
+async def test_api_probe_rejects_post_classification_request_modifiers_before_transport(
+    tmp_path: Path,
+    request_kwargs: dict[str, Any],
+) -> None:
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, stream=httpx.ByteStream(b"ok"), request=request)
+
+    probe = ApiProbe(
+        EvidenceStore(tmp_path, "request-modifiers"),
+        allow_hosts={"example.com"},
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(PermissionError, match="request modifiers are not authorized"):
+        await probe.request("GET", "https://example.com/v1/items", **request_kwargs)
+
+    assert calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"Host": "admin.example.com"},
+        {"Content-Type": "application/json"},
+        {"Content-Length": "0"},
+        {"Transfer-Encoding": "chunked"},
+        {"X-HTTP-Method-Override": "DELETE"},
+        {"X-Method-Override": "PATCH"},
+        {"X-Original-Method": "POST"},
+    ],
+)
+async def test_api_probe_rejects_target_body_and_method_override_headers_before_transport(
+    tmp_path: Path,
+    headers: dict[str, str],
+) -> None:
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, stream=httpx.ByteStream(b"ok"), request=request)
+
+    probe = ApiProbe(
+        EvidenceStore(tmp_path, "request-headers"),
+        allow_hosts={"example.com"},
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(PermissionError, match="request header is not authorized"):
+        await probe.request("GET", "https://example.com/v1/items", headers=headers)
+
+    assert calls == 0
+
+
+@pytest.mark.asyncio
+async def test_api_probe_rejects_request_header_resource_exhaustion_before_transport(
+    tmp_path: Path,
+) -> None:
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, stream=httpx.ByteStream(b"ok"), request=request)
+
+    probe = ApiProbe(
+        EvidenceStore(tmp_path, "request-header-bounds"),
+        allow_hosts={"example.com"},
+        transport=httpx.MockTransport(handler),
+    )
+
+    too_many = [(f"x-safe-{index}", "v") for index in range(65)]
+    with pytest.raises(PermissionError, match="64-header bound"):
+        await probe.request("GET", "https://example.com/v1/items", headers=too_many)
+    with pytest.raises(PermissionError, match="aggregate byte bound"):
+        await probe.request(
+            "GET",
+            "https://example.com/v1/items",
+            headers={"x-safe": "a" * 16_385},
+        )
+
+    assert calls == 0
+
+
 @pytest.mark.parametrize("allowed_methods", [{"POST"}, {"GET", "DELETE"}, set()])
 def test_api_probe_constructor_cannot_widen_observation_method_authority(
     tmp_path: Path, allowed_methods: set[str]
