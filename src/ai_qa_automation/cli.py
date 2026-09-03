@@ -107,8 +107,8 @@ def agent_command(
         typer.Option(
             "--objective-gate-id",
             help=(
-                "Exact deterministic validation gate authorized by the operator to close an unchanged objective; "
-                "omit to preserve NOT_VERIFIED when no trusted objective contract exists"
+                "Exact deterministic validation gate authorized by the operator to close the current objective revision; "
+                "after mutation the same gate identity must PASS again at the new revision, and omission preserves NOT_VERIFIED"
             ),
         ),
     ] = None,

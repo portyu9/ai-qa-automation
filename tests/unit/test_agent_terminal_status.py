@@ -43,6 +43,43 @@ def vr(
     )
 
 
+def objective_pass(*, revision: int = 1) -> ValidationResult:
+    return vr(
+        "objective_validation",
+        ValidationStatus.PASS,
+        gate_id="objective:repair",
+        revision=revision,
+    )
+
+
+def closed_mutation_validations(*, include_objective: bool = True) -> list[ValidationResult]:
+    validations = [
+        vr(
+            "test_patch_safety",
+            ValidationStatus.PASS,
+            gate_id="test_patch_safety:tests/test_x.py",
+            revision=1,
+        ),
+        vr(
+            "pytest",
+            ValidationStatus.PASS,
+            gate_id="pytest:target",
+            revision=1,
+            scope="targeted",
+        ),
+        vr(
+            "pytest",
+            ValidationStatus.PASS,
+            gate_id="pytest:regression",
+            revision=1,
+            scope="regression",
+        ),
+    ]
+    if include_objective:
+        validations.append(objective_pass())
+    return validations
+
+
 def test_read_only_success_requires_operator_objective_gate_contract() -> None:
     status, reason = determine_terminal_outcome(
         "success",
@@ -120,27 +157,93 @@ def test_newer_failed_revision_dominates_older_pass_for_same_gate() -> None:
     assert "pytest:target" in reason
 
 
-def test_new_change_revision_can_supersede_reproduced_failure_only_with_closure_gates() -> None:
+def test_new_change_revision_requires_objective_and_mutation_closure() -> None:
     validations = [
         vr("pytest", ValidationStatus.FAIL, gate_id="pytest:target", revision=0),
-        vr(
-            "test_patch_safety",
-            ValidationStatus.PASS,
-            gate_id="test_patch_safety:tests/test_x.py",
-            revision=1,
-        ),
-        vr("pytest", ValidationStatus.PASS, gate_id="pytest:target", revision=1, scope="targeted"),
-        vr(
-            "pytest",
-            ValidationStatus.PASS,
-            gate_id="pytest:regression",
-            revision=1,
-            scope="regression",
-        ),
+        *closed_mutation_validations(),
     ]
-    status, reason = determine_terminal_outcome("success", validations, current_revision=1)
+    status, reason = determine_terminal_outcome(
+        "success",
+        validations,
+        current_revision=1,
+        objective_gate_id="objective:repair",
+    )
     assert status is TerminalStatus.SUCCESS
     assert "historical failures" in reason.lower()
+
+
+def test_fully_closed_mutation_without_objective_contract_is_not_verified() -> None:
+    status, reason = determine_terminal_outcome(
+        "success",
+        closed_mutation_validations(include_objective=False),
+        current_revision=1,
+    )
+
+    assert status is TerminalStatus.NOT_VERIFIED
+    assert "operator did not supply" in reason.lower()
+
+
+def test_pre_mutation_objective_pass_cannot_certify_newer_revision() -> None:
+    validations = closed_mutation_validations(include_objective=False)
+    validations.append(objective_pass(revision=0))
+
+    status, reason = determine_terminal_outcome(
+        "success",
+        validations,
+        current_revision=1,
+        objective_gate_id="objective:repair",
+    )
+
+    assert status is TerminalStatus.NOT_VERIFIED
+    assert "current change revision" in reason.lower()
+
+
+def test_unrelated_current_revision_pass_cannot_substitute_for_objective_gate() -> None:
+    validations = closed_mutation_validations(include_objective=False)
+    validations.append(
+        vr(
+            "objective_validation",
+            ValidationStatus.PASS,
+            gate_id="objective:unrelated",
+            revision=1,
+        )
+    )
+
+    status, reason = determine_terminal_outcome(
+        "success",
+        validations,
+        current_revision=1,
+        objective_gate_id="objective:repair",
+    )
+
+    assert status is TerminalStatus.NOT_VERIFIED
+    assert "objective-validation gate contract" in reason.lower()
+
+
+def test_conflicting_current_revision_objective_evidence_is_not_verified() -> None:
+    validations = closed_mutation_validations(include_objective=False)
+    validations.extend(
+        [
+            objective_pass(),
+            vr(
+                "objective_validation",
+                ValidationStatus.FAIL,
+                gate_id="objective:repair",
+                revision=1,
+            ),
+        ]
+    )
+
+    status, reason = determine_terminal_outcome(
+        "success",
+        validations,
+        current_revision=1,
+        objective_gate_id="objective:repair",
+    )
+
+    assert status is TerminalStatus.NOT_VERIFIED
+    assert "flakiness" in reason.lower()
+    assert "objective:repair" in reason
 
 
 def test_changed_revision_without_rerunning_original_failed_gate_stays_failure() -> None:
@@ -159,8 +262,14 @@ def test_changed_revision_without_rerunning_original_failed_gate_stays_failure()
             revision=1,
             scope="regression",
         ),
+        objective_pass(),
     ]
-    status, reason = determine_terminal_outcome("success", validations, current_revision=1)
+    status, reason = determine_terminal_outcome(
+        "success",
+        validations,
+        current_revision=1,
+        objective_gate_id="objective:repair",
+    )
     assert status is TerminalStatus.FAILURE
     assert "pytest:target" in reason
 
@@ -183,8 +292,9 @@ def test_incomplete_validation_states_are_never_success(incomplete: ValidationSt
 def test_changed_revision_without_any_current_revision_gate_is_not_verified() -> None:
     status, reason = determine_terminal_outcome(
         "success",
-        [vr("pytest", ValidationStatus.PASS, gate_id="pytest:target", revision=0)],
+        [vr("pytest", ValidationStatus.PASS, gate_id="objective:repair", revision=0)],
         current_revision=1,
+        objective_gate_id="objective:repair",
     )
     assert status is TerminalStatus.NOT_VERIFIED
     assert "current change revision" in reason.lower()
@@ -199,9 +309,11 @@ def test_changed_revision_requires_current_pytest_gate() -> None:
                 ValidationStatus.PASS,
                 gate_id="test_patch_safety:tests/test_x.py",
                 revision=1,
-            )
+            ),
+            objective_pass(),
         ],
         current_revision=1,
+        objective_gate_id="objective:repair",
     )
     assert status is TerminalStatus.NOT_VERIFIED
     assert "pytest" in reason.lower()
@@ -225,8 +337,10 @@ def test_changed_revision_requires_patch_safety_even_when_pytest_is_green() -> N
                 revision=1,
                 scope="regression",
             ),
+            objective_pass(),
         ],
         current_revision=1,
+        objective_gate_id="objective:repair",
     )
     assert status is TerminalStatus.NOT_VERIFIED
     assert "patch-safety" in reason.lower()
@@ -251,8 +365,14 @@ def test_changed_revision_requires_both_targeted_and_regression_pytest(
             revision=1,
             scope=present_scope,
         ),
+        objective_pass(),
     ]
-    status, reason = determine_terminal_outcome("success", validations, current_revision=1)
+    status, reason = determine_terminal_outcome(
+        "success",
+        validations,
+        current_revision=1,
+        objective_gate_id="objective:repair",
+    )
     assert status is TerminalStatus.NOT_VERIFIED
     assert "targeted" in reason.lower()
     assert "regression" in reason.lower()
@@ -281,9 +401,15 @@ def test_changed_revision_rejects_unbound_targeted_validation() -> None:
             revision=1,
             scope="regression",
         ),
+        objective_pass(),
     ]
 
-    status, reason = determine_terminal_outcome("success", validations, current_revision=1)
+    status, reason = determine_terminal_outcome(
+        "success",
+        validations,
+        current_revision=1,
+        objective_gate_id="objective:repair",
+    )
     assert status is TerminalStatus.NOT_VERIFIED
     assert "exact-path-bound" in reason
 
@@ -312,9 +438,15 @@ def test_changed_revision_rejects_mismatched_patch_and_targeted_paths() -> None:
             revision=1,
             scope="regression",
         ),
+        objective_pass(),
     ]
 
-    status, _ = determine_terminal_outcome("success", validations, current_revision=1)
+    status, _ = determine_terminal_outcome(
+        "success",
+        validations,
+        current_revision=1,
+        objective_gate_id="objective:repair",
+    )
     assert status is TerminalStatus.NOT_VERIFIED
 
 

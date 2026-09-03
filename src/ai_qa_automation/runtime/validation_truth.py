@@ -243,29 +243,30 @@ def determine_terminal_outcome(
             + ".",
         )
 
-    if current_revision == 0:
-        if not objective_gate_id:
-            return (
-                TerminalStatus.NOT_VERIFIED,
-                "Agent completed with passing deterministic checks, but the operator did not supply an exact objective-validation gate contract.",
-            )
-        if objective_gate_id in _UNBOUND_OBJECTIVE_GATE_IDS:
-            return (
-                TerminalStatus.NOT_VERIFIED,
-                "Agent completed, but the operator supplied a legacy validation gate that is not bound to an exact deterministic subject.",
-            )
-        objective_bound = [
-            item
-            for item in active
-            if item.status == ValidationStatus.PASS
-            and (item.gate_id or item.name) == objective_gate_id
-        ]
-        if not objective_bound:
-            return (
-                TerminalStatus.NOT_VERIFIED,
-                "Agent completed with passing deterministic checks, but no active PASS matched the operator-supplied objective-validation gate contract.",
-            )
-    else:
+    if not objective_gate_id:
+        return (
+            TerminalStatus.NOT_VERIFIED,
+            "Agent completed with passing deterministic checks, but the operator did not supply an exact objective-validation gate contract.",
+        )
+    if objective_gate_id in _UNBOUND_OBJECTIVE_GATE_IDS:
+        return (
+            TerminalStatus.NOT_VERIFIED,
+            "Agent completed, but the operator supplied a legacy validation gate that is not bound to an exact deterministic subject.",
+        )
+    objective_bound = [
+        item
+        for item in active
+        if item.status == ValidationStatus.PASS
+        and item.revision == current_revision
+        and (item.gate_id or item.name) == objective_gate_id
+    ]
+    if not objective_bound:
+        return (
+            TerminalStatus.NOT_VERIFIED,
+            "Agent completed with passing deterministic checks, but no active PASS matched the operator-supplied objective-validation gate contract at the current change revision.",
+        )
+
+    if current_revision > 0:
         closure = evaluate_revision_closure(active, current_revision=current_revision)
         if not closure.closed:
             return TerminalStatus.NOT_VERIFIED, closure.reason
