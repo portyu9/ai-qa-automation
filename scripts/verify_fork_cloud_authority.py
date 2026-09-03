@@ -136,9 +136,13 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
             f"got {dict(sorted(secret_references.items()))}"
         )
     if name == "manual-validation.yml":
-        missing = [fragment for fragment in _MANUAL_SECRET_CONTEXT_FRAGMENTS if fragment not in text]
+        missing = [
+            fragment for fragment in _MANUAL_SECRET_CONTEXT_FRAGMENTS if fragment not in text
+        ]
         if missing:
-            raise ValueError("manual-validation.yml: reviewed credential consumers moved or changed")
+            raise ValueError(
+                "manual-validation.yml: reviewed credential consumers moved or changed"
+            )
 
     return {
         "workflow": name,
