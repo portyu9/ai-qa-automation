@@ -6,15 +6,14 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import urlparse
 
 from ...evidence import EvidenceStore
 from ...models import AgentRunState, ValidationResult, ValidationStatus
 from ...network_authority import (
     AuthorizedNetworkHosts,
-    NetworkDestinationClass,
     authorize_network_url,
     canonicalize_network_host,
-    classify_network_host,
 )
 from ...policy import PolicyEngine
 from ...state import StateStore
@@ -164,14 +163,6 @@ class RuntimeServices:
         self.allowed_network_hosts = {
             canonicalize_network_host(host) for host in self.allowed_network_hosts
         }
-        if any(
-            classify_network_host(host).destination_class
-            is NetworkDestinationClass.DISALLOWED_LITERAL
-            for host in self.allowed_network_hosts
-        ):
-            raise ValueError(
-                "allowed_network_hosts must not include unsafe non-global IP literals"
-            )
         if self.allow_mutating_api_methods:
             raise ValueError(
                 "allow_mutating_api_methods=true cannot authorize generic remote mutation"
@@ -210,3 +201,18 @@ class RuntimeServices:
             set(self.allowed_network_hosts),
             external_egress_enforced=self.api_browser_external_egress_enforced,
         )
+
+    def generic_network_hosts(self, url: str) -> set[str]:
+        """Preserve pre-#95 host semantics for non-API/browser controlled consumers."""
+
+        host = (urlparse(url).hostname or "").lower()
+        if not host or host not in self.allowed_network_hosts:
+            raise PermissionError(
+                f"network host is not explicitly allowlisted: {host or '<missing>'}"
+            )
+        local_hosts = {"localhost", "127.0.0.1", "::1"}
+        if not self.allow_external_network and host not in local_hosts:
+            raise PermissionError("external network access is disabled")
+        if not self.allow_external_network:
+            return self.allowed_network_hosts & local_hosts
+        return set(self.allowed_network_hosts)
