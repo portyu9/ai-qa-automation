@@ -125,9 +125,7 @@ def test_posttool_subject_unavailable_latches_over_prior_objective_pass_and_late
 
     assert result["hookSpecificOutput"]["updatedToolOutput"]["is_error"] is True
     assert state.terminal_status is TerminalStatus.INFRASTRUCTURE_FAILURE
-    assert state.terminal_reason == (
-        "Workspace subject identity could not be revalidated safely."
-    )
+    assert state.terminal_reason == ("Workspace subject identity could not be revalidated safely.")
 
     candidate_status, _candidate_reason = determine_terminal_outcome(
         "success",
@@ -149,9 +147,7 @@ def test_posttool_subject_unavailable_latches_over_prior_objective_pass_and_late
     _enforce_terminal_workspace_freshness(state, control, control.workspace)
 
     assert state.terminal_status is TerminalStatus.INFRASTRUCTURE_FAILURE
-    assert state.terminal_reason == (
-        "Workspace subject identity could not be revalidated safely."
-    )
+    assert state.terminal_reason == ("Workspace subject identity could not be revalidated safely.")
 
 
 def test_validation_posttool_subject_unavailable_latches_and_poisons_lineage(
