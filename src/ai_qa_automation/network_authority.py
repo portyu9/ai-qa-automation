@@ -103,9 +103,7 @@ def canonicalize_network_host(value: str) -> str:
     if ":" in candidate:
         raise ValueError("network allowlist entries must not include ports")
     if _LEGACY_IPV4_RE.fullmatch(candidate):
-        raise ValueError(
-            "non-canonical numeric network hosts are not accepted as DNS hostnames"
-        )
+        raise ValueError("non-canonical numeric network hosts are not accepted as DNS hostnames")
     try:
         ascii_host = candidate.encode("idna").decode("ascii")
     except UnicodeError as exc:
