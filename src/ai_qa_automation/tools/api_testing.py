@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import math
+import re
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -27,6 +28,7 @@ _MAX_API_RESPONSE_HEADER_BYTES = 64_000
 _MAX_API_REQUEST_HEADERS = 64
 _MAX_API_REQUEST_HEADER_BYTES = 16_384
 _API_RAW_CHUNK_BYTES = 64_000
+_HTTP_HEADER_NAME_RE = re.compile(rb"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 _ALLOWED_OBSERVATION_REQUEST_HEADERS = frozenset(
     {
         "accept",
@@ -141,19 +143,27 @@ def _bounded_headers(headers: httpx.Headers) -> dict[str, str]:
 
 def _bounded_ascii_header_component(value: Any, *, remaining: int, label: str) -> bytes:
     if isinstance(value, bytes):
+        encoded = value
+    elif isinstance(value, str):
         if len(value) > remaining:
             raise PermissionError("API observation request headers exceed the aggregate byte bound")
-        return value
-    if not isinstance(value, str):
+        try:
+            encoded = value.encode("ascii")
+        except UnicodeEncodeError as exc:
+            raise PermissionError(f"API observation request {label} must be ASCII") from exc
+    else:
         raise PermissionError(f"API observation request {label} must be text or bytes")
-    if len(value) > remaining:
-        raise PermissionError("API observation request headers exceed the aggregate byte bound")
-    try:
-        encoded = value.encode("ascii")
-    except UnicodeEncodeError as exc:
-        raise PermissionError(f"API observation request {label} must be ASCII") from exc
     if len(encoded) > remaining:
         raise PermissionError("API observation request headers exceed the aggregate byte bound")
+    try:
+        encoded.decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise PermissionError(f"API observation request {label} must be ASCII") from exc
+    if label == "header name":
+        if not _HTTP_HEADER_NAME_RE.fullmatch(encoded):
+            raise PermissionError("API observation request header name is malformed")
+    elif any(byte < 0x20 or byte == 0x7F for byte in encoded):
+        raise PermissionError("API observation request header value contains control characters")
     return encoded
 
 
@@ -205,10 +215,7 @@ def _bounded_request_header_pairs(value: Any) -> list[tuple[bytes, bytes]]:
             label="header value",
         )
         total += len(raw_value)
-        try:
-            normalized_name = raw_name.decode("ascii").casefold()
-        except UnicodeDecodeError as exc:
-            raise PermissionError("API observation request header name must be ASCII") from exc
+        normalized_name = raw_name.decode("ascii").casefold()
         if normalized_name not in _ALLOWED_OBSERVATION_REQUEST_HEADERS:
             raise PermissionError(
                 f"API observation request header is not authorized: {normalized_name}"
