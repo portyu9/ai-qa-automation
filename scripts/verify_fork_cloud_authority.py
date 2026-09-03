@@ -5,6 +5,7 @@ import json
 import os
 import re
 import stat
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -51,11 +52,17 @@ _FORBIDDEN_WORKFLOW_TOKENS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("pull_request_target trigger", re.compile(r"(?i)\bpull_request_target\b")),
 )
 
-_ALLOWED_SECRET_REFERENCES = {
-    "manual-validation.yml": {"ANTHROPIC_API_KEY"},
-    "trusted-pr-auto.yml": {"TRUSTED_GATE_APP_PRIVATE_KEY"},
+_ALLOWED_SECRET_REFERENCE_COUNTS: dict[str, Counter[str]] = {
+    "manual-validation.yml": Counter({"ANTHROPIC_API_KEY": 2}),
+    "trusted-pr-auto.yml": Counter({"TRUSTED_GATE_APP_PRIVATE_KEY": 1}),
 }
 _SECRET_REFERENCE_RE = re.compile(r"\$\{\{\s*secrets\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
+_MANUAL_SECRET_CONTEXT_FRAGMENTS = (
+    "environment: credentialed-validation",
+    "if: ${{ inputs.run_model && github.ref == 'refs/heads/main' }}",
+    "- name: Require explicit credential\n        env:\n          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}",
+    "- name: Run bounded live Agent SDK evaluation\n        env:\n          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}",
+)
 
 _REQUIRED_PREFLIGHT_FRAGMENTS = (
     f'EXPECTED_REPOSITORY = "{EXPECTED_REPOSITORY}"',
@@ -120,20 +127,24 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
     if violations:
         raise ValueError(f"{name}: forbidden cloud/fork authority tokens: {', '.join(violations)}")
 
-    secret_references = _SECRET_REFERENCE_RE.findall(text)
-    observed_secrets = set(secret_references)
-    allowed_secrets = _ALLOWED_SECRET_REFERENCES.get(name, set())
-    if observed_secrets != allowed_secrets or len(secret_references) != len(allowed_secrets):
+    secret_references = Counter(_SECRET_REFERENCE_RE.findall(text))
+    allowed_secrets = _ALLOWED_SECRET_REFERENCE_COUNTS.get(name, Counter())
+    if secret_references != allowed_secrets:
         raise ValueError(
             f"{name}: secret references differ from reviewed allowlist: "
-            f"expected exactly {sorted(allowed_secrets)}, got {secret_references}"
+            f"expected {dict(sorted(allowed_secrets.items()))}, "
+            f"got {dict(sorted(secret_references.items()))}"
         )
+    if name == "manual-validation.yml":
+        missing = [fragment for fragment in _MANUAL_SECRET_CONTEXT_FRAGMENTS if fragment not in text]
+        if missing:
+            raise ValueError("manual-validation.yml: reviewed credential consumers moved or changed")
 
     return {
         "workflow": name,
         "aws_authentication": "forbidden",
         "pull_request_target": "forbidden",
-        "secrets": sorted(observed_secrets),
+        "secrets": dict(sorted(secret_references.items())),
     }
 
 
