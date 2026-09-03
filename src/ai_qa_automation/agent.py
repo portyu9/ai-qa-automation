@@ -48,6 +48,17 @@ _DEFAULT_LIMITATIONS = [
 ]
 
 
+def _may_recompute_terminal_outcome(status: TerminalStatus | None) -> bool:
+    """Allow generic SDK-success evaluation only without prior failure truth.
+
+    Candidate SUCCESS remains recomputable so later deterministic evidence can demote
+    it. Every non-success terminal state is monotonic by default, including future
+    enum additions, unless a separately reviewed recovery path explicitly changes it.
+    """
+
+    return status is None or status is TerminalStatus.SUCCESS
+
+
 async def run_agent(
     objective: str,
     workspace: Path,
@@ -394,11 +405,7 @@ async def run_agent(
                     if retry_reason is not None:
                         state.terminal_reason = retry_reason
         else:
-            if state.terminal_status not in {
-                TerminalStatus.BUDGET_EXCEEDED,
-                TerminalStatus.BLOCKED,
-                TerminalStatus.POLICY_DENIED,
-            }:
+            if _may_recompute_terminal_outcome(state.terminal_status):
                 state.terminal_status, state.terminal_reason = determine_terminal_outcome(
                     result_subtype,
                     state.validation_results,
