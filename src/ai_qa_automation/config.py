@@ -5,11 +5,7 @@ from pathlib import Path
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from .network_authority import (
-    NetworkDestinationClass,
-    canonicalize_network_host,
-    classify_network_host,
-)
+from .network_authority import canonicalize_network_host
 
 
 class Settings(BaseSettings):
@@ -69,11 +65,6 @@ class Settings(BaseSettings):
         seen: set[str] = set()
         for value in values:
             host = canonicalize_network_host(value)
-            if classify_network_host(host).destination_class is NetworkDestinationClass.DISALLOWED_LITERAL:
-                raise ValueError(
-                    "allowed_network_hosts must not include private, link-local, multicast, "
-                    "reserved, unspecified, or other non-global IP literals"
-                )
             if host not in seen:
                 normalized.append(host)
                 seen.add(host)
