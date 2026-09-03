@@ -175,9 +175,12 @@ async def test_api_probe_rejects_post_classification_request_modifiers_before_tr
         {"X-HTTP-Method-Override": "DELETE"},
         {"X-Method-Override": "PATCH"},
         {"X-Original-Method": "POST"},
+        {"X-Action": "delete"},
+        {"X-Operation": "reset"},
+        {"Cookie": "action=delete"},
     ],
 )
-async def test_api_probe_rejects_target_body_and_method_override_headers_before_transport(
+async def test_api_probe_rejects_unreviewed_request_headers_before_transport(
     tmp_path: Path,
     headers: dict[str, str],
 ) -> None:
@@ -217,17 +220,83 @@ async def test_api_probe_rejects_request_header_resource_exhaustion_before_trans
         transport=httpx.MockTransport(handler),
     )
 
-    too_many = [(f"x-safe-{index}", "v") for index in range(65)]
+    too_many = [("Accept", "v") for _ in range(65)]
     with pytest.raises(PermissionError, match="64-header bound"):
         await probe.request("GET", "https://example.com/v1/items", headers=too_many)
     with pytest.raises(PermissionError, match="aggregate byte bound"):
         await probe.request(
             "GET",
             "https://example.com/v1/items",
-            headers={"x-safe": "a" * 16_385},
+            headers={"Accept": "a" * 16_385},
         )
 
     assert calls == 0
+
+
+@pytest.mark.asyncio
+async def test_api_probe_rejects_unbounded_header_iterables_without_consuming_them(
+    tmp_path: Path,
+) -> None:
+    calls = 0
+    iterated = False
+
+    class UnboundedHeaders:
+        def __iter__(self):
+            nonlocal iterated
+            iterated = True
+            while True:
+                yield ("Accept", "application/json")
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, stream=httpx.ByteStream(b"ok"), request=request)
+
+    probe = ApiProbe(
+        EvidenceStore(tmp_path, "unbounded-request-headers"),
+        allow_hosts={"example.com"},
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(PermissionError, match="bounded mapping or sequence"):
+        await probe.request(
+            "GET",
+            "https://example.com/v1/items",
+            headers=UnboundedHeaders(),
+        )
+
+    assert iterated is False
+    assert calls == 0
+
+
+@pytest.mark.asyncio
+async def test_api_probe_allows_only_reviewed_observation_headers(tmp_path: Path) -> None:
+    observed: httpx.Headers | None = None
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal observed
+        observed = request.headers
+        return httpx.Response(200, stream=httpx.ByteStream(b"ok"), request=request)
+
+    probe = ApiProbe(
+        EvidenceStore(tmp_path, "allowed-request-headers"),
+        allow_hosts={"example.com"},
+        transport=httpx.MockTransport(handler),
+    )
+    await probe.request(
+        "GET",
+        "https://example.com/v1/items",
+        headers={
+            "Accept": "application/json",
+            "Authorization": "Bearer opaque-test-token",
+            "Accept-Encoding": "gzip",
+        },
+    )
+
+    assert observed is not None
+    assert observed["accept"] == "application/json"
+    assert observed["authorization"] == "Bearer opaque-test-token"
+    assert observed["accept-encoding"] == "identity"
 
 
 @pytest.mark.parametrize("allowed_methods", [{"POST"}, {"GET", "DELETE"}, set()])
