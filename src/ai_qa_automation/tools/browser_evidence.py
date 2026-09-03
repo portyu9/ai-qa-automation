@@ -73,9 +73,7 @@ class BrowserProbe:
             raise ValueError("browser timeout_ms must be an integer between 1 and 120000")
         if not isinstance(use_system_chrome, bool):
             raise ValueError("use_system_chrome must be a boolean")
-        if external_egress_enforced is not None and not isinstance(
-            external_egress_enforced, bool
-        ):
+        if external_egress_enforced is not None and not isinstance(external_egress_enforced, bool):
             raise ValueError("external_egress_enforced must be a boolean or None")
         inherited_egress = (
             allow_hosts.external_egress_enforced
@@ -87,9 +85,7 @@ class BrowserProbe:
         self.timeout_ms = timeout_ms
         self.use_system_chrome = use_system_chrome
         self.external_egress_enforced = (
-            inherited_egress
-            if external_egress_enforced is None
-            else external_egress_enforced
+            inherited_egress if external_egress_enforced is None else external_egress_enforced
         )
 
     def _launch_options(self) -> dict[str, Any]:
