@@ -16,6 +16,11 @@ from scripts.verify_fork_cloud_authority import (
     ("payload", "expected"),
     [
         ("permissions:\n  id-token: write\n", "GitHub OIDC permission"),
+        ("permissions: {contents: read, id-token: write}\n", "GitHub OIDC permission"),
+        (
+            "env:\n  TOKEN_URL: ${{ env.ACTIONS_ID_TOKEN_REQUEST_URL }}\n",
+            "GitHub OIDC request environment",
+        ),
         (
             "uses: aws-actions/configure-aws-credentials@0123456789012345678901234567890123456789\n",
             "AWS credential action",
@@ -25,8 +30,20 @@ from scripts.verify_fork_cloud_authority import (
         ("env:\n  AWS_ACCESS_KEY_ID: value\n", "AWS access key"),
         ("env:\n  AWS_SECRET_ACCESS_KEY: value\n", "AWS secret key"),
         ("env:\n  AWS_SESSION_TOKEN: value\n", "AWS session token"),
-        ("with:\n  role-to-assume: arn:aws:iam::123456789012:role/example\n", "AWS role-to-assume input"),
+        (
+            "with:\n  role-to-assume: arn:aws:iam::123456789012:role/example\n",
+            "AWS role-to-assume input",
+        ),
         ("on:\n  pull_request_target:\n", "pull_request_target trigger"),
+        ("on: [pull_request_target]\n", "pull_request_target trigger"),
+        (
+            "env:\n  CLOUD_TOKEN: ${{ secrets['CLOUD_TOKEN'] }}\n",
+            "indirect GitHub secret reference",
+        ),
+        (
+            "env:\n  CLOUD_TOKEN: ${{ secrets[env.SECRET_NAME] }}\n",
+            "indirect GitHub secret reference",
+        ),
     ],
 )
 def test_workflow_cloud_authority_tokens_fail_closed(payload: str, expected: str) -> None:
@@ -48,7 +65,9 @@ def test_reviewed_non_aws_secret_does_not_create_cloud_authority() -> None:
 
 
 def test_trusted_preflight_requires_canonical_repository_and_fork_rejection() -> None:
-    preflight = (Path(__file__).parents[2] / "scripts" / "auto_trusted_preflight.py").read_text()
+    preflight = (
+        Path(__file__).parents[2] / "scripts" / "auto_trusted_preflight.py"
+    ).read_text()
     result = _verify_trusted_preflight(preflight)
     assert result == {
         "repository": EXPECTED_REPOSITORY,
@@ -59,7 +78,9 @@ def test_trusted_preflight_requires_canonical_repository_and_fork_rejection() ->
 
 
 def test_trusted_preflight_fails_if_fork_rejection_is_removed() -> None:
-    preflight = (Path(__file__).parents[2] / "scripts" / "auto_trusted_preflight.py").read_text()
+    preflight = (
+        Path(__file__).parents[2] / "scripts" / "auto_trusted_preflight.py"
+    ).read_text()
     mutated = preflight.replace(
         'raise ValueError("fork/external-head workflow runs are not auto-authorized")',
         'raise ValueError("external workflow")',
