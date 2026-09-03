@@ -23,7 +23,22 @@ _MAX_API_RESPONSE_BYTES = 5_000_000
 _MAX_API_TIMEOUT_SECONDS = 900
 _MAX_API_RESPONSE_HEADERS = 200
 _MAX_API_RESPONSE_HEADER_BYTES = 64_000
+_MAX_API_REQUEST_HEADERS = 64
+_MAX_API_REQUEST_HEADER_BYTES = 16_384
 _API_RAW_CHUNK_BYTES = 64_000
+_FORBIDDEN_OBSERVATION_REQUEST_HEADERS = frozenset(
+    {
+        "content-length",
+        "content-type",
+        "host",
+        "transfer-encoding",
+        "x-http-method",
+        "x-http-method-override",
+        "x-method",
+        "x-method-override",
+        "x-original-method",
+    }
+)
 
 
 class ApiProbeTransportError(RuntimeError):
@@ -121,8 +136,32 @@ def _bounded_headers(headers: httpx.Headers) -> dict[str, str]:
     return result
 
 
-def _identity_request_headers(value: Any) -> httpx.Headers:
+def _observation_request_headers(value: Any) -> httpx.Headers:
+    """Admit only bounded headers that cannot alter target, method, or body authority."""
+
     headers = httpx.Headers(value)
+    raw_headers = headers.raw
+    if len(raw_headers) > _MAX_API_REQUEST_HEADERS:
+        raise PermissionError(
+            f"API observation request exceeds the {_MAX_API_REQUEST_HEADERS}-header bound"
+        )
+
+    raw_total = 0
+    for raw_name, raw_value in raw_headers:
+        raw_total += len(raw_name) + len(raw_value)
+        if raw_total > _MAX_API_REQUEST_HEADER_BYTES:
+            raise PermissionError(
+                "API observation request headers exceed the aggregate byte bound"
+            )
+        try:
+            normalized_name = raw_name.decode("ascii").casefold()
+        except UnicodeDecodeError as exc:  # pragma: no cover - httpx rejects this first
+            raise PermissionError("API observation request header name must be ASCII") from exc
+        if normalized_name in _FORBIDDEN_OBSERVATION_REQUEST_HEADERS:
+            raise PermissionError(
+                f"API observation request header is not authorized: {normalized_name}"
+            )
+
     headers["Accept-Encoding"] = "identity"
     return headers
 
@@ -199,7 +238,13 @@ class ApiProbe:
         if kwargs.get("follow_redirects") not in (None, False):
             raise PermissionError("API probe redirects are disabled by adapter policy")
         kwargs.pop("follow_redirects", None)
-        kwargs["headers"] = _identity_request_headers(kwargs.get("headers"))
+        request_headers = _observation_request_headers(kwargs.pop("headers", None))
+        if kwargs:
+            modifiers = ", ".join(sorted(str(key) for key in kwargs))
+            raise PermissionError(
+                "API observation request modifiers are not authorized after URL classification: "
+                f"{modifiers}"
+            )
 
         started = time.monotonic()
         content = bytearray()
@@ -219,8 +264,8 @@ class ApiProbe:
                 client.stream(
                     normalized_method,
                     url,
+                    headers=request_headers,
                     follow_redirects=False,
-                    **kwargs,
                 ) as response,
             ):
                 status_code = response.status_code
