@@ -91,12 +91,21 @@ Allowlist entries are canonical **hostnames or IP literals only**. Configuration
 - user-info;
 - paths, queries, and fragments;
 - malformed DNS labels;
-- malformed dotted IPv4-looking values;
+- malformed dotted IPv4-looking values and non-canonical legacy numeric IPv4 spellings;
 - bracket abuse;
 - scoped IPv6 zone identifiers;
 - an empty network allowlist when external network access is enabled.
 
-API and browser adapters then consume the same canonical host boundary.
+API/browser destination authority then adds a stricter execution boundary:
+
+- `localhost` and canonical loopback literals may be used for deterministic local testing without external-network authority;
+- private, link-local, multicast, reserved, unspecified, and other non-global IP literals are denied for API/browser execution even if present in the generic host allowlist;
+- external DNS names and global IP literals require both `AI_QA_ALLOW_EXTERNAL_NETWORK=true` and `AI_QA_API_BROWSER_EXTERNAL_EGRESS_ENFORCED=true`;
+- `AI_QA_API_BROWSER_EXTERNAL_EGRESS_ENFORCED` is only a trusted deployment assertion. It does **not** implement a firewall, proxy, namespace, DNS pin, or route constraint itself;
+- HTTPX and Chromium can resolve or re-resolve names below Python policy. The deployment must therefore enforce approved post-resolution destinations at the actual connection boundary on every connection/re-resolution;
+- the framework deliberately does **not** perform a Python DNS preflight and call that DNS-rebinding protection. A separate lookup that the real client is free to ignore would not prove the destination actually contacted.
+
+The live runtime persists `BLOCKED` when an external API/browser action is attempted without the trusted deployment egress prerequisite. Low-level API/browser adapters repeat the destination-authority check as defense in depth, and browser routing reapplies it to navigation, HTTP(S) subresources, and WebSockets.
 
 ---
 
@@ -228,11 +237,12 @@ Unsigned run attestations deliberately distinguish **content integrity** from **
 
 ### API
 
-- exact host allowlist;
+- exact canonical host allowlist;
 - generic observation admits only `GET` / `HEAD` / `OPTIONS`; `POST` / `PUT` / `PATCH` / `DELETE` are deterministically denied and the legacy mutating-method flag cannot widen authority;
 - the exact method + URL is classified before transport, including bounded action-semantics checks over decoded path/query tokens;
 - caller request modifiers that could alter the classified target or add a body/auth-cookie helper are rejected; query parameters must be present in the classified URL;
 - caller request headers are ingested under count/byte/ASCII/control-character bounds and restricted to a reviewed observation-header allowlist before HTTPX materialization;
+- external DNS/global-literal targets additionally require deployment-enforced post-resolution egress authority; unsafe non-global literals remain denied;
 - redirects disabled;
 - ambient proxy inheritance disabled;
 - response bytes and headers bounded;
@@ -242,14 +252,14 @@ A future remote-mutation capability must be a separately typed operation with ex
 
 ### Browser / Playwright
 
-The controlled browser context applies host policy to:
+The controlled browser context applies canonical host policy **and** the external post-resolution egress prerequisite to:
 
 - initial navigation;
 - HTTP(S) subresources;
 - WebSockets;
 - final navigation after page load.
 
-Service workers are disabled in the evidence context so they cannot silently extend the routed network surface. Screenshots remain explicitly `RAW` hashed artifacts rather than being mislabeled as sanitized text.
+Service workers are disabled in the evidence context so they cannot silently extend the routed network surface. Screenshots remain explicitly `RAW` hashed artifacts rather than being mislabeled as sanitized text. DNS/routing truth still belongs to deployment enforcement: browser routing checks the source-visible URL, but does not claim to prove which address Chromium ultimately connected to.
 
 ---
 
