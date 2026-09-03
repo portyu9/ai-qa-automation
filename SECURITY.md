@@ -44,6 +44,24 @@ For design detail, see:
 
 ---
 
+## Fork and cloud-authority isolation
+
+A fork copies public source and workflow definitions; it does **not** receive upstream repository/environment secrets, GitHub App private keys, AWS credentials, SSM SecureStrings, or KMS key authority. Fork owners remain free to edit and run their own copy, so fork-local YAML conditions are defense in depth rather than an upstream security boundary.
+
+Upstream cloud authority follows these invariants:
+
+- GitHub Actions is not an AWS authentication plane for this repository. Checked-in workflows must not request GitHub OIDC identity-token authority, configure AWS credentials, embed AWS access/session credentials, assume AWS web-identity roles, or use `pull_request_target`.
+- `scripts/verify_fork_cloud_authority.py` deterministically scans the complete bounded workflow set for those forbidden authority paths. Required repository pytest coverage executes the verifier and adversarially proves representative OIDC/static-credential/STS/fork-trigger attempts fail closed.
+- the automatic Trusted PR Gate re-fetches live GitHub state from default-branch-owned code and requires the workflow run repository, head repository, PR base/head repository, and owner actor identity to match `portyu9/ai-qa-automation`; fork/external-head runs are ineligible before App credential use;
+- the external AWS Trusted Gate is separate from Actions. A copied workflow cannot manufacture its webhook HMAC secret, App private key, exact one-shot policy, or AWS IAM/KMS authority;
+- environment-owned AWS IAM/KMS/App configuration remains the ultimate boundary. Repository checks prevent accidental source/workflow drift but never claim that editable fork code can constrain a fork owner.
+
+If GitHub-to-AWS OIDC or another workflow cloud-authentication mechanism is ever required, it is a control-plane redesign: the repository verifier, tests, IAM trust policy, exact repository/ref/environment subject binding, documentation, and protected-gate review must all change explicitly. Do not weaken the verifier merely to make such a workflow green.
+
+Live AWS configuration is environment-dependent and must be audited directly; repository documentation does not convert a historical AWS observation into a permanent claim.
+
+---
+
 ## Reporting a vulnerability
 
 > [!CAUTION]
