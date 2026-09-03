@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import math
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
@@ -26,17 +27,19 @@ _MAX_API_RESPONSE_HEADER_BYTES = 64_000
 _MAX_API_REQUEST_HEADERS = 64
 _MAX_API_REQUEST_HEADER_BYTES = 16_384
 _API_RAW_CHUNK_BYTES = 64_000
-_FORBIDDEN_OBSERVATION_REQUEST_HEADERS = frozenset(
+_ALLOWED_OBSERVATION_REQUEST_HEADERS = frozenset(
     {
-        "content-length",
-        "content-type",
-        "host",
-        "transfer-encoding",
-        "x-http-method",
-        "x-http-method-override",
-        "x-method",
-        "x-method-override",
-        "x-original-method",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "cache-control",
+        "if-match",
+        "if-modified-since",
+        "if-none-match",
+        "if-unmodified-since",
+        "range",
+        "user-agent",
     }
 )
 
@@ -136,32 +139,87 @@ def _bounded_headers(headers: httpx.Headers) -> dict[str, str]:
     return result
 
 
-def _observation_request_headers(value: Any) -> httpx.Headers:
-    """Admit only bounded headers that cannot alter target, method, or body authority."""
+def _bounded_ascii_header_component(value: Any, *, remaining: int, label: str) -> bytes:
+    if isinstance(value, bytes):
+        if len(value) > remaining:
+            raise PermissionError("API observation request headers exceed the aggregate byte bound")
+        return value
+    if not isinstance(value, str):
+        raise PermissionError(f"API observation request {label} must be text or bytes")
+    if len(value) > remaining:
+        raise PermissionError("API observation request headers exceed the aggregate byte bound")
+    try:
+        encoded = value.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise PermissionError(f"API observation request {label} must be ASCII") from exc
+    if len(encoded) > remaining:
+        raise PermissionError("API observation request headers exceed the aggregate byte bound")
+    return encoded
 
-    headers = httpx.Headers(value)
-    raw_headers = headers.raw
-    if len(raw_headers) > _MAX_API_REQUEST_HEADERS:
+
+def _bounded_request_header_pairs(value: Any) -> list[tuple[bytes, bytes]]:
+    """Ingest caller headers with limits before HTTPX may normalize/materialize them."""
+
+    if value is None:
+        return []
+    if isinstance(value, httpx.Headers):
+        source: Any = value.raw
+    elif isinstance(value, Mapping):
+        source = value.items()
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        source = value
+    else:
+        raise PermissionError(
+            "API observation request headers must be a bounded mapping or sequence"
+        )
+
+    try:
+        declared_count = len(value)
+    except TypeError:
+        declared_count = None
+    if declared_count is not None and declared_count > _MAX_API_REQUEST_HEADERS:
         raise PermissionError(
             f"API observation request exceeds the {_MAX_API_REQUEST_HEADERS}-header bound"
         )
 
-    raw_total = 0
-    for raw_name, raw_value in raw_headers:
-        raw_total += len(raw_name) + len(raw_value)
-        if raw_total > _MAX_API_REQUEST_HEADER_BYTES:
+    pairs: list[tuple[bytes, bytes]] = []
+    total = 0
+    for index, item in enumerate(source):
+        if index >= _MAX_API_REQUEST_HEADERS:
             raise PermissionError(
-                "API observation request headers exceed the aggregate byte bound"
+                f"API observation request exceeds the {_MAX_API_REQUEST_HEADERS}-header bound"
             )
+        if not isinstance(item, Sequence) or isinstance(item, (str, bytes, bytearray)):
+            raise PermissionError("API observation request header entries must be name/value pairs")
+        if len(item) != 2:
+            raise PermissionError("API observation request header entries must be name/value pairs")
+        raw_name = _bounded_ascii_header_component(
+            item[0],
+            remaining=_MAX_API_REQUEST_HEADER_BYTES - total,
+            label="header name",
+        )
+        total += len(raw_name)
+        raw_value = _bounded_ascii_header_component(
+            item[1],
+            remaining=_MAX_API_REQUEST_HEADER_BYTES - total,
+            label="header value",
+        )
+        total += len(raw_value)
         try:
             normalized_name = raw_name.decode("ascii").casefold()
-        except UnicodeDecodeError as exc:  # pragma: no cover - httpx rejects this first
+        except UnicodeDecodeError as exc:
             raise PermissionError("API observation request header name must be ASCII") from exc
-        if normalized_name in _FORBIDDEN_OBSERVATION_REQUEST_HEADERS:
+        if normalized_name not in _ALLOWED_OBSERVATION_REQUEST_HEADERS:
             raise PermissionError(
                 f"API observation request header is not authorized: {normalized_name}"
             )
+        pairs.append((raw_name, raw_value))
+    return pairs
 
+
+def _observation_request_headers(value: Any) -> httpx.Headers:
+    pairs = _bounded_request_header_pairs(value)
+    headers = httpx.Headers(pairs)
     headers["Accept-Encoding"] = "identity"
     return headers
 
