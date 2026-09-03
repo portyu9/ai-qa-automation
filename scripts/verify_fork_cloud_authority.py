@@ -10,6 +10,12 @@ from typing import Any
 
 EXPECTED_REPOSITORY = "portyu9/ai-qa-automation"
 EXPECTED_OWNER = "portyu9"
+EXPECTED_WORKFLOW_NAMES = {
+    "ci.yml",
+    "manual-validation.yml",
+    "release-candidate.yml",
+    "trusted-pr-auto.yml",
+}
 MAX_WORKFLOW_BYTES = 256 * 1024
 MAX_WORKFLOW_ENTRIES = 16
 MAX_PREFLIGHT_BYTES = 64 * 1024
@@ -17,11 +23,9 @@ MAX_PREFLIGHT_BYTES = 64 * 1024
 # GitHub Actions must not become an AWS authentication plane. This repository's AWS
 # authority is intentionally external to Actions and is admitted by the Trusted PR Gate.
 _FORBIDDEN_WORKFLOW_TOKENS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("GitHub OIDC permission", re.compile(r"(?im)^\s*id-token\s*:")),
-    (
-        "AWS credential action",
-        re.compile(r"(?i)aws-actions/configure-aws-credentials"),
-    ),
+    ("GitHub OIDC permission", re.compile(r"(?i)\bid-token\s*:")),
+    ("GitHub OIDC request environment", re.compile(r"(?i)ACTIONS_ID_TOKEN_REQUEST_(?:URL|TOKEN)")),
+    ("AWS credential action", re.compile(r"(?i)\baws-actions/")),
     ("GitHub OIDC provider", re.compile(r"(?i)token\.actions\.githubusercontent\.com")),
     ("AWS web-identity assumption", re.compile(r"(?i)assumerolewithwebidentity")),
     ("AWS role-to-assume input", re.compile(r"(?i)role-to-assume")),
@@ -30,12 +34,14 @@ _FORBIDDEN_WORKFLOW_TOKENS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("AWS secret key", re.compile(r"(?i)aws_secret_access_key")),
     ("AWS session token", re.compile(r"(?i)aws_session_token")),
     ("AWS shared credentials file", re.compile(r"(?i)aws_shared_credentials_file")),
-    ("AWS profile", re.compile(r"(?i)aws_profile")),
+    ("AWS profile", re.compile(r"(?i)aws_(?:default_)?profile")),
     ("AWS credential file", re.compile(r"(?i)(?:~|\$HOME)/\.aws/credentials")),
-    ("AWS configure command", re.compile(r"(?im)^\s*aws\s+configure\b")),
-    ("AWS STS command", re.compile(r"(?im)^\s*aws\s+sts\b")),
+    ("AWS credential process", re.compile(r"(?i)credential_process|credential_source|source_profile")),
+    ("AWS configure command", re.compile(r"(?i)\baws\s+configure\b")),
+    ("AWS STS command", re.compile(r"(?i)\baws\s+sts\b")),
     ("AWS-prefixed GitHub secret", re.compile(r"(?i)secrets\.AWS[_A-Z0-9]*")),
-    ("pull_request_target trigger", re.compile(r"(?im)^\s*pull_request_target\s*:")),
+    ("indirect GitHub secret reference", re.compile(r"(?i)\bsecrets\s*\[")),
+    ("pull_request_target trigger", re.compile(r"(?i)\bpull_request_target\b")),
 )
 
 _ALLOWED_SECRET_REFERENCES = {
@@ -78,8 +84,20 @@ def _read_regular_text(path: Path, *, max_bytes: int, label: str) -> str:
         if len(payload) > max_bytes:
             raise ValueError(f"{label} exceeds the bounded ingestion limit")
         after = os.fstat(fd)
-        before_sig = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
-        after_sig = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+        before_sig = (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        )
+        after_sig = (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        )
         if before_sig != after_sig:
             raise ValueError(f"{label} changed during ingestion")
     finally:
@@ -91,7 +109,9 @@ def _read_regular_text(path: Path, *, max_bytes: int, label: str) -> str:
 
 
 def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
-    violations = [label for label, pattern in _FORBIDDEN_WORKFLOW_TOKENS if pattern.search(text)]
+    violations = [
+        label for label, pattern in _FORBIDDEN_WORKFLOW_TOKENS if pattern.search(text)
+    ]
     if violations:
         raise ValueError(f"{name}: forbidden cloud/fork authority tokens: {', '.join(violations)}")
 
@@ -134,16 +154,17 @@ def verify_repository(root: Path) -> dict[str, Any]:
 
     names: list[str] = []
     for entry in sorted(workflow_dir.iterdir(), key=lambda item: item.name):
-        if entry.name.startswith("."):
-            continue
         if entry.suffix not in {".yml", ".yaml"}:
             raise ValueError(f"unexpected non-workflow entry in workflow directory: {entry.name}")
         names.append(entry.name)
         if len(names) > MAX_WORKFLOW_ENTRIES:
             raise ValueError("workflow directory exceeds bounded entry limit")
 
-    if not names:
-        raise ValueError("workflow directory must not be empty")
+    if set(names) != EXPECTED_WORKFLOW_NAMES:
+        raise ValueError(
+            "workflow set differs from reviewed cloud-authority contract: "
+            f"expected {sorted(EXPECTED_WORKFLOW_NAMES)}, got {sorted(names)}"
+        )
 
     workflows: list[dict[str, Any]] = []
     for name in names:
@@ -161,7 +182,7 @@ def verify_repository(root: Path) -> dict[str, Any]:
     )
     preflight = _verify_trusted_preflight(preflight_text)
 
-    result = {
+    return {
         "schema_version": 1,
         "canonical_repository": EXPECTED_REPOSITORY,
         "github_actions_aws_authentication": "forbidden",
@@ -170,7 +191,6 @@ def verify_repository(root: Path) -> dict[str, Any]:
         "workflows": workflows,
         "trusted_preflight": preflight,
     }
-    return result
 
 
 def main() -> int:
