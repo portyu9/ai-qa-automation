@@ -243,18 +243,6 @@ def test_evidence_manifest_rejects_truthy_string_regulated_mode(tmp_path: Path) 
 def test_regulated_audit_rejects_hash_valid_duplicate_record(tmp_path: Path) -> None:
     run_root = tmp_path / "run"
     run_root.mkdir()
-    (run_root / "evidence-manifest.json").write_text(
-        json.dumps(
-            {
-                "run_id": "run",
-                "regulated_mode": True,
-                "evidence": [],
-                "artifacts": [],
-            },
-            sort_keys=True,
-        ),
-        encoding="utf-8",
-    )
     core = {
         "sequence": 1,
         "timestamp": "2026-08-24T00:00:00+00:00",
@@ -270,6 +258,24 @@ def test_regulated_audit_rejects_hash_valid_duplicate_record(tmp_path: Path) -> 
         f'"payload":{{}},"previous_hash":"GENESIS","event_hash":"{event_hash}"}}\n'
     )
     (run_root / "audit-log.jsonl").write_text(raw, encoding="utf-8")
+    (run_root / "evidence-manifest.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run",
+                "regulated_mode": True,
+                "evidence": [],
+                "artifacts": [],
+                "audit_log": {
+                    "path": "audit-log.jsonl",
+                    "events": 1,
+                    "last_event_hash": event_hash,
+                    "content_hash": EvidenceStore.hash_bytes(raw.encode("utf-8")),
+                },
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
 
     with pytest.raises(ValueError, match="audit log integrity check failed"):
         EvidenceStore(tmp_path, "run", regulated_mode=True)
@@ -278,17 +284,6 @@ def test_regulated_audit_rejects_hash_valid_duplicate_record(tmp_path: Path) -> 
 def test_regulated_audit_rejects_hash_valid_string_sequence(tmp_path: Path) -> None:
     run_root = tmp_path / "run"
     run_root.mkdir()
-    (run_root / "evidence-manifest.json").write_text(
-        json.dumps(
-            {
-                "run_id": "run",
-                "regulated_mode": True,
-                "evidence": [],
-                "artifacts": [],
-            }
-        ),
-        encoding="utf-8",
-    )
     core = {
         "sequence": "1",
         "timestamp": "2026-08-24T00:00:00+00:00",
@@ -297,9 +292,26 @@ def test_regulated_audit_rejects_hash_valid_string_sequence(tmp_path: Path) -> N
         "previous_hash": "GENESIS",
     }
     canonical = json.dumps(core, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    record = {**core, "event_hash": EvidenceStore.hash_bytes(canonical)}
-    (run_root / "audit-log.jsonl").write_text(
-        json.dumps(record, sort_keys=True) + "\n", encoding="utf-8"
+    event_hash = EvidenceStore.hash_bytes(canonical)
+    raw = json.dumps({**core, "event_hash": event_hash}, sort_keys=True) + "\n"
+    (run_root / "audit-log.jsonl").write_text(raw, encoding="utf-8")
+    (run_root / "evidence-manifest.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run",
+                "regulated_mode": True,
+                "evidence": [],
+                "artifacts": [],
+                "audit_log": {
+                    "path": "audit-log.jsonl",
+                    "events": 1,
+                    "last_event_hash": event_hash,
+                    "content_hash": EvidenceStore.hash_bytes(raw.encode("utf-8")),
+                },
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
     )
 
     with pytest.raises(ValueError, match="audit log integrity check failed"):

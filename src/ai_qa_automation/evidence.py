@@ -8,7 +8,7 @@ import os
 import stat
 import tempfile
 import threading
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -103,6 +103,262 @@ def _identity(value: os.stat_result) -> tuple[int, int]:
     return value.st_dev, value.st_ino
 
 
+def _is_sha256_digest(value: object) -> bool:
+    if not isinstance(value, str) or not value.startswith("sha256:") or len(value) != 71:
+        return False
+    try:
+        int(value[7:], 16)
+    except ValueError:
+        return False
+    return True
+
+
+def validate_regulated_audit_binding(value: object) -> dict[str, Any]:
+    """Validate the exact manifest authority record for a regulated audit subject."""
+
+    required = {"path", "events", "last_event_hash", "content_hash"}
+    if not isinstance(value, dict) or set(value) != required:
+        raise ValueError("regulated audit manifest binding structure is invalid")
+    if value.get("path") != "audit-log.jsonl":
+        raise ValueError("regulated audit manifest path is invalid")
+    events = value.get("events")
+    if type(events) is not int or events < 0 or events > _MAX_EVIDENCE_COUNT + _MAX_ARTIFACT_COUNT:
+        raise ValueError("regulated audit manifest event count is invalid")
+    last_event_hash = value.get("last_event_hash")
+    if events == 0:
+        if last_event_hash != "GENESIS":
+            raise ValueError("regulated audit manifest empty head is invalid")
+    elif not _is_sha256_digest(last_event_hash):
+        raise ValueError("regulated audit manifest head hash is invalid")
+    content_hash = value.get("content_hash")
+    if content_hash is not None and not _is_sha256_digest(content_hash):
+        raise ValueError("regulated audit manifest content hash is invalid")
+    if events > 0 and content_hash is None:
+        raise ValueError("regulated audit manifest content hash is missing")
+    return {
+        "path": "audit-log.jsonl",
+        "events": events,
+        "last_event_hash": last_event_hash,
+        "content_hash": content_hash,
+    }
+
+
+def _evidence_item_hash_for_audit(item: EvidenceItem, *, canonical: bool) -> str:
+    return _hash_json_bounded(
+        _registry_model_proxy(item),
+        max_bytes=_MAX_EVIDENCE_MANIFEST_BYTES,
+        label="regulated evidence item hash",
+        sort_keys=canonical,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=EvidenceStore._manifest_json_default,
+        preflight_default=EvidenceStore._manifest_json_preflight_default,
+    )
+
+
+def verify_regulated_audit_subject(
+    raw: bytes,
+    *,
+    expected_binding: object | None = None,
+    evidence_records: Mapping[str, EvidenceItem] | None = None,
+    artifact_records: Mapping[str, ArtifactRecord] | None = None,
+) -> dict[str, Any]:
+    """Verify exact bounded audit bytes, hash chain, binding, and optional registry authority."""
+
+    content_hash = f"sha256:{hashlib.sha256(raw).hexdigest()}"
+    if len(raw) > _MAX_EVIDENCE_AUDIT_BYTES:
+        return {
+            "valid": False,
+            "events": 0,
+            "head_hash": "GENESIS",
+            "content_hash": content_hash,
+            "reason": "regulated audit log exceeds restore size bound",
+        }
+    binding: dict[str, Any] | None = None
+    if expected_binding is not None:
+        try:
+            binding = validate_regulated_audit_binding(expected_binding)
+        except ValueError as exc:
+            return {
+                "valid": False,
+                "events": 0,
+                "head_hash": "GENESIS",
+                "content_hash": content_hash,
+                "reason": str(exc),
+            }
+
+    expected_previous = "GENESIS"
+    expected_sequence = 1
+    evidence_hashes: dict[str, tuple[str, str | None]] = {}
+    artifact_hashes: dict[str, str] = {}
+    stream = io.BytesIO(raw)
+    total_bytes = 0
+    try:
+        while True:
+            raw_line = stream.readline(_MAX_EVIDENCE_AUDIT_LINE_BYTES + 1)
+            if not raw_line:
+                break
+            total_bytes += len(raw_line)
+            if total_bytes > _MAX_EVIDENCE_AUDIT_BYTES:
+                raise ValueError("regulated audit log exceeds restore size bound")
+            if len(raw_line) > _MAX_EVIDENCE_AUDIT_LINE_BYTES:
+                raise ValueError("regulated audit event exceeds line-size bound")
+            if not raw_line.strip():
+                continue
+            record = parse_json_object_strict(
+                raw_line.decode("utf-8"),
+                label="regulated audit event",
+            )
+            sequence = record.get("sequence")
+            if type(sequence) is not int or sequence != expected_sequence:
+                raise ValueError("regulated audit event sequence is invalid")
+            if record.get("previous_hash") != expected_previous:
+                raise ValueError("regulated audit previous-hash linkage is invalid")
+            core = {key: value for key, value in record.items() if key != "event_hash"}
+            calculated = _hash_json_bounded(
+                core,
+                max_bytes=_MAX_EVIDENCE_AUDIT_LINE_BYTES,
+                label="regulated audit event core",
+                sort_keys=True,
+                ensure_ascii=True,
+                separators=(",", ":"),
+                default=str,
+                preflight_default=str,
+            )
+            if record.get("event_hash") != calculated:
+                raise ValueError("regulated audit event hash is invalid")
+            payload = record.get("payload")
+            event_type = record.get("event_type")
+            if event_type in {"evidence_registered", "artifact_registered"}:
+                if not isinstance(payload, dict):
+                    raise ValueError("regulated audit registry event payload is invalid")
+                if event_type == "evidence_registered":
+                    evidence_id = payload.get("evidence_id")
+                    content = payload.get("content_hash")
+                    if (
+                        not isinstance(evidence_id, str)
+                        or not evidence_id
+                        or not isinstance(content, str)
+                    ):
+                        raise ValueError("regulated audit evidence registration is invalid")
+                    if evidence_id in evidence_hashes:
+                        raise ValueError("regulated audit contains duplicate evidence registration")
+                    raw_algorithm = payload.get("content_hash_algorithm")
+                    algorithm = str(raw_algorithm) if raw_algorithm is not None else None
+                    evidence_hashes[evidence_id] = (content, algorithm)
+                else:
+                    artifact_id = payload.get("artifact_id")
+                    content = payload.get("content_hash")
+                    if (
+                        not isinstance(artifact_id, str)
+                        or not artifact_id
+                        or not isinstance(content, str)
+                    ):
+                        raise ValueError("regulated audit artifact registration is invalid")
+                    if artifact_id in artifact_hashes:
+                        raise ValueError("regulated audit contains duplicate artifact registration")
+                    artifact_hashes[artifact_id] = content
+            expected_previous = calculated
+            expected_sequence += 1
+    except (UnicodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        return {
+            "valid": False,
+            "events": expected_sequence - 1,
+            "head_hash": expected_previous,
+            "content_hash": content_hash,
+            "reason": str(exc),
+        }
+
+    events = expected_sequence - 1
+    head_hash = expected_previous
+    if binding is not None:
+        if binding["events"] != events:
+            return {
+                "valid": False,
+                "events": events,
+                "head_hash": head_hash,
+                "content_hash": content_hash,
+                "reason": "regulated audit event count does not match manifest binding",
+            }
+        if binding["last_event_hash"] != head_hash:
+            return {
+                "valid": False,
+                "events": events,
+                "head_hash": head_hash,
+                "content_hash": content_hash,
+                "reason": "regulated audit head hash does not match manifest binding",
+            }
+        if binding["content_hash"] != content_hash:
+            return {
+                "valid": False,
+                "events": events,
+                "head_hash": head_hash,
+                "content_hash": content_hash,
+                "reason": "regulated audit content hash does not match manifest binding",
+            }
+
+    if evidence_records is not None:
+        if set(evidence_hashes) != set(evidence_records):
+            return {
+                "valid": False,
+                "events": events,
+                "head_hash": head_hash,
+                "content_hash": content_hash,
+                "reason": "regulated evidence registry does not match audit log",
+            }
+        for evidence_id, evidence_item in evidence_records.items():
+            expected_hash, algorithm = evidence_hashes[evidence_id]
+            if algorithm is None:
+                actual = _evidence_item_hash_for_audit(evidence_item, canonical=False)
+            elif algorithm == _CANONICAL_EVIDENCE_HASH_ALGORITHM:
+                actual = _evidence_item_hash_for_audit(evidence_item, canonical=True)
+            else:
+                return {
+                    "valid": False,
+                    "events": events,
+                    "head_hash": head_hash,
+                    "content_hash": content_hash,
+                    "reason": f"regulated evidence hash algorithm is unsupported: {evidence_id}",
+                }
+            if expected_hash != actual:
+                return {
+                    "valid": False,
+                    "events": events,
+                    "head_hash": head_hash,
+                    "content_hash": content_hash,
+                    "reason": f"regulated evidence integrity check failed: {evidence_id}",
+                }
+
+    if artifact_records is not None:
+        if set(artifact_hashes) != set(artifact_records):
+            return {
+                "valid": False,
+                "events": events,
+                "head_hash": head_hash,
+                "content_hash": content_hash,
+                "reason": "regulated artifact registry does not match audit log",
+            }
+        for artifact_id, artifact_record in artifact_records.items():
+            if artifact_hashes[artifact_id] != artifact_record.content_hash:
+                return {
+                    "valid": False,
+                    "events": events,
+                    "head_hash": head_hash,
+                    "content_hash": content_hash,
+                    "reason": f"regulated artifact registry integrity check failed: {artifact_id}",
+                }
+
+    result: dict[str, Any] = {
+        "valid": True,
+        "events": events,
+        "head_hash": head_hash,
+        "content_hash": content_hash,
+    }
+    if evidence_records is not None or artifact_records is not None:
+        result["registry_reconciled"] = True
+    return result
+
+
 class EvidenceStore:
     """Append-only evidence registry with hashing, manifests, and optional audit chaining."""
 
@@ -149,6 +405,9 @@ class EvidenceStore:
         self._artifacts: dict[str, ArtifactRecord] = {}
         self._audit_sequence = 0
         self._audit_previous_hash = "GENESIS"
+        self._audit_content_hash: str | None = None
+        self._audit_file_identity: tuple[int, int] | None = None
+        self._manifest_audit_binding: dict[str, Any] | None = None
         self._audit_write_uncertain = False
         self._lock = threading.RLock()
         self._restore_manifest()
@@ -223,9 +482,31 @@ class EvidenceStore:
         self._revalidate_run_root()
         return data
 
+    def _read_audit_bytes(self) -> bytes:
+        self._revalidate_run_root()
+        if self._descriptor_relative_root:
+            data = read_bytes_confined(
+                self.run_root,
+                "audit-log.jsonl",
+                max_bytes=_MAX_EVIDENCE_AUDIT_BYTES,
+                label="regulated audit log",
+                expected_root_identity=self._run_root_identity,
+                expected_entry_identity=self._audit_file_identity,
+            )
+            self._revalidate_run_root()
+            return data
+        return self._read_owned_bytes(
+            "audit-log.jsonl",
+            max_bytes=_MAX_EVIDENCE_AUDIT_BYTES,
+            label="regulated audit log",
+        )
+
     def _owned_file_hash(self, relative_path: str, *, max_bytes: int, label: str) -> str:
         if self._descriptor_relative_root:
-            data = self._read_owned_bytes(relative_path, max_bytes=max_bytes, label=label)
+            if self.regulated_mode and relative_path == "audit-log.jsonl":
+                data = self._read_audit_bytes()
+            else:
+                data = self._read_owned_bytes(relative_path, max_bytes=max_bytes, label=label)
             return self.hash_bytes(data)
         path = self._owned_artifact_path(relative_path)
         return self.hash_file(path, max_bytes=max_bytes, label=label)
@@ -540,18 +821,21 @@ class EvidenceStore:
             if len(rendered) != rendered_size:
                 raise OSError("regulated audit serialization size changed between bounded passes")
             try:
-                append_bytes_confined(
+                audit_identity = append_bytes_confined(
                     self.run_root,
                     "audit-log.jsonl",
                     rendered,
                     max_total_bytes=_MAX_EVIDENCE_AUDIT_BYTES,
                     label="regulated audit log",
                     expected_root_identity=self._run_root_identity,
+                    expected_entry_identity=self._audit_file_identity,
+                    require_missing=self._audit_file_identity is None,
                 )
                 self._revalidate_run_root()
-            except OSError:
+            except (OSError, ValueError):
                 self._audit_write_uncertain = True
                 raise
+            self._audit_file_identity = audit_identity
             self._audit_sequence = next_sequence
             self._audit_previous_hash = event_hash
             return
@@ -644,6 +928,10 @@ class EvidenceStore:
                 raise ValueError("evidence manifest regulated_mode must be a boolean")
             if manifest_regulated != self.regulated_mode:
                 raise ValueError("evidence manifest regulated_mode mismatch")
+            if self.regulated_mode:
+                self._manifest_audit_binding = validate_regulated_audit_binding(
+                    data.get("audit_log")
+                )
             raw_evidence = data.get("evidence", [])
             raw_artifacts = data.get("artifacts", [])
             if not isinstance(raw_evidence, list) or not isinstance(raw_artifacts, list):
@@ -674,20 +962,11 @@ class EvidenceStore:
             raise ValueError("evidence manifest could not be restored") from exc
 
     def _iter_audit_records(self) -> Iterator[dict[str, Any]]:
-        path = self._assert_control_file_owned("audit-log.jsonl")
+        self._assert_control_file_owned("audit-log.jsonl")
         if not self._entry_exists("audit-log.jsonl", label="regulated audit log"):
             return
-        if self._descriptor_relative_root:
-            raw = self._read_owned_bytes(
-                "audit-log.jsonl",
-                max_bytes=_MAX_EVIDENCE_AUDIT_BYTES,
-                label="regulated audit log",
-            )
-            stream: Any = io.BytesIO(raw)
-        else:
-            if path.stat().st_size > _MAX_EVIDENCE_AUDIT_BYTES:
-                raise ValueError("regulated audit log exceeds restore size bound")
-            stream = open_regular_binary(path, label="regulated audit log")
+        raw = self._read_audit_bytes()
+        stream: Any = io.BytesIO(raw)
         try:
             total_bytes = 0
             while True:
@@ -757,93 +1036,91 @@ class EvidenceStore:
             if f"sha256:{digest}" != record.content_hash:
                 raise ValueError(f"regulated artifact integrity check failed: {record.path}")
 
+    def _current_audit_status(
+        self,
+        *,
+        expected_binding: object | None = None,
+        reconcile_registry: bool = False,
+    ) -> dict[str, Any]:
+        if not self._entry_exists("audit-log.jsonl", label="regulated audit log"):
+            return {
+                "valid": False,
+                "events": 0,
+                "head_hash": "GENESIS",
+                "content_hash": None,
+                "reason": "regulated audit log is missing",
+            }
+        raw = self._read_audit_bytes()
+        return verify_regulated_audit_subject(
+            raw,
+            expected_binding=expected_binding,
+            evidence_records=self._items if reconcile_registry else None,
+            artifact_records=self._artifacts if reconcile_registry else None,
+        )
+
     def _verify_registry_against_audit(self) -> None:
         if not self._entry_exists("audit-log.jsonl", label="regulated audit log"):
             if self._items or self._artifacts:
                 raise ValueError("regulated registry exists without audit log")
             return
-
-        evidence_hashes: dict[str, tuple[str, str | None]] = {}
-        artifact_hashes: dict[str, str] = {}
-        for record in self._iter_audit_records():
-            payload = record.get("payload") or {}
-            if record.get("event_type") == "evidence_registered":
-                raw_algorithm = payload.get("content_hash_algorithm")
-                algorithm = str(raw_algorithm) if raw_algorithm is not None else None
-                evidence_hashes[str(payload.get("evidence_id"))] = (
-                    str(payload.get("content_hash")),
-                    algorithm,
-                )
-            elif record.get("event_type") == "artifact_registered":
-                artifact_hashes[str(payload.get("artifact_id"))] = str(payload.get("content_hash"))
-
-        if set(evidence_hashes) != set(self._items):
-            raise ValueError("regulated evidence registry does not match audit log")
-        if set(artifact_hashes) != set(self._artifacts):
-            raise ValueError("regulated artifact registry does not match audit log")
-
-        for evidence_id, evidence_item in self._items.items():
-            expected_hash, algorithm = evidence_hashes[evidence_id]
-            if algorithm is None:
-                actual = self._evidence_item_hash(evidence_item, canonical=False)
-            elif algorithm == _CANONICAL_EVIDENCE_HASH_ALGORITHM:
-                actual = self._evidence_item_hash(evidence_item, canonical=True)
-            else:
-                raise ValueError(f"regulated evidence hash algorithm is unsupported: {evidence_id}")
-            if expected_hash != actual:
-                raise ValueError(f"regulated evidence integrity check failed: {evidence_id}")
-        for artifact_id, artifact_record in self._artifacts.items():
-            if artifact_hashes[artifact_id] != artifact_record.content_hash:
-                raise ValueError(
-                    f"regulated artifact registry integrity check failed: {artifact_id}"
-                )
+        status = self._current_audit_status(reconcile_registry=True)
+        if not status.get("valid"):
+            raise ValueError(
+                str(status.get("reason") or "regulated registry audit reconciliation failed")
+            )
 
     def verify_audit_chain(self) -> bool:
-        """Verify sequence, previous-hash linkage, and each regulated audit event hash."""
+        """Verify the current regulated audit subject against its pinned file identity."""
         with self._lock:
             if not self._entry_exists("audit-log.jsonl", label="regulated audit log"):
                 return self._audit_sequence == 0 and self._audit_previous_hash == "GENESIS"
-
-            expected_previous = "GENESIS"
-            expected_sequence = 1
             try:
-                for record in self._iter_audit_records():
-                    sequence = record.get("sequence")
-                    if type(sequence) is not int or sequence != expected_sequence:
-                        return False
-                    if record.get("previous_hash") != expected_previous:
-                        return False
-                    core = {key: value for key, value in record.items() if key != "event_hash"}
-                    calculated = _hash_json_bounded(
-                        core,
-                        max_bytes=_MAX_EVIDENCE_AUDIT_LINE_BYTES,
-                        label="regulated audit event core",
-                        sort_keys=True,
-                        ensure_ascii=True,
-                        separators=(",", ":"),
-                        default=str,
-                        preflight_default=str,
-                    )
-                    if record.get("event_hash") != calculated:
-                        return False
-                    expected_previous = calculated
-                    expected_sequence += 1
+                status = self._current_audit_status()
             except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
                 return False
-            return True
+            return bool(status.get("valid"))
 
     def _restore_audit_tail(self) -> None:
-        if not self._entry_exists("audit-log.jsonl", label="regulated audit log"):
+        manifest_exists = self._entry_exists("evidence-manifest.json", label="evidence manifest")
+        audit_exists = self._entry_exists("audit-log.jsonl", label="regulated audit log")
+        if not audit_exists:
+            if manifest_exists:
+                raise ValueError("regulated evidence manifest exists without audit log")
             return
-        if not self.verify_audit_chain():
-            raise ValueError("regulated audit log integrity check failed")
-        last: dict[str, Any] | None = None
-        for record in self._iter_audit_records():
-            last = record
-        if last is None:
-            return
-        self._audit_sequence = int(last["sequence"])
-        self._audit_previous_hash = str(last["event_hash"])
+        if self._descriptor_relative_root:
+            current = self._stat_owned_entry(
+                "audit-log.jsonl",
+                label="regulated audit log",
+            )
+            if not stat.S_ISREG(current.st_mode):
+                raise ValueError("regulated audit log must remain a regular file")
+            self._audit_file_identity = _identity(current)
+        if self._manifest_audit_binding is None:
+            status = self._current_audit_status()
+            empty_hash = f"sha256:{hashlib.sha256(b'').hexdigest()}"
+            if (
+                status.get("valid")
+                and status.get("events") == 0
+                and status.get("head_hash") == "GENESIS"
+                and status.get("content_hash") == empty_hash
+                and not self._items
+                and not self._artifacts
+            ):
+                self._audit_content_hash = empty_hash
+                return
+            raise ValueError("regulated evidence registry does not match audit log")
+        status = self._current_audit_status(
+            expected_binding=self._manifest_audit_binding,
+            reconcile_registry=True,
+        )
+        if not status.get("valid"):
+            raise ValueError(
+                "regulated audit log integrity check failed: "
+                + str(status.get("reason") or "unknown audit integrity failure")
+            )
+        self._audit_sequence = int(status["events"])
+        self._audit_previous_hash = str(status["head_hash"])
+        self._audit_content_hash = str(status["content_hash"])
 
     @staticmethod
     def _manifest_json_default(value: Any) -> Any:
@@ -906,15 +1183,7 @@ class EvidenceStore:
                 "path": "audit-log.jsonl",
                 "events": self._audit_sequence,
                 "last_event_hash": self._audit_previous_hash,
-                "content_hash": (
-                    self._owned_file_hash(
-                        "audit-log.jsonl",
-                        max_bytes=_MAX_EVIDENCE_AUDIT_BYTES,
-                        label="regulated audit log",
-                    )
-                    if self._entry_exists("audit-log.jsonl", label="regulated audit log")
-                    else None
-                ),
+                "content_hash": self._audit_content_hash,
             }
         return data
 
@@ -944,48 +1213,36 @@ class EvidenceStore:
 
     def _flush_manifest(self) -> None:
         self._assert_control_file_owned("evidence-manifest.json")
-        if self._descriptor_relative_root:
-            chunks: list[bytes] = []
+        audit_binding: dict[str, Any] | None = None
+        if self.regulated_mode:
+            if self._audit_write_uncertain:
+                raise OSError("regulated audit log write state is uncertain")
             try:
-                for chunk in iter_json_text_bounded(
-                    self._manifest_data(),
-                    max_bytes=_MAX_EVIDENCE_MANIFEST_BYTES,
-                    label="evidence manifest",
-                    indent=2,
-                    sort_keys=True,
-                    ensure_ascii=True,
-                    default=self._manifest_json_default,
-                    preflight_default=self._manifest_json_preflight_default,
+                audit_status = self._current_audit_status(reconcile_registry=True)
+                if not audit_status.get("valid"):
+                    raise ValueError(
+                        str(audit_status.get("reason") or "regulated audit closure is invalid")
+                    )
+                if (
+                    audit_status.get("events") != self._audit_sequence
+                    or audit_status.get("head_hash") != self._audit_previous_hash
                 ):
-                    chunks.append(chunk.encode("utf-8"))
-            except JsonSerializationBoundsError as exc:
-                if exc.code == "bytes":
-                    raise ValueError("evidence manifest exceeds persistence size bound") from exc
-                raise ValueError(
-                    f"evidence manifest violates persistence serialization bound: {exc.code}"
-                ) from exc
-            atomic_write_bytes_confined(
-                self.run_root,
-                "evidence-manifest.json",
-                b"".join(chunks),
-                create_parents=False,
-                create_only=False,
-                label="evidence manifest",
-                expected_root_identity=self._run_root_identity,
-            )
-            self._revalidate_run_root()
-            return
+                    raise ValueError(
+                        "regulated audit persisted tail does not match in-memory authority"
+                    )
+                self._audit_content_hash = str(audit_status["content_hash"])
+                audit_binding = validate_regulated_audit_binding(self._manifest_data()["audit_log"])
+            except BaseException:
+                self._audit_write_uncertain = True
+                raise
 
-        path = self.run_root / "evidence-manifest.json"
-        handle, raw_temp = tempfile.mkstemp(
-            dir=self.run_root, prefix=".evidence-manifest.", suffix=".tmp", text=True
-        )
-        temp = Path(raw_temp)
+        data = self._manifest_data()
         try:
-            with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            if self._descriptor_relative_root:
+                chunks: list[bytes] = []
                 try:
                     for chunk in iter_json_text_bounded(
-                        self._manifest_data(),
+                        data,
                         max_bytes=_MAX_EVIDENCE_MANIFEST_BYTES,
                         label="evidence manifest",
                         indent=2,
@@ -994,7 +1251,7 @@ class EvidenceStore:
                         default=self._manifest_json_default,
                         preflight_default=self._manifest_json_preflight_default,
                     ):
-                        stream.write(chunk)
+                        chunks.append(chunk.encode("utf-8"))
                 except JsonSerializationBoundsError as exc:
                     if exc.code == "bytes":
                         raise ValueError(
@@ -1003,10 +1260,65 @@ class EvidenceStore:
                     raise ValueError(
                         f"evidence manifest violates persistence serialization bound: {exc.code}"
                     ) from exc
-                stream.flush()
-                os.fsync(stream.fileno())
-            temp.replace(path)
-            fsync_directory(path.parent)
-            self._revalidate_run_root()
-        finally:
-            temp.unlink(missing_ok=True)
+                atomic_write_bytes_confined(
+                    self.run_root,
+                    "evidence-manifest.json",
+                    b"".join(chunks),
+                    create_parents=False,
+                    create_only=False,
+                    label="evidence manifest",
+                    expected_root_identity=self._run_root_identity,
+                )
+                self._revalidate_run_root()
+            else:
+                path = self.run_root / "evidence-manifest.json"
+                handle, raw_temp = tempfile.mkstemp(
+                    dir=self.run_root, prefix=".evidence-manifest.", suffix=".tmp", text=True
+                )
+                temp = Path(raw_temp)
+                try:
+                    with os.fdopen(handle, "w", encoding="utf-8") as stream:
+                        try:
+                            for chunk in iter_json_text_bounded(
+                                data,
+                                max_bytes=_MAX_EVIDENCE_MANIFEST_BYTES,
+                                label="evidence manifest",
+                                indent=2,
+                                sort_keys=True,
+                                ensure_ascii=True,
+                                default=self._manifest_json_default,
+                                preflight_default=self._manifest_json_preflight_default,
+                            ):
+                                stream.write(chunk)
+                        except JsonSerializationBoundsError as exc:
+                            if exc.code == "bytes":
+                                raise ValueError(
+                                    "evidence manifest exceeds persistence size bound"
+                                ) from exc
+                            raise ValueError(
+                                f"evidence manifest violates persistence serialization bound: {exc.code}"
+                            ) from exc
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    temp.replace(path)
+                    fsync_directory(path.parent)
+                    self._revalidate_run_root()
+                finally:
+                    temp.unlink(missing_ok=True)
+
+            if self.regulated_mode:
+                post_status = self._current_audit_status(
+                    expected_binding=audit_binding,
+                    reconcile_registry=True,
+                )
+                if not post_status.get("valid"):
+                    raise ValueError(
+                        "regulated audit changed during manifest closure: "
+                        + str(post_status.get("reason") or "unknown audit integrity failure")
+                    )
+                self._audit_content_hash = str(post_status["content_hash"])
+                self._manifest_audit_binding = dict(audit_binding or {})
+        except BaseException:
+            if self.regulated_mode:
+                self._audit_write_uncertain = True
+            raise

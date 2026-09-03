@@ -326,6 +326,7 @@ def read_bytes_confined(
     max_bytes: int,
     label: str,
     expected_root_identity: tuple[int, int] | None = None,
+    expected_entry_identity: tuple[int, int] | None = None,
 ) -> bytes:
     """Read a stable regular file through a parent descriptor pinned below ``root``."""
 
@@ -350,10 +351,13 @@ def read_bytes_confined(
         try:
             opened = os.fstat(file_fd)
             current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-            if _identity(opened) != _identity(current):
+            opened_identity = _identity(opened)
+            if opened_identity != _identity(current):
                 raise ValueError(f"{label} changed identity during confined read")
             if not stat.S_ISREG(opened.st_mode) or not stat.S_ISREG(current.st_mode):
                 raise ValueError(f"{label} must be a regular file")
+            if expected_entry_identity is not None and opened_identity != expected_entry_identity:
+                raise ValueError(f"{label} changed identity since authorization")
             initial_signature = _stable_file_signature(opened)
 
             chunks: list[bytes] = []
@@ -485,18 +489,23 @@ def append_bytes_confined(
     max_total_bytes: int,
     label: str,
     expected_root_identity: tuple[int, int] | None = None,
-) -> None:
+    expected_entry_identity: tuple[int, int] | None = None,
+    require_missing: bool = False,
+) -> tuple[int, int]:
     """Durably append bounded bytes below one descriptor-pinned root.
 
-    The opened file must remain the current regular entry for the pinned parent
-    and that exact parent/file must remain reachable through the authorized root.
-    A partial or subsequently ambiguous append is truncated back to its original
-    size before an error is propagated; inability to prove that rollback is
-    reported as an I/O failure.
+    When ``expected_entry_identity`` is supplied, the target must still be that
+    exact regular file before any bytes are written. ``require_missing`` is the
+    complementary first-create authority: the target must not exist and is
+    created exclusively. A partial or subsequently ambiguous append is rolled
+    back on the descriptor that was actually opened; inability to prove rollback
+    is reported as an I/O failure.
     """
 
     if type(max_total_bytes) is not int or max_total_bytes < 1:
         raise ValueError("max_total_bytes must be a positive integer")
+    if expected_entry_identity is not None and require_missing:
+        raise ValueError("expected_entry_identity and require_missing are mutually exclusive")
     with _open_confined_parent(
         root,
         relative_path,
@@ -505,7 +514,25 @@ def append_bytes_confined(
         expected_root_identity=expected_root_identity,
     ) as (parent_fd, name):
         parent_identity = _identity(os.fstat(parent_fd))
-        flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0) | os.O_NOFOLLOW
+        if require_missing:
+            try:
+                existing = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                existing = None
+            if existing is not None:
+                raise ValueError(f"{label} appeared before authorized first append")
+            flags = (
+                os.O_WRONLY
+                | os.O_APPEND
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_BINARY", 0)
+                | os.O_NOFOLLOW
+            )
+        else:
+            flags = os.O_WRONLY | os.O_APPEND | getattr(os, "O_BINARY", 0) | os.O_NOFOLLOW
+            if expected_entry_identity is None:
+                flags |= os.O_CREAT
         try:
             file_fd = os.open(name, flags, 0o600, dir_fd=parent_fd)
         except OSError as exc:
@@ -515,13 +542,18 @@ def append_bytes_confined(
         try:
             opened = os.fstat(file_fd)
             current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            opened_identity = _identity(opened)
             if (
                 not stat.S_ISREG(opened.st_mode)
                 or not stat.S_ISREG(current.st_mode)
-                or _identity(opened) != _identity(current)
+                or opened_identity != _identity(current)
             ):
                 raise ValueError(f"{label} changed identity during confined append")
+            if expected_entry_identity is not None and opened_identity != expected_entry_identity:
+                raise ValueError(f"{label} changed identity since authorization")
             original_size = opened.st_size
+            if require_missing and original_size != 0:
+                raise ValueError(f"{label} first append target was not newly created")
             if original_size + len(data) > max_total_bytes:
                 raise ValueError(f"{label} exceeds persistence size bound")
             try:
@@ -538,6 +570,7 @@ def append_bytes_confined(
                 if (
                     not stat.S_ISREG(final_current.st_mode)
                     or _identity(final_opened) != _identity(final_current)
+                    or _identity(final_opened) != opened_identity
                     or final_opened.st_size != original_size + len(data)
                 ):
                     raise ValueError(f"{label} changed identity during confined append")
@@ -572,6 +605,7 @@ def append_bytes_confined(
                     errno.EIO,
                     f"{label} descriptor close could not be proven",
                 ) from exc
+        return opened_identity
 
 
 def unlink_file_confined(

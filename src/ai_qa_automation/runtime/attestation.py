@@ -6,10 +6,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from ..evidence import validate_regulated_audit_binding, verify_regulated_audit_subject
 from ..fs_authority import (
     descriptor_relative_authority_supported,
     pin_directory_identity,
     read_bytes_confined,
+    stat_confined_entry,
 )
 from ..io_safety import parse_json_object_strict, read_json_object_bounded, sha256_file_bounded
 from ..models import ArtifactRecord, EvidenceItem
@@ -20,6 +22,7 @@ _MAX_STATE_BYTES = 16_000_000
 _MAX_MANIFEST_BYTES = 16_000_000
 _MAX_RUNTIME_BYTES = 2_000_000
 _MAX_JOURNAL_BYTES = 64_000_000
+_MAX_AUDIT_BYTES = 64_000_000
 _MAX_EVIDENCE_COUNT = 10_000
 _MAX_ARTIFACT_BYTES = 32_000_000
 _MAX_ARTIFACT_COUNT = 5_000
@@ -93,6 +96,20 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
         root_identity_present="workspace_root_identity" in runtime,
     )
 
+    regulated_mode = manifest.get("regulated_mode") is True
+    regulated_audit: dict[str, Any] | None = None
+    audit_subject: dict[str, object] | None = None
+    if regulated_mode:
+        audit_path = _owned_subject(root, "audit-log.jsonl")
+        regulated_audit, audit_subject = _validate_regulated_audit(
+            root,
+            audit_path,
+            manifest.get("audit_log"),
+            evidence_records,
+            artifact_records,
+            expected_root_identity=run_root_identity,
+        )
+
     try:
         if journal_path.is_file() and journal_path.stat().st_size > _MAX_JOURNAL_BYTES:
             journal = {"valid": False, "reason": "journal exceeds attestation size bound"}
@@ -157,6 +174,8 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
             else None
         ),
     }
+    if regulated_mode:
+        subjects["audit-log.jsonl"] = audit_subject
     subjects_complete = all(value is not None for value in subjects.values())
     pending_mutation_present = "pending_mutation" in runtime
     pending_mutation = runtime.get("pending_mutation")
@@ -171,9 +190,31 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
         and bool(manifest_integrity.get("valid"))
         and bool(artifact_integrity.get("valid"))
         and bool(workspace_integrity.get("valid"))
+        and (
+            not regulated_mode
+            or (
+                regulated_audit is not None
+                and bool(regulated_audit.get("valid"))
+                and bool(regulated_audit.get("final_file_identity_continuity_enforced"))
+            )
+        )
         and pending_mutation_authority_valid
         and pending_mutation is None
     )
+
+    integrity_payload: dict[str, Any] = {
+        "journal": journal,
+        "journal_binding": journal_binding,
+        "manifest": manifest_integrity,
+        "artifacts": artifact_integrity,
+        "workspace": workspace_integrity,
+        "pending_mutation": pending_mutation is not None,
+        "persisted_subjects": subjects,
+        "subjects_complete": subjects_complete,
+        "integrity_verified": integrity_verified,
+    }
+    if regulated_mode:
+        integrity_payload["regulated_audit"] = regulated_audit
 
     core: dict[str, Any] = {
         "schema": "ai-qa-run-attestation/v1",
@@ -199,17 +240,7 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
             "evidence_count": len(evidence_records),
             "artifact_count": len(artifact_records),
         },
-        "integrity": {
-            "journal": journal,
-            "journal_binding": journal_binding,
-            "manifest": manifest_integrity,
-            "artifacts": artifact_integrity,
-            "workspace": workspace_integrity,
-            "pending_mutation": pending_mutation is not None,
-            "persisted_subjects": subjects,
-            "subjects_complete": subjects_complete,
-            "integrity_verified": integrity_verified,
-        },
+        "integrity": integrity_payload,
         "signature": {
             "signed": False,
             "reason": "repository provides content-addressed integrity metadata but no trusted signing key",
@@ -250,6 +281,17 @@ def _validate_manifest_structure(
     if type(regulated_mode) is not bool:
         return (
             {"valid": False, "reason": "evidence manifest regulated_mode must be a boolean"},
+            [],
+            [],
+        )
+    if regulated_mode:
+        try:
+            validate_regulated_audit_binding(manifest.get("audit_log"))
+        except ValueError as exc:
+            return ({"valid": False, "reason": str(exc)}, [], [])
+    elif "audit_log" in manifest:
+        return (
+            {"valid": False, "reason": "non-regulated evidence manifest contains audit authority"},
             [],
             [],
         )
@@ -316,6 +358,82 @@ def _validate_manifest_structure(
         evidence_records,
         artifact_records,
     )
+
+
+def _validate_regulated_audit(
+    root: Path,
+    audit_path: Path,
+    binding: object,
+    evidence_records: list[EvidenceItem],
+    artifact_records: list[ArtifactRecord],
+    *,
+    expected_root_identity: tuple[int, int] | None,
+) -> tuple[dict[str, Any], dict[str, object] | None]:
+    continuity_enforced = expected_root_identity is not None
+    if not audit_path.is_file():
+        return (
+            {
+                "applicable": True,
+                "valid": False,
+                "final_file_identity_continuity_enforced": continuity_enforced,
+                "reason": "regulated audit log is missing",
+            },
+            None,
+        )
+    try:
+        expected_entry_identity: tuple[int, int] | None = None
+        if expected_root_identity is not None:
+            current = stat_confined_entry(
+                root,
+                audit_path.relative_to(root),
+                label="attestation regulated audit log",
+                expected_root_identity=expected_root_identity,
+            )
+            expected_entry_identity = (current.st_dev, current.st_ino)
+            raw = read_bytes_confined(
+                root,
+                audit_path.relative_to(root),
+                max_bytes=_MAX_AUDIT_BYTES,
+                label="attestation regulated audit log",
+                expected_root_identity=expected_root_identity,
+                expected_entry_identity=expected_entry_identity,
+            )
+        else:
+            with audit_path.open("rb") as stream:
+                raw = stream.read(_MAX_AUDIT_BYTES + 1)
+            if len(raw) > _MAX_AUDIT_BYTES:
+                raise ValueError("regulated audit log exceeds attestation size bound")
+        status = verify_regulated_audit_subject(
+            raw,
+            expected_binding=binding,
+            evidence_records={item.id: item for item in evidence_records},
+            artifact_records={item.artifact_id: item for item in artifact_records},
+        )
+    except (OSError, RuntimeError, UnicodeError, ValueError) as exc:
+        return (
+            {
+                "applicable": True,
+                "valid": False,
+                "final_file_identity_continuity_enforced": continuity_enforced,
+                "reason": f"regulated audit subject could not be verified: {type(exc).__name__}",
+            },
+            None,
+        )
+    audit_integrity = {
+        "applicable": True,
+        **status,
+        "final_file_identity_continuity_enforced": continuity_enforced,
+    }
+    if not continuity_enforced:
+        audit_integrity["valid"] = False
+        audit_integrity["reason"] = (
+            "regulated audit final-file identity continuity cannot be enforced on this platform"
+        )
+    subject = {
+        "size": len(raw),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+    }
+    return audit_integrity, subject
 
 
 def _validate_runtime_workspace(
