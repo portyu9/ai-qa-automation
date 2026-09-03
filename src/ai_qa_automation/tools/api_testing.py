@@ -267,9 +267,7 @@ class ApiProbe:
             set(SAFE_API_OBSERVATION_METHODS) if allowed_methods is None else set(allowed_methods)
         )
         self.allowed_methods = {
-            str(method).strip().upper()
-            for method in configured_methods
-            if str(method).strip()
+            str(method).strip().upper() for method in configured_methods if str(method).strip()
         }
         if not self.allowed_methods:
             raise ValueError(
