@@ -73,9 +73,7 @@ def test_reviewed_non_aws_secret_does_not_create_cloud_authority() -> None:
 
 
 def test_trusted_preflight_requires_canonical_repository_and_fork_rejection() -> None:
-    preflight = (
-        Path(__file__).parents[2] / "scripts" / "auto_trusted_preflight.py"
-    ).read_text()
+    preflight = (Path(__file__).parents[2] / "scripts" / "auto_trusted_preflight.py").read_text()
     result = _verify_trusted_preflight(preflight)
     assert result == {
         "repository": EXPECTED_REPOSITORY,
@@ -86,9 +84,7 @@ def test_trusted_preflight_requires_canonical_repository_and_fork_rejection() ->
 
 
 def test_trusted_preflight_fails_if_fork_rejection_is_removed() -> None:
-    preflight = (
-        Path(__file__).parents[2] / "scripts" / "auto_trusted_preflight.py"
-    ).read_text()
+    preflight = (Path(__file__).parents[2] / "scripts" / "auto_trusted_preflight.py").read_text()
     mutated = preflight.replace(
         'raise ValueError("fork/external-head workflow runs are not auto-authorized")',
         'raise ValueError("external workflow")',
