@@ -29,6 +29,21 @@ class NetworkAuthorityCode(StrEnum):
     EXTERNAL_EGRESS_UNVERIFIED = "external_egress_unverified"
 
 
+class AuthorizedNetworkHosts(set[str]):
+    """Allowlisted hosts carrying trusted post-resolution egress authority."""
+
+    def __init__(
+        self,
+        values: set[str],
+        *,
+        external_egress_enforced: bool,
+    ) -> None:
+        if not isinstance(external_egress_enforced, bool):
+            raise ValueError("external_egress_enforced must be a boolean")
+        super().__init__(values)
+        self.external_egress_enforced = external_egress_enforced
+
+
 class NetworkAuthorityError(PermissionError):
     """Deterministic denial carrying a stable authority reason code."""
 
