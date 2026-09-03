@@ -157,7 +157,7 @@ def test_newer_failed_revision_dominates_older_pass_for_same_gate() -> None:
     assert "pytest:target" in reason
 
 
-def test_new_change_revision_can_supersede_reproduced_failure_only_with_objective_and_closure_gates() -> None:
+def test_new_change_revision_requires_objective_and_mutation_closure() -> None:
     validations = [
         vr("pytest", ValidationStatus.FAIL, gate_id="pytest:target", revision=0),
         *closed_mutation_validations(),
