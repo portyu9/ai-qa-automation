@@ -44,6 +44,7 @@ from scripts.verify_fork_cloud_authority import (
             "env:\n  CLOUD_TOKEN: ${{ secrets[env.SECRET_NAME] }}\n",
             "indirect GitHub secret reference",
         ),
+        ("secrets: inherit\n", "inherited GitHub secrets"),
     ],
 )
 def test_workflow_cloud_authority_tokens_fail_closed(payload: str, expected: str) -> None:
@@ -55,6 +56,13 @@ def test_unreviewed_secret_reference_fails_closed() -> None:
     payload = "env:\n  CLOUD_TOKEN: ${{ secrets.UNREVIEWED_CLOUD_TOKEN }}\n"
     with pytest.raises(ValueError, match="secret references differ from reviewed allowlist"):
         _verify_workflow_text("ci.yml", payload)
+
+
+def test_duplicate_reviewed_secret_reference_fails_closed() -> None:
+    secret = "${{ secrets.ANTHROPIC_API_KEY }}"
+    payload = f"env:\n  FIRST: {secret}\n  SECOND: {secret}\n"
+    with pytest.raises(ValueError, match="secret references differ from reviewed allowlist"):
+        _verify_workflow_text("manual-validation.yml", payload)
 
 
 def test_reviewed_non_aws_secret_does_not_create_cloud_authority() -> None:
