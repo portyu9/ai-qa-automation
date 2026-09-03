@@ -10,7 +10,9 @@ Generic API observation admits only `GET`, `HEAD`, and `OPTIONS`. `POST`, `PUT`,
 
 The runtime additionally rejects explicit action semantics encoded in otherwise read-only request URLs. Exact action tokens in path/query semantics—such as `delete`, `reset`, `remove`, or `trigger`—are denied before network transport. Bounded repeated percent-decoding prevents simple encoded action tokens from bypassing this classification. The classifier deliberately uses exact tokens rather than arbitrary substrings so ordinary resource nouns such as `runs` or `updated-items` are not automatically treated as actions.
 
-This URL classification is defense in depth, not a proof that every possible `GET`, `HEAD`, or `OPTIONS` endpoint is side-effect free. The framework still requires operators to expose observation-safe SUT endpoints and to apply deployment-level egress controls. Resolved-destination authority remains a separate network boundary.
+The final transport request is bound to the authority that was classified. `ApiProbe.request()` does not admit post-classification `params`, request bodies, auth/cookie helpers, extensions, or other arbitrary HTTPX request modifiers. Query parameters must be present in the URL that policy classified. The only retained request customization surface is a bounded header set; `Host`, body-shaping headers, transfer framing, and HTTP method-override headers are rejected before transport, and `Accept-Encoding` is forced to `identity`. This prevents a caller from obtaining approval for one read-only URL/method and then changing the effective target, body, query, or method afterward.
+
+This URL/header classification is defense in depth, not a proof that every possible `GET`, `HEAD`, or `OPTIONS` endpoint is side-effect free. The framework still requires operators to expose observation-safe SUT endpoints and to apply deployment-level egress controls. Resolved-destination authority remains a separate network boundary.
 
 ## Why generic mutation is absent
 
@@ -30,7 +32,7 @@ The generic HTTP probe has none of those authorities, so it does not submit remo
 
 ## Preserved observation controls
 
-This hardening does not weaken the existing API observation controls. The adapter still requires explicit host authorization, disallows redirect following, uses `trust_env=False`, forces identity content encoding, applies total timeout and response-size bounds, bounds headers, records transport failures as evidence, and never promotes a response or model interpretation directly to deterministic validation `PASS`.
+This hardening does not weaken the existing API observation controls. The adapter still requires explicit host authorization, disallows redirect following, uses `trust_env=False`, forces identity content encoding, applies total timeout and response-size bounds, bounds request and response headers, records transport failures as evidence, and never promotes a response or model interpretation directly to deterministic validation `PASS`.
 
 The runtime authority chain remains:
 
@@ -45,4 +47,4 @@ objective
   -> terminal truth
 ```
 
-The stronger invariant is: **generic HTTP observation cannot become autonomous remote-mutation authority through a method flag, adapter constructor, encoded action URL, transport ambiguity, or model output.**
+The stronger invariant is: **generic HTTP observation cannot become autonomous remote-mutation authority through a method flag, adapter constructor, post-classification request modifier, encoded action URL, method-override header, transport ambiguity, or model output.**
