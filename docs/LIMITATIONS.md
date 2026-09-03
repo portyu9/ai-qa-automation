@@ -83,9 +83,11 @@ The sections below describe what each control **does not claim** beyond its owne
 
 ### API
 
-- The adapter provides bounded HTTP/evidence/schema mechanics, not business authorization.
-- Read-only methods are default; mutating methods require explicit enablement.
-- Host/method permission does not establish that a user/test identity is authorized for an endpoint.
+- The generic adapter provides bounded **read-only** HTTP observation/evidence mechanics, not business authorization or remote mutation authority.
+- Generic observation admits only `GET`, `HEAD`, and `OPTIONS`; `POST`, `PUT`, `PATCH`, and `DELETE` are denied, and `AI_QA_ALLOW_MUTATING_API_METHODS=true` is rejected rather than widening the adapter.
+- The adapter binds transport to the classified method + URL and a bounded reviewed observation-header set; post-classification query/body/cookie/auth-helper/request-modifier authority is refused.
+- Host/method permission does not establish that a user/test identity is authorized for an endpoint, nor does HTTP convention prove every target `GET`/`HEAD`/`OPTIONS` implementation is side-effect free. Observation-safe endpoint design remains a target/deployment responsibility.
+- A future typed remote-mutation tool would need independent durable pending/unknown-side-effect state, replay-safety semantics, reconciliation, bounded compensation/rollback authority, and deterministic postcondition validation; none of that authority is inferred from the generic probe.
 - JSON Schema/OpenAPI validation complements—not replaces—business-semantic validation.
 - Target auth, tenancy, data setup/isolation, and cleanup remain target responsibilities.
 
