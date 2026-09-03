@@ -263,7 +263,7 @@ def determine_terminal_outcome(
     if not objective_bound:
         return (
             TerminalStatus.NOT_VERIFIED,
-            "Agent completed with passing deterministic checks, but no active PASS at the current change revision matched the operator-supplied objective-validation gate contract.",
+            "Agent completed with passing deterministic checks, but no active PASS matched the operator-supplied objective-validation gate contract at the current change revision.",
         )
 
     if current_revision > 0:
