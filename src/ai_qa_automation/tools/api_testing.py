@@ -288,16 +288,12 @@ class ApiProbe:
                 "unsupported "
                 f"methods: {rendered}"
             )
-        if external_egress_enforced is not None and not isinstance(
-            external_egress_enforced, bool
-        ):
+        if external_egress_enforced is not None and not isinstance(external_egress_enforced, bool):
             raise ValueError("external_egress_enforced must be a boolean or None")
         self.timeout_seconds = float(timeout_seconds)
         self.max_response_bytes = max_response_bytes
         self.external_egress_enforced = (
-            inherited_egress
-            if external_egress_enforced is None
-            else external_egress_enforced
+            inherited_egress if external_egress_enforced is None else external_egress_enforced
         )
         self.transport = transport
 
