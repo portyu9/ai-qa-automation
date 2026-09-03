@@ -24,7 +24,10 @@ MAX_PREFLIGHT_BYTES = 64 * 1024
 # authority is intentionally external to Actions and is admitted by the Trusted PR Gate.
 _FORBIDDEN_WORKFLOW_TOKENS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("GitHub OIDC permission", re.compile(r"(?i)\bid-token\s*:")),
-    ("GitHub OIDC request environment", re.compile(r"(?i)ACTIONS_ID_TOKEN_REQUEST_(?:URL|TOKEN)")),
+    (
+        "GitHub OIDC request environment",
+        re.compile(r"(?i)ACTIONS_ID_TOKEN_REQUEST_(?:URL|TOKEN)"),
+    ),
     ("AWS credential action", re.compile(r"(?i)\baws-actions/")),
     ("GitHub OIDC provider", re.compile(r"(?i)token\.actions\.githubusercontent\.com")),
     ("AWS web-identity assumption", re.compile(r"(?i)assumerolewithwebidentity")),
@@ -36,11 +39,15 @@ _FORBIDDEN_WORKFLOW_TOKENS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("AWS shared credentials file", re.compile(r"(?i)aws_shared_credentials_file")),
     ("AWS profile", re.compile(r"(?i)aws_(?:default_)?profile")),
     ("AWS credential file", re.compile(r"(?i)(?:~|\$HOME)/\.aws/credentials")),
-    ("AWS credential process", re.compile(r"(?i)credential_process|credential_source|source_profile")),
+    (
+        "AWS credential process",
+        re.compile(r"(?i)credential_process|credential_source|source_profile"),
+    ),
     ("AWS configure command", re.compile(r"(?i)\baws\s+configure\b")),
     ("AWS STS command", re.compile(r"(?i)\baws\s+sts\b")),
     ("AWS-prefixed GitHub secret", re.compile(r"(?i)secrets\.AWS[_A-Z0-9]*")),
     ("indirect GitHub secret reference", re.compile(r"(?i)\bsecrets\s*\[")),
+    ("inherited GitHub secrets", re.compile(r"(?i)\bsecrets\s*:\s*inherit\b")),
     ("pull_request_target trigger", re.compile(r"(?i)\bpull_request_target\b")),
 )
 
@@ -115,12 +122,13 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
     if violations:
         raise ValueError(f"{name}: forbidden cloud/fork authority tokens: {', '.join(violations)}")
 
-    observed_secrets = set(_SECRET_REFERENCE_RE.findall(text))
+    secret_references = _SECRET_REFERENCE_RE.findall(text)
+    observed_secrets = set(secret_references)
     allowed_secrets = _ALLOWED_SECRET_REFERENCES.get(name, set())
-    if observed_secrets != allowed_secrets:
+    if observed_secrets != allowed_secrets or len(secret_references) != len(allowed_secrets):
         raise ValueError(
             f"{name}: secret references differ from reviewed allowlist: "
-            f"expected {sorted(allowed_secrets)}, got {sorted(observed_secrets)}"
+            f"expected exactly {sorted(allowed_secrets)}, got {secret_references}"
         )
 
     return {
