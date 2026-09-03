@@ -10,6 +10,11 @@ from urllib.parse import urlparse
 
 from ...evidence import EvidenceStore
 from ...models import AgentRunState, ValidationResult, ValidationStatus
+from ...network_authority import (
+    AuthorizedNetworkHosts,
+    authorize_network_url,
+    canonicalize_network_host,
+)
 from ...policy import PolicyEngine
 from ...state import StateStore
 from ...tools.test_execution import TestRunner
@@ -133,6 +138,7 @@ class RuntimeServices:
     max_repeated_action: int
     allowed_network_hosts: set[str] = field(default_factory=set)
     allow_external_network: bool = False
+    api_browser_external_egress_enforced: bool = False
     allow_mutating_api_methods: bool = False
     k6_external_egress_enforced: bool = False
     state_store: StateStore | None = None
@@ -148,11 +154,15 @@ class RuntimeServices:
                 raise ValueError(f"{name} must be a positive integer")
         for name, value in {
             "allow_external_network": self.allow_external_network,
+            "api_browser_external_egress_enforced": self.api_browser_external_egress_enforced,
             "allow_mutating_api_methods": self.allow_mutating_api_methods,
             "k6_external_egress_enforced": self.k6_external_egress_enforced,
         }.items():
             if not isinstance(value, bool):
                 raise ValueError(f"{name} must be a boolean")
+        self.allowed_network_hosts = {
+            canonicalize_network_host(host) for host in self.allowed_network_hosts
+        }
         if self.allow_mutating_api_methods:
             raise ValueError(
                 "allow_mutating_api_methods=true cannot authorize generic remote mutation"
@@ -181,6 +191,20 @@ class RuntimeServices:
             self.state_store.save(self.state)
 
     def network_hosts(self, url: str) -> set[str]:
+        authorize_network_url(
+            url,
+            allowed_hosts=self.allowed_network_hosts,
+            allow_external_network=self.allow_external_network,
+            external_egress_enforced=self.api_browser_external_egress_enforced,
+        )
+        return AuthorizedNetworkHosts(
+            set(self.allowed_network_hosts),
+            external_egress_enforced=self.api_browser_external_egress_enforced,
+        )
+
+    def generic_network_hosts(self, url: str) -> set[str]:
+        """Preserve pre-#95 host semantics for non-API/browser controlled consumers."""
+
         host = (urlparse(url).hostname or "").lower()
         if not host or host not in self.allowed_network_hosts:
             raise PermissionError(

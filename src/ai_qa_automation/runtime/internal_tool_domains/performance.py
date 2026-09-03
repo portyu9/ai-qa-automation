@@ -36,7 +36,7 @@ def register_performance_tools(
                 "is_error": True,
             }
         try:
-            services.network_hosts(str(gate_payload["target_url"]))
+            services.generic_network_hosts(str(gate_payload["target_url"]))
         except PermissionError as exc:
             return {
                 "content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}],

@@ -37,6 +37,7 @@ async def test_request_header_injection_and_encoding_ambiguity_fail_before_trans
     probe = ApiProbe(
         EvidenceStore(tmp_path, "header-injection"),
         allow_hosts={"example.com"},
+        external_egress_enforced=True,
         transport=httpx.MockTransport(handler),
     )
 

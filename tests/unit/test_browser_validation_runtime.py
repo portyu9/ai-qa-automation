@@ -67,6 +67,7 @@ def make_services(tmp_path: Path) -> RuntimeServices:
         max_repeated_action=5,
         allowed_network_hosts={"example.test"},
         allow_external_network=True,
+        api_browser_external_egress_enforced=True,
     )
 
 
