@@ -98,7 +98,7 @@ A “repair” may hide the failure rather than fix it.
 
 Browser/API/k6 workloads may contact unauthorized hosts or accidentally hit production.
 
-**Controls:** canonical exact-host configuration, read-only API default, routed browser requests/WebSockets, service-worker blocking, production-like hostname denial, and deployment-level egress required for every k6 workload.
+**Controls:** canonical exact-host configuration, observation-only generic API transport, routed browser requests/WebSockets, service-worker blocking, production-like hostname denial, and deployment-level egress required for every k6 workload.
 
 ### 7. Resource exhaustion and retry storms
 
@@ -157,7 +157,7 @@ Persisted bytes may be replaced, cross-run data mixed, ambiguous JSON decoded wi
 | Action-name privilege smuggling | camel/snake/mixed tokenization; destructive > write > read; noun collisions handled |
 | Fabricated remote evidence during outage | normalized provider outcomes; failed calls create no remote evidence |
 | Business ID `403` misread as HTTP status | HTTP error recognition requires status-shaped context |
-| Browser/API egress | exact host allowlist; request/WebSocket routing; read-only API default; no ambient proxy |
+| Browser/API egress | exact host allowlist; request/WebSocket routing; generic API request-shape confinement; no ambient proxy |
 | Browser service-worker bypass | service workers blocked in evidence context |
 | Production load incident | environment + production-like hostname denial + target binding |
 | Dynamic k6 destination escape | infrastructure-egress prerequisite required for **every** k6 run; static JS inspection is defense in depth only |
@@ -200,6 +200,7 @@ The strongest regression and holdout cases attack assumptions rather than syntax
 - cross-run or malformed evidence records attempting to enter the lineage graph;
 - low-confidence test-impact data attempting to shrink regression scope;
 - wildcard, URL-shaped, scoped-IPv6, or malformed dotted network configuration;
+- a read-only API method attempting to smuggle action semantics through encoded URL tokens, post-classification query/body modifiers, or method-override/custom action headers;
 - a k6 script dynamically constructing an external host while the declared target is localhost;
 - a production-like hostname presented with `environment=staging`;
 - a provider outage encouraging fallback to an unapproved integration;
