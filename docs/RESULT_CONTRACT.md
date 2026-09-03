@@ -60,11 +60,15 @@ None of the non-PASS outcomes is promoted by model judgment. Infrastructure/tool
 
 An unexpected exception from an internal **validation-bearing** tool is itself current-revision validation uncertainty. `PostToolUseFailure` therefore records a sanitized `NOT_VERIFIED` lineage item keyed by the tool and a hash of its sanitized request. This marker is intentionally not erased by an older PASS at the same revision: an unexplained validator crash cannot be hidden by earlier green evidence. Failures of advisory-only tools and external-provider reads retain their own diagnostic/provider semantics and do not fabricate deterministic validation outcomes.
 
-### Objective binding for unchanged runs
+### Objective binding across revisions
 
-When `change_revision == 0`, a set of unrelated green checks does not prove that the requested objective succeeded. Terminal `SUCCESS` requires at least one trusted deterministic PASS carrying explicit objective-binding provenance. If no such gate exists, the correct terminal state is `NOT_VERIFIED` even when all executed checks are green.
+A set of unrelated green checks does not prove that the requested objective succeeded. For every `change_revision`, terminal `SUCCESS` requires an operator-supplied exact objective-validation gate contract and an active deterministic PASS whose gate identity matches that contract **at the current revision**.
 
-This prevents a model from selecting an easy but irrelevant validation merely to satisfy a mechanical “some gate passed” condition.
+When autonomous mutation advances `change_revision`, objective evidence from an older revision is stale for terminal authority even if that older PASS remains part of the historical validation record. The objective gate must be re-executed for the post-mutation subject/revision before those newer bytes can reach `SUCCESS`.
+
+For changed revisions, objective closure and mutation closure are independent, additive predicates. Patch-safety, exact-path targeted pytest, and full-regression pytest can close the mutation transaction, but they do not become objective proof unless the operator independently supplied that exact gate identity as the objective contract and the matching PASS is current-revision evidence. If no current objective-specific deterministic PASS exists, the correct terminal state is `NOT_VERIFIED` even when every mutation-closure gate is green.
+
+This prevents a model from selecting an easy but irrelevant validation or mutation merely to satisfy a mechanical “some gate passed” condition.
 
 ### Pytest exit semantics
 
@@ -82,11 +86,13 @@ The controlled pytest adapter also fingerprints the Git-backed target immediatel
 
 Autonomous mutation advances `change_revision`. Validation is revision-bound so evidence from older bytes cannot silently certify newer bytes.
 
-A live autonomous mutation is deliberately constrained to the Python/pytest execution path. For a changed test to close, the current revision requires all three conditions:
+A live autonomous mutation is deliberately constrained to the Python/pytest execution path. For a changed test's **mutation transaction** to close, the current revision requires all three conditions:
 
 1. **patch-safety PASS** bound to the exact changed path;
 2. **targeted pytest PASS** that explicitly selects that same pending mutation path; and
 3. **full-regression pytest PASS** at that revision.
+
+Those three gates prove mutation closure only. Terminal `SUCCESS` for the changed revision additionally requires the exact operator-supplied objective-validation gate to have an active PASS at that same revision. Neither predicate substitutes for the other.
 
 A selector such as:
 
@@ -217,11 +223,3 @@ The structured report carries the identifiers needed to reason about its conclus
 ## Core invariant
 
 > **Unknown is not PASS. Validator uncertainty is not FAIL. Model completion is not PASS. An unrelated green gate is not objective success. Configuration is not PASS. Historical evidence is not current-revision PASS. Integrity is not PASS. Only deterministic closure can produce verified success.**
-
----
-
-Related: [`ARCHITECTURE.md`](ARCHITECTURE.md) · [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md) · [`TRACEABILITY.md`](TRACEABILITY.md) · [`VERIFICATION_BOUNDARIES.md`](VERIFICATION_BOUNDARIES.md)
-
-[← Documentation home](README.md)
-
-Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
