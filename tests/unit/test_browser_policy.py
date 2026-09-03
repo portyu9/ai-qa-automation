@@ -3,7 +3,11 @@ from ai_qa_automation.tools.browser_evidence import BrowserProbe
 
 
 def test_browser_url_guard_applies_to_subresources_and_navigation(tmp_path) -> None:
-    probe = BrowserProbe(EvidenceStore(tmp_path, "run"), allow_hosts={"127.0.0.1", "example.test"})
+    probe = BrowserProbe(
+        EvidenceStore(tmp_path, "run"),
+        allow_hosts={"127.0.0.1", "example.test"},
+        external_egress_enforced=True,
+    )
     assert probe._url_allowed("http://127.0.0.1:8000/checkout") is True
     assert probe._url_allowed("https://example.test/app.js") is True
     assert probe._url_allowed("data:text/plain,ok") is True
@@ -12,7 +16,11 @@ def test_browser_url_guard_applies_to_subresources_and_navigation(tmp_path) -> N
 
 
 def test_browser_url_guard_covers_websockets(tmp_path) -> None:
-    probe = BrowserProbe(EvidenceStore(tmp_path, "run-ws"), allow_hosts={"example.test"})
+    probe = BrowserProbe(
+        EvidenceStore(tmp_path, "run-ws"),
+        allow_hosts={"example.test"},
+        external_egress_enforced=True,
+    )
     assert probe._url_allowed("wss://example.test/socket") is True
     assert probe._url_allowed("ws://example.test/socket") is True
     assert probe._url_allowed("wss://attacker.test/socket") is False
@@ -80,7 +88,11 @@ def test_browser_execution_failure_is_recorded_as_evidence(tmp_path, monkeypatch
     monkeypatch.setitem(sys.modules, "playwright.async_api", fake_module)
 
     evidence = EvidenceStore(tmp_path, "run-browser-failure")
-    probe = BrowserProbe(evidence, allow_hosts={"example.test"})
+    probe = BrowserProbe(
+        evidence,
+        allow_hosts={"example.test"},
+        external_egress_enforced=True,
+    )
     try:
         asyncio.run(probe.inspect("https://example.test/start?token=super-secret-token"))
     except BrowserProbeExecutionError as exc:
@@ -128,7 +140,11 @@ def test_locator_verification_overwrites_model_supplied_uniqueness(tmp_path, mon
         yield FakePage()
 
     evidence = EvidenceStore(tmp_path, "run-verify")
-    probe = BrowserProbe(evidence, allow_hosts={"example.test"})
+    probe = BrowserProbe(
+        evidence,
+        allow_hosts={"example.test"},
+        external_egress_enforced=True,
+    )
     monkeypatch.setattr(probe, "_guarded_page", fake_guarded_page)
     candidates = [
         LocatorCandidate(
@@ -175,7 +191,11 @@ def test_locator_verification_failure_creates_evidence(tmp_path, monkeypatch) ->
         yield FakePage()
 
     evidence = EvidenceStore(tmp_path, "run-verify-fail")
-    probe = BrowserProbe(evidence, allow_hosts={"example.test"})
+    probe = BrowserProbe(
+        evidence,
+        allow_hosts={"example.test"},
+        external_egress_enforced=True,
+    )
     monkeypatch.setattr(probe, "_guarded_page", fake_guarded_page)
     candidate = LocatorCandidate(
         locator="page.get_by_role('button', name='Save')",

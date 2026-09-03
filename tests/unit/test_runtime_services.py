@@ -17,6 +17,7 @@ def make_services(
     max_repeated_action: int = 2,
     hosts: set[str] | None = None,
     external: bool = False,
+    api_browser_egress: bool = False,
     with_state_store: bool = False,
 ) -> RuntimeServices:
     state = AgentRunState(objective="test runtime boundaries", workspace=str(tmp_path))
@@ -30,6 +31,7 @@ def make_services(
         max_repeated_action=max_repeated_action,
         allowed_network_hosts=hosts if hosts is not None else {"localhost", "127.0.0.1"},
         allow_external_network=external,
+        api_browser_external_egress_enforced=api_browser_egress,
         state_store=StateStore(tmp_path / "state.json") if with_state_store else None,
     )
 
@@ -91,13 +93,14 @@ def test_external_host_stays_blocked_even_if_allowlisted_when_external_network_d
         services.network_hosts("https://qa.example.test/path")
 
 
-def test_external_host_requires_both_allowlist_and_explicit_external_enablement(
+def test_external_host_requires_allowlist_external_enablement_and_egress_authority(
     tmp_path: Path,
 ) -> None:
     services = make_services(
         tmp_path,
         hosts={"qa.example.test", "api.example.test"},
         external=True,
+        api_browser_egress=True,
     )
 
     assert services.network_hosts("https://QA.EXAMPLE.TEST/path") == {

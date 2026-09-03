@@ -40,7 +40,11 @@ async def test_browser_failure_evidence_strips_arbitrary_url_sensitive_component
         yield FakePage()
 
     evidence = EvidenceStore(tmp_path, "run-browser-url-redaction")
-    probe = BrowserProbe(evidence, allow_hosts={"example.test"})
+    probe = BrowserProbe(
+        evidence,
+        allow_hosts={"example.test"},
+        external_egress_enforced=True,
+    )
     monkeypatch.setattr(probe, "_guarded_page", fake_guarded_page)
 
     with pytest.raises(BrowserProbeExecutionError) as raised:

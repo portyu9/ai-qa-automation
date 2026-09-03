@@ -107,12 +107,15 @@ Inject configuration through:
 | Variable | Default | Security meaning |
 |---|---|---|
 | `AI_QA_ALLOW_EXTERNAL_NETWORK` | `false` | non-local target access disabled until explicitly enabled |
+| `AI_QA_API_BROWSER_EXTERNAL_EGRESS_ENFORCED` | `false` | trusted assertion that deployment constrains API/browser post-resolution outbound destinations; the flag itself is not a firewall or DNS pin |
 | `AI_QA_ALLOWED_NETWORK_HOSTS` | `["127.0.0.1","localhost"]` | canonical exact host/IP allowlist |
 | `AI_QA_ALLOW_TEST_WRITES` | `false` | enables only policy-eligible live autonomous Python test writes |
 | `AI_QA_ALLOW_MUTATING_API_METHODS` | `false` | legacy compatibility tripwire; setting `true` is rejected because generic remote API mutation is unsupported |
 | `AI_QA_K6_EXTERNAL_EGRESS_ENFORCED` | `false` | asserts deployment-level egress containment for k6; necessary but not sufficient for execution |
 
-The live MCP configuration currently exposes the k6 egress prerequisite only. The controlled runner additionally requires separate trusted **process/filesystem isolation**, **executable module-loading isolation**, **runner CPU/memory/process resource limits**, and **target workload/concurrency/rate limits** before process spawn. Because none of those four additional assertions is wired through live MCP configuration, live `run_k6` remains intentionally fail-closed rather than treating static JavaScript inspection, a validated snapshot, wall-clock/output bounds, or the egress flag as an execution/module/resource/load sandbox.
+The live runtime wires the API/browser egress prerequisite separately from the k6 egress prerequisite. For API/browser traffic, the source-visible host allowlist is only defense in depth: HTTPX and Chromium may resolve or re-resolve DNS below Python policy, so the deployment must enforce the approved destination policy at the actual connection boundary. The framework deliberately does not perform a separate Python DNS lookup and call that rebinding protection.
+
+The live MCP configuration currently exposes the k6 egress prerequisite only for k6. The controlled k6 runner additionally requires separate trusted **process/filesystem isolation**, **executable module-loading isolation**, **runner CPU/memory/process resource limits**, and **target workload/concurrency/rate limits** before process spawn. Because none of those four additional assertions is wired through live MCP configuration, live `run_k6` remains intentionally fail-closed rather than treating static JavaScript inspection, a validated snapshot, wall-clock/output bounds, or the egress flag as an execution/module/resource/load sandbox.
 
 ---
 
@@ -135,11 +138,15 @@ user@qa.example.test
 qa.example.test/path
 fe80::1%eth0
 999.2.3.4
+127.1
+0x7f000001
 ```
 
-The parser also rejects URL/query/fragment ambiguity, malformed DNS labels, scoped IPv6 zone identifiers, and malformed dotted IPv4-looking values.
+The parser also rejects URL/query/fragment ambiguity, malformed DNS labels, scoped IPv6 zone identifiers, malformed dotted IPv4-looking values, and non-canonical legacy numeric IPv4 spellings that system resolvers may interpret as addresses.
 
-A target **URL** belongs to the individual API/browser/k6 operation. The trusted allowlist contains only the network identity policy may authorize.
+For API/browser execution, canonical loopback remains locally usable. Private, link-local, multicast, reserved, unspecified, and other non-global IP literals are denied even if present in the generic allowlist. External DNS names and global IP literals additionally require the deployment egress prerequisite described above.
+
+A target **URL** belongs to the individual API/browser/k6 operation. The trusted allowlist contains only source-visible network identity that policy may authorize; it does not prove the address eventually contacted after DNS/routing.
 
 ---
 
@@ -238,15 +245,22 @@ Jira/Confluence content remains untrusted evidence.
 
 ## Target API / browser access
 
-A non-local target requires both:
+A non-local API/browser target requires all three:
 
-1. explicit external-network enablement; and
-2. the target hostname in the canonical allowlist.
+1. explicit external-network enablement;
+2. the target hostname in the canonical allowlist; and
+3. trusted deployment enforcement of the approved post-resolution destination policy.
 
 ```bash
 export AI_QA_ALLOW_EXTERNAL_NETWORK=true
+export AI_QA_API_BROWSER_EXTERNAL_EGRESS_ENFORCED=true
 export AI_QA_ALLOWED_NETWORK_HOSTS='["qa.checkout.example"]'
 ```
+
+> [!WARNING]
+> `AI_QA_API_BROWSER_EXTERNAL_EGRESS_ENFORCED=true` is a trusted assertion, not an implementation. It does not pin DNS or create a firewall, proxy, network namespace, route policy, or destination filter. The environment must actually enforce allowed destinations at the connection boundary for HTTPX and Chromium, including re-resolution and browser subresources/WebSockets. If that enforcement cannot be proven, leave the flag false; live external API/browser attempts remain `BLOCKED`.
+
+Canonical localhost/loopback targets do not require the external-network or API/browser-egress flags. Unsafe non-global IP literals remain denied for API/browser execution even when listed in generic network configuration.
 
 Generic API mutation is not an autonomous runtime capability. `AI_QA_ALLOW_MUTATING_API_METHODS=true` is rejected during trusted configuration validation; a future mutation capability must use a separately typed operation with explicit side-effect, recovery, and deterministic validation authority. See [`REMOTE_API_MUTATION_AUTHORITY.md`](REMOTE_API_MUTATION_AUTHORITY.md).
 
@@ -347,7 +361,7 @@ The operating environment owns observations such as:
 
 - live Anthropic provider behavior;
 - authenticated GitHub/Atlassian behavior;
-- external application browser/API behavior;
+- external application browser/API behavior and post-resolution outbound-destination enforcement;
 - approved k6 workload behavior, egress enforcement, process/filesystem isolation, executable module-loading isolation, runner resource limits, and target workload limits;
 - Appium app/device/emulator/cloud behavior;
 - process/container isolation;
