@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -10,6 +10,7 @@ from ai_qa_automation.agent import (
     _may_recompute_terminal_outcome,
 )
 from ai_qa_automation.models import AgentRunState, TerminalStatus
+from ai_qa_automation.runtime.run_control import RuntimeControl
 from ai_qa_automation.runtime.workspace_freshness import (
     WorkspaceFreshness,
     WorkspaceFreshnessCode,
@@ -60,13 +61,17 @@ def test_workspace_freshness_infrastructure_failure_cannot_be_promoted(
     control = _Control()
     monkeypatch.setattr(
         "ai_qa_automation.agent.observe_workspace_freshness",
-        lambda *args, **kwargs: WorkspaceFreshness(
+        lambda *_args, **_kwargs: WorkspaceFreshness(
             WorkspaceFreshnessCode.SUBJECT_UNAVAILABLE,
             "Workspace subject identity could not be revalidated safely.",
         ),
     )
 
-    _enforce_terminal_workspace_freshness(state, control, tmp_path)  # type: ignore[arg-type]
+    _enforce_terminal_workspace_freshness(
+        state,
+        cast(RuntimeControl, control),
+        tmp_path,
+    )
 
     assert state.terminal_status is TerminalStatus.INFRASTRUCTURE_FAILURE
     assert state.terminal_reason == (
