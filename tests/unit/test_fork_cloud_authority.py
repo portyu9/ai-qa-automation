@@ -12,6 +12,21 @@ from scripts.verify_fork_cloud_authority import (
 )
 
 
+def _reviewed_manual_secret_payload() -> str:
+    return """jobs:
+  model-smoke:
+    if: ${{ inputs.run_model && github.ref == 'refs/heads/main' }}
+    environment: credentialed-validation
+    steps:
+      - name: Require explicit credential
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      - name: Run bounded live Agent SDK evaluation
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+"""
+
+
 @pytest.mark.parametrize(
     ("payload", "expected"),
     [
@@ -58,18 +73,30 @@ def test_unreviewed_secret_reference_fails_closed() -> None:
         _verify_workflow_text("ci.yml", payload)
 
 
-def test_duplicate_reviewed_secret_reference_fails_closed() -> None:
-    secret = "${{ secrets.ANTHROPIC_API_KEY }}"
-    payload = f"env:\n  FIRST: {secret}\n  SECOND: {secret}\n"
+def test_extra_reviewed_secret_reference_fails_closed() -> None:
+    payload = _reviewed_manual_secret_payload() + (
+        "      - name: Unreviewed third consumer\n"
+        "        env:\n"
+        "          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}\n"
+    )
     with pytest.raises(ValueError, match="secret references differ from reviewed allowlist"):
         _verify_workflow_text("manual-validation.yml", payload)
 
 
-def test_reviewed_non_aws_secret_does_not_create_cloud_authority() -> None:
-    payload = "env:\n  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}\n"
-    result = _verify_workflow_text("manual-validation.yml", payload)
+def test_reviewed_secret_consumer_movement_fails_closed() -> None:
+    payload = _reviewed_manual_secret_payload().replace(
+        "- name: Require explicit credential",
+        "- name: Export credential elsewhere",
+        1,
+    )
+    with pytest.raises(ValueError, match="reviewed credential consumers moved or changed"):
+        _verify_workflow_text("manual-validation.yml", payload)
+
+
+def test_reviewed_non_aws_secret_consumers_do_not_create_cloud_authority() -> None:
+    result = _verify_workflow_text("manual-validation.yml", _reviewed_manual_secret_payload())
     assert result["aws_authentication"] == "forbidden"
-    assert result["secrets"] == ["ANTHROPIC_API_KEY"]
+    assert result["secrets"] == {"ANTHROPIC_API_KEY": 2}
 
 
 def test_trusted_preflight_requires_canonical_repository_and_fork_rejection() -> None:
