@@ -26,6 +26,19 @@ from ai_qa_automation.runtime.workspace_freshness import (
     WorkspaceFreshnessCode,
 )
 
+_TERMINAL_RECOMPUTE_CONTRACT: dict[TerminalStatus | None, bool] = {
+    None: True,
+    TerminalStatus.SUCCESS: True,
+    TerminalStatus.FAILURE: False,
+    TerminalStatus.BLOCKED: False,
+    TerminalStatus.INSUFFICIENT_EVIDENCE: False,
+    TerminalStatus.POLICY_DENIED: False,
+    TerminalStatus.INFRASTRUCTURE_FAILURE: False,
+    TerminalStatus.CANCELLED: False,
+    TerminalStatus.BUDGET_EXCEEDED: False,
+    TerminalStatus.NOT_VERIFIED: False,
+}
+
 
 def _control(tmp_path: Path) -> RuntimeControl:
     workspace = tmp_path / "workspace"
@@ -66,20 +79,20 @@ def _subject_unavailable(*_args: object, **_kwargs: object) -> WorkspaceFreshnes
     )
 
 
-@pytest.mark.parametrize("status", [None, TerminalStatus.SUCCESS])
-def test_terminal_outcome_recomputation_allows_only_unset_or_candidate_success(
-    status: TerminalStatus | None,
-) -> None:
-    assert _may_recompute_terminal_outcome(status) is True
+def test_terminal_recompute_contract_is_exhaustive_and_review_forcing() -> None:
+    assert set(_TERMINAL_RECOMPUTE_CONTRACT) == {None} | set(TerminalStatus)
 
 
 @pytest.mark.parametrize(
-    "status",
-    [status for status in TerminalStatus if status is not TerminalStatus.SUCCESS],
-    ids=lambda status: status.value,
+    ("status", "expected"),
+    list(_TERMINAL_RECOMPUTE_CONTRACT.items()),
+    ids=lambda value: "unset" if value is None else getattr(value, "value", str(value)),
 )
-def test_every_non_success_terminal_truth_is_latched(status: TerminalStatus) -> None:
-    assert _may_recompute_terminal_outcome(status) is False
+def test_terminal_recompute_contract(
+    status: TerminalStatus | None,
+    expected: bool,
+) -> None:
+    assert _may_recompute_terminal_outcome(status) is expected
 
 
 def test_posttool_subject_unavailable_latches_over_prior_objective_pass_and_later_freshness(
