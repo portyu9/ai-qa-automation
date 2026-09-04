@@ -5,7 +5,7 @@ import json
 import tempfile
 import time
 from dataclasses import dataclass
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from uuid import uuid4
 
 from ..io_safety import parse_json_object_strict
@@ -38,6 +38,9 @@ class TargetedExecutionIdentity:
     """Bounded controller-owned summary of pytest call-phase outcomes."""
 
     execution_id: str
+    git_sha: str
+    source_fingerprint: str
+    execution_subject_digest: str
     report_complete: bool
     child_exit_code: int | None
     pytest_returncode: int | None
@@ -52,6 +55,9 @@ class TargetedExecutionIdentity:
     def details(self) -> dict[str, object]:
         return {
             "execution_id": self.execution_id,
+            "git_sha": self.git_sha,
+            "source_fingerprint": self.source_fingerprint,
+            "execution_subject_digest": self.execution_subject_digest,
             "report_complete": self.report_complete,
             "child_exit_code": self.child_exit_code,
             "pytest_returncode": self.pytest_returncode,
@@ -261,6 +267,33 @@ raise SystemExit(child_exit_code if 0 <= child_exit_code <= 255 else 3)
 '''
 
 
+def _is_sha256_identity(value: object) -> bool:
+    if not isinstance(value, str) or len(value) != 71 or not value.startswith("sha256:"):
+        return False
+    try:
+        int(value[7:], 16)
+    except ValueError:
+        return False
+    return True
+
+
+def _subject_identity(details: dict[str, object]) -> tuple[str, str, str]:
+    git_sha = details.get("git_sha")
+    source_fingerprint = details.get("source_fingerprint")
+    digest = details.get("digest")
+    if not isinstance(git_sha, str) or not git_sha or len(git_sha) > 128:
+        raise TargetedExecutionError("targeted pytest execution subject lacked Git identity")
+    if (
+        not isinstance(source_fingerprint, str)
+        or not source_fingerprint
+        or len(source_fingerprint) > 256
+    ):
+        raise TargetedExecutionError("targeted pytest execution subject lacked source fingerprint")
+    if not _is_sha256_identity(digest):
+        raise TargetedExecutionError("targeted pytest execution subject digest was malformed")
+    return git_sha, source_fingerprint, digest
+
+
 def _safe_report_path(value: object) -> str:
     if not isinstance(value, str):
         raise TargetedExecutionError("targeted pytest report contained a non-string passed path")
@@ -268,16 +301,18 @@ def _safe_report_path(value: object) -> str:
         encoded = value.encode("utf-8")
     except UnicodeEncodeError as exc:
         raise TargetedExecutionError("targeted pytest report contained invalid Unicode") from exc
-    path = PurePosixPath(value.replace("\\", "/"))
+    normalized = value.replace("\\", "/")
+    path = PurePosixPath(normalized)
     if (
-        not value
+        not normalized
         or len(encoded) > _MAX_PATH_BYTES
-        or "\x00" in value
+        or "\x00" in normalized
         or path.is_absolute()
         or any(part in {"", ".", ".."} for part in path.parts)
+        or path.as_posix() != normalized
     ):
         raise TargetedExecutionError("targeted pytest report contained an unsafe passed path")
-    return path.as_posix()
+    return normalized
 
 
 def _bounded_count(payload: dict[str, object], key: str) -> int:
@@ -291,6 +326,7 @@ def _parse_targeted_summary(
     stdout: str,
     *,
     truncated: bool,
+    subject_details: dict[str, object],
 ) -> tuple[TargetedExecutionIdentity | None, str | None]:
     if truncated:
         return None, "targeted pytest stdout exceeded its deterministic bound"
@@ -303,6 +339,7 @@ def _parse_targeted_summary(
     if len(raw.encode("utf-8")) > _MAX_REPORT_BYTES:
         return None, "targeted pytest controller summary exceeded its deterministic bound"
     try:
+        git_sha, source_fingerprint, subject_digest = _subject_identity(subject_details)
         payload = parse_json_object_strict(raw, label="targeted pytest controller summary")
         if payload.get("schema_version") != 1:
             raise TargetedExecutionError("targeted pytest report schema was unsupported")
@@ -331,14 +368,8 @@ def _parse_targeted_summary(
         if passed_count < len(passed_paths):
             raise TargetedExecutionError("targeted pytest passed-path count was inconsistent")
         report_sha = payload.get("report_sha256")
-        if report_sha is not None:
-            if (
-                not isinstance(report_sha, str)
-                or len(report_sha) != 71
-                or not report_sha.startswith("sha256:")
-            ):
-                raise TargetedExecutionError("targeted pytest report digest was malformed")
-            int(report_sha[7:], 16)
+        if report_sha is not None and not _is_sha256_identity(report_sha):
+            raise TargetedExecutionError("targeted pytest report digest was malformed")
         if report_complete:
             if payload.get("session_finished") is not True or payload.get("overflow") is not False:
                 raise TargetedExecutionError("targeted pytest complete report lacked terminal proof")
@@ -349,11 +380,26 @@ def _parse_targeted_summary(
     except (TargetedExecutionError, ValueError, UnicodeError) as exc:
         return None, str(exc)
 
-    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    canonical = json.dumps(
+        {
+            "execution_subject": {
+                "git_sha": git_sha,
+                "source_fingerprint": source_fingerprint,
+                "digest": subject_digest,
+            },
+            "report": payload,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
     execution_id = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     return (
         TargetedExecutionIdentity(
             execution_id=execution_id,
+            git_sha=git_sha,
+            source_fingerprint=source_fingerprint,
+            execution_subject_digest=subject_digest,
             report_complete=report_complete,
             child_exit_code=child_exit,
             pytest_returncode=pytest_returncode,
@@ -426,6 +472,7 @@ def _record_execution(
     raw: BoundedSubprocessResult,
     preflight: PytestSandboxPreflight,
     before: object,
+    execution_subject_details: dict[str, object],
     sandbox_postflight_reason: str | None,
 ) -> tuple[TestExecutionResult, TargetedExecutionIdentity | None]:
     after = RepositoryInspector(runner.workspace).snapshot()
@@ -433,13 +480,10 @@ def _record_execution(
     identity, report_reason = _parse_targeted_summary(
         raw.stdout,
         truncated=raw.stdout_truncated,
+        subject_details=execution_subject_details,
     )
     exit_code = 124 if raw.timed_out else raw.returncode
-    reasons = [
-        item
-        for item in (sandbox_postflight_reason, workspace_reason)
-        if item is not None
-    ]
+    reasons = [item for item in (sandbox_postflight_reason, workspace_reason) if item is not None]
     if exit_code == 0 and reasons:
         exit_code = 125
     stdout = redact_text(_without_controller_summary(raw.stdout))
@@ -449,7 +493,9 @@ def _record_execution(
     if report_reason:
         stderr += f"\ntargeted-execution-evidence: {redact_text(report_reason)}"
     if reasons:
-        stderr += "\ntargeted-execution-integrity: " + "; ".join(redact_text(item) for item in reasons)
+        stderr += "\ntargeted-execution-integrity: " + "; ".join(
+            redact_text(item) for item in reasons
+        )
 
     report_verified = (
         identity is not None
@@ -502,6 +548,7 @@ def _record_execution(
                 "stderr_truncated": raw.stderr_truncated,
                 "workspace_integrity_verified": workspace_reason is None,
                 "workspace_integrity_reason": workspace_reason,
+                "execution_subject": execution_subject_details,
                 "targeted_outcome_report_verified": report_verified,
                 "targeted_execution": details,
                 "targeted_report_reason": report_reason,
@@ -548,10 +595,11 @@ def run_targeted_pytest(
             scratch_root=scratch,
             expected_scratch_root_identity=scratch_identity,
         ) as subject:
+            execution_subject_details = subject.details()
             sandbox = runner._sandbox_for_materialized_workspace(subject.root)
             with tempfile.TemporaryDirectory(prefix="aiqa-pytest-home-", dir=scratch) as home:
                 env = restricted_subprocess_env(
-                    home=PurePosixPath(home),
+                    home=Path(home),
                     extra={
                         "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
                         "PYTHONDONTWRITEBYTECODE": "1",
@@ -585,6 +633,7 @@ def run_targeted_pytest(
                         raw=exc.result,
                         preflight=exc.preflight,
                         before=before,
+                        execution_subject_details=execution_subject_details,
                         sandbox_postflight_reason=exc.reason,
                     )
                 return _record_execution(
@@ -594,6 +643,7 @@ def run_targeted_pytest(
                     raw=raw,
                     preflight=preflight,
                     before=before,
+                    execution_subject_details=execution_subject_details,
                     sandbox_postflight_reason=None,
                 )
     except (ExecutionSubjectError, OSError, RuntimeError, ValueError) as exc:
