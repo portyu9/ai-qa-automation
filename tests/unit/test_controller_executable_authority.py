@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from ai_qa_automation.fs_authority import descriptor_relative_authority_supported
+from ai_qa_automation.tools import execution_env
 from ai_qa_automation.tools.execution_env import (
     controller_executable_search_path,
     resolve_executable,
@@ -61,6 +64,34 @@ def test_resolve_executable_rejects_absolute_runtime_owned_executable(
         candidate.write_text("not trusted controller bytes\n", encoding="utf-8")
         with pytest.raises(PermissionError, match="outside controlled PATH authority roots"):
             resolve_executable(str(candidate), env=env)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics required")
+def test_resolve_executable_rejects_symlink_escape_from_authorized_root(tmp_path: Path) -> None:
+    trusted_root = tmp_path / "trusted-bin"
+    trusted_root.mkdir()
+    link = trusted_root / "controller-tool"
+    try:
+        link.symlink_to(Path(sys.executable).resolve())
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable on this platform")
+
+    with pytest.raises(PermissionError, match="outside controlled PATH authority roots"):
+        resolve_executable("controller-tool", env={"PATH": str(trusted_root)})
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX ownership/mode invariant")
+def test_controller_search_path_rejects_mutable_candidate_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate = tmp_path / "mutable-bin"
+    candidate.mkdir()
+    candidate.chmod(0o777)
+    monkeypatch.setattr(execution_env, "_controller_executable_candidates", lambda: (candidate,))
+
+    with pytest.raises(PermissionError, match="controller executable root"):
+        controller_executable_search_path()
 
 
 def test_resolve_executable_binds_named_system_tool_to_controlled_root(tmp_path: Path) -> None:
@@ -118,7 +149,7 @@ def test_repository_inspector_ignores_target_git_first_on_ambient_path(
     marker = tmp_path / "target-git-executed"
     hostile_git = hostile_bin / "git"
     hostile_git.write_text(
-        f"#!/bin/sh\nprintf executed > {marker!s}\nexit 99\n",
+        f"#!/bin/sh\nprintf executed > {shlex.quote(str(marker))}\nexit 99\n",
         encoding="utf-8",
     )
     hostile_git.chmod(0o755)
