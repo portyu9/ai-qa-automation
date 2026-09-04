@@ -8,6 +8,7 @@ from typing import ClassVar, Protocol, runtime_checkable
 from uuid import uuid4
 
 from ..evidence import EvidenceStore
+from ..fs_authority import pin_directory_identity
 from ..models import EvidenceItem, EvidenceKind, EvidenceNature
 from ..redaction import redact_text
 from .artifacts import text_artifact
@@ -92,10 +93,19 @@ class TestRunner:
         self.sandbox = sandbox or BubblewrapPytestSandbox(
             self.workspace,
             evidence_root=self.evidence.run_root,
+            expected_evidence_root_identity=self.evidence.run_root_identity,
         )
 
     def sandbox_preflight(self) -> PytestSandboxPreflight:
         """Execute the concrete isolation capability proof used by live admission."""
+        try:
+            self._trusted_scratch_root()
+        except (OSError, RuntimeError, ValueError) as exc:
+            return PytestSandboxPreflight(
+                ready=False,
+                backend="bubblewrap",
+                reason=f"pytest scratch-root authority is unavailable: {type(exc).__name__}",
+            )
         return self.sandbox.preflight()
 
     def run_pytest(self, args: list[str] | None = None) -> TestExecutionResult:
@@ -130,15 +140,21 @@ class TestRunner:
             )
         else:
             try:
+                scratch_root, scratch_root_identity = self._trusted_scratch_root()
                 with materialized_pytest_execution_subject(
                     self.workspace,
                     expected_snapshot=before,
+                    scratch_root=scratch_root,
+                    expected_scratch_root_identity=scratch_root_identity,
                 ) as execution_subject:
                     execution_subject_details = execution_subject.details()
                     execution_sandbox = self._sandbox_for_materialized_workspace(
                         execution_subject.root
                     )
-                    with tempfile.TemporaryDirectory(prefix="aiqa-pytest-home-") as temp_home:
+                    with tempfile.TemporaryDirectory(
+                        prefix="aiqa-pytest-home-",
+                        dir=scratch_root,
+                    ) as temp_home:
                         env = restricted_subprocess_env(
                             home=Path(temp_home),
                             extra={
@@ -340,6 +356,7 @@ class TestRunner:
             sandbox = BubblewrapPytestSandbox(
                 bound_workspace,
                 evidence_root=self.evidence.run_root,
+                expected_evidence_root_identity=self.evidence.run_root_identity,
             )
             for runtime_root in sandbox._runtime_roots():
                 if self._paths_overlap(self.workspace, runtime_root):
@@ -368,6 +385,22 @@ class TestRunner:
         raise ExecutionSubjectError(
             "custom pytest sandbox must explicitly bind the materialized execution workspace"
         )
+
+    def _trusted_scratch_root(self) -> tuple[Path, tuple[int, int]]:
+        scratch_root = self.evidence.run_root.expanduser().absolute()
+        if self._paths_overlap(self.workspace, scratch_root):
+            raise ExecutionSubjectError(
+                "target workspace and pytest scratch/evidence root must be disjoint"
+            )
+        observed_identity = pin_directory_identity(
+            scratch_root,
+            label="pytest scratch root",
+        )
+        if observed_identity != self.evidence.run_root_identity:
+            raise ExecutionSubjectError(
+                "pytest scratch/evidence root changed identity since evidence authorization"
+            )
+        return scratch_root, observed_identity
 
     @staticmethod
     def _paths_overlap(left: Path, right: Path) -> bool:

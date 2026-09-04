@@ -12,6 +12,7 @@ from pathlib import Path, PurePosixPath
 from typing import Protocol
 from uuid import uuid4
 
+from ..fs_authority import pin_directory_identity
 from ..io_safety import parse_json_object_strict, read_bytes_bounded
 from .execution_env import (
     BoundedSubprocessResult,
@@ -124,9 +125,16 @@ class BubblewrapPytestSandbox:
 
     backend_name = "bubblewrap"
 
-    def __init__(self, workspace: Path, *, evidence_root: Path) -> None:
+    def __init__(
+        self,
+        workspace: Path,
+        *,
+        evidence_root: Path,
+        expected_evidence_root_identity: tuple[int, int] | None = None,
+    ) -> None:
         self.workspace = workspace.expanduser().resolve()
-        self.evidence_root = evidence_root.expanduser().resolve()
+        self.evidence_root = evidence_root.expanduser().absolute()
+        self.expected_evidence_root_identity = expected_evidence_root_identity
         self._python_executable = Path(sys.executable).expanduser().resolve()
 
     @property
@@ -140,8 +148,14 @@ class BubblewrapPytestSandbox:
             self.evidence_root, self.workspace
         ):
             return self._blocked("target workspace and runtime evidence root must be disjoint")
+        scratch_reason = self._scratch_root_failure_reason()
+        if scratch_reason is not None:
+            return self._blocked(scratch_reason)
 
-        with tempfile.TemporaryDirectory(prefix="aiqa-bwrap-preflight-") as host_home:
+        with tempfile.TemporaryDirectory(
+            prefix="aiqa-bwrap-preflight-",
+            dir=self.evidence_root,
+        ) as host_home:
             env = restricted_subprocess_env(home=Path(host_home))
             executable = shutil.which("bwrap", path=_BWRAP_SEARCH_PATH)
             if not executable:
@@ -372,9 +386,18 @@ class BubblewrapPytestSandbox:
             command,
             cpu_limit_seconds=max(1, int(float(timeout_seconds)) + 1),
         )
-        with tempfile.TemporaryDirectory(prefix="aiqa-bwrap-run-") as host_home:
+        scratch_reason = self._scratch_root_failure_reason()
+        if scratch_reason is not None:
+            raise PytestSandboxUnavailable(self._blocked(scratch_reason))
+        with tempfile.TemporaryDirectory(
+            prefix="aiqa-bwrap-run-",
+            dir=self.evidence_root,
+        ) as host_home:
             host_env = restricted_subprocess_env(home=Path(host_home))
-            with tempfile.TemporaryFile(mode="w+b") as status_stream:
+            with tempfile.TemporaryFile(
+                mode="w+b",
+                dir=self.evidence_root,
+            ) as status_stream:
                 status_fd = status_stream.fileno()
                 wrapped = self._build_command(
                     executable_path,
@@ -626,6 +649,24 @@ class BubblewrapPytestSandbox:
             if candidate.exists() and rendered not in entries:
                 entries.append(rendered)
         return os.pathsep.join(entries)
+
+    def _scratch_root_failure_reason(self) -> str | None:
+        try:
+            observed = pin_directory_identity(
+                self.evidence_root,
+                label="pytest sandbox scratch/evidence root",
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            return (
+                "pytest sandbox scratch/evidence root is unavailable: "
+                f"{type(exc).__name__}"
+            )
+        if (
+            self.expected_evidence_root_identity is not None
+            and observed != self.expected_evidence_root_identity
+        ):
+            return "pytest sandbox scratch/evidence root changed identity since authorization"
+        return None
 
     def _blocked(
         self,

@@ -5,29 +5,53 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
+from contextlib import AbstractContextManager
 from pathlib import Path
 
 import pytest
 
 import ai_qa_automation.tools.execution_subject as subject_module
 from ai_qa_automation.evidence import EvidenceStore
-from ai_qa_automation.fs_authority import descriptor_relative_authority_supported
+from ai_qa_automation.fs_authority import (
+    descriptor_relative_authority_supported,
+    pin_directory_identity,
+)
 from ai_qa_automation.tools.execution_env import BoundedSubprocessResult
 from ai_qa_automation.tools.execution_subject import (
     ExecutionSubjectError,
+    MaterializedExecutionSubject,
     materialized_pytest_execution_subject,
 )
 from ai_qa_automation.tools.pytest_sandbox import (
     BubblewrapPytestSandbox,
     PytestSandboxPreflight,
 )
-from ai_qa_automation.tools.repository import RepositoryInspector
+from ai_qa_automation.tools.repository import RepositoryInspector, RepositorySnapshot
 from ai_qa_automation.tools.test_execution import TestRunner
 
 
 def _require_descriptor_authority() -> None:
     if not descriptor_relative_authority_supported():
         pytest.skip("descriptor-relative filesystem authority is unavailable")
+
+
+def _materialized_subject(
+    workspace: Path,
+    snapshot: RepositorySnapshot,
+    tmp_path: Path,
+) -> AbstractContextManager[MaterializedExecutionSubject]:
+    scratch_root = tmp_path / "pytest-scratch"
+    scratch_root.mkdir(exist_ok=True)
+    return materialized_pytest_execution_subject(
+        workspace,
+        expected_snapshot=snapshot,
+        scratch_root=scratch_root,
+        expected_scratch_root_identity=pin_directory_identity(
+            scratch_root,
+            label="test pytest scratch root",
+        ),
+    )
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -88,10 +112,7 @@ def test_materialized_subject_excludes_ordinary_ignored_inputs_and_git_metadata(
     assert snapshot.fingerprint_complete is True
     assert snapshot.changed_files == ()
 
-    with materialized_pytest_execution_subject(
-        workspace,
-        expected_snapshot=snapshot,
-    ) as subject:
+    with _materialized_subject(workspace, snapshot, tmp_path) as subject:
         assert (subject.root / "tracked.txt").read_text(encoding="utf-8") == "baseline\n"
         assert (subject.root / "test_sample.py").is_file()
         assert not (subject.root / "runtime-data").exists()
@@ -117,10 +138,7 @@ def test_materialized_subject_includes_nonignored_untracked_regular_file(
     assert snapshot.fingerprint_complete is True
     assert "candidate.py" in snapshot.changed_files
 
-    with materialized_pytest_execution_subject(
-        workspace,
-        expected_snapshot=snapshot,
-    ) as subject:
+    with _materialized_subject(workspace, snapshot, tmp_path) as subject:
         assert (subject.root / "candidate.py").read_text(encoding="utf-8") == "VALUE = 7\n"
 
 
@@ -146,10 +164,7 @@ def test_materialized_subject_preserves_staged_delete_ignored_replacement(
     assert snapshot.fingerprint_complete is True
     assert snapshot.changed_files == ("tracked.txt",)
 
-    with materialized_pytest_execution_subject(
-        workspace,
-        expected_snapshot=snapshot,
-    ) as subject:
+    with _materialized_subject(workspace, snapshot, tmp_path) as subject:
         assert (subject.root / "tracked.txt").read_text(encoding="utf-8") == (
             "physical-replacement\n"
         )
@@ -172,10 +187,7 @@ def test_ignored_symlink_cannot_enter_materialized_execution_namespace(tmp_path:
     assert snapshot.fingerprint_complete is True
     assert snapshot.changed_files == ()
 
-    with materialized_pytest_execution_subject(
-        workspace,
-        expected_snapshot=snapshot,
-    ) as subject:
+    with _materialized_subject(workspace, snapshot, tmp_path) as subject:
         assert not (subject.root / "ignored-link").exists()
         assert not (subject.root / ".git").exists()
 
@@ -193,10 +205,7 @@ def test_nonignored_symlink_fails_closed_before_materialization(tmp_path: Path) 
     assert snapshot.fingerprint_complete is False
 
     with pytest.raises(ExecutionSubjectError, match="fingerprint is incomplete"):
-        with materialized_pytest_execution_subject(
-            workspace,
-            expected_snapshot=snapshot,
-        ):
+        with _materialized_subject(workspace, snapshot, tmp_path):
             raise AssertionError("unsafe symlink subject must not be yielded")
 
 
@@ -212,10 +221,7 @@ def test_materialized_subject_total_bytes_are_bounded(
     monkeypatch.setattr(subject_module, "_MAX_EXECUTION_SUBJECT_TOTAL_BYTES", 1)
 
     with pytest.raises(ExecutionSubjectError, match="total byte budget"):
-        with materialized_pytest_execution_subject(
-            workspace,
-            expected_snapshot=snapshot,
-        ):
+        with _materialized_subject(workspace, snapshot, tmp_path):
             raise AssertionError("over-budget execution subject must not be yielded")
 
 
@@ -255,10 +261,7 @@ def test_materialized_subject_supports_git_index_v4(tmp_path: Path) -> None:
     snapshot = RepositoryInspector(workspace).snapshot()
     assert snapshot.fingerprint_complete is True
 
-    with materialized_pytest_execution_subject(
-        workspace,
-        expected_snapshot=snapshot,
-    ) as subject:
+    with _materialized_subject(workspace, snapshot, tmp_path) as subject:
         assert (subject.root / "tracked.txt").read_text(encoding="utf-8") == "baseline\n"
         assert (subject.root / "test_sample.py").is_file()
 
@@ -276,10 +279,7 @@ def test_unstaged_executable_mode_change_fails_closed(tmp_path: Path) -> None:
     assert "tracked.txt" in snapshot.changed_files
 
     with pytest.raises(ExecutionSubjectError, match="executable mode diverges"):
-        with materialized_pytest_execution_subject(
-            workspace,
-            expected_snapshot=snapshot,
-        ):
+        with _materialized_subject(workspace, snapshot, tmp_path):
             raise AssertionError("unstaged executable authority must not be yielded")
 
 
@@ -297,10 +297,7 @@ def test_executable_untracked_path_fails_closed(tmp_path: Path) -> None:
     assert "tool.sh" in snapshot.changed_files
 
     with pytest.raises(ExecutionSubjectError, match="lacks Git-index mode authority"):
-        with materialized_pytest_execution_subject(
-            workspace,
-            expected_snapshot=snapshot,
-        ):
+        with _materialized_subject(workspace, snapshot, tmp_path):
             raise AssertionError("untracked executable authority must not be yielded")
 
 
@@ -317,10 +314,7 @@ def test_staged_executable_mode_is_materialized_from_git_index(tmp_path: Path) -
     assert snapshot.fingerprint_complete is True
     assert "tracked.txt" in snapshot.changed_files
 
-    with materialized_pytest_execution_subject(
-        workspace,
-        expected_snapshot=snapshot,
-    ) as subject:
+    with _materialized_subject(workspace, snapshot, tmp_path) as subject:
         assert (subject.root / "tracked.txt").stat().st_mode & 0o111
 
 
@@ -338,9 +332,7 @@ class _BoundWorkspaceSandbox:
         self.workspace = workspace.resolve()
         self.observations = observations
         self.forbidden_source_workspace = (
-            None
-            if forbidden_source_workspace is None
-            else forbidden_source_workspace.resolve()
+            None if forbidden_source_workspace is None else forbidden_source_workspace.resolve()
         )
         self.source_workspace_hidden = source_workspace_hidden
         self.result = BoundedSubprocessResult(
@@ -386,6 +378,43 @@ class _BoundWorkspaceSandbox:
         if (self.workspace / ".git").exists():
             raise AssertionError("Git metadata leaked into pytest execution subject")
         return self.preflight_result, self.result
+
+
+class _ScratchObservingSandbox(_BoundWorkspaceSandbox):
+    def __init__(
+        self,
+        workspace: Path,
+        observations: list[Path],
+        homes: list[Path],
+        *,
+        forbidden_source_workspace: Path | None = None,
+        source_workspace_hidden: bool = False,
+    ) -> None:
+        super().__init__(
+            workspace,
+            observations,
+            forbidden_source_workspace=forbidden_source_workspace,
+            source_workspace_hidden=source_workspace_hidden,
+        )
+        self.homes = homes
+
+    def for_materialized_workspace(
+        self,
+        workspace: Path,
+        *,
+        forbidden_source_workspace: Path,
+    ) -> _ScratchObservingSandbox:
+        return _ScratchObservingSandbox(
+            workspace,
+            self.observations,
+            self.homes,
+            forbidden_source_workspace=forbidden_source_workspace,
+            source_workspace_hidden=True,
+        )
+
+    def run(self, command, *, env, timeout_seconds):
+        self.homes.append(Path(env["HOME"]).resolve())
+        return super().run(command, env=env, timeout_seconds=timeout_seconds)
 
 
 class _SourceVisibleSandbox(_BoundWorkspaceSandbox):
@@ -483,3 +512,43 @@ def test_default_bubblewrap_blocks_source_overlap_with_runtime_root(
     assert result.exit_code == 126
     assert result.execution_started is False
     assert "source workspace overlaps a host runtime root exposed to pytest" in result.stderr
+
+
+def test_test_runner_ignores_ambient_tmpdir_for_materialization_and_host_home(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_descriptor_authority()
+    workspace = tmp_path / "workspace"
+    _init_repo(workspace)
+    monkeypatch.setenv("TMPDIR", str(workspace))
+    observations: list[Path] = []
+    homes: list[Path] = []
+    evidence = EvidenceStore(tmp_path / "artifacts", "run-hostile-tmpdir")
+    scratch_directories: list[Path] = []
+    real_temporary_directory = tempfile.TemporaryDirectory
+
+    def require_explicit_scratch_dir(*args, **kwargs):
+        directory = kwargs.get("dir")
+        assert directory is not None
+        scratch_directories.append(Path(directory).resolve())
+        return real_temporary_directory(*args, **kwargs)
+
+    monkeypatch.setattr(tempfile, "TemporaryDirectory", require_explicit_scratch_dir)
+    runner = TestRunner(
+        workspace,
+        evidence,
+        sandbox=_ScratchObservingSandbox(workspace, observations, homes),
+    )
+
+    result = runner.run_pytest([])
+
+    assert result.exit_code == 0
+    assert result.execution_started is True
+    assert len(observations) == 1
+    assert len(homes) == 1
+    assert scratch_directories == [evidence.run_root, evidence.run_root]
+    assert evidence.run_root in observations[0].parents
+    assert evidence.run_root in homes[0].parents
+    assert workspace not in observations[0].parents
+    assert workspace not in homes[0].parents

@@ -117,8 +117,15 @@ def install_fake_snapshots(
             return next(sequence)
 
     @contextmanager
-    def fake_materialized_subject(workspace: Path, *, expected_snapshot: object):
-        root = workspace.parent / "fake-materialized-pytest-subject"
+    def fake_materialized_subject(
+        workspace: Path,
+        *,
+        expected_snapshot: object,
+        scratch_root: Path,
+        expected_scratch_root_identity: tuple[int, int],
+    ):
+        assert expected_scratch_root_identity
+        root = scratch_root / "fake-materialized-pytest-subject"
         root.mkdir(exist_ok=True)
         yield SimpleNamespace(
             root=root,
@@ -149,7 +156,7 @@ def test_pytest_zero_exit_requires_unchanged_complete_git_fingerprint(
         [snapshot(fingerprint="fp"), snapshot(fingerprint="fp")],
     )
     runner = TestRunner(
-        tmp_path,
+        tmp_path / "workspace",
         EvidenceStore(tmp_path / "artifacts", "run-ok"),
         sandbox=FakeSandbox(),
     )
@@ -170,7 +177,7 @@ def test_pytest_zero_exit_is_downgraded_when_test_changes_workspace(
         [snapshot(fingerprint="before"), snapshot(fingerprint="after")],
     )
     runner = TestRunner(
-        tmp_path,
+        tmp_path / "workspace",
         EvidenceStore(tmp_path / "artifacts", "run-drift"),
         sandbox=FakeSandbox(),
     )
@@ -192,7 +199,7 @@ def test_pytest_without_git_provenance_is_blocked_before_target_execution(
         ],
     )
     runner = TestRunner(
-        tmp_path,
+        tmp_path / "workspace",
         EvidenceStore(tmp_path / "artifacts", "run-nongit"),
         sandbox=FakeSandbox(),
     )
@@ -215,7 +222,7 @@ def test_pytest_zero_exit_is_downgraded_when_fingerprint_is_incomplete(
         ],
     )
     runner = TestRunner(
-        tmp_path,
+        tmp_path / "workspace",
         EvidenceStore(tmp_path / "artifacts", "run-incomplete"),
         sandbox=FakeSandbox(),
     )
@@ -234,7 +241,7 @@ def test_pytest_timeout_maps_to_controlled_timeout_exit(
         [snapshot(fingerprint="fp"), snapshot(fingerprint="fp")],
     )
     runner = TestRunner(
-        tmp_path,
+        tmp_path / "workspace",
         EvidenceStore(tmp_path / "artifacts", "run-timeout"),
         sandbox=FakeSandbox(returncode=-9, timed_out=True),
     )
@@ -250,7 +257,7 @@ def test_pytest_runner_rejects_invalid_timeout_bound(tmp_path: Path, timeout: ob
     run_id = f"run-timeout-{str(timeout).replace('.', '-')}"
     with pytest.raises(ValueError, match="timeout_seconds"):
         TestRunner(
-            tmp_path,
+            tmp_path / "workspace",
             EvidenceStore(tmp_path / "artifacts", run_id),
             timeout_seconds=timeout,  # type: ignore[arg-type]
             sandbox=FakeSandbox(),
@@ -265,7 +272,7 @@ def test_direct_test_runner_has_no_unsandboxed_fallback_when_backend_is_unavaila
         [snapshot(fingerprint="fp"), snapshot(fingerprint="fp")],
     )
     evidence = EvidenceStore(tmp_path / "artifacts", "run-sandbox-blocked")
-    runner = TestRunner(tmp_path, evidence, sandbox=BlockedSandbox())
+    runner = TestRunner(tmp_path / "workspace", evidence, sandbox=BlockedSandbox())
 
     result = runner.run_pytest([])
 
@@ -289,7 +296,7 @@ def test_sandbox_postflight_uncertainty_invalidates_zero_exit(
         [snapshot(fingerprint="fp"), snapshot(fingerprint="fp")],
     )
     evidence = EvidenceStore(tmp_path / "artifacts", "run-sandbox-postflight")
-    runner = TestRunner(tmp_path, evidence, sandbox=PostflightUnverifiedSandbox())
+    runner = TestRunner(tmp_path / "workspace", evidence, sandbox=PostflightUnverifiedSandbox())
 
     result = runner.run_pytest([])
 

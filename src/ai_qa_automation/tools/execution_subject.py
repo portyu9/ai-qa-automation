@@ -250,6 +250,8 @@ def materialized_pytest_execution_subject(
     workspace: Path,
     *,
     expected_snapshot: RepositorySnapshot,
+    scratch_root: Path,
+    expected_scratch_root_identity: tuple[int, int],
 ) -> Iterator[MaterializedExecutionSubject]:
     """Freeze the admissible pytest filesystem namespace into a bounded private tree.
 
@@ -265,6 +267,24 @@ def materialized_pytest_execution_subject(
 
     _require_complete_git_snapshot(expected_snapshot)
     inspector = RepositoryInspector(workspace)
+    trusted_scratch_root = scratch_root.expanduser().absolute()
+    if (
+        trusted_scratch_root == inspector.workspace
+        or trusted_scratch_root in inspector.workspace.parents
+        or inspector.workspace in trusted_scratch_root.parents
+    ):
+        raise ExecutionSubjectError("pytest scratch root overlaps the target workspace")
+    try:
+        scratch_identity = pin_directory_identity(
+            trusted_scratch_root,
+            label="pytest scratch root",
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ExecutionSubjectError(
+            "pytest scratch-root authority is unavailable"
+        ) from exc
+    if scratch_identity != expected_scratch_root_identity:
+        raise ExecutionSubjectError("pytest scratch root changed identity since authorization")
     observed_snapshot = inspector.snapshot()
     if not _same_snapshot(expected_snapshot, observed_snapshot):
         raise ExecutionSubjectError("repository subject changed before pytest materialization")
@@ -293,7 +313,21 @@ def materialized_pytest_execution_subject(
     manifest_rows: list[dict[str, object]] = []
     total_bytes = 0
 
-    with tempfile.TemporaryDirectory(prefix="aiqa-pytest-subject-") as temp_root_text:
+    with tempfile.TemporaryDirectory(
+        prefix="aiqa-pytest-subject-",
+        dir=trusted_scratch_root,
+    ) as temp_root_text:
+        try:
+            current_scratch_identity = pin_directory_identity(
+                trusted_scratch_root,
+                label="pytest scratch root",
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise ExecutionSubjectError(
+                "pytest scratch-root authority became unavailable"
+            ) from exc
+        if current_scratch_identity != expected_scratch_root_identity:
+            raise ExecutionSubjectError("pytest scratch root changed during subject creation")
         temp_root = Path(temp_root_text).absolute()
         temp_root_identity = pin_directory_identity(
             temp_root,
@@ -364,9 +398,13 @@ def materialized_pytest_execution_subject(
                         f"worktree executable mode diverges from Git index: {relative}"
                     )
                 materialized_mode = index_mode
-                if relative not in changed_set and inspector._raw_blob_oid(data, object_format) != oid:
+                if (
+                    relative not in changed_set
+                    and inspector._raw_blob_oid(data, object_format) != oid
+                ):
                     raise ExecutionSubjectError(
-                        f"unchanged tracked bytes diverged from Git index during materialization: {relative}"
+                        "unchanged tracked bytes diverged from Git index during "
+                        f"materialization: {relative}"
                     )
 
             digest = hashlib.sha256(data).hexdigest()
@@ -424,6 +462,17 @@ def materialized_pytest_execution_subject(
         )
         if final_root_identity != temp_root_identity:
             raise ExecutionSubjectError("materialized pytest execution root changed identity")
+        try:
+            final_scratch_identity = pin_directory_identity(
+                trusted_scratch_root,
+                label="pytest scratch root",
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise ExecutionSubjectError(
+                "pytest scratch-root authority became unavailable"
+            ) from exc
+        if final_scratch_identity != expected_scratch_root_identity:
+            raise ExecutionSubjectError("pytest scratch root changed during materialization")
 
         yield MaterializedExecutionSubject(
             root=temp_root,
