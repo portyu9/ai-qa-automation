@@ -289,7 +289,7 @@ def _subject_identity(details: dict[str, object]) -> tuple[str, str, str]:
         or len(source_fingerprint) > 256
     ):
         raise TargetedExecutionError("targeted pytest execution subject lacked source fingerprint")
-    if not _is_sha256_identity(digest):
+    if not isinstance(digest, str) or not _is_sha256_identity(digest):
         raise TargetedExecutionError("targeted pytest execution subject digest was malformed")
     return git_sha, source_fingerprint, digest
 
