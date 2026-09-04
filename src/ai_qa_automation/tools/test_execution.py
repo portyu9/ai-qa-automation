@@ -4,14 +4,16 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Protocol, runtime_checkable
 from uuid import uuid4
 
 from ..evidence import EvidenceStore
+from ..fs_authority import pin_directory_identity
 from ..models import EvidenceItem, EvidenceKind, EvidenceNature
 from ..redaction import redact_text
 from .artifacts import text_artifact
 from .execution_env import restricted_subprocess_env
+from .execution_subject import ExecutionSubjectError, materialized_pytest_execution_subject
 from .pytest_sandbox import (
     BubblewrapPytestSandbox,
     PytestSandbox,
@@ -20,6 +22,18 @@ from .pytest_sandbox import (
     PytestSandboxUnavailable,
 )
 from .repository import RepositoryInspector
+
+
+@runtime_checkable
+class MaterializedWorkspaceSandboxFactory(Protocol):
+    """Trusted extension seam for sandboxes that bind an explicit frozen workspace."""
+
+    def for_materialized_workspace(
+        self,
+        workspace: Path,
+        *,
+        forbidden_source_workspace: Path,
+    ) -> PytestSandbox: ...
 
 
 @dataclass(frozen=True)
@@ -35,12 +49,15 @@ class TestExecutionResult:
 
 
 class TestRunner:
-    """Run target pytest only through a verified OS sandbox boundary.
+    """Run target pytest only from a frozen subject inside a verified OS sandbox.
 
     The target repository is executable untrusted content. A zero pytest exit code
-    is retained only when a concrete Bubblewrap capability proof succeeded, the
-    sandboxed target process completed, and the Git-backed workspace is completely
-    fingerprinted and unchanged across execution. There is no direct-host fallback.
+    is retained only when a complete Git-backed repository subject was materialized
+    into a controller-owned bounded tree, a concrete Bubblewrap capability proof
+    succeeded for that tree, the sandboxed target process completed, and the source
+    workspace remained revision/fingerprint-stable through closure. Ordinary
+    Git-ignored source bytes and Git metadata never enter the pytest namespace.
+    There is no direct-host fallback.
     """
 
     _SAFE_FLAGS: ClassVar[set[str]] = {
@@ -76,10 +93,19 @@ class TestRunner:
         self.sandbox = sandbox or BubblewrapPytestSandbox(
             self.workspace,
             evidence_root=self.evidence.run_root,
+            expected_evidence_root_identity=self.evidence.run_root_identity,
         )
 
     def sandbox_preflight(self) -> PytestSandboxPreflight:
         """Execute the concrete isolation capability proof used by live admission."""
+        try:
+            self._trusted_scratch_root()
+        except (OSError, RuntimeError, ValueError) as exc:
+            return PytestSandboxPreflight(
+                ready=False,
+                backend="bubblewrap",
+                reason=f"pytest scratch-root authority is unavailable: {type(exc).__name__}",
+            )
         return self.sandbox.preflight()
 
     def run_pytest(self, args: list[str] | None = None) -> TestExecutionResult:
@@ -98,33 +124,87 @@ class TestRunner:
         before = RepositoryInspector(self.workspace).snapshot()
         start = time.monotonic()
         preflight: PytestSandboxPreflight
-        with tempfile.TemporaryDirectory(prefix="aiqa-pytest-home-") as temp_home:
-            env = restricted_subprocess_env(
-                home=Path(temp_home),
-                extra={
-                    "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
-                    "PYTHONDONTWRITEBYTECODE": "1",
-                },
+        process_result = None
+        sandbox_postflight_reason: str | None = None
+        execution_subject_details: dict[str, object] | None = None
+        pre_execution_integrity_reason = self._workspace_integrity_failure(before, before)
+
+        if pre_execution_integrity_reason is not None:
+            preflight = PytestSandboxPreflight(
+                ready=False,
+                backend="bubblewrap",
+                reason=(
+                    "pytest execution subject could not be authorized before target execution: "
+                    + pre_execution_integrity_reason
+                ),
             )
-            sandbox_postflight_reason: str | None = None
+        else:
             try:
-                preflight, process_result = self.sandbox.run(
-                    [self.sandbox_python_executable(), "-m", "pytest", *safe_args],
-                    env=env,
-                    timeout_seconds=self.timeout_seconds,
+                scratch_root, scratch_root_identity = self._trusted_scratch_root()
+                with materialized_pytest_execution_subject(
+                    self.workspace,
+                    expected_snapshot=before,
+                    scratch_root=scratch_root,
+                    expected_scratch_root_identity=scratch_root_identity,
+                ) as execution_subject:
+                    execution_subject_details = execution_subject.details()
+                    execution_sandbox = self._sandbox_for_materialized_workspace(
+                        execution_subject.root
+                    )
+                    with tempfile.TemporaryDirectory(
+                        prefix="aiqa-pytest-home-",
+                        dir=scratch_root,
+                    ) as temp_home:
+                        env = restricted_subprocess_env(
+                            home=Path(temp_home),
+                            extra={
+                                "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+                                "PYTHONDONTWRITEBYTECODE": "1",
+                            },
+                        )
+                        try:
+                            preflight, process_result = execution_sandbox.run(
+                                [
+                                    str(execution_sandbox.python_executable),
+                                    "-m",
+                                    "pytest",
+                                    *safe_args,
+                                ],
+                                env=env,
+                                timeout_seconds=self.timeout_seconds,
+                            )
+                        except PytestSandboxUnavailable as exc:
+                            preflight = exc.preflight
+                            process_result = None
+                        except PytestSandboxExecutionUnverified as exc:
+                            preflight = exc.preflight
+                            process_result = exc.result
+                            sandbox_postflight_reason = exc.reason
+                        except (OSError, RuntimeError, ValueError) as exc:
+                            preflight = PytestSandboxPreflight(
+                                ready=False,
+                                backend="bubblewrap",
+                                reason=(
+                                    "sandbox execution authority became unavailable: "
+                                    f"{type(exc).__name__}"
+                                ),
+                            )
+                            process_result = None
+            except ExecutionSubjectError as exc:
+                preflight = PytestSandboxPreflight(
+                    ready=False,
+                    backend="bubblewrap",
+                    reason=f"pytest execution subject materialization failed: {exc}",
                 )
-            except PytestSandboxUnavailable as exc:
-                preflight = exc.preflight
                 process_result = None
-            except PytestSandboxExecutionUnverified as exc:
-                preflight = exc.preflight
-                process_result = exc.result
-                sandbox_postflight_reason = exc.reason
             except (OSError, RuntimeError, ValueError) as exc:
                 preflight = PytestSandboxPreflight(
                     ready=False,
                     backend="bubblewrap",
-                    reason=f"sandbox execution authority became unavailable: {type(exc).__name__}",
+                    reason=(
+                        "pytest execution subject authority became unavailable: "
+                        f"{type(exc).__name__}"
+                    ),
                 )
                 process_result = None
         duration = time.monotonic() - start
@@ -176,6 +256,7 @@ class TestRunner:
             if not sandbox_blocked and preflight.backend == "bubblewrap"
             else None
         )
+        isolation_details["execution_subject"] = execution_subject_details
         exit_item = self.evidence.add(
             EvidenceItem(
                 run_id=self.evidence.run_id,
@@ -206,6 +287,7 @@ class TestRunner:
                     "workspace_integrity_reason": integrity_reason,
                     "workspace_fingerprint_before": before.fingerprint,
                     "workspace_fingerprint_after": after.fingerprint,
+                    "execution_subject": execution_subject_details,
                     "sandbox": isolation_details,
                 },
                 artifact_reference=artifact_path,
@@ -218,6 +300,7 @@ class TestRunner:
                 EvidenceItem(
                     run_id=self.evidence.run_id,
                     kind=EvidenceKind.EXCEPTION,
+                    nature=EvidenceNature.OBSERVED_FACT,
                     source="pytest",
                     summary=(
                         "pytest sandbox blocked target-code execution"
@@ -246,6 +329,7 @@ class TestRunner:
                         "stderr_truncated": stderr_truncated,
                         "workspace_integrity_verified": integrity_reason is None,
                         "workspace_integrity_reason": integrity_reason,
+                        "execution_subject": execution_subject_details,
                         "sandbox": isolation_details,
                     },
                     artifact_reference=artifact_path,
@@ -265,6 +349,62 @@ class TestRunner:
             execution_started=not sandbox_blocked,
             block_reason=(preflight.reason if sandbox_blocked else None),
         )
+
+    def _sandbox_for_materialized_workspace(self, workspace: Path) -> PytestSandbox:
+        bound_workspace = workspace.expanduser().resolve()
+        if isinstance(self.sandbox, BubblewrapPytestSandbox):
+            bubblewrap_sandbox = BubblewrapPytestSandbox(
+                bound_workspace,
+                evidence_root=self.evidence.run_root,
+                expected_evidence_root_identity=self.evidence.run_root_identity,
+            )
+            for runtime_root in bubblewrap_sandbox._runtime_roots():
+                if self._paths_overlap(self.workspace, runtime_root):
+                    raise ExecutionSubjectError(
+                        "source workspace overlaps a host runtime root exposed to pytest"
+                    )
+            return bubblewrap_sandbox
+        if isinstance(self.sandbox, MaterializedWorkspaceSandboxFactory):
+            materialized_sandbox = self.sandbox.for_materialized_workspace(
+                bound_workspace,
+                forbidden_source_workspace=self.workspace,
+            )
+            observed_workspace = getattr(materialized_sandbox, "workspace", None)
+            if (
+                not isinstance(observed_workspace, Path)
+                or observed_workspace.resolve() != bound_workspace
+            ):
+                raise ExecutionSubjectError(
+                    "custom pytest sandbox did not prove the materialized workspace binding"
+                )
+            if getattr(materialized_sandbox, "source_workspace_hidden", None) is not True:
+                raise ExecutionSubjectError(
+                    "custom pytest sandbox did not prove the source workspace is hidden"
+                )
+            return materialized_sandbox
+        raise ExecutionSubjectError(
+            "custom pytest sandbox must explicitly bind the materialized execution workspace"
+        )
+
+    def _trusted_scratch_root(self) -> tuple[Path, tuple[int, int]]:
+        scratch_root = self.evidence.run_root.expanduser().absolute()
+        if self._paths_overlap(self.workspace, scratch_root):
+            raise ExecutionSubjectError(
+                "target workspace and pytest scratch/evidence root must be disjoint"
+            )
+        observed_identity = pin_directory_identity(
+            scratch_root,
+            label="pytest scratch root",
+        )
+        if observed_identity != self.evidence.run_root_identity:
+            raise ExecutionSubjectError(
+                "pytest scratch/evidence root changed identity since evidence authorization"
+            )
+        return scratch_root, observed_identity
+
+    @staticmethod
+    def _paths_overlap(left: Path, right: Path) -> bool:
+        return left == right or left in right.parents or right in left.parents
 
     def sandbox_python_executable(self) -> str:
         return str(self.sandbox.python_executable)

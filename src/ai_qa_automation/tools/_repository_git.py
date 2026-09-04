@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import re
 import stat
-import tempfile
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
@@ -33,6 +32,12 @@ _HeadRefObservation = tuple[
     _MetadataSignature,
     _BaselineRefObservation,
 ]
+
+
+# Git global/system config and user excludes are disabled independently below.
+# Reuse an existing filesystem root as HOME so read-only inspection never creates
+# controller temporary state selected by ambient TMPDIR.
+_GIT_ISOLATED_HOME = Path(os.sep).resolve()
 
 
 class RepositoryGitAuthorityMixin:
@@ -523,48 +528,47 @@ class RepositoryGitAuthorityMixin:
                     observed_ref = self._validate_baseline_ref(candidate)
                     ref_before = self._baseline_ref_observation(observed_ref)
 
-        with tempfile.TemporaryDirectory(prefix="aiqa-git-home-") as temp_home:
-            env = restricted_subprocess_env(
-                home=Path(temp_home),
-                extra={
-                    "GIT_CONFIG_NOSYSTEM": "1",
-                    "GIT_CONFIG_GLOBAL": os.devnull,
-                    "GIT_NO_REPLACE_OBJECTS": "1",
-                    "GIT_OPTIONAL_LOCKS": "0",
-                    "GIT_NO_LAZY_FETCH": "1",
-                },
+        env = restricted_subprocess_env(
+            home=_GIT_ISOLATED_HOME,
+            extra={
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_CONFIG_GLOBAL": os.devnull,
+                "GIT_NO_REPLACE_OBJECTS": "1",
+                "GIT_OPTIONAL_LOCKS": "0",
+                "GIT_NO_LAZY_FETCH": "1",
+            },
+        )
+        with self._git_subject() as (git_cwd, git_subject_args, pass_fds):
+            result = self._run_bounded_subprocess_adapter(
+                [
+                    "git",
+                    *git_subject_args,
+                    "-c",
+                    "core.fsmonitor=false",
+                    "-c",
+                    "core.untrackedCache=false",
+                    "-c",
+                    "core.commitGraph=false",
+                    "-c",
+                    "core.excludesFile=/dev/null",
+                    "-c",
+                    "core.filemode=true",
+                    "-c",
+                    "core.ignoreStat=false",
+                    "-c",
+                    "core.trustctime=true",
+                    "-c",
+                    "core.checkStat=default",
+                    "-c",
+                    "advice.graftFileDeprecated=true",
+                    *args,
+                ],
+                cwd=git_cwd,
+                env=env,
+                timeout_seconds=self.timeout_seconds,
+                max_output_bytes=_MAX_GIT_TEXT_OUTPUT_BYTES,
+                pass_fds=pass_fds,
             )
-            with self._git_subject() as (git_cwd, git_subject_args, pass_fds):
-                result = self._run_bounded_subprocess_adapter(
-                    [
-                        "git",
-                        *git_subject_args,
-                        "-c",
-                        "core.fsmonitor=false",
-                        "-c",
-                        "core.untrackedCache=false",
-                        "-c",
-                        "core.commitGraph=false",
-                        "-c",
-                        "core.excludesFile=/dev/null",
-                        "-c",
-                        "core.filemode=true",
-                        "-c",
-                        "core.ignoreStat=false",
-                        "-c",
-                        "core.trustctime=true",
-                        "-c",
-                        "core.checkStat=default",
-                        "-c",
-                        "advice.graftFileDeprecated=true",
-                        *args,
-                    ],
-                    cwd=git_cwd,
-                    env=env,
-                    timeout_seconds=self.timeout_seconds,
-                    max_output_bytes=_MAX_GIT_TEXT_OUTPUT_BYTES,
-                    pass_fds=pass_fds,
-                )
         if result.timed_out:
             raise RuntimeError(f"git command exceeded {self.timeout_seconds}s inspection budget")
         if result.stdout_truncated or result.stderr_truncated:
@@ -597,49 +601,48 @@ class RepositoryGitAuthorityMixin:
                 raise RepositorySubjectError(
                     "Git split-index metadata is not supported by repository inspection"
                 )
-        with tempfile.TemporaryDirectory(prefix="aiqa-git-home-") as temp_home:
-            env = restricted_subprocess_env(
-                home=Path(temp_home),
-                extra={
-                    "GIT_CONFIG_NOSYSTEM": "1",
-                    "GIT_CONFIG_GLOBAL": os.devnull,
-                    "GIT_NO_REPLACE_OBJECTS": "1",
-                    "GIT_OPTIONAL_LOCKS": "0",
-                    "GIT_NO_LAZY_FETCH": "1",
-                },
+        env = restricted_subprocess_env(
+            home=_GIT_ISOLATED_HOME,
+            extra={
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_CONFIG_GLOBAL": os.devnull,
+                "GIT_NO_REPLACE_OBJECTS": "1",
+                "GIT_OPTIONAL_LOCKS": "0",
+                "GIT_NO_LAZY_FETCH": "1",
+            },
+        )
+        with self._git_subject() as (git_cwd, git_subject_args, pass_fds):
+            result = self._run_bounded_binary_subprocess_adapter(
+                [
+                    "git",
+                    *git_subject_args,
+                    "-c",
+                    "core.fsmonitor=false",
+                    "-c",
+                    "core.untrackedCache=false",
+                    "-c",
+                    "core.commitGraph=false",
+                    "-c",
+                    "core.excludesFile=/dev/null",
+                    "-c",
+                    "core.filemode=true",
+                    "-c",
+                    "core.ignoreStat=false",
+                    "-c",
+                    "core.trustctime=true",
+                    "-c",
+                    "core.checkStat=default",
+                    "-c",
+                    "advice.graftFileDeprecated=true",
+                    *args,
+                ],
+                cwd=git_cwd,
+                env=env,
+                timeout_seconds=self.timeout_seconds,
+                max_stdout_bytes=max_stdout_bytes,
+                max_stderr_bytes=_MAX_GIT_EXACT_STDERR_BYTES,
+                pass_fds=pass_fds,
             )
-            with self._git_subject() as (git_cwd, git_subject_args, pass_fds):
-                result = self._run_bounded_binary_subprocess_adapter(
-                    [
-                        "git",
-                        *git_subject_args,
-                        "-c",
-                        "core.fsmonitor=false",
-                        "-c",
-                        "core.untrackedCache=false",
-                        "-c",
-                        "core.commitGraph=false",
-                        "-c",
-                        "core.excludesFile=/dev/null",
-                        "-c",
-                        "core.filemode=true",
-                        "-c",
-                        "core.ignoreStat=false",
-                        "-c",
-                        "core.trustctime=true",
-                        "-c",
-                        "core.checkStat=default",
-                        "-c",
-                        "advice.graftFileDeprecated=true",
-                        *args,
-                    ],
-                    cwd=git_cwd,
-                    env=env,
-                    timeout_seconds=self.timeout_seconds,
-                    max_stdout_bytes=max_stdout_bytes,
-                    max_stderr_bytes=_MAX_GIT_EXACT_STDERR_BYTES,
-                    pass_fds=pass_fds,
-                )
         if result.timed_out:
             raise RuntimeError(f"git command exceeded {self.timeout_seconds}s inspection budget")
         if result.stdout_truncated or result.stderr_truncated:

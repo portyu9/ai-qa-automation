@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -35,6 +36,9 @@ class FakeSandbox:
     python_executable = Path(sys.executable)
 
     def __init__(self, *, returncode: int = 0, timed_out: bool = False) -> None:
+        self.workspace: Path | None = None
+        self.forbidden_source_workspace: Path | None = None
+        self.source_workspace_hidden = False
         self.result = BoundedSubprocessResult(
             returncode=returncode,
             stdout="1 passed",
@@ -58,6 +62,17 @@ class FakeSandbox:
             no_non_loopback_interfaces=True,
             effective_capabilities_zero=True,
         )
+
+    def for_materialized_workspace(
+        self,
+        workspace: Path,
+        *,
+        forbidden_source_workspace: Path,
+    ) -> FakeSandbox:
+        self.workspace = workspace.resolve()
+        self.forbidden_source_workspace = forbidden_source_workspace.resolve()
+        self.source_workspace_hidden = self.workspace != self.forbidden_source_workspace
+        return self
 
     def preflight(self) -> PytestSandboxPreflight:
         return self.preflight_result
@@ -101,7 +116,36 @@ def install_fake_snapshots(
         def snapshot(self) -> object:
             return next(sequence)
 
+    @contextmanager
+    def fake_materialized_subject(
+        workspace: Path,
+        *,
+        expected_snapshot: object,
+        scratch_root: Path,
+        expected_scratch_root_identity: tuple[int, int],
+    ):
+        assert expected_scratch_root_identity
+        root = scratch_root / "fake-materialized-pytest-subject"
+        root.mkdir(exist_ok=True)
+        yield SimpleNamespace(
+            root=root,
+            details=lambda: {
+                "git_sha": getattr(expected_snapshot, "git_sha", None),
+                "source_fingerprint": getattr(expected_snapshot, "fingerprint", None),
+                "digest": "sha256:" + "f" * 64,
+                "file_count": 1,
+                "total_bytes": 1,
+                "ignored_inputs_excluded": True,
+                "git_metadata_excluded": True,
+            },
+        )
+
     monkeypatch.setattr(execution_module, "RepositoryInspector", FakeInspector)
+    monkeypatch.setattr(
+        execution_module,
+        "materialized_pytest_execution_subject",
+        fake_materialized_subject,
+    )
 
 
 def test_pytest_zero_exit_requires_unchanged_complete_git_fingerprint(
@@ -112,7 +156,7 @@ def test_pytest_zero_exit_requires_unchanged_complete_git_fingerprint(
         [snapshot(fingerprint="fp"), snapshot(fingerprint="fp")],
     )
     runner = TestRunner(
-        tmp_path,
+        tmp_path / "workspace",
         EvidenceStore(tmp_path / "artifacts", "run-ok"),
         sandbox=FakeSandbox(),
     )
@@ -133,7 +177,7 @@ def test_pytest_zero_exit_is_downgraded_when_test_changes_workspace(
         [snapshot(fingerprint="before"), snapshot(fingerprint="after")],
     )
     runner = TestRunner(
-        tmp_path,
+        tmp_path / "workspace",
         EvidenceStore(tmp_path / "artifacts", "run-drift"),
         sandbox=FakeSandbox(),
     )
@@ -144,7 +188,7 @@ def test_pytest_zero_exit_is_downgraded_when_test_changes_workspace(
     assert "target workspace changed during pytest execution" in result.stderr
 
 
-def test_pytest_zero_exit_is_downgraded_without_git_provenance(
+def test_pytest_without_git_provenance_is_blocked_before_target_execution(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     install_fake_snapshots(
@@ -155,14 +199,15 @@ def test_pytest_zero_exit_is_downgraded_without_git_provenance(
         ],
     )
     runner = TestRunner(
-        tmp_path,
+        tmp_path / "workspace",
         EvidenceStore(tmp_path / "artifacts", "run-nongit"),
         sandbox=FakeSandbox(),
     )
 
     result = runner.run_pytest([])
 
-    assert result.exit_code == 125
+    assert result.exit_code == 126
+    assert result.execution_started is False
     assert "requires a Git-backed target workspace" in result.stderr
 
 
@@ -177,7 +222,7 @@ def test_pytest_zero_exit_is_downgraded_when_fingerprint_is_incomplete(
         ],
     )
     runner = TestRunner(
-        tmp_path,
+        tmp_path / "workspace",
         EvidenceStore(tmp_path / "artifacts", "run-incomplete"),
         sandbox=FakeSandbox(),
     )
@@ -196,7 +241,7 @@ def test_pytest_timeout_maps_to_controlled_timeout_exit(
         [snapshot(fingerprint="fp"), snapshot(fingerprint="fp")],
     )
     runner = TestRunner(
-        tmp_path,
+        tmp_path / "workspace",
         EvidenceStore(tmp_path / "artifacts", "run-timeout"),
         sandbox=FakeSandbox(returncode=-9, timed_out=True),
     )
@@ -212,7 +257,7 @@ def test_pytest_runner_rejects_invalid_timeout_bound(tmp_path: Path, timeout: ob
     run_id = f"run-timeout-{str(timeout).replace('.', '-')}"
     with pytest.raises(ValueError, match="timeout_seconds"):
         TestRunner(
-            tmp_path,
+            tmp_path / "workspace",
             EvidenceStore(tmp_path / "artifacts", run_id),
             timeout_seconds=timeout,  # type: ignore[arg-type]
             sandbox=FakeSandbox(),
@@ -227,7 +272,7 @@ def test_direct_test_runner_has_no_unsandboxed_fallback_when_backend_is_unavaila
         [snapshot(fingerprint="fp"), snapshot(fingerprint="fp")],
     )
     evidence = EvidenceStore(tmp_path / "artifacts", "run-sandbox-blocked")
-    runner = TestRunner(tmp_path, evidence, sandbox=BlockedSandbox())
+    runner = TestRunner(tmp_path / "workspace", evidence, sandbox=BlockedSandbox())
 
     result = runner.run_pytest([])
 
@@ -251,7 +296,7 @@ def test_sandbox_postflight_uncertainty_invalidates_zero_exit(
         [snapshot(fingerprint="fp"), snapshot(fingerprint="fp")],
     )
     evidence = EvidenceStore(tmp_path / "artifacts", "run-sandbox-postflight")
-    runner = TestRunner(tmp_path, evidence, sandbox=PostflightUnverifiedSandbox())
+    runner = TestRunner(tmp_path / "workspace", evidence, sandbox=PostflightUnverifiedSandbox())
 
     result = runner.run_pytest([])
 

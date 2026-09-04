@@ -31,6 +31,16 @@ That expected fingerprint is an **authority baseline**, not an observation cache
 
 Read-only repository inspection, browser/API observation, external MCP use, classification, validation, and other non-mutation work never replace the expected fingerprint merely because they observed newer bytes.
 
+### Git-ignored bytes are outside the fingerprint, not silently trusted
+
+Repository fingerprinting deliberately follows Git's ignored-path semantics for ordinary ignored inputs. An ignored host file that is neither tracked nor otherwise represented by the changed-path subject is therefore **not freshness-certified** by `RepositoryInspector`. This is an explicit boundary, not evidence that such bytes are stable or safe to execute.
+
+Live pytest closes that gap by shrinking its execution namespace instead of broadening the meaning of the fingerprint. Before target code runs, `TestRunner` materializes a fresh controller-owned tree from the exact complete Git-backed snapshot. The materialized tree contains the admissible tracked/non-ignored subject, excludes ordinary ignored paths and `.git`, binds tracked OIDs and executable modes to the fingerprint-bound raw Git index, and requires changed/untracked copied bytes to reconstruct the authorized fingerprint. The raw index must itself be checksum-valid and parseable under the supported index contract; split indexes and unknown mandatory lowercase extensions fail closed rather than silently changing stage-zero semantics. The source snapshot is rechecked after materialization and again after pytest execution.
+
+Consequently, an ordinary ignored host file can change without changing the repository fingerprint, but it cannot become a pytest input through `/workspace`: it is absent from the frozen tree. The original source workspace is also refused when it overlaps a Python/system runtime root that Bubblewrap would expose, preventing those ignored bytes from reappearing through an alternate mounted host path. This is an **exclusion guarantee within the verified pytest sandbox boundary**, not a claim that ignored host bytes are immutable.
+
+Executable mode receives an additional fail-closed rule because generic changed-file fingerprint rows do not independently encode every live mode transition. A tracked executable bit must agree with its stage-zero Git-index mode; an unstaged mode divergence blocks. A path with no stage-zero index entry may enter the frozen subject only as non-executable, so executable untracked or executable physical-replacement inputs block rather than acquiring unbound execution authority.
+
 ## Three freshness boundaries
 
 Workspace freshness is re-proved at three independent target-authority boundaries.
@@ -54,6 +64,8 @@ If the current subject cannot be bound safely at an execution-owned freshness ch
 - inability to revalidate repository/root subject identity safely → `INFRASTRUCTURE_FAILURE`.
 
 A denied external request may already have its attempt/network budget conservatively reserved by `PreToolUse`; that accounting does not mean provider execution occurred. The permission callback denies before the provider action. Stale retries therefore cannot create free attempts.
+
+For live pytest, matching the repository fingerprint is necessary but no longer sufficient to start target code. `TestRunner` must also construct the frozen execution subject and prove that the sandbox binds that tree while hiding the original source workspace. Failure of either subject construction or sandbox binding produces `execution_started=false` rather than a test result.
 
 ### 2. Before accepting internal non-mutation target results
 
@@ -108,6 +120,7 @@ If a target changes after prior validation and a later inspection simply replace
 
 A workspace fingerprint proves identity of the repository/worktree state covered by the bounded `RepositoryInspector` observation. It does **not** prove:
 
+- that ordinary Git-ignored host bytes were observed, immutable, or safe to execute;
 - that a validation itself was correct;
 - that an external provider response is trustworthy;
 - that remote evidence describes local target bytes;
@@ -115,7 +128,9 @@ A workspace fingerprint proves identity of the repository/worktree state covered
 - that another operating-system principal cannot write the workspace; or
 - that a future target state will remain unchanged.
 
-Those are separate trust domains. The freshness boundary prevents target validation and terminal truth from silently floating from one observed local target state to another; external MCP evidence remains separately classified as untrusted remote observation.
+Pytest execution-subject evidence is separate and narrower. It records which bounded frozen namespace was constructed from the authorized repository subject and that ordinary ignored inputs plus Git metadata were excluded. That evidence does not expand repository fingerprint coverage to the excluded bytes.
+
+Those are separate trust domains. The freshness boundary prevents target validation and terminal truth from silently floating from one observed local target state to another; pytest additionally refuses to expose local bytes outside its frozen subject, while external MCP evidence remains separately classified as untrusted remote observation.
 
 ## SDK permission and hook dependency boundary
 
@@ -131,18 +146,20 @@ PostToolUse external-response sanitization intentionally does not wait behind a 
 
 The framework's workspace lease coordinates cooperating framework runs and pins the authorized workspace object where supported. It is not claimed to be an operating-system mandatory-write sandbox.
 
-A non-cooperating process with independent write authority to the same target can still race the application. Internal entry/checkpoint/PostToolUse gates, external permission admission, and terminal freshness detect such drift at their respective observation boundaries and fail closed when it is visible.
+A non-cooperating process with independent write authority to the same target can still race the application. Internal entry/checkpoint/PostToolUse gates, external permission admission, and terminal freshness detect such drift at their respective observation boundaries and fail closed when it is visible. Pytest additionally executes frozen copies rather than the mutable source files, so source writes after materialization do not rewrite the bytes already mounted at `/workspace`; source fingerprint drift still invalidates closure when it is covered by repository authority.
+
+Ordinary ignored host files are different: because they are excluded from the pytest execution subject, their mutation need not invalidate the repository fingerprint and is not presented as target-validation input. Preventing an unrelated principal from altering arbitrary host resources outside all mounted roots remains an environment responsibility.
 
 There is one unavoidable application-level window during an authorized mutation: the policy-owned mutation itself is expected to change the workspace, so the old fingerprint cannot remain equal while the mutation is in progress. Preventing an unrelated non-cooperating writer from changing a second path inside that exact window requires deployment-owned workspace/process isolation. The repository does not fabricate that infrastructure control from an application flag or advisory lock.
 
 ## Failure truth
 
-Freshness failures are authority failures, not test passes:
+Freshness and execution-subject failures are authority failures, not test passes:
 
-- `BLOCKED` means required baseline/current-subject authority is absent or the target moved outside authorized lineage;
+- `BLOCKED` means required baseline/current-subject authority is absent, the target moved outside authorized lineage, or pytest could not construct/bind its frozen execution subject safely;
 - `NOT_VERIFIED` means a candidate terminal success or internal validation result cannot be retained because complete current-subject proof is unavailable;
 - `INFRASTRUCTURE_FAILURE` means the runtime could not safely re-establish the repository/root observation authority needed to decide freshness; and
-- no freshness failure can be converted into `PASS`/`SUCCESS` by model output, external content, retries, or read-only observation.
+- no freshness or execution-subject failure can be converted into `PASS`/`SUCCESS` by model output, external content, retries, read-only observation, or excluded ignored bytes.
 
 ---
 
