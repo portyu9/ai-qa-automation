@@ -4,7 +4,6 @@ import hashlib
 import math
 import os
 import re
-import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -15,7 +14,7 @@ from ..fs_authority import pin_directory_identity, read_bytes_confined
 from ..io_safety import read_json_object_bounded
 from ..models import PerformanceMetrics, ToolDecision
 from ..policy import PolicyEngine
-from .execution_env import restricted_subprocess_env, run_bounded_subprocess
+from .execution_env import resolve_executable, restricted_subprocess_env, run_bounded_subprocess
 
 _URL_LITERAL = re.compile(r"https?://[^'\"`\s)]+", re.I)
 _IMPORT_SPECIFIER = re.compile(r"(?:from\s+|import\s+)([\'\"])([^\'\"]+)\1")
@@ -298,8 +297,6 @@ class K6Runner:
                 "k6 execution requires trusted infrastructure-level target workload limits; "
                 "result thresholds do not bound virtual users, request concurrency, or request rate"
             )
-        if shutil.which("k6") is None:
-            raise RuntimeError("k6 is not installed; runtime validation is NOT_VERIFIED")
 
         data: dict[str, Any]
         with tempfile.TemporaryDirectory(prefix="aiqa-k6-runtime-") as temp_runtime:
@@ -308,17 +305,6 @@ class K6Runner:
             self._write_validated_snapshot(snapshot_root, modules)
             script_path = snapshot_root / root_relative
             summary_path = runtime_root / f"summary-{uuid4().hex}.json"
-            command = [
-                "k6",
-                "run",
-                "-e",
-                f"BASE_URL={target_url.rstrip('/')}",
-                "-e",
-                f"TARGET_URL={target_url.rstrip('/')}",
-                "--summary-export",
-                str(summary_path),
-                str(script_path),
-            ]
             env = restricted_subprocess_env(
                 home=runtime_root,
                 extra={
@@ -328,6 +314,24 @@ class K6Runner:
                     "K6_AUTO_EXTENSION_RESOLUTION": "false",
                 },
             )
+            try:
+                k6_executable = resolve_executable("k6", env=env)
+            except FileNotFoundError as exc:
+                raise RuntimeError(
+                    "k6 is not installed in trusted controller executable roots; "
+                    "runtime validation is NOT_VERIFIED"
+                ) from exc
+            command = [
+                k6_executable,
+                "run",
+                "-e",
+                f"BASE_URL={target_url.rstrip('/')}",
+                "-e",
+                f"TARGET_URL={target_url.rstrip('/')}",
+                "--summary-export",
+                str(summary_path),
+                str(script_path),
+            ]
             result = run_bounded_subprocess(
                 command,
                 cwd=snapshot_root,
