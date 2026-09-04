@@ -17,7 +17,9 @@ from ...models import (
     ValidationStatus,
 )
 from ...redaction import redact_text
+from ...tools.pytest_regression import run_regression_pytest
 from ...tools.safe_patch import SafeTestPatcher
+from ...tools.test_execution import TestRunner
 from ..model_source_observation import read_model_source_confined
 from .common import (
     RuntimeServices,
@@ -39,7 +41,12 @@ def register_testing_tools(services: RuntimeServices, tool: ToolDecorator) -> di
     async def run_pytest(args: dict[str, Any]) -> dict[str, Any]:
         services.consume("run_pytest", args)
         pytest_args = [str(item) for item in (args.get("args") or [])]
-        result = services.test_runner.run_pytest(pytest_args)
+        scope = pytest_scope(pytest_args)
+        regression_suite = None
+        if scope == "regression" and isinstance(services.test_runner, TestRunner):
+            result, regression_suite = run_regression_pytest(services.test_runner, pytest_args)
+        else:
+            result = services.test_runner.run_pytest(pytest_args)
         services.state.tests_executed.append(" ".join(result.command))
         services.state.evidence_ids.extend(
             eid for eid in result.evidence_ids if eid not in services.state.evidence_ids
@@ -49,11 +56,26 @@ def register_testing_tools(services: RuntimeServices, tool: ToolDecorator) -> di
             if not result.execution_started
             else pytest_validation_status(result.exit_code)
         )
+        suite_verified = (
+            scope == "regression"
+            and regression_suite is not None
+            and result.execution_started
+            and result.exit_code == 0
+            and regression_suite.pre_post_collection_match
+            and regression_suite.execution_nodes_match
+        )
+        if scope == "regression" and status is ValidationStatus.PASS and not suite_verified:
+            status = ValidationStatus.NOT_VERIFIED
         summary = (
             (result.block_reason or "pytest sandbox blocked target-code execution")
             if not result.execution_started
-            else f"pytest exited with {result.exit_code}"
+            else (
+                "pytest regression exit was zero but no controller-bound suite identity was proven"
+                if scope == "regression" and status is ValidationStatus.NOT_VERIFIED
+                else f"pytest exited with {result.exit_code}"
+            )
         )
+        suite_details = regression_suite.details() if regression_suite is not None else None
         services.state.validation_results.append(
             ValidationResult(
                 name="pytest",
@@ -64,9 +86,14 @@ def register_testing_tools(services: RuntimeServices, tool: ToolDecorator) -> di
                 evidence_ids=list(result.evidence_ids),
                 details={
                     "duration_seconds": result.duration_seconds,
-                    "scope": pytest_scope(pytest_args),
+                    "scope": scope,
                     "args": pytest_args,
                     "execution_started": result.execution_started,
+                    "regression_suite_verified": suite_verified,
+                    "regression_suite_id": (
+                        regression_suite.suite_id if suite_verified and regression_suite is not None else None
+                    ),
+                    "regression_suite": suite_details,
                 },
             )
         )
@@ -79,12 +106,15 @@ def register_testing_tools(services: RuntimeServices, tool: ToolDecorator) -> di
             "validation_status": status.value,
             "duration_seconds": result.duration_seconds,
             "evidence_ids": result.evidence_ids,
+            "regression_suite_id": (
+                regression_suite.suite_id if suite_verified and regression_suite is not None else None
+            ),
             "stdout_tail": result.stdout[-3000:],
             "stderr_tail": result.stderr[-3000:],
         }
         return {
             "content": [{"type": "text", "text": str(text)}],
-            "is_error": result.exit_code != 0,
+            "is_error": status is not ValidationStatus.PASS,
         }
 
     @tool(
