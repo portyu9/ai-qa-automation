@@ -353,7 +353,10 @@ class TestRunner:
                 forbidden_source_workspace=self.workspace,
             )
             observed_workspace = getattr(sandbox, "workspace", None)
-            if not isinstance(observed_workspace, Path) or observed_workspace.resolve() != bound_workspace:
+            if (
+                not isinstance(observed_workspace, Path)
+                or observed_workspace.resolve() != bound_workspace
+            ):
                 raise ExecutionSubjectError(
                     "custom pytest sandbox did not prove the materialized workspace binding"
                 )
