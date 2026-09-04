@@ -115,7 +115,6 @@ def build_service() -> TrustedGateService:
         installation_id=installation_id,
         repository=repository,
         private_key_pem=_required_env("TRUSTED_GATE_APP_PRIVATE_KEY"),
-        openssl_bin=os.environ.get("TRUSTED_GATE_OPENSSL_BIN", "/usr/bin/openssl"),
     )
     github = GitHubClient(token_provider=provider, installation_id=installation_id)
     store = DeliveryStore(Path(_required_env("TRUSTED_GATE_DB_PATH")))
