@@ -280,9 +280,7 @@ def materialized_pytest_execution_subject(
             label="pytest scratch root",
         )
     except (OSError, RuntimeError, ValueError) as exc:
-        raise ExecutionSubjectError(
-            "pytest scratch-root authority is unavailable"
-        ) from exc
+        raise ExecutionSubjectError("pytest scratch-root authority is unavailable") from exc
     if scratch_identity != expected_scratch_root_identity:
         raise ExecutionSubjectError("pytest scratch root changed identity since authorization")
     observed_snapshot = inspector.snapshot()
@@ -323,9 +321,7 @@ def materialized_pytest_execution_subject(
                 label="pytest scratch root",
             )
         except (OSError, RuntimeError, ValueError) as exc:
-            raise ExecutionSubjectError(
-                "pytest scratch-root authority became unavailable"
-            ) from exc
+            raise ExecutionSubjectError("pytest scratch-root authority became unavailable") from exc
         if current_scratch_identity != expected_scratch_root_identity:
             raise ExecutionSubjectError("pytest scratch root changed during subject creation")
         temp_root = Path(temp_root_text).absolute()
@@ -468,9 +464,7 @@ def materialized_pytest_execution_subject(
                 label="pytest scratch root",
             )
         except (OSError, RuntimeError, ValueError) as exc:
-            raise ExecutionSubjectError(
-                "pytest scratch-root authority became unavailable"
-            ) from exc
+            raise ExecutionSubjectError("pytest scratch-root authority became unavailable") from exc
         if final_scratch_identity != expected_scratch_root_identity:
             raise ExecutionSubjectError("pytest scratch root changed during materialization")
 

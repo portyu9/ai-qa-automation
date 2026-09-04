@@ -657,10 +657,7 @@ class BubblewrapPytestSandbox:
                 label="pytest sandbox scratch/evidence root",
             )
         except (OSError, RuntimeError, ValueError) as exc:
-            return (
-                "pytest sandbox scratch/evidence root is unavailable: "
-                f"{type(exc).__name__}"
-            )
+            return f"pytest sandbox scratch/evidence root is unavailable: {type(exc).__name__}"
         if (
             self.expected_evidence_root_identity is not None
             and observed != self.expected_evidence_root_identity
