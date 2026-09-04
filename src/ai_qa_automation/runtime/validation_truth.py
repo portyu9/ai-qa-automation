@@ -57,6 +57,43 @@ def _future_validation_revisions(
     )
 
 
+def _is_sha256_identity(value: object) -> bool:
+    if not isinstance(value, str) or len(value) != 71 or not value.startswith("sha256:"):
+        return False
+    try:
+        int(value[7:], 16)
+    except ValueError:
+        return False
+    return True
+
+
+def _verified_regression_suite_id(item: ValidationResult) -> str | None:
+    """Return one self-consistent controller-bound regression suite identity."""
+
+    if item.details.get("scope") != "regression":
+        return None
+    if item.details.get("regression_suite_verified") is not True:
+        return None
+    suite_id = item.details.get("regression_suite_id")
+    suite = item.details.get("regression_suite")
+    if not _is_sha256_identity(suite_id):
+        return None
+    if not isinstance(suite, dict):
+        return None
+    if suite.get("suite_id") != suite_id:
+        return None
+    if suite.get("pre_post_collection_match") is not True:
+        return None
+    if suite.get("execution_nodes_match") is not True:
+        return None
+    if not isinstance(suite.get("node_count"), int) or int(suite["node_count"]) < 1:
+        return None
+    subject_digest = suite.get("execution_subject_digest")
+    if not _is_sha256_identity(subject_digest):
+        return None
+    return suite_id
+
+
 def evaluate_revision_closure(
     validations: list[ValidationResult] | tuple[ValidationResult, ...],
     *,
@@ -68,8 +105,8 @@ def evaluate_revision_closure(
     Revision zero has no autonomous mutation to close. A positive revision closes
     only when every result at that revision is PASS, exactly one patch-safety
     subject exists, targeted pytest is explicitly bound to that subject, and a
-    full regression pytest PASS exists at the same revision. Negative or
-    future-ahead revision state is invalid and fails closed.
+    controller-bound full-regression suite PASS exists at the same revision.
+    Negative or future-ahead revision state is invalid and fails closed.
     """
 
     if current_revision < 0:
@@ -167,12 +204,33 @@ def evaluate_revision_closure(
         and item.details.get("mutation_target") == mutation_path
         for item in current_pytest
     )
-    regression = any(item.details.get("scope") == "regression" for item in current_pytest)
-    if not targeted or not regression:
+    regression_candidates = [
+        item for item in current_pytest if item.details.get("scope") == "regression"
+    ]
+    regression_suite_ids = {
+        suite_id
+        for item in regression_candidates
+        if (suite_id := _verified_regression_suite_id(item)) is not None
+    }
+    if not targeted:
         return RevisionClosure(
             False,
             "incomplete_pytest_closure",
-            "A changed test requires an exact-path-bound targeted pytest PASS and a full-regression pytest PASS at the current revision.",
+            "A changed test requires an exact-path-bound targeted pytest PASS and a controller-bound full-regression pytest PASS at the current revision.",
+            mutation_path,
+        )
+    if not regression_suite_ids:
+        return RevisionClosure(
+            False,
+            "unbound_regression_suite",
+            "A changed test requires a full-regression PASS bound to an exact controller-verified suite identity.",
+            mutation_path,
+        )
+    if len(regression_suite_ids) != 1:
+        return RevisionClosure(
+            False,
+            "ambiguous_regression_suite",
+            "Current revision contains multiple controller-verified regression suite identities.",
             mutation_path,
         )
 

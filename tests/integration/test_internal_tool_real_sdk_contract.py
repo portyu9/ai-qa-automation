@@ -99,9 +99,9 @@ EXPECTED_TOOL_PROPERTIES: dict[str, dict[str, dict[str, object]]] = {
 
 class FakeTestRunner:
     def run_pytest(self, args: list[str]) -> SimpleNamespace:
-        assert args == []
+        assert args == ["tests/test_sample.py"]
         return SimpleNamespace(
-            command=("python", "-m", "pytest"),
+            command=("python", "-m", "pytest", "tests/test_sample.py"),
             evidence_ids=[],
             exit_code=0,
             duration_seconds=0.01,
@@ -190,7 +190,11 @@ async def test_all_registered_adapters_cross_pinned_sdk_mcp_boundary(tmp_path: P
     repository = await call_real_sdk_tool(server, "inspect_repository", {})
     assert repository.isError is not True
 
-    pytest_response = await call_real_sdk_tool(server, "run_pytest", {"args": []})
+    pytest_response = await call_real_sdk_tool(
+        server,
+        "run_pytest",
+        {"args": ["tests/test_sample.py"]},
+    )
     assert pytest_response.isError is not True
 
     api_response = await call_real_sdk_tool(

@@ -41,14 +41,32 @@ def patch_safety(path: str) -> ValidationResult:
     )
 
 
+def verified_regression_details() -> dict[str, object]:
+    suite_id = "sha256:" + "a" * 64
+    return {
+        "regression_suite_verified": True,
+        "regression_suite_id": suite_id,
+        "regression_suite": {
+            "suite_id": suite_id,
+            "pre_post_collection_match": True,
+            "execution_nodes_match": True,
+            "node_count": 1,
+            "execution_subject_digest": "sha256:" + "b" * 64,
+        },
+    }
+
+
 def pytest_result(*, scope: str, args: list[str]) -> ValidationResult:
+    details: dict[str, object] = {"scope": scope, "args": args}
+    if scope == "regression":
+        details.update(verified_regression_details())
     return ValidationResult(
         name="pytest",
         gate_id=f"pytest:{scope}:{'|'.join(args)}",
         revision=1,
         status=ValidationStatus.PASS,
         summary="pytest passed",
-        details={"scope": scope, "args": args},
+        details=details,
     )
 
 

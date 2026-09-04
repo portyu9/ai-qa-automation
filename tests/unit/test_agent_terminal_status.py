@@ -8,6 +8,21 @@ from ai_qa_automation.agent import determine_terminal_outcome
 from ai_qa_automation.models import TerminalStatus, ValidationResult, ValidationStatus
 
 
+def verified_regression_details() -> dict[str, object]:
+    suite_id = "sha256:" + "a" * 64
+    return {
+        "regression_suite_verified": True,
+        "regression_suite_id": suite_id,
+        "regression_suite": {
+            "suite_id": suite_id,
+            "pre_post_collection_match": True,
+            "execution_nodes_match": True,
+            "node_count": 1,
+            "execution_subject_digest": "sha256:" + "b" * 64,
+        },
+    }
+
+
 def vr(
     name: str,
     status: ValidationStatus,
@@ -33,6 +48,8 @@ def vr(
         )
     if scope == "regression":
         details["args"] = []
+        if status is ValidationStatus.PASS and revision > 0:
+            details.update(verified_regression_details())
     return ValidationResult(
         name=name,
         gate_id=gate_id,
@@ -374,8 +391,7 @@ def test_changed_revision_requires_both_targeted_and_regression_pytest(
         objective_gate_id="objective:repair",
     )
     assert status is TerminalStatus.NOT_VERIFIED
-    assert "targeted" in reason.lower()
-    assert "regression" in reason.lower()
+    assert missing_scope in reason.lower()
 
 
 def test_changed_revision_rejects_unbound_targeted_validation() -> None:

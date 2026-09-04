@@ -57,6 +57,23 @@ def base_state(workspace: Path, **updates: object) -> AgentRunState:
     return state.model_copy(update=updates)
 
 
+def verified_regression_details() -> dict[str, object]:
+    suite_id = "sha256:" + "a" * 64
+    return {
+        "scope": "regression",
+        "args": [],
+        "regression_suite_verified": True,
+        "regression_suite_id": suite_id,
+        "regression_suite": {
+            "suite_id": suite_id,
+            "pre_post_collection_match": True,
+            "execution_nodes_match": True,
+            "node_count": 1,
+            "execution_subject_digest": "sha256:" + "b" * 64,
+        },
+    }
+
+
 def closed_revision_validations(path: str = "tests/test_x.py") -> list[ValidationResult]:
     return [
         ValidationResult(
@@ -86,7 +103,7 @@ def closed_revision_validations(path: str = "tests/test_x.py") -> list[Validatio
             revision=1,
             status=ValidationStatus.PASS,
             summary="regression pass",
-            details={"scope": "regression", "args": []},
+            details=verified_regression_details(),
         ),
     ]
 
