@@ -66,7 +66,7 @@ A set of unrelated green checks does not prove that the requested objective succ
 
 When autonomous mutation advances `change_revision`, objective evidence from an older revision is stale for terminal authority even if that older PASS remains part of the historical validation record. The objective gate must be re-executed for the post-mutation subject/revision before those newer bytes can reach `SUCCESS`.
 
-For changed revisions, objective closure and mutation closure are independent, additive predicates. Patch-safety, exact-path targeted pytest, and full-regression pytest can close the mutation transaction, but they do not become objective proof unless the operator independently supplied that exact gate identity as the objective contract and the matching PASS is current-revision evidence. If no current objective-specific deterministic PASS exists, the correct terminal state is `NOT_VERIFIED` even when every mutation-closure gate is green.
+For changed revisions, objective closure and mutation closure are independent, additive predicates. Patch-safety, exact-path targeted pytest, and controller-bound full-regression pytest can close the mutation transaction, but they do not become objective proof unless the operator independently supplied that exact gate identity as the objective contract and the matching PASS is current-revision evidence. If no current objective-specific deterministic PASS exists, the correct terminal state is `NOT_VERIFIED` even when every mutation-closure gate is green.
 
 This prevents a model from selecting an easy but irrelevant validation or mutation merely to satisfy a mechanical “some gate passed” condition.
 
@@ -80,6 +80,10 @@ Pytest is interpreted according to whether it produced a trustworthy test assert
 
 The controlled pytest adapter also fingerprints the Git-backed target immediately before and after execution. A zero pytest exit cannot remain PASS if target tests changed the repository, changed Git `HEAD`, or made the workspace fingerprint incomplete. Subprocess output is continuously drained into bounded tails, and validator descendants are cleanup-scoped so target code cannot certify itself while leaving background execution attached to the run.
 
+For an authority-bearing **full-regression** gate, exit code alone is additionally insufficient. The controller first materializes the exact provenance-bound pytest execution subject, then performs bounded pre-collection, execution, and post-collection phases against that same frozen tree. The suite identity binds the target Git SHA and workspace fingerprint, frozen-subject digest, pytest version, active pytest configuration bytes and relevant discovery/selection semantics, every admitted `conftest.py` path/content digest, and the ordered collected node IDs. The controller supplies an explicit repository-root `.` selector so target `testpaths` cannot silently redefine the regression root; other admitted target configuration remains active and is part of the bound subject rather than being silently discarded.
+
+A full-regression PASS requires a non-empty admitted collection, exact execution-node reconciliation with that collection, exact post-collection equality, intact sandbox/workspace authority, and one internally consistent content-addressed regression-suite identity. Collection failure, no-tests-collected, bounded-output truncation, timeout, sandbox postflight uncertainty, collection/execution mismatch, or post-collection drift is `NOT_VERIFIED`, never PASS. Once a collection or execution child has started, later uncertainty remains truthfully represented as **executed but unverified**; only failures before target execution can be represented as blocked/unexecuted. `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` and the existing frozen-workspace isolation boundary remain mandatory throughout all three phases.
+
 ---
 
 ## Revision-aware truth
@@ -90,7 +94,7 @@ A live autonomous mutation is deliberately constrained to the Python/pytest exec
 
 1. **patch-safety PASS** bound to the exact changed path;
 2. **targeted pytest PASS** that explicitly selects that same pending mutation path; and
-3. **full-regression pytest PASS** at that revision.
+3. **controller-bound full-regression pytest PASS** carrying exactly one verified regression-suite identity at that revision.
 
 Those three gates prove mutation closure only. Terminal `SUCCESS` for the changed revision additionally requires the exact operator-supplied objective-validation gate to have an active PASS at that same revision. Neither predicate substitutes for the other.
 
@@ -107,20 +111,20 @@ can bind validation to `tests/test_checkout.py`. A `-k` expression with no expli
 
 A failed gate remains active until the **same gate identity** is superseded by evidence at a newer revision. Re-running a different selector cannot erase the original failure.
 
-If PASS and FAIL are both observed for the same gate at the same revision, the evidence is contradictory and terminal truth resolves to `NOT_VERIFIED` rather than selecting the more convenient observation.
+If PASS and FAIL are both observed for the same gate at the same revision, the evidence is contradictory and terminal truth resolves to `NOT_VERIFIED` rather than selecting the more convenient observation. Multiple distinct controller-verified regression-suite identities at the same changed revision are likewise ambiguous and cannot close the mutation.
 
 ## Mutation transaction semantics
 
 ```mermaid
 stateDiagram-v2
     accTitle: Revision-bound mutation transaction from authorization through rollback-backed validation closure
-    accDescr: An authorized mutation receives an owned rollback snapshot and enters a pending state. Exact-path patch safety, exact-path-bound targeted pytest, and full regression must all pass before commit; failures or incomplete closure route to rollback, and unprovable rollback ownership or integrity escalates to infrastructure failure.
+    accDescr: An authorized mutation receives an owned rollback snapshot and enters a pending state. Exact-path patch safety, exact-path-bound targeted pytest, and one controller-bound reconciled full-regression suite must all pass before commit; failures or incomplete closure route to rollback, and unprovable rollback ownership or integrity escalates to infrastructure failure.
 
     [*] --> Authorized
     Authorized --> Pending: owned rollback snapshot
     Pending --> PatchSafe: exact-path patch safety PASS
     PatchSafe --> Targeted: exact-path-bound pytest PASS
-    Targeted --> Regression: full regression PASS
+    Targeted --> Regression: bound regression suite PASS
     Regression --> Committed: revision closed
 
     Pending --> Rollback: failure / incomplete closure
@@ -146,7 +150,7 @@ A measured threshold breach is `FAIL`. A successfully measured run satisfying ev
 
 - one exact patch-safety target exists;
 - targeted pytest is explicitly bound to that target;
-- full regression passed; and
+- exactly one controller-verified full-regression suite identity passed; and
 - no pending mutation remains.
 
 Persisted state/runtime metadata, journal records, registered artifacts, and attestation/recovery ingestion are byte-bounded before parsing or hashing. Oversized/corrupted persisted material therefore cannot be treated as successful recovery evidence simply because it exists.
