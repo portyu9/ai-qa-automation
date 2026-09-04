@@ -353,23 +353,23 @@ class TestRunner:
     def _sandbox_for_materialized_workspace(self, workspace: Path) -> PytestSandbox:
         bound_workspace = workspace.expanduser().resolve()
         if isinstance(self.sandbox, BubblewrapPytestSandbox):
-            sandbox = BubblewrapPytestSandbox(
+            bubblewrap_sandbox = BubblewrapPytestSandbox(
                 bound_workspace,
                 evidence_root=self.evidence.run_root,
                 expected_evidence_root_identity=self.evidence.run_root_identity,
             )
-            for runtime_root in sandbox._runtime_roots():
+            for runtime_root in bubblewrap_sandbox._runtime_roots():
                 if self._paths_overlap(self.workspace, runtime_root):
                     raise ExecutionSubjectError(
                         "source workspace overlaps a host runtime root exposed to pytest"
                     )
-            return sandbox
+            return bubblewrap_sandbox
         if isinstance(self.sandbox, MaterializedWorkspaceSandboxFactory):
-            sandbox = self.sandbox.for_materialized_workspace(
+            materialized_sandbox = self.sandbox.for_materialized_workspace(
                 bound_workspace,
                 forbidden_source_workspace=self.workspace,
             )
-            observed_workspace = getattr(sandbox, "workspace", None)
+            observed_workspace = getattr(materialized_sandbox, "workspace", None)
             if (
                 not isinstance(observed_workspace, Path)
                 or observed_workspace.resolve() != bound_workspace
@@ -377,11 +377,11 @@ class TestRunner:
                 raise ExecutionSubjectError(
                     "custom pytest sandbox did not prove the materialized workspace binding"
                 )
-            if getattr(sandbox, "source_workspace_hidden", None) is not True:
+            if getattr(materialized_sandbox, "source_workspace_hidden", None) is not True:
                 raise ExecutionSubjectError(
                     "custom pytest sandbox did not prove the source workspace is hidden"
                 )
-            return sandbox
+            return materialized_sandbox
         raise ExecutionSubjectError(
             "custom pytest sandbox must explicitly bind the materialized execution workspace"
         )

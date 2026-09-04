@@ -62,7 +62,7 @@ def _same_snapshot(left: RepositorySnapshot, right: RepositorySnapshot) -> bool:
     )
 
 
-def _require_complete_git_snapshot(snapshot: RepositorySnapshot) -> None:
+def _require_complete_git_snapshot(snapshot: RepositorySnapshot) -> str:
     if snapshot.git_sha is None:
         raise ExecutionSubjectError("pytest execution requires a Git-backed target workspace")
     if not snapshot.fingerprint_complete:
@@ -73,6 +73,7 @@ def _require_complete_git_snapshot(snapshot: RepositorySnapshot) -> None:
         raise ExecutionSubjectError(
             "workspace changed-file subject exceeds its bounded file budget"
         )
+    return snapshot.git_sha
 
 
 def _decode_index_v4_strip_count(raw: bytes, offset: int, limit: int) -> tuple[int, int]:
@@ -264,7 +265,7 @@ def materialized_pytest_execution_subject(
     must reconstruct the exact authorized repository fingerprint.
     """
 
-    _require_complete_git_snapshot(expected_snapshot)
+    expected_git_sha = _require_complete_git_snapshot(expected_snapshot)
     inspector = RepositoryInspector(workspace)
     trusted_scratch_root = scratch_root.expanduser().absolute()
     if (
@@ -470,7 +471,7 @@ def materialized_pytest_execution_subject(
         yield MaterializedExecutionSubject(
             root=temp_root,
             root_identity=final_root_identity,
-            git_sha=expected_snapshot.git_sha,
+            git_sha=expected_git_sha,
             source_fingerprint=expected_snapshot.fingerprint,
             digest=digest,
             file_count=len(manifest_rows),
