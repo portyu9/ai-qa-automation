@@ -8,15 +8,15 @@ import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from ..fs_authority import atomic_write_bytes_confined, pin_directory_identity
 from ._repository_common import (
     _MAX_FINGERPRINT_CHANGED_FILES,
     _MAX_FINGERPRINT_FILE_BYTES,
     _MAX_FINGERPRINT_TOTAL_BYTES,
-    _MAX_GIT_EXACT_STDOUT_BYTES,
     _MAX_GIT_PATHS,
+    _git_index_oid_bytes,
 )
 from .repository import RepositoryInspector, RepositorySnapshot
 
@@ -74,6 +74,147 @@ def _require_complete_git_snapshot(snapshot: RepositorySnapshot) -> None:
         raise ExecutionSubjectError("workspace changed-file subject exceeds its bounded file budget")
 
 
+def _decode_index_v4_strip_count(raw: bytes, offset: int, limit: int) -> tuple[int, int]:
+    if offset >= limit:
+        raise ExecutionSubjectError("Git index v4 entry is truncated")
+    value = raw[offset] & 0x7F
+    byte = raw[offset]
+    offset += 1
+    consumed = 1
+    while byte & 0x80:
+        if offset >= limit or consumed >= 10:
+            raise ExecutionSubjectError("Git index v4 path compression is malformed")
+        byte = raw[offset]
+        offset += 1
+        consumed += 1
+        value = ((value + 1) << 7) + (byte & 0x7F)
+    return value, offset
+
+
+def _validate_index_path(raw_path: bytes) -> str:
+    try:
+        path = raw_path.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise ExecutionSubjectError("Git index contains a non-UTF-8 path") from exc
+    candidate = PurePosixPath(path)
+    normalized = candidate.as_posix()
+    if (
+        not path
+        or "\0" in path
+        or candidate.is_absolute()
+        or normalized != path
+        or any(part in {"", ".", ".."} for part in candidate.parts)
+    ):
+        raise ExecutionSubjectError("Git index contains an unsafe repository path")
+    return normalized
+
+
+def _parse_bound_index_entries(raw: bytes) -> tuple[dict[str, tuple[str, str]], str]:
+    """Parse stage-zero entries from the exact raw index bytes bound by the fingerprint."""
+
+    if len(raw) < 32 or raw[:4] != b"DIRC":
+        raise ExecutionSubjectError("Git index header is malformed")
+    version = int.from_bytes(raw[4:8], "big")
+    entry_count = int.from_bytes(raw[8:12], "big")
+    if version not in {2, 3, 4}:
+        raise ExecutionSubjectError("Git index version is unsupported")
+    if entry_count > _MAX_GIT_PATHS:
+        raise ExecutionSubjectError("Git index entry count exceeds the bounded path budget")
+
+    try:
+        oid_bytes = _git_index_oid_bytes(raw)
+    except RuntimeError as exc:
+        raise ExecutionSubjectError("Git index checksum is invalid or ambiguous") from exc
+    object_format = "sha1" if oid_bytes == 20 else "sha256"
+    content_end = len(raw) - oid_bytes
+    offset = 12
+    previous_path = b""
+    entries: dict[str, tuple[str, str]] = {}
+    seen_records: set[tuple[str, int]] = set()
+    unmerged = False
+
+    for _ in range(entry_count):
+        entry_start = offset
+        fixed_bytes = 40 + oid_bytes + 2
+        if offset + fixed_bytes > content_end:
+            raise ExecutionSubjectError("Git index entry is truncated")
+        mode_value = int.from_bytes(raw[offset + 24 : offset + 28], "big")
+        oid = raw[offset + 40 : offset + 40 + oid_bytes].hex()
+        flags_offset = offset + 40 + oid_bytes
+        flags = int.from_bytes(raw[flags_offset : flags_offset + 2], "big")
+        stage = (flags >> 12) & 0x3
+        offset += fixed_bytes
+
+        if flags & 0x4000:
+            if version < 3 or offset + 2 > content_end:
+                raise ExecutionSubjectError("Git index extended flags are malformed")
+            offset += 2
+
+        if version in {2, 3}:
+            nul = raw.find(b"\0", offset, content_end)
+            if nul < 0:
+                raise ExecutionSubjectError("Git index pathname is not NUL terminated")
+            raw_path = raw[offset:nul]
+            stored_length = flags & 0x0FFF
+            if stored_length < 0x0FFF and stored_length != len(raw_path):
+                raise ExecutionSubjectError("Git index pathname length is inconsistent")
+            if stored_length == 0x0FFF and len(raw_path) < 0x0FFF:
+                raise ExecutionSubjectError("Git index long-path marker is inconsistent")
+            consumed = nul + 1 - entry_start
+            next_offset = entry_start + ((consumed + 7) // 8) * 8
+            if next_offset > content_end or any(raw[nul + 1 : next_offset]):
+                raise ExecutionSubjectError("Git index entry padding is malformed")
+            offset = next_offset
+            previous_path = raw_path
+        else:
+            strip_count, offset = _decode_index_v4_strip_count(raw, offset, content_end)
+            if strip_count > len(previous_path):
+                raise ExecutionSubjectError(
+                    "Git index v4 path compression exceeds the previous path"
+                )
+            nul = raw.find(b"\0", offset, content_end)
+            if nul < 0:
+                raise ExecutionSubjectError("Git index v4 pathname is not NUL terminated")
+            raw_path = previous_path[: len(previous_path) - strip_count] + raw[offset:nul]
+            stored_length = flags & 0x0FFF
+            if stored_length < 0x0FFF and stored_length != len(raw_path):
+                raise ExecutionSubjectError("Git index v4 pathname length is inconsistent")
+            if stored_length == 0x0FFF and len(raw_path) < 0x0FFF:
+                raise ExecutionSubjectError("Git index v4 long-path marker is inconsistent")
+            previous_path = raw_path
+            offset = nul + 1
+
+        path = _validate_index_path(raw_path)
+        record_key = (path, stage)
+        if record_key in seen_records:
+            raise ExecutionSubjectError("Git index contains duplicate path/stage entries")
+        seen_records.add(record_key)
+        if stage != 0:
+            unmerged = True
+            continue
+        if path in entries:
+            raise ExecutionSubjectError("Git index contains duplicate stage-zero entries")
+        mode = f"{mode_value:o}"
+        entries[path] = (mode, oid)
+
+    while offset < content_end:
+        if offset + 8 > content_end:
+            raise ExecutionSubjectError("Git index extension header is truncated")
+        signature = raw[offset : offset + 4]
+        size = int.from_bytes(raw[offset + 4 : offset + 8], "big")
+        next_offset = offset + 8 + size
+        if next_offset > content_end:
+            raise ExecutionSubjectError("Git index extension exceeds the bounded index bytes")
+        if signature == b"link":
+            raise ExecutionSubjectError("split Git indexes cannot enter pytest execution")
+        offset = next_offset
+    if offset != content_end:
+        raise ExecutionSubjectError("Git index extension framing is malformed")
+    if unmerged:
+        raise ExecutionSubjectError("unmerged index entries cannot enter pytest execution")
+    return entries, object_format
+
+
 def _fingerprint_from_materialized_changed_files(
     snapshot: RepositorySnapshot,
     *,
@@ -111,8 +252,9 @@ def materialized_pytest_execution_subject(
     Tracked regular worktree files, non-ignored untracked regular files, and any
     physical path already covered by ``changed_files`` are copied through confined
     no-follow reads. Ordinary Git-ignored inputs and ``.git`` metadata are absent.
-    Unchanged tracked bytes are checked against their index blob ids; changed bytes
-    must reconstruct the exact repository fingerprint supplied by the caller.
+    Unchanged tracked bytes are checked against OIDs parsed from the same raw Git
+    index bytes whose digest is already bound by the repository fingerprint.
+    Changed bytes must reconstruct that exact repository fingerprint.
     """
 
     _require_complete_git_snapshot(expected_snapshot)
@@ -121,21 +263,9 @@ def materialized_pytest_execution_subject(
     if not _same_snapshot(expected_snapshot, observed_snapshot):
         raise ExecutionSubjectError("repository subject changed before pytest materialization")
 
-    object_format = inspector._git("rev-parse", "--show-object-format")
-    if object_format not in {"sha1", "sha256"}:
-        raise ExecutionSubjectError("repository object format is unavailable for materialization")
-    raw_index_entries = inspector._git_bytes(
-        "ls-files",
-        "--stage",
-        "-z",
-        "--",
-        max_stdout_bytes=_MAX_GIT_EXACT_STDOUT_BYTES,
-    )
-    if raw_index_entries is None:
-        raise ExecutionSubjectError("repository index entries are unavailable for materialization")
-    index_entries, unmerged = inspector._parse_index_entries(raw_index_entries)
-    if unmerged:
-        raise ExecutionSubjectError("unmerged index entries cannot enter pytest execution")
+    raw_index = inspector._read_index_bytes()
+    index_digest = hashlib.sha256(raw_index).hexdigest()
+    index_entries, object_format = _parse_bound_index_entries(raw_index)
     if any(mode not in {"100644", "100755"} for mode, _oid in index_entries.values()):
         raise ExecutionSubjectError("non-regular tracked entries cannot enter pytest execution")
 
@@ -155,7 +285,6 @@ def materialized_pytest_execution_subject(
     if any(path == ".git" or path.startswith(".git/") for path in candidates):
         raise ExecutionSubjectError("Git metadata cannot enter the pytest execution namespace")
 
-    index_digest = hashlib.sha256(inspector._read_index_bytes()).hexdigest()
     copied_changed: dict[str, tuple[int, str]] = {}
     manifest_rows: list[dict[str, object]] = []
     total_bytes = 0
@@ -238,7 +367,7 @@ def materialized_pytest_execution_subject(
                 expected_root_identity=temp_root_identity,
             )
             target = temp_root / relative
-            os.chmod(target, 0o755 if executable else 0o644, follow_symlinks=False)
+            os.chmod(target, 0o755 if executable else 0o644)
             total_bytes += len(data)
             manifest_rows.append(
                 {
@@ -269,6 +398,7 @@ def materialized_pytest_execution_subject(
             "schema_version": 1,
             "git_sha": expected_snapshot.git_sha,
             "source_fingerprint": expected_snapshot.fingerprint,
+            "index_sha256": index_digest,
             "files": manifest_rows,
             "ignored_inputs_excluded": True,
             "git_metadata_excluded": True,
