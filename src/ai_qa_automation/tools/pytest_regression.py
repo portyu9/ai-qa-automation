@@ -126,10 +126,14 @@ def _parse_collection(stdout: str, *, truncated: bool) -> _Collection:
                 raise RegressionSuiteError("pytest collection exceeded its deterministic bound")
         elif _SKIP_RE.match(line):
             if len(line.encode()) > _MAX_NODE_BYTES:
-                raise RegressionSuiteError("pytest collection skip evidence exceeded its byte bound")
+                raise RegressionSuiteError(
+                    "pytest collection skip evidence exceeded its byte bound"
+                )
             skipped.append(line)
             if len(skipped) > _MAX_ITEMS:
-                raise RegressionSuiteError("pytest collection skip evidence exceeded its item bound")
+                raise RegressionSuiteError(
+                    "pytest collection skip evidence exceeded its item bound"
+                )
     if not nodes:
         raise RegressionSuiteError("pytest regression collection produced no runnable test items")
     return _Collection(tuple(nodes), tuple(skipped))
@@ -152,7 +156,9 @@ def _parse_execution_nodes(stdout: str, *, truncated: bool) -> tuple[str, ...]:
         nodes.append(node)
         total += len(node.encode()) + 1
         if len(nodes) > _MAX_ITEMS or total > _MAX_MANIFEST_BYTES:
-            raise RegressionSuiteError("pytest execution reconciliation exceeded its deterministic bound")
+            raise RegressionSuiteError(
+                "pytest execution reconciliation exceeded its deterministic bound"
+            )
     return tuple(nodes)
 
 
@@ -490,11 +496,7 @@ def run_regression_pytest(
                 target_started = True
                 last_result = pre_raw
                 last_preflight = preflight
-                if (
-                    pre_raw.timed_out
-                    or pre_raw.returncode != 0
-                    or pre_raw.stderr_truncated
-                ):
+                if pre_raw.timed_out or pre_raw.returncode != 0 or pre_raw.stderr_truncated:
                     reason = (
                         "pytest regression collection timed out"
                         if pre_raw.timed_out
@@ -544,8 +546,7 @@ def run_regression_pytest(
                         "options": config.options,
                     },
                     "conftests": [
-                        {"path": path, "sha256": digest}
-                        for path, digest in conftest_rows
+                        {"path": path, "sha256": digest} for path, digest in conftest_rows
                     ],
                     "collection": {
                         "nodeids": list(pre.nodeids),
@@ -713,11 +714,7 @@ def run_regression_pytest(
                         f"EXECUTION\n{_phase_log(safe_stdout)}\n\n"
                         f"STDERR\n{_phase_log(safe_stderr)}\n\n"
                         "POST-COLLECTION\n"
-                        + (
-                            _phase_log(post_raw.stdout)
-                            if post_raw is not None
-                            else "NOT_EXECUTED"
-                        )
+                        + (_phase_log(post_raw.stdout) if post_raw is not None else "NOT_EXECUTED")
                         + "\n"
                     ),
                     originating_tool="pytest",
@@ -743,9 +740,7 @@ def run_regression_pytest(
                             "regression_suite": suite.details(),
                             "sandbox": preflight.details(),
                             "manifest_content_hash": manifest_hash,
-                            "reconciliation_reasons": list(
-                                dict.fromkeys(reconciliation_reasons)
-                            ),
+                            "reconciliation_reasons": list(dict.fromkeys(reconciliation_reasons)),
                         },
                         artifact_reference=log_artifact,
                         content_hash=log_hash,
