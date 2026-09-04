@@ -22,6 +22,36 @@ def _validation(
     )
 
 
+def _targeted_details(path: str) -> dict[str, object]:
+    execution_id = "sha256:" + "c" * 64
+    passed_paths = [path]
+    return {
+        "scope": "targeted",
+        "mutation_target_bound": True,
+        "mutation_target": path,
+        "targeted_outcome_report_verified": True,
+        "targeted_execution_id": execution_id,
+        "targeted_executed_pass_count": 1,
+        "targeted_executed_pass_paths": passed_paths,
+        "targeted_execution": {
+            "execution_id": execution_id,
+            "git_sha": "d" * 40,
+            "source_fingerprint": "sha256:" + "e" * 64,
+            "execution_subject_digest": "sha256:" + "f" * 64,
+            "report_complete": True,
+            "child_exit_code": 0,
+            "pytest_returncode": 0,
+            "call_report_count": 1,
+            "passed_call_count": 1,
+            "skipped_call_count": 0,
+            "xfail_call_count": 0,
+            "failed_call_count": 0,
+            "passed_paths": passed_paths,
+            "report_sha256": "sha256:" + "1" * 64,
+        },
+    }
+
+
 def _checks(*, suite_id: str, subject_digest: str) -> list[ValidationResult]:
     path = "tests/test_checkout.py"
     return [
@@ -33,11 +63,7 @@ def _checks(*, suite_id: str, subject_digest: str) -> list[ValidationResult]:
         _validation(
             "pytest",
             gate_id="pytest:targeted",
-            details={
-                "scope": "targeted",
-                "mutation_target_bound": True,
-                "mutation_target": path,
-            },
+            details=_targeted_details(path),
         ),
         _validation(
             "pytest",
