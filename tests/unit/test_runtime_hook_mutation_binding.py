@@ -60,6 +60,7 @@ def verified_targeted_details(path: str) -> dict[str, object]:
     execution_id = "sha256:" + "c" * 64
     passed_paths = [path]
     return {
+        "targeted_execution_authority": "trusted_out_of_process_observer_v1",
         "targeted_outcome_report_verified": True,
         "targeted_execution_id": execution_id,
         "targeted_executed_pass_count": 1,
