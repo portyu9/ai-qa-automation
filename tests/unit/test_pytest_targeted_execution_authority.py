@@ -123,12 +123,7 @@ def test_early_target_exit_cannot_replace_missing_plugin_report(tmp_path: Path) 
     forged = _REPORT_PREFIX + '{"schema_version":1,"report_complete":true}'
     process, identity, reason = _run_wrapper(
         tmp_path,
-        (
-            "import os\n\n"
-            "def test_subject():\n"
-            f"    print({forged!r}, flush=True)\n"
-            "    os._exit(0)\n"
-        ),
+        (f"import os\n\ndef test_subject():\n    print({forged!r}, flush=True)\n    os._exit(0)\n"),
         args=["-s", "test_subject.py"],
     )
 
@@ -155,9 +150,7 @@ def test_summary_parser_rejects_passed_path_overflow() -> None:
         '"overflow":false,"passed_call_count":5,'
         '"passed_paths":["a.py","b.py","c.py","d.py","e.py"],'
         '"pytest_returncode":0,"report_complete":true,'
-        '"report_sha256":"sha256:'
-        + "d" * 64
-        + '","schema_version":1,"session_finished":true,'
+        '"report_sha256":"sha256:' + "d" * 64 + '","schema_version":1,"session_finished":true,'
         '"skipped_call_count":0,"xfail_call_count":0}'
     )
 
@@ -208,7 +201,9 @@ def _regression() -> ValidationResult:
     )
 
 
-def _targeted(*, mutation_path: str, passed_paths: list[str], passed_count: int) -> ValidationResult:
+def _targeted(
+    *, mutation_path: str, passed_paths: list[str], passed_count: int
+) -> ValidationResult:
     execution_id = "sha256:" + "1" * 64
     return _validation(
         "pytest",
