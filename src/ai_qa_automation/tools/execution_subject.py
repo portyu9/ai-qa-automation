@@ -71,7 +71,9 @@ def _require_complete_git_snapshot(snapshot: RepositorySnapshot) -> None:
         suffix = f" ({reasons})" if reasons else ""
         raise ExecutionSubjectError(f"workspace fingerprint is incomplete{suffix}")
     if len(snapshot.changed_files) > _MAX_FINGERPRINT_CHANGED_FILES:
-        raise ExecutionSubjectError("workspace changed-file subject exceeds its bounded file budget")
+        raise ExecutionSubjectError(
+            "workspace changed-file subject exceeds its bounded file budget"
+        )
 
 
 def _decode_index_v4_strip_count(raw: bytes, offset: int, limit: int) -> tuple[int, int]:
@@ -254,7 +256,9 @@ def materialized_pytest_execution_subject(
     no-follow reads. Ordinary Git-ignored inputs and ``.git`` metadata are absent.
     Unchanged tracked bytes are checked against OIDs parsed from the same raw Git
     index bytes whose digest is already bound by the repository fingerprint.
-    Changed bytes must reconstruct that exact repository fingerprint.
+    Executable authority is admitted only when the stage-zero index binds that mode;
+    executable untracked or unstaged-mode-divergent paths fail closed. Changed bytes
+    must reconstruct the exact authorized repository fingerprint.
     """
 
     _require_complete_git_snapshot(expected_snapshot)
@@ -269,9 +273,7 @@ def materialized_pytest_execution_subject(
     if any(mode not in {"100644", "100755"} for mode, _oid in index_entries.values()):
         raise ExecutionSubjectError("non-regular tracked entries cannot enter pytest execution")
 
-    untracked = inspector._git_path_list(
-        "ls-files", "--others", "--exclude-standard", "-z", "--"
-    )
+    untracked = inspector._git_path_list("ls-files", "--others", "--exclude-standard", "-z", "--")
     changed_set = set(expected_snapshot.changed_files)
     unexpected_untracked = sorted(path for path in untracked if path not in changed_set)
     if unexpected_untracked:
@@ -344,16 +346,25 @@ def materialized_pytest_execution_subject(
                 )
 
             index_entry = index_entries.get(relative)
-            executable = bool(entry.st_mode & 0o111)
-            if index_entry is not None and relative not in changed_set:
-                mode, oid = index_entry
-                if inspector._raw_blob_oid(data, object_format) != oid:
+            observed_executable = bool(entry.st_mode & 0o111)
+            if index_entry is None:
+                if observed_executable:
+                    raise ExecutionSubjectError(
+                        f"executable path lacks Git-index mode authority: {relative}"
+                    )
+                executable = False
+                materialized_mode = "100644"
+            else:
+                index_mode, oid = index_entry
+                executable = index_mode == "100755"
+                if observed_executable != executable:
+                    raise ExecutionSubjectError(
+                        f"worktree executable mode diverges from Git index: {relative}"
+                    )
+                materialized_mode = index_mode
+                if relative not in changed_set and inspector._raw_blob_oid(data, object_format) != oid:
                     raise ExecutionSubjectError(
                         f"unchanged tracked bytes diverged from Git index during materialization: {relative}"
-                    )
-                if executable != (mode == "100755"):
-                    raise ExecutionSubjectError(
-                        f"unchanged tracked mode diverged from Git index during materialization: {relative}"
                     )
 
             digest = hashlib.sha256(data).hexdigest()
@@ -372,7 +383,7 @@ def materialized_pytest_execution_subject(
             manifest_rows.append(
                 {
                     "path": relative,
-                    "mode": "100755" if executable else "100644",
+                    "mode": materialized_mode,
                     "size": len(data),
                     "sha256": digest,
                 }
