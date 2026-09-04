@@ -209,6 +209,8 @@ def _parse_bound_index_entries(raw: bytes) -> tuple[dict[str, tuple[str, str]], 
             raise ExecutionSubjectError("Git index extension exceeds the bounded index bytes")
         if signature == b"link":
             raise ExecutionSubjectError("split Git indexes cannot enter pytest execution")
+        if b"a" <= signature[:1] <= b"z":
+            raise ExecutionSubjectError("unsupported mandatory Git index extension")
         offset = next_offset
     if offset != content_end:
         raise ExecutionSubjectError("Git index extension framing is malformed")
