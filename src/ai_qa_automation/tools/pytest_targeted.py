@@ -330,6 +330,8 @@ def _parse_targeted_summary(
 ) -> tuple[TargetedExecutionIdentity | None, str | None]:
     if truncated:
         return None, "targeted pytest stdout exceeded its deterministic bound"
+    if stdout.count(_REPORT_PREFIX) != 1:
+        return None, "targeted pytest controller summary was missing, duplicated, or embedded in target output"
     lines = stdout.splitlines()
     matches = [line for line in lines if line.startswith(_REPORT_PREFIX)]
     nonempty = [line for line in lines if line.strip()]
@@ -419,10 +421,9 @@ def _parse_targeted_summary(
 
 def _without_controller_summary(stdout: str) -> str:
     lines = stdout.splitlines()
-    matches = [index for index, line in enumerate(lines) if line.startswith(_REPORT_PREFIX)]
     nonempty = [index for index, line in enumerate(lines) if line.strip()]
-    if len(matches) == 1 and nonempty and matches[0] == nonempty[-1]:
-        del lines[matches[0]]
+    if nonempty and lines[nonempty[-1]].startswith(_REPORT_PREFIX):
+        del lines[nonempty[-1]]
     return "\n".join(lines)
 
 
