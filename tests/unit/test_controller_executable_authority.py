@@ -52,6 +52,17 @@ def test_resolve_executable_rejects_empty_and_relative_path_roots() -> None:
         resolve_executable(executable, env={"PATH": "."})
 
 
+def test_current_interpreter_reexec_does_not_authorize_ambient_path_roots(tmp_path: Path) -> None:
+    hostile = tmp_path / "target-bin"
+    hostile.mkdir()
+    missing = tmp_path / "missing-bin"
+    env = {"PATH": f"{missing}{os.pathsep}{hostile}"}
+
+    resolved = Path(resolve_executable(sys.executable, env=env))
+
+    assert resolved.samefile(Path(sys.executable).resolve())
+
+
 def test_resolve_executable_rejects_absolute_runtime_owned_executable(
     tmp_path: Path,
 ) -> None:
@@ -143,6 +154,15 @@ def test_repository_inspector_ignores_target_git_first_on_ambient_path(
         "-m",
         "baseline",
     )
+    head_result = subprocess.run(
+        [trusted_git, "rev-parse", "HEAD"],
+        cwd=workspace,
+        env=bootstrap_env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    head_sha = head_result.stdout.strip()
 
     hostile_bin = workspace / "bin"
     hostile_bin.mkdir()
@@ -158,12 +178,12 @@ def test_repository_inspector_ignores_target_git_first_on_ambient_path(
 
     inspector = RepositoryInspector(workspace)
     snapshot = inspector.snapshot()
-    changes = inspector.change_set("HEAD")
+    changes = inspector.change_set(head_sha)
 
     assert marker.exists() is False
-    assert snapshot.git_sha is not None
+    assert snapshot.git_sha == head_sha
     assert snapshot.fingerprint_complete is True
     assert "bin/git" in snapshot.changed_files
-    assert changes.baseline_sha == snapshot.git_sha
-    assert changes.head_sha == snapshot.git_sha
+    assert changes.baseline_sha == head_sha
+    assert changes.head_sha == head_sha
     assert "bin/git" in changes.worktree_files
