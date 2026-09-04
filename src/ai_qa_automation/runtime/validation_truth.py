@@ -57,6 +57,16 @@ def _future_validation_revisions(
     )
 
 
+def _is_sha256_identity(value: object) -> bool:
+    if not isinstance(value, str) or len(value) != 71 or not value.startswith("sha256:"):
+        return False
+    try:
+        int(value[7:], 16)
+    except ValueError:
+        return False
+    return True
+
+
 def _verified_regression_suite_id(item: ValidationResult) -> str | None:
     """Return one self-consistent controller-bound regression suite identity."""
 
@@ -66,7 +76,7 @@ def _verified_regression_suite_id(item: ValidationResult) -> str | None:
         return None
     suite_id = item.details.get("regression_suite_id")
     suite = item.details.get("regression_suite")
-    if not isinstance(suite_id, str) or not suite_id.startswith("sha256:"):
+    if not _is_sha256_identity(suite_id):
         return None
     if not isinstance(suite, dict):
         return None
@@ -79,7 +89,7 @@ def _verified_regression_suite_id(item: ValidationResult) -> str | None:
     if not isinstance(suite.get("node_count"), int) or int(suite["node_count"]) < 1:
         return None
     subject_digest = suite.get("execution_subject_digest")
-    if not isinstance(subject_digest, str) or not subject_digest.startswith("sha256:"):
+    if not _is_sha256_identity(subject_digest):
         return None
     return suite_id
 
