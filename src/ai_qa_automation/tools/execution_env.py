@@ -6,6 +6,7 @@ import os
 import signal
 import stat
 import subprocess
+import sys
 import threading
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
@@ -101,8 +102,10 @@ def _windows_executable_suffixes(env: Mapping[str, str]) -> tuple[str, ...]:
     suffixes: list[str] = []
     for raw_suffix in raw_pathext.split(os.pathsep):
         suffix = raw_suffix.strip()
-        if not suffix or not suffix.startswith(".") or any(
-            separator in suffix for separator in ("/", "\\", "\x00")
+        if (
+            not suffix
+            or not suffix.startswith(".")
+            or any(separator in suffix for separator in ("/", "\\", "\x00"))
         ):
             raise ValueError("subprocess PATHEXT contains an invalid executable suffix")
         folded = suffix.casefold()
@@ -218,9 +221,7 @@ def _controlled_executable_roots(env: Mapping[str, str]) -> tuple[Path, ...]:
         try:
             resolved = candidate.resolve(strict=True)
         except OSError as exc:
-            raise FileNotFoundError(
-                f"subprocess PATH root does not exist: {candidate}"
-            ) from exc
+            raise FileNotFoundError(f"subprocess PATH root does not exist: {candidate}") from exc
         if not resolved.is_dir():
             raise NotADirectoryError(f"subprocess PATH root is not a directory: {resolved}")
         if resolved not in roots:
@@ -230,6 +231,30 @@ def _controlled_executable_roots(env: Mapping[str, str]) -> tuple[Path, ...]:
             "subprocess executable cannot be resolved without trusted PATH roots"
         )
     return tuple(roots)
+
+
+def _resolve_current_interpreter(executable: str, *, env: Mapping[str, str]) -> str | None:
+    """Bind re-execution to the exact interpreter already running the controller.
+
+    This exception authorizes only the canonical current interpreter file. It does not
+    add the interpreter's directory to executable-search authority and therefore cannot
+    be used to select sibling tools from a virtual environment or hosted tool cache.
+    """
+    candidate = Path(executable)
+    if not candidate.is_absolute():
+        return None
+    try:
+        resolved = candidate.resolve(strict=True)
+        current = Path(sys.executable).resolve(strict=True)
+    except OSError:
+        return None
+    if resolved != current:
+        return None
+    if not resolved.is_file():
+        raise FileNotFoundError(f"current controller interpreter is not a regular file: {resolved}")
+    validation_env = env if os.name != "nt" else {"PATHEXT": _WINDOWS_DEFAULT_PATHEXT}
+    _assert_executable_file(resolved, env=validation_env)
+    return str(resolved)
 
 
 def _candidate_executable_names(raw: str, *, env: Mapping[str, str]) -> tuple[str, ...]:
@@ -256,25 +281,27 @@ def _discover_executable(
             except OSError:
                 continue
             if not resolved.is_file():
-                raise FileNotFoundError(
-                    f"subprocess executable is not a regular file: {resolved}"
-                )
+                raise FileNotFoundError(f"subprocess executable is not a regular file: {resolved}")
             return resolved
     raise FileNotFoundError(f"subprocess executable was not found on the controlled PATH: {raw}")
 
 
 def resolve_executable(executable: str, *, env: Mapping[str, str]) -> str:
-    """Resolve a subprocess executable inside explicit PATH authority roots.
+    """Resolve a subprocess executable inside explicit controller authority.
 
-    PATH is interpreted as an executable-authority root list, not ambient discovery.
-    Every entry must be a non-empty absolute existing directory. Named executables are
-    resolved only through those roots; absolute executable paths must resolve inside
-    one of the same roots. Relative paths containing directory components are rejected.
-    No process-global PATH or PATHEXT lookup participates in executable discovery.
+    The exact interpreter already running the controller may be re-executed by canonical
+    absolute path without turning its parent directory into search authority. Every other
+    executable uses PATH as an explicit authority-root list: entries must be non-empty,
+    absolute, and existing; named tools resolve only through those roots; other absolute
+    paths must remain inside them. Process-global PATH/PATHEXT never participates.
     """
     raw = str(executable).strip()
     if not raw or "\x00" in raw:
         raise ValueError("subprocess executable must be a non-empty path or command name")
+
+    current_interpreter = _resolve_current_interpreter(raw, env=env)
+    if current_interpreter is not None:
+        return current_interpreter
 
     roots = _controlled_executable_roots(env)
     candidate = Path(raw)
