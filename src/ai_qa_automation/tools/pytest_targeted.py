@@ -71,7 +71,7 @@ class TargetedExecutionIdentity:
         }
 
 
-_TARGETED_WRAPPER_SCRIPT = rf'''
+_TARGETED_WRAPPER_SCRIPT = rf"""
 import hashlib
 import json
 import os
@@ -264,7 +264,7 @@ if report is not None:
 sys.stdout.write("\n" + PREFIX + json.dumps(summary, sort_keys=True, separators=(",", ":")) + "\n")
 sys.stdout.flush()
 raise SystemExit(child_exit_code if 0 <= child_exit_code <= 255 else 3)
-'''
+"""
 
 
 def _is_sha256_identity(value: object) -> bool:
@@ -372,7 +372,9 @@ def _parse_targeted_summary(
             raise TargetedExecutionError("targeted pytest report digest was malformed")
         if report_complete:
             if payload.get("session_finished") is not True or payload.get("overflow") is not False:
-                raise TargetedExecutionError("targeted pytest complete report lacked terminal proof")
+                raise TargetedExecutionError(
+                    "targeted pytest complete report lacked terminal proof"
+                )
             if pytest_returncode != child_exit:
                 raise TargetedExecutionError("targeted pytest child/report exit codes disagreed")
             if report_sha is None:
