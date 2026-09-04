@@ -9,9 +9,9 @@ Host-side subprocess execution is an authority boundary. A target workspace, art
 Controller subprocess selection follows these rules:
 
 1. `restricted_subprocess_env()` does not inherit ambient `PATH`, `VIRTUAL_ENV`, `PATHEXT`, or `COMSPEC` as executable-selection authority.
-2. Controller `PATH` is derived from deployment-owned system locations rather than the target workspace or current working directory.
-3. Every executable search root must resolve to an existing absolute directory. Empty and relative entries fail closed.
-4. A named command is resolved only through those explicit roots.
+2. Controller executable roots are derived from deployment-owned system locations rather than the target workspace or current working directory.
+3. An ordinary subprocess `PATH` may select only a subset of those deployment-derived roots. Every selected root must resolve to an existing absolute directory; caller-supplied target, artifact, evidence, virtual-environment, or other arbitrary directories fail closed even when they are absolute.
+4. A named command is resolved only through those explicit trusted roots.
 5. An absolute host-tool command is accepted only when its resolved path remains inside one of the same roots. Resolving a symlink outside the authority root is rejected.
 6. The exact Python interpreter already running the controller is a distinct re-execution case: its canonical `sys.executable` path may be launched again without adding that interpreter's parent directory, virtual environment, or hosted tool cache to generic executable-search authority. A sibling executable in that directory receives no authority from this exception.
 7. Missing or ambiguous controller executable authority is an execution failure or `NOT_VERIFIED` boundary; the framework does not fall back to ambient discovery.
@@ -77,6 +77,7 @@ The deterministic test suite covers the following security properties:
 - hostile ambient `PATH` and `VIRTUAL_ENV` do not enter controller executable authority;
 - executable-authority keys cannot be reintroduced through `restricted_subprocess_env(extra=...)`;
 - empty and relative search roots fail closed for ordinary controller tools;
+- caller-supplied absolute target/workspace roots cannot become controller executable authority;
 - the exact current interpreter can re-execute without authorizing hostile/missing sibling search roots;
 - absolute executables in target, artifact, and evidence-style runtime roots are rejected;
 - symlink resolution cannot escape an authorized root;
