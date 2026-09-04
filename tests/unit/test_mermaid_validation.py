@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 import scripts.validate_mermaid as mermaid
+from ai_qa_automation.tools.execution_env import controller_executable_search_path
 
 
 def _write_required_root_docs(root: Path) -> None:
@@ -125,6 +126,7 @@ def test_renderer_uses_immutable_image_and_bounded_container_authority(
     output_root = tmp_path / "output"
     output_root.mkdir()
     calls: list[tuple[list[str], dict[str, object]]] = []
+    resolved_env: dict[str, str] = {}
 
     def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
         calls.append((command, kwargs))
@@ -139,15 +141,16 @@ def test_renderer_uses_immutable_image_and_bounded_container_authority(
         assert command[1:3] == ["rm", "--force"]
         return subprocess.CompletedProcess(command, 0)
 
-    monkeypatch.setattr(
-        mermaid,
-        "_resolve_docker_executable",
-        lambda *, env: "/usr/bin/docker",
-    )
+    def fake_docker_resolver(*, env: dict[str, str]) -> str:
+        resolved_env.update(env)
+        return "/usr/bin/docker"
+
+    monkeypatch.setattr(mermaid, "_resolve_docker_executable", fake_docker_resolver)
     monkeypatch.setattr(mermaid.subprocess, "run", fake_run)
 
     mermaid._run_mermaid(root, relative_path, output_root, 1)
 
+    assert resolved_env["PATH"] == controller_executable_search_path()
     command, kwargs = calls[0]
     assert command[0] == "/usr/bin/docker"
     assert re.fullmatch(
@@ -201,9 +204,10 @@ def test_renderer_uses_immutable_image_and_bounded_container_authority(
     for _docker_command, docker_kwargs in calls:
         docker_env = docker_kwargs["env"]
         assert isinstance(docker_env, dict)
-        assert docker_env["PATH"] == mermaid.controller_executable_search_path()
+        assert docker_env["PATH"] == controller_executable_search_path()
         assert "DOCKER_HOST" not in docker_env
         assert "DOCKER_CONTEXT" not in docker_env
+        assert "DOCKER_CONFIG" not in docker_env
 
     assert (output_root / "rendered.md").read_text(encoding="utf-8") == "# Rendered\n"
     assert (output_root / "rendered-1.svg").read_text(encoding="utf-8") == "<svg/>\n"
