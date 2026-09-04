@@ -139,12 +139,17 @@ def test_renderer_uses_immutable_image_and_bounded_container_authority(
         assert command[1:3] == ["rm", "--force"]
         return subprocess.CompletedProcess(command, 0)
 
-    monkeypatch.setattr(mermaid, "_resolve_docker_executable", lambda: "docker")
+    monkeypatch.setattr(
+        mermaid,
+        "_resolve_docker_executable",
+        lambda *, env: "/usr/bin/docker",
+    )
     monkeypatch.setattr(mermaid.subprocess, "run", fake_run)
 
     mermaid._run_mermaid(root, relative_path, output_root, 1)
 
     command, kwargs = calls[0]
+    assert command[0] == "/usr/bin/docker"
     assert re.fullmatch(
         r"ghcr\.io/mermaid-js/mermaid-cli/mermaid-cli@sha256:[0-9a-f]{64}",
         mermaid.MERMAID_IMAGE,
@@ -176,7 +181,7 @@ def test_renderer_uses_immutable_image_and_bounded_container_authority(
 
     wait_command, wait_kwargs = calls[1]
     assert wait_command == [
-        "docker",
+        "/usr/bin/docker",
         "exec",
         "a" * 64,
         "/bin/sh",
@@ -186,11 +191,19 @@ def test_renderer_uses_immutable_image_and_bounded_container_authority(
     assert wait_kwargs["timeout"] == mermaid.RENDER_TIMEOUT_SECONDS
 
     archive_command, archive_kwargs = calls[2]
-    assert archive_command[:5] == ["docker", "exec", "a" * 64, "/bin/sh", "-c"]
+    assert archive_command[:5] == ["/usr/bin/docker", "exec", "a" * 64, "/bin/sh", "-c"]
     assert "/bin/busybox tar -C /out -cf - ." in archive_command[-1]
     assert f"head -c {mermaid.MAX_RENDER_ARCHIVE_BYTES + 1}" in archive_command[-1]
     assert archive_kwargs["timeout"] == mermaid.DOCKER_COPY_TIMEOUT_SECONDS
     assert archive_kwargs["stdout"] is subprocess.PIPE
-    assert calls[3][0] == ["docker", "rm", "--force", "a" * 64]
+    assert calls[3][0] == ["/usr/bin/docker", "rm", "--force", "a" * 64]
+
+    for _docker_command, docker_kwargs in calls:
+        docker_env = docker_kwargs["env"]
+        assert isinstance(docker_env, dict)
+        assert docker_env["PATH"] == mermaid.controller_executable_search_path()
+        assert "DOCKER_HOST" not in docker_env
+        assert "DOCKER_CONTEXT" not in docker_env
+
     assert (output_root / "rendered.md").read_text(encoding="utf-8") == "# Rendered\n"
     assert (output_root / "rendered-1.svg").read_text(encoding="utf-8") == "<svg/>\n"
