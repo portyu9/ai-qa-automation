@@ -21,6 +21,7 @@ from .artifacts import text_artifact
 from .execution_env import BoundedSubprocessResult, restricted_subprocess_env
 from .execution_subject import ExecutionSubjectError, materialized_pytest_execution_subject
 from .pytest_sandbox import (
+    PytestSandbox,
     PytestSandboxExecutionUnverified,
     PytestSandboxPreflight,
     PytestSandboxUnavailable,
@@ -309,7 +310,7 @@ def _conftests(root: Path) -> tuple[int, str, tuple[tuple[str, str], ...]]:
 
 def _run_phase(
     runner: TestRunner,
-    sandbox: Any,
+    sandbox: PytestSandbox,
     command: list[str],
     *,
     env: dict[str, str],
