@@ -37,6 +37,8 @@ class FakeSandbox:
 
     def __init__(self, *, returncode: int = 0, timed_out: bool = False) -> None:
         self.workspace: Path | None = None
+        self.forbidden_source_workspace: Path | None = None
+        self.source_workspace_hidden = False
         self.result = BoundedSubprocessResult(
             returncode=returncode,
             stdout="1 passed",
@@ -61,8 +63,15 @@ class FakeSandbox:
             effective_capabilities_zero=True,
         )
 
-    def for_materialized_workspace(self, workspace: Path) -> FakeSandbox:
+    def for_materialized_workspace(
+        self,
+        workspace: Path,
+        *,
+        forbidden_source_workspace: Path,
+    ) -> FakeSandbox:
         self.workspace = workspace.resolve()
+        self.forbidden_source_workspace = forbidden_source_workspace.resolve()
+        self.source_workspace_hidden = self.workspace != self.forbidden_source_workspace
         return self
 
     def preflight(self) -> PytestSandboxPreflight:
