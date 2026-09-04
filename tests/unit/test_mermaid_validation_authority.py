@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 import scripts.validate_mermaid as mermaid
+from ai_qa_automation.tools.execution_env import controller_executable_search_path
 
 
 def test_ci_identity_separates_validation_subject_from_github_event_sha(
@@ -70,6 +71,35 @@ def test_ci_identity_rejects_missing_required_ci_sha(
 
     with pytest.raises(ValueError, match=f"{name} must be a full lowercase GitHub commit SHA"):
         mermaid._ci_identity()
+
+
+def test_docker_resolution_uses_restricted_controller_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hostile = tmp_path / "target-bin"
+    hostile.mkdir()
+    hostile_docker = hostile / "docker"
+    hostile_docker.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
+    hostile_docker.chmod(0o755)
+    monkeypatch.setenv("PATH", str(hostile))
+    monkeypatch.setenv("DOCKER_HOST", "tcp://attacker.invalid:2375")
+    monkeypatch.setenv("DOCKER_CONTEXT", "hostile-context")
+    observed: dict[str, str] = {}
+
+    def fake_resolve(executable: str, *, env: dict[str, str]) -> str:
+        assert executable == "docker"
+        observed.update(env)
+        return "/usr/bin/docker"
+
+    monkeypatch.setattr(mermaid, "resolve_executable", fake_resolve)
+    env = mermaid.restricted_subprocess_env(home=tmp_path / "controller-home")
+
+    assert mermaid._resolve_docker_executable(env=env) == "/usr/bin/docker"
+    assert observed["PATH"] == controller_executable_search_path()
+    assert str(hostile) not in observed["PATH"].split(os.pathsep)
+    assert "DOCKER_HOST" not in observed
+    assert "DOCKER_CONTEXT" not in observed
 
 
 def test_candidate_discovery_enforces_directory_entry_limit_during_iteration(

@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -111,10 +112,11 @@ def test_k6_requires_module_isolation_before_binary_lookup(
         external_process_isolation_enforced=True,
     )
 
-    def fail_lookup(_name: str) -> str:
+    def fail_lookup(_name: str, *, env: dict[str, str]) -> str:
+        del env
         raise AssertionError("k6 binary lookup occurred before module-isolation authorization")
 
-    monkeypatch.setattr(performance.shutil, "which", fail_lookup)
+    monkeypatch.setattr(performance, "resolve_executable", fail_lookup)
     with pytest.raises(PermissionError, match="module-loading isolation"):
         runner.run(
             script,
@@ -136,10 +138,11 @@ def test_k6_requires_resource_limits_before_binary_lookup(
         external_module_isolation_enforced=True,
     )
 
-    def fail_lookup(_name: str) -> str:
+    def fail_lookup(_name: str, *, env: dict[str, str]) -> str:
+        del env
         raise AssertionError("k6 binary lookup occurred before resource-limit authorization")
 
-    monkeypatch.setattr(performance.shutil, "which", fail_lookup)
+    monkeypatch.setattr(performance, "resolve_executable", fail_lookup)
     with pytest.raises(PermissionError, match="CPU/memory/process resource limits"):
         runner.run(
             script,
@@ -162,10 +165,11 @@ def test_k6_requires_workload_limits_before_binary_lookup(
         external_resource_limits_enforced=True,
     )
 
-    def fail_lookup(_name: str) -> str:
+    def fail_lookup(_name: str, *, env: dict[str, str]) -> str:
+        del env
         raise AssertionError("k6 binary lookup occurred before workload-limit authorization")
 
-    monkeypatch.setattr(performance.shutil, "which", fail_lookup)
+    monkeypatch.setattr(performance, "resolve_executable", fail_lookup)
     with pytest.raises(PermissionError, match="target workload limits"):
         runner.run(
             script,
@@ -233,7 +237,6 @@ def test_k6_executes_validated_snapshot_after_workspace_mutation(
         external_resource_limits_enforced=True,
         external_workload_limits_enforced=True,
     )
-    monkeypatch.setattr(performance.shutil, "which", lambda _: "/usr/bin/k6")
 
     original_write = runner._write_validated_snapshot
 
@@ -252,6 +255,13 @@ def test_k6_executes_validated_snapshot_after_workspace_mutation(
     monkeypatch.setattr(runner, "_write_validated_snapshot", mutate_then_write)
     observed: dict[str, object] = {}
 
+    def fake_resolve(name: str, *, env: dict[str, str]) -> str:
+        assert name == "k6"
+        assert str(tmp_path) not in env["PATH"].split(os.pathsep)
+        assert "VIRTUAL_ENV" not in env
+        observed["resolved_path"] = env["PATH"]
+        return "/usr/bin/k6"
+
     def fake_run(
         command: list[str],
         *,
@@ -261,6 +271,7 @@ def test_k6_executes_validated_snapshot_after_workspace_mutation(
     ) -> BoundedSubprocessResult:
         del timeout_seconds
         observed["cwd"] = cwd
+        assert command[0] == "/usr/bin/k6"
         assert env["K6_AUTO_EXTENSION_RESOLUTION"] == "false"
         snapshot_script = Path(command[-1])
         assert snapshot_script.read_text(encoding="utf-8").endswith(
@@ -280,6 +291,7 @@ def test_k6_executes_validated_snapshot_after_workspace_mutation(
             timed_out=False,
         )
 
+    monkeypatch.setattr(performance, "resolve_executable", fake_resolve)
     monkeypatch.setattr(performance, "run_bounded_subprocess", fake_run)
 
     metrics = runner.run(
@@ -289,6 +301,7 @@ def test_k6_executes_validated_snapshot_after_workspace_mutation(
     )
 
     assert metrics.p95_ms == 3.0
+    assert observed["resolved_path"]
     assert observed["cwd"] != tmp_path
     assert str(observed["cwd"]).endswith("/workspace")
 

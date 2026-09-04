@@ -49,7 +49,11 @@ def _install_fake_k6(
     monkeypatch: pytest.MonkeyPatch,
     write_summary: Callable[[Path], None],
 ) -> None:
-    monkeypatch.setattr(performance.shutil, "which", lambda _: "/usr/bin/k6")
+    monkeypatch.setattr(
+        performance,
+        "resolve_executable",
+        lambda executable, *, env: "/usr/bin/k6",
+    )
 
     def fake_run(
         command: list[str],

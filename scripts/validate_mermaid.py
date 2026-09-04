@@ -5,13 +5,15 @@ import io
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
+
+from ai_qa_automation.tools.execution_env import resolve_executable, restricted_subprocess_env
 
 if __package__:
     from . import mermaid_fs as _fs
@@ -104,17 +106,13 @@ def _discover_mermaid_documents(root: Path) -> list[tuple[Path, int]]:
     return [(item.relative_path, item.diagram_count) for item in _discover_mermaid_snapshot(root)]
 
 
-def _resolve_docker_executable() -> str:
-    discovered = shutil.which("docker")
-    if discovered is None:
-        raise RuntimeError("Docker executable is unavailable for Mermaid validation")
+def _resolve_docker_executable(*, env: Mapping[str, str]) -> str:
     try:
-        resolved = Path(discovered).resolve(strict=True)
-    except OSError as exc:
-        raise RuntimeError("Docker executable identity could not be resolved") from exc
-    if not resolved.is_file() or not os.access(resolved, os.X_OK):
-        raise RuntimeError("Docker executable is not an executable regular file")
-    return str(resolved)
+        return resolve_executable("docker", env=env)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(
+            "Docker executable is unavailable in trusted controller roots for Mermaid validation"
+        ) from exc
 
 
 def _container_id_from_cidfile(path: Path) -> str | None:
@@ -130,7 +128,11 @@ def _container_id_from_cidfile(path: Path) -> str | None:
 
 
 def _remove_renderer_container(
-    name: str, cidfile: Path, *, docker_executable: str = "docker"
+    name: str,
+    cidfile: Path,
+    *,
+    docker_executable: str,
+    docker_env: Mapping[str, str],
 ) -> None:
     container_id = _container_id_from_cidfile(cidfile)
     target = container_id or name
@@ -141,6 +143,7 @@ def _remove_renderer_container(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=DOCKER_CLEANUP_TIMEOUT_SECONDS,
+            env=dict(docker_env),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise RuntimeError("Mermaid renderer container cleanup could not be completed") from exc
@@ -152,7 +155,12 @@ def _remove_renderer_container(
         raise RuntimeError("Mermaid renderer container cleanup did not confirm removal")
 
 
-def _wait_renderer_completion(container_id: str, *, docker_executable: str) -> None:
+def _wait_renderer_completion(
+    container_id: str,
+    *,
+    docker_executable: str,
+    docker_env: Mapping[str, str],
+) -> None:
     try:
         subprocess.run(
             [
@@ -167,6 +175,7 @@ def _wait_renderer_completion(container_id: str, *, docker_executable: str) -> N
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=RENDER_TIMEOUT_SECONDS,
+            env=dict(docker_env),
         )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"Mermaid render exceeded {RENDER_TIMEOUT_SECONDS}s") from exc
@@ -262,6 +271,7 @@ def _copy_renderer_outputs(
     *,
     expected_count: int,
     docker_executable: str,
+    docker_env: Mapping[str, str],
 ) -> None:
     archive_command = (
         f"/bin/busybox tar -C /out -cf - . | /bin/busybox head -c {MAX_RENDER_ARCHIVE_BYTES + 1}"
@@ -273,6 +283,7 @@ def _copy_renderer_outputs(
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=DOCKER_COPY_TIMEOUT_SECONDS,
+            env=dict(docker_env),
         )
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         raise RuntimeError("Mermaid renderer output archive could not be collected") from exc
@@ -284,7 +295,9 @@ def _copy_renderer_outputs(
 
 def _run_mermaid(root: Path, relative: Path, output_root: Path, expected_count: int) -> None:
     _require_empty_render_root(output_root)
-    docker_executable = _resolve_docker_executable()
+    docker_home = output_root.parent / f".docker-home-{uuid.uuid4().hex}"
+    docker_env = restricted_subprocess_env(home=docker_home)
+    docker_executable = _resolve_docker_executable(env=docker_env)
     name = f"aiqa-mermaid-{os.getpid()}-{uuid.uuid4().hex}"
     cidfile = output_root.parent / f".{name}.cid"
     input_path = f"/repo/{relative.as_posix()}"
@@ -342,11 +355,16 @@ def _run_mermaid(root: Path, relative: Path, output_root: Path, expected_count: 
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=DOCKER_START_TIMEOUT_SECONDS,
+            env=dict(docker_env),
         )
         container_id = _container_id_from_cidfile(cidfile)
         if container_id is None:
             raise RuntimeError("Mermaid renderer did not publish an exact container identity")
-        _wait_renderer_completion(container_id, docker_executable=docker_executable)
+        _wait_renderer_completion(
+            container_id,
+            docker_executable=docker_executable,
+            docker_env=docker_env,
+        )
         # Docker's archive API cannot copy tmpfs mounts. Stream a bounded tar
         # from the exact live container and validate every member before host write.
         _copy_renderer_outputs(
@@ -354,6 +372,7 @@ def _run_mermaid(root: Path, relative: Path, output_root: Path, expected_count: 
             output_root,
             expected_count=expected_count,
             docker_executable=docker_executable,
+            docker_env=docker_env,
         )
     except subprocess.CalledProcessError as exc:
         error = RuntimeError(f"Mermaid renderer could not be started for {relative}")
@@ -372,7 +391,12 @@ def _run_mermaid(root: Path, relative: Path, output_root: Path, expected_count: 
     finally:
         if cleanup_required:
             try:
-                _remove_renderer_container(name, cidfile, docker_executable=docker_executable)
+                _remove_renderer_container(
+                    name,
+                    cidfile,
+                    docker_executable=docker_executable,
+                    docker_env=docker_env,
+                )
             except RuntimeError as exc:
                 cleanup_error = exc
     if cleanup_error is not None:

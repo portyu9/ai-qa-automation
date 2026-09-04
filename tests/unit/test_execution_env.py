@@ -6,12 +6,18 @@ from pathlib import Path
 
 import pytest
 
+from ai_qa_automation.tools import execution_env
 from ai_qa_automation.tools.execution_env import (
     _TailBuffer,
+    controller_executable_search_path,
     resolve_executable,
     run_bounded_binary_subprocess,
     run_bounded_subprocess,
 )
+
+
+def _python_env() -> dict[str, str]:
+    return {"PATH": controller_executable_search_path()}
 
 
 def test_tail_buffer_retains_only_bounded_recent_bytes() -> None:
@@ -34,30 +40,41 @@ def test_tail_buffer_replaces_tail_when_single_chunk_exceeds_limit() -> None:
 
 
 def test_resolve_executable_binds_absolute_existing_file() -> None:
-    resolved = Path(resolve_executable(sys.executable, env=os.environ))
+    resolved = Path(resolve_executable(sys.executable, env=_python_env()))
 
     assert resolved.is_absolute()
     assert resolved.is_file()
     assert resolved.samefile(Path(sys.executable).resolve())
 
 
-def test_resolve_executable_rejects_ambiguous_or_missing_commands(tmp_path: Path) -> None:
+def test_resolve_executable_rejects_ambiguous_or_missing_commands() -> None:
+    trusted_env = _python_env()
     with pytest.raises(ValueError):
-        resolve_executable("relative/tool", env={"PATH": str(tmp_path)})
+        resolve_executable("relative/tool", env=trusted_env)
     with pytest.raises(FileNotFoundError):
-        resolve_executable("definitely-not-an-aiqa-executable", env={"PATH": str(tmp_path)})
+        resolve_executable("definitely-not-an-aiqa-executable", env=trusted_env)
     with pytest.raises(FileNotFoundError):
         resolve_executable("python", env={})
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX execute bits are not portable to Windows")
-def test_resolve_executable_rejects_absolute_non_executable_file(tmp_path: Path) -> None:
-    candidate = tmp_path / "not-executable"
+def test_resolve_executable_rejects_absolute_non_executable_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trusted_root = tmp_path / "trusted-bin"
+    trusted_root.mkdir()
+    candidate = trusted_root / "not-executable"
     candidate.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     candidate.chmod(0o600)
+    monkeypatch.setattr(
+        execution_env,
+        "_trusted_controller_executable_roots",
+        lambda: (trusted_root.resolve(),),
+    )
 
     with pytest.raises(PermissionError, match="not executable"):
-        resolve_executable(str(candidate), env=os.environ)
+        resolve_executable(str(candidate), env={"PATH": str(trusted_root)})
 
 
 @pytest.mark.parametrize(
@@ -78,7 +95,7 @@ def test_bounded_subprocess_rejects_invalid_bounds(
         run_bounded_subprocess(
             [sys.executable, "-c", "print('ok')"],
             cwd=tmp_path,
-            env=os.environ,
+            env=_python_env(),
             timeout_seconds=timeout,  # type: ignore[arg-type]
             max_output_bytes=max_output,  # type: ignore[arg-type]
         )
@@ -88,7 +105,7 @@ def test_bounded_subprocess_retains_bounded_output_tail(tmp_path: Path) -> None:
     result = run_bounded_subprocess(
         [sys.executable, "-c", "print('x' * 1000)"],
         cwd=tmp_path,
-        env=os.environ,
+        env=_python_env(),
         timeout_seconds=5,
         max_output_bytes=64,
     )
@@ -105,7 +122,7 @@ def test_bounded_binary_subprocess_preserves_exact_non_utf8_output(tmp_path: Pat
     result = run_bounded_binary_subprocess(
         [sys.executable, "-c", script],
         cwd=tmp_path,
-        env=os.environ,
+        env=_python_env(),
         timeout_seconds=5,
         max_stdout_bytes=16,
         max_stderr_bytes=16,
@@ -127,7 +144,7 @@ def test_bounded_binary_subprocess_drains_both_streams_with_independent_limits(
     result = run_bounded_binary_subprocess(
         [sys.executable, "-c", script],
         cwd=tmp_path,
-        env=os.environ,
+        env=_python_env(),
         timeout_seconds=5,
         max_stdout_bytes=64,
         max_stderr_bytes=32,
@@ -161,7 +178,7 @@ def test_bounded_binary_subprocess_rejects_invalid_capture_limits(
         run_bounded_binary_subprocess(
             [sys.executable, "-c", "print('ok')"],
             cwd=tmp_path,
-            env=os.environ,
+            env=_python_env(),
             timeout_seconds=5,
             max_stdout_bytes=stdout_limit,  # type: ignore[arg-type]
             max_stderr_bytes=stderr_limit,  # type: ignore[arg-type]

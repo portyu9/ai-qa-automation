@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+import os
 import stat
 import subprocess
 import sys
@@ -9,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from scripts.trusted_gate_service import github as gate_github
 from scripts.trusted_gate_service.github import MAX_PRIVATE_KEY_BYTES, AppTokenProvider
 
 PEM_LABEL = "PRIVATE" + " KEY"
@@ -27,8 +30,38 @@ def _provider(private_key: str = PRIVATE_KEY) -> AppTokenProvider:
         installation_id=12345,
         repository="portyu9/ai-qa-automation",
         private_key_pem=private_key,
-        openssl_bin=sys.executable,
     )
+
+
+def test_app_token_provider_exposes_no_openssl_executable_override() -> None:
+    assert "openssl_bin" not in inspect.signature(AppTokenProvider).parameters
+
+
+@pytest.mark.skipif(os.name != "posix", reason="trusted gate deployment is POSIX")
+def test_reviewed_openssl_resolution_binds_system_owned_executable() -> None:
+    resolved = Path(AppTokenProvider._resolve_openssl())
+
+    assert resolved.is_absolute()
+    assert resolved.is_file()
+    assert resolved == Path("/usr/bin/openssl").resolve(strict=True)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX ownership/mode invariant")
+def test_reviewed_openssl_resolution_rejects_mutable_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "mutable-bin"
+    root.mkdir()
+    root.chmod(0o777)
+    executable = root / "openssl"
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o755)
+    monkeypatch.setattr(gate_github, "_OPENSSL_TRUSTED_ROOT", root)
+    monkeypatch.setattr(gate_github, "_OPENSSL_EXECUTABLE", executable)
+
+    with pytest.raises(ValueError, match="OpenSSL executable root"):
+        AppTokenProvider._resolve_openssl()
 
 
 def test_app_jwt_signing_uses_only_anonymous_inherited_key_fd(
@@ -37,6 +70,11 @@ def test_app_jwt_signing_uses_only_anonymous_inherited_key_fd(
 ) -> None:
     observed: dict[str, object] = {}
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(
+        AppTokenProvider,
+        "_resolve_openssl",
+        staticmethod(lambda: str(Path(sys.executable).resolve())),
+    )
 
     def fake_run(
         args: list[str],

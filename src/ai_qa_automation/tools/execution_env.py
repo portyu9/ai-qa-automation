@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import ctypes
 import math
 import os
-import shutil
 import signal
+import stat
 import subprocess
+import sys
 import threading
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
@@ -13,12 +15,8 @@ from pathlib import Path
 from typing import BinaryIO
 
 _SAFE_INHERITED_ENV = {
-    "PATH",
-    "VIRTUAL_ENV",
     "SYSTEMROOT",
     "WINDIR",
-    "COMSPEC",
-    "PATHEXT",
     "LANG",
     "LC_ALL",
     "LC_CTYPE",
@@ -29,7 +27,10 @@ _MAX_OUTPUT_BYTES = 16_000_000
 _READ_CHUNK_BYTES = 64 * 1024
 _DRAIN_JOIN_SECONDS = 2.0
 _WINDOWS_NEW_PROCESS_GROUP = 0x00000200
-_WINDOWS_DEFAULT_PATHEXT = ".COM;.EXE;.BAT;.CMD"
+_WINDOWS_DEFAULT_PATHEXT = ".EXE"
+_WINDOWS_SYSTEM_PATH_BUFFER = 32_768
+_POSIX_CONTROLLER_EXECUTABLE_ROOTS = (Path("/usr/bin"), Path("/bin"))
+_CONTROLLER_AUTHORITY_ENV_KEYS = frozenset({"PATH", "VIRTUAL_ENV", "PATHEXT"})
 
 
 @dataclass(frozen=True)
@@ -96,12 +97,28 @@ def _render_bounded_text(data: bytes, *, truncated: bool, limit: int) -> str:
     return f"...[output truncated to last {limit} bytes]...\n{rendered}"
 
 
+def _windows_executable_suffixes(env: Mapping[str, str]) -> tuple[str, ...]:
+    raw_pathext = env.get("PATHEXT") or _WINDOWS_DEFAULT_PATHEXT
+    suffixes: list[str] = []
+    for raw_suffix in raw_pathext.split(os.pathsep):
+        suffix = raw_suffix.strip()
+        if (
+            not suffix
+            or not suffix.startswith(".")
+            or any(separator in suffix for separator in ("/", "\\", "\x00"))
+        ):
+            raise ValueError("subprocess PATHEXT contains an invalid executable suffix")
+        folded = suffix.casefold()
+        if folded not in {item.casefold() for item in suffixes}:
+            suffixes.append(suffix)
+    if not suffixes:
+        raise ValueError("subprocess PATHEXT must contain at least one executable suffix")
+    return tuple(suffixes)
+
+
 def _assert_executable_file(path: Path, *, env: Mapping[str, str]) -> None:
     if os.name == "nt":
-        raw_pathext = env.get("PATHEXT") or _WINDOWS_DEFAULT_PATHEXT
-        allowed_suffixes = {
-            suffix.casefold() for suffix in raw_pathext.split(os.pathsep) if suffix.strip()
-        }
+        allowed_suffixes = {suffix.casefold() for suffix in _windows_executable_suffixes(env)}
         if path.suffix.casefold() not in allowed_suffixes:
             raise PermissionError(
                 f"subprocess executable has an unsupported Windows suffix: {path}"
@@ -111,46 +128,211 @@ def _assert_executable_file(path: Path, *, env: Mapping[str, str]) -> None:
         raise PermissionError(f"subprocess executable is not executable: {path}")
 
 
-def resolve_executable(executable: str, *, env: Mapping[str, str]) -> str:
-    """Resolve a subprocess executable to one existing absolute executable file.
+def _path_within(candidate: Path, root: Path) -> bool:
+    return candidate == root or root in candidate.parents
 
-    Named executables are resolved through the explicitly supplied subprocess PATH,
-    then bound to the resulting absolute path before process creation. Relative paths
-    containing directory components are rejected so the working directory cannot
-    silently change executable identity.
+
+def _windows_system_directory() -> Path | None:
+    """Read the Windows system executable directory from the OS, never environment."""
+    if os.name != "nt":
+        return None
+    loader = getattr(ctypes, "windll", None)
+    if loader is None:
+        return None
+    try:
+        buffer = ctypes.create_unicode_buffer(_WINDOWS_SYSTEM_PATH_BUFFER)
+        length = int(loader.kernel32.GetSystemDirectoryW(buffer, len(buffer)))
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+    if length <= 0 or length >= len(buffer):
+        return None
+    system_directory = Path(buffer.value)
+    if not system_directory.is_absolute():
+        return None
+    return system_directory
+
+
+def _controller_executable_candidates() -> tuple[Path, ...]:
+    if os.name != "nt":
+        return _POSIX_CONTROLLER_EXECUTABLE_ROOTS
+
+    system_directory = _windows_system_directory()
+    if system_directory is None:
+        return ()
+    windows_root = system_directory.parent
+    candidates: list[Path] = [system_directory]
+    if windows_root.drive:
+        program_files = Path(f"{windows_root.drive}\\Program Files")
+        candidates.extend((program_files / "Git" / "cmd", program_files / "Git" / "bin"))
+    return tuple(candidates)
+
+
+def _assert_controller_root_trusted(root: Path) -> None:
+    """Reject mutable POSIX executable roots before they can become controller authority."""
+    if os.name == "nt":
+        # Windows candidates originate from GetSystemDirectoryW plus fixed Program Files
+        # locations on that OS-selected drive. ACL integrity remains a deployment/OS
+        # prerequisite rather than a permission-bit claim this adapter cannot prove.
+        return
+    observed = root.stat(follow_symlinks=False)
+    if not stat.S_ISDIR(observed.st_mode):
+        raise PermissionError(f"controller executable root is not a directory: {root}")
+    if observed.st_uid != 0:
+        raise PermissionError(f"controller executable root is not root-owned: {root}")
+    if observed.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        raise PermissionError(f"controller executable root is group/world writable: {root}")
+
+
+def _trusted_controller_executable_roots() -> tuple[Path, ...]:
+    roots: list[Path] = []
+    for candidate in _controller_executable_candidates():
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError:
+            continue
+        if not resolved.is_dir() or resolved in roots:
+            continue
+        _assert_controller_root_trusted(resolved)
+        roots.append(resolved)
+    if not roots:
+        raise RuntimeError("no trusted controller executable roots are available")
+    return tuple(roots)
+
+
+def controller_executable_search_path() -> str:
+    """Return deployment-owned search roots for host/controller executables.
+
+    The path is derived independently of ambient PATH/VIRTUAL_ENV. Missing candidate
+    roots are ignored, aliases are resolved, and an empty result fails closed. POSIX
+    roots must additionally be root-owned and not group/world writable. Windows system
+    identity comes from GetSystemDirectoryW instead of mutable environment variables.
+    """
+    return os.pathsep.join(str(root) for root in _trusted_controller_executable_roots())
+
+
+def _controlled_executable_roots(env: Mapping[str, str]) -> tuple[Path, ...]:
+    search_path = env.get("PATH")
+    if not search_path:
+        raise FileNotFoundError("subprocess executable cannot be resolved without PATH")
+
+    trusted_roots = _trusted_controller_executable_roots()
+    roots: list[Path] = []
+    for raw_root in search_path.split(os.pathsep):
+        if not raw_root:
+            raise ValueError("subprocess PATH must not contain empty entries")
+        candidate = Path(raw_root)
+        if not candidate.is_absolute():
+            raise ValueError("subprocess PATH entries must be absolute trusted roots")
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError as exc:
+            raise FileNotFoundError(f"subprocess PATH root does not exist: {candidate}") from exc
+        if not resolved.is_dir():
+            raise NotADirectoryError(f"subprocess PATH root is not a directory: {resolved}")
+        if resolved not in trusted_roots:
+            raise PermissionError(
+                f"subprocess PATH root is outside trusted controller executable authority: {resolved}"
+            )
+        if resolved not in roots:
+            roots.append(resolved)
+    if not roots:
+        raise FileNotFoundError(
+            "subprocess executable cannot be resolved without trusted PATH roots"
+        )
+    return tuple(roots)
+
+
+def _resolve_current_interpreter(executable: str, *, env: Mapping[str, str]) -> str | None:
+    """Bind re-execution to the exact interpreter already running the controller.
+
+    This exception authorizes only the canonical current interpreter file. It does not
+    add the interpreter's directory to executable-search authority and therefore cannot
+    be used to select sibling tools from a virtual environment or hosted tool cache.
+    """
+    candidate = Path(executable)
+    if not candidate.is_absolute():
+        return None
+    try:
+        resolved = candidate.resolve(strict=True)
+        current = Path(sys.executable).resolve(strict=True)
+    except OSError:
+        return None
+    if resolved != current:
+        return None
+    if not resolved.is_file():
+        raise FileNotFoundError(f"current controller interpreter is not a regular file: {resolved}")
+    validation_env = env if os.name != "nt" else {"PATHEXT": _WINDOWS_DEFAULT_PATHEXT}
+    _assert_executable_file(resolved, env=validation_env)
+    return str(resolved)
+
+
+def _candidate_executable_names(raw: str, *, env: Mapping[str, str]) -> tuple[str, ...]:
+    if os.name != "nt":
+        return (raw,)
+    suffixes = _windows_executable_suffixes(env)
+    if Path(raw).suffix:
+        return (raw,)
+    return tuple(f"{raw}{suffix}" for suffix in suffixes)
+
+
+def _discover_executable(
+    raw: str,
+    *,
+    roots: Sequence[Path],
+    env: Mapping[str, str],
+) -> Path:
+    """Resolve a bare name without consulting process-global PATH or PATHEXT."""
+    for root in roots:
+        for name in _candidate_executable_names(raw, env=env):
+            candidate = root / name
+            try:
+                resolved = candidate.resolve(strict=True)
+            except OSError:
+                continue
+            if not resolved.is_file():
+                raise FileNotFoundError(f"subprocess executable is not a regular file: {resolved}")
+            return resolved
+    raise FileNotFoundError(f"subprocess executable was not found on the controlled PATH: {raw}")
+
+
+def resolve_executable(executable: str, *, env: Mapping[str, str]) -> str:
+    """Resolve a subprocess executable inside explicit controller authority.
+
+    The exact interpreter already running the controller may be re-executed by canonical
+    absolute path without turning its parent directory into search authority. Every other
+    executable may use only a caller-selected subset of the deployment-owned controller
+    roots; named tools resolve through those roots and other absolute paths must remain
+    inside them. Process-global PATH/PATHEXT never participates.
     """
     raw = str(executable).strip()
     if not raw or "\x00" in raw:
         raise ValueError("subprocess executable must be a non-empty path or command name")
 
     candidate = Path(raw)
+    if not candidate.is_absolute() and candidate.parent != Path():
+        raise ValueError(
+            "relative subprocess executable paths with directory components are forbidden"
+        )
+
+    current_interpreter = _resolve_current_interpreter(raw, env=env)
+    if current_interpreter is not None:
+        return current_interpreter
+
+    roots = _controlled_executable_roots(env)
     if candidate.is_absolute():
         try:
             resolved = candidate.resolve(strict=True)
         except OSError as exc:
             raise FileNotFoundError(f"subprocess executable was not found: {raw}") from exc
     else:
-        if candidate.parent != Path():
-            raise ValueError(
-                "relative subprocess executable paths with directory components are forbidden"
-            )
-        search_path = env.get("PATH")
-        if not search_path:
-            raise FileNotFoundError(f"subprocess executable cannot be resolved without PATH: {raw}")
-        discovered = shutil.which(raw, path=search_path)
-        if discovered is None:
-            raise FileNotFoundError(
-                f"subprocess executable was not found on the controlled PATH: {raw}"
-            )
-        try:
-            resolved = Path(discovered).resolve(strict=True)
-        except OSError as exc:
-            raise FileNotFoundError(
-                f"resolved subprocess executable no longer exists: {raw}"
-            ) from exc
+        resolved = _discover_executable(raw, roots=roots, env=env)
 
     if not resolved.is_file():
         raise FileNotFoundError(f"subprocess executable is not a regular file: {resolved}")
+    if not any(_path_within(resolved, root) for root in roots):
+        raise PermissionError(
+            f"subprocess executable resolved outside controlled PATH authority roots: {resolved}"
+        )
     _assert_executable_file(resolved, env=env)
     return str(resolved)
 
@@ -223,8 +405,8 @@ def _terminate_process_tree(
         return
 
     # CREATE_NEW_PROCESS_GROUP above gives Windows taskkill a stable tree root.
-    # Resolve taskkill to an absolute executable before invoking it so cleanup does
-    # not rely on partial-path process execution or a broader inherited environment.
+    # Resolve taskkill under the same explicit executable authority as the child;
+    # cleanup must never fall back to partial-path ambient process execution.
     try:
         taskkill = resolve_executable("taskkill", env=env)
         cleanup = subprocess.run(
@@ -423,7 +605,7 @@ def restricted_subprocess_env(
     home: Path,
     extra: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
-    """Build a minimal subprocess environment without inheriting credentials by default."""
+    """Build a minimal environment with explicit controller executable authority."""
     home = home.expanduser().resolve()
     home.mkdir(parents=True, exist_ok=True)
     env = {key: value for key, value in os.environ.items() if key in _SAFE_INHERITED_ENV}
@@ -436,8 +618,20 @@ def restricted_subprocess_env(
             "PIP_CONFIG_FILE": os.devnull,
             "GIT_TERMINAL_PROMPT": "0",
             "GIT_PAGER": "cat",
+            "PATH": controller_executable_search_path(),
         }
     )
+    if os.name == "nt":
+        env["PATHEXT"] = _WINDOWS_DEFAULT_PATHEXT
     if extra:
-        env.update({str(key): str(value) for key, value in extra.items()})
+        rendered = {str(key): str(value) for key, value in extra.items()}
+        authority_overrides = {
+            key for key in rendered if key.upper() in _CONTROLLER_AUTHORITY_ENV_KEYS
+        }
+        if authority_overrides:
+            names = ", ".join(sorted(authority_overrides))
+            raise ValueError(
+                f"restricted subprocess environment cannot override executable authority: {names}"
+            )
+        env.update(rendered)
     return env

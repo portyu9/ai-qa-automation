@@ -43,6 +43,8 @@ USER_AGENT = "yp-trusted-pr-gate-external/1"
 MAX_TOKEN_RESPONSE_BYTES = 512 * 1024
 MAX_PULL_REQUEST_CANDIDATES = 100
 MAX_PRIVATE_KEY_BYTES = 64 * 1024
+_OPENSSL_TRUSTED_ROOT = Path("/usr/bin")
+_OPENSSL_EXECUTABLE = _OPENSSL_TRUSTED_ROOT / "openssl"
 
 
 class GitHubTransportError(RuntimeError):
@@ -67,7 +69,6 @@ class AppTokenProvider:
         installation_id: int,
         repository: str,
         private_key_pem: str,
-        openssl_bin: str = "/usr/bin/openssl",
     ) -> None:
         self._app_id = require_str(app_id, label="GitHub App id", max_len=64)
         self._installation_id = require_positive_int(
@@ -90,18 +91,33 @@ class AppTokenProvider:
             raise ValueError("GitHub App private key is malformed or outside bounds")
         self._repository = repository
         self._private_key_pem = private_key_bytes
-        self._openssl = self._resolve_openssl(openssl_bin)
+        self._openssl = self._resolve_openssl()
         self._cached: Token | None = None
 
     @staticmethod
-    def _resolve_openssl(path: str) -> str:
-        candidate = Path(path)
-        if not candidate.is_absolute():
-            raise ValueError("openssl path must be absolute")
-        resolved = candidate.resolve(strict=True)
-        st = resolved.stat()
-        if not stat.S_ISREG(st.st_mode) or not os.access(resolved, os.X_OK):
-            raise ValueError("openssl path must be an executable regular file")
+    def _resolve_openssl() -> str:
+        """Bind signing to the reviewed system OpenSSL executable on POSIX."""
+        if os.name != "posix":
+            raise ValueError("trusted gate OpenSSL executable authority requires POSIX")
+        try:
+            trusted_root = _OPENSSL_TRUSTED_ROOT.resolve(strict=True)
+            root_stat = trusted_root.stat(follow_symlinks=False)
+            resolved = _OPENSSL_EXECUTABLE.resolve(strict=True)
+            executable_stat = resolved.stat(follow_symlinks=False)
+        except OSError as exc:
+            raise ValueError("reviewed OpenSSL executable authority is unavailable") from exc
+        if not stat.S_ISDIR(root_stat.st_mode) or root_stat.st_uid != 0:
+            raise ValueError("reviewed OpenSSL executable root is not a root-owned directory")
+        if root_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            raise ValueError("reviewed OpenSSL executable root is group/world writable")
+        if resolved != trusted_root and trusted_root not in resolved.parents:
+            raise ValueError("reviewed OpenSSL executable resolves outside its trusted root")
+        if not stat.S_ISREG(executable_stat.st_mode) or executable_stat.st_uid != 0:
+            raise ValueError("reviewed OpenSSL executable is not a root-owned regular file")
+        if executable_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            raise ValueError("reviewed OpenSSL executable is group/world writable")
+        if not os.access(resolved, os.X_OK):
+            raise ValueError("reviewed OpenSSL executable is not executable")
         return str(resolved)
 
     @staticmethod
