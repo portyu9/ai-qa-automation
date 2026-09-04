@@ -8,7 +8,7 @@ Host-side subprocess execution is an authority boundary. A target workspace, art
 
 Controller subprocess selection follows these rules:
 
-1. `restricted_subprocess_env()` does not inherit ambient `PATH`, `VIRTUAL_ENV`, or `PATHEXT` as executable-selection authority.
+1. `restricted_subprocess_env()` does not inherit ambient `PATH`, `VIRTUAL_ENV`, `PATHEXT`, or `COMSPEC` as executable-selection authority.
 2. Controller `PATH` is derived from deployment-owned system locations rather than the target workspace or current working directory.
 3. Every executable search root must resolve to an existing absolute directory. Empty and relative entries fail closed.
 4. A named command is resolved only through those explicit roots.
@@ -17,7 +17,7 @@ Controller subprocess selection follows these rules:
 
 On POSIX, the built-in controller roots are the resolved standard system executable directories corresponding to `/usr/bin` and `/bin`. An existing selected root must be owned by uid 0 and must not be group- or world-writable. `/bin` aliases that resolve to `/usr/bin` are deduplicated.
 
-On Windows, the system executable directory is obtained from the operating system through `GetSystemDirectoryW`; it is not selected from `SYSTEMROOT`, `WINDIR`, or `PATH`. Fixed Git installation candidates under `Program Files` on that OS-selected system drive may be used when present. Windows ACL integrity for those system-owned locations remains a deployment/OS prerequisite; the Python permission-bit model does not claim to attest Windows ACLs.
+On Windows, the system executable directory is obtained from the operating system through `GetSystemDirectoryW`; it is not selected from `SYSTEMROOT`, `WINDIR`, or `PATH`. Fixed Git installation candidates under `Program Files` on that OS-selected system drive may be used when present. The restricted controller environment authorizes `.EXE` files only; batch/command-script suffixes and ambient `COMSPEC` are not controller execution authority. Windows ACL integrity for those system-owned locations remains a deployment/OS prerequisite; the Python permission-bit model does not claim to attest Windows ACLs.
 
 These checks establish executable-selection authority. They do not cryptographically attest operating-system packages or replace host hardening, package integrity, measured boot, or deployment provenance.
 
