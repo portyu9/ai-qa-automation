@@ -3,7 +3,6 @@ from __future__ import annotations
 import ctypes
 import math
 import os
-import shutil
 import signal
 import stat
 import subprocess
@@ -98,12 +97,26 @@ def _render_bounded_text(data: bytes, *, truncated: bool, limit: int) -> str:
     return f"...[output truncated to last {limit} bytes]...\n{rendered}"
 
 
+def _windows_executable_suffixes(env: Mapping[str, str]) -> tuple[str, ...]:
+    raw_pathext = env.get("PATHEXT") or _WINDOWS_DEFAULT_PATHEXT
+    suffixes: list[str] = []
+    for raw_suffix in raw_pathext.split(os.pathsep):
+        suffix = raw_suffix.strip()
+        if not suffix or not suffix.startswith(".") or any(
+            separator in suffix for separator in ("/", "\\", "\x00")
+        ):
+            raise ValueError("subprocess PATHEXT contains an invalid executable suffix")
+        folded = suffix.casefold()
+        if folded not in {item.casefold() for item in suffixes}:
+            suffixes.append(suffix)
+    if not suffixes:
+        raise ValueError("subprocess PATHEXT must contain at least one executable suffix")
+    return tuple(suffixes)
+
+
 def _assert_executable_file(path: Path, *, env: Mapping[str, str]) -> None:
     if os.name == "nt":
-        raw_pathext = env.get("PATHEXT") or _WINDOWS_DEFAULT_PATHEXT
-        allowed_suffixes = {
-            suffix.casefold() for suffix in raw_pathext.split(os.pathsep) if suffix.strip()
-        }
+        allowed_suffixes = {suffix.casefold() for suffix in _windows_executable_suffixes(env)}
         if path.suffix.casefold() not in allowed_suffixes:
             raise PermissionError(
                 f"subprocess executable has an unsupported Windows suffix: {path}"
@@ -220,6 +233,37 @@ def _controlled_executable_roots(env: Mapping[str, str]) -> tuple[Path, ...]:
     return tuple(roots)
 
 
+def _candidate_executable_names(raw: str, *, env: Mapping[str, str]) -> tuple[str, ...]:
+    if os.name != "nt":
+        return (raw,)
+    suffixes = _windows_executable_suffixes(env)
+    if Path(raw).suffix:
+        return (raw,)
+    return tuple(f"{raw}{suffix}" for suffix in suffixes)
+
+
+def _discover_executable(
+    raw: str,
+    *,
+    roots: Sequence[Path],
+    env: Mapping[str, str],
+) -> Path:
+    """Resolve a bare name without consulting process-global PATH or PATHEXT."""
+    for root in roots:
+        for name in _candidate_executable_names(raw, env=env):
+            candidate = root / name
+            try:
+                resolved = candidate.resolve(strict=True)
+            except OSError:
+                continue
+            if not resolved.is_file():
+                raise FileNotFoundError(
+                    f"subprocess executable is not a regular file: {resolved}"
+                )
+            return resolved
+    raise FileNotFoundError(f"subprocess executable was not found on the controlled PATH: {raw}")
+
+
 def resolve_executable(executable: str, *, env: Mapping[str, str]) -> str:
     """Resolve a subprocess executable inside explicit PATH authority roots.
 
@@ -227,7 +271,7 @@ def resolve_executable(executable: str, *, env: Mapping[str, str]) -> str:
     Every entry must be a non-empty absolute existing directory. Named executables are
     resolved only through those roots; absolute executable paths must resolve inside
     one of the same roots. Relative paths containing directory components are rejected.
-    This keeps process creation bound to caller-supplied executable authority.
+    No process-global PATH or PATHEXT lookup participates in executable discovery.
     """
     raw = str(executable).strip()
     if not raw or "\x00" in raw:
@@ -245,18 +289,7 @@ def resolve_executable(executable: str, *, env: Mapping[str, str]) -> str:
             raise ValueError(
                 "relative subprocess executable paths with directory components are forbidden"
             )
-        search_path = os.pathsep.join(str(root) for root in roots)
-        discovered = shutil.which(raw, path=search_path)
-        if discovered is None:
-            raise FileNotFoundError(
-                f"subprocess executable was not found on the controlled PATH: {raw}"
-            )
-        try:
-            resolved = Path(discovered).resolve(strict=True)
-        except OSError as exc:
-            raise FileNotFoundError(
-                f"resolved subprocess executable no longer exists: {raw}"
-            ) from exc
+        resolved = _discover_executable(raw, roots=roots, env=env)
 
     if not resolved.is_file():
         raise FileNotFoundError(f"subprocess executable is not a regular file: {resolved}")
