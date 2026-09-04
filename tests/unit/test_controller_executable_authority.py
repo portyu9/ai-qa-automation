@@ -44,12 +44,15 @@ def test_restricted_subprocess_env_rejects_executable_authority_override(
 
 
 def test_resolve_executable_rejects_empty_and_relative_path_roots() -> None:
-    executable = str(Path(os.__file__).resolve())
+    trusted_root = controller_executable_search_path().split(os.pathsep)[0]
 
     with pytest.raises(ValueError, match="empty entries"):
-        resolve_executable(executable, env={"PATH": f"{Path(executable).parent}{os.pathsep}"})
+        resolve_executable(
+            "/definitely-not-an-aiqa-executable",
+            env={"PATH": f"{trusted_root}{os.pathsep}"},
+        )
     with pytest.raises(ValueError, match="absolute trusted roots"):
-        resolve_executable(executable, env={"PATH": "."})
+        resolve_executable("/definitely-not-an-aiqa-executable", env={"PATH": "."})
 
 
 def test_current_interpreter_reexec_does_not_authorize_ambient_path_roots(tmp_path: Path) -> None:
@@ -61,6 +64,16 @@ def test_current_interpreter_reexec_does_not_authorize_ambient_path_roots(tmp_pa
     resolved = Path(resolve_executable(sys.executable, env=env))
 
     assert resolved.samefile(Path(sys.executable).resolve())
+
+
+def test_resolve_executable_rejects_caller_supplied_untrusted_path_root(tmp_path: Path) -> None:
+    hostile = tmp_path / "target-bin"
+    hostile.mkdir()
+    candidate = hostile / "controller-tool"
+    candidate.write_text("target-controlled bytes\n", encoding="utf-8")
+
+    with pytest.raises(PermissionError, match="outside trusted controller executable authority"):
+        resolve_executable(str(candidate), env={"PATH": str(hostile)})
 
 
 def test_resolve_executable_rejects_absolute_runtime_owned_executable(
@@ -78,7 +91,10 @@ def test_resolve_executable_rejects_absolute_runtime_owned_executable(
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics required")
-def test_resolve_executable_rejects_symlink_escape_from_authorized_root(tmp_path: Path) -> None:
+def test_resolve_executable_rejects_symlink_escape_from_authorized_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     trusted_root = tmp_path / "trusted-bin"
     trusted_root.mkdir()
     link = trusted_root / "controller-tool"
@@ -86,6 +102,11 @@ def test_resolve_executable_rejects_symlink_escape_from_authorized_root(tmp_path
         link.symlink_to(Path(sys.executable).resolve())
     except (OSError, NotImplementedError):
         pytest.skip("symlinks unavailable on this platform")
+    monkeypatch.setattr(
+        execution_env,
+        "_trusted_controller_executable_roots",
+        lambda: (trusted_root.resolve(),),
+    )
 
     with pytest.raises(PermissionError, match="outside controlled PATH authority roots"):
         resolve_executable("controller-tool", env={"PATH": str(trusted_root)})
