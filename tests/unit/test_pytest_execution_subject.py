@@ -223,12 +223,86 @@ def test_materialized_subject_supports_git_index_v4(tmp_path: Path) -> None:
         assert (subject.root / "test_sample.py").is_file()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable bits are required")
+def test_unstaged_executable_mode_change_fails_closed(tmp_path: Path) -> None:
+    _require_descriptor_authority()
+    workspace = tmp_path / "workspace"
+    _init_repo(workspace)
+    tracked = workspace / "tracked.txt"
+    tracked.chmod(tracked.stat().st_mode | 0o111)
+
+    snapshot = RepositoryInspector(workspace).snapshot()
+    assert snapshot.fingerprint_complete is True
+    assert "tracked.txt" in snapshot.changed_files
+
+    with pytest.raises(ExecutionSubjectError, match="executable mode diverges"):
+        with materialized_pytest_execution_subject(
+            workspace,
+            expected_snapshot=snapshot,
+        ):
+            raise AssertionError("unstaged executable authority must not be yielded")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable bits are required")
+def test_executable_untracked_path_fails_closed(tmp_path: Path) -> None:
+    _require_descriptor_authority()
+    workspace = tmp_path / "workspace"
+    _init_repo(workspace)
+    executable = workspace / "tool.sh"
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(executable.stat().st_mode | 0o111)
+
+    snapshot = RepositoryInspector(workspace).snapshot()
+    assert snapshot.fingerprint_complete is True
+    assert "tool.sh" in snapshot.changed_files
+
+    with pytest.raises(ExecutionSubjectError, match="lacks Git-index mode authority"):
+        with materialized_pytest_execution_subject(
+            workspace,
+            expected_snapshot=snapshot,
+        ):
+            raise AssertionError("untracked executable authority must not be yielded")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable bits are required")
+def test_staged_executable_mode_is_materialized_from_git_index(tmp_path: Path) -> None:
+    _require_descriptor_authority()
+    workspace = tmp_path / "workspace"
+    _init_repo(workspace)
+    tracked = workspace / "tracked.txt"
+    tracked.chmod(tracked.stat().st_mode | 0o111)
+    _git(workspace, "add", "--", "tracked.txt")
+
+    snapshot = RepositoryInspector(workspace).snapshot()
+    assert snapshot.fingerprint_complete is True
+    assert "tracked.txt" in snapshot.changed_files
+
+    with materialized_pytest_execution_subject(
+        workspace,
+        expected_snapshot=snapshot,
+    ) as subject:
+        assert (subject.root / "tracked.txt").stat().st_mode & 0o111
+
+
 class _BoundWorkspaceSandbox:
     python_executable = Path(sys.executable)
 
-    def __init__(self, workspace: Path, observations: list[Path]) -> None:
+    def __init__(
+        self,
+        workspace: Path,
+        observations: list[Path],
+        *,
+        forbidden_source_workspace: Path | None = None,
+        source_workspace_hidden: bool = False,
+    ) -> None:
         self.workspace = workspace.resolve()
         self.observations = observations
+        self.forbidden_source_workspace = (
+            None
+            if forbidden_source_workspace is None
+            else forbidden_source_workspace.resolve()
+        )
+        self.source_workspace_hidden = source_workspace_hidden
         self.result = BoundedSubprocessResult(
             returncode=0,
             stdout="1 passed",
@@ -248,8 +322,18 @@ class _BoundWorkspaceSandbox:
             effective_capabilities_zero=True,
         )
 
-    def for_materialized_workspace(self, workspace: Path) -> _BoundWorkspaceSandbox:
-        return _BoundWorkspaceSandbox(workspace, self.observations)
+    def for_materialized_workspace(
+        self,
+        workspace: Path,
+        *,
+        forbidden_source_workspace: Path,
+    ) -> _BoundWorkspaceSandbox:
+        return _BoundWorkspaceSandbox(
+            workspace,
+            self.observations,
+            forbidden_source_workspace=forbidden_source_workspace,
+            source_workspace_hidden=True,
+        )
 
     def preflight(self) -> PytestSandboxPreflight:
         return self.preflight_result
@@ -262,6 +346,21 @@ class _BoundWorkspaceSandbox:
         if (self.workspace / ".git").exists():
             raise AssertionError("Git metadata leaked into pytest execution subject")
         return self.preflight_result, self.result
+
+
+class _SourceVisibleSandbox(_BoundWorkspaceSandbox):
+    def for_materialized_workspace(
+        self,
+        workspace: Path,
+        *,
+        forbidden_source_workspace: Path,
+    ) -> _BoundWorkspaceSandbox:
+        return _BoundWorkspaceSandbox(
+            workspace,
+            self.observations,
+            forbidden_source_workspace=forbidden_source_workspace,
+            source_workspace_hidden=False,
+        )
 
 
 def test_test_runner_executes_against_materialized_subject_not_source_workspace(
@@ -295,4 +394,28 @@ def test_test_runner_executes_against_materialized_subject_not_source_workspace(
     execution_subject = exit_item.structured_data["execution_subject"]
     assert execution_subject["ignored_inputs_excluded"] is True
     assert execution_subject["git_metadata_excluded"] is True
-    assert execution_subject["source_fingerprint"] == RepositoryInspector(workspace).snapshot().fingerprint
+    assert (
+        execution_subject["source_fingerprint"]
+        == RepositoryInspector(workspace).snapshot().fingerprint
+    )
+
+
+def test_custom_sandbox_without_source_hiding_is_blocked_before_execution(
+    tmp_path: Path,
+) -> None:
+    _require_descriptor_authority()
+    workspace = tmp_path / "workspace"
+    _init_repo(workspace)
+    observations: list[Path] = []
+    runner = TestRunner(
+        workspace,
+        EvidenceStore(tmp_path / "artifacts", "run-source-visible-sandbox"),
+        sandbox=_SourceVisibleSandbox(workspace, observations),
+    )
+
+    result = runner.run_pytest([])
+
+    assert result.exit_code == 126
+    assert result.execution_started is False
+    assert observations == []
+    assert "did not prove the source workspace is hidden" in result.stderr
