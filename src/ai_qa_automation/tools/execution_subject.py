@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import stat
 import tempfile
 from collections.abc import Iterator
@@ -414,7 +413,7 @@ def materialized_pytest_execution_subject(
                 expected_root_identity=temp_root_identity,
             )
             target = temp_root / relative
-            os.chmod(target, 0o755 if executable else 0o644)
+            target.chmod(0o755 if executable else 0o644)
             total_bytes += len(data)
             manifest_rows.append(
                 {

@@ -204,9 +204,11 @@ def test_nonignored_symlink_fails_closed_before_materialization(tmp_path: Path) 
     snapshot = RepositoryInspector(workspace).snapshot()
     assert snapshot.fingerprint_complete is False
 
-    with pytest.raises(ExecutionSubjectError, match="fingerprint is incomplete"):
-        with _materialized_subject(workspace, snapshot, tmp_path):
-            raise AssertionError("unsafe symlink subject must not be yielded")
+    with (
+        pytest.raises(ExecutionSubjectError, match="fingerprint is incomplete"),
+        _materialized_subject(workspace, snapshot, tmp_path),
+    ):
+        raise AssertionError("unsafe symlink subject must not be yielded")
 
 
 def test_materialized_subject_total_bytes_are_bounded(
@@ -220,9 +222,11 @@ def test_materialized_subject_total_bytes_are_bounded(
     assert snapshot.fingerprint_complete is True
     monkeypatch.setattr(subject_module, "_MAX_EXECUTION_SUBJECT_TOTAL_BYTES", 1)
 
-    with pytest.raises(ExecutionSubjectError, match="total byte budget"):
-        with _materialized_subject(workspace, snapshot, tmp_path):
-            raise AssertionError("over-budget execution subject must not be yielded")
+    with (
+        pytest.raises(ExecutionSubjectError, match="total byte budget"),
+        _materialized_subject(workspace, snapshot, tmp_path),
+    ):
+        raise AssertionError("over-budget execution subject must not be yielded")
 
 
 def test_bound_index_parser_rejects_checksum_corruption(tmp_path: Path) -> None:
@@ -278,9 +282,11 @@ def test_unstaged_executable_mode_change_fails_closed(tmp_path: Path) -> None:
     assert snapshot.fingerprint_complete is True
     assert "tracked.txt" in snapshot.changed_files
 
-    with pytest.raises(ExecutionSubjectError, match="executable mode diverges"):
-        with _materialized_subject(workspace, snapshot, tmp_path):
-            raise AssertionError("unstaged executable authority must not be yielded")
+    with (
+        pytest.raises(ExecutionSubjectError, match="executable mode diverges"),
+        _materialized_subject(workspace, snapshot, tmp_path),
+    ):
+        raise AssertionError("unstaged executable authority must not be yielded")
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX executable bits are required")
@@ -296,9 +302,11 @@ def test_executable_untracked_path_fails_closed(tmp_path: Path) -> None:
     assert snapshot.fingerprint_complete is True
     assert "tool.sh" in snapshot.changed_files
 
-    with pytest.raises(ExecutionSubjectError, match="lacks Git-index mode authority"):
-        with _materialized_subject(workspace, snapshot, tmp_path):
-            raise AssertionError("untracked executable authority must not be yielded")
+    with (
+        pytest.raises(ExecutionSubjectError, match="lacks Git-index mode authority"),
+        _materialized_subject(workspace, snapshot, tmp_path),
+    ):
+        raise AssertionError("untracked executable authority must not be yielded")
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX executable bits are required")

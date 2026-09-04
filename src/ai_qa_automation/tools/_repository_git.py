@@ -37,7 +37,7 @@ _HeadRefObservation = tuple[
 # Git global/system config and user excludes are disabled independently below.
 # Reuse an existing filesystem root as HOME so read-only inspection never creates
 # controller temporary state selected by ambient TMPDIR.
-_GIT_ISOLATED_HOME = Path(os.path.abspath(os.sep))
+_GIT_ISOLATED_HOME = Path(os.sep).resolve()
 
 
 class RepositoryGitAuthorityMixin:
