@@ -14,6 +14,10 @@ from ai_qa_automation.tools.execution_env import (
 )
 
 
+def _python_env() -> dict[str, str]:
+    return {"PATH": str(Path(sys.executable).resolve().parent)}
+
+
 def test_tail_buffer_retains_only_bounded_recent_bytes() -> None:
     buffer = _TailBuffer(8)
     buffer.append(b"12345")
@@ -34,7 +38,7 @@ def test_tail_buffer_replaces_tail_when_single_chunk_exceeds_limit() -> None:
 
 
 def test_resolve_executable_binds_absolute_existing_file() -> None:
-    resolved = Path(resolve_executable(sys.executable, env=os.environ))
+    resolved = Path(resolve_executable(sys.executable, env=_python_env()))
 
     assert resolved.is_absolute()
     assert resolved.is_file()
@@ -57,7 +61,7 @@ def test_resolve_executable_rejects_absolute_non_executable_file(tmp_path: Path)
     candidate.chmod(0o600)
 
     with pytest.raises(PermissionError, match="not executable"):
-        resolve_executable(str(candidate), env=os.environ)
+        resolve_executable(str(candidate), env={"PATH": str(tmp_path)})
 
 
 @pytest.mark.parametrize(
@@ -78,7 +82,7 @@ def test_bounded_subprocess_rejects_invalid_bounds(
         run_bounded_subprocess(
             [sys.executable, "-c", "print('ok')"],
             cwd=tmp_path,
-            env=os.environ,
+            env=_python_env(),
             timeout_seconds=timeout,  # type: ignore[arg-type]
             max_output_bytes=max_output,  # type: ignore[arg-type]
         )
@@ -88,7 +92,7 @@ def test_bounded_subprocess_retains_bounded_output_tail(tmp_path: Path) -> None:
     result = run_bounded_subprocess(
         [sys.executable, "-c", "print('x' * 1000)"],
         cwd=tmp_path,
-        env=os.environ,
+        env=_python_env(),
         timeout_seconds=5,
         max_output_bytes=64,
     )
@@ -105,7 +109,7 @@ def test_bounded_binary_subprocess_preserves_exact_non_utf8_output(tmp_path: Pat
     result = run_bounded_binary_subprocess(
         [sys.executable, "-c", script],
         cwd=tmp_path,
-        env=os.environ,
+        env=_python_env(),
         timeout_seconds=5,
         max_stdout_bytes=16,
         max_stderr_bytes=16,
@@ -127,7 +131,7 @@ def test_bounded_binary_subprocess_drains_both_streams_with_independent_limits(
     result = run_bounded_binary_subprocess(
         [sys.executable, "-c", script],
         cwd=tmp_path,
-        env=os.environ,
+        env=_python_env(),
         timeout_seconds=5,
         max_stdout_bytes=64,
         max_stderr_bytes=32,
@@ -161,7 +165,7 @@ def test_bounded_binary_subprocess_rejects_invalid_capture_limits(
         run_bounded_binary_subprocess(
             [sys.executable, "-c", "print('ok')"],
             cwd=tmp_path,
-            env=os.environ,
+            env=_python_env(),
             timeout_seconds=5,
             max_stdout_bytes=stdout_limit,  # type: ignore[arg-type]
             max_stderr_bytes=stderr_limit,  # type: ignore[arg-type]
