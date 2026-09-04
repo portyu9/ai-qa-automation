@@ -183,14 +183,7 @@ def _assert_controller_root_trusted(root: Path) -> None:
         raise PermissionError(f"controller executable root is group/world writable: {root}")
 
 
-def controller_executable_search_path() -> str:
-    """Return deployment-owned search roots for host/controller executables.
-
-    The path is derived independently of ambient PATH/VIRTUAL_ENV. Missing candidate
-    roots are ignored, aliases are resolved, and an empty result fails closed. POSIX
-    roots must additionally be root-owned and not group/world writable. Windows system
-    identity comes from GetSystemDirectoryW instead of mutable environment variables.
-    """
+def _trusted_controller_executable_roots() -> tuple[Path, ...]:
     roots: list[Path] = []
     for candidate in _controller_executable_candidates():
         try:
@@ -203,7 +196,18 @@ def controller_executable_search_path() -> str:
         roots.append(resolved)
     if not roots:
         raise RuntimeError("no trusted controller executable roots are available")
-    return os.pathsep.join(str(root) for root in roots)
+    return tuple(roots)
+
+
+def controller_executable_search_path() -> str:
+    """Return deployment-owned search roots for host/controller executables.
+
+    The path is derived independently of ambient PATH/VIRTUAL_ENV. Missing candidate
+    roots are ignored, aliases are resolved, and an empty result fails closed. POSIX
+    roots must additionally be root-owned and not group/world writable. Windows system
+    identity comes from GetSystemDirectoryW instead of mutable environment variables.
+    """
+    return os.pathsep.join(str(root) for root in _trusted_controller_executable_roots())
 
 
 def _controlled_executable_roots(env: Mapping[str, str]) -> tuple[Path, ...]:
@@ -211,6 +215,7 @@ def _controlled_executable_roots(env: Mapping[str, str]) -> tuple[Path, ...]:
     if not search_path:
         raise FileNotFoundError("subprocess executable cannot be resolved without PATH")
 
+    trusted_roots = _trusted_controller_executable_roots()
     roots: list[Path] = []
     for raw_root in search_path.split(os.pathsep):
         if not raw_root:
@@ -224,6 +229,10 @@ def _controlled_executable_roots(env: Mapping[str, str]) -> tuple[Path, ...]:
             raise FileNotFoundError(f"subprocess PATH root does not exist: {candidate}") from exc
         if not resolved.is_dir():
             raise NotADirectoryError(f"subprocess PATH root is not a directory: {resolved}")
+        if resolved not in trusted_roots:
+            raise PermissionError(
+                f"subprocess PATH root is outside trusted controller executable authority: {resolved}"
+            )
         if resolved not in roots:
             roots.append(resolved)
     if not roots:
@@ -291,30 +300,31 @@ def resolve_executable(executable: str, *, env: Mapping[str, str]) -> str:
 
     The exact interpreter already running the controller may be re-executed by canonical
     absolute path without turning its parent directory into search authority. Every other
-    executable uses PATH as an explicit authority-root list: entries must be non-empty,
-    absolute, and existing; named tools resolve only through those roots; other absolute
-    paths must remain inside them. Process-global PATH/PATHEXT never participates.
+    executable may use only a caller-selected subset of the deployment-owned controller
+    roots; named tools resolve through those roots and other absolute paths must remain
+    inside them. Process-global PATH/PATHEXT never participates.
     """
     raw = str(executable).strip()
     if not raw or "\x00" in raw:
         raise ValueError("subprocess executable must be a non-empty path or command name")
+
+    candidate = Path(raw)
+    if not candidate.is_absolute() and candidate.parent != Path():
+        raise ValueError(
+            "relative subprocess executable paths with directory components are forbidden"
+        )
 
     current_interpreter = _resolve_current_interpreter(raw, env=env)
     if current_interpreter is not None:
         return current_interpreter
 
     roots = _controlled_executable_roots(env)
-    candidate = Path(raw)
     if candidate.is_absolute():
         try:
             resolved = candidate.resolve(strict=True)
         except OSError as exc:
             raise FileNotFoundError(f"subprocess executable was not found: {raw}") from exc
     else:
-        if candidate.parent != Path():
-            raise ValueError(
-                "relative subprocess executable paths with directory components are forbidden"
-            )
         resolved = _discover_executable(raw, roots=roots, env=env)
 
     if not resolved.is_file():
