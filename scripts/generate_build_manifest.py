@@ -11,7 +11,10 @@ from pathlib import Path
 from typing import Any
 
 from ai_qa_automation.io_safety import fsync_directory, read_bytes_bounded, sha256_file_bounded
-from ai_qa_automation.tools.execution_env import run_bounded_binary_subprocess
+from ai_qa_automation.tools.execution_env import (
+    restricted_subprocess_env,
+    run_bounded_binary_subprocess,
+)
 
 SOURCE_DATE_EPOCH = "315532800"
 MAX_WHEEL_BYTES = 64 * 1024 * 1024
@@ -48,15 +51,17 @@ def _read_hashed_bytes(path: Path, *, max_bytes: int, label: str) -> tuple[bytes
     return content, hashlib.sha256(content).hexdigest()
 
 
-def _git_environment() -> dict[str, str]:
-    return {
-        "PATH": os.environ.get("PATH", ""),
-        "GIT_CONFIG_NOSYSTEM": "1",
-        "GIT_CONFIG_GLOBAL": os.devnull,
-        "GIT_NO_REPLACE_OBJECTS": "1",
-        "GIT_OPTIONAL_LOCKS": "0",
-        "GIT_NO_LAZY_FETCH": "1",
-    }
+def _git_environment(*, home: Path) -> dict[str, str]:
+    return restricted_subprocess_env(
+        home=home,
+        extra={
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_NO_LAZY_FETCH": "1",
+        },
+    )
 
 
 def _run_git_bytes(
@@ -65,14 +70,15 @@ def _run_git_bytes(
     max_stdout_bytes: int,
 ) -> bytes:
     try:
-        result = run_bounded_binary_subprocess(
-            ["git", *args],
-            cwd=cwd or Path.cwd(),
-            env=_git_environment(),
-            timeout_seconds=GIT_TIMEOUT_SECONDS,
-            max_stdout_bytes=max_stdout_bytes,
-            max_stderr_bytes=MAX_GIT_STDERR_BYTES,
-        )
+        with tempfile.TemporaryDirectory(prefix="aiqa-build-git-home-") as raw_home:
+            result = run_bounded_binary_subprocess(
+                ["git", *args],
+                cwd=cwd or Path.cwd(),
+                env=_git_environment(home=Path(raw_home)),
+                timeout_seconds=GIT_TIMEOUT_SECONDS,
+                max_stdout_bytes=max_stdout_bytes,
+                max_stderr_bytes=MAX_GIT_STDERR_BYTES,
+            )
     except (OSError, RuntimeError, ValueError) as exc:
         raise _GitCommandError(
             "Git build-provenance subprocess could not be executed safely"
