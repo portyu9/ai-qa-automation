@@ -195,6 +195,34 @@ def test_materialized_subject_total_bytes_are_bounded(
             raise AssertionError("over-budget execution subject must not be yielded")
 
 
+def test_bound_index_parser_rejects_checksum_corruption(tmp_path: Path) -> None:
+    _require_descriptor_authority()
+    workspace = tmp_path / "workspace"
+    _init_repo(workspace)
+    raw_index = bytearray(RepositoryInspector(workspace)._read_index_bytes())
+    assert len(raw_index) > 32
+    raw_index[16] ^= 0x01
+
+    with pytest.raises(ExecutionSubjectError, match="checksum is invalid or ambiguous"):
+        subject_module._parse_bound_index_entries(bytes(raw_index))
+
+
+def test_materialized_subject_supports_git_index_v4(tmp_path: Path) -> None:
+    _require_descriptor_authority()
+    workspace = tmp_path / "workspace"
+    _init_repo(workspace)
+    _git(workspace, "update-index", "--index-version", "4")
+    snapshot = RepositoryInspector(workspace).snapshot()
+    assert snapshot.fingerprint_complete is True
+
+    with materialized_pytest_execution_subject(
+        workspace,
+        expected_snapshot=snapshot,
+    ) as subject:
+        assert (subject.root / "tracked.txt").read_text(encoding="utf-8") == "baseline\n"
+        assert (subject.root / "test_sample.py").is_file()
+
+
 class _BoundWorkspaceSandbox:
     python_executable = Path(sys.executable)
 
