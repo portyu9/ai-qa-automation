@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 
 from ..models import TerminalStatus, ValidationResult, ValidationStatus
 
@@ -52,9 +53,7 @@ def _future_validation_revisions(
     *,
     current_revision: int,
 ) -> tuple[int, ...]:
-    return tuple(
-        sorted({item.revision for item in validations if item.revision > current_revision})
-    )
+    return tuple(sorted({item.revision for item in validations if item.revision > current_revision}))
 
 
 def _is_sha256_identity(value: object) -> bool:
@@ -94,6 +93,85 @@ def _verified_regression_suite_id(item: ValidationResult) -> str | None:
     return suite_id
 
 
+def _normalized_target_path(value: object) -> str | None:
+    if not isinstance(value, str) or not value or "\x00" in value:
+        return None
+    normalized = value.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    normalized = normalized.rstrip("/")
+    if not normalized:
+        return None
+    path = PurePosixPath(normalized)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        return None
+    if path.as_posix() != normalized:
+        return None
+    return normalized
+
+
+def _verified_targeted_execution_covers_path(
+    item: ValidationResult,
+    mutation_path: str,
+) -> bool:
+    """Require self-consistent call-phase PASS evidence for the exact mutation path."""
+
+    expected = _normalized_target_path(mutation_path)
+    if expected is None:
+        return False
+    if item.details.get("scope") != "targeted":
+        return False
+    if item.details.get("mutation_target_bound") is not True:
+        return False
+    if _normalized_target_path(item.details.get("mutation_target")) != expected:
+        return False
+    if item.details.get("targeted_outcome_report_verified") is not True:
+        return False
+
+    execution_id = item.details.get("targeted_execution_id")
+    execution = item.details.get("targeted_execution")
+    if not _is_sha256_identity(execution_id) or not isinstance(execution, dict):
+        return False
+    if execution.get("execution_id") != execution_id:
+        return False
+    if execution.get("report_complete") is not True:
+        return False
+    if execution.get("child_exit_code") != 0 or execution.get("pytest_returncode") != 0:
+        return False
+    if not _is_sha256_identity(execution.get("execution_subject_digest")):
+        return False
+    git_sha = execution.get("git_sha")
+    source_fingerprint = execution.get("source_fingerprint")
+    if not isinstance(git_sha, str) or not git_sha or len(git_sha) > 128:
+        return False
+    if (
+        not isinstance(source_fingerprint, str)
+        or not source_fingerprint
+        or len(source_fingerprint) > 256
+    ):
+        return False
+
+    passed_count = execution.get("passed_call_count")
+    top_count = item.details.get("targeted_executed_pass_count")
+    if type(passed_count) is not int or passed_count < 1 or top_count != passed_count:
+        return False
+    passed_paths = execution.get("passed_paths")
+    top_paths = item.details.get("targeted_executed_pass_paths")
+    if (
+        not isinstance(passed_paths, list)
+        or not isinstance(top_paths, list)
+        or passed_paths != top_paths
+        or not 1 <= len(passed_paths) <= 4
+    ):
+        return False
+    normalized_paths = [_normalized_target_path(value) for value in passed_paths]
+    if any(value is None for value in normalized_paths):
+        return False
+    if len(set(normalized_paths)) != len(normalized_paths):
+        return False
+    return expected in normalized_paths
+
+
 def evaluate_revision_closure(
     validations: list[ValidationResult] | tuple[ValidationResult, ...],
     *,
@@ -104,9 +182,10 @@ def evaluate_revision_closure(
 
     Revision zero has no autonomous mutation to close. A positive revision closes
     only when every result at that revision is PASS, exactly one patch-safety
-    subject exists, targeted pytest is explicitly bound to that subject, and a
-    controller-bound full-regression suite PASS exists at the same revision.
-    Negative or future-ahead revision state is invalid and fails closed.
+    subject exists, targeted pytest is explicitly bound to and has an executed
+    call-phase PASS for that subject, and a controller-bound full-regression suite
+    PASS exists at the same revision. Negative or future-ahead revision state is
+    invalid and fails closed.
     """
 
     if current_revision < 0:
@@ -115,10 +194,7 @@ def evaluate_revision_closure(
             "invalid_revision",
             "Change revision must be a non-negative integer before deterministic closure.",
         )
-    future_revisions = _future_validation_revisions(
-        validations,
-        current_revision=current_revision,
-    )
+    future_revisions = _future_validation_revisions(validations, current_revision=current_revision)
     if future_revisions:
         return RevisionClosure(
             False,
@@ -148,9 +224,7 @@ def evaluate_revision_closure(
             "Current deterministic validation failed: " + ", ".join(failed) + ".",
         )
 
-    incomplete = sorted(
-        {item.status.value for item in current if item.status != ValidationStatus.PASS}
-    )
+    incomplete = sorted({item.status.value for item in current if item.status != ValidationStatus.PASS})
     if incomplete:
         return RevisionClosure(
             False,
@@ -199,10 +273,7 @@ def evaluate_revision_closure(
         )
 
     targeted = any(
-        item.details.get("scope") == "targeted"
-        and item.details.get("mutation_target_bound") is True
-        and item.details.get("mutation_target") == mutation_path
-        for item in current_pytest
+        _verified_targeted_execution_covers_path(item, mutation_path) for item in current_pytest
     )
     regression_candidates = [
         item for item in current_pytest if item.details.get("scope") == "regression"
@@ -216,7 +287,7 @@ def evaluate_revision_closure(
         return RevisionClosure(
             False,
             "incomplete_pytest_closure",
-            "A changed test requires an exact-path-bound targeted pytest PASS and a controller-bound full-regression pytest PASS at the current revision.",
+            "A changed test requires an exact-path-bound targeted pytest PASS with a controller-verified executed call-phase PASS for that path, plus a controller-bound full-regression pytest PASS at the current revision.",
             mutation_path,
         )
     if not regression_suite_ids:
@@ -258,10 +329,7 @@ def determine_terminal_outcome(
             TerminalStatus.NOT_VERIFIED,
             "Agent completed, but change revision is invalid and deterministic closure cannot be established.",
         )
-    future_revisions = _future_validation_revisions(
-        validations,
-        current_revision=current_revision,
-    )
+    future_revisions = _future_validation_revisions(validations, current_revision=current_revision)
     if future_revisions:
         return (
             TerminalStatus.NOT_VERIFIED,
@@ -290,9 +358,7 @@ def determine_terminal_outcome(
         names = ", ".join(sorted({item.gate_id or item.name for item in failed}))
         return TerminalStatus.FAILURE, f"Current deterministic validation failed: {names}."
 
-    incomplete = sorted(
-        {item.status.value for item in active if item.status != ValidationStatus.PASS}
-    )
+    incomplete = sorted({item.status.value for item in active if item.status != ValidationStatus.PASS})
     if incomplete:
         return (
             TerminalStatus.NOT_VERIFIED,
