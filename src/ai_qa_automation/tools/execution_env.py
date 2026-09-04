@@ -13,12 +13,9 @@ from pathlib import Path
 from typing import BinaryIO
 
 _SAFE_INHERITED_ENV = {
-    "PATH",
-    "VIRTUAL_ENV",
     "SYSTEMROOT",
     "WINDIR",
     "COMSPEC",
-    "PATHEXT",
     "LANG",
     "LC_ALL",
     "LC_CTYPE",
@@ -30,6 +27,8 @@ _READ_CHUNK_BYTES = 64 * 1024
 _DRAIN_JOIN_SECONDS = 2.0
 _WINDOWS_NEW_PROCESS_GROUP = 0x00000200
 _WINDOWS_DEFAULT_PATHEXT = ".COM;.EXE;.BAT;.CMD"
+_POSIX_CONTROLLER_EXECUTABLE_ROOTS = (Path("/usr/bin"), Path("/bin"))
+_CONTROLLER_AUTHORITY_ENV_KEYS = frozenset({"PATH", "VIRTUAL_ENV", "PATHEXT"})
 
 
 @dataclass(frozen=True)
@@ -111,18 +110,90 @@ def _assert_executable_file(path: Path, *, env: Mapping[str, str]) -> None:
         raise PermissionError(f"subprocess executable is not executable: {path}")
 
 
-def resolve_executable(executable: str, *, env: Mapping[str, str]) -> str:
-    """Resolve a subprocess executable to one existing absolute executable file.
+def _path_within(candidate: Path, root: Path) -> bool:
+    return candidate == root or root in candidate.parents
 
-    Named executables are resolved through the explicitly supplied subprocess PATH,
-    then bound to the resulting absolute path before process creation. Relative paths
-    containing directory components are rejected so the working directory cannot
-    silently change executable identity.
+
+def _controller_executable_candidates() -> tuple[Path, ...]:
+    if os.name != "nt":
+        return _POSIX_CONTROLLER_EXECUTABLE_ROOTS
+
+    raw_system_root = os.environ.get("SYSTEMROOT") or os.environ.get("WINDIR")
+    if not raw_system_root:
+        return ()
+    system_root = Path(raw_system_root)
+    if not system_root.is_absolute():
+        return ()
+    candidates: list[Path] = [system_root / "System32", system_root]
+    if system_root.drive:
+        program_files = Path(f"{system_root.drive}\\Program Files")
+        candidates.extend((program_files / "Git" / "cmd", program_files / "Git" / "bin"))
+    return tuple(candidates)
+
+
+def controller_executable_search_path() -> str:
+    """Return the deployment-owned search roots for host/controller executables.
+
+    The path is code-defined rather than inherited from the launch environment. Missing
+    roots are ignored, aliases are resolved, and an empty result fails closed. POSIX
+    production authority is intentionally limited to standard system executable roots;
+    user/virtual-environment locations are not controller executable authority.
+    """
+    roots: list[Path] = []
+    for candidate in _controller_executable_candidates():
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError:
+            continue
+        if not resolved.is_dir() or resolved in roots:
+            continue
+        roots.append(resolved)
+    if not roots:
+        raise RuntimeError("no trusted controller executable roots are available")
+    return os.pathsep.join(str(root) for root in roots)
+
+
+def _controlled_executable_roots(env: Mapping[str, str]) -> tuple[Path, ...]:
+    search_path = env.get("PATH")
+    if not search_path:
+        raise FileNotFoundError("subprocess executable cannot be resolved without PATH")
+
+    roots: list[Path] = []
+    for raw_root in search_path.split(os.pathsep):
+        if not raw_root:
+            raise ValueError("subprocess PATH must not contain empty entries")
+        candidate = Path(raw_root)
+        if not candidate.is_absolute():
+            raise ValueError("subprocess PATH entries must be absolute trusted roots")
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError as exc:
+            raise FileNotFoundError(
+                f"subprocess PATH root does not exist: {candidate}"
+            ) from exc
+        if not resolved.is_dir():
+            raise NotADirectoryError(f"subprocess PATH root is not a directory: {resolved}")
+        if resolved not in roots:
+            roots.append(resolved)
+    if not roots:
+        raise FileNotFoundError("subprocess executable cannot be resolved without trusted PATH roots")
+    return tuple(roots)
+
+
+def resolve_executable(executable: str, *, env: Mapping[str, str]) -> str:
+    """Resolve a subprocess executable inside explicit PATH authority roots.
+
+    PATH is interpreted as an executable-authority root list, not ambient discovery.
+    Every entry must be a non-empty absolute existing directory. Named executables are
+    resolved only through those roots; absolute executable paths must resolve inside
+    one of the same roots. Relative paths containing directory components are rejected.
+    This keeps process creation bound to a caller-supplied trusted executable authority.
     """
     raw = str(executable).strip()
     if not raw or "\x00" in raw:
         raise ValueError("subprocess executable must be a non-empty path or command name")
 
+    roots = _controlled_executable_roots(env)
     candidate = Path(raw)
     if candidate.is_absolute():
         try:
@@ -134,9 +205,7 @@ def resolve_executable(executable: str, *, env: Mapping[str, str]) -> str:
             raise ValueError(
                 "relative subprocess executable paths with directory components are forbidden"
             )
-        search_path = env.get("PATH")
-        if not search_path:
-            raise FileNotFoundError(f"subprocess executable cannot be resolved without PATH: {raw}")
+        search_path = os.pathsep.join(str(root) for root in roots)
         discovered = shutil.which(raw, path=search_path)
         if discovered is None:
             raise FileNotFoundError(
@@ -151,6 +220,10 @@ def resolve_executable(executable: str, *, env: Mapping[str, str]) -> str:
 
     if not resolved.is_file():
         raise FileNotFoundError(f"subprocess executable is not a regular file: {resolved}")
+    if not any(_path_within(resolved, root) for root in roots):
+        raise PermissionError(
+            f"subprocess executable resolved outside controlled PATH authority roots: {resolved}"
+        )
     _assert_executable_file(resolved, env=env)
     return str(resolved)
 
@@ -223,8 +296,8 @@ def _terminate_process_tree(
         return
 
     # CREATE_NEW_PROCESS_GROUP above gives Windows taskkill a stable tree root.
-    # Resolve taskkill to an absolute executable before invoking it so cleanup does
-    # not rely on partial-path process execution or a broader inherited environment.
+    # Resolve taskkill under the same explicit executable authority as the child;
+    # cleanup must never fall back to partial-path ambient process execution.
     try:
         taskkill = resolve_executable("taskkill", env=env)
         cleanup = subprocess.run(
@@ -423,7 +496,7 @@ def restricted_subprocess_env(
     home: Path,
     extra: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
-    """Build a minimal subprocess environment without inheriting credentials by default."""
+    """Build a minimal environment with explicit controller executable authority."""
     home = home.expanduser().resolve()
     home.mkdir(parents=True, exist_ok=True)
     env = {key: value for key, value in os.environ.items() if key in _SAFE_INHERITED_ENV}
@@ -436,8 +509,20 @@ def restricted_subprocess_env(
             "PIP_CONFIG_FILE": os.devnull,
             "GIT_TERMINAL_PROMPT": "0",
             "GIT_PAGER": "cat",
+            "PATH": controller_executable_search_path(),
         }
     )
+    if os.name == "nt":
+        env["PATHEXT"] = _WINDOWS_DEFAULT_PATHEXT
     if extra:
-        env.update({str(key): str(value) for key, value in extra.items()})
+        rendered = {str(key): str(value) for key, value in extra.items()}
+        authority_overrides = {
+            key for key in rendered if key.upper() in _CONTROLLER_AUTHORITY_ENV_KEYS
+        }
+        if authority_overrides:
+            names = ", ".join(sorted(authority_overrides))
+            raise ValueError(
+                f"restricted subprocess environment cannot override executable authority: {names}"
+            )
+        env.update(rendered)
     return env
