@@ -6,8 +6,10 @@ from pathlib import Path
 
 import pytest
 
+from ai_qa_automation.tools import execution_env
 from ai_qa_automation.tools.execution_env import (
     _TailBuffer,
+    controller_executable_search_path,
     resolve_executable,
     run_bounded_binary_subprocess,
     run_bounded_subprocess,
@@ -15,7 +17,7 @@ from ai_qa_automation.tools.execution_env import (
 
 
 def _python_env() -> dict[str, str]:
-    return {"PATH": str(Path(sys.executable).resolve().parent)}
+    return {"PATH": controller_executable_search_path()}
 
 
 def test_tail_buffer_retains_only_bounded_recent_bytes() -> None:
@@ -45,23 +47,34 @@ def test_resolve_executable_binds_absolute_existing_file() -> None:
     assert resolved.samefile(Path(sys.executable).resolve())
 
 
-def test_resolve_executable_rejects_ambiguous_or_missing_commands(tmp_path: Path) -> None:
+def test_resolve_executable_rejects_ambiguous_or_missing_commands() -> None:
+    trusted_env = _python_env()
     with pytest.raises(ValueError):
-        resolve_executable("relative/tool", env={"PATH": str(tmp_path)})
+        resolve_executable("relative/tool", env=trusted_env)
     with pytest.raises(FileNotFoundError):
-        resolve_executable("definitely-not-an-aiqa-executable", env={"PATH": str(tmp_path)})
+        resolve_executable("definitely-not-an-aiqa-executable", env=trusted_env)
     with pytest.raises(FileNotFoundError):
         resolve_executable("python", env={})
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX execute bits are not portable to Windows")
-def test_resolve_executable_rejects_absolute_non_executable_file(tmp_path: Path) -> None:
-    candidate = tmp_path / "not-executable"
+def test_resolve_executable_rejects_absolute_non_executable_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trusted_root = tmp_path / "trusted-bin"
+    trusted_root.mkdir()
+    candidate = trusted_root / "not-executable"
     candidate.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     candidate.chmod(0o600)
+    monkeypatch.setattr(
+        execution_env,
+        "_trusted_controller_executable_roots",
+        lambda: (trusted_root.resolve(),),
+    )
 
     with pytest.raises(PermissionError, match="not executable"):
-        resolve_executable(str(candidate), env={"PATH": str(tmp_path)})
+        resolve_executable(str(candidate), env={"PATH": str(trusted_root)})
 
 
 @pytest.mark.parametrize(
