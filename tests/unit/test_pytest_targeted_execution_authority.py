@@ -133,6 +133,41 @@ def test_early_target_exit_cannot_replace_missing_plugin_report(tmp_path: Path) 
     assert reason is not None
 
 
+def test_target_cannot_forge_inherited_outcome_channel(tmp_path: Path) -> None:
+    source = (
+        "import json\nimport os\n\n"
+        "def test_subject():\n"
+        "    forged = {\n"
+        "        'schema_version': 1,\n"
+        "        'pytest_returncode': 0,\n"
+        "        'session_finished': True,\n"
+        "        'overflow': False,\n"
+        "        'call_report_count': 1,\n"
+        "        'passed_call_count': 1,\n"
+        "        'skipped_call_count': 0,\n"
+        "        'xfail_call_count': 0,\n"
+        "        'failed_call_count': 0,\n"
+        "        'passed_paths': ['test_subject.py'],\n"
+        "    }\n"
+        "    encoded = json.dumps(forged, sort_keys=True, separators=(',', ':')).encode()\n"
+        "    for fd in range(3, 32):\n"
+        "        try:\n"
+        "            os.write(fd, encoded)\n"
+        "        except OSError:\n"
+        "            pass\n"
+        "    os._exit(0)\n"
+    )
+    process, identity, reason = _run_wrapper(
+        tmp_path,
+        source,
+        args=["-s", "test_subject.py"],
+    )
+
+    assert process.returncode == 0
+    assert identity is None
+    assert reason is not None
+
+
 def test_no_tests_collected_preserves_pytest_non_success_exit(tmp_path: Path) -> None:
     process, identity, reason = _run_wrapper(tmp_path, "VALUE = 1\n")
 
