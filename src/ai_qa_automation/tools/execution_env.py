@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import ctypes
 import math
 import os
 import shutil
 import signal
+import stat
 import subprocess
 import threading
 from collections.abc import Mapping, Sequence
@@ -27,6 +29,7 @@ _READ_CHUNK_BYTES = 64 * 1024
 _DRAIN_JOIN_SECONDS = 2.0
 _WINDOWS_NEW_PROCESS_GROUP = 0x00000200
 _WINDOWS_DEFAULT_PATHEXT = ".COM;.EXE;.BAT;.CMD"
+_WINDOWS_SYSTEM_PATH_BUFFER = 32_768
 _POSIX_CONTROLLER_EXECUTABLE_ROOTS = (Path("/usr/bin"), Path("/bin"))
 _CONTROLLER_AUTHORITY_ENV_KEYS = frozenset({"PATH", "VIRTUAL_ENV", "PATHEXT"})
 
@@ -114,30 +117,64 @@ def _path_within(candidate: Path, root: Path) -> bool:
     return candidate == root or root in candidate.parents
 
 
+def _windows_system_directory() -> Path | None:
+    """Read the Windows system executable directory from the OS, never environment."""
+    if os.name != "nt":
+        return None
+    loader = getattr(ctypes, "windll", None)
+    if loader is None:
+        return None
+    try:
+        buffer = ctypes.create_unicode_buffer(_WINDOWS_SYSTEM_PATH_BUFFER)
+        length = int(loader.kernel32.GetSystemDirectoryW(buffer, len(buffer)))
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+    if length <= 0 or length >= len(buffer):
+        return None
+    system_directory = Path(buffer.value)
+    if not system_directory.is_absolute():
+        return None
+    return system_directory
+
+
 def _controller_executable_candidates() -> tuple[Path, ...]:
     if os.name != "nt":
         return _POSIX_CONTROLLER_EXECUTABLE_ROOTS
 
-    raw_system_root = os.environ.get("SYSTEMROOT") or os.environ.get("WINDIR")
-    if not raw_system_root:
+    system_directory = _windows_system_directory()
+    if system_directory is None:
         return ()
-    system_root = Path(raw_system_root)
-    if not system_root.is_absolute():
-        return ()
-    candidates: list[Path] = [system_root / "System32", system_root]
-    if system_root.drive:
-        program_files = Path(f"{system_root.drive}\\Program Files")
+    windows_root = system_directory.parent
+    candidates: list[Path] = [system_directory]
+    if windows_root.drive:
+        program_files = Path(f"{windows_root.drive}\\Program Files")
         candidates.extend((program_files / "Git" / "cmd", program_files / "Git" / "bin"))
     return tuple(candidates)
 
 
-def controller_executable_search_path() -> str:
-    """Return the deployment-owned search roots for host/controller executables.
+def _assert_controller_root_trusted(root: Path) -> None:
+    """Reject mutable POSIX executable roots before they can become controller authority."""
+    if os.name == "nt":
+        # Windows candidates originate from GetSystemDirectoryW plus fixed Program Files
+        # locations on that OS-selected drive. ACL integrity remains a deployment/OS
+        # prerequisite rather than a permission-bit claim this adapter cannot prove.
+        return
+    observed = root.stat(follow_symlinks=False)
+    if not stat.S_ISDIR(observed.st_mode):
+        raise PermissionError(f"controller executable root is not a directory: {root}")
+    if observed.st_uid != 0:
+        raise PermissionError(f"controller executable root is not root-owned: {root}")
+    if observed.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        raise PermissionError(f"controller executable root is group/world writable: {root}")
 
-    The path is code-defined rather than inherited from the launch environment. Missing
+
+def controller_executable_search_path() -> str:
+    """Return deployment-owned search roots for host/controller executables.
+
+    The path is derived independently of ambient PATH/VIRTUAL_ENV. Missing candidate
     roots are ignored, aliases are resolved, and an empty result fails closed. POSIX
-    production authority is intentionally limited to standard system executable roots;
-    user/virtual-environment locations are not controller executable authority.
+    roots must additionally be root-owned and not group/world writable. Windows system
+    identity comes from GetSystemDirectoryW instead of mutable environment variables.
     """
     roots: list[Path] = []
     for candidate in _controller_executable_candidates():
@@ -147,6 +184,7 @@ def controller_executable_search_path() -> str:
             continue
         if not resolved.is_dir() or resolved in roots:
             continue
+        _assert_controller_root_trusted(resolved)
         roots.append(resolved)
     if not roots:
         raise RuntimeError("no trusted controller executable roots are available")
@@ -176,7 +214,9 @@ def _controlled_executable_roots(env: Mapping[str, str]) -> tuple[Path, ...]:
         if resolved not in roots:
             roots.append(resolved)
     if not roots:
-        raise FileNotFoundError("subprocess executable cannot be resolved without trusted PATH roots")
+        raise FileNotFoundError(
+            "subprocess executable cannot be resolved without trusted PATH roots"
+        )
     return tuple(roots)
 
 
@@ -187,7 +227,7 @@ def resolve_executable(executable: str, *, env: Mapping[str, str]) -> str:
     Every entry must be a non-empty absolute existing directory. Named executables are
     resolved only through those roots; absolute executable paths must resolve inside
     one of the same roots. Relative paths containing directory components are rejected.
-    This keeps process creation bound to a caller-supplied trusted executable authority.
+    This keeps process creation bound to caller-supplied executable authority.
     """
     raw = str(executable).strip()
     if not raw or "\x00" in raw:
