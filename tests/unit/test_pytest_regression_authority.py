@@ -4,7 +4,6 @@ import sys
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
 
 import pytest
 
@@ -19,7 +18,10 @@ from ai_qa_automation.tools.pytest_regression import (
     _parse_collection,
     run_regression_pytest,
 )
-from ai_qa_automation.tools.pytest_sandbox import PytestSandboxPreflight
+from ai_qa_automation.tools.pytest_sandbox import (
+    PytestSandboxExecutionUnverified,
+    PytestSandboxPreflight,
+)
 from ai_qa_automation.tools.test_execution import TestRunner
 
 
@@ -37,14 +39,16 @@ def _result(
     *,
     returncode: int = 0,
     stdout_truncated: bool = False,
+    stderr_truncated: bool = False,
+    timed_out: bool = False,
 ) -> BoundedSubprocessResult:
     return BoundedSubprocessResult(
         returncode=returncode,
         stdout=stdout,
         stderr="",
         stdout_truncated=stdout_truncated,
-        stderr_truncated=False,
-        timed_out=False,
+        stderr_truncated=stderr_truncated,
+        timed_out=timed_out,
     )
 
 
@@ -96,6 +100,26 @@ class SequencedSandbox:
         self.envs.append(dict(env))
         assert self.results
         return self.preflight_result, self.results.pop(0)
+
+
+class PostflightUnverifiedSandbox(SequencedSandbox):
+    def run(
+        self,
+        command: list[str],
+        *,
+        env: dict[str, str],
+        timeout_seconds: int | float,
+    ) -> tuple[PytestSandboxPreflight, BoundedSubprocessResult]:
+        preflight, result = super().run(
+            command,
+            env=env,
+            timeout_seconds=timeout_seconds,
+        )
+        raise PytestSandboxExecutionUnverified(
+            preflight,
+            result,
+            "sandbox postflight identity became uncertain",
+        )
 
 
 def _install_subject(
@@ -217,6 +241,7 @@ def test_regression_execution_node_mismatch_downgrades_zero_exit(
     result, suite = run_regression_pytest(runner, [])
 
     assert result.exit_code == 125
+    assert result.execution_started is True
     assert suite is not None
     assert suite.execution_nodes_match is False
     assert suite.pre_post_collection_match is False
@@ -241,6 +266,7 @@ def test_regression_post_collection_mismatch_downgrades_zero_exit(
     result, suite = run_regression_pytest(runner, [])
 
     assert result.exit_code == 125
+    assert result.execution_started is True
     assert suite is not None
     assert suite.execution_nodes_match is True
     assert suite.pre_post_collection_match is False
@@ -253,21 +279,62 @@ def test_regression_post_collection_mismatch_downgrades_zero_exit(
         _result("tests/test_a.py::test_a\n", stdout_truncated=True),
     ],
 )
-def test_regression_unusable_collection_blocks_before_execution(
+def test_regression_unusable_collection_is_executed_but_not_verified(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     collection: BoundedSubprocessResult,
 ) -> None:
     sandbox = SequencedSandbox([collection])
     _install_subject(monkeypatch, tmp_path)
-    runner = _runner(tmp_path, sandbox, run_id="run-regression-blocked")
+    runner = _runner(tmp_path, sandbox, run_id="run-regression-collection-unverified")
 
     result, suite = run_regression_pytest(runner, [])
 
-    assert result.exit_code == 126
-    assert result.execution_started is False
+    assert result.exit_code == 125
+    assert result.execution_started is True
+    assert result.block_reason is None
     assert suite is None
     assert len(sandbox.commands) == 1
+
+
+def test_regression_execution_output_truncation_preserves_started_truth(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    node = "tests/test_a.py::test_a"
+    sandbox = SequencedSandbox(
+        [
+            _result(node + "\n"),
+            _result(node + " PASSED\n", stdout_truncated=True),
+        ]
+    )
+    _install_subject(monkeypatch, tmp_path)
+    runner = _runner(tmp_path, sandbox, run_id="run-regression-output-truncated")
+
+    result, suite = run_regression_pytest(runner, [])
+
+    assert result.exit_code == 125
+    assert result.execution_started is True
+    assert result.block_reason is None
+    assert suite is not None
+    assert suite.execution_nodes_match is False
+
+
+def test_regression_sandbox_postflight_uncertainty_preserves_started_truth(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = PostflightUnverifiedSandbox([_result("tests/test_a.py::test_a\n")])
+    _install_subject(monkeypatch, tmp_path)
+    runner = _runner(tmp_path, sandbox, run_id="run-regression-postflight-unverified")
+
+    result, suite = run_regression_pytest(runner, [])
+
+    assert result.exit_code == 125
+    assert result.execution_started is True
+    assert result.block_reason is None
+    assert suite is None
+    assert "postflight identity became uncertain" in result.stderr
 
 
 def test_collection_parser_rejects_empty_truncated_and_duplicate_manifests() -> None:
