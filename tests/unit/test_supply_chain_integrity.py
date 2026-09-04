@@ -275,9 +275,19 @@ def test_bound_source_input_rejects_worktree_bytes_not_in_expected_commit(
         )
 
 
-def test_build_manifest_git_environment_disables_ambient_authority() -> None:
-    env = build_manifest._git_environment()
+def test_build_manifest_git_environment_disables_ambient_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hostile = tmp_path / "hostile-bin"
+    hostile.mkdir()
+    monkeypatch.setenv("PATH", str(hostile))
+    monkeypatch.setenv("VIRTUAL_ENV", str(tmp_path / "hostile-venv"))
 
+    env = build_manifest._git_environment(home=tmp_path / "git-home")
+
+    assert str(hostile) not in env["PATH"].split(build_manifest.os.pathsep)
+    assert "VIRTUAL_ENV" not in env
     assert env["GIT_CONFIG_NOSYSTEM"] == "1"
     assert env["GIT_CONFIG_GLOBAL"] == build_manifest.os.devnull
     assert env["GIT_NO_REPLACE_OBJECTS"] == "1"
