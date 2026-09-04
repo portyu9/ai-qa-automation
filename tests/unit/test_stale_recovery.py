@@ -93,6 +93,22 @@ def recover(artifact_root: Path, workspace: Path, *, fingerprint: str = "fp") ->
     )
 
 
+def _verified_regression_details() -> dict[str, object]:
+    suite_id = "sha256:" + "a" * 64
+    return {
+        "scope": "regression",
+        "regression_suite_verified": True,
+        "regression_suite_id": suite_id,
+        "regression_suite": {
+            "suite_id": suite_id,
+            "pre_post_collection_match": True,
+            "execution_nodes_match": True,
+            "node_count": 1,
+            "execution_subject_digest": "sha256:" + "b" * 64,
+        },
+    }
+
+
 def _closed_revision_checks(path: str) -> list[ValidationResult]:
     return [
         ValidationResult(
@@ -121,7 +137,7 @@ def _closed_revision_checks(path: str) -> list[ValidationResult]:
             revision=1,
             status=ValidationStatus.PASS,
             summary="full regression passed",
-            details={"scope": "regression"},
+            details=_verified_regression_details(),
         ),
     ]
 
