@@ -50,6 +50,21 @@ def validation(
     )
 
 
+def regression_details(suite_id: str = "sha256:" + "a" * 64) -> dict[str, Any]:
+    return {
+        "scope": "regression",
+        "regression_suite_verified": True,
+        "regression_suite_id": suite_id,
+        "regression_suite": {
+            "suite_id": suite_id,
+            "pre_post_collection_match": True,
+            "execution_nodes_match": True,
+            "node_count": 3,
+            "execution_subject_digest": "sha256:" + "b" * 64,
+        },
+    }
+
+
 def changed_revision_checks(path: str = "tests/test_checkout.py") -> list[ValidationResult]:
     return [
         validation(
@@ -72,7 +87,7 @@ def changed_revision_checks(path: str = "tests/test_checkout.py") -> list[Valida
             "pytest",
             gate_id="pytest:regression",
             revision=1,
-            details={"scope": "regression"},
+            details=regression_details(),
         ),
     ]
 
@@ -150,7 +165,33 @@ def test_changed_revision_requires_one_exact_subject_and_both_pytest_scopes() ->
 
     no_regression = evaluate_revision_closure(checks[:-1], current_revision=1)
     assert no_regression.closed is False
-    assert no_regression.code == "incomplete_pytest_closure"
+    assert no_regression.code == "unbound_regression_suite"
+
+    unbound = [
+        *checks[:-1],
+        validation(
+            "pytest",
+            gate_id="pytest:regression-unbound",
+            revision=1,
+            details={"scope": "regression"},
+        ),
+    ]
+    unbound_closure = evaluate_revision_closure(unbound, current_revision=1)
+    assert unbound_closure.closed is False
+    assert unbound_closure.code == "unbound_regression_suite"
+
+    ambiguous = [
+        *checks,
+        validation(
+            "pytest",
+            gate_id="pytest:regression-other",
+            revision=1,
+            details=regression_details("sha256:" + "c" * 64),
+        ),
+    ]
+    ambiguous_closure = evaluate_revision_closure(ambiguous, current_revision=1)
+    assert ambiguous_closure.closed is False
+    assert ambiguous_closure.code == "ambiguous_regression_suite"
 
 
 def test_internal_mutation_precheck_uses_shared_revision_closure_authority(
