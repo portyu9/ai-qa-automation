@@ -91,7 +91,9 @@ def register_testing_tools(services: RuntimeServices, tool: ToolDecorator) -> di
                     "execution_started": result.execution_started,
                     "regression_suite_verified": suite_verified,
                     "regression_suite_id": (
-                        regression_suite.suite_id if suite_verified and regression_suite is not None else None
+                        regression_suite.suite_id
+                        if suite_verified and regression_suite is not None
+                        else None
                     ),
                     "regression_suite": suite_details,
                 },
@@ -107,7 +109,9 @@ def register_testing_tools(services: RuntimeServices, tool: ToolDecorator) -> di
             "duration_seconds": result.duration_seconds,
             "evidence_ids": result.evidence_ids,
             "regression_suite_id": (
-                regression_suite.suite_id if suite_verified and regression_suite is not None else None
+                regression_suite.suite_id
+                if suite_verified and regression_suite is not None
+                else None
             ),
             "stdout_tail": result.stdout[-3000:],
             "stderr_tail": result.stderr[-3000:],
