@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -16,7 +17,10 @@ from ai_qa_automation.tools.execution_subject import (
     ExecutionSubjectError,
     materialized_pytest_execution_subject,
 )
-from ai_qa_automation.tools.pytest_sandbox import PytestSandboxPreflight
+from ai_qa_automation.tools.pytest_sandbox import (
+    BubblewrapPytestSandbox,
+    PytestSandboxPreflight,
+)
 from ai_qa_automation.tools.repository import RepositoryInspector
 from ai_qa_automation.tools.test_execution import TestRunner
 
@@ -98,6 +102,26 @@ def test_materialized_subject_excludes_ordinary_ignored_inputs_and_git_metadata(
         assert subject.git_metadata_excluded is True
         assert subject.source_fingerprint == snapshot.fingerprint
         assert subject.digest.startswith("sha256:")
+
+
+def test_materialized_subject_includes_nonignored_untracked_regular_file(
+    tmp_path: Path,
+) -> None:
+    _require_descriptor_authority()
+    workspace = tmp_path / "workspace"
+    _init_repo(workspace)
+    untracked = workspace / "candidate.py"
+    untracked.write_text("VALUE = 7\n", encoding="utf-8")
+
+    snapshot = RepositoryInspector(workspace).snapshot()
+    assert snapshot.fingerprint_complete is True
+    assert "candidate.py" in snapshot.changed_files
+
+    with materialized_pytest_execution_subject(
+        workspace,
+        expected_snapshot=snapshot,
+    ) as subject:
+        assert (subject.root / "candidate.py").read_text(encoding="utf-8") == "VALUE = 7\n"
 
 
 def test_materialized_subject_preserves_staged_delete_ignored_replacement(
@@ -205,6 +229,22 @@ def test_bound_index_parser_rejects_checksum_corruption(tmp_path: Path) -> None:
 
     with pytest.raises(ExecutionSubjectError, match="checksum is invalid or ambiguous"):
         subject_module._parse_bound_index_entries(bytes(raw_index))
+
+
+def test_bound_index_parser_rejects_unknown_mandatory_extension(tmp_path: Path) -> None:
+    _require_descriptor_authority()
+    workspace = tmp_path / "workspace"
+    _init_repo(workspace)
+    raw_index = RepositoryInspector(workspace)._read_index_bytes()
+    oid_bytes = subject_module._git_index_oid_bytes(raw_index)
+    body = raw_index[:-oid_bytes] + b"abcd" + (0).to_bytes(4, "big")
+    if oid_bytes == 20:
+        checksum = hashlib.sha1(body, usedforsecurity=False).digest()
+    else:
+        checksum = hashlib.sha256(body).digest()
+
+    with pytest.raises(ExecutionSubjectError, match="mandatory Git index extension"):
+        subject_module._parse_bound_index_entries(body + checksum)
 
 
 def test_materialized_subject_supports_git_index_v4(tmp_path: Path) -> None:
@@ -419,3 +459,27 @@ def test_custom_sandbox_without_source_hiding_is_blocked_before_execution(
     assert result.execution_started is False
     assert observations == []
     assert "did not prove the source workspace is hidden" in result.stderr
+
+
+def test_default_bubblewrap_blocks_source_overlap_with_runtime_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_descriptor_authority()
+    workspace = tmp_path / "workspace"
+    _init_repo(workspace)
+    monkeypatch.setattr(
+        BubblewrapPytestSandbox,
+        "_runtime_roots",
+        lambda _sandbox: (workspace.parent.resolve(),),
+    )
+    runner = TestRunner(
+        workspace,
+        EvidenceStore(tmp_path / "artifacts", "run-runtime-root-overlap"),
+    )
+
+    result = runner.run_pytest([])
+
+    assert result.exit_code == 126
+    assert result.execution_started is False
+    assert "source workspace overlaps a host runtime root exposed to pytest" in result.stderr
