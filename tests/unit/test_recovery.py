@@ -81,6 +81,7 @@ def verified_targeted_details(path: str) -> dict[str, object]:
         "args": [path],
         "mutation_target": path,
         "mutation_target_bound": True,
+        "targeted_execution_authority": "trusted_out_of_process_observer_v1",
         "targeted_outcome_report_verified": True,
         "targeted_execution_id": execution_id,
         "targeted_executed_pass_count": 1,
