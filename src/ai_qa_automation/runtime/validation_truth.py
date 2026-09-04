@@ -7,6 +7,7 @@ from pathlib import PurePosixPath
 from ..models import TerminalStatus, ValidationResult, ValidationStatus
 
 _UNBOUND_OBJECTIVE_GATE_IDS = {"browser_runtime"}
+_TRUSTED_TARGETED_EXECUTION_AUTHORITY = "trusted_out_of_process_observer_v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,7 +117,7 @@ def _verified_targeted_execution_covers_path(
     item: ValidationResult,
     mutation_path: str,
 ) -> bool:
-    """Require self-consistent call-phase PASS evidence for the exact mutation path."""
+    """Require trusted out-of-process call-phase PASS evidence for the mutation path."""
 
     expected = _normalized_target_path(mutation_path)
     if expected is None:
@@ -126,6 +127,8 @@ def _verified_targeted_execution_covers_path(
     if item.details.get("mutation_target_bound") is not True:
         return False
     if _normalized_target_path(item.details.get("mutation_target")) != expected:
+        return False
+    if item.details.get("targeted_execution_authority") != _TRUSTED_TARGETED_EXECUTION_AUTHORITY:
         return False
     if item.details.get("targeted_outcome_report_verified") is not True:
         return False
@@ -184,10 +187,10 @@ def evaluate_revision_closure(
 
     Revision zero has no autonomous mutation to close. A positive revision closes
     only when every result at that revision is PASS, exactly one patch-safety
-    subject exists, targeted pytest is explicitly bound to and has an executed
-    call-phase PASS for that subject, and a controller-bound full-regression suite
-    PASS exists at the same revision. Negative or future-ahead revision state is
-    invalid and fails closed.
+    subject exists, targeted pytest is explicitly bound to that subject and has a
+    trusted out-of-process executed call-phase PASS for it, and a controller-bound
+    full-regression suite PASS exists at the same revision. Negative or future-ahead
+    revision state is invalid and fails closed.
     """
 
     if current_revision < 0:
@@ -291,7 +294,7 @@ def evaluate_revision_closure(
         return RevisionClosure(
             False,
             "incomplete_pytest_closure",
-            "A changed test requires an exact-path-bound targeted pytest PASS with a controller-verified executed call-phase PASS for that path, plus a controller-bound full-regression pytest PASS at the current revision.",
+            "A changed test requires an exact-path-bound targeted pytest PASS with trusted out-of-process executed call-phase PASS evidence for that path, plus a controller-bound full-regression pytest PASS at the current revision.",
             mutation_path,
         )
     if not regression_suite_ids:
