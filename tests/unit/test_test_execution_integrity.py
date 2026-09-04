@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -35,6 +36,7 @@ class FakeSandbox:
     python_executable = Path(sys.executable)
 
     def __init__(self, *, returncode: int = 0, timed_out: bool = False) -> None:
+        self.workspace: Path | None = None
         self.result = BoundedSubprocessResult(
             returncode=returncode,
             stdout="1 passed",
@@ -58,6 +60,10 @@ class FakeSandbox:
             no_non_loopback_interfaces=True,
             effective_capabilities_zero=True,
         )
+
+    def for_materialized_workspace(self, workspace: Path) -> FakeSandbox:
+        self.workspace = workspace.resolve()
+        return self
 
     def preflight(self) -> PytestSandboxPreflight:
         return self.preflight_result
@@ -101,7 +107,29 @@ def install_fake_snapshots(
         def snapshot(self) -> object:
             return next(sequence)
 
+    @contextmanager
+    def fake_materialized_subject(workspace: Path, *, expected_snapshot: object):
+        root = workspace.parent / "fake-materialized-pytest-subject"
+        root.mkdir(exist_ok=True)
+        yield SimpleNamespace(
+            root=root,
+            details=lambda: {
+                "git_sha": getattr(expected_snapshot, "git_sha", None),
+                "source_fingerprint": getattr(expected_snapshot, "fingerprint", None),
+                "digest": "sha256:" + "f" * 64,
+                "file_count": 1,
+                "total_bytes": 1,
+                "ignored_inputs_excluded": True,
+                "git_metadata_excluded": True,
+            },
+        )
+
     monkeypatch.setattr(execution_module, "RepositoryInspector", FakeInspector)
+    monkeypatch.setattr(
+        execution_module,
+        "materialized_pytest_execution_subject",
+        fake_materialized_subject,
+    )
 
 
 def test_pytest_zero_exit_requires_unchanged_complete_git_fingerprint(
@@ -144,7 +172,7 @@ def test_pytest_zero_exit_is_downgraded_when_test_changes_workspace(
     assert "target workspace changed during pytest execution" in result.stderr
 
 
-def test_pytest_zero_exit_is_downgraded_without_git_provenance(
+def test_pytest_without_git_provenance_is_blocked_before_target_execution(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     install_fake_snapshots(
@@ -162,7 +190,8 @@ def test_pytest_zero_exit_is_downgraded_without_git_provenance(
 
     result = runner.run_pytest([])
 
-    assert result.exit_code == 125
+    assert result.exit_code == 126
+    assert result.execution_started is False
     assert "requires a Git-backed target workspace" in result.stderr
 
 
