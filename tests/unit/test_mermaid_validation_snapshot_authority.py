@@ -40,6 +40,10 @@ def _valid_render_archive() -> bytes:
     )
 
 
+def _docker_env() -> dict[str, str]:
+    return {"PATH": "/usr/bin"}
+
+
 def test_snapshot_records_exact_document_digest(tmp_path: Path) -> None:
     content = b"```mermaid\nflowchart LR\nA --> B\n```\n"
     _write_required_repo(tmp_path, content.decode())
@@ -113,12 +117,16 @@ def test_renderer_timeout_force_removes_exact_container_id_without_archive(
             raise subprocess.TimeoutExpired(command, mermaid.RENDER_TIMEOUT_SECONDS)
         return subprocess.CompletedProcess(command, 0)
 
-    monkeypatch.setattr(mermaid, "_resolve_docker_executable", lambda: "docker")
+    monkeypatch.setattr(
+        mermaid,
+        "_resolve_docker_executable",
+        lambda *, env: "/usr/bin/docker",
+    )
     monkeypatch.setattr(mermaid.subprocess, "run", fake_run)
     with pytest.raises(RuntimeError, match="render exceeded"):
         mermaid._run_mermaid(root, Path("README.md"), output, 1)
     assert sum(command[1] == "exec" for command in calls) == 1
-    assert calls[-1] == ["docker", "rm", "--force", "b" * 64]
+    assert calls[-1] == ["/usr/bin/docker", "rm", "--force", "b" * 64]
 
 
 def test_renderer_nonzero_completion_does_not_archive_and_force_removes_exact_container_id(
@@ -140,12 +148,16 @@ def test_renderer_nonzero_completion_does_not_archive_and_force_removes_exact_co
             raise subprocess.CalledProcessError(1, command)
         return subprocess.CompletedProcess(command, 0)
 
-    monkeypatch.setattr(mermaid, "_resolve_docker_executable", lambda: "docker")
+    monkeypatch.setattr(
+        mermaid,
+        "_resolve_docker_executable",
+        lambda *, env: "/usr/bin/docker",
+    )
     monkeypatch.setattr(mermaid.subprocess, "run", fake_run)
     with pytest.raises(RuntimeError, match="did not complete successfully"):
         mermaid._run_mermaid(root, Path("README.md"), output, 1)
     assert sum(command[1] == "exec" for command in calls) == 1
-    assert calls[-1] == ["docker", "rm", "--force", "e" * 64]
+    assert calls[-1] == ["/usr/bin/docker", "rm", "--force", "e" * 64]
 
 
 def test_renderer_cleanup_failure_is_a_hard_failure(
@@ -168,7 +180,11 @@ def test_renderer_cleanup_failure_is_a_hard_failure(
         assert command[-1] == "c" * 64
         return subprocess.CompletedProcess(command, 1)
 
-    monkeypatch.setattr(mermaid, "_resolve_docker_executable", lambda: "docker")
+    monkeypatch.setattr(
+        mermaid,
+        "_resolve_docker_executable",
+        lambda *, env: "/usr/bin/docker",
+    )
     monkeypatch.setattr(mermaid.subprocess, "run", fake_run)
     with pytest.raises(RuntimeError, match="cleanup did not confirm removal"):
         mermaid._run_mermaid(root, Path("README.md"), output, 1)
@@ -195,11 +211,15 @@ def test_renderer_archive_collection_failure_still_force_removes_exact_container
             raise subprocess.CalledProcessError(1, command)
         return subprocess.CompletedProcess(command, 0)
 
-    monkeypatch.setattr(mermaid, "_resolve_docker_executable", lambda: "docker")
+    monkeypatch.setattr(
+        mermaid,
+        "_resolve_docker_executable",
+        lambda *, env: "/usr/bin/docker",
+    )
     monkeypatch.setattr(mermaid.subprocess, "run", fake_run)
     with pytest.raises(RuntimeError, match="output archive could not be collected"):
         mermaid._run_mermaid(root, Path("README.md"), output, 1)
-    assert calls[-1] == ["docker", "rm", "--force", "d" * 64]
+    assert calls[-1] == ["/usr/bin/docker", "rm", "--force", "d" * 64]
 
 
 def test_renderer_cleanup_without_exact_container_id_fails_closed_after_best_effort(
@@ -212,11 +232,15 @@ def test_renderer_cleanup_without_exact_container_id_fails_closed_after_best_eff
         calls.append(command)
         return subprocess.CompletedProcess(command, 0)
 
-    monkeypatch.setattr(mermaid, "_resolve_docker_executable", lambda: "docker")
     monkeypatch.setattr(mermaid.subprocess, "run", fake_run)
     with pytest.raises(RuntimeError, match="exact container identity was unavailable"):
-        mermaid._remove_renderer_container("aiqa-mermaid-private-name", cidfile)
-    assert calls == [["docker", "rm", "--force", "aiqa-mermaid-private-name"]]
+        mermaid._remove_renderer_container(
+            "aiqa-mermaid-private-name",
+            cidfile,
+            docker_executable="/usr/bin/docker",
+            docker_env=_docker_env(),
+        )
+    assert calls == [["/usr/bin/docker", "rm", "--force", "aiqa-mermaid-private-name"]]
 
 
 def test_renderer_archive_rejects_path_traversal_without_host_write(tmp_path: Path) -> None:
@@ -378,13 +402,20 @@ def test_main_uses_distinct_empty_output_roots_for_same_stem_documents(
 
 
 def test_docker_executable_is_resolved_to_one_absolute_executable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    docker = tmp_path / "docker"
-    docker.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    docker.chmod(0o755)
-    monkeypatch.setattr(mermaid.shutil, "which", lambda _name: str(docker))
-    assert mermaid._resolve_docker_executable() == str(docker.resolve())
+    docker_env = _docker_env()
+    observed: dict[str, object] = {}
+
+    def fake_resolve(executable: str, *, env: dict[str, str]) -> str:
+        observed["executable"] = executable
+        observed["env"] = dict(env)
+        return "/usr/bin/docker"
+
+    monkeypatch.setattr(mermaid, "resolve_executable", fake_resolve)
+
+    assert mermaid._resolve_docker_executable(env=docker_env) == "/usr/bin/docker"
+    assert observed == {"executable": "docker", "env": docker_env}
 
 
 def test_rendered_output_validation_enforces_aggregate_byte_budget(
