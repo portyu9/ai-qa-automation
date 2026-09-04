@@ -74,6 +74,31 @@ def verified_regression_details() -> dict[str, object]:
     }
 
 
+def verified_targeted_details(path: str) -> dict[str, object]:
+    execution_id = "sha256:" + "c" * 64
+    return {
+        "scope": "targeted",
+        "args": [path],
+        "mutation_target": path,
+        "mutation_target_bound": True,
+        "targeted_outcome_report_verified": True,
+        "targeted_execution_id": execution_id,
+        "targeted_executed_pass_count": 1,
+        "targeted_executed_pass_paths": [path],
+        "targeted_execution": {
+            "execution_id": execution_id,
+            "git_sha": "d" * 40,
+            "source_fingerprint": "sha256:" + "e" * 64,
+            "execution_subject_digest": "sha256:" + "f" * 64,
+            "report_complete": True,
+            "child_exit_code": 0,
+            "pytest_returncode": 0,
+            "passed_call_count": 1,
+            "passed_paths": [path],
+        },
+    }
+
+
 def closed_revision_validations(path: str = "tests/test_x.py") -> list[ValidationResult]:
     return [
         ValidationResult(
@@ -90,12 +115,7 @@ def closed_revision_validations(path: str = "tests/test_x.py") -> list[Validatio
             revision=1,
             status=ValidationStatus.PASS,
             summary="targeted pass",
-            details={
-                "scope": "targeted",
-                "args": [path],
-                "mutation_target": path,
-                "mutation_target_bound": True,
-            },
+            details=verified_targeted_details(path),
         ),
         ValidationResult(
             name="pytest",
