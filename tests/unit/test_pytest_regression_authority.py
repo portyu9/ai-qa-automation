@@ -351,7 +351,7 @@ def test_collection_parser_rejects_empty_truncated_and_duplicate_manifests() -> 
 
 def test_config_precedence_and_selection_semantics_are_bound(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text(
-        "[tool.pytest.ini_options]\naddopts = \"-k smoke\"\n",
+        '[tool.pytest.ini_options]\naddopts = "-k smoke"\n',
         encoding="utf-8",
     )
     (tmp_path / "pytest.ini").write_text(
