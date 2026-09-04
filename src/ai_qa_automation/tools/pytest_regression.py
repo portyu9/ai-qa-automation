@@ -35,6 +35,7 @@ _MAX_CONFIG_BYTES = 1_000_000
 _MAX_CONFIG_EVIDENCE_BYTES = 64_000
 _MAX_CONFTEST_FILES = 2_000
 _MAX_CONFTEST_BYTES = 512_000
+_MAX_LOG_PHASE_CHARS = 256_000
 _EXECUTION_RE = re.compile(r"^(?P<node>.+?)\s+(?:PASSED|SKIPPED|XFAIL|XPASS)(?:\s|$)")
 _SKIP_RE = re.compile(r"^SKIPPED \[\d+\] .+$")
 
@@ -234,8 +235,11 @@ def _config(root: Path) -> _Config:
         matched, table = _config_table(name, data)
         if not matched:
             continue
-        options = _bounded_config_options(table)
-        return _Config(name, hashlib.sha256(data).hexdigest(), options)
+        return _Config(
+            name,
+            hashlib.sha256(data).hexdigest(),
+            _bounded_config_options(table),
+        )
     if pyproject_fallback is not None:
         name, data = pyproject_fallback
         return _Config(name, hashlib.sha256(data).hexdigest(), {})
@@ -312,10 +316,17 @@ def _run_phase(
         return sandbox.run(command, env=env, timeout_seconds=remaining)
     except PytestSandboxUnavailable as exc:
         raise RegressionSuiteError(exc.preflight.reason or "pytest sandbox is unavailable") from exc
-    except PytestSandboxExecutionUnverified as exc:
-        raise RegressionSuiteError(exc.reason) from exc
+    except PytestSandboxExecutionUnverified:
+        raise
     except (OSError, RuntimeError, ValueError) as exc:
         raise RegressionSuiteError(f"pytest sandbox failed with {type(exc).__name__}") from exc
+
+
+def _phase_log(text: str) -> str:
+    safe = redact_text(text)
+    if len(safe) <= _MAX_LOG_PHASE_CHARS:
+        return safe
+    return "...[phase log truncated by controller]...\n" + safe[-_MAX_LOG_PHASE_CHARS:]
 
 
 def _blocked(
@@ -337,7 +348,7 @@ def _blocked(
             kind=EvidenceKind.EXCEPTION,
             nature=EvidenceNature.OBSERVED_FACT,
             source="pytest_regression_authority",
-            summary="pytest full-regression suite authority was blocked",
+            summary="pytest full-regression suite authority was blocked before target execution",
             structured_data={"reason": safe, "execution_started": False},
             artifact_reference=artifact,
             content_hash=digest,
@@ -355,6 +366,70 @@ def _blocked(
     )
 
 
+def _unverified_after_start(
+    runner: TestRunner,
+    logical: list[str],
+    started: float,
+    reason: str,
+    *,
+    phase_result: BoundedSubprocessResult,
+    preflight: PytestSandboxPreflight,
+) -> TestExecutionResult:
+    safe_reason = redact_text(reason)
+    safe_stdout = redact_text(phase_result.stdout)
+    safe_stderr = redact_text(phase_result.stderr)
+    exit_code = 124 if phase_result.timed_out else 125
+    artifact, digest = text_artifact(
+        runner.evidence,
+        f"pytest/{uuid4().hex}.log",
+        (
+            f"$ {' '.join(logical)}\n\n"
+            f"STDOUT\n{_phase_log(safe_stdout)}\n\n"
+            f"STDERR\n{_phase_log(safe_stderr)}\n\n"
+            f"REGRESSION-AUTHORITY\n{safe_reason}\n"
+        ),
+        originating_tool="pytest",
+    )
+    item = runner.evidence.add(
+        EvidenceItem(
+            run_id=runner.evidence.run_id,
+            kind=EvidenceKind.EXIT_CODE,
+            nature=EvidenceNature.OBSERVED_FACT,
+            source="pytest_regression_authority",
+            summary="pytest regression target code executed but suite authority was not verified",
+            structured_data={
+                "exit_code": exit_code,
+                "pytest_returncode": phase_result.returncode,
+                "execution_started": True,
+                "reason": safe_reason,
+                "stdout_truncated": phase_result.stdout_truncated,
+                "stderr_truncated": phase_result.stderr_truncated,
+                "timeout": phase_result.timed_out,
+                "sandbox": preflight.details(),
+            },
+            artifact_reference=artifact,
+            content_hash=digest,
+        )
+    )
+    return TestExecutionResult(
+        command=tuple(logical),
+        exit_code=exit_code,
+        stdout=safe_stdout,
+        stderr=(safe_stderr + f"\nregression-suite-integrity: {safe_reason}").strip(),
+        duration_seconds=time.monotonic() - started,
+        evidence_ids=(item.id,),
+        execution_started=True,
+        block_reason=None,
+    )
+
+
+def _pytest_version() -> str:
+    try:
+        return importlib.metadata.version("pytest")
+    except importlib.metadata.PackageNotFoundError as exc:
+        raise RegressionSuiteError("pytest runtime version could not be resolved") from exc
+
+
 def run_regression_pytest(
     runner: TestRunner,
     requested_args: list[str],
@@ -369,6 +444,10 @@ def run_regression_pytest(
     if integrity is not None:
         return _blocked(runner, logical, started, integrity), None
 
+    target_started = False
+    last_result: BoundedSubprocessResult | None = None
+    last_preflight: PytestSandboxPreflight | None = None
+
     try:
         scratch, scratch_identity = runner._trusted_scratch_root()
         with materialized_pytest_execution_subject(
@@ -379,6 +458,7 @@ def run_regression_pytest(
         ) as subject:
             config = _config(subject.root)
             conftest_count, conftest_sha, conftest_rows = _conftests(subject.root)
+            pytest_version = _pytest_version()
             sandbox = runner._sandbox_for_materialized_workspace(subject.root)
             with tempfile.TemporaryDirectory(prefix="aiqa-pytest-home-", dir=scratch) as home:
                 env = restricted_subprocess_env(
@@ -407,13 +487,49 @@ def run_regression_pytest(
                     env=env,
                     started=started,
                 )
-                if pre_raw.timed_out or pre_raw.returncode != 0:
-                    raise RegressionSuiteError(
-                        "pytest regression collection did not complete successfully"
+                target_started = True
+                last_result = pre_raw
+                last_preflight = preflight
+                if (
+                    pre_raw.timed_out
+                    or pre_raw.returncode != 0
+                    or pre_raw.stderr_truncated
+                ):
+                    reason = (
+                        "pytest regression collection timed out"
+                        if pre_raw.timed_out
+                        else (
+                            "pytest regression collection output was truncated"
+                            if pre_raw.stderr_truncated
+                            else "pytest regression collection did not complete successfully"
+                        )
                     )
-                pre = _parse_collection(pre_raw.stdout, truncated=pre_raw.stdout_truncated)
+                    return (
+                        _unverified_after_start(
+                            runner,
+                            logical,
+                            started,
+                            reason,
+                            phase_result=pre_raw,
+                            preflight=preflight,
+                        ),
+                        None,
+                    )
+                try:
+                    pre = _parse_collection(pre_raw.stdout, truncated=pre_raw.stdout_truncated)
+                except RegressionSuiteError as exc:
+                    return (
+                        _unverified_after_start(
+                            runner,
+                            logical,
+                            started,
+                            str(exc),
+                            phase_result=pre_raw,
+                            preflight=preflight,
+                        ),
+                        None,
+                    )
 
-                pytest_version = importlib.metadata.version("pytest")
                 manifest_payload = {
                     "schema_version": 1,
                     "git_sha": subject.git_sha,
@@ -446,8 +562,16 @@ def run_regression_pytest(
                     _MAX_MANIFEST_BYTES + _MAX_CONFTEST_BYTES + _MAX_CONFIG_EVIDENCE_BYTES
                 )
                 if len(manifest_json.encode()) > manifest_limit:
-                    raise RegressionSuiteError(
-                        "pytest regression manifest exceeded its artifact bound"
+                    return (
+                        _unverified_after_start(
+                            runner,
+                            logical,
+                            started,
+                            "pytest regression manifest exceeded its artifact bound",
+                            phase_result=pre_raw,
+                            preflight=preflight,
+                        ),
+                        None,
                     )
                 suite_id = "sha256:" + hashlib.sha256(manifest_json.encode()).hexdigest()
                 manifest_artifact, manifest_hash = text_artifact(
@@ -474,16 +598,32 @@ def run_regression_pytest(
                     env=env,
                     started=started,
                 )
+                last_result = run_raw
+                last_preflight = preflight
                 execution_match = False
                 post_match = False
+                reconciliation_reasons: list[str] = []
                 post_raw: BoundedSubprocessResult | None = None
+
                 if not run_raw.timed_out and run_raw.returncode == 0:
-                    execution_nodes = _parse_execution_nodes(
-                        run_raw.stdout,
-                        truncated=run_raw.stdout_truncated,
-                    )
-                    execution_match = execution_nodes == pre.nodeids
-                    if execution_match:
+                    try:
+                        execution_nodes = _parse_execution_nodes(
+                            run_raw.stdout,
+                            truncated=run_raw.stdout_truncated,
+                        )
+                    except RegressionSuiteError as exc:
+                        reconciliation_reasons.append(str(exc))
+                    else:
+                        execution_match = execution_nodes == pre.nodeids
+                        if not execution_match:
+                            reconciliation_reasons.append(
+                                "pytest execution node ids did not match admitted collection"
+                            )
+                    if run_raw.stderr_truncated:
+                        reconciliation_reasons.append(
+                            "pytest execution stderr exceeded its byte bound"
+                        )
+                    if execution_match and not run_raw.stderr_truncated:
                         preflight, post_raw = _run_phase(
                             runner,
                             sandbox,
@@ -491,18 +631,44 @@ def run_regression_pytest(
                             env=env,
                             started=started,
                         )
-                        if not post_raw.timed_out and post_raw.returncode == 0:
-                            post = _parse_collection(
-                                post_raw.stdout,
-                                truncated=post_raw.stdout_truncated,
+                        last_result = post_raw
+                        last_preflight = preflight
+                        if (
+                            post_raw.timed_out
+                            or post_raw.returncode != 0
+                            or post_raw.stderr_truncated
+                        ):
+                            reconciliation_reasons.append(
+                                "pytest post-execution collection did not complete cleanly"
                             )
-                            post_match = post == pre
+                        else:
+                            try:
+                                post = _parse_collection(
+                                    post_raw.stdout,
+                                    truncated=post_raw.stdout_truncated,
+                                )
+                            except RegressionSuiteError as exc:
+                                reconciliation_reasons.append(str(exc))
+                            else:
+                                post_match = post == pre
+                                if not post_match:
+                                    reconciliation_reasons.append(
+                                        "pytest post-execution collection changed"
+                                    )
+                elif run_raw.timed_out:
+                    reconciliation_reasons.append(
+                        "pytest regression execution exceeded its shared execution budget"
+                    )
 
                 after = RepositoryInspector(runner.workspace).snapshot()
                 workspace_reason = runner._workspace_integrity_failure(before, after)
+                if workspace_reason is not None:
+                    reconciliation_reasons.append(workspace_reason)
+
                 verified = (
                     run_raw.returncode == 0
                     and not run_raw.timed_out
+                    and not run_raw.stdout_truncated
                     and not run_raw.stderr_truncated
                     and execution_match
                     and post_match
@@ -510,17 +676,14 @@ def run_regression_pytest(
                 )
                 exit_code = 124 if run_raw.timed_out else run_raw.returncode
                 stderr = run_raw.stderr
-                if run_raw.timed_out:
-                    stderr += (
-                        "\npytest regression execution exceeded its shared execution budget"
-                    )
                 if exit_code == 0 and not verified:
                     exit_code = 125
-                    stderr += (
-                        "\nregression-suite-integrity: collection/execution did not reconcile"
+                if reconciliation_reasons:
+                    stderr += "\nregression-suite-integrity: " + "; ".join(
+                        dict.fromkeys(reconciliation_reasons)
                     )
-                if workspace_reason is not None:
-                    stderr += f"\nworkspace-integrity: {workspace_reason}"
+                if post_raw is not None and post_raw.timed_out:
+                    exit_code = 124
 
                 suite = RegressionSuiteIdentity(
                     suite_id=suite_id,
@@ -546,12 +709,12 @@ def run_regression_pytest(
                     f"pytest/{uuid4().hex}.log",
                     (
                         f"$ {' '.join(logical)}\n\n"
-                        f"PRE-COLLECTION\n{redact_text(pre_raw.stdout)}\n\n"
-                        f"EXECUTION\n{safe_stdout}\n\n"
-                        f"STDERR\n{safe_stderr}\n\n"
+                        f"PRE-COLLECTION\n{_phase_log(pre_raw.stdout)}\n\n"
+                        f"EXECUTION\n{_phase_log(safe_stdout)}\n\n"
+                        f"STDERR\n{_phase_log(safe_stderr)}\n\n"
                         "POST-COLLECTION\n"
                         + (
-                            redact_text(post_raw.stdout)
+                            _phase_log(post_raw.stdout)
                             if post_raw is not None
                             else "NOT_EXECUTED"
                         )
@@ -580,6 +743,9 @@ def run_regression_pytest(
                             "regression_suite": suite.details(),
                             "sandbox": preflight.details(),
                             "manifest_content_hash": manifest_hash,
+                            "reconciliation_reasons": list(
+                                dict.fromkeys(reconciliation_reasons)
+                            ),
                         },
                         artifact_reference=log_artifact,
                         content_hash=log_hash,
@@ -598,15 +764,44 @@ def run_regression_pytest(
                     ),
                     suite,
                 )
-    except (ExecutionSubjectError, RegressionSuiteError) as exc:
-        return _blocked(runner, logical, started, str(exc)), None
-    except (OSError, RuntimeError, ValueError) as exc:
+    except PytestSandboxExecutionUnverified as exc:
         return (
-            _blocked(
+            _unverified_after_start(
                 runner,
                 logical,
                 started,
-                f"pytest regression authority became unavailable: {type(exc).__name__}",
+                exc.reason,
+                phase_result=exc.result,
+                preflight=exc.preflight,
             ),
             None,
         )
+    except (ExecutionSubjectError, RegressionSuiteError) as exc:
+        if target_started and last_result is not None and last_preflight is not None:
+            return (
+                _unverified_after_start(
+                    runner,
+                    logical,
+                    started,
+                    str(exc),
+                    phase_result=last_result,
+                    preflight=last_preflight,
+                ),
+                None,
+            )
+        return _blocked(runner, logical, started, str(exc)), None
+    except (OSError, RuntimeError, ValueError) as exc:
+        reason = f"pytest regression authority became unavailable: {type(exc).__name__}"
+        if target_started and last_result is not None and last_preflight is not None:
+            return (
+                _unverified_after_start(
+                    runner,
+                    logical,
+                    started,
+                    reason,
+                    phase_result=last_result,
+                    preflight=last_preflight,
+                ),
+                None,
+            )
+        return _blocked(runner, logical, started, reason), None
