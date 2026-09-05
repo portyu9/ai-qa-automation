@@ -145,6 +145,7 @@ def _capture_non_git_workspace_fingerprint(
     return canonical_sha256(
         {
             "schema_version": 1,
+            "directories": [item.path.as_posix() for item in before.directories],
             "files": rows,
         }
     )

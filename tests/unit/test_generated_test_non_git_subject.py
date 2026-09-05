@@ -35,6 +35,26 @@ def test_non_git_workspace_content_changes_subject(tmp_path: Path) -> None:
     assert before.workspace_fingerprint != after.workspace_fingerprint
 
 
+def test_non_git_empty_directory_changes_subject(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "test_subject.py").write_text("value = 1\n", encoding="utf-8")
+
+    before = capture_generated_test_repository_subject(
+        workspace,
+        expected_root_identity=None,
+        change_revision=0,
+    )
+    (workspace / "new-empty-directory").mkdir()
+    after = capture_generated_test_repository_subject(
+        workspace,
+        expected_root_identity=None,
+        change_revision=0,
+    )
+
+    assert before.workspace_fingerprint != after.workspace_fingerprint
+
+
 def test_non_git_workspace_root_replacement_after_inspector_pin_fails_closed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
