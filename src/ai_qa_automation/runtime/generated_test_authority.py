@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..tools.repository import RepositoryInspector, RepositorySubjectError
+from ..tools.repository import RepositoryInspector
 
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 _SUBJECT_KEYS = {
@@ -61,7 +61,7 @@ def capture_generated_test_repository_subject(
             expected_root_identity=expected_root_identity,
         )
         snapshot = inspector.snapshot()
-    except (OSError, RuntimeError, ValueError, RepositorySubjectError) as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         raise GeneratedTestAuthorityError(
             "generated-test repository subject could not be captured"
         ) from exc
