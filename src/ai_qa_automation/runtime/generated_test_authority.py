@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..intelligence.test_generation import TestGenerationPlanner
+from ..models import TestGenerationPlan
 from ..tools.repository import RepositoryInspector
 
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -184,6 +186,32 @@ def generated_test_plan_subject(
         _require_bounded_text(label, value)
     if not isinstance(plan, dict):
         raise GeneratedTestAuthorityError("generated-test plan payload is invalid")
+    try:
+        parsed_plan = TestGenerationPlan.model_validate(plan)
+        TestGenerationPlanner().validate_identity(parsed_plan)
+    except ValueError as exc:
+        raise GeneratedTestAuthorityError(
+            "generated-test plan identity does not replay deterministically"
+        ) from exc
+    if parsed_plan.requirement_digest != requirement_digest:
+        raise GeneratedTestAuthorityError(
+            "generated-test plan requirement digest does not match requirement authority"
+        )
+    if parsed_plan.selected_scenario_id != selected_scenario_id:
+        raise GeneratedTestAuthorityError(
+            "generated-test selected scenario does not match deterministic plan"
+        )
+    selected = [
+        item for item in parsed_plan.scenarios if item.scenario_id == parsed_plan.selected_scenario_id
+    ]
+    if (
+        len(selected) != 1
+        or selected[0].assertion_contract_digest != selected_assertion_contract_digest
+    ):
+        raise GeneratedTestAuthorityError(
+            "generated-test assertion contract does not match deterministic plan"
+        )
+    canonical_plan = parsed_plan.model_dump(mode="json")
     payload = {
         "schema_version": 1,
         "coverage_evidence_id": coverage_evidence_id,
@@ -197,7 +225,7 @@ def generated_test_plan_subject(
         "selected_scenario_id": selected_scenario_id,
         "selected_assertion_contract_digest": selected_assertion_contract_digest,
         "advisory_existing_coverage_digest": advisory_existing_coverage_digest,
-        "plan": plan,
+        "plan": canonical_plan,
     }
     return {**payload, "plan_subject_id": canonical_sha256(payload)}
 
