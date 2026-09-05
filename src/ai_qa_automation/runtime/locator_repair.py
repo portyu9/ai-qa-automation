@@ -749,7 +749,9 @@ def resolve_locator_repair_authority(
 
     browser_gate_id = details.get("browser_gate_id")
     if not isinstance(browser_gate_id, str):
-        raise LocatorRepairAuthorityError("locator repair subject browser gate identity is malformed")
+        raise LocatorRepairAuthorityError(
+            "locator repair subject browser gate identity is malformed"
+        )
     candidate_count = _validate_browser_subject_details(details, browser_gate_id)
     if details.get("original_locator_hash") != original_locator_hash:
         raise LocatorRepairAuthorityError(
