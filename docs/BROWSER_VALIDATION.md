@@ -18,7 +18,7 @@ This document defines the authority, subject identity, failure semantics, runtim
 The internal browser tools covered by this contract are:
 
 - `inspect_browser` — collect a bounded viewport screenshot, accessibility snapshot, console errors, failed requests, and HTTP error observations for an allowlisted URL;
-- `verify_locator_candidates` — load an allowlisted URL and deterministically measure the supplied locator candidates against the current DOM.
+- `verify_locator_candidates` — bind one exact failing targeted-pytest subject, load an allowlisted URL, and deterministically measure the supplied locator candidates against the current DOM.
 
 Both operations run through the framework's controlled Playwright adapter and network-host policy. Redirects, subresource requests, and WebSocket connections are constrained by the browser allowlist logic.
 
@@ -39,16 +39,57 @@ A PASS for URL A cannot satisfy an operator objective contract for URL B.
 
 ### Locator verification
 
-`browser_locator_verification:<sha256>` binds the exact request supplied to `verify_locator_candidates`:
+`browser_locator_verification:<sha256>` binds the exact browser request supplied to `verify_locator_candidates`:
 
 - operation name;
 - exact requested URL;
 - exact original locator; and
 - ordered candidate request payload.
 
-The candidate request identity includes duplicates and the complete candidate fields supplied to the operation. Reordering candidates or changing an advisory field therefore creates a different gate identity rather than silently reusing earlier validation.
+The candidate request identity includes duplicates and the complete candidate fields supplied to the operation. Reordering candidates or changing an advisory field therefore creates a different browser gate identity rather than silently reusing earlier validation.
 
-This does **not** make model-supplied locator measurements authoritative. Downstream locator-healing policy recomputes policy-owned semantic and stability signals deterministically before mutation can be authorized.
+This browser gate does **not** make model-supplied locator measurements authoritative and does not authorize a test mutation. Playwright overwrites candidate uniqueness with observed counts, deterministic policy recomputes semantic intent and stability, and locator mutation requires the separate repair authority below.
+
+### Locator repair authority
+
+Autonomous locator repair is authorized only through a content-addressed `locator_repair:<sha256>` validation subject. The subject is created only after the framework can join the browser observation to one exact failing test subject.
+
+Before browser execution, `verify_locator_candidates` requires the exact ID of an executed failing targeted-pytest validation at the current `change_revision`. The runtime derives rather than accepts from the caller:
+
+- the targeted pytest selector and exact test-file path;
+- the exact failing pytest node identity;
+- the exact observed pytest failure evidence IDs;
+- the current Git SHA and complete workspace fingerprint;
+- the exact target-file SHA-256;
+- the exact supported original locator and its unique occurrence inside that selected Python test node; and
+- the current change revision.
+
+File-only targeted selectors are intentionally too ambiguous for autonomous locator repair. The repair path currently requires an explicit Python pytest node selector that can be mapped deterministically to one source test function.
+
+The failing pytest evidence must itself prove that it observed the same Git SHA and workspace fingerprint: its before/after workspace fingerprints must match, workspace integrity must be verified, and its frozen execution-subject Git SHA/source fingerprint must match the subject being repaired. A stale failure record at the same numeric revision therefore cannot be retrospectively attached to newer out-of-band workspace bytes.
+
+After Playwright completes, the repair subject additionally binds:
+
+- the exact `browser_locator_verification` gate;
+- the Playwright locator-verification observation;
+- the exact same-DOM screenshot and accessibility evidence IDs;
+- requested URL and candidate-request hashes from the browser subject;
+- the exact requested candidate count, which must equal the number of measured candidate rows; and
+- deterministic failure classification/confidence computed **only** from the bound pytest failure evidence plus that exact Playwright verification and same-DOM context.
+
+A truncated, expanded, or otherwise cardinality-inconsistent candidate observation cannot create repair authority, even if individual rows look plausible. If Playwright completed the exact browser operation but later repair-subject construction fails this additional authority validation, the browser gate remains `PASS` for the observation it actually completed while locator repair remains unverified and no repair subject is created.
+
+When a repair subject is created, the browser validation record carries reverse linkage to the repair-subject ID, failing validation/node/path, workspace revision/Git SHA/fingerprint, and target-file digest. Every later repair-subject resolution requires that exact browser metadata and exact browser evidence list to still match the repair subject. A detached or rewritten browser PASS cannot be reattached to a different repair authority.
+
+Run-wide `classify_failure` remains useful diagnostic state, but it cannot grant locator mutation authority. Unrelated evidence elsewhere in the run cannot raise the repair subject's classification confidence. Persisted classification fields are not trusted on reuse: every proposal/apply resolution reruns the deterministic `FailureAnalyzer` over the exact bound evidence subset and requires the stored classification, confidence, and evidence IDs to reproduce exactly.
+
+`propose_locator_heal` accepts only the repair-subject ID and a candidate list. It does not accept a target path, expected file hash, original locator, or arbitrary verification evidence ID. Candidates are eligible only if they resolve uniquely in the repair subject's exact Playwright observation.
+
+`apply_locator_heal` accepts only an approved proposal ID. Before writing it re-resolves the repair subject and revalidates the current revision, Git SHA, complete workspace fingerprint, target-file SHA, original locator occurrence, failing pytest lineage, browser gate/linkage, verification evidence, candidate cardinality, same-DOM context, and replayed deterministic classification. The proposal's mirrored authority fields must still match the canonical subject, and the selected locator must reproduce under deterministic healing policy.
+
+Any intervening authorized mutation or out-of-band workspace change invalidates an unused proposal even if the target file itself is byte-identical. Closing a newer revision cannot reactivate an older proposal. Exact target-file SHA equality is therefore necessary but intentionally insufficient freshness proof for browser/classification evidence.
+
+A successful locator write establishes only deterministic patch-safety evidence for the new revision. It does not certify the changed test or close the mutation transaction. Exact-path targeted pytest with trusted out-of-process executed-test outcome authority and the controller-bound full regression are still required by the runtime result contract. The current live targeted adapter deliberately does not manufacture that trusted outcome authority; until that separate observer exists, a positive autonomous test mutation cannot be promoted to verified closure merely because locator repair was subject-bound.
 
 ## Validation outcomes
 
@@ -61,6 +102,8 @@ A browser operation records validation for the current `change_revision`.
 | Request is deterministically denied before a trustworthy browser observation exists | denial/error response; never synthetic PASS |
 
 A browser execution failure is not automatically a product failure. Browser runtime absence, transport/execution uncertainty, or another incomplete observation remains `NOT_VERIFIED`.
+
+For locator healing, `browser_locator_verification=PASS` means only that candidate measurement completed. A separate `locator_repair_subject=PASS` is required before proposal evaluation, and that PASS still authorizes only the bounded repair decision—not post-mutation correctness or revision closure. A browser PASS can therefore coexist with missing locator-repair authority when the browser observation completed but subject correlation, cardinality, context, or classification validation did not.
 
 ## Browser runtime authority
 
@@ -91,7 +134,9 @@ For locator verification, the validation carries:
 - the Playwright locator-verification observation; and
 - its same-DOM screenshot/accessibility context evidence.
 
-Browser execution failures that produce exception evidence register that evidence in canonical run state before the corresponding `NOT_VERIFIED` validation is persisted.
+The locator-repair subject then joins those browser evidence IDs to the exact current targeted-pytest failure evidence subset and workspace/file authority. The browser evidence is not detached and reintroduced later through caller-selected identifiers.
+
+Browser execution failures that produce exception evidence register that evidence in canonical run state before the corresponding `NOT_VERIFIED` validation is persisted. A generic browser runtime failure after the exact locator-verification subject is established is likewise persisted as `NOT_VERIFIED`, not misrepresented as a pre-execution policy denial.
 
 ## PASS is operation completion, not page health
 
@@ -159,7 +204,7 @@ A malformed, denied, oversized, unavailable, or otherwise untrustworthy browser 
 
 ## Core invariant
 
-> **Browser evidence collection is not page correctness. Exact-subject completion is not semantic acceptance. A stale browser PASS cannot erase later uncertainty. Raw URL secrets are not diagnostic metadata. Automatic PR browser validation may observe a hosted browser but may not install privileged browser/OS dependencies. Only a deterministic gate bound to the intended subject may close an objective.**
+> **Browser evidence collection is not page correctness. Exact-subject completion is not semantic acceptance. Locator repair requires one exact failing-test/workspace/browser subject, not caller-selected path authority. Persisted classification is replayed, not trusted. Candidate rows must match the bound browser request. Target-file SHA alone is not evidence freshness. A stale browser PASS cannot erase later uncertainty. Raw URL secrets are not diagnostic metadata. Automatic PR browser validation may observe a hosted browser but may not install privileged browser/OS dependencies. Only a deterministic gate bound to the intended subject may close an objective.**
 
 ---
 

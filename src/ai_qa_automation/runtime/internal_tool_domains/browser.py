@@ -8,7 +8,6 @@ from ...models import (
     EvidenceItem,
     EvidenceKind,
     EvidenceNature,
-    FailureClass,
     LocatorCandidate,
     RiskLevel,
     ValidationStatus,
@@ -21,12 +20,119 @@ from ..browser_validation import (
     browser_locator_verification_subject,
     browser_validation_result,
 )
+from ..locator_repair import (
+    LocatorRepairAuthority,
+    LocatorRepairAuthorityError,
+    build_locator_repair_subject,
+    prepare_locator_repair_binding,
+    resolve_locator_repair_authority,
+)
 from .common import (
     RuntimeServices,
     ToolDecorator,
     record_patch_safety_validation,
     require_closed_revision_before_mutation,
 )
+
+_MAX_LOCATOR_CANDIDATES = 20
+_MAX_CANDIDATES_JSON_BYTES = 100_000
+
+
+def _parse_candidates_json(value: str) -> list[LocatorCandidate]:
+    if len(value.encode("utf-8")) > _MAX_CANDIDATES_JSON_BYTES:
+        raise ValueError("candidates_json exceeds the bounded locator-candidate input limit")
+    payload = json.loads(value)
+    if not isinstance(payload, list) or len(payload) > _MAX_LOCATOR_CANDIDATES:
+        raise ValueError("candidates_json must contain at most 20 candidates")
+    return [LocatorCandidate.model_validate(item) for item in payload]
+
+
+def _bind_requested_candidates(
+    authority: LocatorRepairAuthority,
+    requested: list[LocatorCandidate],
+) -> list[LocatorCandidate]:
+    observed_rows = authority.verification.structured_data.get("candidates")
+    if not isinstance(observed_rows, list) or len(observed_rows) > _MAX_LOCATOR_CANDIDATES:
+        raise ValueError("repair subject contains malformed locator-candidate observations")
+
+    bound: list[LocatorCandidate] = []
+    for candidate in requested:
+        matches = [
+            row
+            for row in observed_rows
+            if isinstance(row, dict)
+            and row.get("locator") == candidate.locator
+            and row.get("strategy") == candidate.strategy
+        ]
+        if len(matches) != 1:
+            raise ValueError(
+                "candidate does not resolve uniquely in the repair subject's Playwright observation"
+            )
+        observed = matches[0]
+        count = observed.get("uniqueness_count")
+        rejected = observed.get("rejected_reason")
+        if type(count) is not int or count < 0:
+            raise ValueError("observed locator uniqueness count is malformed")
+        if rejected is not None and not isinstance(rejected, str):
+            raise ValueError("observed locator rejection reason is malformed")
+        bound.append(
+            candidate.model_copy(
+                update={
+                    "uniqueness_count": count,
+                    "rejected_reason": rejected,
+                }
+            )
+        )
+    return bound
+
+
+def _revalidate_proposed_locator(
+    services: RuntimeServices,
+    authority: LocatorRepairAuthority,
+    *,
+    proposed_locator: str,
+    expected_risk: object,
+) -> None:
+    rows = authority.verification.structured_data.get("candidates")
+    if not isinstance(rows, list):
+        raise ValueError("repair subject lost locator-candidate observations")
+    matches = [
+        row for row in rows if isinstance(row, dict) and row.get("locator") == proposed_locator
+    ]
+    if len(matches) != 1:
+        raise ValueError("proposed locator does not resolve uniquely in Playwright evidence")
+    row = matches[0]
+    strategy = row.get("strategy")
+    count = row.get("uniqueness_count")
+    rejected = row.get("rejected_reason")
+    if not isinstance(strategy, str) or type(count) is not int or count < 0:
+        raise ValueError("proposed locator observation is malformed")
+    if rejected is not None and not isinstance(rejected, str):
+        raise ValueError("proposed locator rejection state is malformed")
+
+    candidate = LocatorCandidate(
+        locator=proposed_locator,
+        strategy=strategy,
+        uniqueness_count=count,
+        semantic_match=0.0,
+        stability_score=0.0,
+        rejected_reason=rejected,
+    )
+    replay = SelfHealingEngine().propose(
+        classification=authority.classification,
+        original_locator=authority.original_locator,
+        candidates=[candidate],
+        evidence_ids=list(authority.validation.evidence_ids),
+        policy=services.policy,
+    )
+    if (
+        replay.allowed is not True
+        or replay.proposed_locator != proposed_locator
+        or replay.risk.value != expected_risk
+    ):
+        raise ValueError(
+            "stored healing proposal no longer reproduces under deterministic locator policy"
+        )
 
 
 def register_browser_tools(
@@ -142,98 +248,160 @@ def register_browser_tools(
 
     @tool(
         "verify_locator_candidates",
-        "Use Playwright to deterministically measure locator candidate uniqueness in the current DOM.",
-        {"url": str, "original_locator": str, "candidates_json": str},
+        "Bind one failing targeted pytest node, then use Playwright to verify locator candidates against its exact repair authority.",
+        {
+            "url": str,
+            "failure_validation_id": str,
+            "original_locator": str,
+            "candidates_json": str,
+        },
     )
     async def verify_locator_candidates(args: dict[str, Any]) -> dict[str, Any]:
         services.consume("verify_locator_candidates", args)
-        subject = None
         try:
-            payload = json.loads(args["candidates_json"])
-            if not isinstance(payload, list):
-                raise ValueError("candidates_json must contain a JSON list")
-            candidates = [LocatorCandidate.model_validate(item) for item in payload]
+            candidates = _parse_candidates_json(args["candidates_json"])
+            binding = prepare_locator_repair_binding(
+                workspace=services.workspace,
+                expected_root_identity=services.workspace_root_identity,
+                state=services.state,
+                evidence=services.evidence,
+                policy=services.policy,
+                failure_validation_id=args["failure_validation_id"],
+                original_locator=args["original_locator"],
+            )
             subject = browser_locator_verification_subject(
                 args["url"], args["original_locator"], candidates
             )
             allow_hosts = services.network_hosts(args["url"])
+        except (
+            LocatorRepairAuthorityError,
+            ValueError,
+            PermissionError,
+            RuntimeError,
+            OSError,
+            UnicodeError,
+        ) as exc:
+            services.checkpoint()
+            return {
+                "content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}],
+                "is_error": True,
+            }
+
+        try:
             verified, evidence_id = await browser_probe_cls(
                 services.evidence, allow_hosts=allow_hosts
             ).verify_locator_candidates(args["url"], args["original_locator"], candidates)
         except BrowserProbeExecutionError as exc:
             if exc.evidence_id not in services.state.evidence_ids:
                 services.state.evidence_ids.append(exc.evidence_id)
-            if subject is not None:
-                services.state.validation_results.append(
-                    browser_validation_result(
-                        subject,
-                        revision=services.state.change_revision,
-                        status=ValidationStatus.NOT_VERIFIED,
-                        summary="Browser locator verification did not complete deterministically.",
-                        evidence_ids=[exc.evidence_id],
-                        details={"failure_kind": "browser_execution"},
-                    )
+            services.state.validation_results.append(
+                browser_validation_result(
+                    subject,
+                    revision=services.state.change_revision,
+                    status=ValidationStatus.NOT_VERIFIED,
+                    summary="Browser locator verification did not complete deterministically.",
+                    evidence_ids=[exc.evidence_id],
+                    details={"failure_kind": "browser_execution"},
                 )
+            )
             services.checkpoint()
-            gate_text = f" gate_id={subject.gate_id}" if subject is not None else ""
             return {
                 "content": [
                     {
                         "type": "text",
-                        "text": f"NOT_VERIFIED{gate_text}: {redact_text(str(exc))}",
+                        "text": f"NOT_VERIFIED gate_id={subject.gate_id}: {redact_text(str(exc))}",
                     }
                 ],
-                "is_error": True,
-            }
-        except (ValueError, PermissionError) as exc:
-            return {
-                "content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}],
                 "is_error": True,
             }
         except RuntimeError as exc:
-            if subject is not None:
-                services.state.validation_results.append(
-                    browser_validation_result(
-                        subject,
-                        revision=services.state.change_revision,
-                        status=ValidationStatus.NOT_VERIFIED,
-                        summary=redact_text(str(exc)),
-                        details={"failure_kind": "browser_runtime"},
-                    )
+            services.state.validation_results.append(
+                browser_validation_result(
+                    subject,
+                    revision=services.state.change_revision,
+                    status=ValidationStatus.NOT_VERIFIED,
+                    summary=redact_text(str(exc)),
+                    details={"failure_kind": "browser_runtime"},
                 )
-                services.checkpoint()
-            gate_text = f" gate_id={subject.gate_id}" if subject is not None else ""
+            )
+            services.checkpoint()
             return {
                 "content": [
                     {
                         "type": "text",
-                        "text": f"NOT_VERIFIED{gate_text}: {redact_text(str(exc))}",
+                        "text": f"NOT_VERIFIED gate_id={subject.gate_id}: {redact_text(str(exc))}",
                     }
                 ],
                 "is_error": True,
             }
+
         verification_item = services.evidence.get(evidence_id)
         context_ids = verification_item.structured_data.get("context_evidence_ids", [])
         registered_context_ids: list[str] = []
         if isinstance(context_ids, list):
             for context_id in context_ids:
-                context_id = str(context_id)
+                if not isinstance(context_id, str) or not context_id:
+                    continue
                 registered_context_ids.append(context_id)
                 if context_id not in services.state.evidence_ids:
                     services.state.evidence_ids.append(context_id)
         if evidence_id not in services.state.evidence_ids:
             services.state.evidence_ids.append(evidence_id)
-        if subject is None:  # pragma: no cover - assigned before browser execution
-            raise RuntimeError("browser locator verification lost deterministic subject identity")
-        services.state.validation_results.append(
-            browser_validation_result(
-                subject,
-                revision=services.state.change_revision,
-                status=ValidationStatus.PASS,
-                summary="Playwright verified locator candidates for the exact request subject.",
-                evidence_ids=[evidence_id, *registered_context_ids],
+
+        browser_evidence_ids = [evidence_id, *registered_context_ids]
+        try:
+            repair_subject = build_locator_repair_subject(
+                binding,
+                workspace=services.workspace,
+                expected_root_identity=services.workspace_root_identity,
+                state=services.state,
+                evidence=services.evidence,
+                verification=verification_item,
+                browser_gate_id=subject.gate_id,
+                browser_subject_details=subject.details,
             )
+        except (LocatorRepairAuthorityError, RuntimeError, OSError, UnicodeError) as exc:
+            services.state.validation_results.append(
+                browser_validation_result(
+                    subject,
+                    revision=services.state.change_revision,
+                    status=ValidationStatus.PASS,
+                    summary="Playwright verified locator candidates for the exact request subject.",
+                    evidence_ids=browser_evidence_ids,
+                )
+            )
+            services.checkpoint()
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            f"NOT_VERIFIED locator_repair_subject browser_gate_id={subject.gate_id}: "
+                            f"{redact_text(str(exc))}"
+                        ),
+                    }
+                ],
+                "is_error": True,
+            }
+
+        browser_validation = browser_validation_result(
+            subject,
+            revision=services.state.change_revision,
+            status=ValidationStatus.PASS,
+            summary="Playwright verified locator candidates for the exact request subject.",
+            evidence_ids=browser_evidence_ids,
+            details={
+                "repair_subject_id": repair_subject.gate_id,
+                "failure_validation_id": binding.failure_validation_id,
+                "failing_node_id": binding.failing_node_id,
+                "path": binding.path,
+                "workspace_revision": binding.revision,
+                "workspace_git_sha": binding.git_sha,
+                "workspace_fingerprint": binding.workspace_fingerprint,
+                "expected_sha256": binding.expected_sha256,
+            },
         )
+        services.state.validation_results.extend([browser_validation, repair_subject])
         services.checkpoint()
         return {
             "content": [
@@ -244,189 +412,76 @@ def register_browser_tools(
                             "verification_evidence_id": evidence_id,
                             "candidates": [item.model_dump(mode="json") for item in verified],
                             "gate_id": subject.gate_id,
+                            "repair_subject_id": repair_subject.gate_id,
+                            "repair_subject_status": repair_subject.status.value,
+                            "failure_validation_id": binding.failure_validation_id,
+                            "failing_node_id": binding.failing_node_id,
+                            "path": binding.path,
                         }
                     )[:16000],
                 }
-            ]
+            ],
+            "is_error": repair_subject.status is not ValidationStatus.PASS,
         }
 
     @tool(
         "propose_locator_heal",
-        "Evaluate only browser-verified semantic locator candidates; does not change test code.",
-        {
-            "path": str,
-            "expected_sha256": str,
-            "original_locator": str,
-            "candidates_json": str,
-            "verification_evidence_id": str,
-        },
+        "Evaluate browser-measured candidates only for one active subject-bound locator repair; does not change test code.",
+        {"repair_subject_id": str, "candidates_json": str},
     )
     async def propose_locator_heal(args: dict[str, Any]) -> dict[str, Any]:
         services.consume("propose_locator_heal", args)
-        classification = services.state.classification
-        confidence = services.state.classification_confidence or 0.0
-        if (
-            classification
-            not in {
-                FailureClass.LOCATOR_UI_CONTRACT_CHANGE,
-                FailureClass.TEST_AUTOMATION_DEFECT,
-            }
-            or confidence < 0.75
-        ):
-            return {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "DENIED: current deterministic failure classification does not support a sufficiently confident locator repair",
-                    }
-                ],
-                "is_error": True,
-            }
         try:
-            verification = services.evidence.get(args["verification_evidence_id"])
-        except KeyError:
-            return {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "DENIED: locator verification evidence does not exist in this run",
-                    }
-                ],
-                "is_error": True,
-            }
-        if (
-            verification.kind != EvidenceKind.SOURCE_OBSERVATION
-            or verification.nature != EvidenceNature.OBSERVED_FACT
-            or verification.source != "playwright_locator_verification"
-            or verification.id not in services.state.evidence_ids
-        ):
-            return {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "DENIED: supplied evidence is not authoritative Playwright locator verification from this run",
-                    }
-                ],
-                "is_error": True,
-            }
-
-        all_items = {item.id: item for item in services.evidence.all()}
-        context_ids = verification.structured_data.get("context_evidence_ids", [])
-        if not isinstance(context_ids, list) or len(context_ids) != 2:
-            return {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "DENIED: locator verification is missing same-DOM context evidence",
-                    }
-                ],
-                "is_error": True,
-            }
-        try:
-            context_items = [all_items[str(eid)] for eid in context_ids]
-        except KeyError:
-            return {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "DENIED: locator verification context evidence is unavailable in this run",
-                    }
-                ],
-                "is_error": True,
-            }
-        if any(item.id not in services.state.evidence_ids for item in context_items):
-            return {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "DENIED: locator verification context is not registered in canonical run state",
-                    }
-                ],
-                "is_error": True,
-            }
-        context_kinds = {item.kind for item in context_items}
-        if context_kinds != {EvidenceKind.SCREENSHOT, EvidenceKind.ACCESSIBILITY_SNAPSHOT} or any(
-            item.source != "playwright_locator_verification"
-            or item.source_identifier != verification.source_identifier
-            for item in context_items
-        ):
-            return {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "DENIED: locator repair requires screenshot and accessibility evidence captured by the same Playwright verification",
-                    }
-                ],
-                "is_error": True,
-            }
-
-        if (
-            str(verification.structured_data.get("original_locator") or "")
-            != args["original_locator"]
-        ):
-            return {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "DENIED: original locator does not match the browser verification evidence",
-                    }
-                ],
-                "is_error": True,
-            }
-        observed_rows = verification.structured_data.get("candidates", [])
-        observed_map = {
-            (str(row.get("locator")), str(row.get("strategy"))): row
-            for row in observed_rows
-            if isinstance(row, dict)
-        }
-        try:
-            requested = json.loads(args["candidates_json"])
-            if not isinstance(requested, list):
-                raise ValueError("candidates_json must contain a JSON list")
-            bound: list[LocatorCandidate] = []
-            for raw in requested:
-                candidate = LocatorCandidate.model_validate(raw)
-                observed = observed_map.get((candidate.locator, candidate.strategy))
-                if observed is None:
-                    raise ValueError(
-                        "candidate was not measured by the supplied Playwright verification evidence"
-                    )
-                bound.append(
-                    candidate.model_copy(
-                        update={
-                            "uniqueness_count": int(observed.get("uniqueness_count", 0)),
-                            "rejected_reason": observed.get("rejected_reason"),
-                        }
-                    )
-                )
-        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            authority = resolve_locator_repair_authority(
+                subject_id=args["repair_subject_id"],
+                workspace=services.workspace,
+                expected_root_identity=services.workspace_root_identity,
+                state=services.state,
+                evidence=services.evidence,
+            )
+            requested = _parse_candidates_json(args["candidates_json"])
+            bound = _bind_requested_candidates(authority, requested)
+        except (
+            LocatorRepairAuthorityError,
+            ValueError,
+            TypeError,
+            json.JSONDecodeError,
+            RuntimeError,
+            OSError,
+            UnicodeError,
+        ) as exc:
             return {
                 "content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}],
                 "is_error": True,
             }
 
         proposal = SelfHealingEngine().propose(
-            classification=classification,
-            original_locator=args["original_locator"],
+            classification=authority.classification,
+            original_locator=authority.original_locator,
             candidates=bound,
-            evidence_ids=[verification.id],
+            evidence_ids=list(authority.validation.evidence_ids),
             policy=services.policy,
         )
+        subject_details = authority.validation.details
         proposal_item = services.evidence.add(
             EvidenceItem(
                 run_id=services.state.run_id,
                 kind=EvidenceKind.HEALING_PROPOSAL,
                 nature=EvidenceNature.MODEL_INTERPRETATION,
                 source="self_healing_engine",
-                source_identifier=verification.id,
-                summary="Locator healing proposal evaluated against browser-verified candidates",
+                source_identifier=args["repair_subject_id"],
+                summary="Locator healing proposal evaluated against one subject-bound browser verification",
                 structured_data={
                     **proposal.model_dump(mode="json"),
-                    "path": args["path"],
-                    "expected_sha256": args["expected_sha256"],
-                    "classification": classification.value,
-                    "classification_confidence": confidence,
-                    "verification_evidence_id": verification.id,
+                    "repair_subject_id": args["repair_subject_id"],
+                    "path": authority.path,
+                    "expected_sha256": authority.expected_sha256,
+                    "workspace_revision": subject_details.get("workspace_revision"),
+                    "workspace_git_sha": subject_details.get("workspace_git_sha"),
+                    "workspace_fingerprint": subject_details.get("workspace_fingerprint"),
+                    "classification": authority.classification.value,
+                    "classification_confidence": authority.classification_confidence,
+                    "verification_evidence_id": authority.verification.id,
                 },
             )
         )
@@ -439,6 +494,7 @@ def register_browser_tools(
                     "text": json.dumps(
                         {
                             "proposal_evidence_id": proposal_item.id,
+                            "repair_subject_id": args["repair_subject_id"],
                             "proposal": proposal.model_dump(mode="json"),
                         }
                     ),
@@ -449,13 +505,16 @@ def register_browser_tools(
 
     @tool(
         "apply_locator_heal",
-        "Apply one previously approved, browser-verified locator proposal to its bound test file.",
-        {"proposal_evidence_id": str, "path": str},
+        "Apply one approved locator proposal only to the exact still-current test subject bound before browser verification.",
+        {"proposal_evidence_id": str},
     )
     async def apply_locator_heal(args: dict[str, Any]) -> dict[str, Any]:
         services.consume("apply_locator_heal", args)
         if reason := require_closed_revision_before_mutation(services):
-            return {"content": [{"type": "text", "text": f"DENIED: {reason}"}], "is_error": True}
+            return {
+                "content": [{"type": "text", "text": f"DENIED: {reason}"}],
+                "is_error": True,
+            }
         try:
             proposal_item = services.evidence.get(args["proposal_evidence_id"])
         except KeyError:
@@ -470,8 +529,9 @@ def register_browser_tools(
             }
         data = proposal_item.structured_data
         if (
-            proposal_item.kind != EvidenceKind.HEALING_PROPOSAL
-            or proposal_item.nature != EvidenceNature.MODEL_INTERPRETATION
+            proposal_item.kind is not EvidenceKind.HEALING_PROPOSAL
+            or proposal_item.nature is not EvidenceNature.MODEL_INTERPRETATION
+            or proposal_item.source != "self_healing_engine"
             or proposal_item.id not in services.state.evidence_ids
             or data.get("allowed") is not True
             or data.get("risk") not in {RiskLevel.LOW.value, RiskLevel.MEDIUM.value}
@@ -485,31 +545,71 @@ def register_browser_tools(
                 ],
                 "is_error": True,
             }
-        path = str(data.get("path") or "")
-        if str(args.get("path") or "") != path:
+
+        repair_subject_id = data.get("repair_subject_id")
+        if not isinstance(repair_subject_id, str) or not repair_subject_id:
             return {
                 "content": [
                     {
                         "type": "text",
-                        "text": "DENIED: requested path does not match the path bound into the healing proposal",
+                        "text": "DENIED: healing proposal lost repair subject identity",
                     }
                 ],
                 "is_error": True,
             }
-        expected_sha256 = str(data.get("expected_sha256") or "")
-        original_locator = str(data.get("original_locator") or "")
-        proposed_locator = str(data.get("proposed_locator") or "")
-        if not all((path, expected_sha256, original_locator, proposed_locator)):
+        try:
+            authority = resolve_locator_repair_authority(
+                subject_id=repair_subject_id,
+                workspace=services.workspace,
+                expected_root_identity=services.workspace_root_identity,
+                state=services.state,
+                evidence=services.evidence,
+            )
+            subject_details = authority.validation.details
+            if (
+                proposal_item.source_identifier != repair_subject_id
+                or data.get("path") != authority.path
+                or data.get("expected_sha256") != authority.expected_sha256
+                or data.get("workspace_revision") != subject_details.get("workspace_revision")
+                or data.get("workspace_git_sha") != subject_details.get("workspace_git_sha")
+                or data.get("workspace_fingerprint") != subject_details.get("workspace_fingerprint")
+                or data.get("classification") != authority.classification.value
+                or data.get("classification_confidence") != authority.classification_confidence
+                or data.get("verification_evidence_id") != authority.verification.id
+                or data.get("original_locator") != authority.original_locator
+                or data.get("evidence_ids") != authority.validation.evidence_ids
+            ):
+                raise ValueError(
+                    "healing proposal authority does not match the active locator repair subject"
+                )
+            proposed_locator = data.get("proposed_locator")
+            if not isinstance(proposed_locator, str) or not proposed_locator:
+                raise ValueError("healing proposal is incomplete")
+            _revalidate_proposed_locator(
+                services,
+                authority,
+                proposed_locator=proposed_locator,
+                expected_risk=data.get("risk"),
+            )
+        except (
+            LocatorRepairAuthorityError,
+            ValueError,
+            TypeError,
+            RuntimeError,
+            OSError,
+            UnicodeError,
+        ) as exc:
             return {
-                "content": [{"type": "text", "text": "DENIED: healing proposal is incomplete"}],
+                "content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}],
                 "is_error": True,
             }
+
         patcher = SafeTestPatcher(services.workspace, services.policy)
         try:
             result = patcher.replace_locator_once(
-                relative_path=path,
-                expected_sha256=expected_sha256,
-                old_locator=original_locator,
+                relative_path=authority.path,
+                expected_sha256=authority.expected_sha256,
+                old_locator=authority.original_locator,
                 new_locator=proposed_locator,
             )
         except (PermissionError, RuntimeError, ValueError, FileNotFoundError) as exc:
@@ -525,13 +625,15 @@ def register_browser_tools(
                 kind=EvidenceKind.GIT_DIFF,
                 source="safe_test_patcher",
                 source_identifier=proposal_item.id,
-                summary="Browser-verified locator replacement applied; execution validation still required",
+                summary="Subject-bound browser-verified locator replacement applied; execution validation still required",
                 structured_data={
                     "path": result.path,
                     "old_sha256": result.old_sha256,
                     "new_sha256": result.new_sha256,
                     "diff": result.diff[:12000],
                     "proposal_evidence_id": proposal_item.id,
+                    "repair_subject_id": repair_subject_id,
+                    "originating_revision": authority.validation.revision,
                 },
             )
         )
@@ -547,7 +649,7 @@ def register_browser_tools(
             "content": [
                 {
                     "type": "text",
-                    "text": f"LOCATOR_PATCH_APPLIED evidence_id={item.id} revision={services.state.change_revision}; run targeted test and relevant regression next",
+                    "text": f"LOCATOR_PATCH_APPLIED evidence_id={item.id} revision={services.state.change_revision}; run exact-path targeted test and full regression next",
                 }
             ]
         }

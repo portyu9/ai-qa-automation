@@ -63,20 +63,15 @@ EXPECTED_TOOL_PROPERTIES: dict[str, dict[str, dict[str, object]]] = {
     },
     "verify_locator_candidates": {
         "url": {"type": "string"},
+        "failure_validation_id": {"type": "string"},
         "original_locator": {"type": "string"},
         "candidates_json": {"type": "string"},
     },
     "propose_locator_heal": {
-        "path": {"type": "string"},
-        "expected_sha256": {"type": "string"},
-        "original_locator": {"type": "string"},
+        "repair_subject_id": {"type": "string"},
         "candidates_json": {"type": "string"},
-        "verification_evidence_id": {"type": "string"},
     },
-    "apply_locator_heal": {
-        "proposal_evidence_id": {"type": "string"},
-        "path": {"type": "string"},
-    },
+    "apply_locator_heal": {"proposal_evidence_id": {"type": "string"}},
     "validate_json_contract": {
         "instance_json": {"type": "string"},
         "schema_json": {"type": "string"},
@@ -271,6 +266,7 @@ async def test_all_registered_adapters_cross_pinned_sdk_mcp_boundary(tmp_path: P
         "verify_locator_candidates",
         {
             "url": "https://blocked.invalid/",
+            "failure_validation_id": "missing",
             "original_locator": "#submit",
             "candidates_json": "[]",
         },
@@ -280,20 +276,14 @@ async def test_all_registered_adapters_cross_pinned_sdk_mcp_boundary(tmp_path: P
     proposal = await call_real_sdk_tool(
         server,
         "propose_locator_heal",
-        {
-            "path": "tests/test_sample.py",
-            "expected_sha256": "0" * 64,
-            "original_locator": "#submit",
-            "candidates_json": "[]",
-            "verification_evidence_id": "missing",
-        },
+        {"repair_subject_id": "missing", "candidates_json": "[]"},
     )
     assert proposal.isError is True
 
     application = await call_real_sdk_tool(
         server,
         "apply_locator_heal",
-        {"proposal_evidence_id": "missing", "path": "tests/test_sample.py"},
+        {"proposal_evidence_id": "missing"},
     )
     assert application.isError is True
 
