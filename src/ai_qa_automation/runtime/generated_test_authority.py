@@ -102,7 +102,7 @@ def _capture_non_git_workspace_fingerprint(
         try:
             data = read_bytes_confined(
                 workspace,
-                observed.path,
+                observed.path.as_posix(),
                 max_bytes=max(1, observed.size),
                 label=f"generated-test non-Git workspace subject {observed.path.as_posix()}",
                 expected_root_identity=before.root_identity,
