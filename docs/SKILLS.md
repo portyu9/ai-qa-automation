@@ -17,7 +17,7 @@ The live Agent SDK configuration explicitly allowlists exactly five framework Sk
 |---|---|---|
 | `investigate-test-failure` | evidence-driven root-cause investigation | material classification references observed evidence; interpretation alone cannot prove defect class |
 | `self-heal-test` | semantic locator maintenance | Playwright uniqueness + deterministic locator semantics/stability + exact path/hash + validation lineage |
-| `generate-test` | coverage-aware test design/creation | observed coverage drives candidates; unsupported model coverage claims cannot suppress them |
+| `generate-test` | coverage-aware test design/proposal | observed coverage drives candidates; unsupported model coverage claims cannot suppress them; generic generated source is proposal-only until semantic implementation is deterministically authorized |
 | `prioritize-regression` | risk-aware regression selection | mandatory coverage preserved; low confidence broadens execution |
 | `performance-test` | bounded k6 assessment | non-production/host/script/egress prerequisites + predefined measured thresholds |
 
@@ -94,25 +94,36 @@ Generation begins with expected behavior and **observed repository coverage**—
 
 ```mermaid
 flowchart LR
-    accTitle: Coverage-aware test generation from observed evidence to guarded validation
-    accDescr: A requirement or change is inspected through bounded coverage search, producing observed coverage evidence and deterministic candidate gaps. The model may interpret a same-run plan, but guarded creation is followed by deterministic quality, execution, and regression validation.
+    accTitle: Coverage-aware test generation from observed evidence to proposal-only authority
+    accDescr: A requirement or change is inspected through bounded coverage search bound to the exact repository subject. A deterministic plan assigns stable scenario identities and one selected scenario. Proposed source is bound to that scenario, path, content hash, and workspace revision, then static safety is checked. Generic source cannot be mutated until a target-specific deterministic semantic implementation gate or explicit approval exists.
 
     A[Requirement / change] --> B[Bounded coverage search]
-    B --> C[Observed coverage evidence]
-    C --> D[Deterministic candidate gaps]
-    D --> E[Model-interpreted same-run plan]
-    E --> F[Guarded creation]
-    F --> G[Quality + execution + regression validation]
+    B --> C[Observed coverage + repository subject]
+    C --> D[Stable deterministic scenario candidates]
+    D --> E[Model-interpreted same-run plan + exact selected scenario]
+    E --> F[Bound source proposal]
+    F --> G[Static path / syntax / assertion / unsafe-diff checks]
+    G --> H{Semantic implementation authority?}
+    H -->|No| I[Mutation denied / proposal retained]
+    H -->|Deterministic gate or explicit approval| J[Controlled mutation]
+    J --> K[Exact-path execution + full regression closure]
 ```
 
 A model may annotate a candidate as “already covered” only when same-run observed evidence supports that interpretation. Unsupported labels cannot shrink the deterministic candidate set.
 
-The Skill rejects plan-less, assertion-free, arbitrary-sleep, skip/xfail/focus, timeout-inflated, or otherwise intent-eroding tests.
+The runtime binds coverage evidence to the exact workspace fingerprint/revision before planning. Each deterministic candidate has a content-addressed scenario ID and assertion-contract digest; the plan identifies exactly one selected scenario. A generated-source proposal then binds the exact coverage evidence ID, requirement digest/provenance, plan evidence ID, selected scenario/layer/assertion contract, target path, proposed-content hash, and current repository subject.
+
+Meaningful-assertion, syntax, path, no-overwrite, and unsafe-diff checks remain mandatory, but they are explicitly **static safety checks, not semantic coverage proof**. A syntactically valid passing test is not evidence that it implements the selected requirement.
+
+> [!IMPORTANT]
+> The current generic generated-test path has no deterministic semantic implementation gate. `create_test_file` therefore records a bound static-safe proposal and returns a denial without writing repository bytes. A future target-specific deterministic gate or explicit human approval may authorize a separate controlled mutation path; model prose, plan existence, static quality, targeted pytest, or full-regression success cannot substitute for that missing authority.
+
+The Skill rejects plan-less, assertion-free, arbitrary-sleep, skip/xfail/focus, timeout-inflated, or otherwise intent-eroding tests. Incomplete coverage observation also cannot authorize a proposal because duplicate coverage cannot be excluded deterministically.
 
 Unknown product intent remains unknown; it is not invented merely to produce a test.
 
 > [!NOTE]
-> Reusable generation/patch components can understand Python/JavaScript/TypeScript syntax. Live autonomous commit authority is intentionally narrower where the controlled execution proof is pytest-backed.
+> Reusable generation/patch components can understand Python/JavaScript/TypeScript syntax. Live autonomous commit authority is intentionally narrower, and generated-test mutation is currently denied altogether when semantic implementation proof is unavailable. Skill prose cannot widen that runtime decision.
 
 ---
 
