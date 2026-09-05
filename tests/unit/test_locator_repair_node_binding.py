@@ -35,7 +35,9 @@ def _git(workspace: Path, *args: str) -> str:
     ).stdout.strip()
 
 
-def _subject(tmp_path: Path, source: str) -> tuple[Path, AgentRunState, EvidenceStore, PolicyEngine, tuple[int, int]]:
+def _subject(
+    tmp_path: Path, source: str
+) -> tuple[Path, AgentRunState, EvidenceStore, PolicyEngine, tuple[int, int]]:
     workspace = tmp_path / "workspace"
     test_file = workspace / "tests" / "test_nodes.py"
     test_file.parent.mkdir(parents=True)
@@ -137,9 +139,7 @@ def test_file_level_failure_is_too_ambiguous_for_autonomous_locator_repair(
 ) -> None:
     workspace, state, evidence, policy, root_identity = _subject(
         tmp_path,
-        "def test_target(page):\n"
-        f"    {_LOCATOR}.click()\n"
-        "    assert True\n",
+        f"def test_target(page):\n    {_LOCATOR}.click()\n    assert True\n",
     )
     validation = _failure(
         workspace,
@@ -159,7 +159,7 @@ def test_locator_outside_selected_failing_node_cannot_become_repair_authority(
     workspace, state, evidence, policy, root_identity = _subject(
         tmp_path,
         "def test_target(page):\n"
-        "    page.get_by_test_id(\"different\").click()\n"
+        '    page.get_by_test_id("different").click()\n'
         "    assert True\n\n"
         "def test_other(page):\n"
         f"    {_LOCATOR}.click()\n"
