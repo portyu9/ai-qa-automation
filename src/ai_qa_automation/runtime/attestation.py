@@ -222,9 +222,7 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
         or state.get("control_plane_terminal_subject_digest") is not None
     )
     attestation_schema = (
-        "ai-qa-run-attestation/v2"
-        if has_control_plane_provenance
-        else "ai-qa-run-attestation/v1"
+        "ai-qa-run-attestation/v2" if has_control_plane_provenance else "ai-qa-run-attestation/v1"
     )
 
     core: dict[str, Any] = {
