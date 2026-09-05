@@ -67,7 +67,11 @@ def capture_generated_test_repository_subject(
     expected_root_identity: tuple[int, int] | None,
     change_revision: int,
 ) -> GeneratedTestRepositorySubject:
-    if isinstance(change_revision, bool) or not isinstance(change_revision, int) or change_revision < 0:
+    if (
+        isinstance(change_revision, bool)
+        or not isinstance(change_revision, int)
+        or change_revision < 0
+    ):
         raise GeneratedTestAuthorityError("generated-test change revision is invalid")
     try:
         inspector = RepositoryInspector(
@@ -80,22 +84,15 @@ def capture_generated_test_repository_subject(
             "generated-test repository subject could not be captured"
         ) from exc
     if not snapshot.fingerprint_complete:
-        raise GeneratedTestAuthorityError(
-            "generated-test repository fingerprint is incomplete"
-        )
+        raise GeneratedTestAuthorityError("generated-test repository fingerprint is incomplete")
     if not _SHA256.fullmatch(snapshot.fingerprint):
-        raise GeneratedTestAuthorityError(
-            "generated-test repository fingerprint is malformed"
-        )
+        raise GeneratedTestAuthorityError("generated-test repository fingerprint is malformed")
     root_identity = inspector.workspace_root_identity
     if root_identity is None:
-        raise GeneratedTestAuthorityError(
-            "generated-test repository root identity is unavailable"
-        )
+        raise GeneratedTestAuthorityError("generated-test repository root identity is unavailable")
     git_sha = snapshot.git_sha
     if git_sha is not None and (
-        len(git_sha) not in {40, 64}
-        or any(char not in "0123456789abcdef" for char in git_sha)
+        len(git_sha) not in {40, 64} or any(char not in "0123456789abcdef" for char in git_sha)
     ):
         raise GeneratedTestAuthorityError("generated-test Git subject is malformed")
     return GeneratedTestRepositorySubject(
@@ -118,18 +115,14 @@ def parse_generated_test_repository_subject(value: object) -> GeneratedTestRepos
         raise GeneratedTestAuthorityError("generated-test repository Git subject is invalid")
     fingerprint = value.get("workspace_fingerprint")
     if not isinstance(fingerprint, str) or not _SHA256.fullmatch(fingerprint):
-        raise GeneratedTestAuthorityError(
-            "generated-test repository fingerprint is invalid"
-        )
+        raise GeneratedTestAuthorityError("generated-test repository fingerprint is invalid")
     raw_root = value.get("workspace_root_identity")
     if (
         not isinstance(raw_root, list)
         or len(raw_root) != 2
         or any(isinstance(part, bool) or not isinstance(part, int) or part < 0 for part in raw_root)
     ):
-        raise GeneratedTestAuthorityError(
-            "generated-test repository root identity is invalid"
-        )
+        raise GeneratedTestAuthorityError("generated-test repository root identity is invalid")
     revision = value.get("change_revision")
     if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
         raise GeneratedTestAuthorityError("generated-test repository revision is invalid")
@@ -202,7 +195,9 @@ def generated_test_plan_subject(
             "generated-test selected scenario does not match deterministic plan"
         )
     selected = [
-        item for item in parsed_plan.scenarios if item.scenario_id == parsed_plan.selected_scenario_id
+        item
+        for item in parsed_plan.scenarios
+        if item.scenario_id == parsed_plan.selected_scenario_id
     ]
     if (
         len(selected) != 1
