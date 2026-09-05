@@ -27,6 +27,7 @@ from ai_qa_automation.runtime.locator_repair import (
     resolve_locator_repair_authority,
 )
 from ai_qa_automation.runtime.validation_truth import evaluate_revision_closure
+from ai_qa_automation.tools.repository import RepositoryInspector
 
 _ORIGINAL = 'page.get_by_test_id("save-profile")'
 _CANDIDATE = 'page.get_by_role("button", name="Save Profile")'
@@ -84,11 +85,23 @@ def _make_services(tmp_path: Path) -> RuntimeServices:
     )
 
 
+def _current_subject(services: RuntimeServices) -> tuple[str, str]:
+    snapshot = RepositoryInspector(
+        services.workspace,
+        expected_root_identity=services.workspace_root_identity,
+    ).snapshot()
+    assert snapshot.git_sha
+    assert snapshot.fingerprint_complete is True
+    assert snapshot.fingerprint
+    return snapshot.git_sha, snapshot.fingerprint
+
+
 def _add_failing_pytest(
     services: RuntimeServices,
     *,
     selector: str = "tests/test_a.py::test_save_profile",
 ) -> ValidationResult:
+    git_sha, fingerprint = _current_subject(services)
     exit_item = services.evidence.add(
         EvidenceItem(
             run_id=services.state.run_id,
@@ -96,7 +109,16 @@ def _add_failing_pytest(
             source="pytest",
             source_identifier=f"python -m pytest {selector}",
             summary="pytest exited with code 1",
-            structured_data={"exit_code": 1},
+            structured_data={
+                "exit_code": 1,
+                "workspace_integrity_verified": True,
+                "workspace_fingerprint_before": fingerprint,
+                "workspace_fingerprint_after": fingerprint,
+                "execution_subject": {
+                    "git_sha": git_sha,
+                    "source_fingerprint": fingerprint,
+                },
+            },
         )
     )
     exception_item = services.evidence.add(
@@ -217,6 +239,11 @@ class SubjectBrowserProbe:
         return verified, verification.id
 
 
+class UnexpectedBrowserProbe(SubjectBrowserProbe):
+    def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("stale failure evidence must be rejected before browser execution")
+
+
 def _tool_decorator(
     _name: str,
     _description: str,
@@ -257,7 +284,6 @@ async def _verified_subject(
             "candidates_json": json.dumps([_candidate().model_dump(mode="json")]),
         }
     )
-    payload = _json_response(response)
     subjects = [
         item
         for item in services.state.validation_results
@@ -287,6 +313,31 @@ async def test_exact_failing_node_and_browser_evidence_create_repair_subject(
     assert str(subject.details["workspace_fingerprint"])
     assert len(subject.details["failure_evidence_ids"]) == 2
     assert len(subject.details["context_evidence_ids"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_stale_same_revision_failure_is_denied_before_browser_execution(
+    tmp_path: Path,
+) -> None:
+    services = _make_services(tmp_path)
+    failure = _add_failing_pytest(services)
+    (services.workspace / "conftest.py").write_text("# changed after failure\n", encoding="utf-8")
+
+    response = await _tools(services, UnexpectedBrowserProbe)["verify_locator_candidates"](
+        {
+            "url": "https://example.test/profile",
+            "failure_validation_id": failure.id,
+            "original_locator": _ORIGINAL,
+            "candidates_json": json.dumps([_candidate().model_dump(mode="json")]),
+        }
+    )
+
+    assert response["is_error"] is True
+    assert "failing pytest evidence is not bound" in response["content"][0]["text"]
+    assert not any(
+        item.name == "browser_locator_verification"
+        for item in services.state.validation_results
+    )
 
 
 @pytest.mark.asyncio
@@ -393,7 +444,7 @@ class NonFailingLocatorProbe(SubjectBrowserProbe):
     original_count = 1
 
 
-def _add_unrelated_locator_signal(services: RuntimeServices) -> None:
+def _add_unrelated_locator_signal(services: RuntimeServices) -> set[str]:
     url = "https://example.test/unrelated"
     screenshot = services.evidence.add(
         EvidenceItem(
@@ -436,6 +487,7 @@ def _add_unrelated_locator_signal(services: RuntimeServices) -> None:
         )
     )
     services.state.evidence_ids.extend([screenshot.id, accessibility.id, verification.id])
+    return {screenshot.id, accessibility.id, verification.id}
 
 
 @pytest.mark.asyncio
@@ -443,7 +495,7 @@ async def test_unrelated_run_evidence_cannot_raise_bound_repair_classification(
     tmp_path: Path,
 ) -> None:
     services = _make_services(tmp_path)
-    _add_unrelated_locator_signal(services)
+    unrelated_ids = _add_unrelated_locator_signal(services)
     global_result_before = FailureAnalyzer().classify(services.evidence.all())
     assert global_result_before.classification is FailureClass.LOCATOR_UI_CONTRACT_CHANGE
 
@@ -452,9 +504,7 @@ async def test_unrelated_run_evidence_cannot_raise_bound_repair_classification(
     assert response["is_error"] is True
     assert subject.status is ValidationStatus.NOT_VERIFIED
     assert subject.details["classification"] == FailureClass.INSUFFICIENT_EVIDENCE.value
-    assert set(subject.details["classification_evidence_ids"]).isdisjoint(
-        set(services.state.evidence_ids[:3])
-    )
+    assert set(subject.details["classification_evidence_ids"]).isdisjoint(unrelated_ids)
 
 
 class MissingContextProbe(SubjectBrowserProbe):
