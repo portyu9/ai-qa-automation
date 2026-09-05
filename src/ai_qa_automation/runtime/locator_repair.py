@@ -198,13 +198,14 @@ def _selected_python_test_node(source: str, selector: str) -> ast.AST:
 
 def _assert_locator_in_selected_node(source: str, selector: str, original_locator: str) -> None:
     node = _selected_python_test_node(source, selector)
+    start_lineno = getattr(node, "lineno", None)
     end_lineno = getattr(node, "end_lineno", None)
-    if type(node.lineno) is not int or type(end_lineno) is not int:
+    if type(start_lineno) is not int or type(end_lineno) is not int:
         raise LocatorRepairAuthorityError(
             "Python test node does not expose complete source boundaries"
         )
     lines = source.splitlines(keepends=True)
-    node_source = "".join(lines[node.lineno - 1 : end_lineno])
+    node_source = "".join(lines[start_lineno - 1 : end_lineno])
     if node_source.count(original_locator) != 1:
         raise LocatorRepairAuthorityError(
             "original locator is not uniquely contained in the selected failing pytest node"
