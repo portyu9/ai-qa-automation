@@ -31,6 +31,8 @@ from .common import (
     stable_gate_id,
 )
 
+_TARGETED_EXECUTION_AUTHORITY = "unavailable"
+
 
 def register_testing_tools(services: RuntimeServices, tool: ToolDecorator) -> dict[str, Any]:
     @tool(
@@ -66,13 +68,20 @@ def register_testing_tools(services: RuntimeServices, tool: ToolDecorator) -> di
         )
         if scope == "regression" and status is ValidationStatus.PASS and not suite_verified:
             status = ValidationStatus.NOT_VERIFIED
+        targeted_authority = _TARGETED_EXECUTION_AUTHORITY if scope == "targeted" else None
+        targeted_executed_pass_paths: list[str] = []
+        targeted_executed_pass_count = len(targeted_executed_pass_paths)
         summary = (
             (result.block_reason or "pytest sandbox blocked target-code execution")
             if not result.execution_started
             else (
                 "pytest regression exit was zero but no controller-bound suite identity was proven"
                 if scope == "regression" and status is ValidationStatus.NOT_VERIFIED
-                else f"pytest exited with {result.exit_code}"
+                else (
+                    "pytest exited with 0; no trusted out-of-process executed-test outcome authority is available for mutation closure"
+                    if scope == "targeted" and status is ValidationStatus.PASS
+                    else f"pytest exited with {result.exit_code}"
+                )
             )
         )
         suite_details = regression_suite.details() if regression_suite is not None else None
@@ -96,6 +105,12 @@ def register_testing_tools(services: RuntimeServices, tool: ToolDecorator) -> di
                         else None
                     ),
                     "regression_suite": suite_details,
+                    "targeted_execution_authority": targeted_authority,
+                    "targeted_outcome_report_verified": False,
+                    "targeted_execution_id": None,
+                    "targeted_executed_pass_count": targeted_executed_pass_count,
+                    "targeted_executed_pass_paths": targeted_executed_pass_paths,
+                    "targeted_execution": None,
                 },
             )
         )
@@ -113,6 +128,10 @@ def register_testing_tools(services: RuntimeServices, tool: ToolDecorator) -> di
                 if suite_verified and regression_suite is not None
                 else None
             ),
+            "targeted_execution_authority": targeted_authority,
+            "targeted_outcome_report_verified": False,
+            "targeted_executed_pass_count": targeted_executed_pass_count,
+            "targeted_executed_pass_paths": targeted_executed_pass_paths,
             "stdout_tail": result.stdout[-3000:],
             "stderr_tail": result.stderr[-3000:],
         }

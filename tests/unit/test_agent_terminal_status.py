@@ -23,6 +23,28 @@ def verified_regression_details() -> dict[str, object]:
     }
 
 
+def verified_targeted_execution_details(path: str) -> dict[str, object]:
+    execution_id = "sha256:" + "c" * 64
+    return {
+        "targeted_execution_authority": "trusted_out_of_process_observer_v1",
+        "targeted_outcome_report_verified": True,
+        "targeted_execution_id": execution_id,
+        "targeted_executed_pass_count": 1,
+        "targeted_executed_pass_paths": [path],
+        "targeted_execution": {
+            "execution_id": execution_id,
+            "git_sha": "d" * 40,
+            "source_fingerprint": "sha256:" + "e" * 64,
+            "execution_subject_digest": "sha256:" + "f" * 64,
+            "report_complete": True,
+            "child_exit_code": 0,
+            "pytest_returncode": 0,
+            "passed_call_count": 1,
+            "passed_paths": [path],
+        },
+    }
+
+
 def vr(
     name: str,
     status: ValidationStatus,
@@ -46,6 +68,8 @@ def vr(
                 "mutation_target_bound": mutation_target_bound,
             }
         )
+        if status is ValidationStatus.PASS:
+            details.update(verified_targeted_execution_details(mutation_path))
     if scope == "regression":
         details["args"] = []
         if status is ValidationStatus.PASS and revision > 0:
