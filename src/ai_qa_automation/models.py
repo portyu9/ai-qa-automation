@@ -56,6 +56,7 @@ class EvidenceKind(StrEnum):
     POLICY_EVENT = "policy_event"
     HEALING_PROPOSAL = "healing_proposal"
     TEST_PLAN = "test_plan"
+    TEST_GENERATION_PROPOSAL = "test_generation_proposal"
 
 
 class EvidenceNature(StrEnum):
@@ -199,6 +200,8 @@ class TestLayer(StrEnum):
 
 
 class TestScenario(FrozenModel):
+    scenario_id: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    assertion_contract_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     name: str
     layer: TestLayer
     risk: RiskLevel
@@ -209,8 +212,10 @@ class TestScenario(FrozenModel):
 
 class TestGenerationPlan(FrozenModel):
     requirement_summary: str
+    requirement_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     coverage_gaps: list[str]
     scenarios: list[TestScenario]
+    selected_scenario_id: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     duplicate_risk: str
     validation_plan: list[str]
 

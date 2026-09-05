@@ -327,7 +327,7 @@ async def test_all_registered_adapters_cross_pinned_sdk_mcp_boundary(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_real_sdk_boundary_blocks_second_mutation_until_revision_closure(
+async def test_real_sdk_boundary_keeps_generated_test_proposals_non_mutating(
     tmp_path: Path,
 ) -> None:
     services = make_services(tmp_path)
@@ -366,27 +366,31 @@ async def test_real_sdk_boundary_blocks_second_mutation_until_revision_closure(
             "plan_evidence_id": plan_payload["plan_evidence_id"],
         },
     )
-    assert creation.isError is not True
-    assert (services.workspace / generated_path).read_text(encoding="utf-8") == generated_content
-    assert services.state.change_revision == 1
+    assert creation.isError is True
+    assert "PROPOSAL_RECORDED" in response_text(creation)
+    assert "no file was written" in response_text(creation)
+    assert not (services.workspace / generated_path).exists()
+    assert services.state.change_revision == 0
 
-    patch_safety = services.state.validation_results[-1]
-    assert patch_safety.name == "test_patch_safety"
-    assert patch_safety.revision == 1
-    assert patch_safety.status is ValidationStatus.PASS
-    assert patch_safety.details["path"] == generated_path
+    static_safety = services.state.validation_results[-1]
+    assert static_safety.name == "generated_test_proposal_static_safety"
+    assert static_safety.revision == 0
+    assert static_safety.status is ValidationStatus.PASS
+    assert static_safety.details["path"] == generated_path
+    assert static_safety.details["semantic_implementation_verified"] is False
+    assert static_safety.details["mutation_authorized"] is False
 
-    blocked_path = "tests/test_second_generated_behavior.py"
+    duplicate_path = "tests/test_second_generated_behavior.py"
     second_creation = await call_real_sdk_tool(
         server,
         "create_test_file",
         {
-            "path": blocked_path,
+            "path": duplicate_path,
             "content": generated_content,
             "plan_evidence_id": plan_payload["plan_evidence_id"],
         },
     )
     assert second_creation.isError is True
-    assert "change revision 1 is not closed" in response_text(second_creation)
-    assert not (services.workspace / blocked_path).exists()
-    assert services.state.change_revision == 1
+    assert "already has a proposal" in response_text(second_creation)
+    assert not (services.workspace / duplicate_path).exists()
+    assert services.state.change_revision == 0

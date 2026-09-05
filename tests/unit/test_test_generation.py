@@ -1,3 +1,5 @@
+import pytest
+
 from ai_qa_automation.intelligence.test_generation import TestGenerationPlanner
 from ai_qa_automation.models import TestLayer
 
@@ -24,3 +26,21 @@ def test_generation_plan_requires_same_run_coverage_review_before_implementation
 
     assert "same-run repository coverage evidence review" in plan.validation_plan
     assert "inspect same-run repository coverage evidence" in plan.duplicate_risk.lower()
+
+
+def test_generation_plan_identity_rejects_content_with_stale_hashes() -> None:
+    planner = TestGenerationPlanner()
+    plan = planner.plan("orders API rejects malformed payload")
+    forged = plan.model_copy(update={"requirement_summary": "profiles UI renders avatar"})
+
+    with pytest.raises(ValueError, match="does not replay"):
+        planner.validate_identity(forged)
+
+
+def test_generation_plan_identity_rejects_noncanonical_requirement_summary() -> None:
+    planner = TestGenerationPlanner()
+    plan = planner.plan("orders API rejects malformed payload")
+    forged = plan.model_copy(update={"requirement_summary": f" {plan.requirement_summary} "})
+
+    with pytest.raises(ValueError, match="does not replay"):
+        planner.validate_identity(forged)

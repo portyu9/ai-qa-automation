@@ -7,6 +7,10 @@ from typing import Any
 from ...models import EvidenceItem, EvidenceKind, EvidenceNature
 from ...redaction import redact_text
 from ...tools.repository import RepositoryInspector
+from ..generated_test_authority import (
+    GeneratedTestAuthorityError,
+    capture_generated_test_repository_subject,
+)
 from ..model_source_observation import read_model_source_confined
 from .common import MAX_MODEL_SOURCE_CHARS, RuntimeServices, ToolDecorator, coverage_search
 
@@ -102,12 +106,26 @@ def register_repository_tools(services: RuntimeServices, tool: ToolDecorator) ->
         services.consume("search_test_coverage", args)
         raw_query = str(args.get("query", ""))
         try:
+            before_subject = capture_generated_test_repository_subject(
+                services.workspace,
+                expected_root_identity=services.workspace_root_identity,
+                change_revision=services.state.change_revision,
+            )
             observed = coverage_search(
                 services.workspace,
                 query=raw_query,
                 max_results=int(args.get("max_results", 100)),
                 expected_root_identity=services.workspace_root_identity,
             )
+            after_subject = capture_generated_test_repository_subject(
+                services.workspace,
+                expected_root_identity=services.workspace_root_identity,
+                change_revision=services.state.change_revision,
+            )
+            if before_subject != after_subject:
+                raise GeneratedTestAuthorityError(
+                    "repository subject changed during coverage observation"
+                )
         except (ValueError, OSError, RuntimeError) as exc:
             return {
                 "content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}],
@@ -115,6 +133,8 @@ def register_repository_tools(services: RuntimeServices, tool: ToolDecorator) ->
             }
         redacted_query = redact_text(raw_query)
         structured = observed.as_structured_data(query=redacted_query)
+        structured["repository_subject_verified"] = True
+        structured["repository_subject"] = before_subject.as_dict()
         item = services.evidence.add(
             EvidenceItem(
                 run_id=services.state.run_id,
@@ -124,7 +144,7 @@ def register_repository_tools(services: RuntimeServices, tool: ToolDecorator) ->
                 source_identifier=redacted_query,
                 summary=(
                     f"Observed {len(observed.results)} bounded test coverage search result(s); "
-                    f"complete={observed.complete}"
+                    f"complete={observed.complete}; repository subject verified"
                 ),
                 structured_data=structured,
             )
@@ -141,6 +161,7 @@ def register_repository_tools(services: RuntimeServices, tool: ToolDecorator) ->
                             "results": structured["results"],
                             "complete": observed.complete,
                             "incomplete_reasons": list(observed.incomplete_reasons),
+                            "repository_subject": before_subject.as_dict(),
                         }
                     )[:16000],
                 }
