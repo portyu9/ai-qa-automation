@@ -35,3 +35,12 @@ def test_generation_plan_identity_rejects_content_with_stale_hashes() -> None:
 
     with pytest.raises(ValueError, match="does not replay"):
         planner.validate_identity(forged)
+
+
+def test_generation_plan_identity_rejects_noncanonical_requirement_summary() -> None:
+    planner = TestGenerationPlanner()
+    plan = planner.plan("orders API rejects malformed payload")
+    forged = plan.model_copy(update={"requirement_summary": f" {plan.requirement_summary} "})
+
+    with pytest.raises(ValueError, match="does not replay"):
+        planner.validate_identity(forged)

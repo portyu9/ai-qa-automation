@@ -140,7 +140,8 @@ class TestGenerationPlanner:
             existing_coverage=["advisory-present"],
         )
         if (
-            plan.requirement_digest != expected.requirement_digest
+            plan.requirement_summary != expected.requirement_summary
+            or plan.requirement_digest != expected.requirement_digest
             or plan.coverage_gaps != expected.coverage_gaps
             or plan.scenarios != expected.scenarios
             or plan.selected_scenario_id != expected.selected_scenario_id
