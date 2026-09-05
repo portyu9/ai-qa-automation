@@ -131,6 +131,27 @@ class TestGenerationPlanner:
             ],
         )
 
+    def validate_identity(self, plan: TestGenerationPlan) -> None:
+        """Fail unless a persisted plan is an exact deterministic planner output."""
+
+        expected = self.plan(plan.requirement_summary)
+        expected_with_advisory_coverage = self.plan(
+            plan.requirement_summary,
+            existing_coverage=["advisory-present"],
+        )
+        if (
+            plan.requirement_digest != expected.requirement_digest
+            or plan.coverage_gaps != expected.coverage_gaps
+            or plan.scenarios != expected.scenarios
+            or plan.selected_scenario_id != expected.selected_scenario_id
+            or plan.validation_plan != expected.validation_plan
+            or plan.duplicate_risk
+            not in {expected.duplicate_risk, expected_with_advisory_coverage.duplicate_risk}
+        ):
+            raise ValueError(
+                "test-generation plan identity does not replay from deterministic planner inputs"
+            )
+
     @staticmethod
     def _select_layer(text: str) -> TestLayer:
         if any(
