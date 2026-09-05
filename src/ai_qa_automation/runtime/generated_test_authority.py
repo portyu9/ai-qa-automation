@@ -47,6 +47,18 @@ def text_sha256(value: str) -> str:
     return f"sha256:{hashlib.sha256(value.encode('utf-8')).hexdigest()}"
 
 
+def _require_sha256(label: str, value: object) -> str:
+    if not isinstance(value, str) or not _SHA256.fullmatch(value):
+        raise GeneratedTestAuthorityError(f"generated-test {label} is invalid")
+    return value
+
+
+def _require_bounded_text(label: str, value: object) -> str:
+    if not isinstance(value, str) or not value or len(value) > 4096:
+        raise GeneratedTestAuthorityError(f"generated-test {label} is invalid")
+    return value
+
+
 def capture_generated_test_repository_subject(
     workspace: Path,
     *,
@@ -138,6 +150,58 @@ def require_same_generated_test_repository_subject(
         )
 
 
+def generated_test_plan_subject(
+    *,
+    coverage_evidence_id: str,
+    coverage_evidence_digest: str,
+    coverage_complete: bool,
+    requirement_evidence_id: str,
+    requirement_evidence_digest: str,
+    requirement_digest: str,
+    requirement_provenance: str,
+    repository_subject: GeneratedTestRepositorySubject,
+    selected_scenario_id: str,
+    selected_assertion_contract_digest: str,
+    advisory_existing_coverage_digest: str,
+    plan: dict[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(coverage_complete, bool):
+        raise GeneratedTestAuthorityError("generated-test coverage completeness is invalid")
+    for label, value in {
+        "coverage_evidence_digest": coverage_evidence_digest,
+        "requirement_evidence_digest": requirement_evidence_digest,
+        "requirement_digest": requirement_digest,
+        "selected_scenario_id": selected_scenario_id,
+        "selected_assertion_contract_digest": selected_assertion_contract_digest,
+        "advisory_existing_coverage_digest": advisory_existing_coverage_digest,
+    }.items():
+        _require_sha256(label, value)
+    for label, value in {
+        "coverage_evidence_id": coverage_evidence_id,
+        "requirement_evidence_id": requirement_evidence_id,
+        "requirement_provenance": requirement_provenance,
+    }.items():
+        _require_bounded_text(label, value)
+    if not isinstance(plan, dict):
+        raise GeneratedTestAuthorityError("generated-test plan payload is invalid")
+    payload = {
+        "schema_version": 1,
+        "coverage_evidence_id": coverage_evidence_id,
+        "coverage_evidence_digest": coverage_evidence_digest,
+        "coverage_complete": coverage_complete,
+        "requirement_evidence_id": requirement_evidence_id,
+        "requirement_evidence_digest": requirement_evidence_digest,
+        "requirement_digest": requirement_digest,
+        "requirement_provenance": requirement_provenance,
+        "repository_subject": repository_subject.as_dict(),
+        "selected_scenario_id": selected_scenario_id,
+        "selected_assertion_contract_digest": selected_assertion_contract_digest,
+        "advisory_existing_coverage_digest": advisory_existing_coverage_digest,
+        "plan": plan,
+    }
+    return {**payload, "plan_subject_id": canonical_sha256(payload)}
+
+
 def generated_test_proposal_subject(
     *,
     coverage_evidence_id: str,
@@ -161,8 +225,7 @@ def generated_test_proposal_subject(
         "assertion_contract_digest": assertion_contract_digest,
         "content_sha256": content_sha256,
     }.items():
-        if not isinstance(value, str) or not _SHA256.fullmatch(value):
-            raise GeneratedTestAuthorityError(f"generated-test {label} is invalid")
+        _require_sha256(label, value)
     for label, value in {
         "coverage_evidence_id": coverage_evidence_id,
         "requirement_evidence_id": requirement_evidence_id,
@@ -170,8 +233,7 @@ def generated_test_proposal_subject(
         "layer": layer,
         "target_path": target_path,
     }.items():
-        if not isinstance(value, str) or not value or len(value) > 4096:
-            raise GeneratedTestAuthorityError(f"generated-test {label} is invalid")
+        _require_bounded_text(label, value)
     payload = {
         "schema_version": 1,
         "coverage_evidence_id": coverage_evidence_id,
