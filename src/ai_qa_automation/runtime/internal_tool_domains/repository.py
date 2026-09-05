@@ -126,7 +126,7 @@ def register_repository_tools(services: RuntimeServices, tool: ToolDecorator) ->
                 raise GeneratedTestAuthorityError(
                     "repository subject changed during coverage observation"
                 )
-        except (ValueError, OSError, RuntimeError, GeneratedTestAuthorityError) as exc:
+        except (ValueError, OSError, RuntimeError) as exc:
             return {
                 "content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}],
                 "is_error": True,
