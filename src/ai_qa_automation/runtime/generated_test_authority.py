@@ -82,9 +82,9 @@ def _capture_non_git_workspace_fingerprint(
         raise GeneratedTestAuthorityError(
             "generated-test non-Git workspace namespace could not be observed"
         ) from exc
-    if before.truncated:
+    if before.resource_truncated:
         raise GeneratedTestAuthorityError(
-            "generated-test non-Git workspace namespace observation is incomplete"
+            "generated-test non-Git workspace namespace resource observation is incomplete"
         )
 
     rows: list[dict[str, object]] = []
@@ -145,8 +145,11 @@ def _capture_non_git_workspace_fingerprint(
     return canonical_sha256(
         {
             "schema_version": 1,
+            "complete": not before.truncated,
             "directories": [item.path.as_posix() for item in before.directories],
             "files": rows,
+            "unsafe_paths": [item.as_posix() for item in before.unsafe_paths],
+            "unreadable_paths": [item.as_posix() for item in before.unreadable_paths],
         }
     )
 
