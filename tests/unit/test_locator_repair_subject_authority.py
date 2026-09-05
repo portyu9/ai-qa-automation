@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -45,11 +46,7 @@ def _git(workspace: Path, *args: str) -> str:
 
 
 def _test_source(locator: str = _ORIGINAL) -> str:
-    return (
-        "def test_save_profile(page):\n"
-        f"    {locator}.click()\n"
-        "    assert True\n"
-    )
+    return f"def test_save_profile(page):\n    {locator}.click()\n    assert True\n"
 
 
 def _make_services(tmp_path: Path) -> RuntimeServices:
@@ -239,6 +236,49 @@ class SubjectBrowserProbe:
         return verified, verification.id
 
 
+class CardinalityDriftProbe(SubjectBrowserProbe):
+    async def verify_locator_candidates(
+        self,
+        url: str,
+        original_locator: str,
+        candidates: list[LocatorCandidate],
+    ) -> tuple[list[LocatorCandidate], str]:
+        screenshot = self.evidence.add(
+            EvidenceItem(
+                run_id=self.evidence.run_id,
+                kind=EvidenceKind.SCREENSHOT,
+                source="playwright_locator_verification",
+                source_identifier=url,
+                summary="same DOM screenshot",
+            )
+        )
+        accessibility = self.evidence.add(
+            EvidenceItem(
+                run_id=self.evidence.run_id,
+                kind=EvidenceKind.ACCESSIBILITY_SNAPSHOT,
+                source="playwright_locator_verification",
+                source_identifier=url,
+                summary="same DOM accessibility",
+            )
+        )
+        verification = self.evidence.add(
+            EvidenceItem(
+                run_id=self.evidence.run_id,
+                kind=EvidenceKind.SOURCE_OBSERVATION,
+                source="playwright_locator_verification",
+                source_identifier=url,
+                summary="truncated locator observation",
+                structured_data={
+                    "original_locator": original_locator,
+                    "original_count": 0,
+                    "candidates": [],
+                    "context_evidence_ids": [screenshot.id, accessibility.id],
+                },
+            )
+        )
+        return candidates, verification.id
+
+
 class UnexpectedBrowserProbe(SubjectBrowserProbe):
     def __init__(self, *_args: Any, **_kwargs: Any) -> None:
         raise AssertionError("stale failure evidence must be rejected before browser execution")
@@ -270,6 +310,12 @@ def _json_response(response: dict[str, Any]) -> dict[str, Any]:
     return cast(dict[str, Any], json.loads(response["content"][0]["text"]))
 
 
+def _repair_subject_id(details: dict[str, Any]) -> str:
+    payload = {key: value for key, value in details.items() if key != "repair_subject_id"}
+    rendered = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return "locator_repair:" + hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+
+
 async def _verified_subject(
     services: RuntimeServices,
     *,
@@ -285,9 +331,7 @@ async def _verified_subject(
         }
     )
     subjects = [
-        item
-        for item in services.state.validation_results
-        if item.name == "locator_repair_subject"
+        item for item in services.state.validation_results if item.name == "locator_repair_subject"
     ]
     assert len(subjects) == 1
     return response, subjects[0]
@@ -335,8 +379,7 @@ async def test_stale_same_revision_failure_is_denied_before_browser_execution(
     assert response["is_error"] is True
     assert "failing pytest evidence is not bound" in response["content"][0]["text"]
     assert not any(
-        item.name == "browser_locator_verification"
-        for item in services.state.validation_results
+        item.name == "browser_locator_verification" for item in services.state.validation_results
     )
 
 
@@ -438,6 +481,99 @@ async def test_newer_change_revision_cannot_reactivate_older_repair_subject(
             state=services.state,
             evidence=services.evidence,
         )
+
+
+@pytest.mark.asyncio
+async def test_persisted_classification_must_replay_from_exact_bound_evidence(
+    tmp_path: Path,
+) -> None:
+    services = _make_services(tmp_path)
+    _response, subject = await _verified_subject(services)
+
+    tampered_details = {
+        **subject.details,
+        "classification": FailureClass.TEST_AUTOMATION_DEFECT.value,
+    }
+    tampered_id = _repair_subject_id(tampered_details)
+    tampered_details["repair_subject_id"] = tampered_id
+    subject_index = services.state.validation_results.index(subject)
+    services.state.validation_results[subject_index] = subject.model_copy(
+        update={"gate_id": tampered_id, "details": tampered_details}
+    )
+
+    browser = next(
+        item
+        for item in services.state.validation_results
+        if item.name == "browser_locator_verification"
+    )
+    browser_index = services.state.validation_results.index(browser)
+    services.state.validation_results[browser_index] = browser.model_copy(
+        update={"details": {**browser.details, "repair_subject_id": tampered_id}}
+    )
+
+    with pytest.raises(LocatorRepairAuthorityError, match="does not reproduce"):
+        resolve_locator_repair_authority(
+            subject_id=tampered_id,
+            workspace=services.workspace,
+            expected_root_identity=services.workspace_root_identity,
+            state=services.state,
+            evidence=services.evidence,
+        )
+
+
+@pytest.mark.asyncio
+async def test_browser_validation_linkage_tampering_invalidates_repair_subject(
+    tmp_path: Path,
+) -> None:
+    services = _make_services(tmp_path)
+    _response, subject = await _verified_subject(services)
+    browser = next(
+        item
+        for item in services.state.validation_results
+        if item.name == "browser_locator_verification"
+    )
+    browser_index = services.state.validation_results.index(browser)
+    services.state.validation_results[browser_index] = browser.model_copy(
+        update={"details": {**browser.details, "path": "tests/test_b.py"}}
+    )
+
+    with pytest.raises(LocatorRepairAuthorityError, match="metadata does not match"):
+        resolve_locator_repair_authority(
+            subject_id=str(subject.gate_id),
+            workspace=services.workspace,
+            expected_root_identity=services.workspace_root_identity,
+            state=services.state,
+            evidence=services.evidence,
+        )
+
+
+@pytest.mark.asyncio
+async def test_browser_candidate_cardinality_drift_cannot_create_repair_subject(
+    tmp_path: Path,
+) -> None:
+    services = _make_services(tmp_path)
+    failure = _add_failing_pytest(services)
+
+    response = await _tools(services, CardinalityDriftProbe)["verify_locator_candidates"](
+        {
+            "url": "https://example.test/profile",
+            "failure_validation_id": failure.id,
+            "original_locator": _ORIGINAL,
+            "candidates_json": json.dumps([_candidate().model_dump(mode="json")]),
+        }
+    )
+
+    assert response["is_error"] is True
+    assert "request cardinality" in response["content"][0]["text"]
+    browser = next(
+        item
+        for item in services.state.validation_results
+        if item.name == "browser_locator_verification"
+    )
+    assert browser.status is ValidationStatus.PASS
+    assert not any(
+        item.name == "locator_repair_subject" for item in services.state.validation_results
+    )
 
 
 class NonFailingLocatorProbe(SubjectBrowserProbe):
