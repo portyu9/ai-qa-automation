@@ -28,6 +28,8 @@ In non-Git or installed-package contexts the Git fields can be absent. The two l
 
 The initial subject is persisted in canonical `AgentRunState` before model execution and propagated into the final report, run lineage, and unsigned run attestation. It remains distinct from `target_git_sha`.
 
+Immediately before every Agent SDK session attempt, including a bounded retry after a replay-safe startup failure, the runtime recaptures the trusted control-plane subject and requires exact content plus filesystem-observation equivalence with the run-start binding. A drifted subject refuses provider construction as `BLOCKED`; an unsafe or unavailable subject refuses provider construction as `INFRASTRUCTURE_FAILURE`. A later byte-for-byte restoration cannot erase that earlier pre-provider denial.
+
 Terminal revalidation has explicit states:
 
 | Status | Meaning |

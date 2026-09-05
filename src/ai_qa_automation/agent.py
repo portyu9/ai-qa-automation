@@ -1,14 +1,24 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import importlib.metadata
-import json
 import logging
 import time
 from pathlib import Path
 from typing import Any
 
+from .agent_provider import execute_sdk_sessions
+from .agent_support import (
+    _enforce_terminal_workspace_freshness,
+    _final_response,
+    _may_recompute_terminal_outcome,
+    _observe_control_git_subject,
+    _package_version,
+    _rollback_unresolved_mutation,
+    _sync_operational_state,
+    configuration_fingerprint,
+    sdk_exception_outcome,
+    validate_runtime_roots,
+)
 from .config import Settings
 from .evidence import EvidenceStore
 from .integrations.mcp_registry import build_external_mcp
@@ -19,11 +29,9 @@ from .models import (
     TerminalStatus,
 )
 from .policy import PolicyEngine
-from .reporting import build_final_report
 from .runtime.bootstrap import BaselineResolutionError, bootstrap_runtime_context
 from .runtime.budget import ExecutionBudget
 from .runtime.control_plane_provenance import (
-    TRUSTED_PROJECT_SKILLS,
     bind_control_git_identity,
     capture_control_plane_subject,
     enforce_terminal_control_plane_subject,
@@ -32,43 +40,19 @@ from .runtime.control_plane_provenance import (
 from .runtime.internal_tools import build_internal_mcp_server
 from .runtime.journal import RunJournal
 from .runtime.live_services import LiveRuntimeServices
-from .runtime.mutation_lineage import reconcile_rolled_back_mutation
 from .runtime.objective_bounds import validate_objective
 from .runtime.run_control import RuntimeControl
 from .runtime.runtime_hooks import build_hooks, build_permission_handler
-from .runtime.sdk_recovery import (
-    SDKRetryDecision,
-    retry_decision,
-    retry_delay_seconds,
-    retry_failure_reason,
-)
-from .runtime.sdk_result_bounds import SDKResultBoundsError, validate_sdk_result_message
+from .runtime.sdk_recovery import SDKRetryDecision, retry_failure_reason
+from .runtime.sdk_result_bounds import SDKResultBoundsError
 from .runtime.stale_recovery import recover_stale_mutation
 from .runtime.system_prompt import RUNTIME_SYSTEM_PROMPT
 from .runtime.validation_truth import determine_terminal_outcome
-from .runtime.workspace_freshness import WorkspaceFreshnessCode, observe_workspace_freshness
 from .runtime.workspace_lease import WorkspaceBusyError, WorkspaceLease
 from .state import StateStore
 from .telemetry import emit_event, trace_span
 from .tools.repository import RepositoryInspector
 from .tools.test_execution import TestRunner
-
-_DEFAULT_LIMITATIONS = [
-    "A model response is not a test result; only deterministic validations can produce verified success.",
-    "External MCP capability remains NOT_VERIFIED unless authenticated and exercised in this environment.",
-    "Crash recovery verifies persisted state/journal integrity and starts a new model session; it does not replay a prior conversation.",
-]
-
-
-def _may_recompute_terminal_outcome(status: TerminalStatus | None) -> bool:
-    """Allow generic SDK-success evaluation only without prior failure truth.
-
-    Candidate SUCCESS remains recomputable so later deterministic evidence can demote
-    it. Every non-success terminal state is monotonic by default, including future
-    enum additions, unless a separately reviewed recovery path explicitly changes it.
-    """
-
-    return status is None or status is TerminalStatus.SUCCESS
 
 
 async def run_agent(
@@ -323,7 +307,13 @@ async def run_agent(
             cwd=str(cfg.control_root),
             system_prompt=RUNTIME_SYSTEM_PROMPT,
             setting_sources=["project"],
-            skills=list(TRUSTED_PROJECT_SKILLS),
+            skills=[
+                "investigate-test-failure",
+                "self-heal-test",
+                "generate-test",
+                "prioritize-regression",
+                "performance-test",
+            ],
             tools=[],
             allowed_tools=allowed_tools,
             disallowed_tools=[
@@ -367,77 +357,30 @@ async def run_agent(
         )
         final_text = ""
         result_subtype: str | None = None
-        result_message_seen = False
         last_retry_decision: SDKRetryDecision | None = None
+        pre_provider_denial: ControlPlaneRevalidationStatus | None = None
         try:
             with trace_span("ai_qa_automation.agent_run"):
                 async with asyncio.timeout(cfg.global_timeout_seconds):
-                    while True:
-                        provider_request_started = False
-                        try:
-                            async with ClaudeSDKClient(options=options) as client:
-                                provider_request_started = True
-                                await client.query(bounded_prompt)
-                                async for message in client.receive_response():
-                                    state.iteration += 1
-                                    budget.assert_wall_time()
-                                    if isinstance(message, ResultMessage):
-                                        if result_message_seen:
-                                            raise SDKResultBoundsError(
-                                                "duplicate_result_message",
-                                                "Agent SDK emitted more than one terminal result message",
-                                            )
-                                        bounded_result = validate_sdk_result_message(
-                                            message,
-                                            max_cost_usd=cfg.max_cost_usd,
-                                        )
-                                        result_message_seen = True
-                                        final_text = bounded_result.result
-                                        result_subtype = bounded_result.subtype
-                                        state.cost = bounded_result.total_cost_usd
-                                        state.token_usage = bounded_result.token_usage
-                                        if bounded_result.budget_exceeded:
-                                            state.terminal_status = TerminalStatus.BUDGET_EXCEEDED
-                                            state.terminal_reason = "Agent SDK reported cost above the configured runtime budget"
-                            if not result_message_seen:
-                                raise SDKResultBoundsError(
-                                    "missing_result_message",
-                                    "Agent SDK response ended without a terminal result message",
-                                )
-                            break
-                        except asyncio.CancelledError:
-                            raise
-                        except Exception as exc:
-                            decision = retry_decision(
-                                exc,
-                                state=state,
-                                retry_limit=cfg.max_sdk_retries,
-                                pending_mutation=control.pending_mutation is not None,
-                                provider_request_started=provider_request_started,
-                            )
-                            last_retry_decision = decision
-                            if not decision.retry:
-                                raise
-                            state.retry_count += 1
-                            delay = retry_delay_seconds(
-                                state.retry_count,
-                                base_seconds=cfg.sdk_retry_backoff_seconds,
-                                max_seconds=cfg.sdk_retry_max_backoff_seconds,
-                            )
-                            state.observations.append(
-                                "Transient Agent SDK session-start failure occurred before provider "
-                                f"query submission; scheduling bounded retry {state.retry_count}/{cfg.max_sdk_retries}."
-                            )
-                            journal.try_append(
-                                "sdk_retry_scheduled",
-                                retry_number=state.retry_count,
-                                retry_limit=cfg.max_sdk_retries,
-                                category=decision.category,
-                                error_type=type(exc).__name__,
-                                delay_seconds=delay,
-                            )
-                            _sync_operational_state(state, state_store, control)
-                            await asyncio.sleep(delay)
+                    outcome = await execute_sdk_sessions(
+                        client_type=ClaudeSDKClient,
+                        result_message_type=ResultMessage,
+                        options=options,
+                        bounded_prompt=bounded_prompt,
+                        state=state,
+                        budget=budget,
+                        control=control,
+                        cfg=cfg,
+                        state_store=state_store,
+                        journal=journal,
+                        control_plane_capture=control_plane_capture,
+                    )
+                    final_text = outcome.final_text
+                    result_subtype = outcome.result_subtype
+                    last_retry_decision = outcome.last_retry_decision
+                    pre_provider_denial = outcome.pre_provider_denial
+                    if outcome.failure is not None:
+                        raise outcome.failure
         except asyncio.CancelledError:
             state.terminal_status = TerminalStatus.CANCELLED
             state.terminal_reason = "Execution cancelled"
@@ -487,6 +430,13 @@ async def run_agent(
                 bound=control_plane_capture,
                 control_root=cfg.control_root,
             )
+            if pre_provider_denial in {
+                ControlPlaneRevalidationStatus.DRIFTED,
+                ControlPlaneRevalidationStatus.UNAVAILABLE,
+            }:
+                # A later byte-for-byte restoration cannot erase the fact that provider
+                # admission was denied on an earlier required provenance observation.
+                state.control_plane_revalidation_status = pre_provider_denial
             journal.try_append(
                 "terminal_control_plane_revalidation",
                 status=control_plane_status.value,
@@ -524,120 +474,6 @@ async def run_agent(
     return _final_response(state, agent_result=final_text)
 
 
-def _rollback_unresolved_mutation(
-    state: AgentRunState,
-    control: RuntimeControl,
-    workspace: Path,
-) -> None:
-    """Rollback terminally unresolved mutation bytes and poison that revision's closure."""
-
-    pending = control.pending_mutation
-    if pending is None:
-        return
-    if state.terminal_status == TerminalStatus.SUCCESS:
-        state.terminal_status = TerminalStatus.NOT_VERIFIED
-        state.terminal_reason = (
-            "Terminal evaluation encountered an unresolved mutation transaction; "
-            "verified commit authority exists only in PostToolUse closure."
-        )
-    rolled_back = control.rollback_pending_mutation(
-        reason="run ended with an unresolved mutation transaction"
-    )
-    if rolled_back:
-        reconcile_rolled_back_mutation(
-            state,
-            relative_path=rolled_back,
-            change_revision_before=pending.change_revision_before,
-        )
-        state.observations.append(
-            f"Unresolved mutation rolled back before terminal report: {rolled_back}"
-        )
-    control.set_workspace_fingerprint(RepositoryInspector(workspace).snapshot().fingerprint)
-
-
-def _enforce_terminal_workspace_freshness(
-    state: AgentRunState,
-    control: RuntimeControl,
-    workspace: Path,
-) -> None:
-    """Demote candidate SUCCESS unless the current workspace still matches authorized lineage."""
-
-    freshness = observe_workspace_freshness(
-        workspace,
-        expected_fingerprint=control.expected_workspace_fingerprint,
-        expected_root_identity=control.workspace_identity,
-    )
-    if freshness.fresh:
-        control.journal.try_append(
-            "terminal_workspace_freshness_verified",
-            reason_code=freshness.code.value,
-        )
-        return
-
-    if freshness.code is WorkspaceFreshnessCode.SUBJECT_UNAVAILABLE:
-        state.terminal_status = TerminalStatus.INFRASTRUCTURE_FAILURE
-        state.terminal_reason = (
-            "Terminal workspace subject identity could not be revalidated safely."
-        )
-    elif freshness.code is WorkspaceFreshnessCode.FINGERPRINT_INCOMPLETE:
-        state.terminal_status = TerminalStatus.NOT_VERIFIED
-        state.terminal_reason = (
-            "Terminal success was refused because the current workspace fingerprint is incomplete."
-        )
-    elif freshness.code is WorkspaceFreshnessCode.BASELINE_MISSING:
-        state.terminal_status = TerminalStatus.BLOCKED
-        state.terminal_reason = "Terminal success was refused because no authorized workspace fingerprint baseline exists."
-    else:
-        state.terminal_status = TerminalStatus.BLOCKED
-        state.terminal_reason = "Terminal success was refused because the target workspace changed outside authorized mutation lineage."
-    control.journal.try_append(
-        "terminal_workspace_freshness_denied",
-        reason_code=freshness.code.value,
-        terminal_status=state.terminal_status.value,
-    )
-
-
-def validate_runtime_roots(
-    control_root: Path,
-    workspace: Path,
-    *,
-    artifact_root: Path | None = None,
-) -> None:
-    """Require trusted control, target, and artifact roots to remain disjoint."""
-
-    control = control_root.expanduser().resolve()
-    target = workspace.expanduser().resolve()
-    if _paths_overlap(control, target):
-        raise ValueError("control_root and target workspace must be disjoint")
-    if artifact_root is not None:
-        artifacts = artifact_root.expanduser().resolve()
-        if _paths_overlap(artifacts, target):
-            raise ValueError("artifact_root and target workspace must be disjoint")
-
-    required = [
-        control / "CLAUDE.md",
-        control / ".claude" / "settings.json",
-    ]
-    missing = [str(path.relative_to(control)) for path in required if not path.is_file()]
-    if missing:
-        raise ValueError(
-            "control_root is missing trusted runtime configuration: " + ", ".join(missing)
-        )
-
-
-def _paths_overlap(left: Path, right: Path) -> bool:
-    try:
-        right.relative_to(left)
-        return True
-    except ValueError:
-        pass
-    try:
-        left.relative_to(right)
-        return True
-    except ValueError:
-        return False
-
-
 def run_agent_sync(
     objective: str,
     workspace: Path,
@@ -656,101 +492,3 @@ def run_agent_sync(
             objective_gate_id=objective_gate_id,
         )
     )
-
-
-def _observe_control_git_subject(control_root: Path) -> tuple[str | None, bool | None]:
-    """Record Git identity when safely observable without making it sufficient authority."""
-
-    try:
-        snapshot = RepositoryInspector(control_root).snapshot()
-    except (OSError, RuntimeError, ValueError):
-        return None, None
-    if not snapshot.fingerprint_complete or snapshot.git_sha is None:
-        return None, None
-    return snapshot.git_sha, snapshot.status == ""
-
-
-def configuration_fingerprint(settings: Settings) -> str:
-    """Bind provenance to the complete trusted runtime configuration."""
-
-    payload = settings.model_dump(mode="json")
-    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
-    return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
-
-
-def _sync_operational_state(
-    state: AgentRunState,
-    state_store: StateStore,
-    control: RuntimeControl,
-) -> None:
-    """Persist QA state and runtime authority without duplicating control-plane fields."""
-
-    state_store.save(state)
-    control.persist()
-
-
-def _final_response(
-    state: AgentRunState,
-    *,
-    agent_result: str,
-    limitations: list[str] | None = None,
-) -> dict[str, Any]:
-    resolved_limitations = list(_DEFAULT_LIMITATIONS)
-    for limitation in limitations or []:
-        if limitation not in resolved_limitations:
-            resolved_limitations.append(limitation)
-    return {
-        "report": build_final_report(state, limitations=resolved_limitations).model_dump(
-            mode="json"
-        ),
-        "agent_result": agent_result,
-    }
-
-
-def sdk_exception_outcome(exc: BaseException) -> tuple[TerminalStatus, str]:
-    """Classify SDK failures conservatively without depending on private SDK exception types."""
-
-    text = f"{type(exc).__name__}: {exc}".casefold()
-    if any(
-        marker in text
-        for marker in (
-            "authentication",
-            "unauthorized",
-            "401",
-            "403",
-            "invalid api key",
-            "invalid_api_key",
-        )
-    ):
-        return (
-            TerminalStatus.BLOCKED,
-            f"Agent SDK authentication/authorization failed: {type(exc).__name__}",
-        )
-    if any(
-        marker in text
-        for marker in (
-            "connection",
-            "connecterror",
-            "timeout",
-            "timed out",
-            "network",
-            "unavailable",
-            "overloaded",
-            "rate limit",
-            "rate_limit",
-            "429",
-            "529",
-        )
-    ):
-        return (
-            TerminalStatus.INFRASTRUCTURE_FAILURE,
-            f"Agent SDK/provider transport failed: {type(exc).__name__}",
-        )
-    return TerminalStatus.FAILURE, f"Agent SDK execution failed: {type(exc).__name__}"
-
-
-def _package_version(name: str) -> str:
-    try:
-        return importlib.metadata.version(name)
-    except importlib.metadata.PackageNotFoundError:  # pragma: no cover
-        return "NOT_VERIFIED"

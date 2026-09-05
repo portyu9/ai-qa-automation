@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -132,4 +133,92 @@ async def test_run_agent_rejects_control_drift_during_git_observation_before_mod
         report["provenance"]["control_plane_revalidation_status"]
         == ControlPlaneRevalidationStatus.UNAVAILABLE.value
     )
+    assert result["agent_result"] == ""
+
+
+@pytest.mark.asyncio
+async def test_run_agent_revalidates_control_subject_immediately_before_provider_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    control, workspace, artifacts = _runtime_roots(tmp_path)
+
+    class AcceptOptions:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+    class ForbiddenClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            raise AssertionError("provider client must not start after pre-provider control drift")
+
+    def drift_after_bootstrap(**kwargs: object) -> str:
+        del kwargs
+        skill = control / ".claude" / "skills" / "generate-test" / "SKILL.md"
+        skill.write_text("drifted after bootstrap before provider\n", encoding="utf-8")
+        return "bounded bootstrap context"
+
+    monkeypatch.setattr("claude_agent_sdk.ClaudeAgentOptions", AcceptOptions)
+    monkeypatch.setattr("claude_agent_sdk.ClaudeSDKClient", ForbiddenClient)
+    monkeypatch.setattr(agent_module, "bootstrap_runtime_context", drift_after_bootstrap)
+    monkeypatch.setattr(agent_module, "build_internal_mcp_server", lambda services: (object(), []))
+    monkeypatch.setattr(agent_module, "build_external_mcp", lambda settings, policy: ({}, {}))
+    monkeypatch.setattr(agent_module, "build_permission_handler", lambda *args, **kwargs: None)
+    monkeypatch.setattr(agent_module, "build_hooks", lambda *args, **kwargs: {})
+    result = await run_agent(
+        "inspect target safely",
+        workspace,
+        Settings(control_root=control, artifact_root=artifacts),
+    )
+
+    report = result["report"]
+    assert report["terminal_status"] == TerminalStatus.BLOCKED.value
+    assert (
+        report["provenance"]["control_plane_revalidation_status"]
+        == ControlPlaneRevalidationStatus.DRIFTED.value
+    )
+    assert report["provenance"]["control_plane_subject"] is not None
+    assert result["agent_result"] == ""
+
+
+@pytest.mark.asyncio
+async def test_run_agent_fails_closed_when_control_subject_becomes_unavailable_before_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    control, workspace, artifacts = _runtime_roots(tmp_path)
+
+    class AcceptOptions:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+    class ForbiddenClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            raise AssertionError("provider client must not start without revalidated control authority")
+
+    def remove_authority_after_bootstrap(**kwargs: object) -> str:
+        del kwargs
+        shutil.rmtree(control / ".claude")
+        return "bounded bootstrap context"
+
+    monkeypatch.setattr("claude_agent_sdk.ClaudeAgentOptions", AcceptOptions)
+    monkeypatch.setattr("claude_agent_sdk.ClaudeSDKClient", ForbiddenClient)
+    monkeypatch.setattr(agent_module, "bootstrap_runtime_context", remove_authority_after_bootstrap)
+    monkeypatch.setattr(agent_module, "build_internal_mcp_server", lambda services: (object(), []))
+    monkeypatch.setattr(agent_module, "build_external_mcp", lambda settings, policy: ({}, {}))
+    monkeypatch.setattr(agent_module, "build_permission_handler", lambda *args, **kwargs: None)
+    monkeypatch.setattr(agent_module, "build_hooks", lambda *args, **kwargs: {})
+
+    result = await run_agent(
+        "inspect target safely",
+        workspace,
+        Settings(control_root=control, artifact_root=artifacts),
+    )
+
+    report = result["report"]
+    assert report["terminal_status"] == TerminalStatus.INFRASTRUCTURE_FAILURE.value
+    assert (
+        report["provenance"]["control_plane_revalidation_status"]
+        == ControlPlaneRevalidationStatus.UNAVAILABLE.value
+    )
+    assert report["provenance"]["control_plane_subject"] is not None
     assert result["agent_result"] == ""
