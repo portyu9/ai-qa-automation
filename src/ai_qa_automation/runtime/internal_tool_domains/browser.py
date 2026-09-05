@@ -21,6 +21,7 @@ from ..browser_validation import (
     browser_validation_result,
 )
 from ..locator_repair import (
+    LocatorRepairAuthority,
     LocatorRepairAuthorityError,
     build_locator_repair_subject,
     prepare_locator_repair_binding,
@@ -32,6 +33,108 @@ from .common import (
     record_patch_safety_validation,
     require_closed_revision_before_mutation,
 )
+
+_MAX_LOCATOR_CANDIDATES = 20
+_MAX_CANDIDATES_JSON_BYTES = 100_000
+
+
+def _parse_candidates_json(value: str) -> list[LocatorCandidate]:
+    if len(value.encode("utf-8")) > _MAX_CANDIDATES_JSON_BYTES:
+        raise ValueError("candidates_json exceeds the bounded locator-candidate input limit")
+    payload = json.loads(value)
+    if not isinstance(payload, list) or len(payload) > _MAX_LOCATOR_CANDIDATES:
+        raise ValueError("candidates_json must contain at most 20 candidates")
+    return [LocatorCandidate.model_validate(item) for item in payload]
+
+
+def _bind_requested_candidates(
+    authority: LocatorRepairAuthority,
+    requested: list[LocatorCandidate],
+) -> list[LocatorCandidate]:
+    observed_rows = authority.verification.structured_data.get("candidates")
+    if not isinstance(observed_rows, list) or len(observed_rows) > _MAX_LOCATOR_CANDIDATES:
+        raise ValueError("repair subject contains malformed locator-candidate observations")
+
+    bound: list[LocatorCandidate] = []
+    for candidate in requested:
+        matches = [
+            row
+            for row in observed_rows
+            if isinstance(row, dict)
+            and row.get("locator") == candidate.locator
+            and row.get("strategy") == candidate.strategy
+        ]
+        if len(matches) != 1:
+            raise ValueError(
+                "candidate does not resolve uniquely in the repair subject's Playwright observation"
+            )
+        observed = matches[0]
+        count = observed.get("uniqueness_count")
+        rejected = observed.get("rejected_reason")
+        if type(count) is not int or count < 0:
+            raise ValueError("observed locator uniqueness count is malformed")
+        if rejected is not None and not isinstance(rejected, str):
+            raise ValueError("observed locator rejection reason is malformed")
+        bound.append(
+            candidate.model_copy(
+                update={
+                    "uniqueness_count": count,
+                    "rejected_reason": rejected,
+                }
+            )
+        )
+    return bound
+
+
+def _revalidate_proposed_locator(
+    services: RuntimeServices,
+    authority: LocatorRepairAuthority,
+    *,
+    proposed_locator: str,
+    expected_risk: object,
+) -> None:
+    rows = authority.verification.structured_data.get("candidates")
+    if not isinstance(rows, list):
+        raise ValueError("repair subject lost locator-candidate observations")
+    matches = [
+        row
+        for row in rows
+        if isinstance(row, dict) and row.get("locator") == proposed_locator
+    ]
+    if len(matches) != 1:
+        raise ValueError("proposed locator does not resolve uniquely in Playwright evidence")
+    row = matches[0]
+    strategy = row.get("strategy")
+    count = row.get("uniqueness_count")
+    rejected = row.get("rejected_reason")
+    if not isinstance(strategy, str) or type(count) is not int or count < 0:
+        raise ValueError("proposed locator observation is malformed")
+    if rejected is not None and not isinstance(rejected, str):
+        raise ValueError("proposed locator rejection state is malformed")
+
+    candidate = LocatorCandidate(
+        locator=proposed_locator,
+        strategy=strategy,
+        uniqueness_count=count,
+        semantic_match=0.0,
+        stability_score=0.0,
+        rejected_reason=rejected,
+    )
+    replay = SelfHealingEngine().propose(
+        classification=authority.classification,
+        original_locator=authority.original_locator,
+        candidates=[candidate],
+        evidence_ids=list(authority.validation.evidence_ids),
+        policy=services.policy,
+    )
+    if (
+        replay.allowed is not True
+        or replay.proposed_locator != proposed_locator
+        or replay.risk.value != expected_risk
+    ):
+        raise ValueError(
+            "stored healing proposal no longer reproduces under deterministic locator policy"
+        )
 
 
 def register_browser_tools(
@@ -147,7 +250,7 @@ def register_browser_tools(
 
     @tool(
         "verify_locator_candidates",
-        "Bind one failing targeted pytest subject, then use Playwright to verify locator candidates against its exact repair authority.",
+        "Bind one failing targeted pytest node, then use Playwright to verify locator candidates against its exact repair authority.",
         {
             "url": str,
             "failure_validation_id": str,
@@ -157,19 +260,10 @@ def register_browser_tools(
     )
     async def verify_locator_candidates(args: dict[str, Any]) -> dict[str, Any]:
         services.consume("verify_locator_candidates", args)
-        if reason := require_closed_revision_before_mutation(services):
-            return {
-                "content": [{"type": "text", "text": f"DENIED: {reason}"}],
-                "is_error": True,
-            }
-
         subject = None
         binding = None
         try:
-            payload = json.loads(args["candidates_json"])
-            if not isinstance(payload, list):
-                raise ValueError("candidates_json must contain a JSON list")
-            candidates = [LocatorCandidate.model_validate(item) for item in payload]
+            candidates = _parse_candidates_json(args["candidates_json"])
             binding = prepare_locator_repair_binding(
                 workspace=services.workspace,
                 expected_root_identity=services.workspace_root_identity,
@@ -312,39 +406,17 @@ def register_browser_tools(
                 state=services.state,
                 evidence=services.evidence,
             )
-        except (LocatorRepairAuthorityError, RuntimeError, OSError, UnicodeError) as exc:
-            return {
-                "content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}],
-                "is_error": True,
-            }
-
-        observed_rows = authority.verification.structured_data.get("candidates", [])
-        observed_map = {
-            (str(row.get("locator")), str(row.get("strategy"))): row
-            for row in observed_rows
-            if isinstance(row, dict)
-        }
-        try:
-            requested = json.loads(args["candidates_json"])
-            if not isinstance(requested, list) or len(requested) > 20:
-                raise ValueError("candidates_json must contain at most 20 candidates")
-            bound: list[LocatorCandidate] = []
-            for raw in requested:
-                candidate = LocatorCandidate.model_validate(raw)
-                observed = observed_map.get((candidate.locator, candidate.strategy))
-                if observed is None:
-                    raise ValueError(
-                        "candidate was not measured by the repair subject's Playwright verification"
-                    )
-                bound.append(
-                    candidate.model_copy(
-                        update={
-                            "uniqueness_count": int(observed.get("uniqueness_count", 0)),
-                            "rejected_reason": observed.get("rejected_reason"),
-                        }
-                    )
-                )
-        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            requested = _parse_candidates_json(args["candidates_json"])
+            bound = _bind_requested_candidates(authority, requested)
+        except (
+            LocatorRepairAuthorityError,
+            ValueError,
+            TypeError,
+            json.JSONDecodeError,
+            RuntimeError,
+            OSError,
+            UnicodeError,
+        ) as exc:
             return {
                 "content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}],
                 "is_error": True,
@@ -444,7 +516,9 @@ def register_browser_tools(
         repair_subject_id = data.get("repair_subject_id")
         if not isinstance(repair_subject_id, str) or not repair_subject_id:
             return {
-                "content": [{"type": "text", "text": "DENIED: healing proposal lost repair subject identity"}],
+                "content": [
+                    {"type": "text", "text": "DENIED: healing proposal lost repair subject identity"}
+                ],
                 "is_error": True,
             }
         try:
@@ -455,39 +529,46 @@ def register_browser_tools(
                 state=services.state,
                 evidence=services.evidence,
             )
-        except (LocatorRepairAuthorityError, RuntimeError, OSError, UnicodeError) as exc:
+            subject_details = authority.validation.details
+            if (
+                proposal_item.source_identifier != repair_subject_id
+                or data.get("path") != authority.path
+                or data.get("expected_sha256") != authority.expected_sha256
+                or data.get("workspace_revision") != subject_details.get("workspace_revision")
+                or data.get("workspace_git_sha") != subject_details.get("workspace_git_sha")
+                or data.get("workspace_fingerprint")
+                != subject_details.get("workspace_fingerprint")
+                or data.get("classification") != authority.classification.value
+                or data.get("classification_confidence") != authority.classification_confidence
+                or data.get("verification_evidence_id") != authority.verification.id
+                or data.get("original_locator") != authority.original_locator
+                or data.get("evidence_ids") != authority.validation.evidence_ids
+            ):
+                raise ValueError(
+                    "healing proposal authority does not match the active locator repair subject"
+                )
+            proposed_locator = data.get("proposed_locator")
+            if not isinstance(proposed_locator, str) or not proposed_locator:
+                raise ValueError("healing proposal is incomplete")
+            _revalidate_proposed_locator(
+                services,
+                authority,
+                proposed_locator=proposed_locator,
+                expected_risk=data.get("risk"),
+            )
+        except (
+            LocatorRepairAuthorityError,
+            ValueError,
+            TypeError,
+            RuntimeError,
+            OSError,
+            UnicodeError,
+        ) as exc:
             return {
                 "content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}],
                 "is_error": True,
             }
 
-        if (
-            data.get("path") != authority.path
-            or data.get("expected_sha256") != authority.expected_sha256
-            or data.get("workspace_revision") != authority.validation.details.get("workspace_revision")
-            or data.get("workspace_git_sha") != authority.validation.details.get("workspace_git_sha")
-            or data.get("workspace_fingerprint")
-            != authority.validation.details.get("workspace_fingerprint")
-            or data.get("classification") != authority.classification.value
-            or data.get("classification_confidence") != authority.classification_confidence
-            or data.get("verification_evidence_id") != authority.verification.id
-        ):
-            return {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "DENIED: healing proposal authority does not match the active locator repair subject",
-                    }
-                ],
-                "is_error": True,
-            }
-
-        proposed_locator = str(data.get("proposed_locator") or "")
-        if not proposed_locator:
-            return {
-                "content": [{"type": "text", "text": "DENIED: healing proposal is incomplete"}],
-                "is_error": True,
-            }
         patcher = SafeTestPatcher(services.workspace, services.policy)
         try:
             result = patcher.replace_locator_once(
