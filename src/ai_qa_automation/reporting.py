@@ -25,6 +25,13 @@ def build_final_report(
             "policy_version": state.policy_version,
             "tool_schema_version": state.tool_schema_version,
             "configuration_version": state.configuration_version,
+            "control_plane_subject": (
+                state.control_plane_subject.model_dump(mode="json")
+                if state.control_plane_subject is not None
+                else None
+            ),
+            "control_plane_revalidation_status": state.control_plane_revalidation_status.value,
+            "control_plane_terminal_subject_digest": state.control_plane_terminal_subject_digest,
             "target_git_sha": state.target_git_sha or "NOT_OBSERVED",
             "objective_gate_id": state.objective_gate_id or "NOT_SUPPLIED",
         },

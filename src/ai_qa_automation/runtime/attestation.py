@@ -216,22 +216,42 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
     if regulated_mode:
         integrity_payload["regulated_audit"] = regulated_audit
 
+    has_control_plane_provenance = (
+        state.get("control_plane_subject") is not None
+        or state.get("control_plane_revalidation_status") not in {None, "NOT_CAPTURED"}
+        or state.get("control_plane_terminal_subject_digest") is not None
+    )
+    attestation_schema = (
+        "ai-qa-run-attestation/v2" if has_control_plane_provenance else "ai-qa-run-attestation/v1"
+    )
+    runtime_payload: dict[str, Any] = {
+        "agent_version": state.get("agent_version"),
+        "model_id": state.get("model_id"),
+        "sdk_version": state.get("sdk_version"),
+        "policy_version": state.get("policy_version"),
+        "tool_schema_version": state.get("tool_schema_version"),
+        "configuration_version": state.get("configuration_version"),
+    }
+    if has_control_plane_provenance:
+        runtime_payload.update(
+            {
+                "control_plane_subject": state.get("control_plane_subject"),
+                "control_plane_revalidation_status": state.get("control_plane_revalidation_status"),
+                "control_plane_terminal_subject_digest": state.get(
+                    "control_plane_terminal_subject_digest"
+                ),
+            }
+        )
+
     core: dict[str, Any] = {
-        "schema": "ai-qa-run-attestation/v1",
+        "schema": attestation_schema,
         "run_id": state.get("run_id"),
         "objective_hash": _hash_text(str(state.get("objective") or "")),
         "target": {
             "git_sha": state.get("target_git_sha"),
             "workspace_fingerprint": runtime.get("workspace_fingerprint"),
         },
-        "runtime": {
-            "agent_version": state.get("agent_version"),
-            "model_id": state.get("model_id"),
-            "sdk_version": state.get("sdk_version"),
-            "policy_version": state.get("policy_version"),
-            "tool_schema_version": state.get("tool_schema_version"),
-            "configuration_version": state.get("configuration_version"),
-        },
+        "runtime": runtime_payload,
         "outcome": {
             "terminal_status": terminal_status,
             "terminal_reason": state.get("terminal_reason"),

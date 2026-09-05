@@ -7,7 +7,7 @@
 **Evidence-First Agentic Quality Engineering**  
 Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
-[Repository](../README.md) · [Architecture](ARCHITECTURE.md) · [Result Contract](RESULT_CONTRACT.md) · [Security](SECURITY.md) · [CI/CD](CI_CD.md) · [Release Candidate](RELEASE_CANDIDATE.md) · [Setup](SETUP.md)
+[Repository](../README.md) · [Architecture](ARCHITECTURE.md) · [Result Contract](RESULT_CONTRACT.md) · [Control-Plane Provenance](CONTROL_PLANE_PROVENANCE.md) · [Security](SECURITY.md) · [CI/CD](CI_CD.md) · [Release Candidate](RELEASE_CANDIDATE.md) · [Setup](SETUP.md)
 
 </div>
 
