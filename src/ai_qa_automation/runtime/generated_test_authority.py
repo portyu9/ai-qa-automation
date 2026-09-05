@@ -141,8 +141,11 @@ def require_same_generated_test_repository_subject(
 def generated_test_proposal_subject(
     *,
     coverage_evidence_id: str,
-    plan_evidence_id: str,
+    coverage_evidence_digest: str,
+    requirement_evidence_id: str,
     requirement_digest: str,
+    plan_evidence_id: str,
+    plan_subject_id: str,
     scenario_id: str,
     layer: str,
     assertion_contract_digest: str,
@@ -151,7 +154,9 @@ def generated_test_proposal_subject(
     repository_subject: GeneratedTestRepositorySubject,
 ) -> dict[str, Any]:
     for label, value in {
+        "coverage_evidence_digest": coverage_evidence_digest,
         "requirement_digest": requirement_digest,
+        "plan_subject_id": plan_subject_id,
         "scenario_id": scenario_id,
         "assertion_contract_digest": assertion_contract_digest,
         "content_sha256": content_sha256,
@@ -160,6 +165,7 @@ def generated_test_proposal_subject(
             raise GeneratedTestAuthorityError(f"generated-test {label} is invalid")
     for label, value in {
         "coverage_evidence_id": coverage_evidence_id,
+        "requirement_evidence_id": requirement_evidence_id,
         "plan_evidence_id": plan_evidence_id,
         "layer": layer,
         "target_path": target_path,
@@ -169,8 +175,11 @@ def generated_test_proposal_subject(
     payload = {
         "schema_version": 1,
         "coverage_evidence_id": coverage_evidence_id,
-        "plan_evidence_id": plan_evidence_id,
+        "coverage_evidence_digest": coverage_evidence_digest,
+        "requirement_evidence_id": requirement_evidence_id,
         "requirement_digest": requirement_digest,
+        "plan_evidence_id": plan_evidence_id,
+        "plan_subject_id": plan_subject_id,
         "scenario_id": scenario_id,
         "layer": layer,
         "assertion_contract_digest": assertion_contract_digest,
