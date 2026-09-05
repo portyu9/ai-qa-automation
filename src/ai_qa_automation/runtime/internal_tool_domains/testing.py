@@ -15,6 +15,7 @@ from ...models import (
     RegressionCandidate,
     TerminalStatus,
     TestGenerationPlan,
+    TestScenario,
     ToolDecision,
     ValidationResult,
     ValidationStatus,
@@ -27,6 +28,7 @@ from ..generated_test_authority import (
     GeneratedTestAuthorityError,
     canonical_sha256,
     capture_generated_test_repository_subject,
+    generated_test_plan_subject,
     generated_test_proposal_subject,
     require_same_generated_test_repository_subject,
     text_sha256,
@@ -42,6 +44,11 @@ from .common import (
 )
 
 _TARGETED_EXECUTION_AUTHORITY = "unavailable"
+_REQUIREMENT_PROVENANCE = "plan_tests.requirement"
+
+
+def _evidence_digest(item: EvidenceItem) -> str:
+    return canonical_sha256(item.model_dump(mode="json"))
 
 
 def _validate_generated_test_proposal(
@@ -90,7 +97,7 @@ def _validate_generated_test_proposal(
     return path.as_posix(), text_sha256(content), synthetic_diff
 
 
-def _plan_selected_scenario(plan: TestGenerationPlan) -> Any:
+def _plan_selected_scenario(plan: TestGenerationPlan) -> TestScenario:
     matches = [item for item in plan.scenarios if item.scenario_id == plan.selected_scenario_id]
     if len(matches) != 1:
         raise GeneratedTestAuthorityError(
@@ -301,17 +308,41 @@ def register_testing_tools(services: RuntimeServices, tool: ToolDecorator) -> di
             }
         selected = _plan_selected_scenario(result)
         coverage_complete = coverage_evidence.structured_data.get("complete") is True
+        coverage_evidence_digest = _evidence_digest(coverage_evidence)
         existing_coverage_digest = canonical_sha256(existing_coverage)
-        plan_subject_payload = {
-            "coverage_evidence_id": coverage_evidence.id,
-            "repository_subject": current_subject.as_dict(),
-            "requirement_digest": result.requirement_digest,
-            "requirement_provenance": "plan_tests.requirement",
-            "selected_scenario_id": result.selected_scenario_id,
-            "selected_assertion_contract_digest": selected.assertion_contract_digest,
-            "advisory_existing_coverage_digest": existing_coverage_digest,
-        }
-        plan_subject_id = canonical_sha256(plan_subject_payload)
+        requirement_item = services.evidence.add(
+            EvidenceItem(
+                run_id=services.state.run_id,
+                kind=EvidenceKind.REQUIREMENT,
+                nature=EvidenceNature.MODEL_INTERPRETATION,
+                source="test_generation_requirement_input",
+                source_identifier=coverage_evidence.id,
+                summary="Generated-test requirement input captured for exact plan provenance",
+                content_hash=result.requirement_digest,
+                structured_data={
+                    "requirement_digest": result.requirement_digest,
+                    "requirement_provenance": _REQUIREMENT_PROVENANCE,
+                    "repository_subject": current_subject.as_dict(),
+                },
+            )
+        )
+        services.state.evidence_ids.append(requirement_item.id)
+        requirement_evidence_digest = _evidence_digest(requirement_item)
+        plan_dump = result.model_dump(mode="json")
+        plan_subject = generated_test_plan_subject(
+            coverage_evidence_id=coverage_evidence.id,
+            coverage_evidence_digest=coverage_evidence_digest,
+            coverage_complete=coverage_complete,
+            requirement_evidence_id=requirement_item.id,
+            requirement_evidence_digest=requirement_evidence_digest,
+            requirement_digest=result.requirement_digest,
+            requirement_provenance=_REQUIREMENT_PROVENANCE,
+            repository_subject=current_subject,
+            selected_scenario_id=result.selected_scenario_id,
+            selected_assertion_contract_digest=selected.assertion_contract_digest,
+            advisory_existing_coverage_digest=existing_coverage_digest,
+            plan=plan_dump,
+        )
         item = services.evidence.add(
             EvidenceItem(
                 run_id=services.state.run_id,
@@ -321,20 +352,11 @@ def register_testing_tools(services: RuntimeServices, tool: ToolDecorator) -> di
                 source_identifier=coverage_evidence.id,
                 summary="Coverage-aware test-generation plan created; semantic implementation remains unverified",
                 structured_data={
-                    "coverage_evidence_id": coverage_evidence.id,
-                    "coverage_complete": coverage_complete,
+                    **plan_subject,
                     "coverage_incomplete_reasons": coverage_evidence.structured_data.get(
                         "incomplete_reasons", []
                     ),
-                    "repository_subject": current_subject.as_dict(),
-                    "requirement_digest": result.requirement_digest,
-                    "requirement_provenance": "plan_tests.requirement",
-                    "selected_scenario_id": result.selected_scenario_id,
-                    "selected_assertion_contract_digest": selected.assertion_contract_digest,
-                    "advisory_existing_coverage_digest": existing_coverage_digest,
-                    "plan_subject_id": plan_subject_id,
                     "semantic_implementation_verified": False,
-                    "plan": result.model_dump(mode="json"),
                 },
             )
         )
@@ -347,10 +369,11 @@ def register_testing_tools(services: RuntimeServices, tool: ToolDecorator) -> di
                     "text": json.dumps(
                         {
                             "plan_evidence_id": item.id,
-                            "plan_subject_id": plan_subject_id,
+                            "plan_subject_id": plan_subject["plan_subject_id"],
+                            "requirement_evidence_id": requirement_item.id,
                             "selected_scenario_id": result.selected_scenario_id,
                             "semantic_implementation_verified": False,
-                            "plan": result.model_dump(mode="json"),
+                            "plan": plan_dump,
                         }
                     )[:16000],
                 }
@@ -476,11 +499,19 @@ def register_testing_tools(services: RuntimeServices, tool: ToolDecorator) -> di
                     "test-generation assertion contract does not match the plan"
                 )
             coverage_evidence_id = plan_item.structured_data.get("coverage_evidence_id")
-            if not isinstance(coverage_evidence_id, str):
+            requirement_evidence_id = plan_item.structured_data.get("requirement_evidence_id")
+            if not isinstance(coverage_evidence_id, str) or not isinstance(
+                requirement_evidence_id, str
+            ):
                 raise GeneratedTestAuthorityError(
-                    "test-generation plan coverage provenance is invalid"
+                    "test-generation plan evidence provenance is invalid"
+                )
+            if plan_item.source_identifier != coverage_evidence_id:
+                raise GeneratedTestAuthorityError(
+                    "test-generation plan source does not match coverage provenance"
                 )
             coverage_evidence = services.evidence.get(coverage_evidence_id)
+            requirement_evidence = services.evidence.get(requirement_evidence_id)
             if (
                 coverage_evidence.id not in services.state.evidence_ids
                 or coverage_evidence.kind != EvidenceKind.SOURCE_OBSERVATION
@@ -490,6 +521,21 @@ def register_testing_tools(services: RuntimeServices, tool: ToolDecorator) -> di
             ):
                 raise GeneratedTestAuthorityError(
                     "test-generation coverage provenance is not authoritative"
+                )
+            if (
+                requirement_evidence.id not in services.state.evidence_ids
+                or requirement_evidence.kind != EvidenceKind.REQUIREMENT
+                or requirement_evidence.nature != EvidenceNature.MODEL_INTERPRETATION
+                or requirement_evidence.source != "test_generation_requirement_input"
+                or requirement_evidence.source_identifier != coverage_evidence.id
+                or requirement_evidence.content_hash != plan.requirement_digest
+                or requirement_evidence.structured_data.get("requirement_digest")
+                != plan.requirement_digest
+                or requirement_evidence.structured_data.get("requirement_provenance")
+                != _REQUIREMENT_PROVENANCE
+            ):
+                raise GeneratedTestAuthorityError(
+                    "test-generation requirement provenance is not authoritative"
                 )
             if (
                 plan_item.structured_data.get("coverage_complete") is not True
@@ -511,6 +557,47 @@ def register_testing_tools(services: RuntimeServices, tool: ToolDecorator) -> di
                 coverage_evidence.structured_data.get("repository_subject"),
                 current_subject,
             )
+            require_same_generated_test_repository_subject(
+                requirement_evidence.structured_data.get("repository_subject"),
+                current_subject,
+            )
+            coverage_evidence_digest = _evidence_digest(coverage_evidence)
+            requirement_evidence_digest = _evidence_digest(requirement_evidence)
+            if (
+                plan_item.structured_data.get("coverage_evidence_digest")
+                != coverage_evidence_digest
+                or plan_item.structured_data.get("requirement_evidence_digest")
+                != requirement_evidence_digest
+            ):
+                raise GeneratedTestAuthorityError(
+                    "test-generation plan evidence digest does not match exact provenance"
+                )
+            advisory_existing_coverage_digest = plan_item.structured_data.get(
+                "advisory_existing_coverage_digest"
+            )
+            if not isinstance(advisory_existing_coverage_digest, str):
+                raise GeneratedTestAuthorityError(
+                    "test-generation advisory coverage digest is invalid"
+                )
+            recomputed_plan_subject = generated_test_plan_subject(
+                coverage_evidence_id=coverage_evidence.id,
+                coverage_evidence_digest=coverage_evidence_digest,
+                coverage_complete=True,
+                requirement_evidence_id=requirement_evidence.id,
+                requirement_evidence_digest=requirement_evidence_digest,
+                requirement_digest=plan.requirement_digest,
+                requirement_provenance=_REQUIREMENT_PROVENANCE,
+                repository_subject=current_subject,
+                selected_scenario_id=selected.scenario_id,
+                selected_assertion_contract_digest=selected.assertion_contract_digest,
+                advisory_existing_coverage_digest=advisory_existing_coverage_digest,
+                plan=plan.model_dump(mode="json"),
+            )
+            plan_subject_id = recomputed_plan_subject["plan_subject_id"]
+            if plan_item.structured_data.get("plan_subject_id") != plan_subject_id:
+                raise GeneratedTestAuthorityError(
+                    "test-generation plan subject does not match exact evidence lineage"
+                )
             for existing in services.evidence.all():
                 if (
                     existing.kind == EvidenceKind.TEST_GENERATION_PROPOSAL
@@ -536,8 +623,11 @@ def register_testing_tools(services: RuntimeServices, tool: ToolDecorator) -> di
                 )
             proposal_subject = generated_test_proposal_subject(
                 coverage_evidence_id=coverage_evidence.id,
-                plan_evidence_id=plan_item.id,
+                coverage_evidence_digest=coverage_evidence_digest,
+                requirement_evidence_id=requirement_evidence.id,
                 requirement_digest=plan.requirement_digest,
+                plan_evidence_id=plan_item.id,
+                plan_subject_id=plan_subject_id,
                 scenario_id=selected.scenario_id,
                 layer=selected.layer.value,
                 assertion_contract_digest=selected.assertion_contract_digest,
@@ -548,7 +638,10 @@ def register_testing_tools(services: RuntimeServices, tool: ToolDecorator) -> di
         except KeyError:
             return {
                 "content": [
-                    {"type": "text", "text": "DENIED: test-generation coverage evidence is unavailable"}
+                    {
+                        "type": "text",
+                        "text": "DENIED: test-generation coverage or requirement evidence is unavailable",
+                    }
                 ],
                 "is_error": True,
             }
