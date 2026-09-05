@@ -62,9 +62,7 @@ def _validate_generated_test_proposal(
     patcher = SafeTestPatcher(services.workspace, services.policy)
     content_bytes = content.encode("utf-8")
     if len(content_bytes) > patcher._MAX_TEST_FILE_BYTES:
-        raise ValueError(
-            f"generated test exceeds {patcher._MAX_TEST_FILE_BYTES} byte limit"
-        )
+        raise ValueError(f"generated test exceeds {patcher._MAX_TEST_FILE_BYTES} byte limit")
     path, destination = patcher._resolve_owned_path(relative_path)
     decision = services.policy.authorize_path(path, write=True)
     services.state.policy_decisions.append(decision)
@@ -87,9 +85,7 @@ def _validate_generated_test_proposal(
                 + ", ".join(f"{item.code}@{item.line}" for item in blockers)
             )
     elif not patcher._has_non_python_assertion(content):
-        raise PermissionError(
-            "generated JavaScript/TypeScript test has no observable assertion"
-        )
+        raise PermissionError("generated JavaScript/TypeScript test has no observable assertion")
     synthetic_diff = "".join(f"+{line}" for line in content.splitlines(keepends=True))
     violations = services.policy.validate_patch(synthetic_diff)
     if violations:
@@ -298,9 +294,7 @@ def register_testing_tools(services: RuntimeServices, tool: ToolDecorator) -> di
                 change_revision=services.state.change_revision,
             )
             if final_subject != current_subject:
-                raise GeneratedTestAuthorityError(
-                    "repository subject changed during test planning"
-                )
+                raise GeneratedTestAuthorityError("repository subject changed during test planning")
         except GeneratedTestAuthorityError as exc:
             return {
                 "content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}],
