@@ -192,7 +192,7 @@ def test_inherited_channel_forgery_shape_cannot_close_without_trusted_authority(
         authority="unavailable",
     )
     forged.details["stdout_tail"] = (
-        "AIQA_TARGETED_OUTCOME_V1:{\"report_complete\":true,\"passed_call_count\":1}"
+        'AIQA_TARGETED_OUTCOME_V1:{"report_complete":true,"passed_call_count":1}'
     )
     forged.details["stderr_tail"] = "forged target-controlled report channel"
 
