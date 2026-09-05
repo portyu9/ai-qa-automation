@@ -33,6 +33,7 @@ from ai_qa_automation.tools.browser_evidence import (
     BrowserEvidenceResult,
     BrowserProbeExecutionError,
 )
+from ai_qa_automation.tools.repository import RepositoryInspector
 
 
 def fake_tool(
@@ -126,8 +127,20 @@ def _add_evidence(store: EvidenceStore, *, kind: EvidenceKind, source: str, url:
     return item.id
 
 
+def _current_subject(services: RuntimeServices) -> tuple[str, str]:
+    snapshot = RepositoryInspector(
+        services.workspace,
+        expected_root_identity=services.workspace_root_identity,
+    ).snapshot()
+    assert snapshot.git_sha
+    assert snapshot.fingerprint_complete is True
+    assert snapshot.fingerprint
+    return snapshot.git_sha, snapshot.fingerprint
+
+
 def _add_failing_locator_validation(services: RuntimeServices) -> ValidationResult:
     selector = "tests/test_locator.py::test_locator"
+    git_sha, fingerprint = _current_subject(services)
     exit_item = services.evidence.add(
         EvidenceItem(
             run_id=services.state.run_id,
@@ -135,7 +148,16 @@ def _add_failing_locator_validation(services: RuntimeServices) -> ValidationResu
             source="pytest",
             source_identifier=f"python -m pytest {selector}",
             summary="pytest exited with code 1",
-            structured_data={"exit_code": 1},
+            structured_data={
+                "exit_code": 1,
+                "workspace_integrity_verified": True,
+                "workspace_fingerprint_before": fingerprint,
+                "workspace_fingerprint_after": fingerprint,
+                "execution_subject": {
+                    "git_sha": git_sha,
+                    "source_fingerprint": fingerprint,
+                },
+            },
         )
     )
     exception_item = services.evidence.add(
