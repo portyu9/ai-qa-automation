@@ -216,8 +216,19 @@ def build_run_attestation(run_dir: Path) -> dict[str, Any]:
     if regulated_mode:
         integrity_payload["regulated_audit"] = regulated_audit
 
+    has_control_plane_provenance = (
+        state.get("control_plane_subject") is not None
+        or state.get("control_plane_revalidation_status") not in {None, "NOT_CAPTURED"}
+        or state.get("control_plane_terminal_subject_digest") is not None
+    )
+    attestation_schema = (
+        "ai-qa-run-attestation/v2"
+        if has_control_plane_provenance
+        else "ai-qa-run-attestation/v1"
+    )
+
     core: dict[str, Any] = {
-        "schema": "ai-qa-run-attestation/v2",
+        "schema": attestation_schema,
         "run_id": state.get("run_id"),
         "objective_hash": _hash_text(str(state.get("objective") or "")),
         "target": {
