@@ -415,12 +415,14 @@ async def test_locator_verification_tool_persists_browser_and_repair_subjects(
     assert browser_validation.details["repair_subject_id"] == repair_subject.gate_id
     assert browser_validation.details["failure_validation_id"] == failure.id
     assert browser_validation.details["path"] == repair_subject.details["path"]
-    assert browser_validation.details["workspace_git_sha"] == repair_subject.details[
-        "workspace_git_sha"
-    ]
-    assert browser_validation.details["workspace_fingerprint"] == repair_subject.details[
-        "workspace_fingerprint"
-    ]
+    assert (
+        browser_validation.details["workspace_git_sha"]
+        == repair_subject.details["workspace_git_sha"]
+    )
+    assert (
+        browser_validation.details["workspace_fingerprint"]
+        == repair_subject.details["workspace_fingerprint"]
+    )
     payload = json.loads(response["content"][0]["text"])
     assert payload["gate_id"] == browser_subject.gate_id
     assert payload["repair_subject_id"] == repair_subject.gate_id
