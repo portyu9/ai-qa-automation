@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import ai_qa_automation.runtime.generated_test_authority as generated_test_authority
 from ai_qa_automation.runtime.generated_test_authority import (
     GeneratedTestAuthorityError,
     capture_generated_test_repository_subject,
@@ -53,6 +54,48 @@ def test_non_git_empty_directory_changes_subject(tmp_path: Path) -> None:
     )
 
     assert before.workspace_fingerprint != after.workspace_fingerprint
+
+
+def test_non_git_workspace_file_byte_limit_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "oversized.py").write_bytes(b"12345")
+    monkeypatch.setattr(generated_test_authority, "_NON_GIT_MAX_FILE_BYTES", 4)
+
+    with pytest.raises(
+        GeneratedTestAuthorityError,
+        match="file exceeds fingerprint byte limit",
+    ):
+        capture_generated_test_repository_subject(
+            workspace,
+            expected_root_identity=None,
+            change_revision=0,
+        )
+
+
+def test_non_git_workspace_aggregate_byte_limit_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "first.py").write_bytes(b"123")
+    (workspace / "second.py").write_bytes(b"456")
+    monkeypatch.setattr(generated_test_authority, "_NON_GIT_MAX_FILE_BYTES", 4)
+    monkeypatch.setattr(generated_test_authority, "_NON_GIT_MAX_TOTAL_BYTES", 5)
+
+    with pytest.raises(
+        GeneratedTestAuthorityError,
+        match="exceeds aggregate fingerprint byte limit",
+    ):
+        capture_generated_test_repository_subject(
+            workspace,
+            expected_root_identity=None,
+            change_revision=0,
+        )
 
 
 def test_non_git_workspace_root_replacement_after_inspector_pin_fails_closed(
