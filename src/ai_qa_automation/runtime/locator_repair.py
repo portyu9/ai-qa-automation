@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 from dataclasses import dataclass
@@ -20,7 +21,7 @@ from ..models import (
 from ..policy import PolicyEngine
 from ..tools.locators import parse_locator_expression
 from ..tools.repository import RepositoryInspector
-from .model_source_observation import is_test_code_path, read_model_source_confined
+from .model_source_observation import read_model_source_confined
 
 _LOCATOR_REPAIR_AUTHORITY_VERSION = "locator_repair_subject_v1"
 _ALLOWED_REPAIR_CLASSES = {
@@ -43,7 +44,7 @@ class LocatorRepairBinding:
     failure_gate_id: str
     path: str
     pytest_selector: str
-    failing_node_id: str | None
+    failing_node_id: str
     failure_evidence_ids: tuple[str, ...]
     failure_items: tuple[EvidenceItem, ...]
     git_sha: str
@@ -98,7 +99,7 @@ def _subject_gate_id(payload: dict[str, object]) -> str:
     return "locator_repair:" + hashlib.sha256(rendered.encode("utf-8")).hexdigest()
 
 
-def _normalized_pytest_selector(args: object) -> tuple[str, str, str | None]:
+def _normalized_pytest_selector(args: object) -> tuple[str, str, str]:
     if not isinstance(args, list) or not all(isinstance(item, str) for item in args):
         raise LocatorRepairAuthorityError("targeted pytest validation has malformed arguments")
 
@@ -110,7 +111,7 @@ def _normalized_pytest_selector(args: object) -> tuple[str, str, str | None]:
             continue
         if item in {"-k", "-m"} or item.startswith(("-k=", "-m=")):
             raise LocatorRepairAuthorityError(
-                "locator repair requires one explicit pytest selector without -k/-m filtering"
+                "locator repair requires one explicit pytest node selector without -k/-m filtering"
             )
         if item in {"--maxfail", "--tb"}:
             skip_next = True
@@ -121,29 +122,93 @@ def _normalized_pytest_selector(args: object) -> tuple[str, str, str | None]:
 
     if len(selectors) != 1:
         raise LocatorRepairAuthorityError(
-            "locator repair requires exactly one targeted pytest file or node selector"
+            "locator repair requires exactly one targeted pytest node selector"
         )
 
     selector = selectors[0].replace("\\", "/")
     while selector.startswith("./"):
         selector = selector[2:]
-    if not selector or "\x00" in selector:
-        raise LocatorRepairAuthorityError("targeted pytest selector is invalid")
+    if not selector or "\x00" in selector or "::" not in selector:
+        raise LocatorRepairAuthorityError(
+            "locator repair requires an explicit pytest test-node selector"
+        )
 
-    path_text = selector.split("::", 1)[0]
+    path_text, node_text = selector.split("::", 1)
     pure = PurePosixPath(path_text)
     if (
         pure.is_absolute()
         or not pure.parts
         or any(part in {"", ".", ".."} for part in pure.parts)
         or pure.as_posix() != path_text
+        or pure.suffix.casefold() != ".py"
     ):
-        raise LocatorRepairAuthorityError("targeted pytest selector does not name a safe test path")
-    if not is_test_code_path(Path(path_text)):
-        raise LocatorRepairAuthorityError("targeted pytest selector is not a supported test-code path")
+        raise LocatorRepairAuthorityError(
+            "locator repair requires a safe relative Python pytest path"
+        )
+    node_parts = node_text.split("::")
+    base_parts = [part.split("[", 1)[0] if index == len(node_parts) - 1 else part for index, part in enumerate(node_parts)]
+    if (
+        not node_parts
+        or any(not part or not part.isidentifier() for part in base_parts)
+    ):
+        raise LocatorRepairAuthorityError(
+            "locator repair pytest node identity is unsupported or ambiguous"
+        )
+    return selector, path_text, selector
 
-    failing_node_id = selector if "::" in selector else None
-    return selector, path_text, failing_node_id
+
+def _selected_python_test_node(source: str, selector: str) -> ast.AST:
+    node_parts = selector.split("::")[1:]
+    names = [
+        part.split("[", 1)[0] if index == len(node_parts) - 1 else part
+        for index, part in enumerate(node_parts)
+    ]
+    try:
+        body: list[ast.stmt] = ast.parse(source).body
+    except SyntaxError as exc:
+        raise LocatorRepairAuthorityError(
+            "failing Python test subject is not syntactically valid"
+        ) from exc
+
+    selected: ast.AST | None = None
+    for index, name in enumerate(names):
+        matches = [
+            item
+            for item in body
+            if isinstance(item, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+            and item.name == name
+        ]
+        if len(matches) != 1:
+            raise LocatorRepairAuthorityError(
+                "pytest node selector does not resolve to exactly one source test node"
+            )
+        selected = matches[0]
+        if index < len(names) - 1:
+            if not isinstance(selected, ast.ClassDef):
+                raise LocatorRepairAuthorityError(
+                    "pytest node hierarchy cannot be mapped to the Python test source"
+                )
+            body = selected.body
+    if not isinstance(selected, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        raise LocatorRepairAuthorityError(
+            "pytest selector must resolve to one concrete Python test function"
+        )
+    return selected
+
+
+def _assert_locator_in_selected_node(source: str, selector: str, original_locator: str) -> None:
+    node = _selected_python_test_node(source, selector)
+    end_lineno = getattr(node, "end_lineno", None)
+    if type(node.lineno) is not int or type(end_lineno) is not int:
+        raise LocatorRepairAuthorityError(
+            "Python test node does not expose complete source boundaries"
+        )
+    lines = source.splitlines(keepends=True)
+    node_source = "".join(lines[node.lineno - 1 : end_lineno])
+    if node_source.count(original_locator) != 1:
+        raise LocatorRepairAuthorityError(
+            "original locator is not uniquely contained in the selected failing pytest node"
+        )
 
 
 def _find_failure_validation(state: AgentRunState, validation_id: str) -> ValidationResult:
@@ -226,9 +291,7 @@ def _pytest_exit_item(items: tuple[EvidenceItem, ...]) -> EvidenceItem:
         and item.structured_data.get("exit_code") == 1
     ]
     if len(matches) != 1:
-        raise LocatorRepairAuthorityError(
-            "failing pytest workspace lineage is ambiguous"
-        )
+        raise LocatorRepairAuthorityError("failing pytest workspace lineage is ambiguous")
     return matches[0]
 
 
@@ -286,7 +349,7 @@ def prepare_locator_repair_binding(
     failure_validation_id: str,
     original_locator: str,
 ) -> LocatorRepairBinding:
-    """Bind one locator investigation to the exact failing test subject before browser work."""
+    """Bind one locator investigation to the exact failing test node before browser work."""
 
     validation = _find_failure_validation(state, failure_validation_id)
     selector, path, failing_node_id = _normalized_pytest_selector(validation.details.get("args"))
@@ -324,8 +387,9 @@ def prepare_locator_repair_binding(
     )
     if source.text.count(original_locator) != 1:
         raise LocatorRepairAuthorityError(
-            "original locator must occur exactly once in the failing test subject"
+            "original locator must occur exactly once in the failing test file"
         )
+    _assert_locator_in_selected_node(source.text, selector, original_locator)
 
     return LocatorRepairBinding(
         revision=state.change_revision,
@@ -381,6 +445,11 @@ def ensure_locator_repair_binding_fresh(
         raise LocatorRepairAuthorityError(
             "original locator occurrence changed during locator repair evidence collection"
         )
+    _assert_locator_in_selected_node(
+        source.text,
+        binding.pytest_selector,
+        binding.original_locator,
+    )
 
 
 def locator_verification_context(
@@ -479,6 +548,10 @@ def build_locator_repair_subject(
         state=state,
     )
     _validate_browser_subject_details(browser_subject_details, browser_gate_id)
+    if browser_subject_details.get("original_locator_hash") != binding.original_locator_hash:
+        raise LocatorRepairAuthorityError(
+            "browser locator subject original identity does not match the failing test node"
+        )
     if str(verification.structured_data.get("original_locator") or "") != binding.original_locator:
         raise LocatorRepairAuthorityError(
             "Playwright verification original locator does not match the failing test subject"
@@ -530,7 +603,7 @@ def build_locator_repair_subject(
         revision=binding.revision,
         status=ValidationStatus.PASS if eligible else ValidationStatus.NOT_VERIFIED,
         summary=(
-            "Locator repair evidence is bound to one failing test subject and is eligible for deterministic proposal evaluation."
+            "Locator repair evidence is bound to one failing test node and is eligible for deterministic proposal evaluation."
             if eligible
             else "Locator repair evidence is subject-bound, but the bound deterministic classification does not authorize autonomous repair."
         ),
@@ -586,6 +659,7 @@ def resolve_locator_repair_authority(
     original_locator = details.get("original_locator")
     original_locator_hash = details.get("original_locator_hash")
     original_locator_offset = details.get("original_locator_offset")
+    failing_node_id = details.get("failing_node_id")
     if (
         not isinstance(path, str)
         or not path
@@ -596,6 +670,8 @@ def resolve_locator_repair_authority(
         or original_locator_hash != _sha256_text(original_locator)
         or type(original_locator_offset) is not int
         or original_locator_offset < 0
+        or not isinstance(failing_node_id, str)
+        or not failing_node_id
     ):
         raise LocatorRepairAuthorityError("locator repair subject contains malformed test-file authority")
 
@@ -603,14 +679,14 @@ def resolve_locator_repair_authority(
     if not isinstance(failure_validation_id, str) or not failure_validation_id:
         raise LocatorRepairAuthorityError("locator repair subject lost failing pytest identity")
     failure_validation = _find_failure_validation(state, failure_validation_id)
-    selector, failure_path, failing_node_id = _normalized_pytest_selector(
+    selector, failure_path, current_node_id = _normalized_pytest_selector(
         failure_validation.details.get("args")
     )
     failure_gate_id = str(failure_validation.gate_id or failure_validation.name)
     if (
         failure_path != path
         or selector != details.get("pytest_selector")
-        or failing_node_id != details.get("failing_node_id")
+        or current_node_id != failing_node_id
         or failure_gate_id != details.get("failure_gate_id")
         or list(failure_validation.evidence_ids) != details.get("failure_evidence_ids")
     ):
@@ -641,6 +717,13 @@ def resolve_locator_repair_authority(
     browser_gate_id = details.get("browser_gate_id")
     if not _is_gate_sha256(browser_gate_id, "browser_locator_verification:"):
         raise LocatorRepairAuthorityError("locator repair subject browser gate identity is malformed")
+    if (
+        not _is_prefixed_sha256(details.get("requested_url_hash"))
+        or not _is_prefixed_sha256(details.get("candidate_request_hash"))
+        or type(details.get("candidate_count")) is not int
+        or not 0 <= int(details["candidate_count"]) <= _MAX_CANDIDATES
+    ):
+        raise LocatorRepairAuthorityError("locator repair subject browser metadata is malformed")
     browser_matches = [
         item
         for item in state.validation_results
@@ -720,6 +803,7 @@ def resolve_locator_repair_authority(
         raise LocatorRepairAuthorityError(
             "original locator occurrence changed since locator repair evidence was bound"
         )
+    _assert_locator_in_selected_node(source.text, selector, original_locator)
 
     return LocatorRepairAuthority(
         validation=subject,
