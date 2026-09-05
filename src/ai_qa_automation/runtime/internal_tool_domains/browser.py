@@ -309,10 +309,7 @@ def register_browser_tools(
                 "content": [
                     {
                         "type": "text",
-                        "text": (
-                            f"NOT_VERIFIED gate_id={subject.gate_id}: "
-                            f"{redact_text(str(exc))}"
-                        ),
+                        "text": f"NOT_VERIFIED gate_id={subject.gate_id}: {redact_text(str(exc))}",
                     }
                 ],
                 "is_error": True,
@@ -332,10 +329,7 @@ def register_browser_tools(
                 "content": [
                     {
                         "type": "text",
-                        "text": (
-                            f"NOT_VERIFIED gate_id={subject.gate_id}: "
-                            f"{redact_text(str(exc))}"
-                        ),
+                        "text": f"NOT_VERIFIED gate_id={subject.gate_id}: {redact_text(str(exc))}",
                     }
                 ],
                 "is_error": True,
@@ -381,7 +375,10 @@ def register_browser_tools(
                 "content": [
                     {
                         "type": "text",
-                        "text": f"NOT_VERIFIED gate_id={subject.gate_id}: {redact_text(str(exc))}",
+                        "text": (
+                            f"NOT_VERIFIED locator_repair_subject browser_gate_id={subject.gate_id}: "
+                            f"{redact_text(str(exc))}"
+                        ),
                     }
                 ],
                 "is_error": True,
