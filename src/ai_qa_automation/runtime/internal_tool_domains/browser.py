@@ -97,9 +97,7 @@ def _revalidate_proposed_locator(
     if not isinstance(rows, list):
         raise ValueError("repair subject lost locator-candidate observations")
     matches = [
-        row
-        for row in rows
-        if isinstance(row, dict) and row.get("locator") == proposed_locator
+        row for row in rows if isinstance(row, dict) and row.get("locator") == proposed_locator
     ]
     if len(matches) != 1:
         raise ValueError("proposed locator does not resolve uniquely in Playwright evidence")
@@ -260,8 +258,6 @@ def register_browser_tools(
     )
     async def verify_locator_candidates(args: dict[str, Any]) -> dict[str, Any]:
         services.consume("verify_locator_candidates", args)
-        subject = None
-        binding = None
         try:
             candidates = _parse_candidates_json(args["candidates_json"])
             binding = prepare_locator_repair_binding(
@@ -277,34 +273,6 @@ def register_browser_tools(
                 args["url"], args["original_locator"], candidates
             )
             allow_hosts = services.network_hosts(args["url"])
-            verified, evidence_id = await browser_probe_cls(
-                services.evidence, allow_hosts=allow_hosts
-            ).verify_locator_candidates(args["url"], args["original_locator"], candidates)
-        except BrowserProbeExecutionError as exc:
-            if exc.evidence_id not in services.state.evidence_ids:
-                services.state.evidence_ids.append(exc.evidence_id)
-            if subject is not None:
-                services.state.validation_results.append(
-                    browser_validation_result(
-                        subject,
-                        revision=services.state.change_revision,
-                        status=ValidationStatus.NOT_VERIFIED,
-                        summary="Browser locator verification did not complete deterministically.",
-                        evidence_ids=[exc.evidence_id],
-                        details={"failure_kind": "browser_execution"},
-                    )
-                )
-            services.checkpoint()
-            gate_text = f" gate_id={subject.gate_id}" if subject is not None else ""
-            return {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": f"NOT_VERIFIED{gate_text}: {redact_text(str(exc))}",
-                    }
-                ],
-                "is_error": True,
-            }
         except (
             LocatorRepairAuthorityError,
             ValueError,
@@ -316,6 +284,60 @@ def register_browser_tools(
             services.checkpoint()
             return {
                 "content": [{"type": "text", "text": f"DENIED: {redact_text(str(exc))}"}],
+                "is_error": True,
+            }
+
+        try:
+            verified, evidence_id = await browser_probe_cls(
+                services.evidence, allow_hosts=allow_hosts
+            ).verify_locator_candidates(args["url"], args["original_locator"], candidates)
+        except BrowserProbeExecutionError as exc:
+            if exc.evidence_id not in services.state.evidence_ids:
+                services.state.evidence_ids.append(exc.evidence_id)
+            services.state.validation_results.append(
+                browser_validation_result(
+                    subject,
+                    revision=services.state.change_revision,
+                    status=ValidationStatus.NOT_VERIFIED,
+                    summary="Browser locator verification did not complete deterministically.",
+                    evidence_ids=[exc.evidence_id],
+                    details={"failure_kind": "browser_execution"},
+                )
+            )
+            services.checkpoint()
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            f"NOT_VERIFIED gate_id={subject.gate_id}: "
+                            f"{redact_text(str(exc))}"
+                        ),
+                    }
+                ],
+                "is_error": True,
+            }
+        except RuntimeError as exc:
+            services.state.validation_results.append(
+                browser_validation_result(
+                    subject,
+                    revision=services.state.change_revision,
+                    status=ValidationStatus.NOT_VERIFIED,
+                    summary=redact_text(str(exc)),
+                    details={"failure_kind": "browser_runtime"},
+                )
+            )
+            services.checkpoint()
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            f"NOT_VERIFIED gate_id={subject.gate_id}: "
+                            f"{redact_text(str(exc))}"
+                        ),
+                    }
+                ],
                 "is_error": True,
             }
 
@@ -331,17 +353,8 @@ def register_browser_tools(
                     services.state.evidence_ids.append(context_id)
         if evidence_id not in services.state.evidence_ids:
             services.state.evidence_ids.append(evidence_id)
-        if subject is None or binding is None:  # pragma: no cover - both precede browser execution
-            raise RuntimeError("browser locator verification lost deterministic repair subject identity")
 
-        browser_validation = browser_validation_result(
-            subject,
-            revision=services.state.change_revision,
-            status=ValidationStatus.PASS,
-            summary="Playwright verified locator candidates for the exact request subject.",
-            evidence_ids=[evidence_id, *registered_context_ids],
-        )
-        services.state.validation_results.append(browser_validation)
+        browser_evidence_ids = [evidence_id, *registered_context_ids]
         try:
             repair_subject = build_locator_repair_subject(
                 binding,
@@ -354,21 +367,44 @@ def register_browser_tools(
                 browser_subject_details=subject.details,
             )
         except (LocatorRepairAuthorityError, RuntimeError, OSError, UnicodeError) as exc:
+            services.state.validation_results.append(
+                browser_validation_result(
+                    subject,
+                    revision=services.state.change_revision,
+                    status=ValidationStatus.PASS,
+                    summary="Playwright verified locator candidates for the exact request subject.",
+                    evidence_ids=browser_evidence_ids,
+                )
+            )
             services.checkpoint()
             return {
                 "content": [
                     {
                         "type": "text",
-                        "text": (
-                            f"NOT_VERIFIED gate_id={subject.gate_id}: "
-                            f"{redact_text(str(exc))}"
-                        ),
+                        "text": f"NOT_VERIFIED gate_id={subject.gate_id}: {redact_text(str(exc))}",
                     }
                 ],
                 "is_error": True,
             }
 
-        services.state.validation_results.append(repair_subject)
+        browser_validation = browser_validation_result(
+            subject,
+            revision=services.state.change_revision,
+            status=ValidationStatus.PASS,
+            summary="Playwright verified locator candidates for the exact request subject.",
+            evidence_ids=browser_evidence_ids,
+            details={
+                "repair_subject_id": repair_subject.gate_id,
+                "failure_validation_id": binding.failure_validation_id,
+                "failing_node_id": binding.failing_node_id,
+                "path": binding.path,
+                "workspace_revision": binding.revision,
+                "workspace_git_sha": binding.git_sha,
+                "workspace_fingerprint": binding.workspace_fingerprint,
+                "expected_sha256": binding.expected_sha256,
+            },
+        )
+        services.state.validation_results.extend([browser_validation, repair_subject])
         services.checkpoint()
         return {
             "content": [
@@ -517,7 +553,10 @@ def register_browser_tools(
         if not isinstance(repair_subject_id, str) or not repair_subject_id:
             return {
                 "content": [
-                    {"type": "text", "text": "DENIED: healing proposal lost repair subject identity"}
+                    {
+                        "type": "text",
+                        "text": "DENIED: healing proposal lost repair subject identity",
+                    }
                 ],
                 "is_error": True,
             }
@@ -536,8 +575,7 @@ def register_browser_tools(
                 or data.get("expected_sha256") != authority.expected_sha256
                 or data.get("workspace_revision") != subject_details.get("workspace_revision")
                 or data.get("workspace_git_sha") != subject_details.get("workspace_git_sha")
-                or data.get("workspace_fingerprint")
-                != subject_details.get("workspace_fingerprint")
+                or data.get("workspace_fingerprint") != subject_details.get("workspace_fingerprint")
                 or data.get("classification") != authority.classification.value
                 or data.get("classification_confidence") != authority.classification_confidence
                 or data.get("verification_evidence_id") != authority.verification.id
