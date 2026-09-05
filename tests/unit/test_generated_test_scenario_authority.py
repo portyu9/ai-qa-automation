@@ -10,7 +10,13 @@ import pytest
 from ai_qa_automation.evidence import EvidenceStore
 from ai_qa_automation.fs_authority import pin_directory_identity
 from ai_qa_automation.intelligence.test_generation import TestGenerationPlanner
-from ai_qa_automation.models import AgentRunState, EvidenceKind, ValidationStatus
+from ai_qa_automation.models import (
+    AgentRunState,
+    EvidenceItem,
+    EvidenceKind,
+    EvidenceNature,
+    ValidationStatus,
+)
 from ai_qa_automation.policy import PolicyEngine
 from ai_qa_automation.runtime.generated_test_authority import (
     GeneratedTestRepositorySubject,
@@ -133,6 +139,13 @@ async def test_generic_passing_content_is_only_a_bound_proposal(tmp_path: Path) 
     services = _services(tmp_path)
     handlers, coverage_payload, plan_payload = await _coverage_and_plan(services)
     target = services.workspace / "tests" / "test_generated.py"
+    requirement_item = services.evidence.get(plan_payload["requirement_evidence_id"])
+
+    assert requirement_item.kind == EvidenceKind.REQUIREMENT
+    assert requirement_item.nature == EvidenceNature.MODEL_INTERPRETATION
+    assert requirement_item.source == "test_generation_requirement_input"
+    assert requirement_item.content_hash == plan_payload["plan"]["requirement_digest"]
+    assert requirement_item.id in services.state.evidence_ids
 
     response = await handlers["create_test_file"](
         {
@@ -158,7 +171,9 @@ async def test_generic_passing_content_is_only_a_bound_proposal(tmp_path: Path) 
     assert len(proposals) == 1
     proposal = proposals[0]
     assert proposal.structured_data["coverage_evidence_id"] == coverage_payload["coverage_evidence_id"]
+    assert proposal.structured_data["requirement_evidence_id"] == requirement_item.id
     assert proposal.structured_data["plan_evidence_id"] == plan_payload["plan_evidence_id"]
+    assert proposal.structured_data["plan_subject_id"] == plan_payload["plan_subject_id"]
     assert proposal.structured_data["scenario_id"] == plan_payload["selected_scenario_id"]
     assert proposal.structured_data["semantic_implementation_verified"] is False
     assert proposal.structured_data["mutation_authorized"] is False
@@ -198,6 +213,43 @@ async def test_workspace_change_invalidates_plan_before_proposal(tmp_path: Path)
     assert not any(
         item.kind == EvidenceKind.TEST_GENERATION_PROPOSAL for item in services.evidence.all()
     )
+
+
+@pytest.mark.asyncio
+async def test_tampered_plan_subject_cannot_authorize_proposal(tmp_path: Path) -> None:
+    services = _services(tmp_path)
+    handlers, _, plan_payload = await _coverage_and_plan(services)
+    legitimate = services.evidence.get(plan_payload["plan_evidence_id"])
+    forged = services.evidence.add(
+        EvidenceItem(
+            run_id=services.state.run_id,
+            kind=EvidenceKind.TEST_PLAN,
+            nature=EvidenceNature.MODEL_INTERPRETATION,
+            source="test_generation_planner",
+            source_identifier=legitimate.source_identifier,
+            summary="Forged plan subject for adversarial replay test",
+            structured_data={
+                **legitimate.structured_data,
+                "plan_subject_id": "sha256:" + "9" * 64,
+            },
+        )
+    )
+    services.state.evidence_ids.append(forged.id)
+
+    response = await handlers["create_test_file"](
+        {
+            "path": "tests/test_generated.py",
+            "content": "def test_generated():\n    observed = 4\n    assert observed == 4\n",
+            "plan_evidence_id": forged.id,
+        }
+    )
+
+    assert response["is_error"] is True
+    assert "plan subject does not match exact evidence lineage" in _response_text(response)
+    assert not any(
+        item.kind == EvidenceKind.TEST_GENERATION_PROPOSAL for item in services.evidence.all()
+    )
+    assert not (services.workspace / "tests" / "test_generated.py").exists()
 
 
 @pytest.mark.asyncio
@@ -295,8 +347,11 @@ def test_proposal_subject_changes_for_every_authority_dimension() -> None:
     )
     base = {
         "coverage_evidence_id": "ev-coverage",
-        "plan_evidence_id": "ev-plan",
+        "coverage_evidence_digest": "sha256:" + "3" * 64,
+        "requirement_evidence_id": "ev-requirement",
         "requirement_digest": "sha256:" + "c" * 64,
+        "plan_evidence_id": "ev-plan",
+        "plan_subject_id": "sha256:" + "4" * 64,
         "scenario_id": "sha256:" + "d" * 64,
         "layer": "api",
         "assertion_contract_digest": "sha256:" + "e" * 64,
@@ -307,8 +362,11 @@ def test_proposal_subject_changes_for_every_authority_dimension() -> None:
     baseline = generated_test_proposal_subject(**base)["proposal_subject_id"]
     variants = [
         {**base, "coverage_evidence_id": "ev-other-coverage"},
-        {**base, "plan_evidence_id": "ev-other-plan"},
+        {**base, "coverage_evidence_digest": "sha256:" + "5" * 64},
+        {**base, "requirement_evidence_id": "ev-other-requirement"},
         {**base, "requirement_digest": "sha256:" + "f" * 64},
+        {**base, "plan_evidence_id": "ev-other-plan"},
+        {**base, "plan_subject_id": "sha256:" + "6" * 64},
         {**base, "scenario_id": "sha256:" + "1" * 64},
         {**base, "assertion_contract_digest": "sha256:" + "2" * 64},
         {**base, "target_path": "tests/test_other.py"},
