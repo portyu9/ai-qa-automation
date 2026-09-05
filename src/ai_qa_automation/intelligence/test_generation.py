@@ -1,6 +1,19 @@
 from __future__ import annotations
 
+import hashlib
+import json
+from typing import Any
+
 from ..models import RiskLevel, TestGenerationPlan, TestLayer, TestScenario
+
+
+def _sha256_json(value: Any) -> str:
+    rendered = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return f"sha256:{hashlib.sha256(rendered.encode('utf-8')).hexdigest()}"
+
+
+def _requirement_digest(requirement: str) -> str:
+    return f"sha256:{hashlib.sha256(requirement.encode('utf-8')).hexdigest()}"
 
 
 class TestGenerationPlanner:
@@ -10,7 +23,19 @@ class TestGenerationPlanner:
     observations. They are therefore advisory context only and never suppress a
     deterministic candidate scenario. Omission requires stronger observed or
     deterministic evidence than a model-supplied label.
+
+    Scenario identities are content-addressed from the normalized requirement and
+    deterministic scenario contract. The selected scenario is therefore stable for
+    the same planner inputs, but remains advisory until a deterministic implementation
+    gate proves proposed source corresponds to that contract.
     """
+
+    _RISK_RANK = {
+        RiskLevel.LOW: 1,
+        RiskLevel.MEDIUM: 2,
+        RiskLevel.HIGH: 3,
+        RiskLevel.CRITICAL: 4,
+    }
 
     def plan(
         self,
@@ -18,7 +43,9 @@ class TestGenerationPlanner:
         *,
         existing_coverage: list[str] | None = None,
     ) -> TestGenerationPlan:
-        text = requirement.lower()
+        normalized_requirement = requirement.strip()
+        requirement_digest = _requirement_digest(normalized_requirement)
+        text = normalized_requirement.lower()
         layer = self._select_layer(text)
         scenarios: list[TestScenario] = []
 
@@ -53,8 +80,21 @@ class TestGenerationPlanner:
             )
 
         for name, risk, purpose, assertions in candidate_specs:
+            assertion_contract_digest = _sha256_json(assertions)
+            scenario_contract = {
+                "requirement_digest": requirement_digest,
+                "name": name,
+                "layer": layer.value,
+                "risk": risk.value,
+                "purpose": purpose,
+                "assertions": assertions,
+                "tags": ["generated-plan"],
+                "assertion_contract_digest": assertion_contract_digest,
+            }
             scenarios.append(
                 TestScenario(
+                    scenario_id=_sha256_json(scenario_contract),
+                    assertion_contract_digest=assertion_contract_digest,
                     name=name,
                     layer=layer,
                     risk=risk,
@@ -64,6 +104,10 @@ class TestGenerationPlanner:
                 )
             )
 
+        selected = max(
+            enumerate(scenarios),
+            key=lambda item: (self._RISK_RANK[item[1].risk], -item[0]),
+        )[1]
         gaps = [f"{scenario.layer.value}:{scenario.name}" for scenario in scenarios]
         duplicate_risk = (
             "REVIEW_REQUIRED — interpreted existing-coverage labels are advisory and cannot "
@@ -72,9 +116,11 @@ class TestGenerationPlanner:
             else "UNKNOWN — inspect same-run repository coverage evidence before implementation"
         )
         return TestGenerationPlan(
-            requirement_summary=requirement.strip(),
+            requirement_summary=normalized_requirement,
+            requirement_digest=requirement_digest,
             coverage_gaps=gaps,
             scenarios=scenarios,
+            selected_scenario_id=selected.scenario_id,
             duplicate_risk=duplicate_risk,
             validation_plan=[
                 "same-run repository coverage evidence review",
