@@ -289,6 +289,17 @@ class FailingBrowserProbe(SuccessfulBrowserProbe):
         raise self._failure(url, "playwright_locator_verification")
 
 
+class RuntimeFailingLocatorProbe(SuccessfulBrowserProbe):
+    async def verify_locator_candidates(
+        self,
+        url: str,
+        original_locator: str,
+        candidates: list[LocatorCandidate],
+    ) -> tuple[list[LocatorCandidate], str]:
+        del url, original_locator, candidates
+        raise RuntimeError("synthetic browser runtime unavailable")
+
+
 @pytest.mark.asyncio
 async def test_inspect_browser_tool_persists_subject_gate_and_exact_evidence(
     tmp_path: Path,
@@ -401,6 +412,15 @@ async def test_locator_verification_tool_persists_browser_and_repair_subjects(
     assert repair_subject.status is ValidationStatus.PASS
     assert repair_subject.details["failure_validation_id"] == failure.id
     assert repair_subject.details["path"] == "tests/test_locator.py"
+    assert browser_validation.details["repair_subject_id"] == repair_subject.gate_id
+    assert browser_validation.details["failure_validation_id"] == failure.id
+    assert browser_validation.details["path"] == repair_subject.details["path"]
+    assert browser_validation.details["workspace_git_sha"] == repair_subject.details[
+        "workspace_git_sha"
+    ]
+    assert browser_validation.details["workspace_fingerprint"] == repair_subject.details[
+        "workspace_fingerprint"
+    ]
     payload = json.loads(response["content"][0]["text"])
     assert payload["gate_id"] == browser_subject.gate_id
     assert payload["repair_subject_id"] == repair_subject.gate_id
@@ -441,13 +461,56 @@ async def test_locator_browser_failure_is_subject_bound_and_registers_failure_ev
 
     subject = browser_locator_verification_subject(url, original, candidates)
     validation = next(
-        item
-        for item in services.state.validation_results
-        if item.gate_id == subject.gate_id
+        item for item in services.state.validation_results if item.gate_id == subject.gate_id
     )
     assert validation.status is ValidationStatus.NOT_VERIFIED
     assert len(validation.evidence_ids) == 1
     assert validation.evidence_ids[0] in services.state.evidence_ids
+    assert response["is_error"] is True
+    assert subject.gate_id in response["content"][0]["text"]
+    assert not any(
+        item.name == "locator_repair_subject" for item in services.state.validation_results
+    )
+
+
+@pytest.mark.asyncio
+async def test_locator_browser_runtime_failure_after_subject_is_not_verified(
+    tmp_path: Path,
+    fake_sdk: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del fake_sdk
+    services = make_services(tmp_path)
+    failure = _add_failing_locator_validation(services)
+    monkeypatch.setattr(internal_tools, "BrowserProbe", RuntimeFailingLocatorProbe)
+    tools = tool_map(services)
+    url = "https://example.test/login"
+    original = 'page.get_by_role("button", name="Sign in")'
+    candidates = [
+        LocatorCandidate(
+            locator='page.get_by_test_id("login")',
+            strategy="test_id",
+            uniqueness_count=0,
+            semantic_match=0.0,
+            stability_score=0.8,
+        )
+    ]
+
+    response = await tools["verify_locator_candidates"](
+        {
+            "url": url,
+            "failure_validation_id": failure.id,
+            "original_locator": original,
+            "candidates_json": json.dumps([item.model_dump(mode="json") for item in candidates]),
+        }
+    )
+
+    subject = browser_locator_verification_subject(url, original, candidates)
+    validation = next(
+        item for item in services.state.validation_results if item.gate_id == subject.gate_id
+    )
+    assert validation.status is ValidationStatus.NOT_VERIFIED
+    assert validation.details["failure_kind"] == "browser_runtime"
     assert response["is_error"] is True
     assert subject.gate_id in response["content"][0]["text"]
     assert not any(
