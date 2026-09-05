@@ -12,11 +12,23 @@ from typing import Any
 from .config import Settings
 from .evidence import EvidenceStore
 from .integrations.mcp_registry import build_external_mcp
-from .models import AgentRunState, MCPStatus, TerminalStatus
+from .models import (
+    AgentRunState,
+    ControlPlaneRevalidationStatus,
+    MCPStatus,
+    TerminalStatus,
+)
 from .policy import PolicyEngine
 from .reporting import build_final_report
 from .runtime.bootstrap import BaselineResolutionError, bootstrap_runtime_context
 from .runtime.budget import ExecutionBudget
+from .runtime.control_plane_provenance import (
+    TRUSTED_PROJECT_SKILLS,
+    bind_control_git_identity,
+    capture_control_plane_subject,
+    enforce_terminal_control_plane_subject,
+    same_control_plane_capture,
+)
 from .runtime.internal_tools import build_internal_mcp_server
 from .runtime.journal import RunJournal
 from .runtime.live_services import LiveRuntimeServices
@@ -80,12 +92,57 @@ async def run_agent(
         raise RuntimeError("Install project dependencies to use live agent mode") from exc
 
     started = time.monotonic()
+    try:
+        control_plane_before_git = capture_control_plane_subject(cfg.control_root)
+        control_git_sha, control_git_clean = _observe_control_git_subject(cfg.control_root)
+        control_plane_after_git = capture_control_plane_subject(cfg.control_root)
+        if not same_control_plane_capture(control_plane_before_git, control_plane_after_git):
+            raise RuntimeError(
+                "trusted control-plane subject changed while Git provenance was observed"
+            )
+        control_plane_capture = bind_control_git_identity(
+            control_plane_after_git,
+            control_git_sha=control_git_sha,
+            control_git_clean=control_git_clean,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        state = AgentRunState(
+            objective=objective,
+            objective_gate_id=objective_gate_id,
+            model_id=cfg.model,
+            sdk_version=_package_version("claude-agent-sdk"),
+            configuration_version=configuration_fingerprint(cfg),
+            control_plane_revalidation_status=ControlPlaneRevalidationStatus.UNAVAILABLE,
+            workspace=str(workspace),
+            phase="TERMINAL",
+            terminal_status=TerminalStatus.INFRASTRUCTURE_FAILURE,
+            terminal_reason=(
+                "Trusted control-plane provenance could not be captured safely before model "
+                f"execution: {type(exc).__name__}"
+            ),
+        )
+        artifact_root = cfg.artifact_root
+        if artifact_root is None:
+            raise RuntimeError("artifact_root was not resolved")
+        state.duration = max(0.0, time.monotonic() - started)
+        StateStore(artifact_root / state.run_id / "state.json").save(state)
+        return _final_response(
+            state,
+            agent_result="",
+            limitations=[
+                "Trusted control-plane source/configuration identity was unavailable, so model "
+                "and target-tool execution were not started."
+            ],
+        )
+
     state = AgentRunState(
         objective=objective,
         objective_gate_id=objective_gate_id,
         model_id=cfg.model,
         sdk_version=_package_version("claude-agent-sdk"),
         configuration_version=configuration_fingerprint(cfg),
+        control_plane_subject=control_plane_capture.subject,
+        control_plane_revalidation_status=ControlPlaneRevalidationStatus.BOUND,
         workspace=str(workspace),
         phase="INITIALIZE",
     )
@@ -199,6 +256,12 @@ async def run_agent(
             lease_id=lease.lease_id,
             workspace=str(workspace),
         )
+        journal.append(
+            "control_plane_subject_bound",
+            subject_digest=control_plane_capture.subject.subject_digest,
+            control_git_sha=control_plane_capture.subject.control_git_sha,
+            control_git_clean=control_plane_capture.subject.control_git_clean,
+        )
         try:
             bootstrap_context = bootstrap_runtime_context(
                 workspace=workspace,
@@ -260,13 +323,7 @@ async def run_agent(
             cwd=str(cfg.control_root),
             system_prompt=RUNTIME_SYSTEM_PROMPT,
             setting_sources=["project"],
-            skills=[
-                "investigate-test-failure",
-                "self-heal-test",
-                "generate-test",
-                "prioritize-regression",
-                "performance-test",
-            ],
+            skills=list(TRUSTED_PROJECT_SKILLS),
             tools=[],
             allowed_tools=allowed_tools,
             disallowed_tools=[
@@ -425,6 +482,18 @@ async def run_agent(
                     journal.try_append("rollback_failed", error_type=type(rollback_exc).__name__)
             if state.terminal_status == TerminalStatus.SUCCESS:
                 _enforce_terminal_workspace_freshness(state, control, workspace)
+            control_plane_status, control_plane_reason = enforce_terminal_control_plane_subject(
+                state,
+                bound=control_plane_capture,
+                control_root=cfg.control_root,
+            )
+            journal.try_append(
+                "terminal_control_plane_revalidation",
+                status=control_plane_status.value,
+                reason=control_plane_reason,
+                bound_subject_digest=control_plane_capture.subject.subject_digest,
+                terminal_subject_digest=state.control_plane_terminal_subject_digest,
+            )
             if state.terminal_status is None:
                 state.terminal_status = TerminalStatus.NOT_VERIFIED
                 state.terminal_reason = (
@@ -587,6 +656,18 @@ def run_agent_sync(
             objective_gate_id=objective_gate_id,
         )
     )
+
+
+def _observe_control_git_subject(control_root: Path) -> tuple[str | None, bool | None]:
+    """Record Git identity when safely observable without making it sufficient authority."""
+
+    try:
+        snapshot = RepositoryInspector(control_root).snapshot()
+    except (OSError, RuntimeError, ValueError):
+        return None, None
+    if not snapshot.fingerprint_complete or snapshot.git_sha is None:
+        return None, None
+    return snapshot.git_sha, snapshot.status == ""
 
 
 def configuration_fingerprint(settings: Settings) -> str:

@@ -1,12 +1,21 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import UTC, datetime
 from enum import StrEnum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 
 class FrozenModel(BaseModel):
@@ -283,6 +292,146 @@ class ArtifactRecord(FrozenModel):
     retention_classification: str = "standard"
 
 
+class ControlPlaneRevalidationStatus(StrEnum):
+    NOT_CAPTURED = "NOT_CAPTURED"
+    BOUND = "BOUND"
+    VERIFIED = "VERIFIED"
+    DRIFTED = "DRIFTED"
+    UNAVAILABLE = "UNAVAILABLE"
+
+
+_MAX_CONTROL_PLANE_PATH_BYTES = 4096
+_MAX_CONTROL_PLANE_MANIFEST_ENTRIES = 8192
+_MAX_CONTROL_PLANE_MANIFEST_METADATA_BYTES = 4_000_000
+
+
+def _control_plane_canonical_bytes(payload: object) -> bytes:
+    return json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+
+
+def _control_plane_canonical_digest(payload: object) -> str:
+    canonical = _control_plane_canonical_bytes(payload)
+    return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+
+
+def _validate_control_plane_relative_path(value: str, *, label: str) -> str:
+    if "\\" in value:
+        raise ValueError(f"{label} must use canonical POSIX separators")
+    path = PurePosixPath(value)
+    if (
+        path.is_absolute()
+        or value in {"", "."}
+        or any(part in {"", ".", ".."} for part in path.parts)
+    ):
+        raise ValueError(f"{label} must be a canonical relative path")
+    if path.as_posix() != value:
+        raise ValueError(f"{label} must be a canonical relative path")
+    if len(value.encode("utf-8")) > _MAX_CONTROL_PLANE_PATH_BYTES:
+        raise ValueError(f"{label} exceeds the UTF-8 path-length bound")
+    return value
+
+
+class ControlPlaneFileSubject(FrozenModel):
+    path: str = Field(min_length=1, max_length=4096)
+    size: int = Field(ge=0)
+    content_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+    @field_validator("path")
+    @classmethod
+    def canonical_path(cls, value: str) -> str:
+        return _validate_control_plane_relative_path(value, label="control-plane file path")
+
+
+class ControlPlaneManifest(FrozenModel):
+    digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    files: tuple[ControlPlaneFileSubject, ...] = Field(
+        max_length=_MAX_CONTROL_PLANE_MANIFEST_ENTRIES
+    )
+    directories: tuple[str, ...] = Field(
+        default=(), max_length=_MAX_CONTROL_PLANE_MANIFEST_ENTRIES
+    )
+    absent_paths: tuple[str, ...] = Field(
+        default=(), max_length=_MAX_CONTROL_PLANE_MANIFEST_ENTRIES
+    )
+    total_bytes: int = Field(ge=0)
+
+    @field_validator("directories", "absent_paths")
+    @classmethod
+    def canonical_paths(cls, values: tuple[str, ...], info: ValidationInfo) -> tuple[str, ...]:
+        # Directory root marker is represented as '.' only inside the controller tree
+        # manifest; all persisted authority paths otherwise remain canonical relatives.
+        field_name = info.field_name or "paths"
+        normalized: list[str] = []
+        for value in values:
+            if field_name == "directories" and value == ".":
+                normalized.append(value)
+            else:
+                normalized.append(
+                    _validate_control_plane_relative_path(
+                        value, label=f"control-plane {field_name[:-1]} path"
+                    )
+                )
+        return tuple(normalized)
+
+    @model_validator(mode="after")
+    def validate_manifest_identity(self) -> ControlPlaneManifest:
+        file_paths = tuple(item.path for item in self.files)
+        if file_paths != tuple(sorted(file_paths)) or len(set(file_paths)) != len(file_paths):
+            raise ValueError("control-plane manifest files must be uniquely path-sorted")
+        if self.directories != tuple(sorted(self.directories)) or len(set(self.directories)) != len(
+            self.directories
+        ):
+            raise ValueError("control-plane manifest directories must be uniquely path-sorted")
+        if self.absent_paths != tuple(sorted(self.absent_paths)) or len(
+            set(self.absent_paths)
+        ) != len(self.absent_paths):
+            raise ValueError("control-plane manifest absent paths must be uniquely path-sorted")
+        if set(file_paths) & set(self.absent_paths):
+            raise ValueError("control-plane manifest path cannot be both present and absent")
+        if self.total_bytes != sum(item.size for item in self.files):
+            raise ValueError("control-plane manifest total_bytes does not match file subjects")
+        payload = {
+            "files": [item.model_dump(mode="json") for item in self.files],
+            "directories": list(self.directories),
+            "absent_paths": list(self.absent_paths),
+        }
+        canonical = _control_plane_canonical_bytes(payload)
+        if len(canonical) > _MAX_CONTROL_PLANE_MANIFEST_METADATA_BYTES:
+            raise ValueError("control-plane manifest exceeds metadata serialization bound")
+        expected_digest = f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+        if self.digest != expected_digest:
+            raise ValueError("control-plane manifest digest does not match its file subjects")
+        return self
+
+
+class ControlPlaneSubject(FrozenModel):
+    format_version: str = "ai-qa-control-plane-subject/v1"
+    subject_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    project_manifest: ControlPlaneManifest
+    controller_manifest: ControlPlaneManifest
+    control_git_sha: str | None = Field(
+        default=None, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    )
+    control_git_clean: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_subject_identity(self) -> ControlPlaneSubject:
+        if self.format_version != "ai-qa-control-plane-subject/v1":
+            raise ValueError("unsupported control-plane subject format")
+        if self.control_git_clean is not None and self.control_git_sha is None:
+            raise ValueError("control Git cleanliness requires an exact commit SHA")
+        payload = {
+            "schema": self.format_version,
+            "project_manifest_digest": self.project_manifest.digest,
+            "controller_manifest_digest": self.controller_manifest.digest,
+        }
+        if self.subject_digest != _control_plane_canonical_digest(payload):
+            raise ValueError("control-plane subject digest does not match its manifests")
+        return self
+
+
 class AgentRunState(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
@@ -296,6 +445,13 @@ class AgentRunState(BaseModel):
     policy_version: str = "2"
     tool_schema_version: str = "2"
     configuration_version: str = "NOT_CAPTURED"
+    control_plane_subject: ControlPlaneSubject | None = None
+    control_plane_revalidation_status: ControlPlaneRevalidationStatus = (
+        ControlPlaneRevalidationStatus.NOT_CAPTURED
+    )
+    control_plane_terminal_subject_digest: str | None = Field(
+        default=None, pattern=r"^sha256:[0-9a-f]{64}$"
+    )
     target_repository: str | None = None
     target_git_sha: str | None = None
     workspace: str
@@ -349,4 +505,4 @@ class FinalAgentReport(FrozenModel):
     validation_results: list[ValidationResult] = Field(default_factory=list)
     files_modified: list[str] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
-    provenance: dict[str, str] = Field(default_factory=dict)
+    provenance: dict[str, Any] = Field(default_factory=dict)
