@@ -29,6 +29,7 @@ _ALLOWED_REPAIR_CLASSES = {
 }
 _MIN_REPAIR_CONFIDENCE = 0.75
 _MAX_FAILURE_EVIDENCE_ITEMS = 16
+_MAX_CANDIDATES = 20
 
 
 class LocatorRepairAuthorityError(ValueError):
@@ -66,6 +67,30 @@ class LocatorRepairAuthority:
 
 def _sha256_text(value: str) -> str:
     return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _is_hex_digest(value: object, *, length: int = 64) -> bool:
+    if not isinstance(value, str) or len(value) != length:
+        return False
+    try:
+        int(value, 16)
+    except ValueError:
+        return False
+    return True
+
+
+def _is_prefixed_sha256(value: object, *, prefix: str = "sha256:") -> bool:
+    return (
+        isinstance(value, str)
+        and value.startswith(prefix)
+        and _is_hex_digest(value.removeprefix(prefix))
+    )
+
+
+def _is_gate_sha256(value: object, prefix: str) -> bool:
+    if not isinstance(value, str) or not value.startswith(prefix):
+        return False
+    return _is_hex_digest(value.removeprefix(prefix))
 
 
 def _subject_gate_id(payload: dict[str, object]) -> str:
@@ -172,14 +197,16 @@ def _failure_evidence(
             )
         items.append(item)
 
-    if not any(
-        item.kind is EvidenceKind.EXIT_CODE
+    exit_items = [
+        item
+        for item in items
+        if item.kind is EvidenceKind.EXIT_CODE
         and item.source == "pytest"
         and item.structured_data.get("exit_code") == 1
-        for item in items
-    ):
+    ]
+    if len(exit_items) != 1:
         raise LocatorRepairAuthorityError(
-            "failing targeted pytest validation is missing an observed pytest exit-code failure"
+            "failing targeted pytest validation requires exactly one observed pytest exit-code failure"
         )
     if not any(
         item.kind is EvidenceKind.EXCEPTION and item.source == "pytest" for item in items
@@ -188,6 +215,45 @@ def _failure_evidence(
             "failing targeted pytest validation is missing observed pytest failure evidence"
         )
     return tuple(items)
+
+
+def _pytest_exit_item(items: tuple[EvidenceItem, ...]) -> EvidenceItem:
+    matches = [
+        item
+        for item in items
+        if item.kind is EvidenceKind.EXIT_CODE
+        and item.source == "pytest"
+        and item.structured_data.get("exit_code") == 1
+    ]
+    if len(matches) != 1:
+        raise LocatorRepairAuthorityError(
+            "failing pytest workspace lineage is ambiguous"
+        )
+    return matches[0]
+
+
+def _assert_failure_workspace_binding(
+    items: tuple[EvidenceItem, ...],
+    *,
+    git_sha: str,
+    workspace_fingerprint: str,
+) -> None:
+    """Require the failure observation itself to cover the workspace now being repaired."""
+
+    exit_item = _pytest_exit_item(items)
+    data = exit_item.structured_data
+    execution_subject = data.get("execution_subject")
+    if (
+        data.get("workspace_integrity_verified") is not True
+        or data.get("workspace_fingerprint_before") != workspace_fingerprint
+        or data.get("workspace_fingerprint_after") != workspace_fingerprint
+        or not isinstance(execution_subject, dict)
+        or execution_subject.get("git_sha") != git_sha
+        or execution_subject.get("source_fingerprint") != workspace_fingerprint
+    ):
+        raise LocatorRepairAuthorityError(
+            "failing pytest evidence is not bound to the current workspace revision and fingerprint"
+        )
 
 
 def _workspace_identity(
@@ -236,6 +302,20 @@ def prepare_locator_repair_binding(
             "original locator is not a supported literal Playwright locator expression"
         )
     failure_items = _failure_evidence(state, evidence, validation)
+    git_sha, workspace_fingerprint = _workspace_identity(
+        workspace,
+        expected_root_identity=expected_root_identity,
+    )
+    if state.target_git_sha is not None and state.target_git_sha != git_sha:
+        raise LocatorRepairAuthorityError(
+            "current workspace Git revision does not match canonical target revision"
+        )
+    _assert_failure_workspace_binding(
+        failure_items,
+        git_sha=git_sha,
+        workspace_fingerprint=workspace_fingerprint,
+    )
+
     source = read_model_source_confined(
         workspace,
         path,
@@ -245,14 +325,6 @@ def prepare_locator_repair_binding(
     if source.text.count(original_locator) != 1:
         raise LocatorRepairAuthorityError(
             "original locator must occur exactly once in the failing test subject"
-        )
-    git_sha, workspace_fingerprint = _workspace_identity(
-        workspace,
-        expected_root_identity=expected_root_identity,
-    )
-    if state.target_git_sha is not None and state.target_git_sha != git_sha:
-        raise LocatorRepairAuthorityError(
-            "current workspace Git revision does not match canonical target revision"
         )
 
     return LocatorRepairBinding(
@@ -373,6 +445,20 @@ def locator_verification_context(
     return context[0], context[1]
 
 
+def _validate_browser_subject_details(details: dict[str, object], browser_gate_id: str) -> None:
+    candidate_count = details.get("candidate_count")
+    if (
+        not _is_gate_sha256(browser_gate_id, "browser_locator_verification:")
+        or not _is_prefixed_sha256(details.get("requested_url_hash"))
+        or not _is_prefixed_sha256(details.get("candidate_request_hash"))
+        or type(candidate_count) is not int
+        or not 0 <= candidate_count <= _MAX_CANDIDATES
+    ):
+        raise LocatorRepairAuthorityError(
+            "browser locator verification subject identity is malformed"
+        )
+
+
 def build_locator_repair_subject(
     binding: LocatorRepairBinding,
     *,
@@ -392,6 +478,7 @@ def build_locator_repair_subject(
         expected_root_identity=expected_root_identity,
         state=state,
     )
+    _validate_browser_subject_details(browser_subject_details, browser_gate_id)
     if str(verification.structured_data.get("original_locator") or "") != binding.original_locator:
         raise LocatorRepairAuthorityError(
             "Playwright verification original locator does not match the failing test subject"
@@ -464,7 +551,8 @@ def _subject_validation(state: AgentRunState, subject_id: str) -> ValidationResu
         )
     subject = matches[0]
     if (
-        subject.status is not ValidationStatus.PASS
+        not _is_gate_sha256(subject_id, "locator_repair:")
+        or subject.status is not ValidationStatus.PASS
         or subject.revision != state.change_revision
         or subject.details.get("authority_version") != _LOCATOR_REPAIR_AUTHORITY_VERSION
         or subject.details.get("repair_subject_id") != subject_id
@@ -501,10 +589,10 @@ def resolve_locator_repair_authority(
     if (
         not isinstance(path, str)
         or not path
-        or not isinstance(expected_sha256, str)
-        or len(expected_sha256) != 64
+        or not _is_hex_digest(expected_sha256)
         or not isinstance(original_locator, str)
         or not original_locator
+        or not _is_prefixed_sha256(original_locator_hash)
         or original_locator_hash != _sha256_text(original_locator)
         or type(original_locator_offset) is not int
         or original_locator_offset < 0
@@ -518,16 +606,18 @@ def resolve_locator_repair_authority(
     selector, failure_path, failing_node_id = _normalized_pytest_selector(
         failure_validation.details.get("args")
     )
+    failure_gate_id = str(failure_validation.gate_id or failure_validation.name)
     if (
         failure_path != path
         or selector != details.get("pytest_selector")
         or failing_node_id != details.get("failing_node_id")
+        or failure_gate_id != details.get("failure_gate_id")
         or list(failure_validation.evidence_ids) != details.get("failure_evidence_ids")
     ):
         raise LocatorRepairAuthorityError(
             "locator repair subject no longer matches the referenced failing pytest validation"
         )
-    _failure_evidence(state, evidence, failure_validation)
+    failure_items = _failure_evidence(state, evidence, failure_validation)
 
     verification_evidence_id = details.get("verification_evidence_id")
     if not isinstance(verification_evidence_id, str) or not verification_evidence_id:
@@ -549,6 +639,8 @@ def resolve_locator_repair_authority(
         )
 
     browser_gate_id = details.get("browser_gate_id")
+    if not _is_gate_sha256(browser_gate_id, "browser_locator_verification:"):
+        raise LocatorRepairAuthorityError("locator repair subject browser gate identity is malformed")
     browser_matches = [
         item
         for item in state.validation_results
@@ -606,6 +698,11 @@ def resolve_locator_repair_authority(
         raise LocatorRepairAuthorityError(
             "workspace revision or fingerprint changed since locator repair evidence was bound"
         )
+    _assert_failure_workspace_binding(
+        failure_items,
+        git_sha=git_sha,
+        workspace_fingerprint=workspace_fingerprint,
+    )
     source = read_model_source_confined(
         workspace,
         path,
