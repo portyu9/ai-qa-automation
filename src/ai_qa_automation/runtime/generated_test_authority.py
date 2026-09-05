@@ -174,17 +174,17 @@ def capture_generated_test_repository_subject(
         ) from exc
     if not snapshot.fingerprint_complete:
         raise GeneratedTestAuthorityError("generated-test repository fingerprint is incomplete")
+    root_identity = inspector.workspace_root_identity
+    if root_identity is None:
+        raise GeneratedTestAuthorityError("generated-test repository root identity is unavailable")
     fingerprint = snapshot.fingerprint
     if snapshot.git_sha is None:
         fingerprint = _capture_non_git_workspace_fingerprint(
             workspace,
-            expected_root_identity=expected_root_identity,
+            expected_root_identity=root_identity,
         )
     if not _SHA256.fullmatch(fingerprint):
         raise GeneratedTestAuthorityError("generated-test repository fingerprint is malformed")
-    root_identity = inspector.workspace_root_identity
-    if root_identity is None:
-        raise GeneratedTestAuthorityError("generated-test repository root identity is unavailable")
     git_sha = snapshot.git_sha
     if git_sha is not None and (
         len(git_sha) not in {40, 64} or any(char not in "0123456789abcdef" for char in git_sha)
