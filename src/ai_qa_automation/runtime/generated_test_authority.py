@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..fs_authority import read_bytes_confined
+from ..fs_observation import scan_regular_files_confined
 from ..intelligence.test_generation import TestGenerationPlanner
 from ..models import TestGenerationPlan
 from ..tools.repository import RepositoryInspector
@@ -18,6 +20,9 @@ _SUBJECT_KEYS = {
     "workspace_root_identity",
     "change_revision",
 }
+_NON_GIT_MAX_ENTRIES = 10_000
+_NON_GIT_MAX_FILE_BYTES = 4 * 1024 * 1024
+_NON_GIT_MAX_TOTAL_BYTES = 32 * 1024 * 1024
 
 
 class GeneratedTestAuthorityError(RuntimeError):
@@ -61,6 +66,90 @@ def _require_bounded_text(label: str, value: object) -> str:
     return value
 
 
+def _capture_non_git_workspace_fingerprint(
+    workspace: Path,
+    *,
+    expected_root_identity: tuple[int, int] | None,
+) -> str:
+    try:
+        before = scan_regular_files_confined(
+            workspace,
+            max_entries=_NON_GIT_MAX_ENTRIES,
+            label="generated-test non-Git workspace",
+            expected_root_identity=expected_root_identity,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise GeneratedTestAuthorityError(
+            "generated-test non-Git workspace namespace could not be observed"
+        ) from exc
+    if before.truncated:
+        raise GeneratedTestAuthorityError(
+            "generated-test non-Git workspace namespace observation is incomplete"
+        )
+
+    rows: list[dict[str, object]] = []
+    total_bytes = 0
+    for observed in before.files:
+        if observed.size > _NON_GIT_MAX_FILE_BYTES:
+            raise GeneratedTestAuthorityError(
+                "generated-test non-Git workspace file exceeds fingerprint byte limit"
+            )
+        total_bytes += observed.size
+        if total_bytes > _NON_GIT_MAX_TOTAL_BYTES:
+            raise GeneratedTestAuthorityError(
+                "generated-test non-Git workspace exceeds aggregate fingerprint byte limit"
+            )
+        try:
+            data = read_bytes_confined(
+                workspace,
+                observed.path,
+                max_bytes=max(1, observed.size),
+                label=f"generated-test non-Git workspace subject {observed.path.as_posix()}",
+                expected_root_identity=before.root_identity,
+                expected_entry_identity=(
+                    observed.metadata_signature[0],
+                    observed.metadata_signature[1],
+                ),
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise GeneratedTestAuthorityError(
+                "generated-test non-Git workspace file could not be fingerprinted"
+            ) from exc
+        if len(data) != observed.size:
+            raise GeneratedTestAuthorityError(
+                "generated-test non-Git workspace file changed size during fingerprinting"
+            )
+        rows.append(
+            {
+                "path": observed.path.as_posix(),
+                "size": observed.size,
+                "sha256": hashlib.sha256(data).hexdigest(),
+            }
+        )
+
+    try:
+        after = scan_regular_files_confined(
+            workspace,
+            max_entries=_NON_GIT_MAX_ENTRIES,
+            label="generated-test non-Git workspace",
+            expected_root_identity=before.root_identity,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise GeneratedTestAuthorityError(
+            "generated-test non-Git workspace namespace could not be revalidated"
+        ) from exc
+    if after != before:
+        raise GeneratedTestAuthorityError(
+            "generated-test non-Git workspace changed during fingerprinting"
+        )
+    return canonical_sha256(
+        {
+            "schema_version": 1,
+            "files": rows,
+        }
+    )
+
+
 def capture_generated_test_repository_subject(
     workspace: Path,
     *,
@@ -85,7 +174,13 @@ def capture_generated_test_repository_subject(
         ) from exc
     if not snapshot.fingerprint_complete:
         raise GeneratedTestAuthorityError("generated-test repository fingerprint is incomplete")
-    if not _SHA256.fullmatch(snapshot.fingerprint):
+    fingerprint = snapshot.fingerprint
+    if snapshot.git_sha is None:
+        fingerprint = _capture_non_git_workspace_fingerprint(
+            workspace,
+            expected_root_identity=expected_root_identity,
+        )
+    if not _SHA256.fullmatch(fingerprint):
         raise GeneratedTestAuthorityError("generated-test repository fingerprint is malformed")
     root_identity = inspector.workspace_root_identity
     if root_identity is None:
@@ -97,7 +192,7 @@ def capture_generated_test_repository_subject(
         raise GeneratedTestAuthorityError("generated-test Git subject is malformed")
     return GeneratedTestRepositorySubject(
         git_sha=git_sha,
-        workspace_fingerprint=snapshot.fingerprint,
+        workspace_fingerprint=fingerprint,
         workspace_root_identity=root_identity,
         change_revision=change_revision,
     )

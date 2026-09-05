@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
+from typing import Any, ClassVar
 
 from ..models import RiskLevel, TestGenerationPlan, TestLayer, TestScenario
 
@@ -30,7 +30,7 @@ class TestGenerationPlanner:
     gate proves proposed source corresponds to that contract.
     """
 
-    _RISK_RANK = {
+    _RISK_RANK: ClassVar[dict[RiskLevel, int]] = {
         RiskLevel.LOW: 1,
         RiskLevel.MEDIUM: 2,
         RiskLevel.HIGH: 3,
