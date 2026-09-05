@@ -166,11 +166,15 @@ async def test_generic_passing_content_is_only_a_bound_proposal(tmp_path: Path) 
     assert services.state.change_revision == 0
     assert services.state.files_modified == []
     proposals = [
-        item for item in services.evidence.all() if item.kind == EvidenceKind.TEST_GENERATION_PROPOSAL
+        item
+        for item in services.evidence.all()
+        if item.kind == EvidenceKind.TEST_GENERATION_PROPOSAL
     ]
     assert len(proposals) == 1
     proposal = proposals[0]
-    assert proposal.structured_data["coverage_evidence_id"] == coverage_payload["coverage_evidence_id"]
+    assert (
+        proposal.structured_data["coverage_evidence_id"] == coverage_payload["coverage_evidence_id"]
+    )
     assert proposal.structured_data["requirement_evidence_id"] == requirement_item.id
     assert proposal.structured_data["plan_evidence_id"] == plan_payload["plan_evidence_id"]
     assert proposal.structured_data["plan_subject_id"] == plan_payload["plan_subject_id"]
@@ -276,13 +280,16 @@ async def test_duplicate_selected_scenario_proposal_is_denied(tmp_path: Path) ->
     assert "PROPOSAL_RECORDED" in _response_text(first)
     assert second["is_error"] is True
     assert "already has a proposal" in _response_text(second)
-    assert len(
-        [
-            item
-            for item in services.evidence.all()
-            if item.kind == EvidenceKind.TEST_GENERATION_PROPOSAL
-        ]
-    ) == 1
+    assert (
+        len(
+            [
+                item
+                for item in services.evidence.all()
+                if item.kind == EvidenceKind.TEST_GENERATION_PROPOSAL
+            ]
+        )
+        == 1
+    )
     assert not (services.workspace / "tests" / "test_generated_one.py").exists()
     assert not (services.workspace / "tests" / "test_generated_two.py").exists()
 
