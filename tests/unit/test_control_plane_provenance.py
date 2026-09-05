@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -190,7 +189,7 @@ def test_git_observation_sandwich_detects_content_or_ownership_drift(tmp_path: P
     replacement = control / ".claude" / "settings.tmp"
     settings = control / ".claude" / "settings.json"
     replacement.write_bytes(settings.read_bytes())
-    os.replace(replacement, settings)
+    replacement.replace(settings)
     after_same_byte_replacement = capture_control_plane_subject(control, controller_root=controller)
     assert rebound.subject.subject_digest == after_same_byte_replacement.subject.subject_digest
     assert not same_control_plane_capture(rebound, after_same_byte_replacement)
@@ -221,7 +220,7 @@ def test_same_byte_replacement_preserves_content_subject_but_fails_ownership_rev
     policy = controller / "policy.py"
     replacement = controller / "policy.tmp"
     replacement.write_bytes(policy.read_bytes())
-    os.replace(replacement, policy)
+    replacement.replace(policy)
 
     current = capture_control_plane_subject(control, controller_root=controller)
     assert current.subject.subject_digest == bound.subject.subject_digest

@@ -183,7 +183,7 @@ async def run_agent(
         )
         artifact_root = cfg.artifact_root
         if artifact_root is None:
-            raise RuntimeError("artifact_root was not resolved")
+            raise RuntimeError("artifact_root was not resolved") from exc
         state.duration = max(0.0, time.monotonic() - started)
         StateStore(artifact_root / state.run_id / "state.json").save(state)
         return _final_response(
