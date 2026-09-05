@@ -66,7 +66,7 @@ A set of unrelated green checks does not prove that the requested objective succ
 
 When autonomous mutation advances `change_revision`, objective evidence from an older revision is stale for terminal authority even if that older PASS remains part of the historical validation record. The objective gate must be re-executed for the post-mutation subject/revision before those newer bytes can reach `SUCCESS`.
 
-For changed revisions, objective closure and mutation closure are independent, additive predicates. Patch-safety, exact-path targeted pytest, and controller-bound full-regression pytest can close the mutation transaction, but they do not become objective proof unless the operator independently supplied that exact gate identity as the objective contract and the matching PASS is current-revision evidence. If no current objective-specific deterministic PASS exists, the correct terminal state is `NOT_VERIFIED` even when every mutation-closure gate is green.
+For changed revisions, objective closure and mutation closure are independent, additive predicates. Patch-safety, exact-path targeted pytest, trusted out-of-process executed-test outcome evidence, and controller-bound full-regression pytest can close the mutation transaction, but they do not become objective proof unless the operator independently supplied that exact gate identity as the objective contract and the matching PASS is current-revision evidence. If no current objective-specific deterministic PASS exists, the correct terminal state is `NOT_VERIFIED` even when every mutation-closure gate is green.
 
 This prevents a model from selecting an easy but irrelevant validation or mutation merely to satisfy a mechanical “some gate passed” condition.
 
@@ -84,19 +84,22 @@ For an authority-bearing **full-regression** gate, exit code alone is additional
 
 A full-regression PASS requires a non-empty admitted collection, exact execution-node reconciliation with that collection, exact post-collection equality, intact sandbox/workspace authority, and one internally consistent content-addressed regression-suite identity. Collection failure, no-tests-collected, bounded-output truncation, timeout, sandbox postflight uncertainty, collection/execution mismatch, or post-collection drift is `NOT_VERIFIED`, never PASS. Once a collection or execution child has started, later uncertainty remains truthfully represented as **executed but unverified**; only failures before target execution can be represented as blocked/unexecuted. `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` and the existing frozen-workspace isolation boundary remain mandatory throughout all three phases.
 
+For a **targeted changed-test closure** gate, a zero pytest exit is still not sufficient. Target test code executes inside the pytest interpreter and cannot authoritatively report that its own intended call-phase test actually executed. Mutation closure therefore requires a separate trusted out-of-process observer bound to the exact mutated path and execution subject. The current live `run_pytest` adapter deliberately records `targeted_execution_authority="unavailable"` and `targeted_outcome_report_verified=false`; it does not manufacture the reserved trusted-observer authority from target-controlled stdout, hooks, files, or same-interpreter state.
+
 ---
 
 ## Revision-aware truth
 
 Autonomous mutation advances `change_revision`. Validation is revision-bound so evidence from older bytes cannot silently certify newer bytes.
 
-A live autonomous mutation is deliberately constrained to the Python/pytest execution path. For a changed test's **mutation transaction** to close, the current revision requires all three conditions:
+A live autonomous mutation is deliberately constrained to the Python/pytest execution path. For a changed test's **mutation transaction** to close, the current revision requires all four conditions:
 
 1. **patch-safety PASS** bound to the exact changed path;
-2. **targeted pytest PASS** that explicitly selects that same pending mutation path; and
-3. **controller-bound full-regression pytest PASS** carrying exactly one verified regression-suite identity at that revision.
+2. **targeted pytest PASS** that explicitly selects that same pending mutation path;
+3. **trusted out-of-process executed-test outcome evidence** proving at least one successful call-phase execution from that exact mutated path and bound execution subject; and
+4. **controller-bound full-regression pytest PASS** carrying exactly one verified regression-suite identity at that revision.
 
-Those three gates prove mutation closure only. Terminal `SUCCESS` for the changed revision additionally requires the exact operator-supplied objective-validation gate to have an active PASS at that same revision. Neither predicate substitutes for the other.
+Those four gates prove mutation closure only. Terminal `SUCCESS` for the changed revision additionally requires the exact operator-supplied objective-validation gate to have an active PASS at that same revision. Neither predicate substitutes for the other.
 
 A selector such as:
 
@@ -104,32 +107,44 @@ A selector such as:
 tests/test_checkout.py::test_checkout_success
 ```
 
-can bind validation to `tests/test_checkout.py`. A `-k` expression with no explicit file selector, or a run targeting another test file, cannot certify those changed bytes; it is diagnostic evidence only.
+can bind diagnostic targeted validation to `tests/test_checkout.py`. A `-k` expression with no explicit file selector, or a run targeting another test file, cannot certify those changed bytes; it is diagnostic evidence only. Even an exact-path targeted exit `0` cannot close the mutation without the independent trusted executed-test outcome authority.
 
 > [!CAUTION]
-> “Targeted” is not a synonym for “relevant.” Mutation commit requires a deterministic subject binding to the exact file whose bytes are pending.
+> “Targeted” is not a synonym for “relevant,” and “pytest exited 0” is not a synonym for “trusted executed-test proof.” Mutation commit requires deterministic subject binding to the exact changed path plus independently trusted execution outcome authority.
+
+The current live targeted adapter does not yet emit the trusted observer proof. Consequently a positive autonomous test mutation remains unclosed/`NOT_VERIFIED` and subject to rollback until that separate authority is integrated. This fail-closed liveness limitation must not be bypassed by locator healing, generated-test logic, or model interpretation.
 
 A failed gate remains active until the **same gate identity** is superseded by evidence at a newer revision. Re-running a different selector cannot erase the original failure.
 
 If PASS and FAIL are both observed for the same gate at the same revision, the evidence is contradictory and terminal truth resolves to `NOT_VERIFIED` rather than selecting the more convenient observation. Multiple distinct controller-verified regression-suite identities at the same changed revision are likewise ambiguous and cannot close the mutation.
+
+### Locator-repair authority is not revision closure
+
+A `locator_repair:<sha256>` PASS authorizes only evaluation/application of one narrowly bound locator mutation. Its subject binds the exact failing targeted-pytest validation and failure evidence, the failure-observed Git SHA/workspace fingerprint, test path and file digest, original locator occurrence, exact browser verification and same-DOM context, current revision, and classification computed only from that evidence subset.
+
+Proposal cannot introduce a new target path/hash/original locator after browser verification, and apply revalidates the same subject before writing. Workspace or revision drift invalidates unused proposal authority even when target-file SHA remains unchanged. This prevents cross-test and cross-revision repair reuse.
+
+After a locator patch is applied, only patch-safety evidence exists for the new revision. The four mutation-closure requirements above still apply in full. A repair subject, browser PASS, or model-approved healing proposal cannot stand in for targeted trusted execution or regression evidence.
 
 ## Mutation transaction semantics
 
 ```mermaid
 stateDiagram-v2
     accTitle: Revision-bound mutation transaction from authorization through rollback-backed validation closure
-    accDescr: An authorized mutation receives an owned rollback snapshot and enters a pending state. Exact-path patch safety, exact-path-bound targeted pytest, and one controller-bound reconciled full-regression suite must all pass before commit; failures or incomplete closure route to rollback, and unprovable rollback ownership or integrity escalates to infrastructure failure.
+    accDescr: An authorized mutation receives an owned rollback snapshot and enters a pending state. Exact-path patch safety, exact-path targeted pytest plus trusted out-of-process executed-test outcome authority, and one controller-bound reconciled full-regression suite must all pass before commit; failures or incomplete closure route to rollback, and unprovable rollback ownership or integrity escalates to infrastructure failure.
 
     [*] --> Authorized
     Authorized --> Pending: owned rollback snapshot
     Pending --> PatchSafe: exact-path patch safety PASS
-    PatchSafe --> Targeted: exact-path-bound pytest PASS
-    Targeted --> Regression: bound regression suite PASS
+    PatchSafe --> TargetedExit: exact-path targeted pytest PASS
+    TargetedExit --> TrustedOutcome: trusted executed call-phase outcome
+    TrustedOutcome --> Regression: bound regression suite PASS
     Regression --> Committed: revision closed
 
     Pending --> Rollback: failure / incomplete closure
     PatchSafe --> Rollback
-    Targeted --> Rollback
+    TargetedExit --> Rollback
+    TrustedOutcome --> Rollback
     Regression --> Rollback
     Rollback --> IntegrityFailure: rollback ownership/hash cannot be proven
 ```
@@ -150,6 +165,7 @@ A measured threshold breach is `FAIL`. A successfully measured run satisfying ev
 
 - one exact patch-safety target exists;
 - targeted pytest is explicitly bound to that target;
+- trusted out-of-process executed-test outcome evidence proves successful call-phase execution from that exact target;
 - exactly one controller-verified full-regression suite identity passed; and
 - no pending mutation remains.
 
@@ -226,7 +242,7 @@ The structured report carries the identifiers needed to reason about its conclus
 
 ## Core invariant
 
-> **Unknown is not PASS. Validator uncertainty is not FAIL. Model completion is not PASS. An unrelated green gate is not objective success. Configuration is not PASS. Historical evidence is not current-revision PASS. Integrity is not PASS. Only deterministic closure can produce verified success.**
+> **Unknown is not PASS. Validator uncertainty is not FAIL. Model completion is not PASS. An unrelated green gate is not objective success. A mutation proposal is not mutation closure. Configuration is not PASS. Historical evidence is not current-revision PASS. Integrity is not PASS. Only deterministic closure can produce verified success.**
 
 ---
 
