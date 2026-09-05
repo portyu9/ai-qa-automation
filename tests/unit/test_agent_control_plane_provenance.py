@@ -193,7 +193,9 @@ async def test_run_agent_fails_closed_when_control_subject_becomes_unavailable_b
 
     class ForbiddenClient:
         def __init__(self, *args: object, **kwargs: object) -> None:
-            raise AssertionError("provider client must not start without revalidated control authority")
+            raise AssertionError(
+                "provider client must not start without revalidated control authority"
+            )
 
     def remove_authority_after_bootstrap(**kwargs: object) -> str:
         del kwargs

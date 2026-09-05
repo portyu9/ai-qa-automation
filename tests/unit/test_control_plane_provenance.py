@@ -39,9 +39,7 @@ def _control_root(tmp_path: Path) -> Path:
         skill_file = root / ".claude" / "skills" / skill / "SKILL.md"
         skill_file.parent.mkdir(parents=True, exist_ok=True)
         skill_file.write_text(f"{skill} authority\n", encoding="utf-8")
-    (root / ".claude" / "hooks" / "policy_guard.py").write_text(
-        "POLICY = 1\n", encoding="utf-8"
-    )
+    (root / ".claude" / "hooks" / "policy_guard.py").write_text("POLICY = 1\n", encoding="utf-8")
     return root
 
 
@@ -62,9 +60,7 @@ def _capture(tmp_path: Path):
         _control_root(tmp_path),
         controller_root=_controller_root(tmp_path),
     )
-    return bind_control_git_identity(
-        captured, control_git_sha="a" * 40, control_git_clean=False
-    )
+    return bind_control_git_identity(captured, control_git_sha="a" * 40, control_git_clean=False)
 
 
 def _state(bound, *, terminal_status: TerminalStatus) -> AgentRunState:
@@ -150,19 +146,13 @@ def test_git_identity_is_supporting_metadata_not_sufficient_authority(tmp_path: 
     control = _control_root(tmp_path)
     controller = _controller_root(tmp_path)
     captured = capture_control_plane_subject(control, controller_root=controller)
-    clean = bind_control_git_identity(
-        captured, control_git_sha="e" * 40, control_git_clean=True
-    )
-    dirty = bind_control_git_identity(
-        captured, control_git_sha="e" * 40, control_git_clean=False
-    )
+    clean = bind_control_git_identity(captured, control_git_sha="e" * 40, control_git_clean=True)
+    dirty = bind_control_git_identity(captured, control_git_sha="e" * 40, control_git_clean=False)
 
     assert clean.subject.control_git_sha == dirty.subject.control_git_sha
     assert clean.subject.control_git_clean is True
     assert dirty.subject.control_git_clean is False
     assert clean.subject.subject_digest == dirty.subject.subject_digest
-
-
 
 
 def test_missing_runtime_requested_skill_is_not_a_bindable_project_subject(tmp_path: Path) -> None:
@@ -201,9 +191,7 @@ def test_git_observation_sandwich_detects_content_or_ownership_drift(tmp_path: P
     settings = control / ".claude" / "settings.json"
     replacement.write_bytes(settings.read_bytes())
     os.replace(replacement, settings)
-    after_same_byte_replacement = capture_control_plane_subject(
-        control, controller_root=controller
-    )
+    after_same_byte_replacement = capture_control_plane_subject(control, controller_root=controller)
     assert rebound.subject.subject_digest == after_same_byte_replacement.subject.subject_digest
     assert not same_control_plane_capture(rebound, after_same_byte_replacement)
 
@@ -370,7 +358,6 @@ def test_unavailable_terminal_subject_demotes_only_candidate_success(tmp_path: P
     assert failure.terminal_status is TerminalStatus.FAILURE
 
 
-
 def test_persisted_control_subject_rejects_internally_inconsistent_digest(tmp_path: Path) -> None:
     import json
 
@@ -386,6 +373,7 @@ def test_persisted_control_subject_rejects_internally_inconsistent_digest(tmp_pa
 
     with pytest.raises(ValueError, match="control-plane manifest digest"):
         StateStore(state_path).load()
+
 
 def test_report_state_attestation_and_lineage_preserve_control_subject_separately_from_target(
     tmp_path: Path,
@@ -407,6 +395,7 @@ def test_report_state_attestation_and_lineage_preserve_control_subject_separatel
     run_dir = tmp_path / "artifacts" / state.run_id
     StateStore(run_dir / "state.json").save(state)
     attestation = build_run_attestation(run_dir)
+    assert attestation["schema"] == "ai-qa-run-attestation/v2"
     assert (
         attestation["runtime"]["control_plane_subject"]["subject_digest"]
         == bound.subject.subject_digest

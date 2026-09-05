@@ -129,9 +129,7 @@ def bind_control_git_identity(
     return ControlPlaneCapture(subject=subject, observation=capture.observation)
 
 
-def same_control_plane_capture(
-    left: ControlPlaneCapture, right: ControlPlaneCapture
-) -> bool:
+def same_control_plane_capture(left: ControlPlaneCapture, right: ControlPlaneCapture) -> bool:
     """Return whether two captures identify the same bytes and ownership observation."""
 
     return (
@@ -159,8 +157,7 @@ def enforce_terminal_control_plane_subject(
         state.control_plane_revalidation_status = status
         state.control_plane_terminal_subject_digest = None
         reason = (
-            "trusted control-plane subject could not be revalidated safely: "
-            f"{type(exc).__name__}"
+            f"trusted control-plane subject could not be revalidated safely: {type(exc).__name__}"
         )
         if state.terminal_status is None or state.terminal_status is TerminalStatus.SUCCESS:
             state.terminal_status = TerminalStatus.INFRASTRUCTURE_FAILURE
@@ -268,8 +265,7 @@ def _capture_project(root: Path) -> tuple[ControlPlaneManifest, tuple[int, int],
         for item in claude_manifest.files
     )
     prefixed_directories = tuple(
-        ".claude" if item == "." else f".claude/{item}"
-        for item in claude_manifest.directories
+        ".claude" if item == "." else f".claude/{item}" for item in claude_manifest.directories
     )
     files = tuple(
         sorted(

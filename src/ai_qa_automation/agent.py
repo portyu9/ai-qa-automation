@@ -8,12 +8,10 @@ from typing import Any
 
 from .agent_provider import execute_sdk_sessions
 from .agent_support import (
-    _enforce_terminal_workspace_freshness,
     _final_response,
     _may_recompute_terminal_outcome,
     _observe_control_git_subject,
     _package_version,
-    _rollback_unresolved_mutation,
     _sync_operational_state,
     configuration_fingerprint,
     sdk_exception_outcome,
@@ -40,6 +38,7 @@ from .runtime.control_plane_provenance import (
 from .runtime.internal_tools import build_internal_mcp_server
 from .runtime.journal import RunJournal
 from .runtime.live_services import LiveRuntimeServices
+from .runtime.mutation_lineage import reconcile_rolled_back_mutation
 from .runtime.objective_bounds import validate_objective
 from .runtime.run_control import RuntimeControl
 from .runtime.runtime_hooks import build_hooks, build_permission_handler
@@ -48,11 +47,90 @@ from .runtime.sdk_result_bounds import SDKResultBoundsError
 from .runtime.stale_recovery import recover_stale_mutation
 from .runtime.system_prompt import RUNTIME_SYSTEM_PROMPT
 from .runtime.validation_truth import determine_terminal_outcome
+from .runtime.workspace_freshness import WorkspaceFreshnessCode, observe_workspace_freshness
 from .runtime.workspace_lease import WorkspaceBusyError, WorkspaceLease
 from .state import StateStore
 from .telemetry import emit_event, trace_span
 from .tools.repository import RepositoryInspector
 from .tools.test_execution import TestRunner
+
+
+def _rollback_unresolved_mutation(
+    state: AgentRunState,
+    control: RuntimeControl,
+    workspace: Path,
+) -> None:
+    """Rollback terminally unresolved mutation bytes and poison that revision's closure."""
+
+    pending = control.pending_mutation
+    if pending is None:
+        return
+    if state.terminal_status == TerminalStatus.SUCCESS:
+        state.terminal_status = TerminalStatus.NOT_VERIFIED
+        state.terminal_reason = (
+            "Terminal evaluation encountered an unresolved mutation transaction; "
+            "verified commit authority exists only in PostToolUse closure."
+        )
+    rolled_back = control.rollback_pending_mutation(
+        reason="run ended with an unresolved mutation transaction"
+    )
+    if rolled_back:
+        reconcile_rolled_back_mutation(
+            state,
+            relative_path=rolled_back,
+            change_revision_before=pending.change_revision_before,
+        )
+        state.observations.append(
+            f"Unresolved mutation rolled back before terminal report: {rolled_back}"
+        )
+    control.set_workspace_fingerprint(RepositoryInspector(workspace).snapshot().fingerprint)
+
+
+def _enforce_terminal_workspace_freshness(
+    state: AgentRunState,
+    control: RuntimeControl,
+    workspace: Path,
+) -> None:
+    """Demote candidate SUCCESS unless the current workspace still matches authorized lineage."""
+
+    freshness = observe_workspace_freshness(
+        workspace,
+        expected_fingerprint=control.expected_workspace_fingerprint,
+        expected_root_identity=control.workspace_identity,
+    )
+    if freshness.fresh:
+        control.journal.try_append(
+            "terminal_workspace_freshness_verified",
+            reason_code=freshness.code.value,
+        )
+        return
+
+    if freshness.code is WorkspaceFreshnessCode.SUBJECT_UNAVAILABLE:
+        state.terminal_status = TerminalStatus.INFRASTRUCTURE_FAILURE
+        state.terminal_reason = (
+            "Terminal workspace subject identity could not be revalidated safely."
+        )
+    elif freshness.code is WorkspaceFreshnessCode.FINGERPRINT_INCOMPLETE:
+        state.terminal_status = TerminalStatus.NOT_VERIFIED
+        state.terminal_reason = (
+            "Terminal success was refused because the current workspace fingerprint is incomplete."
+        )
+    elif freshness.code is WorkspaceFreshnessCode.BASELINE_MISSING:
+        state.terminal_status = TerminalStatus.BLOCKED
+        state.terminal_reason = (
+            "Terminal success was refused because no authorized workspace fingerprint baseline exists."
+        )
+    else:
+        state.terminal_status = TerminalStatus.BLOCKED
+        state.terminal_reason = (
+            "Terminal success was refused because the target workspace changed outside authorized "
+            "mutation lineage."
+        )
+    control.journal.try_append(
+        "terminal_workspace_freshness_denied",
+        reason_code=freshness.code.value,
+        terminal_status=state.terminal_status.value,
+    )
 
 
 async def run_agent(

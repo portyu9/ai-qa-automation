@@ -184,9 +184,7 @@ def build_run_lineage(run_dir: Path, *, max_journal_events: int = 500) -> RunLin
             "target_git_sha": state.get("target_git_sha"),
             "configuration_version": state.get("configuration_version"),
             "control_plane_subject": state.get("control_plane_subject"),
-            "control_plane_revalidation_status": state.get(
-                "control_plane_revalidation_status"
-            ),
+            "control_plane_revalidation_status": state.get("control_plane_revalidation_status"),
             "control_plane_terminal_subject_digest": state.get(
                 "control_plane_terminal_subject_digest"
             ),

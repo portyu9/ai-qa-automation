@@ -306,9 +306,9 @@ _MAX_CONTROL_PLANE_MANIFEST_METADATA_BYTES = 4_000_000
 
 
 def _control_plane_canonical_bytes(payload: object) -> bytes:
-    return json.dumps(
-        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-    ).encode("utf-8")
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
+        "utf-8"
+    )
 
 
 def _control_plane_canonical_digest(payload: object) -> str:
@@ -349,9 +349,7 @@ class ControlPlaneManifest(FrozenModel):
     files: tuple[ControlPlaneFileSubject, ...] = Field(
         max_length=_MAX_CONTROL_PLANE_MANIFEST_ENTRIES
     )
-    directories: tuple[str, ...] = Field(
-        default=(), max_length=_MAX_CONTROL_PLANE_MANIFEST_ENTRIES
-    )
+    directories: tuple[str, ...] = Field(default=(), max_length=_MAX_CONTROL_PLANE_MANIFEST_ENTRIES)
     absent_paths: tuple[str, ...] = Field(
         default=(), max_length=_MAX_CONTROL_PLANE_MANIFEST_ENTRIES
     )
@@ -411,9 +409,7 @@ class ControlPlaneSubject(FrozenModel):
     subject_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     project_manifest: ControlPlaneManifest
     controller_manifest: ControlPlaneManifest
-    control_git_sha: str | None = Field(
-        default=None, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
-    )
+    control_git_sha: str | None = Field(default=None, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
     control_git_clean: bool | None = None
 
     @model_validator(mode="after")
