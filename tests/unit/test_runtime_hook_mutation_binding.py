@@ -62,16 +62,21 @@ def verified_regression_details() -> dict[str, object]:
 
 def verified_targeted_details(path: str, *, args: list[str], run_id: str) -> dict[str, object]:
     passed_paths = [path]
+    observer_backend = "controller-observer-test-double"
+    observer_identity = "sha256:" + "c" * 64
+    git_sha = "d" * 40
+    source_fingerprint = "sha256:" + "e" * 64
+    subject_digest = "sha256:" + "f" * 64
     observer = build_targeted_execution_observation(
         run_id=run_id,
         change_revision=1,
         mutation_path=path,
         pytest_args=tuple(args),
-        observer_backend="controller-observer-test-double",
-        observer_identity="sha256:" + "c" * 64,
-        git_sha="d" * 40,
-        source_fingerprint="sha256:" + "e" * 64,
-        execution_subject_digest="sha256:" + "f" * 64,
+        observer_backend=observer_backend,
+        observer_identity=observer_identity,
+        git_sha=git_sha,
+        source_fingerprint=source_fingerprint,
+        execution_subject_digest=subject_digest,
         report_complete=True,
         child_exit_code=0,
         pytest_returncode=0,
@@ -86,6 +91,17 @@ def verified_targeted_details(path: str, *, args: list[str], run_id: str) -> dic
     return {
         "targeted_execution_authority": TRUSTED_TARGETED_EXECUTION_AUTHORITY,
         "targeted_outcome_report_verified": True,
+        "targeted_observer_backend": observer_backend,
+        "targeted_observer_identity": observer_identity,
+        "targeted_execution_subject": {
+            "git_sha": git_sha,
+            "source_fingerprint": source_fingerprint,
+            "digest": subject_digest,
+            "file_count": 1,
+            "total_bytes": 1,
+            "ignored_inputs_excluded": True,
+            "git_metadata_excluded": True,
+        },
         "targeted_execution_id": observer.execution_id,
         "targeted_executed_pass_count": 1,
         "targeted_executed_pass_paths": passed_paths,
