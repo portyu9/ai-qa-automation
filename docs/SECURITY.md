@@ -123,7 +123,7 @@ A live write requires all of the following:
 6. no unresolved previous mutation transaction;
 7. no absolute path, `..` traversal, workspace escape, or symlink component.
 
-The Python/pytest restriction is deliberate: the current autonomous closure mechanism can deterministically execute and bind pytest evidence to the changed path. Reusable patch libraries may understand additional source syntaxes without widening live autonomous commit authority.
+The Python/pytest restriction is deliberate: the current autonomous closure mechanism can bind execution to the changed Python test path and preserve a frozen isolated subject. That containment does **not** make target-interpreter pytest hooks, collection/output/report bytes, or process exit positive semantic authority. Positive commit remains fail-closed until separately trusted targeted and full-regression executed-test semantic observers exist. Reusable patch libraries may understand additional source syntaxes without widening live autonomous commit authority.
 
 ### Trusted runtime artifacts
 
@@ -145,22 +145,28 @@ This prevents “same bytes, wrong filesystem object” from being mistaken for 
 ```mermaid
 flowchart LR
     accTitle: Transactional test-mutation integrity and rollback
-    accDescr: An authorized Python test write creates a rollback snapshot, then patch safety, exact-path targeted pytest, and full regression must pass before commit. Any failure or incomplete closure rolls back, and uncertain rollback ownership escalates to infrastructure failure or manual review.
+    accDescr: An authorized Python test write creates a rollback snapshot, then patch safety and exact-path targeted execution diagnostics must be supplemented by independently trusted targeted semantics and independently trusted full-regression executed-test semantics before commit. Any failure or incomplete closure rolls back, and uncertain rollback ownership escalates to infrastructure failure or manual review.
 
     A[Authorized Python test write] --> B[Rollback snapshot]
     B --> C[Candidate revision]
     C --> D[Patch-safety PASS]
     D --> E[Targeted pytest bound to exact changed path]
-    E --> F[Full regression PASS]
-    F --> G[Commit]
-    C -->|failure / incomplete| H[Rollback]
-    D -->|failure / incomplete| H
-    E -->|failure / incomplete| H
-    F -->|failure / incomplete| H
-    H -->|ownership uncertain| I[INFRASTRUCTURE_FAILURE / manual review]
+    E --> F[Independent targeted semantic PASS]
+    F --> G[Full-regression execution diagnostics]
+    G --> H[Independent regression semantic PASS]
+    H --> I[Commit]
+    C -->|failure / incomplete| J[Rollback]
+    D -->|failure / incomplete| J
+    E -->|failure / incomplete| J
+    F -->|failure / incomplete| J
+    G -->|failure / incomplete| J
+    H -->|failure / incomplete| J
+    J -->|ownership uncertain| K[INFRASTRUCTURE_FAILURE / manual review]
 ```
 
 The target-specific gate is not merely labeled `targeted`. The validation record must be bound to the **same path** as the current patch-safety record and pending mutation. A different test file or a `-k`-only selection cannot certify the changed bytes.
+
+Even exact-path targeted exit 0 and reconciled full-regression collection/terminal transcripts remain insufficient for positive closure. The target interpreter can control its hooks, output, report files, and ordinary exit. Current live targeted evidence therefore declares `targeted_execution_authority="unavailable"`; current live regression evidence declares `regression_execution_authority="unavailable"`. Neither can be promoted merely because its transcript is internally plausible.
 
 Patch-quality controls reject common “make it green” shortcuts including:
 
@@ -193,7 +199,7 @@ Automatic restoration requires:
 
 A developer edit after a crash wins. If newer work may exist, automatic rollback is refused rather than overwriting it.
 
-Recovery inspection also uses the same exact-path targeted-validation semantics as terminal truth, so the recovery CLI cannot report a weaker closure standard than the live runtime.
+Recovery inspection uses the same exact-path and independently trusted targeted/regression semantic closure standard as terminal truth. Legacy `regression_suite_verified` metadata, matching collection/output, or target-interpreter exit 0 cannot make recovery report a changed revision as closed.
 
 ---
 
