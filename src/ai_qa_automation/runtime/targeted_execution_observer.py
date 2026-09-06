@@ -5,7 +5,7 @@ import json
 from pathlib import PurePosixPath
 from typing import Any
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, StrictBool, StrictInt, StrictStr, field_validator, model_validator
 
 from ..models import FrozenModel
 
@@ -19,6 +19,7 @@ _MAX_PYTEST_ARG_BYTES = 4096
 _MAX_PYTEST_ARGS_TOTAL_BYTES = 64_000
 _MAX_TARGET_PATH_BYTES = 4096
 _MAX_PASSED_PATHS = 4
+_MAX_CALL_REPORTS = 10_000
 _SAFE_RUN_ID_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-")
 
 
@@ -69,34 +70,34 @@ def _pytest_args_select_mutation(pytest_args: tuple[str, ...], mutation_path: st
 
 
 class TargetedExecutionObservation(FrozenModel):
-    """Authority-bearing targeted-test observation emitted only by a trusted observer."""
+    """Schema for evidence that only a separately trusted observer may authorize."""
 
-    schema_version: str = TARGETED_EXECUTION_SCHEMA
-    authority: str = TRUSTED_TARGETED_EXECUTION_AUTHORITY
-    execution_id: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
-    run_id: str = Field(min_length=1, max_length=_MAX_RUN_ID_BYTES)
-    change_revision: int = Field(ge=1)
-    mutation_path: str = Field(min_length=1, max_length=_MAX_TARGET_PATH_BYTES)
-    pytest_args: tuple[str, ...] = Field(max_length=_MAX_PYTEST_ARGS)
-    observer_backend: str = Field(
+    schema_version: StrictStr = TARGETED_EXECUTION_SCHEMA
+    authority: StrictStr = TRUSTED_TARGETED_EXECUTION_AUTHORITY
+    execution_id: StrictStr = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    run_id: StrictStr = Field(min_length=1, max_length=_MAX_RUN_ID_BYTES)
+    change_revision: StrictInt = Field(ge=1)
+    mutation_path: StrictStr = Field(min_length=1, max_length=_MAX_TARGET_PATH_BYTES)
+    pytest_args: tuple[StrictStr, ...] = Field(max_length=_MAX_PYTEST_ARGS)
+    observer_backend: StrictStr = Field(
         min_length=1,
         max_length=_MAX_OBSERVER_BACKEND_BYTES,
         pattern=r"^[a-z0-9][a-z0-9._-]{0,127}$",
     )
-    observer_identity: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
-    git_sha: str = Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
-    source_fingerprint: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
-    execution_subject_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
-    report_complete: bool
-    child_exit_code: int
-    pytest_returncode: int
-    call_report_count: int = Field(ge=0)
-    passed_call_count: int = Field(ge=0)
-    skipped_call_count: int = Field(ge=0)
-    xfail_call_count: int = Field(ge=0)
-    failed_call_count: int = Field(ge=0)
-    passed_paths: tuple[str, ...] = Field(max_length=_MAX_PASSED_PATHS)
-    report_sha256: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    observer_identity: StrictStr = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    git_sha: StrictStr = Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    source_fingerprint: StrictStr = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    execution_subject_digest: StrictStr = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    report_complete: StrictBool
+    child_exit_code: StrictInt = Field(ge=-255, le=255)
+    pytest_returncode: StrictInt = Field(ge=0, le=255)
+    call_report_count: StrictInt = Field(ge=0, le=_MAX_CALL_REPORTS)
+    passed_call_count: StrictInt = Field(ge=0, le=_MAX_CALL_REPORTS)
+    skipped_call_count: StrictInt = Field(ge=0, le=_MAX_CALL_REPORTS)
+    xfail_call_count: StrictInt = Field(ge=0, le=_MAX_CALL_REPORTS)
+    failed_call_count: StrictInt = Field(ge=0, le=_MAX_CALL_REPORTS)
+    passed_paths: tuple[StrictStr, ...] = Field(max_length=_MAX_PASSED_PATHS)
+    report_sha256: StrictStr = Field(pattern=r"^sha256:[0-9a-f]{64}$")
 
     @field_validator("run_id")
     @classmethod
@@ -193,8 +194,13 @@ def verified_targeted_execution_observation(
     expected_revision: int,
     expected_mutation_path: str,
     expected_pytest_args: tuple[str, ...],
+    expected_observer_backend: str,
+    expected_observer_identity: str,
+    expected_git_sha: str,
+    expected_source_fingerprint: str,
+    expected_execution_subject_digest: str,
 ) -> TargetedExecutionObservation | None:
-    """Accept only one exact, positive observer result for the canonical runtime subject."""
+    """Accept only one exact positive result matching controller-owned subject authority."""
 
     expected_path = normalize_targeted_path(expected_mutation_path)
     if (
@@ -202,6 +208,11 @@ def verified_targeted_execution_observation(
         or not expected_run_id
         or expected_revision < 1
         or expected_path is None
+        or not expected_observer_backend
+        or not expected_observer_identity
+        or not expected_git_sha
+        or not expected_source_fingerprint
+        or not expected_execution_subject_digest
     ):
         return None
     try:
@@ -210,9 +221,18 @@ def verified_targeted_execution_observation(
         return None
     if observation.run_id != expected_run_id or observation.change_revision != expected_revision:
         return None
-    if observation.mutation_path != expected_path:
+    if observation.mutation_path != expected_path or observation.pytest_args != expected_pytest_args:
         return None
-    if observation.pytest_args != expected_pytest_args:
+    if (
+        observation.observer_backend != expected_observer_backend
+        or observation.observer_identity != expected_observer_identity
+    ):
+        return None
+    if (
+        observation.git_sha != expected_git_sha
+        or observation.source_fingerprint != expected_source_fingerprint
+        or observation.execution_subject_digest != expected_execution_subject_digest
+    ):
         return None
     if not _pytest_args_select_mutation(observation.pytest_args, expected_path):
         return None
