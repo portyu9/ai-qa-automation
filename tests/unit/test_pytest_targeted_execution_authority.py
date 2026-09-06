@@ -3,9 +3,14 @@ from __future__ import annotations
 from ai_qa_automation.models import ValidationResult, ValidationStatus
 from ai_qa_automation.runtime.internal_tool_domains.common import pytest_validation_status
 from ai_qa_automation.runtime.internal_tool_domains.testing import _TARGETED_EXECUTION_AUTHORITY
+from ai_qa_automation.runtime.targeted_execution_observer import (
+    TRUSTED_TARGETED_EXECUTION_AUTHORITY,
+    build_targeted_execution_observation,
+)
 from ai_qa_automation.runtime.validation_truth import evaluate_revision_closure
 
-_TRUSTED_AUTHORITY = "trusted_out_of_process_observer_v1"
+_TRUSTED_AUTHORITY = TRUSTED_TARGETED_EXECUTION_AUTHORITY
+_RUN_ID = "run-targeted-authority"
 
 
 def _validation(
@@ -53,7 +58,27 @@ def _targeted(
     xfail_count: int = 0,
     skipped_count: int = 0,
 ) -> ValidationResult:
-    execution_id = "sha256:" + "1" * 64
+    observer = build_targeted_execution_observation(
+        run_id=_RUN_ID,
+        change_revision=1,
+        mutation_path=mutation_path,
+        pytest_args=(mutation_path,),
+        observer_backend="controller-observer-test-double",
+        observer_identity="sha256:" + "1" * 64,
+        git_sha="2" * 40,
+        source_fingerprint="sha256:" + "3" * 64,
+        execution_subject_digest="sha256:" + "4" * 64,
+        report_complete=True,
+        child_exit_code=0,
+        pytest_returncode=0,
+        call_report_count=passed_count + xfail_count + skipped_count,
+        passed_call_count=passed_count,
+        skipped_call_count=skipped_count,
+        xfail_call_count=xfail_count,
+        failed_call_count=0,
+        passed_paths=tuple(passed_paths),
+        report_sha256="sha256:" + "5" * 64,
+    )
     return _validation(
         "pytest",
         gate_id="pytest:targeted",
@@ -64,30 +89,20 @@ def _targeted(
             "mutation_target": mutation_path,
             "targeted_execution_authority": authority,
             "targeted_outcome_report_verified": True,
-            "targeted_execution_id": execution_id,
+            "targeted_execution_id": observer.execution_id,
             "targeted_executed_pass_count": passed_count,
             "targeted_executed_pass_paths": passed_paths,
-            "targeted_execution": {
-                "execution_id": execution_id,
-                "git_sha": "2" * 40,
-                "source_fingerprint": "sha256:" + "3" * 64,
-                "execution_subject_digest": "sha256:" + "4" * 64,
-                "report_complete": True,
-                "child_exit_code": 0,
-                "pytest_returncode": 0,
-                "call_report_count": max(1, passed_count + xfail_count + skipped_count),
-                "passed_call_count": passed_count,
-                "skipped_call_count": skipped_count,
-                "xfail_call_count": xfail_count,
-                "failed_call_count": 0,
-                "passed_paths": passed_paths,
-                "report_sha256": "sha256:" + "5" * 64,
-            },
+            "targeted_execution": observer.model_dump(mode="json"),
         },
     )
 
 
-def _closure(targeted: ValidationResult, path: str) -> object:
+def _closure(
+    targeted: ValidationResult,
+    path: str,
+    *,
+    expected_run_id: str = _RUN_ID,
+) -> object:
     validations = [
         _validation(
             "test_patch_safety",
@@ -97,7 +112,11 @@ def _closure(targeted: ValidationResult, path: str) -> object:
         targeted,
         _regression(),
     ]
-    return evaluate_revision_closure(validations, current_revision=1)
+    return evaluate_revision_closure(
+        validations,
+        current_revision=1,
+        expected_run_id=expected_run_id,
+    )
 
 
 def test_live_targeted_pytest_declares_no_authoritative_observer() -> None:
@@ -213,16 +232,46 @@ def test_missing_authority_cannot_close_even_with_self_consistent_execution_meta
     assert closure.code == "incomplete_pytest_closure"
 
 
+def test_cross_run_observer_evidence_cannot_close_mutation() -> None:
+    path = "tests/test_changed.py"
+    targeted = _targeted(mutation_path=path, passed_paths=[path], passed_count=1)
+
+    closure = _closure(targeted, path, expected_run_id="run-other")
+
+    assert closure.closed is False
+    assert closure.code == "incomplete_pytest_closure"
+
+
+def test_legacy_structurally_plausible_observer_payload_cannot_close() -> None:
+    path = "tests/test_changed.py"
+    targeted = _targeted(mutation_path=path, passed_paths=[path], passed_count=1)
+    execution = dict(targeted.details["targeted_execution"])
+    for field in ("schema_version", "authority", "run_id", "change_revision", "mutation_path", "pytest_args"):
+        execution.pop(field)
+    targeted.details["targeted_execution"] = execution
+
+    closure = _closure(targeted, path)
+
+    assert closure.closed is False
+    assert closure.code == "incomplete_pytest_closure"
+
+
 def test_passed_path_metadata_remains_bounded() -> None:
     path = "tests/test_changed.py"
-    closure = _closure(
-        _targeted(
-            mutation_path=path,
-            passed_paths=["a.py", "b.py", "c.py", "d.py", path],
-            passed_count=5,
-        ),
-        path,
+    targeted = _targeted(
+        mutation_path=path,
+        passed_paths=[path],
+        passed_count=1,
     )
+    execution = dict(targeted.details["targeted_execution"])
+    execution["passed_call_count"] = 5
+    execution["call_report_count"] = 5
+    execution["passed_paths"] = ["a.py", "b.py", "c.py", "d.py", path]
+    targeted.details["targeted_executed_pass_count"] = 5
+    targeted.details["targeted_executed_pass_paths"] = execution["passed_paths"]
+    targeted.details["targeted_execution"] = execution
+
+    closure = _closure(targeted, path)
 
     assert closure.closed is False
     assert closure.code == "incomplete_pytest_closure"
