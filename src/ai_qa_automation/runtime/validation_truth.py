@@ -136,7 +136,11 @@ def _verified_targeted_execution_covers_path(
     subject_digest = subject.get("digest")
     file_count = subject.get("file_count")
     total_bytes = subject.get("total_bytes")
-    if not all(isinstance(value, str) for value in (git_sha, source_fingerprint, subject_digest)):
+    if (
+        not isinstance(git_sha, str)
+        or not isinstance(source_fingerprint, str)
+        or not isinstance(subject_digest, str)
+    ):
         return False
     if type(file_count) is not int or file_count < 1:
         return False
