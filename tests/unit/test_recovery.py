@@ -132,11 +132,13 @@ def verified_targeted_details(path: str, *, run_id: str = _RUN_ID) -> dict[str, 
     }
 
 
-def closed_revision_validations(
+def legacy_positive_revision_validations(
     path: str = "tests/test_x.py",
     *,
     run_id: str = _RUN_ID,
 ) -> list[ValidationResult]:
+    """Model pre-hardening persisted regression claims for recovery compatibility tests."""
+
     return [
         ValidationResult(
             name="test_patch_safety",
@@ -159,7 +161,7 @@ def closed_revision_validations(
             gate_id="regression",
             revision=1,
             status=ValidationStatus.PASS,
-            summary="regression pass",
+            summary="legacy regression claim",
             details=verified_regression_details(),
         ),
     ]
@@ -187,7 +189,7 @@ def test_revision_zero_is_safe_to_start_new_session_from_persisted_state(tmp_pat
     assert "does not replay or continue" in result["note"]
 
 
-def test_changed_revision_requires_exact_bound_targeted_and_regression_passes(
+def test_changed_revision_legacy_regression_claim_is_not_recovery_closed(
     tmp_path: Path,
 ) -> None:
     if not descriptor_relative_authority_supported():
@@ -200,7 +202,7 @@ def test_changed_revision_requires_exact_bound_targeted_and_regression_passes(
         base_state(
             workspace,
             change_revision=1,
-            validation_results=closed_revision_validations(),
+            validation_results=legacy_positive_revision_validations(),
         ),
     )
     RunJournal(run_dir / "journal.jsonl").append("validation_closed")
@@ -209,8 +211,8 @@ def test_changed_revision_requires_exact_bound_targeted_and_regression_passes(
     result = inspect_recovery(run_dir)
 
     assert result["recoverable"] is True
-    assert result["revision_closed"] is True
-    assert result["resume_policy"] == "safe-to-start-a-new-agent-session-from-persisted-evidence"
+    assert result["revision_closed"] is False
+    assert result["resume_policy"] == "manual-review-required-before-new-session"
 
 
 def test_unbound_targeted_validation_is_not_recovery_closed(tmp_path: Path) -> None:
@@ -219,7 +221,7 @@ def test_unbound_targeted_validation_is_not_recovery_closed(tmp_path: Path) -> N
     run_dir = tmp_path / "run-1"
     workspace = tmp_path / "sut"
     workspace.mkdir()
-    validations = closed_revision_validations()
+    validations = legacy_positive_revision_validations()
     validations[1] = validations[1].model_copy(
         update={
             "details": {
@@ -255,7 +257,7 @@ def test_pending_mutation_forces_manual_review_even_when_gates_pass(tmp_path: Pa
         base_state(
             workspace,
             change_revision=1,
-            validation_results=closed_revision_validations(),
+            validation_results=legacy_positive_revision_validations(),
         ),
     )
     RunJournal(run_dir / "journal.jsonl").append("mutation_prepared")
