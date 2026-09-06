@@ -134,9 +134,7 @@ def register_testing_tools(services: RuntimeServices, tool: ToolDecorator) -> di
         if scope == "regression" and status is ValidationStatus.PASS:
             status = ValidationStatus.NOT_VERIFIED
         targeted_authority = _TARGETED_EXECUTION_AUTHORITY if scope == "targeted" else None
-        regression_authority = (
-            _REGRESSION_EXECUTION_AUTHORITY if scope == "regression" else None
-        )
+        regression_authority = _REGRESSION_EXECUTION_AUTHORITY if scope == "regression" else None
         targeted_executed_pass_paths: list[str] = []
         targeted_executed_pass_count = len(targeted_executed_pass_paths)
         summary = (
