@@ -136,7 +136,11 @@ def test_exact_live_subject_without_protected_changes_is_auto_eligible() -> None
     assert admission.protected_changes == ()
 
 
-@pytest.mark.parametrize("changed_path", ["tests", ".gitattributes"])
+def test_repository_maintenance_roots_use_routine_admission() -> None:
+    assert {".github", "scripts", "tests"}.isdisjoint(preflight.PROTECTED_PATHS)
+
+
+@pytest.mark.parametrize("changed_path", ["requirements", ".gitattributes"])
 def test_protected_change_is_observed_but_not_auto_authorized(changed_path: str) -> None:
     admission = preflight.evaluate_admission(
         FakeAPI(_responses(changed_path=changed_path)),
