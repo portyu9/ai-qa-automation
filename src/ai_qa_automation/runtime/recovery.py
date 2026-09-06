@@ -188,6 +188,7 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
     closure = evaluate_revision_closure(
         state.validation_results,
         current_revision=state.change_revision,
+        expected_run_id=state.run_id,
     )
     revision_closed = closure.closed
     if pending_mutation is not None:
