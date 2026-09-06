@@ -246,7 +246,14 @@ def test_legacy_structurally_plausible_observer_payload_cannot_close() -> None:
     path = "tests/test_changed.py"
     targeted = _targeted(mutation_path=path, passed_paths=[path], passed_count=1)
     execution = dict(targeted.details["targeted_execution"])
-    for field in ("schema_version", "authority", "run_id", "change_revision", "mutation_path", "pytest_args"):
+    for field in (
+        "schema_version",
+        "authority",
+        "run_id",
+        "change_revision",
+        "mutation_path",
+        "pytest_args",
+    ):
         execution.pop(field)
     targeted.details["targeted_execution"] = execution
 
