@@ -95,7 +95,9 @@ def _verified_targeted_details(path: str, *, run_id: str) -> dict[str, object]:
     }
 
 
-def _closed_revision_checks(path: str, *, run_id: str) -> list[ValidationResult]:
+def _legacy_positive_revision_checks(path: str, *, run_id: str) -> list[ValidationResult]:
+    """Model persisted pre-hardening positive lineage for rollback-coherence tests."""
+
     return [
         ValidationResult(
             name="test_patch_safety",
@@ -118,7 +120,7 @@ def _closed_revision_checks(path: str, *, run_id: str) -> list[ValidationResult]
             gate_id="pytest:regression",
             revision=1,
             status=ValidationStatus.PASS,
-            summary="full regression passed",
+            summary="legacy regression claim",
             details=_verified_regression_details(),
         ),
     ]
@@ -165,18 +167,17 @@ def _live_pending_run(
     target.write_text("candidate\n", encoding="utf-8")
     state.change_revision = 1
     state.files_modified = [relative_path]
-    state.validation_results = _closed_revision_checks(relative_path, run_id=state.run_id)
+    state.validation_results = _legacy_positive_revision_checks(relative_path, run_id=state.run_id)
     state.terminal_status = TerminalStatus.SUCCESS
-    state.terminal_reason = "validated candidate"
+    state.terminal_reason = "legacy validated candidate"
     store.save(state)
-    assert (
-        evaluate_revision_closure(
-            state.validation_results,
-            current_revision=state.change_revision,
-            expected_run_id=state.run_id,
-        ).closed
-        is True
+    current_closure = evaluate_revision_closure(
+        state.validation_results,
+        current_revision=state.change_revision,
+        expected_run_id=state.run_id,
     )
+    assert current_closure.closed is False
+    assert current_closure.code == "unbound_regression_suite"
     return control, store, state, target, backup, relative_path
 
 
@@ -201,14 +202,13 @@ def test_preclose_state_failure_preserves_candidate_and_pending_authority(
     assert isinstance(runtime["pending_mutation"], dict)
     persisted = StateStore(store.path).load()
     assert persisted.terminal_status is TerminalStatus.SUCCESS
-    assert (
-        evaluate_revision_closure(
-            persisted.validation_results,
-            current_revision=persisted.change_revision,
-            expected_run_id=persisted.run_id,
-        ).closed
-        is True
+    persisted_closure = evaluate_revision_closure(
+        persisted.validation_results,
+        current_revision=persisted.change_revision,
+        expected_run_id=persisted.run_id,
     )
+    assert persisted_closure.closed is False
+    assert persisted_closure.code == "unbound_regression_suite"
     assert state.terminal_status is TerminalStatus.NOT_VERIFIED
 
 
