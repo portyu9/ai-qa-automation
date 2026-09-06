@@ -19,9 +19,7 @@ _MAX_PYTEST_ARG_BYTES = 4096
 _MAX_PYTEST_ARGS_TOTAL_BYTES = 64_000
 _MAX_TARGET_PATH_BYTES = 4096
 _MAX_PASSED_PATHS = 4
-_SAFE_RUN_ID_CHARS = frozenset(
-    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-"
-)
+_SAFE_RUN_ID_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-")
 
 
 def canonical_targeted_execution_id(payload: dict[str, Any]) -> str:
