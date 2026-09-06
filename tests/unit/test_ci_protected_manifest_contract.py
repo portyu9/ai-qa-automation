@@ -7,6 +7,7 @@ from scripts import auto_trusted_preflight
 from scripts.trusted_gate_service import core as external_gate
 
 ROOT = Path(__file__).resolve().parents[2]
+_ROUTINE_MAINTENANCE_ROOTS = frozenset({".github", "scripts", "tests"})
 
 
 def test_ordinary_ci_contains_no_retired_protected_manifest_authority() -> None:
@@ -20,20 +21,26 @@ def test_ordinary_ci_contains_no_retired_protected_manifest_authority() -> None:
     assert "Trusted PR Gate Reporter" not in text
 
 
-def test_protected_root_sets_are_identical_across_trusted_paths() -> None:
+def test_routine_and_external_protected_root_partitions_are_explicit() -> None:
     automatic = tuple(ci_contract.TRUSTED_AUTO_PROTECTED_PATHS)
     preflight = tuple(auto_trusted_preflight.PROTECTED_PATHS)
     external = tuple(external_gate.PROTECTED_PATHS)
 
-    assert automatic == preflight == external
+    assert automatic == preflight
+    assert _ROUTINE_MAINTENANCE_ROOTS.isdisjoint(automatic)
+    assert set(external) - set(automatic) == _ROUTINE_MAINTENANCE_ROOTS
+    assert set(automatic) < set(external)
     assert ".gitattributes" in automatic
 
 
-def test_automatic_subject_guard_checks_every_protected_root() -> None:
+def test_automatic_subject_guard_checks_every_routine_protected_root() -> None:
     text = (ROOT / ".github" / "workflows" / "trusted-pr-auto.yml").read_text(encoding="utf-8")
     subject_guard = ci_contract._job_block(text, "subject-guard")
 
     for path in auto_trusted_preflight.PROTECTED_PATHS:
         assert f"            {path}\n" in subject_guard
+
+    for path in _ROUTINE_MAINTENANCE_ROOTS:
+        assert f"            {path}\n" not in subject_guard
 
     assert 'test "$base_oid" = "$subject_oid"' in subject_guard
