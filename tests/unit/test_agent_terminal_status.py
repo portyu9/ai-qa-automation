@@ -230,7 +230,7 @@ def test_newer_failed_revision_dominates_older_pass_for_same_gate() -> None:
     assert "pytest:target" in reason
 
 
-def test_new_change_revision_requires_objective_and_mutation_closure() -> None:
+def test_objective_and_legacy_mutation_claims_cannot_bypass_missing_regression_authority() -> None:
     validations = [
         vr("pytest", ValidationStatus.FAIL, gate_id="pytest:target", revision=0),
         *closed_mutation_validations(),
@@ -242,8 +242,8 @@ def test_new_change_revision_requires_objective_and_mutation_closure() -> None:
         objective_gate_id="objective:repair",
         expected_run_id=_RUN_ID,
     )
-    assert status is TerminalStatus.SUCCESS
-    assert "historical failures" in reason.lower()
+    assert status is TerminalStatus.NOT_VERIFIED
+    assert "independently trusted" in reason.lower()
 
 
 def test_fully_closed_mutation_without_objective_contract_is_not_verified() -> None:

@@ -172,7 +172,7 @@ def test_expected_xfail_only_targeted_pass_cannot_close_mutation() -> None:
     assert closure.code == "incomplete_pytest_closure"
 
 
-def test_genuine_pass_plus_unrelated_skip_can_close_with_trusted_observer() -> None:
+def test_genuine_targeted_pass_still_requires_independent_regression_semantics() -> None:
     path = "tests/test_changed.py"
     closure = _closure(
         _targeted(
@@ -184,7 +184,8 @@ def test_genuine_pass_plus_unrelated_skip_can_close_with_trusted_observer() -> N
         path,
     )
 
-    assert closure.closed is True
+    assert closure.closed is False
+    assert closure.code == "unbound_regression_suite"
 
 
 def test_pass_from_other_selected_path_cannot_close_mutation() -> None:

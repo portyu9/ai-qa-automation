@@ -44,7 +44,8 @@ The sections below describe what each control **does not claim** beyond its owne
 - `NOT_VERIFIED` preserves unresolved truth rather than pretending failure or success;
 - same-revision contradiction is surfaced;
 - historical PASS cannot certify newer bytes;
-- targeted mutation validation must refer to the exact changed path;
+- targeted mutation validation must refer to the exact changed path and cannot self-certify execution semantics;
+- full-regression target-interpreter transcripts cannot certify positive regression semantics without independent observer authority;
 - integrity metadata never overrides validation.
 
 ---
@@ -174,6 +175,8 @@ The analyzer is structural and conservative.
 - Write enablement does not authorize arbitrary files.
 - Live autonomous commit is restricted to approved Python test paths because deterministic closure is pytest-backed.
 - A targeted PASS for another file or a `-k`-only run cannot certify the pending path.
+- Positive closure additionally requires independently trusted targeted executed-test semantics and independently trusted full-regression executed-test semantics for the exact current subject; neither authority is emitted by the current live pytest adapter.
+- Consequently positive autonomous test mutation liveness remains fail-closed/`NOT_VERIFIED` until the independent observer substrate exists; target-controlled collection, terminal output, JUnit/report bytes, same-interpreter hooks, or process exit cannot substitute.
 - OS-backed lease/fingerprint/path checks reduce concurrency risk but do not replace surrounding process/filesystem isolation.
 
 ### Recovery
@@ -182,6 +185,7 @@ The analyzer is structural and conservative.
 - Recovery does not reconstruct hidden model reasoning.
 - Automatic stale rollback refuses ambiguous fingerprints/path ownership.
 - Symlink aliases and tampered rollback state block automatic restoration.
+- Persisted legacy regression-suite metadata does not make a changed revision closed after the regression semantic authority hardening.
 - If integrity cannot be guaranteed, the correct response is explicit blocking/infrastructure failure—not best-effort overwrite.
 
 ---
@@ -193,6 +197,8 @@ The analyzer is structural and conservative.
 - Controlled pytest cannot make arbitrary third-party dependencies deterministic.
 - External clocks, queues, networks, databases, caches, datasets, and services can still introduce nondeterminism.
 - Target containers, certificates, test users, credentials, and cleanup remain environment responsibilities.
+- The target pytest interpreter controls its own hooks, collection/output/report bytes, and ordinary process exit. Those signals may remain useful diagnostics or fail-safe denial inputs, but they are not positive executed-test semantic authority.
+- Full-regression pre/run/post collection reconciliation and matching terminal `PASSED` lines remain diagnostic until a separate trusted observer can prove regression execution semantics outside the target interpreter's authority domain.
 - Contradictory same-revision evidence remains visible rather than averaged away.
 
 ### k6

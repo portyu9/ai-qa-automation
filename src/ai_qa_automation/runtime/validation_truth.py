@@ -73,30 +73,18 @@ def _is_sha256_identity(value: object) -> bool:
 
 
 def _verified_regression_suite_id(item: ValidationResult) -> str | None:
-    """Return one self-consistent controller-bound regression suite identity."""
+    """Refuse target-interpreter regression semantics as mutation authority.
+
+    The frozen suite manifest and pre/run/post reconciliation remain diagnostic
+    subject evidence, but collection, terminal node lines, and pytest exit status
+    are all produced inside the untrusted target interpreter. No live independent
+    regression semantic observer exists yet, so legacy plausible suite dictionaries
+    must not close a changed revision.
+    """
 
     if item.details.get("scope") != "regression":
         return None
-    if item.details.get("regression_suite_verified") is not True:
-        return None
-    suite_id = item.details.get("regression_suite_id")
-    suite = item.details.get("regression_suite")
-    if not _is_sha256_identity(suite_id):
-        return None
-    if not isinstance(suite, dict):
-        return None
-    if suite.get("suite_id") != suite_id:
-        return None
-    if suite.get("pre_post_collection_match") is not True:
-        return None
-    if suite.get("execution_nodes_match") is not True:
-        return None
-    if not isinstance(suite.get("node_count"), int) or int(suite["node_count"]) < 1:
-        return None
-    subject_digest = suite.get("execution_subject_digest")
-    if not _is_sha256_identity(subject_digest):
-        return None
-    return suite_id
+    return None
 
 
 def _verified_targeted_execution_covers_path(
@@ -186,8 +174,8 @@ def evaluate_revision_closure(
     only when every result at that revision is PASS, exactly one patch-safety
     subject exists, targeted pytest is explicitly bound to that subject and has a
     trusted out-of-process executed call-phase PASS for it bound to the canonical
-    run/revision/invocation and controller-owned execution subject, and a
-    controller-bound full-regression suite PASS exists at the same revision.
+    run/revision/invocation and controller-owned execution subject, and a separately
+    trusted full-regression executed-test semantic PASS exists at the same revision.
     Negative or future-ahead revision state is invalid and fails closed.
     """
 
@@ -297,21 +285,21 @@ def evaluate_revision_closure(
         return RevisionClosure(
             False,
             "incomplete_pytest_closure",
-            "A changed test requires an exact-path-bound targeted pytest PASS with exact-run and controller-subject-bound trusted out-of-process executed call-phase PASS evidence for that path, plus a controller-bound full-regression pytest PASS at the current revision.",
+            "A changed test requires an exact-path-bound targeted pytest PASS with exact-run and controller-subject-bound trusted out-of-process executed call-phase PASS evidence for that path, plus an independently trusted full-regression executed-test semantic PASS at the current revision.",
             mutation_path,
         )
     if not regression_suite_ids:
         return RevisionClosure(
             False,
             "unbound_regression_suite",
-            "A changed test requires a full-regression PASS bound to an exact controller-verified suite identity.",
+            "A changed test requires an independently trusted full-regression executed-test semantic PASS; target-interpreter collection/output/exit evidence is diagnostic only.",
             mutation_path,
         )
     if len(regression_suite_ids) != 1:
         return RevisionClosure(
             False,
             "ambiguous_regression_suite",
-            "Current revision contains multiple controller-verified regression suite identities.",
+            "Current revision contains multiple independently trusted regression suite identities.",
             mutation_path,
         )
 

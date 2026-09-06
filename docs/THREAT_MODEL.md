@@ -84,9 +84,9 @@ Trusted artifact storage remains a deployment-owned control-plane boundary. The 
 
 ### 4. False validation / stale evidence
 
-An unrelated targeted test, historical PASS, retry, or model claim may be used to certify newer or different bytes.
+An unrelated targeted test, historical PASS, retry, model claim, or target-controlled pytest transcript may be used to certify newer/different bytes or tests that never executed.
 
-**Controls:** change revisions, gate identity, exact changed-path binding between patch safety and targeted pytest, full regression, contradictory PASS/FAIL -> `NOT_VERIFIED`, and terminal truth independent from model prose.
+**Controls:** change revisions, gate identity, exact changed-path binding between patch safety and targeted pytest, independently trusted targeted executed-test semantics, independently trusted full-regression executed-test semantics, explicit rejection of target-interpreter collection/output/report/exit as positive authority, contradictory PASS/FAIL -> `NOT_VERIFIED`, and terminal truth independent from model prose.
 
 ### 5. Test-intent erosion
 
@@ -141,7 +141,8 @@ Persisted bytes may be replaced, cross-run data mixed, ambiguous JSON decoded wi
 | Meaningless generated tests | observed coverage + conservative plan + meaningful assertions + deterministic execution closure |
 | Unsupported model “already covered” claim suppresses scenario | unsupported coverage labels cannot remove deterministic candidate scenarios |
 | JS/TS mutation falsely certified by pytest | live autonomous commit authority limited to Python test paths |
-| Unrelated targeted pytest certifies mutation | targeted validation must select the exact pending changed path |
+| Unrelated targeted pytest certifies mutation | targeted validation must select the exact pending changed path and still requires independent targeted semantics |
+| Target-owned `pytest_runtestloop` forges full-regression PASS | collection/output/terminal lines and exit status remain diagnostic; independent regression semantic authority required for positive closure |
 | False PASS from model completion | terminal status derived from deterministic validation lineage |
 | Retry hides contradiction | same-gate same-revision PASS/FAIL -> `NOT_VERIFIED` |
 | Old evidence certifies new bytes | revision lineage + current-revision closure |
@@ -150,7 +151,7 @@ Persisted bytes may be replaced, cross-run data mixed, ambiguous JSON decoded wi
 | Crash overwrites newer human work | stale rollback requires exact post-mutation fingerprint match |
 | Crash targets byte-equivalent replacement workspace | stale rollback requires exact persisted workspace-root identity on supported platforms |
 | Rollback backup substitution | rollback-root confinement + non-symlink ownership + SHA-256 verification |
-| Recovery CLI reports weaker closure than runtime | recovery uses exact-path target binding + full regression semantics + workspace-root subject binding |
+| Recovery CLI reports weaker closure than runtime | recovery uses exact-path target binding + independently trusted targeted/regression semantics + workspace-root subject binding; legacy regression transcripts cannot close |
 | Cross-run evidence contamination | confined run roots + immutable IDs/paths + run IDs + strict lineage manifest binding |
 | Rogue/community MCP | vendor-official allowlist + strict explicit registry |
 | Excessive MCP privilege | provider identity separated from action authorization |
@@ -186,6 +187,8 @@ The strongest regression and holdout cases attack assumptions rather than syntax
 - a model claiming a scenario is “already covered” without supporting repository evidence;
 - a JS/TS generated test attempting to enter live autonomous pytest commit closure;
 - a targeted pytest run selecting a different file than the pending mutation;
+- a target-owned `pytest_runtestloop` that prints every admitted node as `PASSED`, executes zero test bodies, and exits 0 while pre/post collection still matches;
+- target-controlled stdout/JUnit/report bytes or inherited descriptors attempting to impersonate independent targeted/regression semantic authority;
 - an autonomous write redirected through a symlink;
 - a byte-equivalent replacement workspace created at the same pathname after mutation authorization;
 - persisted stale-recovery root identity removed to attempt an authority downgrade;
@@ -258,5 +261,3 @@ A material new threat should produce at least one concrete engineering artifact:
 ---
 
 [← Security architecture](SECURITY.md) · [Documentation home](README.md)
-
-Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).

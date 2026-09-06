@@ -92,7 +92,7 @@ def _verified_targeted_details(path: str, *, run_id: str) -> dict[str, object]:
     }
 
 
-def _closed_revision_checks(path: str, *, run_id: str) -> list[ValidationResult]:
+def _legacy_positive_revision_checks(path: str, *, run_id: str) -> list[ValidationResult]:
     return [
         ValidationResult(
             name="test_patch_safety",
@@ -115,7 +115,7 @@ def _closed_revision_checks(path: str, *, run_id: str) -> list[ValidationResult]
             gate_id="pytest:regression",
             revision=1,
             status=ValidationStatus.PASS,
-            summary="regression passed",
+            summary="legacy regression claim",
             details=_verified_regression_details(),
         ),
     ]
@@ -174,17 +174,16 @@ def test_stale_recovery_state_checkpoint_failure_keeps_runtime_pending_after_res
         change_revision=1,
         terminal_status=TerminalStatus.SUCCESS,
         files_modified=[relative_path],
-        validation_results=_closed_revision_checks(relative_path, run_id="run-old"),
+        validation_results=_legacy_positive_revision_checks(relative_path, run_id="run-old"),
     )
     StateStore(state_path).save(prior_state)
-    assert (
-        evaluate_revision_closure(
-            prior_state.validation_results,
-            current_revision=prior_state.change_revision,
-            expected_run_id=prior_state.run_id,
-        ).closed
-        is True
+    current_closure = evaluate_revision_closure(
+        prior_state.validation_results,
+        current_revision=prior_state.change_revision,
+        expected_run_id=prior_state.run_id,
     )
+    assert current_closure.closed is False
+    assert current_closure.code == "unbound_regression_suite"
 
     original_save = StateStore.save
 
@@ -220,14 +219,13 @@ def test_stale_recovery_state_checkpoint_failure_keeps_runtime_pending_after_res
     persisted_state = StateStore(state_path).load()
     assert persisted_state.terminal_status is TerminalStatus.SUCCESS
     assert persisted_state.files_modified == [relative_path]
-    assert (
-        evaluate_revision_closure(
-            persisted_state.validation_results,
-            current_revision=persisted_state.change_revision,
-            expected_run_id=persisted_state.run_id,
-        ).closed
-        is True
+    persisted_closure = evaluate_revision_closure(
+        persisted_state.validation_results,
+        current_revision=persisted_state.change_revision,
+        expected_run_id=persisted_state.run_id,
     )
+    assert persisted_closure.closed is False
+    assert persisted_closure.code == "unbound_regression_suite"
 
     inspection = inspect_recovery(prior_run)
     assert inspection["recoverable"] is False

@@ -33,7 +33,7 @@
 | **Controlled tool surface** | 18 least-privilege, purpose-built in-process QA tools; no generic autonomous Bash/Edit/Write/Web authority |
 | **Trusted Skills** | exactly five allowlisted Claude Skills |
 | **Live mutation boundary** | Python/pytest-backed test mutation only; reusable libraries may understand additional test syntaxes without widening runtime authority |
-| **Mutation closure** | exact-path patch safety + exact-path targeted pytest + full regression at one revision |
+| **Mutation closure** | exact-path patch safety + exact-path targeted selection + independently trusted targeted executed-test semantics + independently trusted full-regression executed-test semantics at one revision |
 | **Evidence** | run-confined state, immutable identities, manifests, content hashes, artifacts, lineage, append-only hash-chained journal, optional regulated audit chain |
 | **Security posture** | fail-closed authorization, explicit trust roots, bounded resources, untrusted external context, independent deployment controls |
 | **Network posture** | exact host allowlists, read-only API default, browser routing controls, independent k6 egress prerequisite |
@@ -54,7 +54,7 @@ Use these as inspection prompts; the checkboxes are not runtime results.
 
 - [ ] Trace one bounded objective from `agent.py` through permission handling to a purpose-built QA tool.
 - [ ] Verify that SUT, repository, DOM, API, log, and MCP content can contribute evidence without acquiring control-plane authority.
-- [ ] Follow one mutation from proposal through exact-path patch safety, targeted pytest, full regression, and durable commit/rollback closure.
+- [ ] Follow one mutation from proposal through exact-path patch safety, targeted pytest diagnostics, independent targeted semantic proof, full-regression diagnostics, independent regression semantic proof, and durable commit/rollback closure.
 - [ ] Confirm that terminal `SUCCESS` is derived from active validation lineage rather than model prose or provider health.
 - [ ] Inspect independent budgets, tool circuits, workspace ownership, path confinement, and network boundaries for fail-closed behavior.
 - [ ] Compare the primary adversarial corpus with the repository-visible sequestered H-series readiness cases and frozen safety thresholds.
@@ -103,6 +103,7 @@ That separation of duties is the central design decision. Agentic testing become
 | Tool or integration privilege expansion | least-privilege tool inventory + fail-closed hooks + vendor identity checks + action-level authorization |
 | Concurrent or stale mutation | OS-backed workspace lease + content-sensitive fingerprint + rollback-backed revision transaction |
 | Wrong-subject validation | targeted pytest must explicitly select the exact pending mutation path and revision |
+| Target-controlled pytest false-green | collection/output/report/exit transcripts remain diagnostic; positive targeted and regression semantics require independent observer authority |
 | Filesystem alias/tamper attacks | non-symlink ownership checks cover mutation, rollback, evidence, journal, lease, recovery, and attestation paths |
 | Cross-run evidence contamination | confined run roots + immutable evidence identities + manifests + hashes + hash-chained journals |
 | Unbounded agent loops | independent turn/tool/network/mutation/repetition/time/cost budgets + per-tool circuits |
@@ -332,7 +333,7 @@ The framework exposes 18 purpose-built in-process tools:
 | Performance | controlled k6 execution and deterministic threshold assessment |
 
 > [!NOTE]
-> **Library capability is not runtime authority.** The reusable patching library can validate Python/JavaScript/TypeScript test artifacts, but **live autonomous mutation is intentionally Python/pytest-backed** because that is the language path with deterministic commit closure. The runtime does not claim deterministic commit closure for a language it cannot execute through its controlled validation adapter.
+> **Library capability is not runtime authority.** The reusable patching library can validate Python/JavaScript/TypeScript test artifacts, but **live autonomous mutation is intentionally Python/pytest-backed** because that is the language path with controlled execution and revision binding. Positive commit still requires independently trusted targeted and full-regression executed-test semantics; the current live pytest adapter deliberately exposes both as unavailable rather than treating target-controlled output as proof.
 
 There is intentionally **no generic existing-test rewrite tool** in the live agent surface.
 
@@ -343,7 +344,7 @@ There is intentionally **no generic existing-test rewrite tool** in the live age
 ```mermaid
 flowchart TD
     accTitle: Evidence-first runtime lifecycle with transactional mutation closure
-    accDescr: The runtime acquires and validates workspace ownership, builds deterministic evidence, starts bounded advisory reasoning, authorizes every tool request, persists provenance, and requires exact-path patch safety, targeted pytest, and full regression before a mutated revision can persist.
+    accDescr: The runtime acquires and validates workspace ownership, builds deterministic evidence, starts bounded advisory reasoning, authorizes every tool request, persists provenance, and requires exact-path patch safety plus independently trusted targeted and full-regression executed-test semantics before a mutated revision can persist.
 
     A[Acquire owned workspace lease] --> B[Recover only safely-owned stale mutation]
     B --> C[Capture Git/worktree fingerprint]
@@ -358,10 +359,12 @@ flowchart TD
     K -->|no| E
     K -->|yes| L[Open rollback-backed transaction]
     L --> M[Patch-safety PASS for exact path]
-    M --> N[Exact-path-bound targeted pytest PASS]
-    N --> O[Full regression PASS]
-    O --> P[Durably commit revision]
-    P --> E
+    M --> N[Exact-path-bound targeted pytest diagnostics]
+    N --> O[Independent targeted semantic PASS]
+    O --> P[Full-regression execution diagnostics]
+    P --> R[Independent regression semantic PASS]
+    R --> S[Durably commit revision]
+    S --> E
     E --> Q[Derive terminal outcome from validation lineage]
 
     classDef control fill:#ddf4ff,stroke:#0969da,color:#24292f,stroke-width:2px
@@ -375,22 +378,25 @@ flowchart TD
     class E advisory
     class F,K decision
     class H denied
-    class J,M,N,O,P evidence
+    class J,M,N,O,P,R,S evidence
     class Q terminal
     linkStyle default stroke:#57606a,stroke-width:1.5px
 ```
 
-A targeted run against an unrelated file is diagnostic evidence; it cannot certify the pending mutation.
+A targeted run against an unrelated file is diagnostic evidence; it cannot certify the pending mutation. Even an exact-path targeted exit `0`, or a reconciled full-regression transcript with exit `0`, cannot positively certify its own execution semantics from inside the target interpreter.
 
 ### Mutation persistence is a transaction, not an edit
 
 For a changed revision to persist, the runtime requires all of the following at the **same revision**:
 
 1. deterministic patch-safety `PASS` bound to the exact changed path;
-2. targeted pytest `PASS` explicitly selecting that same path;
-3. full-regression pytest `PASS`;
-4. no conflicting active validation at that revision; and
-5. durable transaction metadata that can be safely committed.
+2. targeted pytest explicitly selecting that same path;
+3. independently trusted targeted executed-test semantic `PASS` for that path and frozen subject;
+4. independently trusted full-regression executed-test semantic `PASS` for the exact current run/revision/frozen regression subject;
+5. no conflicting active validation at that revision; and
+6. durable transaction metadata that can be safely committed.
+
+The current live pytest adapter does not emit items 3 or 4. Its target-controlled collection/output/report/exit data remains diagnostic or fail-safe denial input, so positive autonomous mutation liveness remains fail-closed rather than manufacturing green.
 
 Pending transaction metadata is persisted before the mutation tool may execute. Commit/rollback closure is persisted before rollback-backup cleanup. The design prefers an orphan cleanup artifact over the unsafe inverse: discarded rollback bytes while durable metadata still says the mutation is pending.
 
@@ -401,7 +407,7 @@ Pending transaction metadata is persisted before the mutation tool may execute. 
 stateDiagram-v2
     direction LR
     accTitle: Transactional mutation and crash-recovery state machine
-    accDescr: A mutation starts only from an owned baseline. It must pass exact-path patch safety, exact-path-bound targeted pytest, and full regression before commit. Failure or incomplete proof rolls back. A crash can recover automatically only when workspace ownership, fingerprint, paths, and backup integrity remain provable; otherwise the runtime blocks for manual review.
+    accDescr: A mutation starts only from an owned baseline. Exact-path patch safety and targeted/full-regression execution diagnostics require independent semantic proof before commit. Failure or incomplete proof rolls back. A crash can recover automatically only when workspace ownership, fingerprint, paths, and backup integrity remain provable; otherwise the runtime blocks for manual review.
 
     [*] --> Baseline: owned lease + fingerprint
 
@@ -411,14 +417,15 @@ stateDiagram-v2
     Pending --> PatchSafe: exact-path patch-safety PASS
     Pending --> Rollback: tool failure / terminal without closure
 
-    PatchSafe --> Targeted: exact-path-bound pytest PASS
+    PatchSafe --> Targeted: exact-path-bound pytest diagnostics
     PatchSafe --> Rollback: safety FAIL / incomplete
 
-    Targeted --> Regression: full-regression pytest PASS
-    Targeted --> Rollback: targeted FAIL / unbound / incomplete
+    Targeted --> TargetedSemantics: independent targeted semantic PASS
+    Targeted --> Rollback: targeted FAIL / unbound / missing authority
 
-    Regression --> Committed: deterministic revision closure
-    Regression --> Rollback: regression FAIL / incomplete
+    TargetedSemantics --> Regression: full-regression execution diagnostics
+    Regression --> Committed: independent regression semantic PASS
+    Regression --> Rollback: regression FAIL / missing authority / incomplete
 
     Rollback --> Baseline: prior bytes restored / new file removed
     Rollback --> IntegrityFailure: restore ownership/integrity uncertain
@@ -426,6 +433,7 @@ stateDiagram-v2
     Pending --> Crashed: process exit
     PatchSafe --> Crashed
     Targeted --> Crashed
+    TargetedSemantics --> Crashed
     Regression --> Crashed
 
     Crashed --> Recovered: fingerprint + ownership + backup verified
@@ -437,8 +445,8 @@ stateDiagram-v2
     classDef recovery fill:#fbefff,stroke:#8250df,color:#24292f,stroke-width:2px
     classDef blocked fill:#ffebe9,stroke:#cf222e,color:#24292f,stroke-width:2px
 
-    class Baseline,Pending active
-    class PatchSafe,Targeted,Regression,Committed verified
+    class Baseline,Pending,Regression active
+    class PatchSafe,Targeted,TargetedSemantics,Committed verified
     class Rollback,Crashed,Recovered recovery
     class Blocked,IntegrityFailure,ManualReview blocked
 ```
@@ -463,7 +471,7 @@ The framework distinguishes **terminal outcomes**, **validation outcomes**, and 
 | `BUDGET_EXCEEDED` / `CANCELLED` | bounded execution terminated explicitly |
 | `NOT_VERIFIED` | evidence is absent, incomplete, stale, contradictory, unbound, or validator execution was inconclusive |
 
-Individual validations preserve values such as `NOT_EXECUTED` and `NOT_OBSERVED` rather than translating absence into green. For pytest, exit `0` can support `PASS`, exit `1` represents an observed test failure, and timeout/interruption/usage/internal/no-tests/integrity failures remain `NOT_VERIFIED` rather than being mislabeled as SUT defects.
+Individual validations preserve values such as `NOT_EXECUTED` and `NOT_OBSERVED` rather than translating absence into green. Pytest process exit is scope-sensitive: ordinary diagnostic/read-only exit `0` may support `PASS` when its evidence boundary is sufficient; exit `1` can remain a fail-safe failure signal; timeout/interruption/usage/internal/no-tests/integrity failures remain `NOT_VERIFIED`. For changed-test targeted or full-regression positive semantics, exit `0` and target-controlled transcripts are not sufficient authority.
 
 > [!IMPORTANT]
 > A model result subtype of `success` is only an input to terminal evaluation. It is never sufficient to produce framework `SUCCESS` on its own. An unrelated green check is also insufficient: trusted deterministic validation must be bound to the run objective and, for mutation, to the exact revision and subject.
@@ -520,8 +528,9 @@ The autonomous authorization chain requires:
 7. exact file-hash and proposal binding;
 8. Python locator-only live mutation;
 9. patch-safety `PASS` for the exact changed path;
-10. targeted pytest `PASS` explicitly selecting that path; and
-11. full-regression pytest `PASS` at the same change revision.
+10. targeted pytest explicitly selecting that path;
+11. independently trusted targeted executed-test semantic `PASS`; and
+12. independently trusted full-regression executed-test semantic `PASS` at the same change revision.
 
 Model-provided semantic/stability scores may inform reasoning, but they are overwritten before autonomous eligibility is decided.
 
@@ -536,8 +545,11 @@ observed repository coverage
 → conservative candidate scenarios
 → evidence reconciliation
 → guarded live Python test creation
-→ exact-path targeted execution
-→ full regression closure
+→ exact-path targeted execution diagnostics
+→ independent targeted semantic proof
+→ full-regression execution diagnostics
+→ independent regression semantic proof
+→ mutation closure
 ```
 
 Model-supplied “already covered” labels are advisory. They **cannot suppress deterministic candidate scenarios** by themselves. Before implementation, the candidate is reconciled against the same-run repository observation so the framework avoids both unsafe under-coverage and careless duplication.
@@ -577,8 +589,8 @@ The runtime follows a **zero-trust input posture**: external content may contrib
 | **API** | exact host allowlist; read-only method default; redirects and ambient proxy inheritance disabled; bounded sanitized response evidence |
 | **Browser / Playwright** | allowlisted navigation/subresources/WebSockets; service workers disabled in evidence context; final URL rechecked; bounded diagnostic buffers; viewport-scoped screenshots |
 | **Performance / k6** | production-like targets denied; target injection required; remote modules/`k6/x/*`/local `open()`/unrelated literal hosts rejected; bounded subprocess output; infrastructure-level egress required for every run |
-| **Mutation** | Git-backed isolated worktree; owned non-symlink path; baseline fingerprint; rollback snapshot; one unresolved transaction at a time; revision-bound validation closure |
-| **Recovery** | prior run, journal, target, rollback path, backup hash, fingerprint, and ownership revalidated before any stale rollback |
+| **Mutation** | Git-backed isolated worktree; owned non-symlink path; baseline fingerprint; rollback snapshot; one unresolved transaction at a time; exact-path binding plus independent targeted/regression semantic closure |
+| **Recovery** | prior run, journal, target, rollback path, backup hash, fingerprint, ownership, and independent semantic closure revalidated before stale recovery is represented as clean |
 | **External MCP** | explicit vendor integrations only; conservative action authorization; provider results sanitized; error-shaped results cannot become successful remote evidence |
 | **Persistence** | confined run roots; bounded state/runtime/manifest/journal/artifacts; immutable evidence identities; hash verification; symlink ownership rejection |
 
@@ -635,9 +647,10 @@ Autonomous writes use optimistic concurrency plus owned rollback state:
 - rollback directory and backup ownership are revalidated before restore/commit;
 - rollback bytes are hash-verified;
 - a new mutation cannot begin while the previous revision is unresolved;
-- deterministic commit closure is bound to the exact changed path and revision;
+- deterministic commit closure is bound to the exact changed path/revision and requires independent targeted plus full-regression executed-test semantics;
+- target-controlled pytest collection/output/report/exit evidence cannot promote positive semantic authority;
 - commit/rollback closure becomes durable before rollback-backup cleanup;
-- stale recovery validates prior run, journal, target, rollback directory, backup, fingerprint, and ownership before touching the target;
+- stale recovery validates prior run, journal, target, rollback directory, backup, fingerprint, ownership, and current closure truth before touching/closing authority;
 - newer human/out-of-band work wins over automated rollback when ownership is ambiguous.
 
 See [Runtime Control and Recovery](docs/RUNTIME_CONTROL.md).

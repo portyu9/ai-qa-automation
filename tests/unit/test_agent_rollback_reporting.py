@@ -89,7 +89,9 @@ def _verified_targeted_details(path: str, *, run_id: str) -> dict[str, object]:
     }
 
 
-def _closed_revision_checks(path: str, *, run_id: str) -> list[ValidationResult]:
+def _legacy_positive_revision_checks(path: str, *, run_id: str) -> list[ValidationResult]:
+    """Model a persisted pre-hardening positive lineage for rollback reconciliation."""
+
     return [
         ValidationResult(
             name="test_patch_safety",
@@ -112,13 +114,13 @@ def _closed_revision_checks(path: str, *, run_id: str) -> list[ValidationResult]
             gate_id="pytest:regression",
             revision=1,
             status=ValidationStatus.PASS,
-            summary="full regression passed",
+            summary="legacy regression claim",
             details=_verified_regression_details(),
         ),
     ]
 
 
-def test_terminal_rollback_poison_closed_revision_lineage(
+def test_terminal_rollback_poison_legacy_positive_revision_lineage(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -137,16 +139,15 @@ def test_terminal_rollback_poison_closed_revision_lineage(
         change_revision=1,
         terminal_status=TerminalStatus.SUCCESS,
         files_modified=[path],
-        validation_results=_closed_revision_checks(path, run_id=_RUN_ID),
+        validation_results=_legacy_positive_revision_checks(path, run_id=_RUN_ID),
     )
-    assert (
-        evaluate_revision_closure(
-            state.validation_results,
-            current_revision=1,
-            expected_run_id=state.run_id,
-        ).closed
-        is True
+    pre_rollback = evaluate_revision_closure(
+        state.validation_results,
+        current_revision=1,
+        expected_run_id=state.run_id,
     )
+    assert pre_rollback.closed is False
+    assert pre_rollback.code == "unbound_regression_suite"
 
     class FakeControl:
         def __init__(self) -> None:

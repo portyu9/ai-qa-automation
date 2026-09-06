@@ -113,7 +113,7 @@ def _checks(*, suite_id: str, subject_digest: str) -> list[ValidationResult]:
     ]
 
 
-def test_exact_sha256_suite_and_subject_identities_close_revision() -> None:
+def test_legacy_plausible_regression_suite_cannot_close_revision() -> None:
     closure = evaluate_revision_closure(
         _checks(
             suite_id="sha256:" + "a" * 64,
@@ -123,7 +123,9 @@ def test_exact_sha256_suite_and_subject_identities_close_revision() -> None:
         expected_run_id=_RUN_ID,
     )
 
-    assert closure.closed is True
+    assert closure.closed is False
+    assert closure.code == "unbound_regression_suite"
+    assert "independently trusted" in closure.reason
 
 
 @pytest.mark.parametrize(

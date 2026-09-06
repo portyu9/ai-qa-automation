@@ -44,7 +44,7 @@ The architecture is deliberately asymmetric: **capability may be probabilistic; 
 | Authority is narrower than capability | runtime exposes purpose-built QA tools rather than general shell/edit/web authority |
 | Configuration is not provider evidence | external availability is derived from observed provider interaction |
 | Writes are higher risk than reads | autonomous writes are explicit, path-confined, transactional, and revision-gated |
-| Validation must prove the changed subject | targeted pytest must explicitly select the exact pending mutation path |
+| Validation must prove the changed subject | targeted pytest must explicitly select the exact pending mutation path, and target-controlled pytest semantics cannot certify their own execution |
 | Model confidence cannot authorize mutation | locator uniqueness, semantic eligibility, stability, and patch safety are independently constrained |
 | Uncertainty remains visible | missing, contradictory, stale, or blocked evidence produces explicit non-PASS outcomes |
 | Runtime truth is revision-aware | older evidence cannot silently certify newer bytes |
@@ -278,7 +278,7 @@ Key properties:
 - non-PASS validation outcomes are never promoted by model judgment;
 - same-gate PASS/FAIL at the same revision is contradictory evidence;
 - newer evidence supersedes older gate evidence only through gate identity + revision lineage;
-- changed tests require exact-path patch safety, exact-path-bound targeted pytest, and full-regression PASS at the current revision;
+- changed tests require exact-path patch safety, exact-path-bound targeted pytest with independent executed-call authority, and independently trusted full-regression executed-test semantic PASS at the current revision; target-interpreter collection/output/exit reconciliation is diagnostic only;
 - recovery inspection uses the same subject-bound closure rule.
 
 ## Safe self-healing authority

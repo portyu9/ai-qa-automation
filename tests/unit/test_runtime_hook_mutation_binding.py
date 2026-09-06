@@ -167,7 +167,9 @@ def test_unrelated_targeted_pytest_is_diagnostic_and_cannot_close_mutation(
     assert subject.pending_mutation is not None
 
 
-def test_exact_pending_file_target_plus_regression_closes_mutation(tmp_path: Path) -> None:
+def test_exact_targeted_pass_plus_legacy_regression_claim_cannot_close_mutation(
+    tmp_path: Path,
+) -> None:
     subject = control(tmp_path)
     changed = "tests/test_changed.py"
     subject.prepare_mutation(changed)
@@ -189,4 +191,4 @@ def test_exact_pending_file_target_plus_regression_closes_mutation(tmp_path: Pat
 
     state.validation_results.append(pytest_result(scope="regression", args=[], run_id=state.run_id))
     successful_pytest_hook(state, subject)
-    assert subject.pending_mutation is None
+    assert subject.pending_mutation is not None
