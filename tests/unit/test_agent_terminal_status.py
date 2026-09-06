@@ -6,6 +6,17 @@ import pytest
 
 from ai_qa_automation.agent import determine_terminal_outcome
 from ai_qa_automation.models import TerminalStatus, ValidationResult, ValidationStatus
+from ai_qa_automation.runtime.targeted_execution_observer import (
+    TRUSTED_TARGETED_EXECUTION_AUTHORITY,
+    build_targeted_execution_observation,
+)
+
+_RUN_ID = "run-agent-terminal-status"
+_OBSERVER_BACKEND = "controller-observer-test-double"
+_OBSERVER_IDENTITY = "sha256:" + "1" * 64
+_GIT_SHA = "2" * 40
+_SOURCE_FINGERPRINT = "sha256:" + "3" * 64
+_SUBJECT_DIGEST = "sha256:" + "4" * 64
 
 
 def verified_regression_details() -> dict[str, object]:
@@ -24,24 +35,45 @@ def verified_regression_details() -> dict[str, object]:
 
 
 def verified_targeted_execution_details(path: str) -> dict[str, object]:
-    execution_id = "sha256:" + "c" * 64
+    observer = build_targeted_execution_observation(
+        run_id=_RUN_ID,
+        change_revision=1,
+        mutation_path=path,
+        pytest_args=(path,),
+        observer_backend=_OBSERVER_BACKEND,
+        observer_identity=_OBSERVER_IDENTITY,
+        git_sha=_GIT_SHA,
+        source_fingerprint=_SOURCE_FINGERPRINT,
+        execution_subject_digest=_SUBJECT_DIGEST,
+        report_complete=True,
+        child_exit_code=0,
+        pytest_returncode=0,
+        call_report_count=1,
+        passed_call_count=1,
+        skipped_call_count=0,
+        xfail_call_count=0,
+        failed_call_count=0,
+        passed_paths=(path,),
+        report_sha256="sha256:" + "5" * 64,
+    )
     return {
-        "targeted_execution_authority": "trusted_out_of_process_observer_v1",
+        "targeted_execution_authority": TRUSTED_TARGETED_EXECUTION_AUTHORITY,
         "targeted_outcome_report_verified": True,
-        "targeted_execution_id": execution_id,
+        "targeted_observer_backend": _OBSERVER_BACKEND,
+        "targeted_observer_identity": _OBSERVER_IDENTITY,
+        "targeted_execution_subject": {
+            "git_sha": _GIT_SHA,
+            "source_fingerprint": _SOURCE_FINGERPRINT,
+            "digest": _SUBJECT_DIGEST,
+            "file_count": 1,
+            "total_bytes": 1,
+            "ignored_inputs_excluded": True,
+            "git_metadata_excluded": True,
+        },
+        "targeted_execution_id": observer.execution_id,
         "targeted_executed_pass_count": 1,
         "targeted_executed_pass_paths": [path],
-        "targeted_execution": {
-            "execution_id": execution_id,
-            "git_sha": "d" * 40,
-            "source_fingerprint": "sha256:" + "e" * 64,
-            "execution_subject_digest": "sha256:" + "f" * 64,
-            "report_complete": True,
-            "child_exit_code": 0,
-            "pytest_returncode": 0,
-            "passed_call_count": 1,
-            "passed_paths": [path],
-        },
+        "targeted_execution": observer.model_dump(mode="json"),
     }
 
 
@@ -208,6 +240,7 @@ def test_new_change_revision_requires_objective_and_mutation_closure() -> None:
         validations,
         current_revision=1,
         objective_gate_id="objective:repair",
+        expected_run_id=_RUN_ID,
     )
     assert status is TerminalStatus.SUCCESS
     assert "historical failures" in reason.lower()
