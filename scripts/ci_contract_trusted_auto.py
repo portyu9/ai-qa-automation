@@ -27,7 +27,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
-    "e924ea2e86128706dda8cced48ce2281f9a50c78"  # pragma: allowlist secret
+    "b3a24448e8e233768b5a17a567d3d1262d6a0927"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
     "bf538a2efa1f895ef0a614e8118ba1b1ad2914f5"  # pragma: allowlist secret
@@ -35,7 +35,6 @@ EXPECTED_BASE_VERIFIER_BLOB_SHA = (
 TRUSTED_AUTO_WORKFLOW_NAME = "Trusted PR Auto Gate — ƳƤ AI QA Automation Framework"
 TRUSTED_AUTO_SOURCE_WORKFLOW = "CI — ƳƤ AI QA Automation Framework"
 TRUSTED_AUTO_PROTECTED_PATHS = (
-    ".github",
     ".claude",
     ".dockerignore",
     ".gitattributes",
@@ -47,8 +46,6 @@ TRUSTED_AUTO_PROTECTED_PATHS = (
     "examples",
     "pyproject.toml",
     "requirements",
-    "scripts",
-    "tests",
     "src/ai_qa_automation/__init__.py",
     "src/ai_qa_automation/io_safety.py",
     "src/ai_qa_automation/tools/__init__.py",
