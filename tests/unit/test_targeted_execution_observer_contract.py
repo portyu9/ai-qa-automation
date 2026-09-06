@@ -10,6 +10,12 @@ from ai_qa_automation.runtime.targeted_execution_observer import (
     verified_targeted_execution_observation,
 )
 
+_OBSERVER_BACKEND = "controller-observer-test-double"
+_OBSERVER_IDENTITY = "sha256:" + "1" * 64
+_GIT_SHA = "2" * 40
+_SOURCE_FINGERPRINT = "sha256:" + "3" * 64
+_SUBJECT_DIGEST = "sha256:" + "4" * 64
+
 
 def observation(**overrides: object) -> TargetedExecutionObservation:
     values: dict[str, object] = {
@@ -19,11 +25,11 @@ def observation(**overrides: object) -> TargetedExecutionObservation:
         "change_revision": 2,
         "mutation_path": "tests/test_changed.py",
         "pytest_args": ("tests/test_changed.py::test_changed", "-q"),
-        "observer_backend": "controller-observer-test-double",
-        "observer_identity": "sha256:" + "1" * 64,
-        "git_sha": "2" * 40,
-        "source_fingerprint": "sha256:" + "3" * 64,
-        "execution_subject_digest": "sha256:" + "4" * 64,
+        "observer_backend": _OBSERVER_BACKEND,
+        "observer_identity": _OBSERVER_IDENTITY,
+        "git_sha": _GIT_SHA,
+        "source_fingerprint": _SOURCE_FINGERPRINT,
+        "execution_subject_digest": _SUBJECT_DIGEST,
         "report_complete": True,
         "child_exit_code": 0,
         "pytest_returncode": 0,
@@ -39,13 +45,33 @@ def observation(**overrides: object) -> TargetedExecutionObservation:
     return build_targeted_execution_observation(**values)
 
 
-def verify(result: TargetedExecutionObservation) -> TargetedExecutionObservation | None:
+def verify(
+    result: TargetedExecutionObservation,
+    **expected_overrides: object,
+) -> TargetedExecutionObservation | None:
+    expected: dict[str, object] = {
+        "expected_run_id": "run-observer-contract",
+        "expected_revision": 2,
+        "expected_mutation_path": "tests/test_changed.py",
+        "expected_pytest_args": ("tests/test_changed.py::test_changed", "-q"),
+        "expected_observer_backend": _OBSERVER_BACKEND,
+        "expected_observer_identity": _OBSERVER_IDENTITY,
+        "expected_git_sha": _GIT_SHA,
+        "expected_source_fingerprint": _SOURCE_FINGERPRINT,
+        "expected_execution_subject_digest": _SUBJECT_DIGEST,
+    }
+    expected.update(expected_overrides)
     return verified_targeted_execution_observation(
         result.model_dump(mode="json"),
-        expected_run_id="run-observer-contract",
-        expected_revision=2,
-        expected_mutation_path="tests/test_changed.py",
-        expected_pytest_args=("tests/test_changed.py::test_changed", "-q"),
+        expected_run_id=str(expected["expected_run_id"]),
+        expected_revision=int(expected["expected_revision"]),
+        expected_mutation_path=str(expected["expected_mutation_path"]),
+        expected_pytest_args=tuple(expected["expected_pytest_args"]),
+        expected_observer_backend=str(expected["expected_observer_backend"]),
+        expected_observer_identity=str(expected["expected_observer_identity"]),
+        expected_git_sha=str(expected["expected_git_sha"]),
+        expected_source_fingerprint=str(expected["expected_source_fingerprint"]),
+        expected_execution_subject_digest=str(expected["expected_execution_subject_digest"]),
     )
 
 
@@ -83,13 +109,37 @@ def test_authority_field_mutation_requires_new_execution_identity(
     payload = valid.model_dump(mode="json")
     payload[field] = replacement
 
-    with pytest.raises(ValueError, match="execution_id|counts|authority"):
+    with pytest.raises(ValueError, match=r"execution_id|counts|authority"):
         TargetedExecutionObservation.model_validate(payload)
 
 
-def test_call_phase_counts_must_reconcile_exactly() -> None:
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("change_revision", True),
+        ("report_complete", 1),
+        ("child_exit_code", False),
+        ("passed_call_count", True),
+    ],
+)
+def test_authority_scalars_reject_boolean_integer_coercion(
+    field: str,
+    replacement: object,
+) -> None:
+    with pytest.raises(ValueError):
+        observation(**{field: replacement})
+
+
+def test_call_phase_counts_must_reconcile_and_remain_bounded() -> None:
     with pytest.raises(ValueError, match="counts are inconsistent"):
         observation(call_report_count=4)
+    with pytest.raises(ValueError):
+        observation(
+            call_report_count=10_001,
+            passed_call_count=10_001,
+            skipped_call_count=0,
+            xfail_call_count=0,
+        )
 
 
 def test_passed_paths_must_be_canonical_unique_and_bounded() -> None:
@@ -135,38 +185,21 @@ def test_zero_pass_report_cannot_claim_passed_paths() -> None:
 
 
 def test_positive_verification_rejects_cross_run_revision_and_command_replay() -> None:
-    result = observation().model_dump(mode="json")
+    result = observation()
 
-    assert (
-        verified_targeted_execution_observation(
-            result,
-            expected_run_id="run-other",
-            expected_revision=2,
-            expected_mutation_path="tests/test_changed.py",
-            expected_pytest_args=("tests/test_changed.py::test_changed", "-q"),
-        )
-        is None
-    )
-    assert (
-        verified_targeted_execution_observation(
-            result,
-            expected_run_id="run-observer-contract",
-            expected_revision=3,
-            expected_mutation_path="tests/test_changed.py",
-            expected_pytest_args=("tests/test_changed.py::test_changed", "-q"),
-        )
-        is None
-    )
-    assert (
-        verified_targeted_execution_observation(
-            result,
-            expected_run_id="run-observer-contract",
-            expected_revision=2,
-            expected_mutation_path="tests/test_changed.py",
-            expected_pytest_args=("tests/test_changed.py::test_other", "-q"),
-        )
-        is None
-    )
+    assert verify(result, expected_run_id="run-other") is None
+    assert verify(result, expected_revision=3) is None
+    assert verify(result, expected_pytest_args=("tests/test_changed.py::test_other", "-q")) is None
+
+
+def test_positive_verification_rejects_observer_or_execution_subject_mismatch() -> None:
+    result = observation()
+
+    assert verify(result, expected_observer_backend="other-observer") is None
+    assert verify(result, expected_observer_identity="sha256:" + "6" * 64) is None
+    assert verify(result, expected_git_sha="7" * 40) is None
+    assert verify(result, expected_source_fingerprint="sha256:" + "8" * 64) is None
+    assert verify(result, expected_execution_subject_digest="sha256:" + "9" * 64) is None
 
 
 def test_positive_verification_requires_exact_mutation_selector_and_passed_path() -> None:
