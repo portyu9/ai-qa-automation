@@ -70,6 +70,7 @@ def change_revision_closed(state: AgentRunState) -> bool:
     return evaluate_revision_closure(
         state.validation_results,
         current_revision=state.change_revision,
+        expected_run_id=state.run_id,
     ).closed
 
 

@@ -7,6 +7,10 @@ from ai_qa_automation.runtime.budget import ExecutionBudget
 from ai_qa_automation.runtime.journal import RunJournal
 from ai_qa_automation.runtime.run_control import RuntimeControl
 from ai_qa_automation.runtime.runtime_hooks import posttool_policy_output
+from ai_qa_automation.runtime.targeted_execution_observer import (
+    TRUSTED_TARGETED_EXECUTION_AUTHORITY,
+    build_targeted_execution_observation,
+)
 from ai_qa_automation.tools.repository import RepositoryInspector
 
 
@@ -56,41 +60,62 @@ def verified_regression_details() -> dict[str, object]:
     }
 
 
-def verified_targeted_details(path: str) -> dict[str, object]:
-    execution_id = "sha256:" + "c" * 64
+def verified_targeted_details(path: str, *, args: list[str], run_id: str) -> dict[str, object]:
     passed_paths = [path]
+    observer_backend = "controller-observer-test-double"
+    observer_identity = "sha256:" + "c" * 64
+    git_sha = "d" * 40
+    source_fingerprint = "sha256:" + "e" * 64
+    subject_digest = "sha256:" + "f" * 64
+    observer = build_targeted_execution_observation(
+        run_id=run_id,
+        change_revision=1,
+        mutation_path=path,
+        pytest_args=tuple(args),
+        observer_backend=observer_backend,
+        observer_identity=observer_identity,
+        git_sha=git_sha,
+        source_fingerprint=source_fingerprint,
+        execution_subject_digest=subject_digest,
+        report_complete=True,
+        child_exit_code=0,
+        pytest_returncode=0,
+        call_report_count=1,
+        passed_call_count=1,
+        skipped_call_count=0,
+        xfail_call_count=0,
+        failed_call_count=0,
+        passed_paths=tuple(passed_paths),
+        report_sha256="sha256:" + "1" * 64,
+    )
     return {
-        "targeted_execution_authority": "trusted_out_of_process_observer_v1",
+        "targeted_execution_authority": TRUSTED_TARGETED_EXECUTION_AUTHORITY,
         "targeted_outcome_report_verified": True,
-        "targeted_execution_id": execution_id,
+        "targeted_observer_backend": observer_backend,
+        "targeted_observer_identity": observer_identity,
+        "targeted_execution_subject": {
+            "git_sha": git_sha,
+            "source_fingerprint": source_fingerprint,
+            "digest": subject_digest,
+            "file_count": 1,
+            "total_bytes": 1,
+            "ignored_inputs_excluded": True,
+            "git_metadata_excluded": True,
+        },
+        "targeted_execution_id": observer.execution_id,
         "targeted_executed_pass_count": 1,
         "targeted_executed_pass_paths": passed_paths,
-        "targeted_execution": {
-            "execution_id": execution_id,
-            "git_sha": "d" * 40,
-            "source_fingerprint": "sha256:" + "e" * 64,
-            "execution_subject_digest": "sha256:" + "f" * 64,
-            "report_complete": True,
-            "child_exit_code": 0,
-            "pytest_returncode": 0,
-            "call_report_count": 1,
-            "passed_call_count": 1,
-            "skipped_call_count": 0,
-            "xfail_call_count": 0,
-            "failed_call_count": 0,
-            "passed_paths": passed_paths,
-            "report_sha256": "sha256:" + "1" * 64,
-        },
+        "targeted_execution": observer.model_dump(mode="json"),
     }
 
 
-def pytest_result(*, scope: str, args: list[str]) -> ValidationResult:
+def pytest_result(*, scope: str, args: list[str], run_id: str) -> ValidationResult:
     details: dict[str, object] = {"scope": scope, "args": args}
     if scope == "regression":
         details.update(verified_regression_details())
     elif scope == "targeted":
         path = args[0].split("::", 1)[0]
-        details.update(verified_targeted_details(path))
+        details.update(verified_targeted_details(path, args=args, run_id=run_id))
     return ValidationResult(
         name="pytest",
         gate_id=f"pytest:{scope}:{'|'.join(args)}",
@@ -122,7 +147,11 @@ def test_unrelated_targeted_pytest_is_diagnostic_and_cannot_close_mutation(
     state = AgentRunState(objective="repair", workspace=str(subject.workspace), change_revision=1)
     state.validation_results.append(patch_safety(changed))
     state.validation_results.append(
-        pytest_result(scope="targeted", args=["tests/test_unrelated.py::test_other"])
+        pytest_result(
+            scope="targeted",
+            args=["tests/test_unrelated.py::test_other"],
+            run_id=state.run_id,
+        )
     )
 
     successful_pytest_hook(state, subject)
@@ -133,7 +162,7 @@ def test_unrelated_targeted_pytest_is_diagnostic_and_cannot_close_mutation(
     assert targeted.details["mutation_target_bound"] is False
     assert subject.pending_mutation is not None
 
-    state.validation_results.append(pytest_result(scope="regression", args=[]))
+    state.validation_results.append(pytest_result(scope="regression", args=[], run_id=state.run_id))
     successful_pytest_hook(state, subject)
     assert subject.pending_mutation is not None
 
@@ -145,7 +174,11 @@ def test_exact_pending_file_target_plus_regression_closes_mutation(tmp_path: Pat
     state = AgentRunState(objective="repair", workspace=str(subject.workspace), change_revision=1)
     state.validation_results.append(patch_safety(changed))
     state.validation_results.append(
-        pytest_result(scope="targeted", args=[f"{changed}::test_changed_behavior"])
+        pytest_result(
+            scope="targeted",
+            args=[f"{changed}::test_changed_behavior"],
+            run_id=state.run_id,
+        )
     )
 
     successful_pytest_hook(state, subject)
@@ -154,6 +187,6 @@ def test_exact_pending_file_target_plus_regression_closes_mutation(tmp_path: Pat
     assert targeted.details["mutation_target_bound"] is True
     assert subject.pending_mutation is not None
 
-    state.validation_results.append(pytest_result(scope="regression", args=[]))
+    state.validation_results.append(pytest_result(scope="regression", args=[], run_id=state.run_id))
     successful_pytest_hook(state, subject)
     assert subject.pending_mutation is None

@@ -3,7 +3,18 @@ from __future__ import annotations
 import pytest
 
 from ai_qa_automation.models import ValidationResult, ValidationStatus
+from ai_qa_automation.runtime.targeted_execution_observer import (
+    TRUSTED_TARGETED_EXECUTION_AUTHORITY,
+    build_targeted_execution_observation,
+)
 from ai_qa_automation.runtime.validation_truth import evaluate_revision_closure
+
+_RUN_ID = "run-regression-suite-identity"
+_OBSERVER_BACKEND = "controller-observer-test-double"
+_OBSERVER_IDENTITY = "sha256:" + "1" * 64
+_GIT_SHA = "2" * 40
+_SOURCE_FINGERPRINT = "sha256:" + "3" * 64
+_SUBJECT_DIGEST = "sha256:" + "4" * 64
 
 
 def _validation(
@@ -23,33 +34,50 @@ def _validation(
 
 
 def _targeted_details(path: str) -> dict[str, object]:
-    execution_id = "sha256:" + "c" * 64
     passed_paths = [path]
+    observer = build_targeted_execution_observation(
+        run_id=_RUN_ID,
+        change_revision=1,
+        mutation_path=path,
+        pytest_args=(path,),
+        observer_backend=_OBSERVER_BACKEND,
+        observer_identity=_OBSERVER_IDENTITY,
+        git_sha=_GIT_SHA,
+        source_fingerprint=_SOURCE_FINGERPRINT,
+        execution_subject_digest=_SUBJECT_DIGEST,
+        report_complete=True,
+        child_exit_code=0,
+        pytest_returncode=0,
+        call_report_count=1,
+        passed_call_count=1,
+        skipped_call_count=0,
+        xfail_call_count=0,
+        failed_call_count=0,
+        passed_paths=tuple(passed_paths),
+        report_sha256="sha256:" + "5" * 64,
+    )
     return {
         "scope": "targeted",
+        "args": [path],
         "mutation_target_bound": True,
         "mutation_target": path,
-        "targeted_execution_authority": "trusted_out_of_process_observer_v1",
+        "targeted_execution_authority": TRUSTED_TARGETED_EXECUTION_AUTHORITY,
         "targeted_outcome_report_verified": True,
-        "targeted_execution_id": execution_id,
+        "targeted_observer_backend": _OBSERVER_BACKEND,
+        "targeted_observer_identity": _OBSERVER_IDENTITY,
+        "targeted_execution_subject": {
+            "git_sha": _GIT_SHA,
+            "source_fingerprint": _SOURCE_FINGERPRINT,
+            "digest": _SUBJECT_DIGEST,
+            "file_count": 1,
+            "total_bytes": 1,
+            "ignored_inputs_excluded": True,
+            "git_metadata_excluded": True,
+        },
+        "targeted_execution_id": observer.execution_id,
         "targeted_executed_pass_count": 1,
         "targeted_executed_pass_paths": passed_paths,
-        "targeted_execution": {
-            "execution_id": execution_id,
-            "git_sha": "d" * 40,
-            "source_fingerprint": "sha256:" + "e" * 64,
-            "execution_subject_digest": "sha256:" + "f" * 64,
-            "report_complete": True,
-            "child_exit_code": 0,
-            "pytest_returncode": 0,
-            "call_report_count": 1,
-            "passed_call_count": 1,
-            "skipped_call_count": 0,
-            "xfail_call_count": 0,
-            "failed_call_count": 0,
-            "passed_paths": passed_paths,
-            "report_sha256": "sha256:" + "1" * 64,
-        },
+        "targeted_execution": observer.model_dump(mode="json"),
     }
 
 
@@ -92,6 +120,7 @@ def test_exact_sha256_suite_and_subject_identities_close_revision() -> None:
             subject_digest="sha256:" + "b" * 64,
         ),
         current_revision=1,
+        expected_run_id=_RUN_ID,
     )
 
     assert closure.closed is True
@@ -113,6 +142,7 @@ def test_malformed_regression_identities_fail_closed(
     closure = evaluate_revision_closure(
         _checks(suite_id=suite_id, subject_digest=subject_digest),
         current_revision=1,
+        expected_run_id=_RUN_ID,
     )
 
     assert closure.closed is False

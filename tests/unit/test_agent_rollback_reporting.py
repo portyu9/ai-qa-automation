@@ -12,7 +12,18 @@ from ai_qa_automation.models import (
     ValidationStatus,
 )
 from ai_qa_automation.runtime.run_control import PendingMutation
+from ai_qa_automation.runtime.targeted_execution_observer import (
+    TRUSTED_TARGETED_EXECUTION_AUTHORITY,
+    build_targeted_execution_observation,
+)
 from ai_qa_automation.runtime.validation_truth import evaluate_revision_closure
+
+_RUN_ID = "run-rollback-reporting"
+_OBSERVER_BACKEND = "controller-observer-test-double"
+_OBSERVER_IDENTITY = "sha256:" + "1" * 64
+_GIT_SHA = "2" * 40
+_SOURCE_FINGERPRINT = "sha256:" + "3" * 64
+_SUBJECT_DIGEST = "sha256:" + "4" * 64
 
 
 def _verified_regression_details() -> dict[str, object]:
@@ -31,32 +42,54 @@ def _verified_regression_details() -> dict[str, object]:
     }
 
 
-def _verified_targeted_details(path: str) -> dict[str, object]:
-    execution_id = "sha256:" + "c" * 64
+def _verified_targeted_details(path: str, *, run_id: str) -> dict[str, object]:
+    observer = build_targeted_execution_observation(
+        run_id=run_id,
+        change_revision=1,
+        mutation_path=path,
+        pytest_args=(path,),
+        observer_backend=_OBSERVER_BACKEND,
+        observer_identity=_OBSERVER_IDENTITY,
+        git_sha=_GIT_SHA,
+        source_fingerprint=_SOURCE_FINGERPRINT,
+        execution_subject_digest=_SUBJECT_DIGEST,
+        report_complete=True,
+        child_exit_code=0,
+        pytest_returncode=0,
+        call_report_count=1,
+        passed_call_count=1,
+        skipped_call_count=0,
+        xfail_call_count=0,
+        failed_call_count=0,
+        passed_paths=(path,),
+        report_sha256="sha256:" + "5" * 64,
+    )
     return {
         "scope": "targeted",
+        "args": [path],
         "mutation_target_bound": True,
         "mutation_target": path,
-        "targeted_execution_authority": "trusted_out_of_process_observer_v1",
+        "targeted_execution_authority": TRUSTED_TARGETED_EXECUTION_AUTHORITY,
         "targeted_outcome_report_verified": True,
-        "targeted_execution_id": execution_id,
+        "targeted_observer_backend": _OBSERVER_BACKEND,
+        "targeted_observer_identity": _OBSERVER_IDENTITY,
+        "targeted_execution_subject": {
+            "git_sha": _GIT_SHA,
+            "source_fingerprint": _SOURCE_FINGERPRINT,
+            "digest": _SUBJECT_DIGEST,
+            "file_count": 1,
+            "total_bytes": 1,
+            "ignored_inputs_excluded": True,
+            "git_metadata_excluded": True,
+        },
+        "targeted_execution_id": observer.execution_id,
         "targeted_executed_pass_count": 1,
         "targeted_executed_pass_paths": [path],
-        "targeted_execution": {
-            "execution_id": execution_id,
-            "git_sha": "d" * 40,
-            "source_fingerprint": "sha256:" + "e" * 64,
-            "execution_subject_digest": "sha256:" + "f" * 64,
-            "report_complete": True,
-            "child_exit_code": 0,
-            "pytest_returncode": 0,
-            "passed_call_count": 1,
-            "passed_paths": [path],
-        },
+        "targeted_execution": observer.model_dump(mode="json"),
     }
 
 
-def _closed_revision_checks(path: str) -> list[ValidationResult]:
+def _closed_revision_checks(path: str, *, run_id: str) -> list[ValidationResult]:
     return [
         ValidationResult(
             name="test_patch_safety",
@@ -72,7 +105,7 @@ def _closed_revision_checks(path: str) -> list[ValidationResult]:
             revision=1,
             status=ValidationStatus.PASS,
             summary="targeted pytest passed",
-            details=_verified_targeted_details(path),
+            details=_verified_targeted_details(path, run_id=run_id),
         ),
         ValidationResult(
             name="pytest",
@@ -98,14 +131,22 @@ def test_terminal_rollback_poison_closed_revision_lineage(
         change_revision_before=0,
     )
     state = AgentRunState(
+        run_id=_RUN_ID,
         objective="repair",
         workspace=str(tmp_path),
         change_revision=1,
         terminal_status=TerminalStatus.SUCCESS,
         files_modified=[path],
-        validation_results=_closed_revision_checks(path),
+        validation_results=_closed_revision_checks(path, run_id=_RUN_ID),
     )
-    assert evaluate_revision_closure(state.validation_results, current_revision=1).closed is True
+    assert (
+        evaluate_revision_closure(
+            state.validation_results,
+            current_revision=1,
+            expected_run_id=state.run_id,
+        ).closed
+        is True
+    )
 
     class FakeControl:
         def __init__(self) -> None:
@@ -141,6 +182,10 @@ def test_terminal_rollback_poison_closed_revision_lineage(
     assert rollback_gate.gate_id == f"mutation_transaction:{path}"
     assert rollback_gate.revision == 1
     assert rollback_gate.status is ValidationStatus.NOT_VERIFIED
-    closure = evaluate_revision_closure(state.validation_results, current_revision=1)
+    closure = evaluate_revision_closure(
+        state.validation_results,
+        current_revision=1,
+        expected_run_id=state.run_id,
+    )
     assert closure.closed is False
     assert closure.code == "incomplete_revision_validation"
