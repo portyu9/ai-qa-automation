@@ -105,7 +105,7 @@ def _verified_targeted_execution_covers_path(
     *,
     expected_run_id: str | None,
 ) -> bool:
-    """Require exact runtime-bound out-of-process call-phase PASS evidence."""
+    """Require exact runtime/controller-bound out-of-process call-phase PASS evidence."""
 
     expected = normalize_targeted_path(mutation_path)
     if expected is None or not expected_run_id:
@@ -122,14 +122,42 @@ def _verified_targeted_execution_covers_path(
         return False
 
     raw_args = item.details.get("args")
+    observer_backend = item.details.get("targeted_observer_backend")
+    observer_identity = item.details.get("targeted_observer_identity")
+    subject = item.details.get("targeted_execution_subject")
     if not isinstance(raw_args, list) or not all(isinstance(value, str) for value in raw_args):
         return False
+    if not isinstance(observer_backend, str) or not isinstance(observer_identity, str):
+        return False
+    if not isinstance(subject, dict):
+        return False
+    git_sha = subject.get("git_sha")
+    source_fingerprint = subject.get("source_fingerprint")
+    subject_digest = subject.get("digest")
+    file_count = subject.get("file_count")
+    total_bytes = subject.get("total_bytes")
+    if not all(isinstance(value, str) for value in (git_sha, source_fingerprint, subject_digest)):
+        return False
+    if type(file_count) is not int or file_count < 1:
+        return False
+    if type(total_bytes) is not int or total_bytes < 0:
+        return False
+    if subject.get("ignored_inputs_excluded") is not True:
+        return False
+    if subject.get("git_metadata_excluded") is not True:
+        return False
+
     execution = verified_targeted_execution_observation(
         item.details.get("targeted_execution"),
         expected_run_id=expected_run_id,
         expected_revision=item.revision,
         expected_mutation_path=expected,
         expected_pytest_args=tuple(raw_args),
+        expected_observer_backend=observer_backend,
+        expected_observer_identity=observer_identity,
+        expected_git_sha=git_sha,
+        expected_source_fingerprint=source_fingerprint,
+        expected_execution_subject_digest=subject_digest,
     )
     if execution is None:
         return False
@@ -138,9 +166,7 @@ def _verified_targeted_execution_covers_path(
     if item.details.get("targeted_executed_pass_count") != execution.passed_call_count:
         return False
     top_paths = item.details.get("targeted_executed_pass_paths")
-    if not isinstance(top_paths, list) or top_paths != list(execution.passed_paths):
-        return False
-    return True
+    return isinstance(top_paths, list) and top_paths == list(execution.passed_paths)
 
 
 def evaluate_revision_closure(
@@ -156,9 +182,9 @@ def evaluate_revision_closure(
     only when every result at that revision is PASS, exactly one patch-safety
     subject exists, targeted pytest is explicitly bound to that subject and has a
     trusted out-of-process executed call-phase PASS for it bound to the canonical
-    run/revision/invocation, and a controller-bound full-regression suite PASS exists
-    at the same revision. Negative or future-ahead revision state is invalid and
-    fails closed.
+    run/revision/invocation and controller-owned execution subject, and a
+    controller-bound full-regression suite PASS exists at the same revision.
+    Negative or future-ahead revision state is invalid and fails closed.
     """
 
     if current_revision < 0:
@@ -267,7 +293,7 @@ def evaluate_revision_closure(
         return RevisionClosure(
             False,
             "incomplete_pytest_closure",
-            "A changed test requires an exact-path-bound targeted pytest PASS with exact-run-bound trusted out-of-process executed call-phase PASS evidence for that path, plus a controller-bound full-regression pytest PASS at the current revision.",
+            "A changed test requires an exact-path-bound targeted pytest PASS with exact-run and controller-subject-bound trusted out-of-process executed call-phase PASS evidence for that path, plus a controller-bound full-regression pytest PASS at the current revision.",
             mutation_path,
         )
     if not regression_suite_ids:
