@@ -50,7 +50,7 @@ On platforms where descriptor-relative no-follow authority cannot be enforced, t
 stateDiagram-v2
     direction LR
     accTitle: Autonomous mutation transaction and crash-recovery state machine
-    accDescr: A mutation starts only from an owned baseline. Exact-path patch safety, exact-path-bound targeted pytest with trusted out-of-process executed-test outcome authority, and full regression must pass before commit. Failed or incomplete proof enters rollback only after an advanced revision is durably marked NOT_VERIFIED. A crashed transaction is automatically recovered only when run-persistence identity, workspace root identity, fingerprint, canonical state lineage, paths, and backup integrity remain provable; otherwise the runtime blocks for manual review.
+    accDescr: A mutation starts only from an owned baseline. Exact-path patch safety, exact-path-bound targeted pytest with trusted out-of-process executed-test outcome authority, and independently trusted full-regression executed-test semantics must all pass before commit. Failed or incomplete proof enters rollback only after an advanced revision is durably marked NOT_VERIFIED. A crashed transaction is automatically recovered only when run-persistence identity, workspace root identity, fingerprint, canonical state lineage, paths, and backup integrity remain provable; otherwise the runtime blocks for manual review.
 
     [*] --> Baseline: owned lease + root identity + fingerprint
 
@@ -63,11 +63,11 @@ stateDiagram-v2
     PatchSafe --> Targeted: exact-path pytest PASS + trusted executed outcome
     PatchSafe --> RollbackIntent: patch-safety FAIL / incomplete
 
-    Targeted --> Regression: full-regression pytest PASS
+    Targeted --> Regression: full-regression execution + diagnostic suite reconciliation
     Targeted --> RollbackIntent: targeted pytest FAIL / unrelated target / missing trusted outcome
 
-    Regression --> Committed: revision deterministically closed
-    Regression --> RollbackIntent: regression FAIL / incomplete
+    Regression --> Committed: independent regression semantic PASS + revision closed
+    Regression --> RollbackIntent: regression FAIL / missing independent semantic authority / incomplete
 
     RollbackIntent --> Rollback: advanced revision durably marked NOT_VERIFIED
     Rollback --> Baseline: prior bytes restored / runtime pending closed / state reconciled
@@ -90,8 +90,8 @@ stateDiagram-v2
     classDef recovery fill:#fbefff,stroke:#8250df,color:#24292f,stroke-width:2px
     classDef blocked fill:#ffebe9,stroke:#cf222e,color:#24292f,stroke-width:2px
 
-    class Baseline,Pending active
-    class PatchSafe,Targeted,Regression,Committed verified
+    class Baseline,Pending,Regression active
+    class PatchSafe,Targeted,Committed verified
     class RollbackIntent,Rollback,Crashed,Recovered recovery
     class Blocked,IntegrityFailure,ManualReview blocked
 ```
@@ -157,13 +157,15 @@ The current `change_revision` must contain:
 - patch-safety `PASS` bound to the exact changed path;
 - targeted pytest `PASS` explicitly selecting that same pending path;
 - trusted out-of-process executed-test outcome evidence proving at least one successful call-phase execution from that exact mutated path; and
-- full-regression pytest `PASS` bound to the controller-verified regression-suite identity.
+- independently trusted full-regression executed-test semantic `PASS` bound to the exact current run/revision and frozen regression subject.
 
-The live `run_pytest` adapter deliberately does **not** claim the third property. Target tests execute in the pytest interpreter and are untrusted code; a same-interpreter hook, inherited file descriptor, stdout/stderr protocol, or other target-accessible channel cannot be promoted into authority-bearing executed-test proof. Live targeted pytest therefore records ordinary diagnostic exit evidence with `targeted_execution_authority="unavailable"`, `targeted_outcome_report_verified=false`, and no authoritative passed paths. Until a trusted out-of-process observer is integrated, a positive autonomous test mutation cannot close and must remain `NOT_VERIFIED`/rollback rather than manufacture green.
+The live `run_pytest` adapter deliberately does **not** claim the third or fourth properties. Target tests execute in the pytest interpreter and are untrusted code; same-interpreter hooks, inherited file descriptors, stdout/stderr protocols, terminal node lines, collection output, or other target-accessible channels cannot be promoted into authority-bearing executed-test proof. Live targeted pytest therefore records ordinary diagnostic exit evidence with `targeted_execution_authority="unavailable"`, `targeted_outcome_report_verified=false`, and no authoritative passed paths. Live full regression likewise preserves its frozen suite manifest and bounded pre/run/post reconciliation as diagnostics while recording `regression_execution_authority="unavailable"`, `regression_outcome_report_verified=false`, and no authoritative `regression_suite_id` for mutation closure.
 
-The validator reserves `trusted_out_of_process_observer_v1` for an observer that is outside the target interpreter and is integrated by trusted framework/runtime code. Merely writing that string, structurally plausible counts, target stdout/stderr, or target-controlled report bytes does not make current live pytest such an observer; the live adapter never emits that authority.
+A negative target-controlled regression outcome may still deny progress; fail-safe denial does not grant the target positive mutation authority. What is forbidden is using target-controlled regression bytes to certify semantic success.
 
-Validation lineage ahead of canonical `change_revision`, conflicting same-revision truth, failed/incomplete current-revision checks, ambiguous patch subjects, or missing trusted executed-test authority fail closed rather than being filtered out by a separate mutation precheck.
+The validator reserves `trusted_out_of_process_observer_v1` for targeted executed-test evidence produced outside the target interpreter and integrated by trusted framework/runtime code. No positive live regression semantic authority is currently implemented. Merely writing a reserved-looking string, structurally plausible counts, target stdout/stderr, collection transcripts, terminal `PASSED` lines, or target-controlled report bytes cannot create either authority.
+
+Validation lineage ahead of canonical `change_revision`, conflicting same-revision truth, failed/incomplete current-revision checks, ambiguous patch subjects, or missing trusted targeted or regression executed-test authority fail closed rather than being filtered out by a separate mutation precheck.
 
 For example, a targeted selector such as:
 
@@ -171,7 +173,7 @@ For example, a targeted selector such as:
 tests/test_checkout.py::test_checkout_success
 ```
 
-can bind diagnostic validation to `tests/test_checkout.py`. A `-k` filter with no file selector or a targeted run against `tests/test_other.py` cannot bind that mutation. Even an exact-path exit `0` remains insufficient for autonomous commit until the trusted executed-test observer requirement is satisfied.
+can bind diagnostic validation to `tests/test_checkout.py`. A `-k` filter with no file selector or a targeted run against `tests/test_other.py` cannot bind that mutation. Even an exact-path exit `0` remains insufficient for autonomous commit until the trusted targeted observer requirement is satisfied; a matching full-regression collection/execution transcript is also insufficient until independent regression semantic authority exists.
 
 A different gate cannot silently supersede an earlier failed gate. Gate identity and revision lineage remain governed by [`RESULT_CONTRACT.md`](RESULT_CONTRACT.md).
 
@@ -287,7 +289,7 @@ Keeping these concerns separate prevents process recovery metadata from becoming
 ai-qa recover artifacts/run-<id>
 ```
 
-Recovery inspection uses the same subject-bound closure rule as live terminal evaluation and mutation authorization. A changed revision is closed only when one exact patch target has patch-safety PASS, targeted pytest is bound to that target, trusted out-of-process evidence proves an executed passing call from that target, regression passed with one verified suite identity, no non-PASS current-revision transaction gate remains, and no pending mutation remains.
+Recovery inspection uses the same subject-bound closure rule as live terminal evaluation and mutation authorization. A changed revision is closed only when one exact patch target has patch-safety PASS, targeted pytest is bound to that target, trusted out-of-process evidence proves an executed passing call from that target, independently trusted full-regression executed-test semantics prove the full regression at the same revision, no non-PASS current-revision transaction gate remains, and no pending mutation remains. Legacy `regression_suite_verified` dictionaries and matching target-controlled collection/execution transcripts remain diagnostic and do not make a persisted revision closed.
 
 On descriptor-relative no-follow platforms, one observed run-root identity is pinned for the complete inspection and threaded across state/runtime/journal reads; ordinary-directory replacement during that inspection is rejected rather than allowing authority from two different roots to be combined. This is inspection-time consistency, not a claim that the inspector possesses the historical run-root identity. Automatic stale recovery separately obtains that historical identity from prior lease metadata before it may authorize rollback.
 
@@ -314,7 +316,7 @@ It does not replay or reconstruct hidden Claude conversational state; it decides
 | Stale-recovery state reconciliation fails after restore | restored bytes coexist with retained pending/backup authority; recovery remains blocked for manual reconciliation |
 | Budget exhausted | `BUDGET_EXCEEDED` |
 | Tool circuit open | tool action denied |
-| Revision cannot close, including missing trusted targeted-execution authority | rollback before terminal report |
+| Revision cannot close, including missing trusted targeted or regression execution authority | rollback before terminal report |
 | Human/out-of-band edit after crash | preserve newer work; manual review |
 | Replacement workspace at same pathname | preserve replacement; manual review |
 | Rollback integrity cannot be guaranteed | `INFRASTRUCTURE_FAILURE` |
