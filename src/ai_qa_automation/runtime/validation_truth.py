@@ -4,6 +4,10 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 from ..models import TerminalStatus, ValidationResult, ValidationStatus
+from .regression_execution_observer import (
+    TRUSTED_REGRESSION_EXECUTION_AUTHORITY,
+    verified_regression_execution_observation,
+)
 from .targeted_execution_observer import (
     TRUSTED_TARGETED_EXECUTION_AUTHORITY,
     normalize_targeted_path,
@@ -11,6 +15,7 @@ from .targeted_execution_observer import (
 )
 
 _UNBOUND_OBJECTIVE_GATE_IDS = {"browser_runtime"}
+_LOWER_HEX = frozenset("0123456789abcdef")
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,28 +68,104 @@ def _future_validation_revisions(
 
 
 def _is_sha256_identity(value: object) -> bool:
-    if not isinstance(value, str) or len(value) != 71 or not value.startswith("sha256:"):
-        return False
-    try:
-        int(value[7:], 16)
-    except ValueError:
-        return False
-    return True
+    return (
+        isinstance(value, str)
+        and len(value) == 71
+        and value.startswith("sha256:")
+        and all(character in _LOWER_HEX for character in value[7:])
+    )
 
 
-def _verified_regression_suite_id(item: ValidationResult) -> str | None:
-    """Refuse target-interpreter regression semantics as mutation authority.
+def _is_raw_sha256(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in _LOWER_HEX for character in value)
+    )
 
-    The frozen suite manifest and pre/run/post reconciliation remain diagnostic
-    subject evidence, but collection, terminal node lines, and pytest exit status
-    are all produced inside the untrusted target interpreter. No live independent
-    regression semantic observer exists yet, so legacy plausible suite dictionaries
-    must not close a changed revision.
+
+def _verified_regression_suite_id(
+    item: ValidationResult,
+    *,
+    expected_run_id: str | None,
+) -> str | None:
+    """Require exact external semantic PASS bound to the diagnostic regression subject.
+
+    The controller-owned frozen subject/suite metadata remains correlation evidence.
+    Collection, terminal node lines, and pytest exit status from the target interpreter
+    never become positive authority on their own. Only a canonical observation authored
+    by the separately trusted authority may cross this consumer boundary.
     """
 
-    if item.details.get("scope") != "regression":
+    if item.details.get("scope") != "regression" or not expected_run_id:
         return None
-    return None
+    if item.details.get("regression_execution_authority") != TRUSTED_REGRESSION_EXECUTION_AUTHORITY:
+        return None
+    if item.details.get("regression_outcome_report_verified") is not True:
+        return None
+
+    raw_args = item.details.get("args")
+    observer_backend = item.details.get("regression_observer_backend")
+    observer_identity = item.details.get("regression_observer_identity")
+    suite_id = item.details.get("regression_suite_id")
+    suite = item.details.get("regression_suite")
+    if not isinstance(raw_args, list) or not all(isinstance(value, str) for value in raw_args):
+        return None
+    if not isinstance(observer_backend, str) or not isinstance(observer_identity, str):
+        return None
+    if not isinstance(suite_id, str) or not _is_sha256_identity(suite_id):
+        return None
+    if not isinstance(suite, dict):
+        return None
+    if suite.get("suite_id") != suite_id:
+        return None
+    git_sha = suite.get("git_sha")
+    source_fingerprint = suite.get("source_fingerprint")
+    execution_subject_digest = suite.get("execution_subject_digest")
+    node_count = suite.get("node_count")
+    nodeids_sha256 = suite.get("nodeids_sha256")
+    if not isinstance(git_sha, str) or not git_sha:
+        return None
+    if not isinstance(source_fingerprint, str):
+        return None
+    if not _is_sha256_identity(source_fingerprint):
+        return None
+    if not isinstance(execution_subject_digest, str):
+        return None
+    if not _is_sha256_identity(execution_subject_digest):
+        return None
+    if type(node_count) is not int or not 1 <= node_count <= 10_000:
+        return None
+    if not _is_raw_sha256(nodeids_sha256):
+        return None
+    if suite.get("execution_root") != ".":
+        return None
+    if suite.get("testpaths_bypassed_by_explicit_root") is not True:
+        return None
+    if suite.get("pre_post_collection_match") is not True:
+        return None
+    if suite.get("execution_nodes_match") is not True:
+        return None
+
+    execution = verified_regression_execution_observation(
+        item.details.get("regression_execution"),
+        expected_run_id=expected_run_id,
+        expected_revision=item.revision,
+        expected_pytest_args=tuple(raw_args),
+        expected_observer_backend=observer_backend,
+        expected_observer_identity=observer_identity,
+        expected_git_sha=git_sha,
+        expected_source_fingerprint=source_fingerprint,
+        expected_execution_subject_digest=execution_subject_digest,
+        expected_regression_suite_id=suite_id,
+        expected_node_count=node_count,
+        expected_nodeids_sha256=f"sha256:{nodeids_sha256}",
+    )
+    if execution is None:
+        return None
+    if item.details.get("regression_execution_id") != execution.execution_id:
+        return None
+    return suite_id
 
 
 def _verified_targeted_execution_covers_path(
@@ -276,11 +357,14 @@ def evaluate_revision_closure(
     regression_candidates = [
         item for item in current_pytest if item.details.get("scope") == "regression"
     ]
-    regression_suite_ids = {
-        suite_id
-        for item in regression_candidates
-        if (suite_id := _verified_regression_suite_id(item)) is not None
-    }
+    regression_suite_ids: set[str] = set()
+    for item in regression_candidates:
+        suite_id = _verified_regression_suite_id(
+            item,
+            expected_run_id=expected_run_id,
+        )
+        if suite_id is not None:
+            regression_suite_ids.add(suite_id)
     if not targeted:
         return RevisionClosure(
             False,
