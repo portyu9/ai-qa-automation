@@ -23,6 +23,10 @@ from ai_qa_automation.runtime.journal import RunJournal
 from ai_qa_automation.runtime.live_services import LiveRuntimeServices
 from ai_qa_automation.runtime.run_control import RepeatedActionError, RuntimeControl
 from ai_qa_automation.runtime.runtime_hooks import pretool_policy_output
+from ai_qa_automation.runtime.targeted_execution_observer import (
+    TRUSTED_TARGETED_EXECUTION_AUTHORITY,
+    build_targeted_execution_observation,
+)
 from ai_qa_automation.runtime.validation_truth import (
     active_validation_set,
     determine_terminal_outcome,
@@ -30,6 +34,13 @@ from ai_qa_automation.runtime.validation_truth import (
 )
 from ai_qa_automation.state import StateStore
 from ai_qa_automation.tools.repository import RepositoryInspector
+
+_RUN_ID = "run-phase2-architecture"
+_OBSERVER_BACKEND = "controller-observer-test-double"
+_OBSERVER_IDENTITY = "sha256:" + "1" * 64
+_GIT_SHA = "2" * 40
+_SOURCE_FINGERPRINT = "sha256:" + "3" * 64
+_SUBJECT_DIGEST = "sha256:" + "4" * 64
 
 
 def validation(
@@ -66,30 +77,52 @@ def regression_details(suite_id: str = "sha256:" + "a" * 64) -> dict[str, Any]:
 
 
 def targeted_execution_details(path: str) -> dict[str, Any]:
-    execution_id = "sha256:" + "c" * 64
+    observer = build_targeted_execution_observation(
+        run_id=_RUN_ID,
+        change_revision=1,
+        mutation_path=path,
+        pytest_args=(path,),
+        observer_backend=_OBSERVER_BACKEND,
+        observer_identity=_OBSERVER_IDENTITY,
+        git_sha=_GIT_SHA,
+        source_fingerprint=_SOURCE_FINGERPRINT,
+        execution_subject_digest=_SUBJECT_DIGEST,
+        report_complete=True,
+        child_exit_code=0,
+        pytest_returncode=0,
+        call_report_count=1,
+        passed_call_count=1,
+        skipped_call_count=0,
+        xfail_call_count=0,
+        failed_call_count=0,
+        passed_paths=(path,),
+        report_sha256="sha256:" + "5" * 64,
+    )
     return {
-        "targeted_execution_authority": "trusted_out_of_process_observer_v1",
+        "targeted_execution_authority": TRUSTED_TARGETED_EXECUTION_AUTHORITY,
         "targeted_outcome_report_verified": True,
-        "targeted_execution_id": execution_id,
+        "targeted_observer_backend": _OBSERVER_BACKEND,
+        "targeted_observer_identity": _OBSERVER_IDENTITY,
+        "targeted_execution_subject": {
+            "git_sha": _GIT_SHA,
+            "source_fingerprint": _SOURCE_FINGERPRINT,
+            "digest": _SUBJECT_DIGEST,
+            "file_count": 1,
+            "total_bytes": 1,
+            "ignored_inputs_excluded": True,
+            "git_metadata_excluded": True,
+        },
+        "targeted_execution_id": observer.execution_id,
         "targeted_executed_pass_count": 1,
         "targeted_executed_pass_paths": [path],
-        "targeted_execution": {
-            "execution_id": execution_id,
-            "git_sha": "d" * 40,
-            "source_fingerprint": "sha256:" + "e" * 64,
-            "execution_subject_digest": "sha256:" + "f" * 64,
-            "report_complete": True,
-            "child_exit_code": 0,
-            "pytest_returncode": 0,
-            "passed_call_count": 1,
-            "passed_paths": [path],
-        },
+        "targeted_execution": observer.model_dump(mode="json"),
     }
 
 
 def changed_revision_checks(path: str = "tests/test_checkout.py") -> list[ValidationResult]:
     targeted_details: dict[str, Any] = {
         "scope": "targeted",
+        "args": [path],
         "mutation_target_bound": True,
         "mutation_target": path,
     }
@@ -175,7 +208,12 @@ def test_changed_revision_requires_one_exact_subject_and_both_pytest_scopes() ->
     path = "tests/test_checkout.py"
     checks = changed_revision_checks(path)
 
-    closure = evaluate_revision_closure(checks, current_revision=1, expected_path=path)
+    closure = evaluate_revision_closure(
+        checks,
+        current_revision=1,
+        expected_path=path,
+        expected_run_id=_RUN_ID,
+    )
     assert closure.closed is True
     assert closure.mutation_path == path
 
@@ -183,11 +221,16 @@ def test_changed_revision_requires_one_exact_subject_and_both_pytest_scopes() ->
         checks,
         current_revision=1,
         expected_path="tests/test_other.py",
+        expected_run_id=_RUN_ID,
     )
     assert wrong_subject.closed is False
     assert wrong_subject.code == "unexpected_patch_subject"
 
-    no_regression = evaluate_revision_closure(checks[:-1], current_revision=1)
+    no_regression = evaluate_revision_closure(
+        checks[:-1],
+        current_revision=1,
+        expected_run_id=_RUN_ID,
+    )
     assert no_regression.closed is False
     assert no_regression.code == "unbound_regression_suite"
 
@@ -200,7 +243,11 @@ def test_changed_revision_requires_one_exact_subject_and_both_pytest_scopes() ->
             details={"scope": "regression"},
         ),
     ]
-    unbound_closure = evaluate_revision_closure(unbound, current_revision=1)
+    unbound_closure = evaluate_revision_closure(
+        unbound,
+        current_revision=1,
+        expected_run_id=_RUN_ID,
+    )
     assert unbound_closure.closed is False
     assert unbound_closure.code == "unbound_regression_suite"
 
@@ -213,7 +260,11 @@ def test_changed_revision_requires_one_exact_subject_and_both_pytest_scopes() ->
             details=regression_details("sha256:" + "c" * 64),
         ),
     ]
-    ambiguous_closure = evaluate_revision_closure(ambiguous, current_revision=1)
+    ambiguous_closure = evaluate_revision_closure(
+        ambiguous,
+        current_revision=1,
+        expected_run_id=_RUN_ID,
+    )
     assert ambiguous_closure.closed is False
     assert ambiguous_closure.code == "ambiguous_regression_suite"
 
@@ -221,7 +272,12 @@ def test_changed_revision_requires_one_exact_subject_and_both_pytest_scopes() ->
 def test_internal_mutation_precheck_uses_shared_revision_closure_authority(
     tmp_path: Path,
 ) -> None:
-    state = AgentRunState(objective="mutation closure", workspace=str(tmp_path), change_revision=1)
+    state = AgentRunState(
+        run_id=_RUN_ID,
+        objective="mutation closure",
+        workspace=str(tmp_path),
+        change_revision=1,
+    )
     services = RuntimeServices(
         workspace=tmp_path,
         state=state,
@@ -257,11 +313,19 @@ def test_internal_mutation_precheck_uses_shared_revision_closure_authority(
     ]
     for checks in scenarios:
         state.validation_results = checks
-        expected = evaluate_revision_closure(checks, current_revision=1).closed
+        expected = evaluate_revision_closure(
+            checks,
+            current_revision=1,
+            expected_run_id=state.run_id,
+        ).closed
         assert _change_revision_closed(services.state) is expected
 
     state.validation_results = future_lineage
-    closure = evaluate_revision_closure(state.validation_results, current_revision=1)
+    closure = evaluate_revision_closure(
+        state.validation_results,
+        current_revision=1,
+        expected_run_id=state.run_id,
+    )
     assert closure.closed is False
     assert closure.code == "future_validation_revision"
     reason = _require_closed_revision_before_mutation(services)
@@ -270,7 +334,11 @@ def test_internal_mutation_precheck_uses_shared_revision_closure_authority(
 
     state.change_revision = 0
     state.validation_results = [validation("pytest", gate_id="pytest:future", revision=1)]
-    unchanged_closure = evaluate_revision_closure(state.validation_results, current_revision=0)
+    unchanged_closure = evaluate_revision_closure(
+        state.validation_results,
+        current_revision=0,
+        expected_run_id=state.run_id,
+    )
     assert unchanged_closure.closed is False
     assert unchanged_closure.code == "future_validation_revision"
     assert _change_revision_closed(state) is False
