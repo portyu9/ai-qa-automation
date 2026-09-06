@@ -44,6 +44,7 @@ from .common import (
 )
 
 _TARGETED_EXECUTION_AUTHORITY = "unavailable"
+_REGRESSION_EXECUTION_AUTHORITY = "unavailable"
 _REQUIREMENT_PROVENANCE = "plan_tests.requirement"
 
 
@@ -126,24 +127,23 @@ def register_testing_tools(services: RuntimeServices, tool: ToolDecorator) -> di
             if not result.execution_started
             else pytest_validation_status(result.exit_code)
         )
-        suite_verified = (
-            scope == "regression"
-            and regression_suite is not None
-            and result.execution_started
-            and result.exit_code == 0
-            and regression_suite.pre_post_collection_match
-            and regression_suite.execution_nodes_match
-        )
-        if scope == "regression" and status is ValidationStatus.PASS and not suite_verified:
+        # Collection, terminal node lines, and process exit all originate inside the
+        # untrusted target pytest interpreter. They remain useful bounded diagnostics,
+        # but cannot prove executed-test semantics or authorize mutation closure.
+        suite_verified = False
+        if scope == "regression" and status is ValidationStatus.PASS:
             status = ValidationStatus.NOT_VERIFIED
         targeted_authority = _TARGETED_EXECUTION_AUTHORITY if scope == "targeted" else None
+        regression_authority = (
+            _REGRESSION_EXECUTION_AUTHORITY if scope == "regression" else None
+        )
         targeted_executed_pass_paths: list[str] = []
         targeted_executed_pass_count = len(targeted_executed_pass_paths)
         summary = (
             (result.block_reason or "pytest sandbox blocked target-code execution")
             if not result.execution_started
             else (
-                "pytest regression exit was zero but no controller-bound suite identity was proven"
+                "pytest regression execution completed, but target-interpreter collection/output/exit status cannot prove trusted executed-test semantics"
                 if scope == "regression" and status is ValidationStatus.NOT_VERIFIED
                 else (
                     "pytest exited with 0; no trusted out-of-process executed-test outcome authority is available for mutation closure"
@@ -167,12 +167,12 @@ def register_testing_tools(services: RuntimeServices, tool: ToolDecorator) -> di
                     "args": pytest_args,
                     "execution_started": result.execution_started,
                     "regression_suite_verified": suite_verified,
-                    "regression_suite_id": (
-                        regression_suite.suite_id
-                        if suite_verified and regression_suite is not None
-                        else None
-                    ),
+                    "regression_suite_id": None,
                     "regression_suite": suite_details,
+                    "regression_execution_authority": regression_authority,
+                    "regression_outcome_report_verified": False,
+                    "regression_execution_id": None,
+                    "regression_execution": None,
                     "targeted_execution_authority": targeted_authority,
                     "targeted_outcome_report_verified": False,
                     "targeted_execution_id": None,
@@ -191,11 +191,9 @@ def register_testing_tools(services: RuntimeServices, tool: ToolDecorator) -> di
             "validation_status": status.value,
             "duration_seconds": result.duration_seconds,
             "evidence_ids": result.evidence_ids,
-            "regression_suite_id": (
-                regression_suite.suite_id
-                if suite_verified and regression_suite is not None
-                else None
-            ),
+            "regression_suite_id": None,
+            "regression_execution_authority": regression_authority,
+            "regression_outcome_report_verified": False,
             "targeted_execution_authority": targeted_authority,
             "targeted_outcome_report_verified": False,
             "targeted_executed_pass_count": targeted_executed_pass_count,
