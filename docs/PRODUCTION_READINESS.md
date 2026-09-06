@@ -102,7 +102,8 @@ Important properties:
 - current definitive FAIL remains failure;
 - same-gate same-revision PASS/FAIL is contradictory and remains unverified;
 - historical evidence cannot certify newer bytes;
-- changed live autonomous tests require patch-safety PASS, **targeted pytest bound to the exact changed path**, and full-regression PASS at the current revision;
+- changed live autonomous tests require patch-safety PASS, **targeted pytest bound to the exact changed path with independently trusted executed-call semantics**, and **independently trusted full-regression executed-test semantic PASS** at the current revision;
+- target-interpreter collection/output/report/exit reconciliation is diagnostic and cannot promote either targeted or regression positive semantic authority;
 - provider availability is independent from QA terminal truth.
 
 ### 5. Autonomous mutation safety
@@ -116,6 +117,7 @@ Important properties:
 - one mutation transaction open at a time;
 - trusted rollback snapshots hash-bound outside the SUT;
 - rollback directories/backups protected against symlink substitution;
+- positive commit closure requires independent targeted and full-regression semantic authorities that the current live pytest adapter deliberately does not emit;
 - newer human/out-of-band work wins over stale automatic rollback.
 
 ### 6. Safe self-healing
@@ -144,10 +146,13 @@ observed repository coverage
 → guarded creation
 → deterministic test-quality review
 → exact-path targeted execution
-→ regression closure
+→ independent targeted semantic proof
+→ diagnostic full regression
+→ independent regression semantic proof
+→ mutation closure
 ```
 
-Reusable generation/patch components may understand Python/JavaScript/TypeScript syntax, while live autonomous commit authority remains intentionally narrower where deterministic execution proof is pytest-backed.
+Reusable generation/patch components may understand Python/JavaScript/TypeScript syntax, while live autonomous commit authority remains intentionally narrower where deterministic execution proof is pytest-backed. Because the independent targeted and regression semantic producers are not live, positive autonomous generated-test mutation remains fail-closed rather than treating target-controlled pytest output as proof.
 
 ### 8. Change intelligence
 
@@ -206,7 +211,7 @@ Static JavaScript inspection is defense in depth, not a sandbox.
 - missing, malformed, or mismatched historical run-root identity blocks automatic rollback before target writes on supported platforms;
 - attestation/lineage/recovery inspection pins one observed run-root identity for each multi-file inspection and rejects substitution without pretending that observation is historical authority;
 - platforms without descriptor-relative no-follow root authority retain conservative non-equivalent fallback semantics rather than persisting a best-effort stat tuple as proof;
-- recovery inspection uses the same exact-path validation bar as terminal truth;
+- recovery inspection uses the same exact-path and independent pytest-semantic validation bar as terminal truth and rejects legacy regression transcript metadata as positive closure;
 - recovery never claims hidden model-conversation replay.
 
 ### 12. Traceability and attestation
@@ -276,6 +281,7 @@ A mature production review should be able to answer these without appealing to �
 
 - Can a model response become PASS without deterministic evidence?
 - Can a targeted test of the wrong file certify a mutation?
+- Can target-owned pytest hooks or terminal `PASSED` lines certify targeted or full-regression execution without an independent observer?
 - Can model-reported coverage suppress a required generation scenario without repository evidence?
 - Can a JavaScript/TypeScript write be committed through a pytest-only closure path?
 - Can target `CLAUDE.md`, `.claude/`, `.mcp.json`, DOM, logs, or provider content redefine authority?
