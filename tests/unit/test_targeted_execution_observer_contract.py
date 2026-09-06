@@ -47,31 +47,28 @@ def observation(**overrides: object) -> TargetedExecutionObservation:
 
 def verify(
     result: TargetedExecutionObservation,
-    **expected_overrides: object,
+    *,
+    expected_run_id: str = "run-observer-contract",
+    expected_revision: int = 2,
+    expected_mutation_path: str = "tests/test_changed.py",
+    expected_pytest_args: tuple[str, ...] = ("tests/test_changed.py::test_changed", "-q"),
+    expected_observer_backend: str = _OBSERVER_BACKEND,
+    expected_observer_identity: str = _OBSERVER_IDENTITY,
+    expected_git_sha: str = _GIT_SHA,
+    expected_source_fingerprint: str = _SOURCE_FINGERPRINT,
+    expected_execution_subject_digest: str = _SUBJECT_DIGEST,
 ) -> TargetedExecutionObservation | None:
-    expected: dict[str, object] = {
-        "expected_run_id": "run-observer-contract",
-        "expected_revision": 2,
-        "expected_mutation_path": "tests/test_changed.py",
-        "expected_pytest_args": ("tests/test_changed.py::test_changed", "-q"),
-        "expected_observer_backend": _OBSERVER_BACKEND,
-        "expected_observer_identity": _OBSERVER_IDENTITY,
-        "expected_git_sha": _GIT_SHA,
-        "expected_source_fingerprint": _SOURCE_FINGERPRINT,
-        "expected_execution_subject_digest": _SUBJECT_DIGEST,
-    }
-    expected.update(expected_overrides)
     return verified_targeted_execution_observation(
         result.model_dump(mode="json"),
-        expected_run_id=str(expected["expected_run_id"]),
-        expected_revision=int(expected["expected_revision"]),
-        expected_mutation_path=str(expected["expected_mutation_path"]),
-        expected_pytest_args=tuple(expected["expected_pytest_args"]),
-        expected_observer_backend=str(expected["expected_observer_backend"]),
-        expected_observer_identity=str(expected["expected_observer_identity"]),
-        expected_git_sha=str(expected["expected_git_sha"]),
-        expected_source_fingerprint=str(expected["expected_source_fingerprint"]),
-        expected_execution_subject_digest=str(expected["expected_execution_subject_digest"]),
+        expected_run_id=expected_run_id,
+        expected_revision=expected_revision,
+        expected_mutation_path=expected_mutation_path,
+        expected_pytest_args=expected_pytest_args,
+        expected_observer_backend=expected_observer_backend,
+        expected_observer_identity=expected_observer_identity,
+        expected_git_sha=expected_git_sha,
+        expected_source_fingerprint=expected_source_fingerprint,
+        expected_execution_subject_digest=expected_execution_subject_digest,
     )
 
 
