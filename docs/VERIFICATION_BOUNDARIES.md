@@ -56,7 +56,8 @@ The codebase defines deterministic contracts for areas including:
 
 - typed state, evidence, validation, provider, policy, and terminal outcomes;
 - terminal truth with gate identity + revision supersession;
-- exact-path binding between mutation, patch-safety, and targeted pytest evidence;
+- exact-path binding between mutation, patch-safety, targeted pytest evidence, and independent executed-test semantic authority;
+- fail-closed refusal to treat target-interpreter full-regression collection/output/exit transcripts as positive semantic authority;
 - failure classification and insufficient-evidence handling;
 - deterministic locator parsing/semantic scoring;
 - same-DOM Playwright locator verification;
@@ -97,6 +98,8 @@ Some execution surfaces require locally observable components even when no remot
 `ai-qa doctor` reports what the current environment can actually observe. Package/executable presence does not become provider authentication evidence.
 
 Where descriptor-relative/no-follow filesystem authority is unavailable, repository code must not silently relabel path equality as equivalent root-identity proof. Environment-dependent identity guarantees remain explicit.
+
+For live pytest, a frozen Git-backed subject plus Bubblewrap can establish execution containment and subject identity. Those controls do not by themselves establish positive pytest call-phase or full-regression semantic truth after control passes into the untrusted target interpreter. The current live adapter therefore exposes targeted and regression semantic authority as unavailable until a separately trusted observer exists.
 
 ---
 
@@ -168,8 +171,8 @@ A k6 summary becomes metric authority only after bounded regular-file/no-follow 
 |---|---|---|
 | Claude reasoning loop | Agent SDK orchestration, policy, result semantics | credentialed provider interaction |
 | Terminal truth | gate/revision/path lineage and deterministic derivation | actual validation observations for the run |
-| Autonomous mutation | Python-path authority, target-root identity, lease/fingerprint, descriptor-pinned transaction/rollback, exact-path pytest closure | filesystem/process isolation around runtime |
-| Stale recovery | prior-run journal binding, persisted workspace-root identity, exact fingerprint, target/backup confinement | current filesystem identity primitives + trusted artifact storage |
+| Autonomous mutation | Python-path authority, target-root identity, lease/fingerprint, descriptor-pinned transaction/rollback, exact-path targeted binding, fail-closed independent targeted/regression semantic requirements | filesystem/process isolation around runtime + a separately trusted executed-test semantic observer for any positive mutation closure |
+| Stale recovery | prior-run journal binding, persisted workspace-root identity, exact fingerprint, target/backup confinement, rejection of legacy regression transcript authority | current filesystem identity primitives + trusted artifact storage |
 | GitHub MCP | official config, action policy, failure normalization | auth, permissions, provider responses |
 | Atlassian MCP | official endpoint config, action policy, failure normalization | auth/session, site permissions, provider responses |
 | Network policy | canonical host validation + adapter authorization | DNS/routing/firewall/proxy enforcement |
@@ -232,6 +235,7 @@ When reviewing a claim, ask:
 6. **Does configuration state merely permit an action, or prove it occurred?**
 7. **If deployment enforcement is required, is it actually external to the application flag?**
 8. **If a filesystem pathname was reused, was subject identity verified rather than inferred from path equality?**
+9. **Can the code that produced a positive test-semantic claim also spoof, suppress, or short-circuit the signal being treated as PASS authority?**
 
 ---
 
