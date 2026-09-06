@@ -466,12 +466,24 @@ def recover_stale_mutation(
             ),
         }
 
-    with suppress(OSError, RuntimeError, ValueError, json.JSONDecodeError):
-        journal.try_append(
+    try:
+        recovery_event_recorded = journal.try_append(
             "stale_mutation_recovered",
             recovering_run_id=recovering_run_id,
             path=relative_path,
         )
+    except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
+        recovery_event_recorded = False
+    if not recovery_event_recorded:
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": previous_run_id,
+            "reason": (
+                "stale mutation bytes were restored but the recovery journal event could not be "
+                "durably recorded; rollback authority was retained and manual reconciliation is "
+                "required"
+            ),
+        }
     try:
         post_recovery_journal = journal.verify()
         _current_run_root_identity(prior_run_dir, expected_run_root_identity)
