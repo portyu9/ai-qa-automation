@@ -238,7 +238,7 @@ def test_stale_existing_file_mutation_is_restored_when_fingerprint_matches(tmp_p
     assert metadata["journal_head_hash"] == journal.head_hash
 
 
-def test_stale_recovery_invalidates_prior_closed_revision_and_success(tmp_path: Path) -> None:
+def test_stale_recovery_invalidates_legacy_positive_revision_and_success(tmp_path: Path) -> None:
     artifact_root = tmp_path / "artifacts"
     workspace = tmp_path / "sut"
     workspace.mkdir()
@@ -273,14 +273,13 @@ def test_stale_recovery_invalidates_prior_closed_revision_and_success(tmp_path: 
         validation_results=_closed_revision_checks(relative_path, run_id="run-old"),
     )
     StateStore(prior_run / "state.json").save(prior_state)
-    assert (
-        evaluate_revision_closure(
-            prior_state.validation_results,
-            current_revision=prior_state.change_revision,
-            expected_run_id=prior_state.run_id,
-        ).closed
-        is True
+    legacy_closure = evaluate_revision_closure(
+        prior_state.validation_results,
+        current_revision=prior_state.change_revision,
+        expected_run_id=prior_state.run_id,
     )
+    assert legacy_closure.closed is False
+    assert legacy_closure.code == "unbound_regression_suite"
 
     result = recover(artifact_root, workspace, fingerprint="fp-after-mutation")
 
