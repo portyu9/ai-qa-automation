@@ -49,7 +49,8 @@ Important consequences:
 - non-PASS validations remain non-PASS;
 - same-gate same-revision PASS/FAIL → `NOT_VERIFIED`;
 - older evidence supersedes only through gate identity + newer revision;
-- changed live autonomous tests require patch-safety, **exact-path-bound targeted pytest**, and full regression at the current revision.
+- changed live autonomous tests require patch-safety, **exact-path-bound targeted pytest with independent executed-call authority**, and **independently trusted full-regression executed-test semantics** at the current revision;
+- target-interpreter collection/output/exit evidence is diagnostic and cannot self-certify positive execution semantics.
 
 This is the first code path to inspect if you want to know whether the framework can manufacture success.
 
@@ -228,15 +229,18 @@ search_test_coverage
 → plan_tests (MODEL_INTERPRETATION)
 → guarded create_test_file
 → deterministic quality + patch safety
-→ targeted execution
-→ regression closure
+→ targeted execution diagnostics
+→ independent targeted semantic proof
+→ full-regression execution diagnostics
+→ independent regression semantic proof
+→ mutation closure
 ```
 
 The crucial asymmetry: a model may annotate a scenario as “already covered,” but unsupported labels cannot suppress deterministic candidates.
 
 Generated tests must contain meaningful assertions; comments/strings that merely look assertion-like do not satisfy observability checks.
 
-Reusable generation/patch components understand Python/JavaScript/TypeScript. **Live autonomous commit authority is narrower:** controlled closure is currently pytest-backed, so autonomous writes are restricted to approved Python test paths.
+Reusable generation/patch components understand Python/JavaScript/TypeScript. **Live autonomous commit authority is narrower:** controlled closure is currently pytest-backed, so autonomous writes are restricted to approved Python test paths. Positive autonomous mutation still remains fail-closed because the current live pytest adapter does not emit either independent targeted or independent regression semantic authority.
 
 ---
 
@@ -273,7 +277,7 @@ pending mutation path
 = targeted pytest selected path
 ```
 
-Full regression must also pass at the same revision.
+That path binding is necessary but not sufficient. Positive commit also requires independently trusted targeted executed-test semantics and independently trusted full-regression executed-test semantics for the exact current run/revision/frozen subject. The live adapter deliberately reports both semantic authorities as unavailable; matching collection/output/terminal transcripts remain diagnostic only.
 
 ### Rollback transaction ordering
 
@@ -300,7 +304,7 @@ Stale recovery applies the same ownership and lineage philosophy but retains run
 
 For an advanced mutation, canonical `change_revision` must be exactly `change_revision_before + 1`; impossible gaps block before any recovery write. After every ownership/fingerprint/revision check succeeds, stale recovery may restore/remove target bytes while `runtime.json.pending_mutation` and rollback backup authority remain durable. It then persists the prior run's current-revision `NOT_VERIFIED`/rolled-back lineage and only after that checkpoint may it clear pending runtime authority. If the state save fails, restored bytes remain paired with pending runtime/backup authority and recovery is not represented as clean.
 
-`runtime/recovery.py` uses the same exact-path closure standard, so recovery inspection cannot be weaker than terminal truth.
+`runtime/recovery.py` uses the same exact-path and independent semantic closure standard, so recovery inspection cannot be weaker than terminal truth. Legacy plausible full-regression suite dictionaries cannot certify a persisted changed revision after the authority hardening.
 
 ### Lease hardening
 
