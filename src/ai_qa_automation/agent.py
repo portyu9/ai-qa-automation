@@ -488,6 +488,7 @@ async def run_agent(
                     state.validation_results,
                     current_revision=state.change_revision,
                     objective_gate_id=state.objective_gate_id,
+                    expected_run_id=state.run_id,
                 )
         finally:
             if control.pending_mutation is not None:
