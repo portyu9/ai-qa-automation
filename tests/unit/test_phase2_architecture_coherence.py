@@ -204,7 +204,7 @@ def test_same_gate_same_revision_pass_fail_remains_not_verified() -> None:
     assert status is TerminalStatus.NOT_VERIFIED
 
 
-def test_changed_revision_requires_one_exact_subject_and_both_pytest_scopes() -> None:
+def test_changed_revision_rejects_legacy_regression_semantics_even_when_subjects_match() -> None:
     path = "tests/test_checkout.py"
     checks = changed_revision_checks(path)
 
@@ -214,7 +214,8 @@ def test_changed_revision_requires_one_exact_subject_and_both_pytest_scopes() ->
         expected_path=path,
         expected_run_id=_RUN_ID,
     )
-    assert closure.closed is True
+    assert closure.closed is False
+    assert closure.code == "unbound_regression_suite"
     assert closure.mutation_path == path
 
     wrong_subject = evaluate_revision_closure(
@@ -251,7 +252,7 @@ def test_changed_revision_requires_one_exact_subject_and_both_pytest_scopes() ->
     assert unbound_closure.closed is False
     assert unbound_closure.code == "unbound_regression_suite"
 
-    ambiguous = [
+    multiple_legacy_claims = [
         *checks,
         validation(
             "pytest",
@@ -260,13 +261,13 @@ def test_changed_revision_requires_one_exact_subject_and_both_pytest_scopes() ->
             details=regression_details("sha256:" + "c" * 64),
         ),
     ]
-    ambiguous_closure = evaluate_revision_closure(
-        ambiguous,
+    multiple_legacy_closure = evaluate_revision_closure(
+        multiple_legacy_claims,
         current_revision=1,
         expected_run_id=_RUN_ID,
     )
-    assert ambiguous_closure.closed is False
-    assert ambiguous_closure.code == "ambiguous_regression_suite"
+    assert multiple_legacy_closure.closed is False
+    assert multiple_legacy_closure.code == "unbound_regression_suite"
 
 
 def test_internal_mutation_precheck_uses_shared_revision_closure_authority(
