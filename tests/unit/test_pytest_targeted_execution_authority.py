@@ -11,6 +11,11 @@ from ai_qa_automation.runtime.validation_truth import evaluate_revision_closure
 
 _TRUSTED_AUTHORITY = TRUSTED_TARGETED_EXECUTION_AUTHORITY
 _RUN_ID = "run-targeted-authority"
+_OBSERVER_BACKEND = "controller-observer-test-double"
+_OBSERVER_IDENTITY = "sha256:" + "1" * 64
+_GIT_SHA = "2" * 40
+_SOURCE_FINGERPRINT = "sha256:" + "3" * 64
+_SUBJECT_DIGEST = "sha256:" + "4" * 64
 
 
 def _validation(
@@ -63,11 +68,11 @@ def _targeted(
         change_revision=1,
         mutation_path=mutation_path,
         pytest_args=(mutation_path,),
-        observer_backend="controller-observer-test-double",
-        observer_identity="sha256:" + "1" * 64,
-        git_sha="2" * 40,
-        source_fingerprint="sha256:" + "3" * 64,
-        execution_subject_digest="sha256:" + "4" * 64,
+        observer_backend=_OBSERVER_BACKEND,
+        observer_identity=_OBSERVER_IDENTITY,
+        git_sha=_GIT_SHA,
+        source_fingerprint=_SOURCE_FINGERPRINT,
+        execution_subject_digest=_SUBJECT_DIGEST,
         report_complete=True,
         child_exit_code=0,
         pytest_returncode=0,
@@ -89,6 +94,17 @@ def _targeted(
             "mutation_target": mutation_path,
             "targeted_execution_authority": authority,
             "targeted_outcome_report_verified": True,
+            "targeted_observer_backend": _OBSERVER_BACKEND,
+            "targeted_observer_identity": _OBSERVER_IDENTITY,
+            "targeted_execution_subject": {
+                "git_sha": _GIT_SHA,
+                "source_fingerprint": _SOURCE_FINGERPRINT,
+                "digest": _SUBJECT_DIGEST,
+                "file_count": 1,
+                "total_bytes": 1,
+                "ignored_inputs_excluded": True,
+                "git_metadata_excluded": True,
+            },
             "targeted_execution_id": observer.execution_id,
             "targeted_executed_pass_count": passed_count,
             "targeted_executed_pass_paths": passed_paths,
@@ -225,6 +241,33 @@ def test_missing_authority_cannot_close_even_with_self_consistent_execution_meta
     path = "tests/test_changed.py"
     targeted = _targeted(mutation_path=path, passed_paths=[path], passed_count=1)
     targeted.details.pop("targeted_execution_authority")
+
+    closure = _closure(targeted, path)
+
+    assert closure.closed is False
+    assert closure.code == "incomplete_pytest_closure"
+
+
+def test_missing_controller_observer_or_subject_authority_cannot_close() -> None:
+    path = "tests/test_changed.py"
+    for field in (
+        "targeted_observer_backend",
+        "targeted_observer_identity",
+        "targeted_execution_subject",
+    ):
+        targeted = _targeted(mutation_path=path, passed_paths=[path], passed_count=1)
+        targeted.details.pop(field)
+        closure = _closure(targeted, path)
+        assert closure.closed is False
+        assert closure.code == "incomplete_pytest_closure"
+
+
+def test_controller_execution_subject_mismatch_cannot_close() -> None:
+    path = "tests/test_changed.py"
+    targeted = _targeted(mutation_path=path, passed_paths=[path], passed_count=1)
+    subject = dict(targeted.details["targeted_execution_subject"])
+    subject["digest"] = "sha256:" + "9" * 64
+    targeted.details["targeted_execution_subject"] = subject
 
     closure = _closure(targeted, path)
 
