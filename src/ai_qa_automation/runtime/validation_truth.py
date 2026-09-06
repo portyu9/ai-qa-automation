@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from pathlib import PurePosixPath
 
 from ..models import TerminalStatus, ValidationResult, ValidationStatus
+from .targeted_execution_observer import (
+    TRUSTED_TARGETED_EXECUTION_AUTHORITY,
+    normalize_targeted_path,
+    verified_targeted_execution_observation,
+)
 
 _UNBOUND_OBJECTIVE_GATE_IDS = {"browser_runtime"}
-_TRUSTED_TARGETED_EXECUTION_AUTHORITY = "trusted_out_of_process_observer_v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,85 +99,48 @@ def _verified_regression_suite_id(item: ValidationResult) -> str | None:
     return suite_id
 
 
-def _normalized_target_path(value: object) -> str | None:
-    if not isinstance(value, str) or not value or "\x00" in value:
-        return None
-    normalized = value.replace("\\", "/")
-    while normalized.startswith("./"):
-        normalized = normalized[2:]
-    normalized = normalized.rstrip("/")
-    if not normalized:
-        return None
-    path = PurePosixPath(normalized)
-    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
-        return None
-    if path.as_posix() != normalized:
-        return None
-    return normalized
-
-
 def _verified_targeted_execution_covers_path(
     item: ValidationResult,
     mutation_path: str,
+    *,
+    expected_run_id: str | None,
 ) -> bool:
-    """Require trusted out-of-process call-phase PASS evidence for the mutation path."""
+    """Require exact runtime-bound out-of-process call-phase PASS evidence."""
 
-    expected = _normalized_target_path(mutation_path)
-    if expected is None:
+    expected = normalize_targeted_path(mutation_path)
+    if expected is None or not expected_run_id:
         return False
     if item.details.get("scope") != "targeted":
         return False
     if item.details.get("mutation_target_bound") is not True:
         return False
-    if _normalized_target_path(item.details.get("mutation_target")) != expected:
+    if normalize_targeted_path(item.details.get("mutation_target")) != expected:
         return False
-    if item.details.get("targeted_execution_authority") != _TRUSTED_TARGETED_EXECUTION_AUTHORITY:
+    if item.details.get("targeted_execution_authority") != TRUSTED_TARGETED_EXECUTION_AUTHORITY:
         return False
     if item.details.get("targeted_outcome_report_verified") is not True:
         return False
 
-    execution_id = item.details.get("targeted_execution_id")
-    execution = item.details.get("targeted_execution")
-    if not _is_sha256_identity(execution_id) or not isinstance(execution, dict):
+    raw_args = item.details.get("args")
+    if not isinstance(raw_args, list) or not all(isinstance(value, str) for value in raw_args):
         return False
-    if execution.get("execution_id") != execution_id:
+    execution = verified_targeted_execution_observation(
+        item.details.get("targeted_execution"),
+        expected_run_id=expected_run_id,
+        expected_revision=item.revision,
+        expected_mutation_path=expected,
+        expected_pytest_args=tuple(raw_args),
+    )
+    if execution is None:
         return False
-    if execution.get("report_complete") is not True:
+    if item.details.get("targeted_execution_id") != execution.execution_id:
         return False
-    if execution.get("child_exit_code") != 0 or execution.get("pytest_returncode") != 0:
+    if item.details.get("targeted_executed_pass_count") != execution.passed_call_count:
         return False
-    if not _is_sha256_identity(execution.get("execution_subject_digest")):
-        return False
-    git_sha = execution.get("git_sha")
-    source_fingerprint = execution.get("source_fingerprint")
-    if not isinstance(git_sha, str) or not git_sha or len(git_sha) > 128:
-        return False
-    if (
-        not isinstance(source_fingerprint, str)
-        or not source_fingerprint
-        or len(source_fingerprint) > 256
-    ):
-        return False
-
-    passed_count = execution.get("passed_call_count")
-    top_count = item.details.get("targeted_executed_pass_count")
-    if type(passed_count) is not int or passed_count < 1 or top_count != passed_count:
-        return False
-    passed_paths = execution.get("passed_paths")
     top_paths = item.details.get("targeted_executed_pass_paths")
-    if (
-        not isinstance(passed_paths, list)
-        or not isinstance(top_paths, list)
-        or passed_paths != top_paths
-        or not 1 <= len(passed_paths) <= 4
-    ):
+    if not isinstance(top_paths, list) or top_paths != list(execution.passed_paths):
         return False
-    normalized_paths = [_normalized_target_path(value) for value in passed_paths]
-    if any(value is None for value in normalized_paths):
-        return False
-    if len(set(normalized_paths)) != len(normalized_paths):
-        return False
-    return expected in normalized_paths
+    return True
 
 
 def evaluate_revision_closure(
@@ -182,15 +148,17 @@ def evaluate_revision_closure(
     *,
     current_revision: int,
     expected_path: str | None = None,
+    expected_run_id: str | None = None,
 ) -> RevisionClosure:
     """Apply the one authoritative changed-test closure rule.
 
     Revision zero has no autonomous mutation to close. A positive revision closes
     only when every result at that revision is PASS, exactly one patch-safety
     subject exists, targeted pytest is explicitly bound to that subject and has a
-    trusted out-of-process executed call-phase PASS for it, and a controller-bound
-    full-regression suite PASS exists at the same revision. Negative or future-ahead
-    revision state is invalid and fails closed.
+    trusted out-of-process executed call-phase PASS for it bound to the canonical
+    run/revision/invocation, and a controller-bound full-regression suite PASS exists
+    at the same revision. Negative or future-ahead revision state is invalid and
+    fails closed.
     """
 
     if current_revision < 0:
@@ -280,7 +248,12 @@ def evaluate_revision_closure(
         )
 
     targeted = any(
-        _verified_targeted_execution_covers_path(item, mutation_path) for item in current_pytest
+        _verified_targeted_execution_covers_path(
+            item,
+            mutation_path,
+            expected_run_id=expected_run_id,
+        )
+        for item in current_pytest
     )
     regression_candidates = [
         item for item in current_pytest if item.details.get("scope") == "regression"
@@ -294,7 +267,7 @@ def evaluate_revision_closure(
         return RevisionClosure(
             False,
             "incomplete_pytest_closure",
-            "A changed test requires an exact-path-bound targeted pytest PASS with trusted out-of-process executed call-phase PASS evidence for that path, plus a controller-bound full-regression pytest PASS at the current revision.",
+            "A changed test requires an exact-path-bound targeted pytest PASS with exact-run-bound trusted out-of-process executed call-phase PASS evidence for that path, plus a controller-bound full-regression pytest PASS at the current revision.",
             mutation_path,
         )
     if not regression_suite_ids:
@@ -326,6 +299,7 @@ def determine_terminal_outcome(
     *,
     current_revision: int = 0,
     objective_gate_id: str | None = None,
+    expected_run_id: str | None = None,
 ) -> tuple[TerminalStatus, str]:
     """Derive terminal truth without model authority or unrelated-green promotion."""
 
@@ -400,7 +374,11 @@ def determine_terminal_outcome(
         )
 
     if current_revision > 0:
-        closure = evaluate_revision_closure(active, current_revision=current_revision)
+        closure = evaluate_revision_closure(
+            active,
+            current_revision=current_revision,
+            expected_run_id=expected_run_id,
+        )
         if not closure.closed:
             return TerminalStatus.NOT_VERIFIED, closure.reason
 
