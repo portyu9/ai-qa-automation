@@ -608,6 +608,7 @@ def posttool_policy_output(
                     state.validation_results,
                     current_revision=state.change_revision,
                     expected_path=control.pending_mutation.relative_path,
+                    expected_run_id=state.run_id,
                 )
                 if closure.closed:
                     control.commit_pending_mutation()
