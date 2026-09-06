@@ -221,7 +221,10 @@ def verified_targeted_execution_observation(
         return None
     if observation.run_id != expected_run_id or observation.change_revision != expected_revision:
         return None
-    if observation.mutation_path != expected_path or observation.pytest_args != expected_pytest_args:
+    if (
+        observation.mutation_path != expected_path
+        or observation.pytest_args != expected_pytest_args
+    ):
         return None
     if (
         observation.observer_backend != expected_observer_backend
