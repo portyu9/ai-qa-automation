@@ -70,6 +70,7 @@ def change_revision_closed(state: AgentRunState) -> bool:
     return evaluate_revision_closure(
         state.validation_results,
         current_revision=state.change_revision,
+        expected_run_id=state.run_id,
     ).closed
 
 
@@ -150,39 +151,30 @@ class RuntimeServices:
             "max_tool_calls": self.max_tool_calls,
             "max_repeated_action": self.max_repeated_action,
         }.items():
-            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-                raise ValueError(f"{name} must be a positive integer")
-        for name, value in {
-            "allow_external_network": self.allow_external_network,
-            "api_browser_external_egress_enforced": self.api_browser_external_egress_enforced,
-            "allow_mutating_api_methods": self.allow_mutating_api_methods,
-            "k6_external_egress_enforced": self.k6_external_egress_enforced,
-        }.items():
-            if not isinstance(value, bool):
-                raise ValueError(f"{name} must be a boolean")
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(f"{name} must be an integer")
+            if value < 1:
+                raise ValueError(f"{name} must be >= 1")
+        if not isinstance(self.allow_external_network, bool):
+            raise ValueError("allow_external_network must be boolean")
+        if not isinstance(self.api_browser_external_egress_enforced, bool):
+            raise ValueError("api_browser_external_egress_enforced must be boolean")
+        if not isinstance(self.allow_mutating_api_methods, bool):
+            raise ValueError("allow_mutating_api_methods must be boolean")
+        if not isinstance(self.k6_external_egress_enforced, bool):
+            raise ValueError("k6_external_egress_enforced must be boolean")
         self.allowed_network_hosts = {
             canonicalize_network_host(host) for host in self.allowed_network_hosts
         }
-        if self.allow_mutating_api_methods:
-            raise ValueError(
-                "allow_mutating_api_methods=true cannot authorize generic remote mutation"
-            )
-        if self.workspace_root_identity is not None and (
-            not isinstance(self.workspace_root_identity, tuple)
-            or len(self.workspace_root_identity) != 2
-            or any(type(part) is not int or part < 0 for part in self.workspace_root_identity)
-        ):
-            raise ValueError("workspace_root_identity must be a (device, inode) integer tuple")
 
     def consume(self, tool_name: str, tool_input: dict[str, Any]) -> None:
         if self.state.tool_call_count >= self.max_tool_calls:
-            raise RuntimeError("tool-call budget exhausted")
-        payload = json.dumps(tool_input, sort_keys=True, default=str)
-        fingerprint = hashlib.sha256(f"{tool_name}:{payload}".encode()).hexdigest()
-        seen = self._fingerprints.get(fingerprint, 0) + 1
-        self._fingerprints[fingerprint] = seen
-        if seen > self.max_repeated_action:
-            raise RuntimeError("repeated identical action budget exhausted")
+            raise RuntimeError("tool call budget exceeded")
+        fingerprint = stable_gate_id(tool_name, tool_input)
+        repeated = self._fingerprints.get(fingerprint, 0) + 1
+        self._fingerprints[fingerprint] = repeated
+        if repeated > self.max_repeated_action:
+            raise RuntimeError("repeated tool-call budget exceeded")
         self.state.tool_call_count += 1
         self.checkpoint()
 
