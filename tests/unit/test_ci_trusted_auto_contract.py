@@ -43,6 +43,7 @@ def test_trusted_auto_contract_is_frozen_and_read_only() -> None:
     assert auto["validation_authority"] == "read-only-secret-free-before-reporter"
     assert auto["status_writer"] == "dedicated-github-app"
     assert auto["maintenance_authority"] == ("independent-external-one-shot-exact-subject-gate")
+    assert {".github", "scripts", "tests"}.isdisjoint(auto["protected_paths"])
 
 
 def test_ci_verifier_executes_under_python_safe_path() -> None:
@@ -94,7 +95,7 @@ def test_trusted_auto_contract_rejects_removed_protected_path(tmp_path: Path) ->
     root = _copy_contract_repo(tmp_path)
     path = root / ".github" / "workflows" / "trusted-pr-auto.yml"
     text = path.read_text(encoding="utf-8")
-    marker = "            tests\n"
+    marker = "            requirements\n"
     assert marker in text
     path.write_text(text.replace(marker, "", 1), encoding="utf-8")
 

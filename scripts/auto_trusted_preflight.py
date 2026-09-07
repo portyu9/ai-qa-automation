@@ -23,7 +23,6 @@ MAX_API_BYTES = 8 * 1024 * 1024
 MAX_PULL_REQUEST_CANDIDATES = 100
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 PROTECTED_PATHS = (
-    ".github",
     ".claude",
     ".dockerignore",
     ".gitattributes",
@@ -35,8 +34,6 @@ PROTECTED_PATHS = (
     "examples",
     "pyproject.toml",
     "requirements",
-    "scripts",
-    "tests",
     "src/ai_qa_automation/__init__.py",
     "src/ai_qa_automation/io_safety.py",
     "src/ai_qa_automation/tools/__init__.py",

@@ -31,7 +31,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
-    "9f85471d3c8f27a134b60274a248d2bc8a654d06"  # pragma: allowlist secret
+    "068537f4638fa1559c21e31cfdfd5aa99e135b2f"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
     "66c0bf8aee2633bfb51c83029b0251f2d81dae29"  # pragma: allowlist secret

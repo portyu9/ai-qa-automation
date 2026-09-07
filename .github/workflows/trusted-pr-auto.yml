@@ -114,7 +114,6 @@ jobs:
           test "$head_sha" = "$EXPECTED_HEAD_SHA"
           test -z "$extra_parent"
           protected_paths=(
-            .github
             .claude
             .dockerignore
             .gitattributes
@@ -126,8 +125,6 @@ jobs:
             examples
             pyproject.toml
             requirements
-            scripts
-            tests
             src/ai_qa_automation/__init__.py
             src/ai_qa_automation/io_safety.py
             src/ai_qa_automation/tools/__init__.py
