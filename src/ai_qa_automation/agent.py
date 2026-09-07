@@ -96,7 +96,7 @@ def _mark_terminal_infrastructure_failure(state: AgentRunState, reason: str) -> 
     previous = state.terminal_status
     if previous is not None:
         state.observations.append(
-            "Terminal outcome before teardown integrity failure: " f"{previous.value}."
+            f"Terminal outcome before teardown integrity failure: {previous.value}."
         )
     state.terminal_status = TerminalStatus.INFRASTRUCTURE_FAILURE
     state.terminal_reason = reason
@@ -741,7 +741,7 @@ async def run_agent(
                 primary_error = exc
             else:
                 primary_error.add_note(
-                    "Terminal preparation also failed: " f"{type(exc).__name__}."
+                    f"Terminal preparation also failed: {type(exc).__name__}."
                 )
 
     release_error: BaseException | None = None
@@ -767,7 +767,7 @@ async def run_agent(
             primary_error = release_error
         else:
             primary_error.add_note(
-                "Workspace lease release also failed: " f"{type(release_error).__name__}."
+                f"Workspace lease release also failed: {type(release_error).__name__}."
             )
 
     if terminalize:
