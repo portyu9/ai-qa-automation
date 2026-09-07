@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -125,14 +126,14 @@ def test_successful_posix_group_cleanup_occurs_before_direct_child_reap(
     cleanup_returncodes: list[int | None] = []
 
     def checked_cleanup(
-        process: object,
+        process: subprocess.Popen[bytes],
         *,
         env: dict[str, str],
     ) -> None:
-        returncode = getattr(process, "returncode")
+        returncode = process.returncode
         cleanup_returncodes.append(returncode)
         assert returncode is None
-        original_cleanup(process, env=env)  # type: ignore[arg-type]
+        original_cleanup(process, env=env)
 
     monkeypatch.setattr(execution_env, "_terminate_process_tree", checked_cleanup)
 
@@ -158,14 +159,14 @@ def test_timed_out_posix_group_cleanup_retains_direct_child_identity(
     cleanup_returncodes: list[int | None] = []
 
     def checked_cleanup(
-        process: object,
+        process: subprocess.Popen[bytes],
         *,
         env: dict[str, str],
     ) -> None:
-        returncode = getattr(process, "returncode")
+        returncode = process.returncode
         cleanup_returncodes.append(returncode)
         assert returncode is None
-        original_cleanup(process, env=env)  # type: ignore[arg-type]
+        original_cleanup(process, env=env)
 
     monkeypatch.setattr(execution_env, "_terminate_process_tree", checked_cleanup)
 
