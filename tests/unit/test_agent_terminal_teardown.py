@@ -100,15 +100,13 @@ async def test_terminal_journal_ambiguity_returns_infrastructure_report_without_
 
     report = result["report"]
     assert report["terminal_status"] == TerminalStatus.INFRASTRUCTURE_FAILURE.value
-    assert (
-        "terminal journal persistence could not be guaranteed" in report["terminal_reason"].lower()
-    )
+    assert "terminal journal persistence could not be guaranteed" in report["summary"].lower()
     assert attempted_events.count("terminal_control_plane_revalidation") == 1
     assert "agent_run_finished" not in attempted_events
 
     _run_dir, persisted = _persisted_state(artifacts)
     assert persisted.terminal_status is TerminalStatus.INFRASTRUCTURE_FAILURE
-    assert persisted.terminal_reason == report["terminal_reason"]
+    assert persisted.terminal_reason == report["summary"]
 
 
 @pytest.mark.asyncio
@@ -138,11 +136,11 @@ async def test_workspace_lease_release_failure_is_reported_after_single_release_
     report = result["report"]
     assert release_calls == 1
     assert report["terminal_status"] == TerminalStatus.INFRASTRUCTURE_FAILURE.value
-    assert "workspace lease release could not be guaranteed" in report["terminal_reason"].lower()
+    assert "workspace lease release could not be guaranteed" in report["summary"].lower()
 
     run_dir, persisted = _persisted_state(artifacts)
     assert persisted.terminal_status is TerminalStatus.INFRASTRUCTURE_FAILURE
-    assert persisted.terminal_reason == report["terminal_reason"]
+    assert persisted.terminal_reason == report["summary"]
 
     records = [json.loads(line) for line in (run_dir / "journal.jsonl").read_text().splitlines()]
     events = [record["event"] for record in records]
