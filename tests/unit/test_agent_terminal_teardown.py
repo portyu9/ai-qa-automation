@@ -42,7 +42,9 @@ def _patch_provider_failure(monkeypatch: pytest.MonkeyPatch) -> None:
 
     class ForbiddenClient:
         def __init__(self, *args: object, **kwargs: object) -> None:
-            raise AssertionError("provider client construction is owned by the patched session runner")
+            raise AssertionError(
+                "provider client construction is owned by the patched session runner"
+            )
 
     async def fail_sessions(**_kwargs: object) -> None:
         raise RuntimeError("deterministic provider failure")
@@ -98,7 +100,10 @@ async def test_terminal_journal_ambiguity_returns_infrastructure_report_without_
 
     report = result["report"]
     assert report["terminal_status"] == TerminalStatus.INFRASTRUCTURE_FAILURE.value
-    assert "terminal journal persistence could not be guaranteed" in report["terminal_reason"].lower()
+    assert (
+        "terminal journal persistence could not be guaranteed"
+        in report["terminal_reason"].lower()
+    )
     assert attempted_events.count("terminal_control_plane_revalidation") == 1
     assert "agent_run_finished" not in attempted_events
 
