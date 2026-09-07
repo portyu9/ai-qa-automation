@@ -644,9 +644,8 @@ class EvidenceStore:
                             ) from exc
                         try:
                             opened = os.fstat(child_fd)
-                            if (
-                                not stat.S_ISDIR(opened.st_mode)
-                                or _identity(opened) != _identity(observed)
+                            if not stat.S_ISDIR(opened.st_mode) or _identity(opened) != _identity(
+                                observed
                             ):
                                 raise ValueError(
                                     f"artifact storage directory ownership changed: {relative}"
@@ -661,9 +660,8 @@ class EvidenceStore:
                                 dir_fd=directory_fd,
                                 follow_symlinks=False,
                             )
-                            if (
-                                not stat.S_ISDIR(current.st_mode)
-                                or _identity(current) != _identity(opened)
+                            if not stat.S_ISDIR(current.st_mode) or _identity(current) != _identity(
+                                opened
                             ):
                                 raise ValueError(
                                     f"artifact storage directory ownership changed: {relative}"
@@ -690,9 +688,8 @@ class EvidenceStore:
                         ) from exc
                     try:
                         opened = os.fstat(file_fd)
-                        if (
-                            not stat.S_ISREG(opened.st_mode)
-                            or _identity(opened) != _identity(observed)
+                        if not stat.S_ISREG(opened.st_mode) or _identity(opened) != _identity(
+                            observed
                         ):
                             raise ValueError(
                                 f"artifact storage payload ownership changed: {relative}"
@@ -752,9 +749,8 @@ class EvidenceStore:
                             raise ValueError(
                                 f"artifact storage directory ownership changed: {relative}"
                             ) from exc
-                        if (
-                            not stat.S_ISDIR(current.st_mode)
-                            or _identity(current) != _identity(observed)
+                        if not stat.S_ISDIR(current.st_mode) or _identity(current) != _identity(
+                            observed
                         ):
                             raise ValueError(
                                 f"artifact storage directory ownership changed: {relative}"
@@ -775,9 +771,7 @@ class EvidenceStore:
                         or _identity(current) != _identity(observed)
                         or current.st_size != observed.st_size
                     ):
-                        raise ValueError(
-                            f"artifact storage payload ownership changed: {relative}"
-                        )
+                        raise ValueError(f"artifact storage payload ownership changed: {relative}")
                     account_payload(relative, observed.st_size)
 
         if self._descriptor_relative_root:
@@ -863,7 +857,13 @@ class EvidenceStore:
             destination = self._owned_artifact_path(relative_path)
             normalized_relative = Path(relative_path).as_posix()
             if normalized_relative in _RUN_PERSISTENCE_RESERVED_FILES:
-                raise ValueError("artifact path collides with reserved run persistence control file")
+                raise ValueError(
+                    "artifact path collides with reserved run persistence control file"
+                )
+
+            self._assert_control_file_owned("evidence-manifest.json")
+            if self.regulated_mode:
+                self._assert_control_file_owned("audit-log.jsonl")
 
             durable_bytes, durable_count = self._durable_artifact_usage()
             if durable_count >= _MAX_ARTIFACT_COUNT:
