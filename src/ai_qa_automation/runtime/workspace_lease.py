@@ -91,6 +91,7 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
         self._workspace_lock_fd: int | None = None
         self._authority_bound = False
         self._owner_published = False
+        self._acquired_at: str | None = None
         self.previous_metadata: dict[str, Any] | None = None
 
     @property
@@ -326,6 +327,9 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
         return previous
 
     def _current_metadata_bytes(self) -> bytes:
+        acquired_at = self._acquired_at
+        if acquired_at is None:
+            raise OSError("workspace lease acquisition time is unavailable")
         workspace_root_identity = (
             {
                 "device": self._workspace_root_identity[0],
@@ -350,7 +354,7 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             "run_root_identity": run_root_identity,
             "pid": os.getpid(),
             "hostname": socket.gethostname(),
-            "acquired_at": datetime.now(UTC).isoformat(),
+            "acquired_at": acquired_at,
         }
         rendered = json.dumps(metadata, sort_keys=True).encode("utf-8")
         if len(rendered) > _MAX_LEASE_METADATA_BYTES:
@@ -391,6 +395,7 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             locked = True
             self._revalidate_lease_root(directory_fd)
             self._revalidate_workspace_root()
+            self._acquired_at = datetime.now(UTC).isoformat()
             stream.seek(0)
             raw = stream.read(_MAX_LEASE_METADATA_BYTES + 1)
             if len(raw) > _MAX_LEASE_METADATA_BYTES:
@@ -429,6 +434,7 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
                 with suppress(OSError):
                     self._unlock_workspace_root(workspace_lock_fd)
                 os.close(workspace_lock_fd)
+            self._acquired_at = None
             raise
         finally:
             if directory_fd is not None:
@@ -454,6 +460,7 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
         self._stream = None
         self._workspace_lock_fd = None
         self._owner_published = False
+        self._acquired_at = None
         authority_cleared = True
         if self._authority_bound:
             authority_cleared = clear_active_workspace_authority(
