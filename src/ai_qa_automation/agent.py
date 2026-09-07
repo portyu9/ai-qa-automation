@@ -124,6 +124,30 @@ def _record_terminal_event(
     return False
 
 
+def _require_pre_provider_journal_event(
+    state: AgentRunState,
+    audit: _TerminalJournalAudit,
+    event: str,
+    **payload: Any,
+) -> None:
+    """Require one durable lifecycle event before provider submission can remain eligible."""
+
+    if audit.record(event, **payload):
+        return
+    failure_type = audit.failure_type or "unknown journal failure"
+    _mark_terminal_infrastructure_failure(
+        state,
+        "Run journal persistence could not be guaranteed before provider execution while recording "
+        f"{event}: {failure_type}.",
+    )
+    raise _TerminalRunStop(
+        [
+            "A required pre-provider lifecycle event could not be persisted unambiguously; "
+            "model execution was not started."
+        ]
+    )
+
+
 def _persist_terminal_state(
     state: AgentRunState,
     state_store: StateStore,
@@ -531,7 +555,12 @@ async def run_agent(
             state.observations.append(
                 f"Recovered unverified mutation from crashed run before bootstrap: {recovered_path}"
             )
-            journal.try_append("stale_mutation_recovered_before_bootstrap", **stale_recovery)
+            _require_pre_provider_journal_event(
+                state,
+                terminal_audit,
+                "stale_mutation_recovered_before_bootstrap",
+                **stale_recovery,
+            )
 
         try:
             lease.publish_current_owner()
@@ -554,12 +583,16 @@ async def run_agent(
             ) from exc
 
         state.phase = "BOOTSTRAP"
-        journal.append(
+        _require_pre_provider_journal_event(
+            state,
+            terminal_audit,
             "workspace_lease_acquired",
             lease_id=lease.lease_id,
             workspace=str(workspace),
         )
-        journal.append(
+        _require_pre_provider_journal_event(
+            state,
+            terminal_audit,
             "control_plane_subject_bound",
             subject_digest=control_plane_capture.subject.subject_digest,
             control_git_sha=control_plane_capture.subject.control_git_sha,
@@ -665,7 +698,12 @@ async def run_agent(
 
         state.phase = "RUNNING"
         _sync_operational_state(state, state_store, control)
-        journal.append("agent_run_started", model_id=cfg.model)
+        _require_pre_provider_journal_event(
+            state,
+            terminal_audit,
+            "agent_run_started",
+            model_id=cfg.model,
+        )
         emit_event(logger, "agent_run_started", run_id=state.run_id, model_id=cfg.model)
 
         bounded_prompt = (
