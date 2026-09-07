@@ -611,10 +611,41 @@ def posttool_policy_output(
                     expected_run_id=state.run_id,
                 )
                 if closure.closed:
-                    control.commit_pending_mutation()
-                    control.set_workspace_fingerprint(
-                        RepositoryInspector(control.workspace).snapshot().fingerprint
-                    )
+                    if state_store is None:
+                        failed = True
+                        state.terminal_status = TerminalStatus.INFRASTRUCTURE_FAILURE
+                        state.terminal_reason = (
+                            "Validated mutation could not be committed because canonical state "
+                            "persistence authority is unavailable"
+                        )
+                        control.open_circuits.update(_MUTATION_TOOLS)
+                        control.journal.try_append(
+                            "mutation_commit_denied_missing_state_store",
+                            path=control.pending_mutation.relative_path,
+                            revision=state.change_revision,
+                        )
+                        output["updatedToolOutput"] = {
+                            "is_error": True,
+                            "error": (
+                                "Validated mutation remains pending because canonical closure "
+                                "could not be durably checkpointed."
+                            ),
+                        }
+                        output["additionalContext"] = (
+                            "Deterministic validation closed the candidate revision, but the "
+                            "canonical StateStore authority required to persist that closure was "
+                            "unavailable. The mutation remains pending and further autonomous "
+                            "mutation is disabled for this run."
+                        )
+                    else:
+                        # Canonical closure must be crash-safe before runtime rollback authority
+                        # can be durably removed. The checkpoint preserves the pending transaction
+                        # if either state or runtime persistence fails at this boundary.
+                        _checkpoint(state, state_store, control)
+                        control.commit_pending_mutation()
+                        control.set_workspace_fingerprint(
+                            RepositoryInspector(control.workspace).snapshot().fingerprint
+                        )
         effective_failed = failed or mutation_integrity_blocked
         control.record_tool_result(tool_name, failed=effective_failed)
         control.journal.append(
