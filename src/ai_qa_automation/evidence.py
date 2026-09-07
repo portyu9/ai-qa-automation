@@ -46,7 +46,7 @@ _MAX_ARTIFACT_COUNT = 5_000
 _MAX_TOTAL_ARTIFACT_BYTES = 256_000_000
 _MAX_ARTIFACT_TREE_ENTRIES = 20_000
 _MAX_ARTIFACT_TREE_DEPTH = 128
-_RUN_PERSISTENCE_CONTROL_FILES = frozenset(
+_RUN_PERSISTENCE_RESERVED_FILES = frozenset(
     {
         "audit-log.jsonl",
         "evidence-manifest.json",
@@ -55,6 +55,7 @@ _RUN_PERSISTENCE_CONTROL_FILES = frozenset(
         "state.json",
     }
 )
+_SHARED_RUN_CONTROL_FILES = frozenset({"journal.jsonl", "runtime.json", "state.json"})
 _MANIFEST_AUDIT_RESERVE_BYTES = 1_024
 _CANONICAL_EVIDENCE_HASH_ALGORITHM = "sha256-canonical-json-sorted-keys"
 
@@ -383,6 +384,7 @@ class EvidenceStore:
     ) -> None:
         self.run_id = run_id
         self.regulated_mode = regulated_mode
+        self._shared_run_persistence = expected_run_root_identity is not None
         artifact_root = root.expanduser().resolve()
         requested_run = Path(run_id)
         if requested_run.is_absolute() or not requested_run.parts or ".." in requested_run.parts:
@@ -566,6 +568,15 @@ class EvidenceStore:
             raise ValueError("artifact path escapes run root")
         return destination
 
+    def _is_unregistered_control_file(self, relative: str, registered_paths: set[str]) -> bool:
+        if relative in registered_paths:
+            return False
+        if relative == "evidence-manifest.json":
+            return True
+        if relative == "audit-log.jsonl":
+            return self.regulated_mode
+        return self._shared_run_persistence and relative in _SHARED_RUN_CONTROL_FILES
+
     def _durable_artifact_usage(self) -> tuple[int, int]:
         """Count all durable artifact payloads, including unregistered crash/closure orphans."""
 
@@ -578,7 +589,7 @@ class EvidenceStore:
 
         def account_payload(relative: str, size: int) -> None:
             nonlocal payload_count, total_bytes
-            if relative in _RUN_PERSISTENCE_CONTROL_FILES and relative not in registered_paths:
+            if self._is_unregistered_control_file(relative, registered_paths):
                 return
             payload_count += 1
             if payload_count > _MAX_ARTIFACT_COUNT:
@@ -848,14 +859,18 @@ class EvidenceStore:
                 raise TypeError("artifact content must be bytes")
             if len(content) > _MAX_ARTIFACT_BYTES:
                 raise ValueError(f"artifact exceeds {_MAX_ARTIFACT_BYTES} byte persistence limit")
+
+            destination = self._owned_artifact_path(relative_path)
+            normalized_relative = Path(relative_path).as_posix()
+            if normalized_relative in _RUN_PERSISTENCE_RESERVED_FILES:
+                raise ValueError("artifact path collides with reserved run persistence control file")
+
             durable_bytes, durable_count = self._durable_artifact_usage()
             if durable_count >= _MAX_ARTIFACT_COUNT:
                 raise ValueError("artifact storage exceeds persistence count limit")
             if durable_bytes + len(content) > _MAX_TOTAL_ARTIFACT_BYTES:
                 raise ValueError("artifact storage exceeds cumulative persistence byte limit")
 
-            destination = self._owned_artifact_path(relative_path)
-            normalized_relative = Path(relative_path).as_posix()
             digest = self.hash_bytes(content)
             record = ArtifactRecord(
                 type=destination.suffix.lstrip(".") or "binary",
