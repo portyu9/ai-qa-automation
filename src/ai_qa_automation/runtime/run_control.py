@@ -288,6 +288,9 @@ class RuntimeControl:
                     original_sha256=original_hash,
                     change_revision_before=change_revision_before,
                 )
+                # A successful preparation must not return mutation authority until
+                # runtime metadata is bound to the exact durable journal head/count.
+                self.persist()
             except Exception:
                 self.pending_mutation = None
                 if pending_persisted:
@@ -429,14 +432,24 @@ class RuntimeControl:
             return pending.relative_path
 
     def _journal_after_durable_transition(self, event: str, **payload: Any) -> None:
-        """Record lifecycle provenance without undoing an already-durable transition."""
+        """Bind lifecycle provenance to runtime truth before reporting transition success."""
         try:
             self.journal.append(event, **payload)
-        except (BudgetExceededError, OSError, RuntimeError, ValueError):
-            # Runtime metadata already owns the transaction truth at this point.
-            # A journal failure must not resurrect pending state or destroy restored
-            # bytes. The journal verifier will expose any persisted integrity issue.
-            return
+        except (BudgetExceededError, OSError, RuntimeError, ValueError) as exc:
+            # The transition itself is already durable and must never be undone here.
+            # Journal append failures can be ambiguous after fsync, so they cannot be
+            # converted into a successful transaction return.
+            raise RuntimeError(
+                "mutation transition journal persistence could not be guaranteed"
+            ) from exc
+        try:
+            self.persist()
+        except (OSError, RuntimeError, ValueError) as exc:
+            # A verified journal extension without an exact runtime head/count binding
+            # is legitimate infrastructure uncertainty, not a successful transition.
+            raise RuntimeError(
+                "mutation transition journal binding could not be durably persisted"
+            ) from exc
 
     def _validated_rollback_backup(self, pending: PendingMutation) -> tuple[Path, bytes]:
         """Validate rollback ownership and bytes before either restore or commit disposal."""
