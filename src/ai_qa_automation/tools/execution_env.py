@@ -497,10 +497,7 @@ def _wait_for_process_and_cleanup_group(
         _terminate_process_tree(process, env=env)
         return False
 
-    if not all(
-        hasattr(os, attribute)
-        for attribute in ("waitid", "P_PID", "WEXITED", "WNOWAIT")
-    ):
+    if not all(hasattr(os, attribute) for attribute in ("waitid", "P_PID", "WEXITED", "WNOWAIT")):
         raise RuntimeError("POSIX wait-without-reap support is required for safe process cleanup")
 
     waiter = _PosixUnreapedExitWaiter(process)
