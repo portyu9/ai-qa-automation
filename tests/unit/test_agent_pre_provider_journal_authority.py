@@ -7,7 +7,7 @@ import pytest
 import ai_qa_automation.agent as agent_module
 from ai_qa_automation.agent import run_agent
 from ai_qa_automation.config import Settings
-from ai_qa_automation.models import TerminalStatus
+from ai_qa_automation.models import AgentRunState, TerminalStatus
 from ai_qa_automation.runtime.journal import RunJournal
 from ai_qa_automation.state import StateStore
 
@@ -62,7 +62,7 @@ def _patch_runtime(monkeypatch: pytest.MonkeyPatch, provider_calls: list[str]) -
     monkeypatch.setattr(agent_module, "build_hooks", lambda *args, **kwargs: {})
 
 
-def _persisted_state(artifacts: Path) -> object:
+def _persisted_state(artifacts: Path) -> AgentRunState:
     state_paths = list(artifacts.glob("*/state.json"))
     assert len(state_paths) == 1
     return StateStore(state_paths[0]).load()
@@ -70,19 +70,21 @@ def _persisted_state(artifacts: Path) -> object:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("failed_event", "force_recovery"),
+    ("failed_event", "force_recovery", "failure_mode"),
     [
-        ("stale_mutation_recovered_before_bootstrap", True),
-        ("workspace_lease_acquired", False),
-        ("control_plane_subject_bound", False),
-        ("agent_run_started", False),
+        ("stale_mutation_recovered_before_bootstrap", True, "exception"),
+        ("workspace_lease_acquired", False, "exception"),
+        ("control_plane_subject_bound", False, "exception"),
+        ("agent_run_started", False, "exception"),
+        ("stale_mutation_recovered_before_bootstrap", True, "budget"),
     ],
 )
-async def test_required_pre_provider_journal_ambiguity_fails_closed_without_provider_submission(
+async def test_required_pre_provider_journal_failure_closes_without_provider_submission(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     failed_event: str,
     force_recovery: bool,
+    failure_mode: str,
 ) -> None:
     control, workspace, artifacts = _runtime_roots(tmp_path)
     provider_calls: list[str] = []
@@ -109,6 +111,8 @@ async def test_required_pre_provider_journal_ambiguity_fails_closed_without_prov
     ) -> bool:
         attempted_events.append(event)
         if event == failed_event:
+            if failure_mode == "budget":
+                return False
             raise OSError("post-fsync journal identity is ambiguous")
         return original_try_append(self, event, **payload)
 
@@ -124,6 +128,8 @@ async def test_required_pre_provider_journal_ambiguity_fails_closed_without_prov
     assert report["terminal_status"] == TerminalStatus.INFRASTRUCTURE_FAILURE.value
     assert "before provider execution" in report["summary"].lower()
     assert failed_event in report["summary"]
+    if failure_mode == "budget":
+        assert "BudgetExceededError" in report["summary"]
     assert attempted_events.count(failed_event) == 1
     assert "agent_run_finished" not in attempted_events
     assert provider_calls == []
