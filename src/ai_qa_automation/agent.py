@@ -140,8 +140,7 @@ def _persist_terminal_state(
     except (OSError, RuntimeError, ValueError) as exc:
         _mark_terminal_infrastructure_failure(
             state,
-            "Terminal runtime metadata persistence could not be guaranteed: "
-            f"{type(exc).__name__}.",
+            f"Terminal runtime metadata persistence could not be guaranteed: {type(exc).__name__}.",
         )
         # The first state write completed before runtime metadata persistence began, so
         # this second atomic state write is not a replay of the ambiguous operation.
@@ -740,9 +739,7 @@ async def run_agent(
             if primary_error is None:
                 primary_error = exc
             else:
-                primary_error.add_note(
-                    f"Terminal preparation also failed: {type(exc).__name__}."
-                )
+                primary_error.add_note(f"Terminal preparation also failed: {type(exc).__name__}.")
 
     release_error: BaseException | None = None
     try:
@@ -754,8 +751,7 @@ async def run_agent(
         if terminalize and isinstance(release_error, Exception):
             _mark_terminal_infrastructure_failure(
                 state,
-                "Workspace lease release could not be guaranteed: "
-                f"{type(release_error).__name__}.",
+                f"Workspace lease release could not be guaranteed: {type(release_error).__name__}.",
             )
             _record_terminal_event(
                 state,
