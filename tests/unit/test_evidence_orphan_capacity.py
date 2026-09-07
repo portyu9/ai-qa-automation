@@ -61,6 +61,21 @@ def test_durable_orphan_counts_against_byte_capacity_after_restart(
     assert not rejected.exists()
 
 
+def test_existing_over_limit_orphan_fails_closed_during_store_restore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact_root = tmp_path / "artifacts"
+    first = EvidenceStore(artifact_root, "run-restore-byte-bound")
+    orphan = first.run_root / "orphan.bin"
+    orphan.write_bytes(b"12345")
+    monkeypatch.setattr(evidence_module, "_MAX_TOTAL_ARTIFACT_BYTES", 4)
+
+    with pytest.raises(ValueError, match="cumulative persistence byte limit"):
+        EvidenceStore(artifact_root, first.run_id)
+
+    assert orphan.read_bytes() == b"12345"
+
+
 def test_durable_orphan_counts_against_file_capacity_after_restart(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -88,15 +103,20 @@ def test_durable_orphan_counts_against_file_capacity_after_restart(
     assert not rejected.exists()
 
 
-def test_capacity_scan_excludes_known_run_control_files(
+def test_capacity_scan_excludes_authorized_shared_run_control_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store = EvidenceStore(tmp_path / "artifacts", "run-control-files")
+    artifact_root = tmp_path / "artifacts"
+    first = EvidenceStore(artifact_root, "run-control-files")
+    for name in ("state.json", "runtime.json", "journal.jsonl"):
+        (first.run_root / name).write_bytes(b"control-state")
     monkeypatch.setattr(evidence_module, "_MAX_TOTAL_ARTIFACT_BYTES", 4)
 
-    for name in ("state.json", "runtime.json", "journal.jsonl"):
-        (store.run_root / name).write_bytes(b"control-state")
-
+    store = EvidenceStore(
+        artifact_root,
+        first.run_id,
+        expected_run_root_identity=first.run_root_identity,
+    )
     path, digest = store.register_artifact(
         relative_path="result.bin",
         content=b"1234",
@@ -106,6 +126,31 @@ def test_capacity_scan_excludes_known_run_control_files(
     assert path == "result.bin"
     assert digest == store.hash_bytes(b"1234")
     assert (store.run_root / path).read_bytes() == b"1234"
+
+
+def test_unowned_control_name_is_not_exempt_from_physical_quota(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact_root = tmp_path / "artifacts"
+    first = EvidenceStore(artifact_root, "run-unowned-control-name")
+    (first.run_root / "audit-log.jsonl").write_bytes(b"12345")
+    monkeypatch.setattr(evidence_module, "_MAX_TOTAL_ARTIFACT_BYTES", 4)
+
+    with pytest.raises(ValueError, match="cumulative persistence byte limit"):
+        EvidenceStore(artifact_root, first.run_id)
+
+
+def test_reserved_run_control_path_cannot_be_registered_as_artifact(tmp_path: Path) -> None:
+    store = EvidenceStore(tmp_path / "artifacts", "run-reserved-control")
+
+    with pytest.raises(ValueError, match="reserved run persistence control file"):
+        store.register_artifact(
+            relative_path="audit-log.jsonl",
+            content=b"payload",
+            originating_tool="test",
+        )
+
+    assert not (store.run_root / "audit-log.jsonl").exists()
 
 
 def test_capacity_scan_enforces_tree_entry_bound_before_publish(
@@ -149,4 +194,22 @@ def test_capacity_scan_fails_closed_on_unregistered_symlink(
         )
 
     assert outside.read_bytes() == b"outside"
+    assert not rejected.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="FIFO creation is unavailable on Windows")
+def test_capacity_scan_fails_closed_on_non_regular_entry(tmp_path: Path) -> None:
+    store = EvidenceStore(tmp_path / "artifacts", "run-orphan-fifo")
+    fifo = store.run_root / "orphan-fifo"
+    os.mkfifo(fifo)
+
+    rejected = store.run_root / "rejected.bin"
+    with pytest.raises(ValueError, match="unexpected non-regular entry"):
+        store.register_artifact(
+            relative_path="rejected.bin",
+            content=b"x",
+            originating_tool="test",
+        )
+
+    assert fifo.exists()
     assert not rejected.exists()
