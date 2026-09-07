@@ -44,9 +44,7 @@ def make_control(tmp_path: Path) -> RuntimeControl:
         metadata_path=run_dir / "runtime.json",
         lease_id="lease-closure-durability",
     )
-    control.set_workspace_fingerprint(
-        RepositoryInspector(control.workspace).snapshot().fingerprint
-    )
+    control.set_workspace_fingerprint(RepositoryInspector(control.workspace).snapshot().fingerprint)
     return control
 
 
@@ -213,9 +211,7 @@ def prepare_candidate(
     target = control.workspace / changed
     target.parent.mkdir(parents=True)
     target.write_text("candidate\n", encoding="utf-8")
-    control.set_workspace_fingerprint(
-        RepositoryInspector(control.workspace).snapshot().fingerprint
-    )
+    control.set_workspace_fingerprint(RepositoryInspector(control.workspace).snapshot().fingerprint)
     state = AgentRunState(
         objective="repair",
         workspace=str(control.workspace),
