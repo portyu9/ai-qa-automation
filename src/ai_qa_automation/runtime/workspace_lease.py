@@ -90,6 +90,7 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
         self._stream: Any | None = None
         self._workspace_lock_fd: int | None = None
         self._authority_bound = False
+        self._owner_published = False
         self.previous_metadata: dict[str, Any] | None = None
 
     @property
@@ -324,7 +325,54 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
                     raise OSError("workspace lease run-root identity authority is invalid")
         return previous
 
-    def acquire(self) -> WorkspaceLease:
+    def _current_metadata_bytes(self) -> bytes:
+        workspace_root_identity = (
+            {
+                "device": self._workspace_root_identity[0],
+                "inode": self._workspace_root_identity[1],
+            }
+            if self._workspace_root_identity is not None
+            else None
+        )
+        run_root_identity = (
+            {
+                "device": self._run_root_identity[0],
+                "inode": self._run_root_identity[1],
+            }
+            if self._run_root_identity is not None
+            else None
+        )
+        metadata = {
+            "lease_id": self.lease_id,
+            "run_id": self.run_id,
+            "workspace": str(self.workspace),
+            "workspace_root_identity": workspace_root_identity,
+            "run_root_identity": run_root_identity,
+            "pid": os.getpid(),
+            "hostname": socket.gethostname(),
+            "acquired_at": datetime.now(UTC).isoformat(),
+        }
+        rendered = json.dumps(metadata, sort_keys=True).encode("utf-8")
+        if len(rendered) > _MAX_LEASE_METADATA_BYTES:
+            raise OSError("workspace lease metadata exceeds persistence limit")
+        return rendered
+
+    def _persist_current_owner(self, stream: Any, directory_fd: int | None) -> None:
+        rendered = self._current_metadata_bytes()
+        stream.seek(0)
+        stream.truncate(0)
+        stream.write(rendered)
+        stream.flush()
+        os.fsync(stream.fileno())
+        if directory_fd is not None:
+            os.fsync(directory_fd)
+        else:
+            fsync_directory(self.path.parent)
+        self._revalidate_lease_root(directory_fd)
+        self._revalidate_run_root()
+        self._revalidate_workspace_root()
+
+    def acquire(self, *, publish: bool = True) -> WorkspaceLease:
         self._revalidate_run_root()
         self._revalidate_workspace_root()
         workspace_lock_fd = self._lock_workspace_root()
@@ -350,47 +398,8 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             self.previous_metadata = self._parse_previous_metadata(raw)
             self._revalidate_run_root()
 
-            workspace_root_identity = (
-                {
-                    "device": self._workspace_root_identity[0],
-                    "inode": self._workspace_root_identity[1],
-                }
-                if self._workspace_root_identity is not None
-                else None
-            )
-            run_root_identity = (
-                {
-                    "device": self._run_root_identity[0],
-                    "inode": self._run_root_identity[1],
-                }
-                if self._run_root_identity is not None
-                else None
-            )
-            metadata = {
-                "lease_id": self.lease_id,
-                "run_id": self.run_id,
-                "workspace": str(self.workspace),
-                "workspace_root_identity": workspace_root_identity,
-                "run_root_identity": run_root_identity,
-                "pid": os.getpid(),
-                "hostname": socket.gethostname(),
-                "acquired_at": datetime.now(UTC).isoformat(),
-            }
-            rendered = json.dumps(metadata, sort_keys=True).encode("utf-8")
-            if len(rendered) > _MAX_LEASE_METADATA_BYTES:
-                raise OSError("workspace lease metadata exceeds persistence limit")
-            stream.seek(0)
-            stream.truncate(0)
-            stream.write(rendered)
-            stream.flush()
-            os.fsync(stream.fileno())
-            if directory_fd is not None:
-                os.fsync(directory_fd)
-            else:
-                fsync_directory(self.path.parent)
-            self._revalidate_lease_root(directory_fd)
-            self._revalidate_run_root()
-            self._revalidate_workspace_root()
+            if publish:
+                self._persist_current_owner(stream, directory_fd)
             bind_active_workspace_authority(
                 self.workspace,
                 self._workspace_root_identity,
@@ -402,6 +411,7 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             self._revalidate_workspace_root()
             self._stream = stream
             self._workspace_lock_fd = workspace_lock_fd
+            self._owner_published = publish
             return self
         except Exception:
             if authority_bound:
@@ -424,11 +434,26 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             if directory_fd is not None:
                 os.close(directory_fd)
 
+    def publish_current_owner(self) -> WorkspaceLease:
+        """Durably replace predecessor metadata only after stale recovery is resolved."""
+
+        stream = self._stream
+        if stream is None:
+            raise OSError("workspace lease must be acquired before owner publication")
+        if self._owner_published:
+            return self
+        self._revalidate_run_root()
+        self._revalidate_workspace_root()
+        self._persist_current_owner(stream, None)
+        self._owner_published = True
+        return self
+
     def release(self) -> None:
         stream = self._stream
         workspace_lock_fd = self._workspace_lock_fd
         self._stream = None
         self._workspace_lock_fd = None
+        self._owner_published = False
         authority_cleared = True
         if self._authority_bound:
             authority_cleared = clear_active_workspace_authority(
