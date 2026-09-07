@@ -108,7 +108,29 @@ def test_capacity_scan_excludes_known_run_control_files(
     assert (store.run_root / path).read_bytes() == b"1234"
 
 
-@pytest.mark.skipif(os.name == "nt", reason="symlink creation is not reliably available on Windows CI")
+def test_capacity_scan_enforces_tree_entry_bound_before_publish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = EvidenceStore(tmp_path / "artifacts", "run-tree-bound")
+    monkeypatch.setattr(evidence_module, "_MAX_ARTIFACT_TREE_ENTRIES", 2)
+    for name in ("one", "two", "three"):
+        (store.run_root / name).mkdir()
+
+    rejected = store.run_root / "rejected.bin"
+    with pytest.raises(ValueError, match="tree exceeds persistence entry limit"):
+        store.register_artifact(
+            relative_path="rejected.bin",
+            content=b"x",
+            originating_tool="test",
+        )
+
+    assert not rejected.exists()
+
+
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="symlink creation is not reliably available on Windows CI",
+)
 def test_capacity_scan_fails_closed_on_unregistered_symlink(
     tmp_path: Path,
 ) -> None:
