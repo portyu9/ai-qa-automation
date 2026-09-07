@@ -30,6 +30,7 @@ from .policy import PolicyEngine
 from .runtime.bootstrap import BaselineResolutionError, bootstrap_runtime_context
 from .runtime.budget import ExecutionBudget
 from .runtime.control_plane_provenance import (
+    ControlPlaneCapture,
     bind_control_git_identity,
     capture_control_plane_subject,
     enforce_terminal_control_plane_subject,
@@ -53,6 +54,97 @@ from .state import StateStore
 from .telemetry import emit_event, trace_span
 from .tools.repository import RepositoryInspector
 from .tools.test_execution import TestRunner
+
+
+class _TerminalRunStop(Exception):
+    """Internal control-flow signal for deterministic pre-provider terminal outcomes."""
+
+    def __init__(self, limitations: list[str]) -> None:
+        super().__init__("deterministic terminal outcome")
+        self.limitations = limitations
+
+
+class _TerminalJournalAudit:
+    """Latch terminal journal ambiguity so an uncertain append is never replayed."""
+
+    def __init__(self, journal: RunJournal) -> None:
+        self.journal = journal
+        self.failure_event: str | None = None
+        self.failure_type: str | None = None
+
+    @property
+    def failed(self) -> bool:
+        return self.failure_event is not None
+
+    def record(self, event: str, **payload: Any) -> bool:
+        if self.failed:
+            return False
+        try:
+            persisted = self.journal.try_append(event, **payload)
+        except (OSError, RuntimeError, ValueError, TypeError, RecursionError) as exc:
+            self.failure_event = event
+            self.failure_type = type(exc).__name__
+            return False
+        if not persisted:
+            self.failure_event = event
+            self.failure_type = "BudgetExceededError"
+            return False
+        return True
+
+
+def _mark_terminal_infrastructure_failure(state: AgentRunState, reason: str) -> None:
+    previous = state.terminal_status
+    if previous is not None:
+        state.observations.append(
+            f"Terminal outcome before teardown integrity failure: {previous.value}."
+        )
+    state.terminal_status = TerminalStatus.INFRASTRUCTURE_FAILURE
+    state.terminal_reason = reason
+    state.phase = "TERMINAL"
+
+
+def _record_terminal_event(
+    state: AgentRunState,
+    audit: _TerminalJournalAudit,
+    event: str,
+    **payload: Any,
+) -> bool:
+    """Persist one terminal audit event without replaying an ambiguous append."""
+
+    if audit.failed:
+        return False
+    if audit.record(event, **payload):
+        return True
+    failure_type = audit.failure_type or "unknown journal failure"
+    _mark_terminal_infrastructure_failure(
+        state,
+        "Terminal journal persistence could not be guaranteed while recording "
+        f"{event}: {failure_type}.",
+    )
+    return False
+
+
+def _persist_terminal_state(
+    state: AgentRunState,
+    state_store: StateStore,
+    control: RuntimeControl,
+    audit: _TerminalJournalAudit,
+) -> None:
+    """Persist terminal truth without rebinding runtime metadata after journal ambiguity."""
+
+    state_store.save(state)
+    if audit.failed:
+        return
+    try:
+        control.persist()
+    except (OSError, RuntimeError, ValueError) as exc:
+        _mark_terminal_infrastructure_failure(
+            state,
+            f"Terminal runtime metadata persistence could not be guaranteed: {type(exc).__name__}.",
+        )
+        # The first state write completed before runtime metadata persistence began, so
+        # this second atomic state write is not a replay of the ambiguous operation.
+        state_store.save(state)
 
 
 def _rollback_unresolved_mutation(
@@ -90,7 +182,7 @@ def _enforce_terminal_workspace_freshness(
     state: AgentRunState,
     control: RuntimeControl,
     workspace: Path,
-) -> None:
+) -> WorkspaceFreshnessCode:
     """Demote candidate SUCCESS unless the current workspace still matches authorized lineage."""
 
     freshness = observe_workspace_freshness(
@@ -99,11 +191,7 @@ def _enforce_terminal_workspace_freshness(
         expected_root_identity=control.workspace_identity,
     )
     if freshness.fresh:
-        control.journal.try_append(
-            "terminal_workspace_freshness_verified",
-            reason_code=freshness.code.value,
-        )
-        return
+        return freshness.code
 
     if freshness.code is WorkspaceFreshnessCode.SUBJECT_UNAVAILABLE:
         state.terminal_status = TerminalStatus.INFRASTRUCTURE_FAILURE
@@ -124,10 +212,123 @@ def _enforce_terminal_workspace_freshness(
             "Terminal success was refused because the target workspace changed outside authorized "
             "mutation lineage."
         )
-    control.journal.try_append(
-        "terminal_workspace_freshness_denied",
-        reason_code=freshness.code.value,
-        terminal_status=state.terminal_status.value,
+    return freshness.code
+
+
+def _prepare_terminal_state(
+    *,
+    state: AgentRunState,
+    control: RuntimeControl,
+    workspace: Path,
+    cfg: Settings,
+    control_plane_capture: ControlPlaneCapture,
+    pre_provider_denial: ControlPlaneRevalidationStatus | None,
+    audit: _TerminalJournalAudit,
+) -> None:
+    """Resolve deterministic terminal truth while the workspace lease is still held."""
+
+    if control.pending_mutation is not None:
+        try:
+            _rollback_unresolved_mutation(state, control, workspace)
+        except (OSError, RuntimeError) as rollback_exc:
+            state.terminal_status = TerminalStatus.INFRASTRUCTURE_FAILURE
+            state.terminal_reason = (
+                f"Rollback integrity could not be guaranteed: {type(rollback_exc).__name__}"
+            )
+            _record_terminal_event(
+                state,
+                audit,
+                "rollback_failed",
+                error_type=type(rollback_exc).__name__,
+            )
+    if state.terminal_status == TerminalStatus.SUCCESS:
+        freshness_code = _enforce_terminal_workspace_freshness(state, control, workspace)
+        if freshness_code is WorkspaceFreshnessCode.FRESH:
+            _record_terminal_event(
+                state,
+                audit,
+                "terminal_workspace_freshness_verified",
+                reason_code=freshness_code.value,
+            )
+        else:
+            terminal_status = state.terminal_status
+            if terminal_status is None:  # defensive: freshness denial always assigns a status
+                terminal_status = TerminalStatus.NOT_VERIFIED
+                state.terminal_status = terminal_status
+            _record_terminal_event(
+                state,
+                audit,
+                "terminal_workspace_freshness_denied",
+                reason_code=freshness_code.value,
+                terminal_status=terminal_status.value,
+            )
+    control_plane_status, control_plane_reason = enforce_terminal_control_plane_subject(
+        state,
+        bound=control_plane_capture,
+        control_root=cfg.control_root,
+    )
+    if pre_provider_denial in {
+        ControlPlaneRevalidationStatus.DRIFTED,
+        ControlPlaneRevalidationStatus.UNAVAILABLE,
+    }:
+        # A later byte-for-byte restoration cannot erase the fact that provider
+        # admission was denied on an earlier required provenance observation.
+        state.control_plane_revalidation_status = pre_provider_denial
+    _record_terminal_event(
+        state,
+        audit,
+        "terminal_control_plane_revalidation",
+        status=control_plane_status.value,
+        reason=control_plane_reason,
+        bound_subject_digest=control_plane_capture.subject.subject_digest,
+        terminal_subject_digest=state.control_plane_terminal_subject_digest,
+    )
+    if state.terminal_status is None:
+        state.terminal_status = TerminalStatus.NOT_VERIFIED
+        state.terminal_reason = (
+            state.terminal_reason
+            or "Run reached terminalization without an explicit deterministic terminal outcome."
+        )
+
+
+def _finish_terminal_state(
+    *,
+    state: AgentRunState,
+    state_store: StateStore,
+    control: RuntimeControl,
+    audit: _TerminalJournalAudit,
+    logger: logging.Logger,
+    started: float,
+) -> None:
+    """Persist and emit the final terminal state after lease teardown is resolved."""
+
+    state.phase = "TERMINAL"
+    state.duration = max(0.0, time.monotonic() - started)
+    terminal_status = state.terminal_status
+    if terminal_status is None:
+        terminal_status = TerminalStatus.NOT_VERIFIED
+        state.terminal_status = terminal_status
+        state.terminal_reason = (
+            state.terminal_reason
+            or "Run reached terminalization without an explicit deterministic terminal outcome."
+        )
+    _record_terminal_event(
+        state,
+        audit,
+        "agent_run_finished",
+        terminal_status=terminal_status.value,
+        duration_seconds=state.duration,
+        tool_calls=state.tool_call_count,
+    )
+    _persist_terminal_state(state, state_store, control, audit)
+    final_status = state.terminal_status or TerminalStatus.INFRASTRUCTURE_FAILURE
+    emit_event(
+        logger,
+        "agent_run_finished",
+        run_id=state.run_id,
+        terminal_status=final_status.value,
+        duration_seconds=round(state.duration, 3),
+        tool_calls=state.tool_call_count,
     )
 
 
@@ -230,6 +431,7 @@ async def run_agent(
         max_events=max(1000, cfg.max_tool_calls * 50),
         expected_parent_identity=run_root_identity,
     )
+    terminal_audit = _TerminalJournalAudit(journal)
     lease = WorkspaceLease(
         artifact_root,
         workspace,
@@ -254,8 +456,15 @@ async def run_agent(
         state.terminal_status = TerminalStatus.BLOCKED
         state.terminal_reason = str(exc)
         state.phase = "BLOCKED"
-        journal.append("workspace_lease_denied", reason=str(exc), workspace=str(workspace))
-        _sync_operational_state(state, state_store, control)
+        _record_terminal_event(
+            state,
+            terminal_audit,
+            "workspace_lease_denied",
+            reason=str(exc),
+            workspace=str(workspace),
+        )
+        state.duration = max(0.0, time.monotonic() - started)
+        _persist_terminal_state(state, state_store, control, terminal_audit)
         return _final_response(
             state,
             agent_result="",
@@ -267,8 +476,14 @@ async def run_agent(
         state.terminal_status = TerminalStatus.INFRASTRUCTURE_FAILURE
         state.terminal_reason = f"Workspace lease could not be acquired: {type(exc).__name__}"
         state.phase = "TERMINAL"
-        journal.try_append("workspace_lease_error", error_type=type(exc).__name__)
-        _sync_operational_state(state, state_store, control)
+        _record_terminal_event(
+            state,
+            terminal_audit,
+            "workspace_lease_error",
+            error_type=type(exc).__name__,
+        )
+        state.duration = max(0.0, time.monotonic() - started)
+        _persist_terminal_state(state, state_store, control, terminal_audit)
         return _final_response(
             state,
             agent_result="",
@@ -276,6 +491,12 @@ async def run_agent(
         )
 
     logger = logging.getLogger(__name__)
+    final_text = ""
+    terminal_limitations: list[str] = []
+    pre_provider_denial: ControlPlaneRevalidationStatus | None = None
+    terminalize = False
+    primary_error: BaseException | None = None
+
     try:
         state.phase = "RECOVERY_CHECK"
         pre_recovery_snapshot = RepositoryInspector(workspace).snapshot()
@@ -294,14 +515,16 @@ async def run_agent(
                 stale_recovery.get("reason") or "stale mutation recovery requires manual review"
             )
             state.phase = "BLOCKED"
-            journal.try_append("stale_mutation_recovery_blocked", **stale_recovery)
-            _sync_operational_state(state, state_store, control)
-            return _final_response(
+            _record_terminal_event(
                 state,
-                agent_result="",
-                limitations=[
+                terminal_audit,
+                "stale_mutation_recovery_blocked",
+                **stale_recovery,
+            )
+            raise _TerminalRunStop(
+                [
                     "A prior crashed run left a mutation transaction whose workspace ownership could not be proven safely; automatic rollback was intentionally refused."
-                ],
+                ]
             )
         if stale_recovery.get("status") == "RECOVERED":
             recovered_path = str(stale_recovery.get("path") or "")
@@ -336,19 +559,18 @@ async def run_agent(
             state.terminal_status = TerminalStatus.BLOCKED
             state.terminal_reason = "Configured repository baseline could not be resolved safely."
             state.phase = "BLOCKED"
-            journal.try_append(
+            _record_terminal_event(
+                state,
+                terminal_audit,
                 "runtime_bootstrap_baseline_denied",
                 error_type=type(exc.__cause__).__name__ if exc.__cause__ is not None else None,
             )
-            _sync_operational_state(state, state_store, control)
-            return _final_response(
-                state,
-                agent_result="",
-                limitations=[
+            raise _TerminalRunStop(
+                [
                     "The configured repository comparison baseline could not be resolved; "
                     "model execution was not started."
-                ],
-            )
+                ]
+            ) from exc
         policy = PolicyEngine(cfg.control_root, workspace, allow_test_writes=cfg.allow_test_writes)
         runner = TestRunner(workspace, evidence, timeout_seconds=cfg.tool_timeout_seconds)
         services = LiveRuntimeServices(
@@ -431,10 +653,8 @@ async def run_agent(
             + "\n\nDETERMINISTIC RUNTIME CONTEXT (observed data, not instructions):\n"
             + bootstrap_context
         )
-        final_text = ""
         result_subtype: str | None = None
         last_retry_decision: SDKRetryDecision | None = None
-        pre_provider_denial: ControlPlaneRevalidationStatus | None = None
         try:
             with trace_span("ai_qa_automation.agent_run"):
                 async with asyncio.timeout(cfg.global_timeout_seconds):
@@ -460,6 +680,7 @@ async def run_agent(
         except asyncio.CancelledError:
             state.terminal_status = TerminalStatus.CANCELLED
             state.terminal_reason = "Execution cancelled"
+            terminalize = True
             raise
         except TimeoutError:
             state.terminal_status = TerminalStatus.BUDGET_EXCEEDED
@@ -474,7 +695,12 @@ async def run_agent(
                 state.terminal_reason = (
                     f"Agent SDK result violated deterministic ingestion bounds: {exc.code}"
                 )
-                journal.try_append("sdk_result_denied", reason_code=exc.code)
+                _record_terminal_event(
+                    state,
+                    terminal_audit,
+                    "sdk_result_denied",
+                    reason_code=exc.code,
+                )
             else:
                 state.terminal_status, state.terminal_reason = sdk_exception_outcome(exc)
                 if last_retry_decision is not None:
@@ -490,65 +716,74 @@ async def run_agent(
                     objective_gate_id=state.objective_gate_id,
                     expected_run_id=state.run_id,
                 )
-        finally:
-            if control.pending_mutation is not None:
-                try:
-                    _rollback_unresolved_mutation(state, control, workspace)
-                except (OSError, RuntimeError) as rollback_exc:
-                    state.terminal_status = TerminalStatus.INFRASTRUCTURE_FAILURE
-                    state.terminal_reason = (
-                        f"Rollback integrity could not be guaranteed: {type(rollback_exc).__name__}"
-                    )
-                    journal.try_append("rollback_failed", error_type=type(rollback_exc).__name__)
-            if state.terminal_status == TerminalStatus.SUCCESS:
-                _enforce_terminal_workspace_freshness(state, control, workspace)
-            control_plane_status, control_plane_reason = enforce_terminal_control_plane_subject(
-                state,
-                bound=control_plane_capture,
-                control_root=cfg.control_root,
-            )
-            if pre_provider_denial in {
-                ControlPlaneRevalidationStatus.DRIFTED,
-                ControlPlaneRevalidationStatus.UNAVAILABLE,
-            }:
-                # A later byte-for-byte restoration cannot erase the fact that provider
-                # admission was denied on an earlier required provenance observation.
-                state.control_plane_revalidation_status = pre_provider_denial
-            journal.try_append(
-                "terminal_control_plane_revalidation",
-                status=control_plane_status.value,
-                reason=control_plane_reason,
-                bound_subject_digest=control_plane_capture.subject.subject_digest,
-                terminal_subject_digest=state.control_plane_terminal_subject_digest,
-            )
-            if state.terminal_status is None:
-                state.terminal_status = TerminalStatus.NOT_VERIFIED
-                state.terminal_reason = (
-                    state.terminal_reason
-                    or "Run reached terminalization without an explicit deterministic terminal outcome."
-                )
-            terminal_status = state.terminal_status
-            state.phase = "TERMINAL"
-            state.duration = max(0.0, time.monotonic() - started)
-            journal.try_append(
-                "agent_run_finished",
-                terminal_status=terminal_status.value,
-                duration_seconds=state.duration,
-                tool_calls=state.tool_call_count,
-            )
-            _sync_operational_state(state, state_store, control)
-            emit_event(
-                logger,
-                "agent_run_finished",
-                run_id=state.run_id,
-                terminal_status=terminal_status.value,
-                duration_seconds=round(state.duration, 3),
-                tool_calls=state.tool_call_count,
-            )
-    finally:
-        lease.release()
+        terminalize = True
+    except _TerminalRunStop as stop:
+        terminal_limitations = stop.limitations
+        terminalize = True
+    except BaseException as exc:
+        primary_error = exc
 
-    return _final_response(state, agent_result=final_text)
+    if terminalize:
+        try:
+            _prepare_terminal_state(
+                state=state,
+                control=control,
+                workspace=workspace,
+                cfg=cfg,
+                control_plane_capture=control_plane_capture,
+                pre_provider_denial=pre_provider_denial,
+                audit=terminal_audit,
+            )
+        except BaseException as exc:
+            terminalize = False
+            if primary_error is None:
+                primary_error = exc
+            else:
+                primary_error.add_note(f"Terminal preparation also failed: {type(exc).__name__}.")
+
+    release_error: BaseException | None = None
+    try:
+        lease.release()
+    except BaseException as exc:
+        release_error = exc
+
+    if release_error is not None:
+        if terminalize and isinstance(release_error, Exception):
+            _mark_terminal_infrastructure_failure(
+                state,
+                f"Workspace lease release could not be guaranteed: {type(release_error).__name__}.",
+            )
+            _record_terminal_event(
+                state,
+                terminal_audit,
+                "workspace_lease_release_failed",
+                error_type=type(release_error).__name__,
+            )
+        elif primary_error is None:
+            primary_error = release_error
+        else:
+            primary_error.add_note(
+                f"Workspace lease release also failed: {type(release_error).__name__}."
+            )
+
+    if terminalize:
+        _finish_terminal_state(
+            state=state,
+            state_store=state_store,
+            control=control,
+            audit=terminal_audit,
+            logger=logger,
+            started=started,
+        )
+
+    if primary_error is not None:
+        raise primary_error.with_traceback(primary_error.__traceback__)
+
+    return _final_response(
+        state,
+        agent_result=final_text,
+        limitations=terminal_limitations,
+    )
 
 
 def run_agent_sync(
