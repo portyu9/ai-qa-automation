@@ -39,6 +39,10 @@ Before recursive redaction/sanitization, a new `EvidenceItem` must itself satisf
 
 Cumulative manifest capacity is checked before audit registration and durable manifest replacement. If a non-regulated evidence registration would exceed the manifest ceiling, the staged in-memory item is removed and the prior manifest remains authoritative. Regulated-mode recovery semantics remain stricter: once an audit record is durably appended, the corresponding live registry entry is retained if a later manifest write fails so the framework cannot pretend the audited event disappeared.
 
+Artifact quota enforcement is based on bounded physical state below the owned run root rather than manifest registration alone. The scan is streaming and depth/entry bounded; on descriptor-capable platforms it opens each directory and payload relative to an already-owned directory descriptor, refuses symlinks and non-regular payloads, and checks pathname identity before charging the observed size. It counts registered artifact payloads plus durable orphan or unexpected regular payloads left by interrupted or ambiguous closure. The evidence manifest, regulated audit log, and identity-authorized shared root control files (`state.json`, `runtime.json`, and `journal.jsonl`) are excluded from artifact accounting; their own persistence boundaries remain authoritative. Other regular files, including leftover rollback backups, are conservatively charged rather than silently exempted. The reserved root control filenames cannot be used for new artifact registration, so an artifact cannot masquerade as an excluded control file.
+
+The same physical accounting runs when an `EvidenceStore` is restored and immediately before each new artifact publication. A durable orphan therefore remains charged after restart, and an already-over-limit run fails closed before further artifact work. This keeps the existing artifact byte/count ceilings effective without deleting ambiguous durable bytes or introducing a second quota ledger.
+
 ## Regulated audit log
 
 The regulated audit path applies the same resource discipline before append:
@@ -51,7 +55,7 @@ The regulated audit path applies the same resource discipline before append:
 6. if a caught append/flush failure occurs after bytes were written, the descriptor is truncated to its exact pre-append length and `fsync`ed before the store may continue;
 7. if rollback cannot be durably proven, that `EvidenceStore` instance latches regulated audit writes closed rather than appending behind an uncertain tail.
 8. if the first audit file write succeeds but directory `fsync`, or descriptor close confirmation, fails, the store also latches audit writes closed because durable publication cannot be proven.
-9. caught operator-interruption/cancellation-style exceptions that occur before audit authority advances roll back staged evidence or artifact registry state (and newly linked artifact files) before the original exception is re-raised.
+9. caught operator-interruption/cancellation-style exceptions that occur before audit authority advances roll back staged registry state. Once artifact bytes have been durably published, a later registration-closure failure intentionally does not delete them by pathname because ownership may have become ambiguous; those orphan bytes remain charged against the artifact quota on restart and later registration.
 
 For the same accepted record, event hash bytes and audit-line JSON formatting therefore remain compatible with the prior representation; the implementation changes allocation and failure-recovery behavior, not the audit-chain digest contract.
 

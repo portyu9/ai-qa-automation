@@ -44,6 +44,18 @@ _MAX_EVIDENCE_COUNT = 10_000
 _MAX_ARTIFACT_BYTES = 32_000_000
 _MAX_ARTIFACT_COUNT = 5_000
 _MAX_TOTAL_ARTIFACT_BYTES = 256_000_000
+_MAX_ARTIFACT_TREE_ENTRIES = 20_000
+_MAX_ARTIFACT_TREE_DEPTH = 128
+_RUN_PERSISTENCE_RESERVED_FILES = frozenset(
+    {
+        "audit-log.jsonl",
+        "evidence-manifest.json",
+        "journal.jsonl",
+        "runtime.json",
+        "state.json",
+    }
+)
+_SHARED_RUN_CONTROL_FILES = frozenset({"journal.jsonl", "runtime.json", "state.json"})
 _MANIFEST_AUDIT_RESERVE_BYTES = 1_024
 _CANONICAL_EVIDENCE_HASH_ALGORITHM = "sha256-canonical-json-sorted-keys"
 
@@ -372,6 +384,7 @@ class EvidenceStore:
     ) -> None:
         self.run_id = run_id
         self.regulated_mode = regulated_mode
+        self._shared_run_persistence = expected_run_root_identity is not None
         artifact_root = root.expanduser().resolve()
         requested_run = Path(run_id)
         if requested_run.is_absolute() or not requested_run.parts or ".." in requested_run.parts:
@@ -415,6 +428,7 @@ class EvidenceStore:
             self._restore_audit_tail()
             self._verify_artifact_hashes()
             self._verify_registry_against_audit()
+        self._durable_artifact_usage()
 
     @property
     def run_root_identity(self) -> tuple[int, int]:
@@ -554,25 +568,242 @@ class EvidenceStore:
             raise ValueError("artifact path escapes run root")
         return destination
 
-    def _registered_artifact_bytes(self) -> int:
-        total = 0
-        for record in self._artifacts.values():
-            try:
-                current = self._stat_owned_entry(
-                    record.path,
-                    label=f"registered artifact {record.path}",
-                )
-            except FileNotFoundError as exc:
-                raise ValueError(f"registered artifact is unavailable: {record.path}") from exc
-            if not stat.S_ISREG(current.st_mode):
-                raise ValueError(f"registered artifact is unavailable: {record.path}")
-            size = current.st_size
+    def _is_unregistered_control_file(self, relative: str, registered_paths: set[str]) -> bool:
+        if relative in registered_paths:
+            return False
+        if relative == "evidence-manifest.json":
+            return True
+        if relative == "audit-log.jsonl":
+            return self.regulated_mode
+        return self._shared_run_persistence and relative in _SHARED_RUN_CONTROL_FILES
+
+    def _durable_artifact_usage(self) -> tuple[int, int]:
+        """Count all durable artifact payloads, including unregistered crash/closure orphans."""
+
+        self._revalidate_run_root()
+        registered_paths = {record.path for record in self._artifacts.values()}
+        seen_registered: set[str] = set()
+        total_bytes = 0
+        payload_count = 0
+        tree_entries = 0
+
+        def account_payload(relative: str, size: int) -> None:
+            nonlocal payload_count, total_bytes
+            if self._is_unregistered_control_file(relative, registered_paths):
+                return
+            payload_count += 1
+            if payload_count > _MAX_ARTIFACT_COUNT:
+                raise ValueError("artifact storage exceeds persistence count limit")
             if size > _MAX_ARTIFACT_BYTES:
-                raise ValueError(f"registered artifact exceeds persistence limit: {record.path}")
-            total += size
-            if total > _MAX_TOTAL_ARTIFACT_BYTES:
-                raise ValueError("registered artifacts exceed cumulative persistence limit")
-        return total
+                raise ValueError(f"durable artifact exceeds persistence limit: {relative}")
+            total_bytes += size
+            if total_bytes > _MAX_TOTAL_ARTIFACT_BYTES:
+                raise ValueError("durable artifacts exceed cumulative persistence byte limit")
+            if relative in registered_paths:
+                seen_registered.add(relative)
+
+        def account_tree_entry() -> None:
+            nonlocal tree_entries
+            tree_entries += 1
+            if tree_entries > _MAX_ARTIFACT_TREE_ENTRIES:
+                raise ValueError("artifact storage tree exceeds persistence entry limit")
+
+        def scan_descriptor_directory(
+            directory_fd: int,
+            relative_directory: Path,
+            depth: int,
+        ) -> None:
+            if depth > _MAX_ARTIFACT_TREE_DEPTH:
+                raise ValueError("artifact storage tree exceeds persistence depth limit")
+            with os.scandir(directory_fd) as entries:
+                for entry in entries:
+                    account_tree_entry()
+                    relative = (relative_directory / entry.name).as_posix()
+                    try:
+                        observed = entry.stat(follow_symlinks=False)
+                    except OSError as exc:
+                        raise ValueError(
+                            f"artifact storage changed during capacity scan: {relative}"
+                        ) from exc
+                    if stat.S_ISLNK(observed.st_mode):
+                        raise ValueError(
+                            f"artifact storage contains a symlink with ambiguous ownership: {relative}"
+                        )
+                    if stat.S_ISDIR(observed.st_mode):
+                        flags = (
+                            os.O_RDONLY
+                            | getattr(os, "O_DIRECTORY", 0)
+                            | getattr(os, "O_NOFOLLOW", 0)
+                            | getattr(os, "O_CLOEXEC", 0)
+                        )
+                        try:
+                            child_fd = os.open(entry.name, flags, dir_fd=directory_fd)
+                        except OSError as exc:
+                            raise ValueError(
+                                f"artifact storage directory ownership changed: {relative}"
+                            ) from exc
+                        try:
+                            opened = os.fstat(child_fd)
+                            if not stat.S_ISDIR(opened.st_mode) or _identity(opened) != _identity(
+                                observed
+                            ):
+                                raise ValueError(
+                                    f"artifact storage directory ownership changed: {relative}"
+                                )
+                            scan_descriptor_directory(
+                                child_fd,
+                                relative_directory / entry.name,
+                                depth + 1,
+                            )
+                            current = os.stat(
+                                entry.name,
+                                dir_fd=directory_fd,
+                                follow_symlinks=False,
+                            )
+                            if not stat.S_ISDIR(current.st_mode) or _identity(current) != _identity(
+                                opened
+                            ):
+                                raise ValueError(
+                                    f"artifact storage directory ownership changed: {relative}"
+                                )
+                        finally:
+                            os.close(child_fd)
+                        continue
+                    if not stat.S_ISREG(observed.st_mode):
+                        raise ValueError(
+                            f"artifact storage contains an unexpected non-regular entry: {relative}"
+                        )
+
+                    flags = (
+                        os.O_RDONLY
+                        | getattr(os, "O_NOFOLLOW", 0)
+                        | getattr(os, "O_CLOEXEC", 0)
+                        | getattr(os, "O_BINARY", 0)
+                    )
+                    try:
+                        file_fd = os.open(entry.name, flags, dir_fd=directory_fd)
+                    except OSError as exc:
+                        raise ValueError(
+                            f"artifact storage payload ownership changed: {relative}"
+                        ) from exc
+                    try:
+                        opened = os.fstat(file_fd)
+                        if not stat.S_ISREG(opened.st_mode) or _identity(opened) != _identity(
+                            observed
+                        ):
+                            raise ValueError(
+                                f"artifact storage payload ownership changed: {relative}"
+                            )
+                        current = os.stat(
+                            entry.name,
+                            dir_fd=directory_fd,
+                            follow_symlinks=False,
+                        )
+                        if (
+                            not stat.S_ISREG(current.st_mode)
+                            or _identity(current) != _identity(opened)
+                            or current.st_size != opened.st_size
+                        ):
+                            raise ValueError(
+                                f"artifact storage payload ownership changed: {relative}"
+                            )
+                        account_payload(relative, opened.st_size)
+                    finally:
+                        os.close(file_fd)
+
+        def scan_path_directory(
+            directory_path: Path,
+            relative_directory: Path,
+            depth: int,
+        ) -> None:
+            if depth > _MAX_ARTIFACT_TREE_DEPTH:
+                raise ValueError("artifact storage tree exceeds persistence depth limit")
+            try:
+                entries = os.scandir(directory_path)
+            except OSError as exc:
+                raise ValueError("artifact storage could not be scanned safely") from exc
+            with entries:
+                for entry in entries:
+                    account_tree_entry()
+                    relative = (relative_directory / entry.name).as_posix()
+                    try:
+                        observed = entry.stat(follow_symlinks=False)
+                    except OSError as exc:
+                        raise ValueError(
+                            f"artifact storage changed during capacity scan: {relative}"
+                        ) from exc
+                    if stat.S_ISLNK(observed.st_mode):
+                        raise ValueError(
+                            f"artifact storage contains a symlink with ambiguous ownership: {relative}"
+                        )
+                    entry_path = directory_path / entry.name
+                    if stat.S_ISDIR(observed.st_mode):
+                        scan_path_directory(
+                            entry_path,
+                            relative_directory / entry.name,
+                            depth + 1,
+                        )
+                        try:
+                            current = entry_path.stat(follow_symlinks=False)
+                        except OSError as exc:
+                            raise ValueError(
+                                f"artifact storage directory ownership changed: {relative}"
+                            ) from exc
+                        if not stat.S_ISDIR(current.st_mode) or _identity(current) != _identity(
+                            observed
+                        ):
+                            raise ValueError(
+                                f"artifact storage directory ownership changed: {relative}"
+                            )
+                        continue
+                    if not stat.S_ISREG(observed.st_mode):
+                        raise ValueError(
+                            f"artifact storage contains an unexpected non-regular entry: {relative}"
+                        )
+                    try:
+                        current = entry_path.stat(follow_symlinks=False)
+                    except OSError as exc:
+                        raise ValueError(
+                            f"artifact storage payload ownership changed: {relative}"
+                        ) from exc
+                    if (
+                        not stat.S_ISREG(current.st_mode)
+                        or _identity(current) != _identity(observed)
+                        or current.st_size != observed.st_size
+                    ):
+                        raise ValueError(f"artifact storage payload ownership changed: {relative}")
+                    account_payload(relative, observed.st_size)
+
+        if self._descriptor_relative_root:
+            flags = (
+                os.O_RDONLY
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0)
+            )
+            try:
+                root_fd = os.open(self.run_root, flags)
+            except OSError as exc:
+                raise ValueError("artifact storage root could not be opened safely") from exc
+            try:
+                opened_root = os.fstat(root_fd)
+                if (
+                    not stat.S_ISDIR(opened_root.st_mode)
+                    or _identity(opened_root) != self._run_root_identity
+                ):
+                    raise ValueError("artifact storage root ownership changed during capacity scan")
+                scan_descriptor_directory(root_fd, Path(), 0)
+            finally:
+                os.close(root_fd)
+        else:
+            scan_path_directory(self.run_root, Path(), 0)
+
+        missing = registered_paths - seen_registered
+        if missing:
+            missing_path = min(missing)
+            raise ValueError(f"registered artifact is unavailable: {missing_path}")
+        self._revalidate_run_root()
+        return total_bytes, payload_count
 
     def add(self, item: EvidenceItem) -> EvidenceItem:
         with self._lock:
@@ -622,13 +853,24 @@ class EvidenceStore:
                 raise TypeError("artifact content must be bytes")
             if len(content) > _MAX_ARTIFACT_BYTES:
                 raise ValueError(f"artifact exceeds {_MAX_ARTIFACT_BYTES} byte persistence limit")
-            if len(self._artifacts) >= _MAX_ARTIFACT_COUNT:
-                raise ValueError("artifact registry exceeds persistence count limit")
-            if self._registered_artifact_bytes() + len(content) > _MAX_TOTAL_ARTIFACT_BYTES:
-                raise ValueError("artifact registry exceeds cumulative persistence byte limit")
 
             destination = self._owned_artifact_path(relative_path)
             normalized_relative = Path(relative_path).as_posix()
+            if normalized_relative in _RUN_PERSISTENCE_RESERVED_FILES:
+                raise ValueError(
+                    "artifact path collides with reserved run persistence control file"
+                )
+
+            self._assert_control_file_owned("evidence-manifest.json")
+            if self.regulated_mode:
+                self._assert_control_file_owned("audit-log.jsonl")
+
+            durable_bytes, durable_count = self._durable_artifact_usage()
+            if durable_count >= _MAX_ARTIFACT_COUNT:
+                raise ValueError("artifact storage exceeds persistence count limit")
+            if durable_bytes + len(content) > _MAX_TOTAL_ARTIFACT_BYTES:
+                raise ValueError("artifact storage exceeds cumulative persistence byte limit")
+
             digest = self.hash_bytes(content)
             record = ArtifactRecord(
                 type=destination.suffix.lstrip(".") or "binary",
