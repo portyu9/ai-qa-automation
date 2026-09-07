@@ -451,7 +451,7 @@ async def run_agent(
     state_store.save(state)
 
     try:
-        lease.acquire()
+        lease.acquire(publish=False)
     except WorkspaceBusyError as exc:
         state.terminal_status = TerminalStatus.BLOCKED
         state.terminal_reason = str(exc)
@@ -532,6 +532,26 @@ async def run_agent(
                 f"Recovered unverified mutation from crashed run before bootstrap: {recovered_path}"
             )
             journal.try_append("stale_mutation_recovered_before_bootstrap", **stale_recovery)
+
+        try:
+            lease.publish_current_owner()
+        except OSError as exc:
+            state.terminal_status = TerminalStatus.INFRASTRUCTURE_FAILURE
+            state.terminal_reason = (
+                f"Workspace lease ownership could not be published safely: {type(exc).__name__}"
+            )
+            state.phase = "TERMINAL"
+            _record_terminal_event(
+                state,
+                terminal_audit,
+                "workspace_lease_publish_failed",
+                error_type=type(exc).__name__,
+            )
+            raise _TerminalRunStop(
+                [
+                    "Stale recovery finished, but the current workspace lease owner could not be persisted safely; model execution was not started."
+                ]
+            ) from exc
 
         state.phase = "BOOTSTRAP"
         journal.append(
