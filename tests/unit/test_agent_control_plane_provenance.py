@@ -78,7 +78,8 @@ async def test_early_blocked_report_preserves_bound_control_subject_without_mode
         def __init__(self, *args: object, **kwargs: object) -> None:
             raise AssertionError("model client must not be constructed after lease denial")
 
-    def deny_lease(self: WorkspaceLease) -> None:
+    def deny_lease(self: WorkspaceLease, *, publish: bool = True) -> None:
+        assert publish is False
         raise WorkspaceBusyError("workspace already leased")
 
     monkeypatch.setattr("claude_agent_sdk.ClaudeSDKClient", ForbiddenClient)
