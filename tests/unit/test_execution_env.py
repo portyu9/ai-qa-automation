@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -114,6 +115,71 @@ def test_bounded_subprocess_retains_bounded_output_tail(tmp_path: Path) -> None:
     assert result.stdout_truncated is True
     assert len(result.stdout.encode("utf-8")) < 256
     assert result.timed_out is False
+
+
+@pytest.mark.skipif(os.name == "nt", reason="waitid/WNOWAIT cleanup ordering is POSIX-only")
+def test_successful_posix_group_cleanup_occurs_before_direct_child_reap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_cleanup = execution_env._terminate_process_tree
+    cleanup_returncodes: list[int | None] = []
+
+    def checked_cleanup(
+        process: subprocess.Popen[bytes],
+        *,
+        env: dict[str, str],
+    ) -> None:
+        returncode = process.returncode
+        cleanup_returncodes.append(returncode)
+        assert returncode is None
+        original_cleanup(process, env=env)
+
+    monkeypatch.setattr(execution_env, "_terminate_process_tree", checked_cleanup)
+
+    result = run_bounded_subprocess(
+        [sys.executable, "-c", "print('ok')"],
+        cwd=tmp_path,
+        env=_python_env(),
+        timeout_seconds=5,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == "ok\n"
+    assert result.timed_out is False
+    assert cleanup_returncodes == [None]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="waitid/WNOWAIT cleanup ordering is POSIX-only")
+def test_timed_out_posix_group_cleanup_retains_direct_child_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_cleanup = execution_env._terminate_process_tree
+    cleanup_returncodes: list[int | None] = []
+
+    def checked_cleanup(
+        process: subprocess.Popen[bytes],
+        *,
+        env: dict[str, str],
+    ) -> None:
+        returncode = process.returncode
+        cleanup_returncodes.append(returncode)
+        assert returncode is None
+        original_cleanup(process, env=env)
+
+    monkeypatch.setattr(execution_env, "_terminate_process_tree", checked_cleanup)
+
+    result = run_bounded_subprocess(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        cwd=tmp_path,
+        env=_python_env(),
+        timeout_seconds=0.1,
+    )
+
+    assert result.returncode != 0
+    assert result.timed_out is True
+    assert cleanup_returncodes == [None]
 
 
 def test_bounded_binary_subprocess_preserves_exact_non_utf8_output(tmp_path: Path) -> None:

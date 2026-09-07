@@ -63,6 +63,43 @@ class _BoundedCapture:
     timed_out: bool
 
 
+class _PosixUnreapedExitWaiter:
+    """Observe one POSIX child exit without releasing its PID/process-group identity."""
+
+    def __init__(self, process: subprocess.Popen[bytes]) -> None:
+        self._process = process
+        self._done = threading.Event()
+        self._failure: BaseException | None = None
+        self._thread = threading.Thread(
+            target=self._observe,
+            name="aiqa-posix-unreaped-wait",
+            daemon=True,
+        )
+
+    def _observe(self) -> None:
+        try:
+            status = os.waitid(os.P_PID, self._process.pid, os.WEXITED | os.WNOWAIT)
+            if status is None or status.si_pid != self._process.pid:
+                raise RuntimeError("POSIX child exit observation returned an unexpected identity")
+        except BaseException as exc:
+            self._failure = exc
+        finally:
+            self._done.set()
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def wait(self, timeout_seconds: float) -> bool:
+        if not self._done.wait(timeout_seconds):
+            return False
+        self._thread.join()
+        if self._failure is not None:
+            raise RuntimeError(
+                "POSIX child exit could not be observed without releasing process identity"
+            ) from self._failure
+        return True
+
+
 class _TailBuffer:
     def __init__(self, limit: int) -> None:
         self.limit = limit
@@ -400,8 +437,10 @@ def _terminate_process_tree(
         except ProcessLookupError:
             return
         except OSError:
-            if process.poll() is None:
-                process.kill()
+            # The direct child is deliberately still unreaped while POSIX cleanup
+            # authority is exercised, so its PID cannot yet refer to another process.
+            with suppress(ProcessLookupError):
+                os.kill(process.pid, signal.SIGKILL)
         return
 
     # CREATE_NEW_PROCESS_GROUP above gives Windows taskkill a stable tree root.
@@ -437,6 +476,59 @@ def _validate_timeout(timeout_seconds: int | float) -> None:
 def _validate_output_bound(value: int, *, name: str) -> None:
     if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= _MAX_OUTPUT_BYTES:
         raise ValueError(f"{name} must be an integer between 1 and {_MAX_OUTPUT_BYTES}")
+
+
+def _wait_for_process_and_cleanup_group(
+    process: subprocess.Popen[bytes],
+    *,
+    env: Mapping[str, str],
+    timeout_seconds: float,
+) -> bool:
+    """Wait for the direct child and clean descendants without stale POSIX identity."""
+    if os.name == "nt":
+        try:
+            process.wait(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            _terminate_process_tree(process, env=env)
+            process.wait()
+            return True
+        # The direct Windows validator exited. taskkill still targets its original
+        # CREATE_NEW_PROCESS_GROUP tree root; Windows does not expose waitid/WNOWAIT.
+        _terminate_process_tree(process, env=env)
+        return False
+
+    if not all(hasattr(os, attribute) for attribute in ("waitid", "P_PID", "WEXITED", "WNOWAIT")):
+        raise RuntimeError("POSIX wait-without-reap support is required for safe process cleanup")
+
+    waiter = _PosixUnreapedExitWaiter(process)
+    waiter.start()
+    timed_out = not waiter.wait(timeout_seconds)
+    if timed_out:
+        # The direct child is still owned and unreaped here. Terminate its session,
+        # then require a wait-without-reap observation before releasing the PID.
+        _terminate_process_tree(process, env=env)
+        if not waiter.wait(_DRAIN_JOIN_SECONDS):
+            with suppress(ProcessLookupError):
+                os.kill(process.pid, signal.SIGKILL)
+            if not waiter.wait(_DRAIN_JOIN_SECONDS):
+                # Resource cleanup may reap concurrently with the waiter from this point,
+                # but no further process-group signal will be issued after identity loss.
+                try:
+                    process.wait(timeout=_DRAIN_JOIN_SECONDS)
+                except subprocess.TimeoutExpired as exc:
+                    raise RuntimeError(
+                        "timed-out POSIX child could not be terminated and reaped"
+                    ) from exc
+                raise RuntimeError(
+                    "timed-out POSIX child exit could not be observed before identity release"
+                )
+    else:
+        # waitid(..., WNOWAIT) proved the direct child exited while retaining it as a
+        # zombie. Its PID/PGID therefore cannot be recycled before descendant cleanup.
+        _terminate_process_tree(process, env=env)
+
+    process.wait()
+    return timed_out
 
 
 def _run_bounded_capture(
@@ -480,16 +572,11 @@ def _run_bounded_capture(
 
     timed_out = False
     try:
-        process.wait(timeout=float(timeout_seconds))
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        _terminate_process_tree(process, env=env)
-        process.wait()
-    else:
-        # The direct validator process exited. Clean up any background descendants
-        # before waiting for pipe EOF; otherwise an inherited descriptor can keep
-        # the drain threads blocked after the validator itself has finished.
-        _terminate_process_tree(process, env=env)
+        timed_out = _wait_for_process_and_cleanup_group(
+            process,
+            env=env,
+            timeout_seconds=float(timeout_seconds),
+        )
     finally:
         stdout_thread.join(timeout=_DRAIN_JOIN_SECONDS)
         stderr_thread.join(timeout=_DRAIN_JOIN_SECONDS)
