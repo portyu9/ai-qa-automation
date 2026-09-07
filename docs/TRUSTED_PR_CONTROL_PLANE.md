@@ -16,9 +16,9 @@ The authority chain is:
 
 ## Two admission classes
 
-Routine source changes and protected maintenance intentionally use different trust roots.
+Routine changes and externally protected maintenance intentionally use different trust roots. Repository-maintenance changes under `.github`, `scripts`, and `tests` are part of the routine class for this single-contributor repository; they do not require activation of the external one-shot maintenance service. The strict App-bound branch rule remains unchanged for both classes.
 
-### Routine source-only automatic path
+### Routine automatic path
 
 The routine chain is:
 
@@ -33,29 +33,36 @@ Automatic admission requires all of the following:
 5. exactly one open non-draft PR for the head SHA targeting `main`;
 6. PR base equals current `main`;
 7. prospective merge has exactly two ordered parents `(base, head)`;
-8. every protected authority root has the same Git object ID at trusted base and prospective merge.
+8. every routine-protected authority root has the same Git object ID at trusted base and prospective merge.
 
-Any API failure, malformed or truncated response, PR-resolution saturation, ambiguity, fork head, stale base, identity drift, merge-parent mismatch, or protected-root change fails closed.
+Any API failure, malformed or truncated response, PR-resolution saturation, ambiguity, fork head, stale base, identity drift, merge-parent mismatch, or routine-protected-root change fails closed.
 
 The automatic workflow is the only repository-hosted consumer of Environment `trusted-pr-gate` and its App credential. Candidate-executing validation jobs are read-only and secret-free. The App credential is exposed only after final live admission revalidation in the trusted default-branch reporter.
 
+The routine path deliberately admits changes under these repository-maintenance roots after all of the same exact-subject and CI requirements succeed:
+
+- `.github`
+- `scripts`
+- `tests`
+
+Those three roots are not part of the routine protected-object equality guard. This allows ordinary repository maintenance to proceed without an external one-shot AWS activation while preserving same-repository owner-only admission, exact current-main/head/prospective-merge binding, ordered merge parents, trusted default-branch validation, secret isolation, and the dedicated App-authored terminal status.
+
 ### Protected-maintenance external path
 
-A PR that changes a protected authority root is deliberately not eligible for routine automatic authorization.
+A PR that changes any authority root that remains in the routine protected-object guard is deliberately not eligible for routine automatic authorization.
 
 The protected-maintenance chain is:
 
 **ordinary PR CI completion → external App webhook ingress → exact live PR/head/base/merge resolution → independently administered protected-object policy → exact run/job/artifact verification → terminal live re-resolution → dedicated App status → strict protected-branch enforcement**
 
-The external service implementation lives under the already-protected `scripts/trusted_gate_service/` root. Repository presence does not create authority. Authority exists only when an independently administered deployment is pinned to reviewed bytes, holds its App credential outside candidate Actions, loads an independently administered one-shot policy, and is observed publishing through the App integration required by the live ruleset.
+The external service implementation lives under `scripts/trusted_gate_service/`. Repository presence does not create authority, and the fact that `scripts` is routine-admissible does not make candidate-controlled repository bytes an external trust root. External authority exists only when an independently administered deployment is pinned to reviewed bytes, holds its App credential outside candidate Actions, loads an independently administered one-shot policy, and is observed publishing through the App integration required by the live ruleset.
 
 Repository `repository_dispatch` is not a protected-maintenance authority and no normal-use dispatch path remains in `ci.yml`.
 
 ## Protected authority roots
 
-The protected-root set is:
+The routine automatic guard protects these authority roots from candidate change:
 
-- `.github`
 - `.claude`
 - `.dockerignore`
 - `.gitattributes`
@@ -67,12 +74,12 @@ The protected-root set is:
 - `examples`
 - `pyproject.toml`
 - `requirements`
-- `scripts`
-- `tests`
 - `src/ai_qa_automation/__init__.py`
 - `src/ai_qa_automation/io_safety.py`
 - `src/ai_qa_automation/tools/__init__.py`
 - `src/ai_qa_automation/tools/execution_env.py`
+
+The external protected-maintenance service deliberately retains a broader protected-root vocabulary. Its set is the routine set above plus `.github`, `scripts`, and `tests`. That superset lets the independently deployed service continue to reason about those transitions without making external activation mandatory for ordinary repository maintenance.
 
 The external service derives the complete transition set itself from live base and prospective-merge Git trees. Missing paths use only the literal `MISSING` sentinel after a successful observation proves no object exists. Observation failure is not equivalent to absence.
 
@@ -124,7 +131,7 @@ The external service independently requires:
 5. current `main` equals the PR base;
 6. live `refs/pull/<number>/merge` exists;
 7. prospective merge has exactly two ordered parents `(base, head)`;
-8. the complete protected-root transition set is derived from live base and merge trees.
+8. the complete external protected-root transition set is derived from live base and merge trees.
 
 Ambiguity, stale base, fork identity, API truncation/failure, malformed Git data, or merge-parent drift is non-PASS truth.
 
@@ -132,7 +139,7 @@ The candidate `ci.yml` must bind `CI_SUBJECT_SHA` directly to `github.sha`. The 
 
 ## Independent one-shot policy
 
-Protected transitions are deny-by-default. The service must not implement a generic rule equivalent to “owner PR + ordinary CI green + protected changes = PASS.” That would recreate candidate self-certification.
+External protected transitions are deny-by-default. The service must not implement a generic rule equivalent to “owner PR + ordinary CI green + protected changes = PASS.” That would recreate candidate self-certification.
 
 The supported maintenance policy is a short-lived one-shot policy administered outside the repository. It pins exactly:
 
@@ -159,7 +166,7 @@ Illustrative schema only — this example is not authority-bearing:
   "merge_sha": "2222222222222222222222222222222222222222",
   "protected_changes": [
     {
-      "path": "scripts",
+      "path": "requirements",
       "base_oid": "3333333333333333333333333333333333333333",
       "subject_oid": "4444444444444444444444444444444444444444"
     }
@@ -291,7 +298,7 @@ The `trusted-pr-gate` Environment and its App credential are **not** retired by 
 
 ## Maintenance sequence
 
-Protected-maintenance changes follow this order:
+Changes that remain ineligible for routine admission follow this protected-maintenance order:
 
 1. keep the candidate exact and review its protected transition set;
 2. run ordinary exact-revision CI as development/execution evidence;
@@ -304,15 +311,17 @@ Protected-maintenance changes follow this order:
 9. verify the resulting exact `main` SHA/tree and post-merge CI;
 10. confirm the external gate has returned to its fail-closed idle policy state.
 
+Routine `.github`, `scripts`, and `tests` maintenance does not execute this external activation sequence. Those changes still require exact ordinary CI, routine trusted admission, App-authored `Trusted PR Gate: success`, strict branch enforcement, exact-head merge, and post-merge verification.
+
 For AWS, deployment proof additionally includes exact deployment-ZIP and Lambda code-digest binding, runtime smoke verification, runtime-version control, least-privilege IAM read-back, DynamoDB configuration read-back, Function URL configuration read-back, log-retention read-back, and no-VPC verification before the App webhook is treated as live authority.
 
-If any external host, App, webhook, policy, credential, status, ruleset, runtime, or deployment fact is unavailable or unobserved, terminal truth is **BLOCKED**, not PASS.
+If an external-maintenance change requires an external host, App, webhook, policy, credential, status, ruleset, runtime, or deployment fact that is unavailable or unobserved, terminal truth is **BLOCKED**, not PASS.
 
 ## Verification and non-claims
 
 Repository tests exercise webhook authentication, wrong repository/installation/actor/fork/workflow identity, policy expiry and malformed/duplicate/empty transitions, multi-root protected transitions, replay/idempotency, SQLite ownership, DynamoDB concurrent ownership, stale-processing recovery, transaction record bounds, transport/race separation, the exact DynamoDB IAM contract, Lambda request parsing, private SSM configuration binding, HMAC-before-private-key admission, policy digest binding, secret-safe fixed-stage Lambda failure diagnostics, transient-before-publication retries, no-replay publication recovery, lost/ambiguous status responses, post-publication drift, unsafe artifact ZIPs, duplicate JSON, exact build-manifest binding, routine automatic admission, and shared live merge-ref resolution.
 
-Those tests prove implementation behavior and reviewed policy shape only. They do not prove effective deployed IAM, an external deployment, webhook endpoint, App credential, one-shot policy installation, live integration permissions, ruleset binding, AWS runtime properties, runtime-version control, or App-authored status exists. Effective AWS authority still requires live deployment observation and IAM simulation/read-back.
+Those tests prove implementation behavior and reviewed policy shape only. They do not prove effective deployed IAM, an external deployment, webhook endpoint, App credential, one-shot policy installation, live integration permissions, ruleset binding, AWS runtime properties, runtime-version control, or App-authored status exists. Effective AWS authority still requires live deployment observation and IAM simulation/read-back when the external path is invoked.
 
 The terminal evidence rule remains:
 
@@ -322,7 +331,7 @@ The terminal evidence rule remains:
 
 **same status context ≠ required App integration**
 
-**unobserved external control ≠ PASS**
+**unobserved required control ≠ PASS**
 
 ---
 
