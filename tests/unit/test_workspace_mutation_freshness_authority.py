@@ -134,7 +134,7 @@ def test_policy_denied_mutation_never_reaches_rollback_preparation(
 
     with pytest.raises(PermissionError, match="WRITE-001"):
         services.consume(
-            "create_test_file",
+            "apply_locator_heal",
             {"path": "tests/test_generated.py", "source": "def test_ok():\n    assert True\n"},
         )
 
@@ -152,7 +152,7 @@ def test_mutation_success_without_pending_transaction_is_rejected_without_rebase
 
     result = posttool_policy_output(
         {
-            "tool_name": "mcp__qa__create_test_file",
+            "tool_name": "mcp__qa__apply_locator_heal",
             "tool_input": {"path": "tests/test_generated.py"},
             "tool_response": {"path": "tests/test_generated.py"},
         },
@@ -169,3 +169,54 @@ def test_mutation_success_without_pending_transaction_is_rejected_without_rebase
     assert control.expected_workspace_fingerprint == expected
     assert "mcp__qa__create_test_file" in control.open_circuits
     assert "mcp__qa__apply_locator_heal" in control.open_circuits
+
+def test_proposal_failure_cannot_rollback_bytes_it_never_owned(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state, control, store, services = _runtime(tmp_path, allow_test_writes=False)
+    target = control.workspace / "tests" / "test_generated.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("observed before proposal\n", encoding="utf-8")
+    control.set_workspace_fingerprint("sha256:authorized-baseline")
+    monkeypatch.setattr(
+        live_services_module,
+        "observe_workspace_freshness",
+        lambda *_args, **_kwargs: WorkspaceFreshness(
+            WorkspaceFreshnessCode.FRESH,
+            "fresh",
+        ),
+    )
+    monkeypatch.setattr(
+        control,
+        "prepare_mutation",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("proposal-only validation must not prepare rollback authority")
+        ),
+    )
+    before = control.budget.snapshot()
+
+    services.consume(
+        "create_test_file",
+        {"path": "tests/test_generated.py", "source": "def test_ok():\n    assert True\n"},
+    )
+
+    assert control.pending_mutation is None
+    assert control.budget.snapshot().mutations == before.mutations
+    target.write_text("newer independent work\n", encoding="utf-8")
+
+    posttool_failure_output(
+        {
+            "tool_name": "mcp__qa__create_test_file",
+            "tool_input": {"path": "tests/test_generated.py"},
+            "error": "proposal validation failed after an independent writer changed the target",
+        },
+        state=state,
+        state_store=store,
+        control=control,
+    )
+
+    assert target.read_text(encoding="utf-8") == "newer independent work\n"
+    assert control.pending_mutation is None
+    assert control.budget.snapshot().mutations == before.mutations
+    assert "mcp__qa__apply_locator_heal" not in control.open_circuits

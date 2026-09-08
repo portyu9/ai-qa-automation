@@ -162,9 +162,13 @@ class PolicyEngine:
             internal_name = parts[2]
             path_value = tool_input.get("path") or tool_input.get("file_path")
             if path_value:
-                write = internal_name in {"create_test_file", "apply_locator_heal"}
+                write = internal_name == "apply_locator_heal"
                 path = Path(str(path_value))
-                path_decision = self.authorize_path(path, write=write)
+                path_decision = (
+                    self._authorize_test_proposal_target(path)
+                    if internal_name == "create_test_file"
+                    else self.authorize_path(path, write=write)
+                )
                 if path_decision.decision != ToolDecision.ALLOW:
                     return path_decision
                 if write and path.suffix.lower() != ".py":
@@ -276,6 +280,46 @@ class PolicyEngine:
             reason="Unknown external MCP operation is not auto-approved.",
             rule_id="MCP-TOOL-UNKNOWN",
             risk=RiskLevel.HIGH,
+        )
+
+    def _authorize_test_proposal_target(self, path: Path) -> PolicyDecision:
+        """Constrain proposal subjects without granting repository write authority."""
+
+        path_decision = self.authorize_path(path, write=False)
+        if path_decision.decision != ToolDecision.ALLOW:
+            return path_decision
+        candidate = path if path.is_absolute() else self.target_workspace / path
+        try:
+            relative = candidate.resolve().relative_to(self.target_workspace).as_posix()
+        except ValueError:
+            return PolicyDecision(
+                decision=ToolDecision.DENY,
+                reason="Proposal target escapes the isolated target workspace.",
+                rule_id="FS-001",
+                risk=RiskLevel.CRITICAL,
+            )
+        if not (relative.startswith("tests/") or relative.startswith("generated_tests/")):
+            return PolicyDecision(
+                decision=ToolDecision.DENY,
+                reason="Generated-test proposals are restricted to approved test-code directories.",
+                rule_id="WRITE-002",
+                risk=RiskLevel.CRITICAL,
+            )
+        if candidate.suffix.lower() != ".py":
+            return PolicyDecision(
+                decision=ToolDecision.DENY,
+                reason=(
+                    "Generated-test proposal subjects are restricted to Python tests because "
+                    "the current deterministic execution-closure adapter is pytest-backed."
+                ),
+                rule_id="WRITE-RUNTIME-001",
+                risk=RiskLevel.HIGH,
+            )
+        return PolicyDecision(
+            decision=ToolDecision.ALLOW,
+            reason="Proposal target is confined to approved Python test-code scope.",
+            rule_id="QA-PROPOSAL-PATH-ALLOW",
+            risk=RiskLevel.LOW,
         )
 
     def authorize_path(self, path: Path, *, write: bool) -> PolicyDecision:

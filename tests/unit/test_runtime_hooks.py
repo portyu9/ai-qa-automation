@@ -79,7 +79,7 @@ def test_pretool_mutation_without_git_identity_is_blocked_before_write(tmp_path:
     result = pretool_policy_output(
         policy,
         {
-            "tool_name": "mcp__qa__create_test_file",
+            "tool_name": "mcp__qa__apply_locator_heal",
             "tool_input": {"path": "tests/test_generated.py"},
         },
         state=state,
@@ -309,3 +309,32 @@ def test_advisory_tool_failure_does_not_invalidate_unrelated_objective_pass(
     )
     assert terminal is TerminalStatus.SUCCESS
     assert "all current deterministic validation gates passed" in reason
+
+def test_pretool_proposal_does_not_consume_mutation_budget_or_require_git(
+    tmp_path: Path,
+) -> None:
+    control = make_control(tmp_path)
+    policy = PolicyEngine(tmp_path, control.workspace, allow_test_writes=False)
+    state = AgentRunState(
+        objective="propose generated test",
+        workspace=str(control.workspace),
+        target_git_sha=None,
+    )
+    before = control.budget.snapshot()
+
+    result = pretool_policy_output(
+        policy,
+        {
+            "tool_name": "mcp__qa__create_test_file",
+            "tool_input": {"path": "tests/test_generated.py"},
+        },
+        state=state,
+        control=control,
+    )
+
+    after = control.budget.snapshot()
+    assert result == {}
+    assert after.tool_calls == before.tool_calls + 1
+    assert after.mutations == before.mutations
+    assert control.pending_mutation is None
+    assert state.terminal_status is None
