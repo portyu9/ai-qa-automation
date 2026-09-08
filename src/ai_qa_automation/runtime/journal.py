@@ -43,17 +43,6 @@ def _stable_file_signature(value: os.stat_result) -> tuple[int, int, int, int, i
     )
 
 
-def _write_fd_all(fd: int, content: bytes) -> None:
-    """Write a complete journal record to one already-owned append descriptor."""
-
-    view = memoryview(content)
-    while view:
-        written = os.write(fd, view)
-        if written <= 0:
-            raise OSError(errno.EIO, "run-journal append made no forward progress")
-        view = view[written:]
-
-
 def validate_runtime_journal_binding(
     runtime_metadata: dict[str, Any],
     journal_status: dict[str, Any],
@@ -344,8 +333,18 @@ class RunJournal:
                     self._revalidate_parent(parent_fd)
                     if initial.st_size + len(rendered_bytes) > _MAX_JOURNAL_BYTES:
                         raise BudgetExceededError("run-journal byte budget exhausted")
+                    written_bytes = 0
                     try:
-                        _write_fd_all(fd, rendered_bytes)
+                        view = memoryview(rendered_bytes)
+                        while view:
+                            written = os.write(fd, view)
+                            if written <= 0:
+                                raise OSError(
+                                    errno.EIO,
+                                    "run-journal append made no forward progress",
+                                )
+                            written_bytes += written
+                            view = view[written:]
                         # Journal lineage is authority-bearing in every runtime mode.
                         # Regulated mode may add policy, but durability is not optional.
                         os.fsync(fd)
@@ -368,6 +367,22 @@ class RunJournal:
                                 fsync_directory(self.path.parent)
                     except BaseException:
                         try:
+                            rollback_opened = os.fstat(fd)
+                            rollback_current = self._assert_opened_entry_current(
+                                parent_fd=parent_fd,
+                                opened=rollback_opened,
+                                label="append rollback preflight",
+                            )
+                            self._revalidate_parent(parent_fd)
+                            expected_partial_size = initial.st_size + written_bytes
+                            if (
+                                rollback_opened.st_size != expected_partial_size
+                                or rollback_current.st_size != expected_partial_size
+                            ):
+                                raise OSError(
+                                    errno.EIO,
+                                    "run-journal append tail changed before rollback",
+                                )
                             os.ftruncate(fd, initial.st_size)
                             os.fsync(fd)
                             rolled_back = os.fstat(fd)
