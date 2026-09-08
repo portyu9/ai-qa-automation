@@ -12,7 +12,8 @@ from .run_control import RuntimeControl
 from .tool_input_bounds import validate_tool_request
 from .workspace_freshness import WorkspaceFreshnessCode, observe_workspace_freshness
 
-_LIVE_MUTATION_TOOL_NAMES = frozenset({"create_test_file", "apply_locator_heal"})
+# Proposal-only create_test_file never owns repository mutation/rollback authority.
+_LIVE_MUTATION_TOOL_NAMES = frozenset({"apply_locator_heal"})
 
 
 @dataclass

@@ -65,7 +65,7 @@ def _validate_generated_test_proposal(
     if len(content_bytes) > patcher._MAX_TEST_FILE_BYTES:
         raise ValueError(f"generated test exceeds {patcher._MAX_TEST_FILE_BYTES} byte limit")
     path, destination = patcher._resolve_owned_path(relative_path)
-    decision = services.policy.authorize_path(path, write=True)
+    decision = services.policy.authorize_test_proposal_target(path)
     services.state.policy_decisions.append(decision)
     if decision.decision != ToolDecision.ALLOW:
         raise PermissionError(f"{decision.rule_id}: {decision.reason}")
