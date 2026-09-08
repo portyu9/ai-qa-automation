@@ -516,7 +516,7 @@ class RuntimeControl:
             self.persist()
 
     def persist(self) -> None:
-        with self._lock:
+        with self._lock, self.journal.authority_binding():
             atomic_write_json(
                 self.metadata_path,
                 self.snapshot(include_pending_details=True),
@@ -524,7 +524,7 @@ class RuntimeControl:
             )
 
     def snapshot(self, *, include_pending_details: bool = False) -> dict[str, Any]:
-        with self._lock:
+        with self._lock, self.journal.authority_binding() as journal_authority:
             pending: object = None
             if self.pending_mutation:
                 pending = (
@@ -552,8 +552,8 @@ class RuntimeControl:
                 "workspace_root_identity": workspace_root_identity,
                 "workspace_fingerprint": self.expected_workspace_fingerprint,
                 "budget": self.budget.snapshot().as_dict(),
-                "journal_event_count": self.journal.event_count,
-                "journal_head_hash": self.journal.head_hash,
+                "journal_event_count": journal_authority[0],
+                "journal_head_hash": journal_authority[1],
                 "circuit_failures": dict(sorted(self.circuit_failures.items())),
                 "open_circuits": sorted(self.open_circuits),
                 "max_repeated_action": self.max_repeated_action,
