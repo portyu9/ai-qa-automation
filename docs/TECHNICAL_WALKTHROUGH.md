@@ -227,20 +227,16 @@ search_test_coverage
 → observed repository evidence
 → deterministic candidate gaps
 → plan_tests (MODEL_INTERPRETATION)
-→ guarded create_test_file
-→ deterministic quality + patch safety
-→ targeted execution diagnostics
-→ independent targeted semantic proof
-→ full-regression execution diagnostics
-→ independent regression semantic proof
-→ mutation closure
+→ create_test_file proposal
+→ deterministic static proposal safety
+→ explicit semantic/mutation authority gap
 ```
 
 The crucial asymmetry: a model may annotate a scenario as “already covered,” but unsupported labels cannot suppress deterministic candidates.
 
-Generated tests must contain meaningful assertions; comments/strings that merely look assertion-like do not satisfy observability checks.
+Generated-test proposals must contain meaningful assertions; comments/strings that merely look assertion-like do not satisfy observability checks. The current generic `create_test_file` path records a repository-bound proposal and writes no repository bytes, so proposal completion is not execution evidence or coverage closure.
 
-Reusable generation/patch components understand Python/JavaScript/TypeScript. **Live autonomous commit authority is narrower:** controlled closure is currently pytest-backed, so autonomous writes are restricted to approved Python test paths. Positive autonomous mutation still remains fail-closed because the current live pytest adapter does not emit either independent targeted or independent regression semantic authority.
+Reusable generation/patch components understand Python/JavaScript/TypeScript. A future separately authorized mutation path would need its own mutation authority and deterministic closure. For a live autonomous Python mutation, the existing pytest-backed closure requirements—including independent targeted and regression semantic authority—would remain mandatory; proposal evidence cannot substitute for them.
 
 ---
 

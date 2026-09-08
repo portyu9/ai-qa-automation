@@ -150,11 +150,12 @@ The analyzer is structural and conservative.
 
 ### Test generation
 
-- Generated tests require authoritative expected behavior.
+- Generated-test proposals require authoritative expected behavior.
 - Undocumented product intent is not invented to create a test.
 - Meaningful-assertion checks reject common weak patterns but do not prove the assertion captures the best business invariant.
 - Deterministic candidate gaps cannot be suppressed solely by unsupported model “already covered” labels.
-- Reusable generation/patch components understand Python/JavaScript/TypeScript, but live autonomous commit authority is narrower where controlled proof is pytest-backed.
+- The current generic `create_test_file` path records a repository-bound, statically checked proposal and writes no repository bytes; proposal completion is not execution evidence, semantic implementation proof, mutation authority, or coverage closure.
+- Reusable generation/patch components understand Python/JavaScript/TypeScript syntax, but syntax support does not grant live mutation authority. Any future generated-test mutation path must establish separate deterministic semantic implementation authority and the applicable mutation-transaction closure.
 - Fixtures, factories, service virtualization, and environment setup remain target-specific unless deliberately integrated.
 
 ---

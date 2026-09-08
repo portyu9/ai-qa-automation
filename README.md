@@ -97,7 +97,7 @@ That separation of duties is the central design decision. Agentic testing become
 | False product-defect attribution | evidence-weighted deterministic classification before test-side repair |
 | Test weakening disguised as self-healing | patch rules reject skip/xfail, assertion erosion, arbitrary sleeps, timeout inflation, tautologies, and broad suppression |
 | Wrong-element locator repair | same-DOM Playwright measurement + deterministic semantic intent + transactional validation |
-| Meaningless generated tests | coverage provenance + conservative planning + meaningful-assertion checks + execution closure |
+| Generated-test proposals overclaiming coverage | coverage provenance + conservative planning + meaningful-assertion checks + explicit non-mutating proposal authority |
 | Regression under-selection | mandatory coverage is preserved; uncertainty broadens rather than shrinking regression |
 | Prompt injection from target or provider content | instruction-shaped SUT/source/DOM/log/API/MCP/repository content remains untrusted data and cannot redefine policy |
 | Tool or integration privilege expansion | least-privilege tool inventory + fail-closed hooks + vendor identity checks + action-level authorization |
@@ -325,7 +325,7 @@ The framework exposes 18 purpose-built in-process tools:
 | Test design | evidence-bound generation planning |
 | Regression | risk-based prioritization with mandatory coverage preservation |
 | Test quality | deterministic Python test-quality review |
-| Generation | guarded live Python test creation; reusable patch utilities also understand JS/TS test artifacts |
+| Generation | evidence-bound generated-test proposal recording; the current generic path is non-mutating; reusable patch utilities also understand JS/TS test artifacts |
 | Self-healing | same-DOM locator verification, proposal, and Python locator-only live mutation |
 | Contracts | JSON Schema validation |
 | CI | normalized CI-failure analysis |
@@ -544,17 +544,14 @@ observed repository coverage
 → same-run plan
 → conservative candidate scenarios
 → evidence reconciliation
-→ guarded live Python test creation
-→ exact-path targeted execution diagnostics
-→ independent targeted semantic proof
-→ full-regression execution diagnostics
-→ independent regression semantic proof
-→ mutation closure
+→ bound generated-test proposal
+→ deterministic static proposal safety
+→ explicit semantic/mutation authority gap
 ```
 
-Model-supplied “already covered” labels are advisory. They **cannot suppress deterministic candidate scenarios** by themselves. Before implementation, the candidate is reconciled against the same-run repository observation so the framework avoids both unsafe under-coverage and careless duplication.
+Model-supplied “already covered” labels are advisory. They **cannot suppress deterministic candidate scenarios** by themselves. Before a proposal is recorded, the candidate is reconciled against the same-run repository observation so the framework avoids both unsafe under-coverage and careless duplication.
 
-Generated tests are checked for meaningful assertions and common intent-eroding shortcuts. Assertion-looking text in comments or strings does not satisfy observability requirements. **Unknown product behavior is not invented merely to create a test.**
+Generated-test proposals are checked for meaningful assertions and common intent-eroding shortcuts. Assertion-looking text in comments or strings does not satisfy observability requirements. **Unknown product behavior is not invented merely to create a test.** The current generic path does not write repository bytes or claim the coverage gap is closed; any future separate mutation authority must establish its own deterministic closure.
 
 ### Deterministic change intelligence
 

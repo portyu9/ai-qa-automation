@@ -138,9 +138,9 @@ Persisted bytes may be replaced, cross-run data mixed, ambiguous JSON decoded wi
 | Model-inflated locator confidence | Playwright owns uniqueness; deterministic semantic/stability policy owns authorization |
 | Wrong nearby locator repair | same-DOM evidence + syntax/semantic/stability checks + exact file/hash binding |
 | Test-intent weakening | unsafe-diff rules + deterministic test-quality review |
-| Meaningless generated tests | observed coverage + conservative plan + meaningful assertions + deterministic execution closure |
+| Generated-test proposal mistaken for coverage closure | observed coverage + conservative plan + meaningful assertions + static proposal safety + explicit non-mutation/semantic-authority gap |
 | Unsupported model “already covered” claim suppresses scenario | unsupported coverage labels cannot remove deterministic candidate scenarios |
-| JS/TS mutation falsely certified by pytest | live autonomous commit authority limited to Python test paths |
+| Generated-test proposal treated as mutation authority | `create_test_file` writes no repository bytes; any future generated-test mutation path requires separate deterministic semantic implementation and mutation closure authority |
 | Unrelated targeted pytest certifies mutation | targeted validation must select the exact pending changed path and still requires independent targeted semantics |
 | Target-owned `pytest_runtestloop` forges full-regression PASS | collection/output/terminal lines and exit status remain diagnostic; independent regression semantic authority required for positive closure |
 | False PASS from model completion | terminal status derived from deterministic validation lineage |
@@ -185,7 +185,7 @@ The strongest regression and holdout cases attack assumptions rather than syntax
 - a repair that removes the failing assertion;
 - assertion-like text in a comment/string satisfying a naive test-quality scanner;
 - a model claiming a scenario is “already covered” without supporting repository evidence;
-- a JS/TS generated test attempting to enter live autonomous pytest commit closure;
+- a generated-test proposal attempting to claim execution, coverage closure, or mutation authority merely because its static checks passed;
 - a targeted pytest run selecting a different file than the pending mutation;
 - a target-owned `pytest_runtestloop` that prints every admitted node as `PASSED`, executes zero test bodies, and exits 0 while pre/post collection still matches;
 - target-controlled stdout/JUnit/report bytes or inherited descriptors attempting to impersonate independent targeted/regression semantic authority;

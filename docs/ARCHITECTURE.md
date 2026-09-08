@@ -211,7 +211,7 @@ The Agent SDK path uses:
 - fail-closed programmatic permission handling;
 - independent limits for turns, tools, network actions, mutations, repeated actions, per-tool time, wall time, and model cost.
 
-The internal server exposes 18 narrow capabilities spanning repository inspection, pytest, API/browser evidence, classification, bounded source reads, coverage search/planning, regression prioritization, test review/creation, locator verification/healing, schema validation, CI analysis, Appium inspection, and k6 assessment.
+The internal server exposes 18 narrow capabilities spanning repository inspection, pytest, API/browser evidence, classification, bounded source reads, coverage search/planning, regression prioritization, test review/generated-test proposal, locator verification/healing, schema validation, CI analysis, Appium inspection, and k6 assessment.
 
 Live autonomous mutation is intentionally restricted to Python tests because deterministic mutation closure is pytest-backed. Reusable patch utilities may understand Python/JavaScript/TypeScript artifacts, but non-Python live writes are not authorized merely because the library can parse them.
 
@@ -301,9 +301,9 @@ The model may propose candidates. Playwright measures candidate uniqueness in th
 
 Coverage search creates observed repository evidence. Test planning is interpretation derived from that evidence.
 
-Model-supplied “already covered” labels are intentionally advisory: they cannot suppress deterministic candidate scenarios by themselves. Before implementation, a candidate is reconciled with same-run observed coverage so the framework avoids both unsafe omission and unnecessary duplication.
+Model-supplied “already covered” labels are intentionally advisory: they cannot suppress deterministic candidate scenarios by themselves. Before a proposal is recorded, a candidate is reconciled with same-run observed coverage so the framework avoids both unsafe omission and unnecessary duplication.
 
-Live generated-file mutation is Python/pytest-backed and remains subject to the same transaction closure as self-healing.
+The current generic generated-test path is proposal-only: it records a repository-bound, statically checked proposal and does not write repository bytes. Any future separately authorized mutation path must establish its own mutation authority and deterministic closure; proposal evidence cannot grant or substitute for that authority.
 
 ## Workspace and mutation safety
 
