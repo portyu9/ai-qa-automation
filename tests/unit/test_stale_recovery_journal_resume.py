@@ -131,7 +131,7 @@ def test_stale_recovery_resumes_exact_durable_tail_without_duplicate_append(
     assert isinstance(runtime_path, Path)
     assert target.read_bytes() == original
     assert backup.is_file()
-    assert journal.event_count == 2
+    assert journal.verify()["events"] == 2
 
     tail_status = journal.verify(include_last_record=True)
     tail = tail_status["last_record"]
@@ -158,13 +158,13 @@ def test_stale_recovery_resumes_exact_durable_tail_without_duplicate_append(
     }
     assert target.read_bytes() == original
     assert not backup.exists()
-    assert journal.event_count == 2
+    assert journal.verify()["events"] == 2
 
     persisted_runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
     assert persisted_runtime["pending_mutation"] is None
     assert persisted_runtime["recovered_by_run_id"] == "run-recovery-1"
     assert persisted_runtime["journal_event_count"] == 2
-    assert persisted_runtime["journal_head_hash"] == journal.head_hash
+    assert persisted_runtime["journal_head_hash"] == journal.verify()["head_hash"]
 
     persisted_state = StateStore(state_path).load()
     assert setup["relative_path"] not in persisted_state.files_modified
@@ -227,7 +227,7 @@ def test_stale_recovery_rejects_wrong_subject_tail_before_target_write(
     assert "prior runtime journal authority is invalid" in str(result["reason"])
     assert target.read_bytes() == candidate_bytes
     assert backup.is_file()
-    assert journal.event_count == 2
+    assert journal.verify()["events"] == 2
     persisted_runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
     assert isinstance(persisted_runtime["pending_mutation"], dict)
 
@@ -263,7 +263,7 @@ def test_stale_recovery_rejects_workspace_drift_after_durable_recovery_event(
         recovering_run_id="run-recovery-1",
     )
     assert first["status"] == "BLOCKED"
-    assert journal.event_count == 2
+    assert journal.verify()["events"] == 2
     assert backup.is_file()
 
     monkeypatch.undo()
@@ -285,4 +285,4 @@ def test_stale_recovery_rejects_workspace_drift_after_durable_recovery_event(
     assert target.read_bytes() == restored_bytes
     assert unrelated.read_text(encoding="utf-8") == "newer work\n"
     assert backup.is_file()
-    assert journal.event_count == 2
+    assert journal.verify()["events"] == 2

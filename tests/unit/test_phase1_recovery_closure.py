@@ -99,6 +99,6 @@ def test_failed_stale_recovery_close_retains_authority_but_requires_reconciliati
     )
 
     assert second["status"] == "BLOCKED"
-    assert "runtime journal authority does not match persisted journal" in str(second["reason"])
+    assert "workspace changed after a durable stale recovery event" in str(second["reason"])
     assert target.read_bytes() == original
     assert backup.read_bytes() == original

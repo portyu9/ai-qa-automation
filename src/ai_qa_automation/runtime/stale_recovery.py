@@ -263,6 +263,7 @@ def _resumable_recovery_tail(
         or payload.get("change_revision_before") != change_revision_before
         or payload.get("runtime_event_count") != expected_events
         or payload.get("runtime_head_hash") != expected_head
+        or not isinstance(recovered_fingerprint, str)
         or not _is_sha256_fingerprint(recovered_fingerprint)
     ):
         return None
