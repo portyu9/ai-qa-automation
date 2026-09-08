@@ -106,3 +106,34 @@ def test_journal_failed_rollback_latches_uncertain_write_state(
     monkeypatch.setattr(journal_module.os, "ftruncate", real_ftruncate)
     with pytest.raises(OSError, match="write state is uncertain"):
         journal.append("must-not-continue")
+
+
+def test_journal_uncertain_descriptor_close_latches_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "journal.jsonl"
+    journal = RunJournal(path)
+    real_close = os.close
+    calls = 0
+
+    def uncertain_close(fd: int) -> None:
+        nonlocal calls
+        calls += 1
+        real_close(fd)
+        if calls == 1:
+            raise OSError(errno.EIO, "injected close uncertainty")
+
+    monkeypatch.setattr(journal_module.os, "close", uncertain_close)
+    with pytest.raises(OSError, match="descriptor close could not be proven"):
+        journal.append("durably-written-but-close-uncertain")
+
+    assert journal.event_count == 0
+    assert journal.head_hash is None
+    persisted = journal.verify()
+    assert persisted["valid"] is True
+    assert persisted["events"] == 1
+
+    monkeypatch.setattr(journal_module.os, "close", real_close)
+    with pytest.raises(OSError, match="write state is uncertain"):
+        journal.append("must-not-continue")
