@@ -1,0 +1,102 @@
+name: issue140-build
+
+on:
+  push:
+    branches: [build/issue-140-proposal-authority]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout disposable build branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: build/issue-140-proposal-authority
+          persist-credentials: true
+      - name: Apply proposal-only authority fix and regressions
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one replacement, found {count}")
+              target.write_text(text.replace(old, new), encoding="utf-8")
+
+          replace_once(
+              "src/ai_qa_automation/runtime/live_services.py",
+              '_LIVE_MUTATION_TOOL_NAMES = frozenset({"create_test_file", "apply_locator_heal"})',
+              '# Proposal-only create_test_file never owns repository mutation/rollback authority.\n_LIVE_MUTATION_TOOL_NAMES = frozenset({"apply_locator_heal"})',
+          )
+          replace_once(
+              "src/ai_qa_automation/runtime/runtime_hooks.py",
+              '_MUTATION_TOOLS = {"mcp__qa__create_test_file", "mcp__qa__apply_locator_heal"}',
+              '# Proposal-only create_test_file validates evidence but never writes repository bytes.\n_MUTATION_TOOLS = {"mcp__qa__apply_locator_heal"}',
+          )
+          replace_once(
+              "src/ai_qa_automation/policy.py",
+              '''                write = internal_name in {"create_test_file", "apply_locator_heal"}\n                path = Path(str(path_value))\n                path_decision = self.authorize_path(path, write=write)\n                if path_decision.decision != ToolDecision.ALLOW:\n                    return path_decision\n                if write and path.suffix.lower() != ".py":\n''',
+              '''                write = internal_name == "apply_locator_heal"\n                path = Path(str(path_value))\n                path_decision = (\n                    self._authorize_test_proposal_target(path)\n                    if internal_name == "create_test_file"\n                    else self.authorize_path(path, write=write)\n                )\n                if path_decision.decision != ToolDecision.ALLOW:\n                    return path_decision\n                if write and path.suffix.lower() != ".py":\n''',
+          )
+          replace_once(
+              "src/ai_qa_automation/policy.py",
+              '''    def authorize_path(self, path: Path, *, write: bool) -> PolicyDecision:\n''',
+              '''    def _authorize_test_proposal_target(self, path: Path) -> PolicyDecision:\n        """Constrain proposal subjects without granting repository write authority."""\n\n        path_decision = self.authorize_path(path, write=False)\n        if path_decision.decision != ToolDecision.ALLOW:\n            return path_decision\n        candidate = path if path.is_absolute() else self.target_workspace / path\n        try:\n            relative = candidate.resolve().relative_to(self.target_workspace).as_posix()\n        except ValueError:\n            return PolicyDecision(\n                decision=ToolDecision.DENY,\n                reason="Proposal target escapes the isolated target workspace.",\n                rule_id="FS-001",\n                risk=RiskLevel.CRITICAL,\n            )\n        if not (relative.startswith("tests/") or relative.startswith("generated_tests/")):\n            return PolicyDecision(\n                decision=ToolDecision.DENY,\n                reason="Generated-test proposals are restricted to approved test-code directories.",\n                rule_id="WRITE-002",\n                risk=RiskLevel.CRITICAL,\n            )\n        if candidate.suffix.lower() != ".py":\n            return PolicyDecision(\n                decision=ToolDecision.DENY,\n                reason=(\n                    "Generated-test proposal subjects are restricted to Python tests because "\n                    "the current deterministic execution-closure adapter is pytest-backed."\n                ),\n                rule_id="WRITE-RUNTIME-001",\n                risk=RiskLevel.HIGH,\n            )\n        return PolicyDecision(\n            decision=ToolDecision.ALLOW,\n            reason="Proposal target is confined to approved Python test-code scope.",\n            rule_id="QA-PROPOSAL-PATH-ALLOW",\n            risk=RiskLevel.LOW,\n        )\n\n    def authorize_path(self, path: Path, *, write: bool) -> PolicyDecision:\n''',
+          )
+
+          replace_once(
+              "tests/unit/test_runtime_hooks.py",
+              '''            "tool_name": "mcp__qa__create_test_file",\n            "tool_input": {"path": "tests/test_generated.py"},\n''',
+              '''            "tool_name": "mcp__qa__apply_locator_heal",\n            "tool_input": {"path": "tests/test_generated.py"},\n''',
+          )
+          replace_once(
+              "tests/unit/test_workspace_mutation_freshness_authority.py",
+              '''        services.consume(\n            "create_test_file",\n            {"path": "tests/test_generated.py", "source": "def test_ok():\\n    assert True\\n"},\n        )\n\n    assert state.terminal_status is TerminalStatus.POLICY_DENIED\n''',
+              '''        services.consume(\n            "apply_locator_heal",\n            {"path": "tests/test_generated.py", "source": "def test_ok():\\n    assert True\\n"},\n        )\n\n    assert state.terminal_status is TerminalStatus.POLICY_DENIED\n''',
+          )
+          replace_once(
+              "tests/unit/test_workspace_mutation_freshness_authority.py",
+              '''            "tool_name": "mcp__qa__create_test_file",\n            "tool_input": {"path": "tests/test_generated.py"},\n            "tool_response": {"path": "tests/test_generated.py"},\n''',
+              '''            "tool_name": "mcp__qa__apply_locator_heal",\n            "tool_input": {"path": "tests/test_generated.py"},\n            "tool_response": {"path": "tests/test_generated.py"},\n''',
+          )
+
+          policy_test = Path("tests/policy/test_live_mutation_execution_contract.py")
+          policy_text = policy_test.read_text(encoding="utf-8")
+          policy_append = '''\n\ndef test_generated_test_proposal_does_not_require_write_authority(tmp_path: Path) -> None:\n    target = tmp_path / "target-proposal"\n    target.mkdir()\n    subject = PolicyEngine(tmp_path, target, allow_test_writes=False)\n\n    proposal = subject.authorize_tool(\n        "mcp__qa__create_test_file",\n        {"path": "tests/test_checkout.py"},\n    )\n    mutation = subject.authorize_tool(\n        "mcp__qa__apply_locator_heal",\n        {"path": "tests/test_checkout.py"},\n    )\n\n    assert proposal.decision is ToolDecision.ALLOW\n    assert proposal.rule_id == "QA-TOOL-ALLOW"\n    assert mutation.decision is ToolDecision.REQUIRE_APPROVAL\n    assert mutation.rule_id == "WRITE-001"\n'''
+          if "test_generated_test_proposal_does_not_require_write_authority" in policy_text:
+              raise SystemExit("policy proposal regression already exists")
+          policy_test.write_text(policy_text.rstrip() + policy_append + "\n", encoding="utf-8")
+
+          hooks_test = Path("tests/unit/test_runtime_hooks.py")
+          hooks_text = hooks_test.read_text(encoding="utf-8")
+          hooks_append = '''\n\ndef test_pretool_proposal_does_not_consume_mutation_budget_or_require_git(\n    tmp_path: Path,\n) -> None:\n    control = make_control(tmp_path)\n    policy = PolicyEngine(tmp_path, control.workspace, allow_test_writes=False)\n    state = AgentRunState(\n        objective="propose generated test",\n        workspace=str(control.workspace),\n        target_git_sha=None,\n    )\n    before = control.budget.snapshot()\n\n    result = pretool_policy_output(\n        policy,\n        {\n            "tool_name": "mcp__qa__create_test_file",\n            "tool_input": {"path": "tests/test_generated.py"},\n        },\n        state=state,\n        control=control,\n    )\n\n    after = control.budget.snapshot()\n    assert result == {}\n    assert after.tool_calls == before.tool_calls + 1\n    assert after.mutations == before.mutations\n    assert control.pending_mutation is None\n    assert state.terminal_status is None\n'''
+          if "test_pretool_proposal_does_not_consume_mutation_budget_or_require_git" in hooks_text:
+              raise SystemExit("hook proposal regression already exists")
+          hooks_test.write_text(hooks_text.rstrip() + hooks_append + "\n", encoding="utf-8")
+
+          freshness_test = Path("tests/unit/test_workspace_mutation_freshness_authority.py")
+          freshness_text = freshness_test.read_text(encoding="utf-8")
+          freshness_append = '''\n\ndef test_proposal_failure_cannot_rollback_bytes_it_never_owned(\n    tmp_path: Path,\n    monkeypatch: pytest.MonkeyPatch,\n) -> None:\n    state, control, store, services = _runtime(tmp_path, allow_test_writes=False)\n    target = control.workspace / "tests" / "test_generated.py"\n    target.parent.mkdir(parents=True)\n    target.write_text("observed before proposal\\n", encoding="utf-8")\n    control.set_workspace_fingerprint("sha256:authorized-baseline")\n    monkeypatch.setattr(\n        live_services_module,\n        "observe_workspace_freshness",\n        lambda *_args, **_kwargs: WorkspaceFreshness(\n            WorkspaceFreshnessCode.FRESH,\n            "fresh",\n        ),\n    )\n    monkeypatch.setattr(\n        control,\n        "prepare_mutation",\n        lambda *_args, **_kwargs: (_ for _ in ()).throw(\n            AssertionError("proposal-only validation must not prepare rollback authority")\n        ),\n    )\n    before = control.budget.snapshot()\n\n    services.consume(\n        "create_test_file",\n        {"path": "tests/test_generated.py", "source": "def test_ok():\\n    assert True\\n"},\n    )\n\n    assert control.pending_mutation is None\n    assert control.budget.snapshot().mutations == before.mutations\n    target.write_text("newer independent work\\n", encoding="utf-8")\n\n    posttool_failure_output(\n        {\n            "tool_name": "mcp__qa__create_test_file",\n            "tool_input": {"path": "tests/test_generated.py"},\n            "error": "proposal validation failed after an independent writer changed the target",\n        },\n        state=state,\n        state_store=store,\n        control=control,\n    )\n\n    assert target.read_text(encoding="utf-8") == "newer independent work\\n"\n    assert control.pending_mutation is None\n    assert control.budget.snapshot().mutations == before.mutations\n    assert "mcp__qa__apply_locator_heal" not in control.open_circuits\n'''
+          if "test_proposal_failure_cannot_rollback_bytes_it_never_owned" in freshness_text:
+              raise SystemExit("proposal rollback-race regression already exists")
+          freshness_test.write_text(freshness_text.rstrip() + freshness_append + "\n", encoding="utf-8")
+          PY
+          python -m compileall -q src tests/policy/test_live_mutation_execution_contract.py tests/unit/test_runtime_hooks.py tests/unit/test_workspace_mutation_freshness_authority.py
+          git diff --check
+      - name: Commit code only and remove disposable workflow
+        run: |
+          git rm .github/workflows/issue140-build.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/ai_qa_automation/policy.py src/ai_qa_automation/runtime/live_services.py src/ai_qa_automation/runtime/runtime_hooks.py tests/policy/test_live_mutation_execution_contract.py tests/unit/test_runtime_hooks.py tests/unit/test_workspace_mutation_freshness_authority.py
+          git diff --cached --check
+          git commit -m 'fix: keep generated-test proposals outside mutation authority'
+          git push origin HEAD:build/issue-140-proposal-authority
