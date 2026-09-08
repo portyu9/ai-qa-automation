@@ -794,7 +794,11 @@ def recover_stale_mutation(
                 expected_root_identity=expected_run_root_identity,
             )
 
-    result = {"status": "RECOVERED", "previous_run_id": previous_run_id, "path": relative_path}
+    result: dict[str, Any] = {
+        "status": "RECOVERED",
+        "previous_run_id": previous_run_id,
+        "path": relative_path,
+    }
     if recovery_event_already_recorded:
         result["resumed_recovery_event"] = True
     return result
