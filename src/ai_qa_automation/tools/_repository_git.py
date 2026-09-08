@@ -219,12 +219,12 @@ class RepositoryGitAuthorityMixin:
 
         section_header = re.compile(
             r'^\s*\[\s*([A-Za-z0-9.-]+)(\s+"(?:[^"\\]|\\.)*")?\s*\]'
-            r'\s*(?:[#;].*)?$',
+            r"\s*(?:[#;].*)?$",
             re.IGNORECASE,
         )
         ref_storage = re.compile(
             r'^\s*refstorage\s*=\s*(?:"(files|reftable)"|(files|reftable))'
-            r'\s*(?:[#;].*)?$',
+            r"\s*(?:[#;].*)?$",
             re.IGNORECASE,
         )
         ref_storage_prefix = re.compile(r"^\s*refstorage(?:\s|=|$)", re.IGNORECASE)

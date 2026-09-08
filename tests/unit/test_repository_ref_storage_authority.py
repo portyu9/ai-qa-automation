@@ -165,9 +165,7 @@ def test_repository_ref_storage_config_aba_fails_closed(
     ) -> BoundedSubprocessResult:
         nonlocal calls
         calls += 1
-        config.write_bytes(
-            original + b"\n[extensions]\nrefStorage = files:///tmp/external-refs\n"
-        )
+        config.write_bytes(original + b"\n[extensions]\nrefStorage = files:///tmp/external-refs\n")
         try:
             return real_run(
                 command,
