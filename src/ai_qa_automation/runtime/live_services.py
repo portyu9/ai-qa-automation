@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
-from ..models import TerminalStatus, ValidationResult, ValidationStatus
+from ..models import (
+    EvidenceKind,
+    EvidenceNature,
+    TerminalStatus,
+    ToolDecision,
+    ValidationResult,
+    ValidationStatus,
+)
 from ..network_authority import NetworkAuthorityCode, NetworkAuthorityError
 from .internal_tools import RuntimeServices, _pytest_scope, _stable_gate_id
 from .k6_authority import k6_gate_payload, k6_persisted_subject
+from .locator_repair import LocatorRepairAuthorityError, resolve_locator_repair_authority
 from .mutation_lineage import build_rollback_lineage_checkpoints
 from .run_control import RuntimeControl
 from .tool_input_bounds import validate_tool_request
@@ -192,10 +201,95 @@ class LiveRuntimeServices(RuntimeServices):
         self.control.persist()
         raise PermissionError(reason)
 
+    def _deny_live_mutation(self, *, tool_name: str, rule_id: str, reason: str) -> None:
+        if self.control is None or self.state_store is None:  # pragma: no cover - guarded above
+            raise RuntimeError("live runtime services lost durable mutation authority")
+        if self.state.terminal_status in {None, TerminalStatus.SUCCESS}:
+            self.state.terminal_status = TerminalStatus.POLICY_DENIED
+            self.state.terminal_reason = f"{rule_id}: {reason}"
+        self.control.journal.try_append(
+            "mutation_policy_denied",
+            tool_name=f"mcp__qa__{tool_name}",
+            rule_id=rule_id,
+        )
+        self.state_store.save(self.state)
+        self.control.persist()
+        raise PermissionError(f"{rule_id}: {reason}")
+
+    def _resolved_live_mutation_path(
+        self,
+        tool_name: str,
+        tool_input: dict[str, Any],
+    ) -> str:
+        """Resolve mutation subject from trusted same-run evidence, never model-supplied path data."""
+
+        if tool_name != "apply_locator_heal":
+            raise PermissionError("unsupported live mutation tool")
+        proposal_id = tool_input.get("proposal_evidence_id")
+        if not isinstance(proposal_id, str) or not proposal_id:
+            raise PermissionError("live locator mutation requires proposal evidence identity")
+        try:
+            proposal = self.evidence.get(proposal_id)
+        except KeyError as exc:
+            raise PermissionError("live locator mutation proposal evidence is unavailable") from exc
+        data = proposal.structured_data
+        if (
+            proposal.kind is not EvidenceKind.HEALING_PROPOSAL
+            or proposal.nature is not EvidenceNature.MODEL_INTERPRETATION
+            or proposal.source != "self_healing_engine"
+            or proposal.id not in self.state.evidence_ids
+        ):
+            raise PermissionError("live locator mutation proposal lacks trusted same-run provenance")
+        repair_subject_id = data.get("repair_subject_id")
+        if not isinstance(repair_subject_id, str) or not repair_subject_id:
+            raise PermissionError("live locator mutation proposal lost repair subject identity")
+        try:
+            authority = resolve_locator_repair_authority(
+                subject_id=repair_subject_id,
+                workspace=self.workspace,
+                expected_root_identity=self.workspace_root_identity,
+                state=self.state,
+                evidence=self.evidence,
+            )
+        except LocatorRepairAuthorityError as exc:
+            raise PermissionError("live locator mutation subject authority is invalid") from exc
+        if proposal.source_identifier != repair_subject_id or data.get("path") != authority.path:
+            raise PermissionError("live locator mutation proposal does not match repair subject path")
+        return authority.path
+
+    def _bind_active_mutation_candidate(self) -> None:
+        if self.control is None:  # pragma: no cover - guarded by __post_init__
+            raise RuntimeError("live runtime services lost RuntimeControl")
+        pending = self.control.pending_mutation
+        if pending is None or not pending.candidate_required or pending.candidate_sha256 is not None:
+            return
+
+        for evidence_id in reversed(self.state.evidence_ids):
+            try:
+                item = self.evidence.get(evidence_id)
+            except KeyError:
+                continue
+            if item.kind is not EvidenceKind.GIT_DIFF or item.source != "safe_test_patcher":
+                continue
+            path = item.structured_data.get("path")
+            candidate_sha256 = item.structured_data.get("new_sha256")
+            if path != pending.relative_path or not isinstance(candidate_sha256, str):
+                continue
+            self.control.bind_pending_mutation_candidate(path, candidate_sha256)
+            return
+        raise RuntimeError(
+            "live mutation produced no exact candidate evidence; pending rollback authority remains open"
+        )
+
     def checkpoint(self) -> None:
         """Persist tool state only while observations remain on the authorized subject."""
 
-        if self._active_tool_name not in _LIVE_MUTATION_TOOL_NAMES:
+        if self._active_tool_name in _LIVE_MUTATION_TOOL_NAMES:
+            # The mutation tool records its exact post-write digest before checkpoint.
+            # Bind that digest to the durable transaction before canonical state can
+            # persist the revision as an owned live mutation.
+            self._bind_active_mutation_candidate()
+        else:
             self._require_workspace_freshness(
                 stage="tool_checkpoint",
                 tool_name=self._active_tool_name,
@@ -228,20 +322,12 @@ class LiveRuntimeServices(RuntimeServices):
                 tool_input,
             )
             self.state.policy_decisions.append(policy_decision)
-            if policy_decision.decision.value != "ALLOW":
-                reason = f"{policy_decision.rule_id}: {policy_decision.reason}"
-                if self.state.terminal_status in {None, TerminalStatus.SUCCESS}:
-                    self.state.terminal_status = TerminalStatus.POLICY_DENIED
-                    self.state.terminal_reason = reason
-                self.control.journal.try_append(
-                    "mutation_policy_denied",
-                    tool_name=f"mcp__qa__{tool_name}",
+            if policy_decision.decision is not ToolDecision.ALLOW:
+                self._deny_live_mutation(
+                    tool_name=tool_name,
                     rule_id=policy_decision.rule_id,
+                    reason=policy_decision.reason,
                 )
-                if self.state_store is not None:  # pragma: no branch - required in __post_init__
-                    self.state_store.save(self.state)
-                self.control.persist()
-                raise PermissionError(reason)
 
             if self.state.target_git_sha is None:
                 reason = "Autonomous mutation requires a Git-backed target workspace"
@@ -256,11 +342,28 @@ class LiveRuntimeServices(RuntimeServices):
                 self.control.persist()
                 raise PermissionError(reason)
 
-            # Capture rollback authority only after the exact workspace baseline and
-            # mutation policy have both been re-proved.
+            subject_path = self._resolved_live_mutation_path(tool_name, tool_input)
+            path_decision = self.policy.authorize_path(Path(subject_path), write=True)
+            self.state.policy_decisions.append(path_decision)
+            if path_decision.decision is not ToolDecision.ALLOW:
+                self._deny_live_mutation(
+                    tool_name=tool_name,
+                    rule_id=path_decision.rule_id,
+                    reason=path_decision.reason,
+                )
+            if Path(subject_path).suffix != ".py":
+                self._deny_live_mutation(
+                    tool_name=tool_name,
+                    rule_id="WRITE-RUNTIME-001",
+                    reason="live autonomous mutation is restricted to pytest-backed Python test paths",
+                )
+
+            # Capture rollback authority only after the exact workspace baseline,
+            # mutation policy, and evidence-resolved subject have all been re-proved.
             self.control.prepare_mutation(
-                str(tool_input.get("path") or ""),
+                subject_path,
                 change_revision_before=self.state.change_revision,
+                candidate_required=True,
             )
 
         self._active_tool_name = tool_name
