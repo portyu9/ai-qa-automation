@@ -12,6 +12,7 @@ from ..fs_authority import (
     descriptor_relative_authority_supported,
     pin_directory_identity,
     read_bytes_confined,
+    stat_confined_entry,
     unlink_file_confined,
 )
 from ..io_safety import parse_json_object_strict, read_json_object_bounded
@@ -268,6 +269,61 @@ def _resumable_recovery_tail(
     return actor, recovered_fingerprint
 
 
+def _verify_resumed_rollback_target(
+    *,
+    workspace: Path,
+    relative_path: str,
+    existed: bool,
+    backup_data: bytes | None,
+    expected_workspace_identity: tuple[int, int] | None,
+) -> bool:
+    """Prove a durable recovery tail corresponds to the actual rollback target state."""
+
+    if existed:
+        if backup_data is None:
+            return False
+        try:
+            current = read_bytes_confined(
+                workspace,
+                relative_path,
+                max_bytes=_MAX_ROLLBACK_BYTES,
+                label="resumed stale recovery target",
+                expected_root_identity=expected_workspace_identity,
+            )
+        except (OSError, RuntimeError, ValueError):
+            return False
+        return current == backup_data
+    try:
+        stat_confined_entry(
+            workspace,
+            relative_path,
+            label="resumed stale recovery target",
+            expected_root_identity=expected_workspace_identity,
+        )
+    except FileNotFoundError:
+        return True
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return False
+
+
+def _observe_recovered_workspace_fingerprint(
+    workspace: Path,
+    *,
+    expected_workspace_identity: tuple[int, int] | None,
+) -> str | None:
+    try:
+        snapshot = RepositoryInspector(
+            workspace,
+            expected_root_identity=expected_workspace_identity,
+        ).snapshot()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if not snapshot.fingerprint_complete or not _is_sha256_fingerprint(snapshot.fingerprint):
+        return None
+    return snapshot.fingerprint
+
+
 def recover_stale_mutation(
     *,
     artifact_root: Path,
@@ -282,7 +338,11 @@ def recover_stale_mutation(
 
     if not previous_lease:
         return {"status": "NONE"}
-    if not recovering_run_id.strip() or len(recovering_run_id) > _MAX_RECOVERY_RUN_ID_CHARS:
+    if (
+        not isinstance(recovering_run_id, str)
+        or not recovering_run_id.strip()
+        or len(recovering_run_id) > _MAX_RECOVERY_RUN_ID_CHARS
+    ):
         return {"status": "BLOCKED", "reason": "recovering run_id is invalid"}
     raw_previous_run_id = previous_lease.get("run_id")
     if not isinstance(raw_previous_run_id, str) or not raw_previous_run_id.strip():
@@ -530,6 +590,22 @@ def recover_stale_mutation(
             }
         backup_to_cleanup = backup_relative
 
+    if recovery_event_already_recorded and not _verify_resumed_rollback_target(
+        workspace=workspace,
+        relative_path=relative_path,
+        existed=existed,
+        backup_data=backup_data,
+        expected_workspace_identity=expected_workspace_identity,
+    ):
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": previous_run_id,
+            "reason": (
+                "durable stale recovery event does not match the current rollback target bytes; "
+                "pending authority was retained for manual reconciliation"
+            ),
+        }
+
     if not recovery_event_already_recorded:
         if existed:
             if backup_data is None:  # pragma: no cover - guarded by backup validation
@@ -580,12 +656,11 @@ def recover_stale_mutation(
                     "closure; rollback authority was retained and manual reconciliation is required"
                 ),
             }
-        try:
-            recovered_snapshot = RepositoryInspector(
-                workspace,
-                expected_root_identity=expected_workspace_identity,
-            ).snapshot()
-        except (OSError, RuntimeError, ValueError):
+        recovered_workspace_fingerprint = _observe_recovered_workspace_fingerprint(
+            workspace,
+            expected_workspace_identity=expected_workspace_identity,
+        )
+        if recovered_workspace_fingerprint is None:
             return {
                 "status": "BLOCKED",
                 "previous_run_id": previous_run_id,
@@ -595,16 +670,6 @@ def recover_stale_mutation(
                     "reconciliation is required"
                 ),
             }
-        if not recovered_snapshot.fingerprint_complete:
-            return {
-                "status": "BLOCKED",
-                "previous_run_id": previous_run_id,
-                "reason": (
-                    "stale mutation bytes were restored but the post-recovery workspace fingerprint "
-                    "is incomplete; rollback authority was retained and manual reconciliation is required"
-                ),
-            }
-        recovered_workspace_fingerprint = recovered_snapshot.fingerprint
         try:
             recovery_event_recorded = journal.try_append(
                 "stale_mutation_recovered",
@@ -649,6 +714,25 @@ def recover_stale_mutation(
             "reason": (
                 "stale mutation bytes were restored but prior journal authority became invalid; "
                 "rollback authority was retained and manual reconciliation is required"
+            ),
+        }
+    if recovered_workspace_fingerprint is None:
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": previous_run_id,
+            "reason": "stale recovery workspace fingerprint authority is unavailable",
+        }
+    closure_fingerprint = _observe_recovered_workspace_fingerprint(
+        workspace,
+        expected_workspace_identity=expected_workspace_identity,
+    )
+    if closure_fingerprint != recovered_workspace_fingerprint:
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": previous_run_id,
+            "reason": (
+                "workspace changed after stale recovery evidence was recorded and before durable "
+                "closure; pending authority was retained for manual reconciliation"
             ),
         }
 
