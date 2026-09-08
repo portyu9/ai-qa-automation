@@ -266,6 +266,8 @@ def _resumable_recovery_tail(
         or not _is_sha256_fingerprint(recovered_fingerprint)
     ):
         return None
+    if not isinstance(recovered_fingerprint, str):
+        return None
     return actor, recovered_fingerprint
 
 
