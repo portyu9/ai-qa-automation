@@ -1,0 +1,95 @@
+name: issue140-polish-builder
+
+on:
+  push:
+    branches: [build/issue-140-final-authority]
+
+permissions:
+  contents: write
+
+jobs:
+  polish:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: build/issue-140-final-authority
+          persist-credentials: true
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.11.16'
+          check-latest: false
+      - name: Tighten regression semantics
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding='utf-8')
+              if text.count(old) != 1:
+                  raise SystemExit(f'{path}: expected exactly one semantic cleanup replacement')
+              target.write_text(text.replace(old, new), encoding='utf-8')
+
+          replace_once(
+              'tests/unit/test_workspace_mutation_freshness_authority.py',
+              'def test_freshness_denied_mutation_failure_does_not_rebase_workspace_authority(',
+              'def test_freshness_denied_proposal_failure_does_not_rebase_workspace_authority(',
+          )
+          replace_once(
+              'tests/unit/test_workspace_mutation_freshness_authority.py',
+              '"error": "workspace freshness denied before mutation preparation",',
+              '"error": "workspace freshness denied before proposal validation",',
+          )
+
+          path = Path('tests/policy/test_live_mutation_execution_contract.py')
+          text = path.read_text(encoding='utf-8')
+          addition = '''\n\ndef test_generated_test_proposal_target_scope_remains_fail_closed(tmp_path: Path) -> None:\n    target = tmp_path / "target-proposal-scope"\n    target.mkdir()\n    subject = PolicyEngine(tmp_path, target, allow_test_writes=False)\n\n    outside_test_scope = subject.authorize_tool(\n        "mcp__qa__create_test_file",\n        {"path": "src/test_generated.py"},\n    )\n    protected_governance = subject.authorize_tool(\n        "mcp__qa__create_test_file",\n        {"path": ".github/workflows/test_generated.py"},\n    )\n\n    assert outside_test_scope.decision is ToolDecision.DENY\n    assert outside_test_scope.rule_id == "WRITE-002"\n    assert protected_governance.decision is ToolDecision.DENY\n    assert protected_governance.rule_id == "GOV-001"\n'''
+          if 'test_generated_test_proposal_target_scope_remains_fail_closed' in text:
+              raise SystemExit('proposal target scope regression already exists')
+          path.write_text(text.rstrip() + addition.rstrip() + '\n', encoding='utf-8')
+          PY
+      - name: Install locked verification environment
+        run: |
+          python -m pip install --require-hashes -r requirements/dev-py311.lock >/dev/null
+          python -m pip install --no-deps --no-build-isolation . >/dev/null
+      - name: Format lint and test affected authority surfaces
+        run: |
+          files=(
+            src/ai_qa_automation/policy.py
+            src/ai_qa_automation/runtime/live_services.py
+            src/ai_qa_automation/runtime/runtime_hooks.py
+            src/ai_qa_automation/runtime/internal_tool_domains/testing.py
+            tests/policy/test_live_mutation_execution_contract.py
+            tests/unit/test_runtime_hooks.py
+            tests/unit/test_workspace_mutation_freshness_authority.py
+            tests/unit/test_generated_test_scenario_authority.py
+          )
+          ruff format "${files[@]}"
+          ruff format --check "${files[@]}"
+          ruff check "${files[@]}"
+          python -m compileall -q src tests
+          git diff --check
+          pytest -q \
+            tests/policy/test_live_mutation_execution_contract.py \
+            tests/unit/test_runtime_hooks.py \
+            tests/unit/test_workspace_mutation_freshness_authority.py \
+            tests/unit/test_generated_test_scenario_authority.py
+      - name: Commit polished source and tests only
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            src/ai_qa_automation/policy.py \
+            src/ai_qa_automation/runtime/live_services.py \
+            src/ai_qa_automation/runtime/runtime_hooks.py \
+            src/ai_qa_automation/runtime/internal_tool_domains/testing.py \
+            tests/policy/test_live_mutation_execution_contract.py \
+            tests/unit/test_runtime_hooks.py \
+            tests/unit/test_workspace_mutation_freshness_authority.py \
+            tests/unit/test_generated_test_scenario_authority.py
+          git diff --cached --check
+          git commit -m 'test: lock proposal-only authority boundaries'
+          git push origin HEAD:build/issue-140-final-authority
