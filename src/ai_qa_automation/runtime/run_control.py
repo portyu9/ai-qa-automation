@@ -319,7 +319,8 @@ class RuntimeControl:
     @staticmethod
     def _validate_candidate_sha256(candidate_sha256: str) -> None:
         if (
-            len(candidate_sha256) != 64
+            not isinstance(candidate_sha256, str)
+            or len(candidate_sha256) != 64
             or candidate_sha256.lower() != candidate_sha256
             or any(character not in "0123456789abcdef" for character in candidate_sha256)
         ):
