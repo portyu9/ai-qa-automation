@@ -1,0 +1,46 @@
+name: issue140-repair-builder
+
+on:
+  push:
+    branches: [build/issue-140-proposal-authority]
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: build/issue-140-proposal-authority
+          persist-credentials: true
+      - name: Repair exact EOF normalization expressions
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/workflows/issue140-build.yml')
+          text = path.read_text(encoding='utf-8')
+          replacements = {
+              'policy_text.rstrip() + policy_append + "\\n"': 'policy_text.rstrip() + policy_append.rstrip() + "\\n"',
+              'hooks_text.rstrip() + hooks_append + "\\n"': 'hooks_text.rstrip() + hooks_append.rstrip() + "\\n"',
+              'freshness_text.rstrip() + freshness_append + "\\n"': 'freshness_text.rstrip() + freshness_append.rstrip() + "\\n"',
+          }
+          for old, new in replacements.items():
+              if text.count(old) != 1:
+                  raise SystemExit(f'expected one builder expression: {old}')
+              text = text.replace(old, new)
+          path.write_text(text, encoding='utf-8')
+          PY
+          git diff --check
+      - name: Commit repaired disposable builder
+        run: |
+          git rm .github/workflows/issue140-repair-builder.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/issue140-build.yml
+          git diff --cached --check
+          git commit -m 'ci: repair disposable issue 140 builder'
+          git push origin HEAD:build/issue-140-proposal-authority
