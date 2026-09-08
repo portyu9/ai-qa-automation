@@ -196,6 +196,13 @@ class RunJournal:
         with self._lock:
             return self._head
 
+    @contextmanager
+    def authority_binding(self) -> Iterator[tuple[int, str | None]]:
+        """Hold the exact journal head/count stable across an authority-bearing publication."""
+
+        with self._lock:
+            yield self._seq, self._head
+
     def _revalidate_parent(self, parent_fd: int | None = None) -> None:
         try:
             current = self.path.parent.stat(follow_symlinks=False)
