@@ -137,3 +137,46 @@ def test_journal_uncertain_descriptor_close_latches_fail_closed(
     monkeypatch.setattr(journal_module.os, "close", real_close)
     with pytest.raises(OSError, match="write state is uncertain"):
         journal.append("must-not-continue")
+
+
+def test_journal_concurrent_tail_change_is_not_erased_during_failed_append(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "journal.jsonl"
+    journal = RunJournal(path)
+    first = journal.append("first")
+    before = path.read_bytes()
+    real_write = os.write
+    real_close = os.close
+    calls = 0
+    external = b'{"external":"unowned"}\n'
+
+    def interrupted_write(fd: int, data: bytes | memoryview) -> int:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            flags = os.O_WRONLY | os.O_APPEND | getattr(os, "O_BINARY", 0)
+            external_fd = os.open(path, flags)
+            try:
+                real_write(external_fd, external)
+            finally:
+                real_close(external_fd)
+            partial = max(1, len(data) // 2)
+            return real_write(fd, data[:partial])
+        raise OSError(errno.EIO, "injected short-write interruption")
+
+    monkeypatch.setattr(journal_module.os, "write", interrupted_write)
+    with pytest.raises(OSError, match="rollback could not be durably proven"):
+        journal.append("interrupted")
+
+    persisted = path.read_bytes()
+    assert persisted.startswith(before + external)
+    assert len(persisted) > len(before) + len(external)
+    assert journal.event_count == 1
+    assert journal.head_hash == first
+    assert journal.verify()["valid"] is False
+
+    monkeypatch.setattr(journal_module.os, "write", real_write)
+    with pytest.raises(OSError, match="write state is uncertain"):
+        journal.append("must-not-continue")
