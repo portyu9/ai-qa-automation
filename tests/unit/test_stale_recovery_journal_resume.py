@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,17 @@ from ai_qa_automation.runtime.journal import RunJournal
 from ai_qa_automation.runtime.stale_recovery import recover_stale_mutation
 from ai_qa_automation.state import StateStore
 from ai_qa_automation.tools.repository import RepositoryInspector
+
+
+def _git(workspace: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", *args],
+        cwd=workspace,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
 
 
 def _workspace_fingerprint(workspace: Path) -> str:
@@ -26,12 +38,26 @@ def _setup_pending_recovery(tmp_path: Path) -> dict[str, object]:
     relative_path = "tests/test_checkout.py"
     target = workspace / relative_path
     target.parent.mkdir(parents=True)
+    original = b"original\n"
+    target.write_bytes(original)
+    _git(workspace, "init", "-q")
+    _git(workspace, "add", "--", relative_path)
+    _git(
+        workspace,
+        "-c",
+        "user.name=QA Fixture",
+        "-c",
+        "user.email=qa-fixture@example.invalid",
+        "commit",
+        "-q",
+        "-m",
+        "fixture baseline",
+    )
     target.write_text("candidate\n", encoding="utf-8")
 
     prior_run = artifact_root / "run-old"
     backup = prior_run / "rollback" / "checkout.bin"
     backup.parent.mkdir(parents=True)
-    original = b"original\n"
     backup.write_bytes(original)
 
     journal = RunJournal(prior_run / "journal.jsonl")
@@ -267,9 +293,11 @@ def test_stale_recovery_rejects_workspace_drift_after_durable_recovery_event(
     assert backup.is_file()
 
     monkeypatch.undo()
+    recovered_fingerprint = _workspace_fingerprint(workspace)
     unrelated = workspace / "unrelated.txt"
     unrelated.write_text("newer work\n", encoding="utf-8")
     drifted_fingerprint = _workspace_fingerprint(workspace)
+    assert drifted_fingerprint != recovered_fingerprint
     restored_bytes = target.read_bytes()
 
     result = recover_stale_mutation(
