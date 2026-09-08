@@ -390,7 +390,7 @@ def test_mutation_preparation_occurs_only_after_fresh_workspace_proof(tmp_path: 
     )
 
     services.consume(
-        "create_test_file",
+        "apply_locator_heal",
         {"path": relative, "source": "def test_ok():\n    assert True\n"},
     )
 
@@ -416,7 +416,7 @@ def test_drifted_mutation_never_creates_pending_or_rollback_authority(tmp_path: 
 
     with pytest.raises(PermissionError, match="outside the authorized runtime mutation lineage"):
         services.consume(
-            "create_test_file",
+            "apply_locator_heal",
             {"path": "tests/generated_test.py", "source": "def test_ok():\n    assert True\n"},
         )
 
