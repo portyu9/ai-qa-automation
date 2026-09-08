@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from .agent_support import _sync_operational_state
 from .config import Settings
@@ -14,7 +14,6 @@ from .runtime.control_plane_provenance import (
     capture_control_plane_subject,
     same_control_plane_capture,
 )
-from .runtime.journal import RunJournal
 from .runtime.run_control import RuntimeControl
 from .runtime.sdk_recovery import (
     SDKRetryDecision,
@@ -25,6 +24,14 @@ from .runtime.sdk_result_bounds import SDKResultBoundsError, validate_sdk_result
 from .state import StateStore
 
 
+class ProviderJournalAudit(Protocol):
+    """Shared fail-closed journal authority used across provider and terminal paths."""
+
+    failure_type: str | None
+
+    def record(self, event: str, **payload: Any) -> bool: ...
+
+
 @dataclass(frozen=True)
 class ProviderSessionOutcome:
     final_text: str
@@ -32,6 +39,24 @@ class ProviderSessionOutcome:
     last_retry_decision: SDKRetryDecision | None
     pre_provider_denial: ControlPlaneRevalidationStatus | None
     failure: Exception | None = None
+
+
+def _mark_journal_authority_failure(
+    state: AgentRunState,
+    journal_audit: ProviderJournalAudit,
+    *,
+    event: str,
+    action: str,
+) -> None:
+    """Make ambiguous provider/replay lineage a monotonic infrastructure failure."""
+
+    failure_type = journal_audit.failure_type or "unknown journal failure"
+    state.terminal_status = TerminalStatus.INFRASTRUCTURE_FAILURE
+    state.terminal_reason = (
+        f"Run journal persistence could not be guaranteed {action} while recording "
+        f"{event}: {failure_type}."
+    )
+    state.phase = "TERMINAL"
 
 
 async def execute_sdk_sessions(
@@ -45,10 +70,10 @@ async def execute_sdk_sessions(
     control: RuntimeControl,
     cfg: Settings,
     state_store: StateStore,
-    journal: RunJournal,
+    journal_audit: ProviderJournalAudit,
     control_plane_capture: ControlPlaneCapture,
 ) -> ProviderSessionOutcome:
-    """Execute bounded SDK sessions with exact control-plane admission before each attempt."""
+    """Execute bounded SDK sessions with durable control-plane admission before each attempt."""
 
     final_text = ""
     result_subtype: str | None = None
@@ -65,15 +90,30 @@ async def execute_sdk_sessions(
             control_plane_capture,
             cfg.control_root,
         )
-        journal.try_append(
+        if pre_provider_status is not ControlPlaneRevalidationStatus.VERIFIED:
+            pre_provider_denial = pre_provider_status
+        if not journal_audit.record(
             "pre_provider_control_plane_revalidation",
             status=pre_provider_status.value,
             reason=pre_provider_reason,
             bound_subject_digest=control_plane_capture.subject.subject_digest,
             observed_subject_digest=pre_provider_digest,
-        )
+        ):
+            state.control_plane_revalidation_status = pre_provider_status
+            state.control_plane_terminal_subject_digest = pre_provider_digest
+            _mark_journal_authority_failure(
+                state,
+                journal_audit,
+                event="pre_provider_control_plane_revalidation",
+                action="before provider execution",
+            )
+            return ProviderSessionOutcome(
+                final_text=final_text,
+                result_subtype=result_subtype,
+                last_retry_decision=last_retry_decision,
+                pre_provider_denial=pre_provider_denial,
+            )
         if pre_provider_status is not ControlPlaneRevalidationStatus.VERIFIED:
-            pre_provider_denial = pre_provider_status
             state.control_plane_revalidation_status = pre_provider_status
             state.control_plane_terminal_subject_digest = pre_provider_digest
             if pre_provider_status is ControlPlaneRevalidationStatus.UNAVAILABLE:
@@ -159,23 +199,36 @@ async def execute_sdk_sessions(
                     pre_provider_denial=pre_provider_denial,
                     failure=exc,
                 )
-            state.retry_count += 1
+            retry_number = state.retry_count + 1
             delay = retry_delay_seconds(
-                state.retry_count,
+                retry_number,
                 base_seconds=cfg.sdk_retry_backoff_seconds,
                 max_seconds=cfg.sdk_retry_max_backoff_seconds,
             )
-            state.observations.append(
-                "Transient Agent SDK session-start failure occurred before provider "
-                f"query submission; scheduling bounded retry {state.retry_count}/{cfg.max_sdk_retries}."
-            )
-            journal.try_append(
+            if not journal_audit.record(
                 "sdk_retry_scheduled",
-                retry_number=state.retry_count,
+                retry_number=retry_number,
                 retry_limit=cfg.max_sdk_retries,
                 category=decision.category,
                 error_type=type(exc).__name__,
                 delay_seconds=delay,
+            ):
+                _mark_journal_authority_failure(
+                    state,
+                    journal_audit,
+                    event="sdk_retry_scheduled",
+                    action="before scheduling an Agent SDK retry",
+                )
+                return ProviderSessionOutcome(
+                    final_text=final_text,
+                    result_subtype=result_subtype,
+                    last_retry_decision=last_retry_decision,
+                    pre_provider_denial=pre_provider_denial,
+                )
+            state.retry_count = retry_number
+            state.observations.append(
+                "Transient Agent SDK session-start failure occurred before provider "
+                f"query submission; scheduling bounded retry {state.retry_count}/{cfg.max_sdk_retries}."
             )
             _sync_operational_state(state, state_store, control)
             await asyncio.sleep(delay)
