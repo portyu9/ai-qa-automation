@@ -165,8 +165,10 @@ async def test_expected_pre_provider_initialization_failure_returns_durable_infr
         event for event in events if event.get("event") == "pre_provider_initialization_failed"
     ]
     assert len(failure_events) == 1
-    assert failure_events[0]["failed_phase"] == expected_phase
-    assert failure_events[0]["error_type"] == error_type.__name__
+    failure_payload = failure_events[0]["payload"]
+    assert isinstance(failure_payload, dict)
+    assert failure_payload["failed_phase"] == expected_phase
+    assert failure_payload["error_type"] == error_type.__name__
     assert not any(event.get("event") == "agent_run_started" for event in events)
     assert any(event.get("event") == "agent_run_finished" for event in events)
 
