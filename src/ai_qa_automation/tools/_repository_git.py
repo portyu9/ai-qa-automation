@@ -523,6 +523,7 @@ class RepositoryGitAuthorityMixin:
                 raise RepositorySubjectError(
                     "repository Git metadata must not redirect to external common/object storage"
                 )
+
         grafts = self._read_git_metadata_file("info/grafts", label="legacy Git graft metadata")
         if grafts is not None and grafts.strip():
             raise RepositorySubjectError(
