@@ -174,6 +174,158 @@ async def test_expected_pre_provider_initialization_failure_returns_durable_infr
 
 
 @pytest.mark.asyncio
+async def test_setup_failure_before_journal_returns_state_backed_infrastructure_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    control, workspace, artifacts = _runtime_roots(tmp_path)
+    provider_calls: list[str] = []
+    _patch_pre_provider_dependencies(monkeypatch, provider_calls)
+
+    def fail_evidence(*_args: object, **_kwargs: object) -> object:
+        raise OSError("synthetic evidence store failure")
+
+    monkeypatch.setattr(agent_module, "EvidenceStore", fail_evidence)
+
+    result = await run_agent(
+        "exercise setup failure before journal construction",
+        workspace,
+        Settings(control_root=control, artifact_root=artifacts),
+    )
+
+    report = result["report"]
+    assert report["terminal_status"] == TerminalStatus.INFRASTRUCTURE_FAILURE.value
+    assert "evidence_store_initialization" in report["summary"]
+    assert "OSError" in report["summary"]
+    assert provider_calls == []
+
+    persisted = _persisted_state(artifacts)
+    assert persisted.phase == "TERMINAL"
+    assert persisted.terminal_status is TerminalStatus.INFRASTRUCTURE_FAILURE
+    assert persisted.terminal_reason == report["summary"]
+    assert list(artifacts.glob("*/journal.jsonl")) == []
+    assert list(artifacts.glob("*/runtime.json")) == []
+
+
+@pytest.mark.asyncio
+async def test_setup_failure_after_journal_records_terminal_lifecycle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    control, workspace, artifacts = _runtime_roots(tmp_path)
+    provider_calls: list[str] = []
+    _patch_pre_provider_dependencies(monkeypatch, provider_calls)
+
+    def fail_lease(*_args: object, **_kwargs: object) -> object:
+        raise ValueError("synthetic lease construction failure")
+
+    monkeypatch.setattr(agent_module, "WorkspaceLease", fail_lease)
+
+    result = await run_agent(
+        "exercise setup failure after journal construction",
+        workspace,
+        Settings(control_root=control, artifact_root=artifacts),
+    )
+
+    report = result["report"]
+    assert report["terminal_status"] == TerminalStatus.INFRASTRUCTURE_FAILURE.value
+    assert "workspace_lease_initialization" in report["summary"]
+    assert provider_calls == []
+
+    persisted = _persisted_state(artifacts)
+    assert persisted.terminal_status is TerminalStatus.INFRASTRUCTURE_FAILURE
+    assert persisted.terminal_reason == report["summary"]
+
+    events = _journal_events(artifacts)
+    failure_events = [
+        event for event in events if event.get("event") == "pre_provider_initialization_failed"
+    ]
+    assert len(failure_events) == 1
+    payload = failure_events[0]["payload"]
+    assert isinstance(payload, dict)
+    assert payload["failed_phase"] == "INITIALIZE"
+    assert payload["setup_stage"] == "workspace_lease_initialization"
+    assert payload["error_type"] == "ValueError"
+    assert [event["event"] for event in events] == [
+        "pre_provider_initialization_failed",
+        "agent_run_finished",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_initial_runtime_metadata_persist_failure_is_not_replayed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    control, workspace, artifacts = _runtime_roots(tmp_path)
+    provider_calls: list[str] = []
+    _patch_pre_provider_dependencies(monkeypatch, provider_calls)
+    persist_calls = 0
+
+    def fail_persist(_self: object) -> None:
+        nonlocal persist_calls
+        persist_calls += 1
+        raise OSError("synthetic ambiguous runtime metadata persistence")
+
+    monkeypatch.setattr(agent_module.RuntimeControl, "persist", fail_persist)
+
+    result = await run_agent(
+        "exercise initial runtime metadata persistence failure",
+        workspace,
+        Settings(control_root=control, artifact_root=artifacts),
+    )
+
+    report = result["report"]
+    assert persist_calls == 1
+    assert report["terminal_status"] == TerminalStatus.INFRASTRUCTURE_FAILURE.value
+    assert "runtime_metadata_initial_persist" in report["summary"]
+    assert provider_calls == []
+
+    persisted = _persisted_state(artifacts)
+    assert persisted.terminal_status is TerminalStatus.INFRASTRUCTURE_FAILURE
+    assert persisted.terminal_reason == report["summary"]
+    events = _journal_events(artifacts)
+    failure_events = [
+        event for event in events if event.get("event") == "pre_provider_initialization_failed"
+    ]
+    assert len(failure_events) == 1
+    payload = failure_events[0]["payload"]
+    assert isinstance(payload, dict)
+    assert payload["setup_stage"] == "runtime_metadata_initial_persist"
+
+
+@pytest.mark.asyncio
+async def test_initial_canonical_state_persist_failure_propagates_without_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    control, workspace, artifacts = _runtime_roots(tmp_path)
+    provider_calls: list[str] = []
+    _patch_pre_provider_dependencies(monkeypatch, provider_calls)
+    save_calls = 0
+
+    def fail_save(_self: StateStore, _state: AgentRunState) -> None:
+        nonlocal save_calls
+        save_calls += 1
+        raise OSError("synthetic ambiguous canonical state persistence")
+
+    monkeypatch.setattr(StateStore, "save", fail_save)
+
+    with pytest.raises(OSError, match="synthetic ambiguous canonical state persistence"):
+        await run_agent(
+            "exercise initial canonical state persistence failure",
+            workspace,
+            Settings(control_root=control, artifact_root=artifacts),
+        )
+
+    assert save_calls == 1
+    assert provider_calls == []
+    assert list(artifacts.glob("*/state.json")) == []
+    assert list(artifacts.glob("*/journal.jsonl")) == []
+    assert list(artifacts.glob("*/runtime.json")) == []
+
+
+@pytest.mark.asyncio
 async def test_unexpected_pre_provider_programming_failure_still_propagates(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

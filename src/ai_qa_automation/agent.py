@@ -174,6 +174,72 @@ def _terminalize_pre_provider_failure(
     ]
 
 
+def _terminalize_pre_provider_setup_failure(
+    state: AgentRunState,
+    state_store: StateStore,
+    audit: _TerminalJournalAudit | None,
+    exc: OSError | RuntimeError | ValueError,
+    *,
+    setup_stage: str,
+    started: float,
+) -> dict[str, Any]:
+    """Close setup failure without replaying an ambiguous runtime metadata write."""
+
+    _mark_terminal_infrastructure_failure(
+        state,
+        "Pre-provider runtime initialization could not be completed safely during "
+        f"INITIALIZE ({setup_stage}): {type(exc).__name__}.",
+    )
+    state.duration = max(0.0, time.monotonic() - started)
+
+    try:
+        # The initial canonical state was already persisted successfully before any
+        # other run subsystem was constructed. This is a new state transition, not
+        # a replay of the setup operation that just failed.
+        state_store.save(state)
+    except Exception as persist_exc:
+        persist_exc.add_note(
+            "Canonical terminal state could not be guaranteed after pre-provider "
+            f"setup failure in {setup_stage}; original failure was {type(exc).__name__}."
+        )
+        raise
+
+    if audit is not None:
+        failure_recorded = _record_terminal_event(
+            state,
+            audit,
+            "pre_provider_initialization_failed",
+            failed_phase="INITIALIZE",
+            setup_stage=setup_stage,
+            error_type=type(exc).__name__,
+        )
+        if not failure_recorded:
+            # Journal ambiguity can revise the terminal reason. The prior state save
+            # completed before the journal operation began, so persisting that revised
+            # truth is a distinct operation rather than a replay.
+            state_store.save(state)
+        else:
+            terminal_status = state.terminal_status or TerminalStatus.INFRASTRUCTURE_FAILURE
+            if not _record_terminal_event(
+                state,
+                audit,
+                "agent_run_finished",
+                terminal_status=terminal_status.value,
+                duration_seconds=state.duration,
+                tool_calls=state.tool_call_count,
+            ):
+                state_store.save(state)
+
+    return _final_response(
+        state,
+        agent_result="",
+        limitations=[
+            "Pre-provider setup failed before runtime and lease authority were fully established; "
+            "canonical state records infrastructure failure and model execution was not started."
+        ],
+    )
+
+
 def _persist_terminal_state(
     state: AgentRunState,
     state_store: StateStore,
@@ -462,43 +528,66 @@ async def run_agent(
         raise RuntimeError("artifact_root was not resolved")
     run_dir = artifact_root / state.run_id
     state_store = StateStore(run_dir / "state.json")
-    run_root_identity = state_store.parent_identity
-    evidence = EvidenceStore(
-        artifact_root,
-        state.run_id,
-        regulated_mode=cfg.regulated_mode,
-        expected_run_root_identity=run_root_identity,
-    )
-    budget = ExecutionBudget(
-        max_tool_calls=cfg.max_tool_calls,
-        max_network_calls=cfg.max_network_calls,
-        max_mutations=cfg.max_mutations,
-        max_wall_seconds=float(cfg.global_timeout_seconds),
-    )
-    journal = RunJournal(
-        run_dir / "journal.jsonl",
-        regulated_mode=cfg.regulated_mode,
-        max_events=max(1000, cfg.max_tool_calls * 50),
-        expected_parent_identity=run_root_identity,
-    )
-    terminal_audit = _TerminalJournalAudit(journal)
-    lease = WorkspaceLease(
-        artifact_root,
-        workspace,
-        state.run_id,
-        run_root_identity=run_root_identity,
-    )
-    control = RuntimeControl(
-        workspace=workspace,
-        budget=budget,
-        journal=journal,
-        metadata_path=run_dir / "runtime.json",
-        lease_id=lease.lease_id,
-        max_repeated_action=cfg.max_repeated_action,
-        persistence_root_identity=run_root_identity,
-    )
-    control.persist()
+    # Establish canonical state before constructing any other run subsystem. If this
+    # write is ambiguous, do not replay it and do not claim structured terminal closure.
     state_store.save(state)
+    run_root_identity = state_store.parent_identity
+
+    terminal_audit: _TerminalJournalAudit | None = None
+    setup_stage = "evidence_store_initialization"
+    try:
+        evidence = EvidenceStore(
+            artifact_root,
+            state.run_id,
+            regulated_mode=cfg.regulated_mode,
+            expected_run_root_identity=run_root_identity,
+        )
+        setup_stage = "execution_budget_initialization"
+        budget = ExecutionBudget(
+            max_tool_calls=cfg.max_tool_calls,
+            max_network_calls=cfg.max_network_calls,
+            max_mutations=cfg.max_mutations,
+            max_wall_seconds=float(cfg.global_timeout_seconds),
+        )
+        setup_stage = "run_journal_initialization"
+        journal = RunJournal(
+            run_dir / "journal.jsonl",
+            regulated_mode=cfg.regulated_mode,
+            max_events=max(1000, cfg.max_tool_calls * 50),
+            expected_parent_identity=run_root_identity,
+        )
+        terminal_audit = _TerminalJournalAudit(journal)
+        setup_stage = "workspace_lease_initialization"
+        lease = WorkspaceLease(
+            artifact_root,
+            workspace,
+            state.run_id,
+            run_root_identity=run_root_identity,
+        )
+        setup_stage = "runtime_control_initialization"
+        control = RuntimeControl(
+            workspace=workspace,
+            budget=budget,
+            journal=journal,
+            metadata_path=run_dir / "runtime.json",
+            lease_id=lease.lease_id,
+            max_repeated_action=cfg.max_repeated_action,
+            persistence_root_identity=run_root_identity,
+        )
+        setup_stage = "runtime_metadata_initial_persist"
+        control.persist()
+    except (OSError, RuntimeError, ValueError) as exc:
+        return _terminalize_pre_provider_setup_failure(
+            state,
+            state_store,
+            terminal_audit,
+            exc,
+            setup_stage=setup_stage,
+            started=started,
+        )
+
+    if terminal_audit is None:  # pragma: no cover - construction above is unconditional
+        raise AssertionError("terminal journal audit was not initialized")
 
     try:
         lease.acquire(publish=False)
