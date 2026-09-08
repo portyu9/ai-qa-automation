@@ -50,9 +50,7 @@ def _patch_pre_provider_dependencies(
 
     async def forbidden_sessions(**_kwargs: object) -> None:
         provider_calls.append("started")
-        raise AssertionError(
-            "provider execution must not start after initialization failure"
-        )
+        raise AssertionError("provider execution must not start after initialization failure")
 
     monkeypatch.setattr("claude_agent_sdk.ClaudeAgentOptions", AcceptOptions)
     monkeypatch.setattr("claude_agent_sdk.ClaudeSDKClient", ForbiddenClient)
@@ -157,9 +155,7 @@ async def test_expected_pre_provider_initialization_failure_returns_durable_infr
 
     events = _journal_events(artifacts)
     failure_events = [
-        event
-        for event in events
-        if event.get("event") == "pre_provider_initialization_failed"
+        event for event in events if event.get("event") == "pre_provider_initialization_failed"
     ]
     assert len(failure_events) == 1
     assert failure_events[0]["failed_phase"] == expected_phase
@@ -235,6 +231,4 @@ async def test_expected_exception_after_provider_start_is_not_reclassified_as_pr
 
     assert provider_calls == ["started"]
     events = _journal_events(artifacts)
-    assert not any(
-        event.get("event") == "pre_provider_initialization_failed" for event in events
-    )
+    assert not any(event.get("event") == "pre_provider_initialization_failed" for event in events)
