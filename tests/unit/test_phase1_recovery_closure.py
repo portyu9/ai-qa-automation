@@ -87,6 +87,9 @@ def test_failed_stale_recovery_close_retains_authority_but_requires_reconciliati
     assert "manual reconciliation" in str(first["reason"])
     assert target.read_bytes() == original
     assert backup.read_bytes() == original
+    durable_journal = journal.verify(include_last_record=True)
+    assert durable_journal["events"] == 2
+    assert durable_journal["last_record"]["event"] == "stale_mutation_recovered"
     persisted = json.loads(runtime_path.read_text(encoding="utf-8"))
     assert persisted["pending_mutation"] is not None
 
