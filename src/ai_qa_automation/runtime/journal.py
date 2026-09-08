@@ -43,6 +43,17 @@ def _stable_file_signature(value: os.stat_result) -> tuple[int, int, int, int, i
     )
 
 
+def _write_fd_all(fd: int, content: bytes) -> None:
+    """Write a complete journal record to one already-owned append descriptor."""
+
+    view = memoryview(content)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError(errno.EIO, "run-journal append made no forward progress")
+        view = view[written:]
+
+
 def validate_runtime_journal_binding(
     runtime_metadata: dict[str, Any],
     journal_status: dict[str, Any],
@@ -183,6 +194,7 @@ class RunJournal:
         self.regulated_mode = regulated_mode
         self.max_events = max_events
         self._lock = RLock()
+        self._write_uncertain = False
         self._seq, self._head = self._inspect_existing()
 
     @property
@@ -298,6 +310,8 @@ class RunJournal:
     def append(self, event: str, **payload: Any) -> str:
         safe_payload = sanitize(payload)
         with self._lock:
+            if self._write_uncertain:
+                raise OSError("run journal write state is uncertain")
             if self._seq >= self.max_events:
                 raise BudgetExceededError("run-journal event budget exhausted")
             body = {
@@ -330,26 +344,65 @@ class RunJournal:
                     self._revalidate_parent(parent_fd)
                     if initial.st_size + len(rendered_bytes) > _MAX_JOURNAL_BYTES:
                         raise BudgetExceededError("run-journal byte budget exhausted")
-                    with os.fdopen(fd, "a", encoding="utf-8") as stream:
-                        fd = -1
-                        stream.write(rendered)
-                        stream.flush()
+                    try:
+                        _write_fd_all(fd, rendered_bytes)
                         # Journal lineage is authority-bearing in every runtime mode.
                         # Regulated mode may add policy, but durability is not optional.
-                        os.fsync(stream.fileno())
-                    final_current = self._stat_entry(parent_fd)
-                    if not stat.S_ISREG(final_current.st_mode) or _identity(
-                        final_current
-                    ) != _identity(initial):
-                        raise RuntimeError("run journal changed identity during append")
-                    if initial.st_size == 0:
-                        if parent_fd is not None:
-                            os.fsync(parent_fd)
-                        else:
-                            fsync_directory(self.path.parent)
+                        os.fsync(fd)
+                        final_opened = os.fstat(fd)
+                        final_current = self._assert_opened_entry_current(
+                            parent_fd=parent_fd,
+                            opened=final_opened,
+                            label="append",
+                        )
+                        expected_size = initial.st_size + len(rendered_bytes)
+                        if (
+                            final_opened.st_size != expected_size
+                            or final_current.st_size != expected_size
+                        ):
+                            raise RuntimeError("run journal size changed during append")
+                        if initial.st_size == 0:
+                            if parent_fd is not None:
+                                os.fsync(parent_fd)
+                            else:
+                                fsync_directory(self.path.parent)
+                    except BaseException:
+                        try:
+                            os.ftruncate(fd, initial.st_size)
+                            os.fsync(fd)
+                            rolled_back = os.fstat(fd)
+                            current = self._assert_opened_entry_current(
+                                parent_fd=parent_fd,
+                                opened=rolled_back,
+                                label="append rollback",
+                            )
+                            if (
+                                rolled_back.st_size != initial.st_size
+                                or current.st_size != initial.st_size
+                            ):
+                                raise OSError(
+                                    errno.EIO,
+                                    "run-journal rollback did not restore the prior length",
+                                )
+                            if initial.st_size == 0:
+                                if parent_fd is not None:
+                                    os.fsync(parent_fd)
+                                else:
+                                    fsync_directory(self.path.parent)
+                        except BaseException as rollback_exc:
+                            self._write_uncertain = True
+                            raise OSError(
+                                "run journal append failed and rollback could not be durably proven"
+                            ) from rollback_exc
+                        raise
                 finally:
-                    if fd >= 0:
+                    try:
                         os.close(fd)
+                    except BaseException as close_exc:
+                        self._write_uncertain = True
+                        raise OSError(
+                            "run journal descriptor close could not be proven"
+                        ) from close_exc
             self._seq += 1
             self._head = record_hash
         if isinstance(safe_payload, dict):
