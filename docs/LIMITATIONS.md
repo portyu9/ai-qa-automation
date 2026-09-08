@@ -271,7 +271,7 @@ Repository source still cannot prove that the automatic Environment/App credenti
 
 H-series readiness and credentialed model smoke remain separate manual evidence classes and are never promoted into protected merge authority by their existence or success.
 
-See [CI/CD and Repository Governance](CI_CD.md) and [Trusted PR Control Plane](TRUSTED_PR_CONTROL_PLANE.md).
+See [CI/CD and Repository Governance](CI_CD.md) and [Trusted PR control plane](TRUSTED_PR_CONTROL_PLANE.md).
 
 ### Reference SUT
 
