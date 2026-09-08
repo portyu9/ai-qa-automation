@@ -32,7 +32,9 @@ def _make_control(tmp_path: Path) -> RuntimeControl:
 
 
 def _forbid_split_authority_read(_journal: RunJournal) -> int:
-    raise AssertionError("runtime snapshot must not assemble journal authority from split properties")
+    raise AssertionError(
+        "runtime snapshot must not assemble journal authority from split properties"
+    )
 
 
 def test_runtime_snapshot_uses_one_journal_authority_binding(
