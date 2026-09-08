@@ -88,7 +88,7 @@ def test_repository_rejects_payload_backed_or_unknown_ref_storage(
 
     with pytest.raises(
         RepositorySubjectError,
-        match=r"unsupported extensions.refStorage syntax or payload",
+        match=r"unsupported extensions\.refStorage syntax or payload",
     ):
         RepositoryInspector(repo)
 
@@ -99,7 +99,7 @@ def test_repository_rejects_same_line_redirected_ref_storage(tmp_path: Path) -> 
 
     with pytest.raises(
         RepositorySubjectError,
-        match=r"unsupported extensions.refStorage syntax or payload",
+        match=r"unsupported extensions\.refStorage syntax or payload",
     ):
         RepositoryInspector(repo)
 
@@ -113,7 +113,7 @@ def test_repository_rejects_bom_prefixed_redirected_ref_storage(tmp_path: Path) 
 
     with pytest.raises(
         RepositorySubjectError,
-        match=r"unsupported extensions.refStorage syntax or payload",
+        match=r"unsupported extensions\.refStorage syntax or payload",
     ):
         RepositoryInspector(repo)
 
