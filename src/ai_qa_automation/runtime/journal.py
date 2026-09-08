@@ -376,6 +376,7 @@ class RunJournal:
                                 opened=rolled_back,
                                 label="append rollback",
                             )
+                            self._revalidate_parent(parent_fd)
                             if (
                                 rolled_back.st_size != initial.st_size
                                 or current.st_size != initial.st_size
