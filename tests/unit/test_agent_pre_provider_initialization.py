@@ -98,6 +98,7 @@ def _journal_events(artifacts: Path) -> list[dict[str, object]]:
 @pytest.mark.parametrize(
     ("failure_stage", "error_type", "expected_phase"),
     [
+        ("recovery", OSError, "RECOVERY_CHECK"),
         ("bootstrap", OSError, "BOOTSTRAP"),
         ("external_mcp", ValueError, "BOOTSTRAP"),
         ("operational_sync", RuntimeError, "RUNNING"),
@@ -117,7 +118,13 @@ async def test_expected_pre_provider_initialization_failure_returns_durable_infr
     def fail() -> None:
         raise error_type("synthetic pre-provider failure")
 
-    if failure_stage == "bootstrap":
+    if failure_stage == "recovery":
+        monkeypatch.setattr(
+            agent_module,
+            "recover_stale_mutation",
+            lambda **_kwargs: fail(),
+        )
+    elif failure_stage == "bootstrap":
         monkeypatch.setattr(
             agent_module,
             "bootstrap_runtime_context",
