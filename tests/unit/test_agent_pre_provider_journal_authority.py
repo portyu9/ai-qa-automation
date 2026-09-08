@@ -33,16 +33,20 @@ def _runtime_roots(tmp_path: Path) -> tuple[Path, Path, Path]:
     return control, workspace, artifacts
 
 
-def _patch_runtime(monkeypatch: pytest.MonkeyPatch, provider_calls: list[str]) -> None:
+def _patch_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    provider_calls: list[str],
+    *,
+    patch_sessions: bool = True,
+) -> None:
     class AcceptOptions:
         def __init__(self, **kwargs: object) -> None:
             self.kwargs = kwargs
 
     class ForbiddenClient:
         def __init__(self, *args: object, **kwargs: object) -> None:
-            raise AssertionError(
-                "provider client construction is owned by the patched session runner"
-            )
+            provider_calls.append("client_constructed")
+            raise AssertionError("provider client must not be constructed after journal ambiguity")
 
     async def forbidden_sessions(**_kwargs: object) -> None:
         provider_calls.append("started")
@@ -50,7 +54,8 @@ def _patch_runtime(monkeypatch: pytest.MonkeyPatch, provider_calls: list[str]) -
 
     monkeypatch.setattr("claude_agent_sdk.ClaudeAgentOptions", AcceptOptions)
     monkeypatch.setattr("claude_agent_sdk.ClaudeSDKClient", ForbiddenClient)
-    monkeypatch.setattr(agent_module, "execute_sdk_sessions", forbidden_sessions)
+    if patch_sessions:
+        monkeypatch.setattr(agent_module, "execute_sdk_sessions", forbidden_sessions)
     monkeypatch.setattr(
         agent_module,
         "bootstrap_runtime_context",
@@ -76,7 +81,9 @@ def _persisted_state(artifacts: Path) -> AgentRunState:
         ("workspace_lease_acquired", False, "exception"),
         ("control_plane_subject_bound", False, "exception"),
         ("agent_run_started", False, "exception"),
+        ("pre_provider_control_plane_revalidation", False, "exception"),
         ("stale_mutation_recovered_before_bootstrap", True, "budget"),
+        ("pre_provider_control_plane_revalidation", False, "budget"),
     ],
 )
 async def test_required_pre_provider_journal_failure_closes_without_provider_submission(
@@ -88,7 +95,11 @@ async def test_required_pre_provider_journal_failure_closes_without_provider_sub
 ) -> None:
     control, workspace, artifacts = _runtime_roots(tmp_path)
     provider_calls: list[str] = []
-    _patch_runtime(monkeypatch, provider_calls)
+    _patch_runtime(
+        monkeypatch,
+        provider_calls,
+        patch_sessions=failed_event != "pre_provider_control_plane_revalidation",
+    )
 
     if force_recovery:
         monkeypatch.setattr(
@@ -137,3 +148,69 @@ async def test_required_pre_provider_journal_failure_closes_without_provider_sub
     persisted = _persisted_state(artifacts)
     assert persisted.terminal_status is TerminalStatus.INFRASTRUCTURE_FAILURE
     assert persisted.terminal_reason == report["summary"]
+
+
+@pytest.mark.asyncio
+async def test_retry_schedule_journal_ambiguity_refuses_replay_before_state_advances(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    control, workspace, artifacts = _runtime_roots(tmp_path)
+    provider_calls: list[str] = []
+    _patch_runtime(monkeypatch, provider_calls, patch_sessions=False)
+
+    class StartupFailureClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            provider_calls.append("client_constructed")
+
+        async def __aenter__(self) -> StartupFailureClient:
+            provider_calls.append("client_entered")
+            raise ConnectionError("connection refused before provider query submission")
+
+        async def __aexit__(self, *args: object) -> None:
+            provider_calls.append("client_exited")
+
+    monkeypatch.setattr("claude_agent_sdk.ClaudeSDKClient", StartupFailureClient)
+
+    original_try_append = RunJournal.try_append
+    attempted_events: list[str] = []
+
+    def fail_retry_schedule(
+        self: RunJournal,
+        event: str,
+        **payload: object,
+    ) -> bool:
+        attempted_events.append(event)
+        if event == "sdk_retry_scheduled":
+            raise OSError("retry journal durability is ambiguous")
+        return original_try_append(self, event, **payload)
+
+    monkeypatch.setattr(RunJournal, "try_append", fail_retry_schedule)
+
+    result = await run_agent(
+        "exercise retry journal authority",
+        workspace,
+        Settings(
+            control_root=control,
+            artifact_root=artifacts,
+            max_sdk_retries=2,
+            sdk_retry_backoff_seconds=0.1,
+            sdk_retry_max_backoff_seconds=0.1,
+        ),
+    )
+
+    report = result["report"]
+    assert report["terminal_status"] == TerminalStatus.INFRASTRUCTURE_FAILURE.value
+    assert "before scheduling an Agent SDK retry" in report["summary"]
+    assert "sdk_retry_scheduled" in report["summary"]
+    assert "OSError" in report["summary"]
+    assert attempted_events.count("pre_provider_control_plane_revalidation") == 1
+    assert attempted_events.count("sdk_retry_scheduled") == 1
+    assert "agent_run_finished" not in attempted_events
+    assert provider_calls == ["client_constructed", "client_entered"]
+
+    persisted = _persisted_state(artifacts)
+    assert persisted.terminal_status is TerminalStatus.INFRASTRUCTURE_FAILURE
+    assert persisted.terminal_reason == report["summary"]
+    assert persisted.retry_count == 0
+    assert all("scheduling bounded retry" not in item for item in persisted.observations)
