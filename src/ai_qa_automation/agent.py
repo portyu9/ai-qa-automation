@@ -148,6 +148,32 @@ def _require_pre_provider_journal_event(
     )
 
 
+def _terminalize_pre_provider_failure(
+    state: AgentRunState,
+    audit: _TerminalJournalAudit,
+    exc: OSError | RuntimeError | ValueError,
+) -> list[str]:
+    """Convert expected pre-provider runtime failures into durable terminal truth."""
+
+    failed_phase = state.phase
+    _mark_terminal_infrastructure_failure(
+        state,
+        "Pre-provider runtime initialization could not be completed safely during "
+        f"{failed_phase}: {type(exc).__name__}.",
+    )
+    _record_terminal_event(
+        state,
+        audit,
+        "pre_provider_initialization_failed",
+        failed_phase=failed_phase,
+        error_type=type(exc).__name__,
+    )
+    return [
+        "A required pre-provider runtime initialization step failed safely; "
+        "model execution was not started."
+    ]
+
+
 def _persist_terminal_state(
     state: AgentRunState,
     state_store: StateStore,
@@ -520,6 +546,7 @@ async def run_agent(
     pre_provider_denial: ControlPlaneRevalidationStatus | None = None
     terminalize = False
     primary_error: BaseException | None = None
+    provider_execution_started = False
 
     try:
         state.phase = "RECOVERY_CHECK"
@@ -716,6 +743,7 @@ async def run_agent(
         try:
             with trace_span("ai_qa_automation.agent_run"):
                 async with asyncio.timeout(cfg.global_timeout_seconds):
+                    provider_execution_started = True
                     outcome = await execute_sdk_sessions(
                         client_type=ClaudeSDKClient,
                         result_message_type=ResultMessage,
@@ -778,6 +806,16 @@ async def run_agent(
     except _TerminalRunStop as stop:
         terminal_limitations = stop.limitations
         terminalize = True
+    except (OSError, RuntimeError, ValueError) as exc:
+        if provider_execution_started:
+            primary_error = exc
+        else:
+            terminal_limitations = _terminalize_pre_provider_failure(
+                state,
+                terminal_audit,
+                exc,
+            )
+            terminalize = True
     except BaseException as exc:
         primary_error = exc
 
