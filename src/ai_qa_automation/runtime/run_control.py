@@ -6,7 +6,7 @@ import os
 import tempfile
 from _thread import RLock
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -47,6 +47,8 @@ class PendingMutation:
     backup_path: str | None
     original_sha256: str | None
     change_revision_before: int | None = None
+    candidate_required: bool = False
+    candidate_sha256: str | None = None
 
 
 @dataclass
@@ -194,8 +196,11 @@ class RuntimeControl:
         relative_path: str,
         *,
         change_revision_before: int | None = None,
+        candidate_required: bool = False,
     ) -> None:
         with self._lock:
+            if not isinstance(candidate_required, bool):
+                raise ValueError("candidate_required must be a boolean")
             if self.pending_mutation is not None:
                 raise MutationPendingError(
                     f"a mutation is already pending validation: {self.pending_mutation.relative_path}"
@@ -273,6 +278,7 @@ class RuntimeControl:
                 backup_path=str(backup_path) if backup_path else None,
                 original_sha256=original_hash,
                 change_revision_before=change_revision_before,
+                candidate_required=candidate_required,
             )
             self.pending_mutation = pending
             pending_persisted = False
@@ -287,6 +293,7 @@ class RuntimeControl:
                     existed=existed,
                     original_sha256=original_hash,
                     change_revision_before=change_revision_before,
+                    candidate_required=candidate_required,
                 )
                 # A successful preparation must not return mutation authority until
                 # runtime metadata is bound to the exact durable journal head/count.
@@ -309,12 +316,133 @@ class RuntimeControl:
                     self._discard_backup_best_effort(backup_path)
                 raise
 
+    @staticmethod
+    def _validate_candidate_sha256(candidate_sha256: str) -> None:
+        if (
+            len(candidate_sha256) != 64
+            or candidate_sha256.lower() != candidate_sha256
+            or any(character not in "0123456789abcdef" for character in candidate_sha256)
+        ):
+            raise ValueError("mutation candidate sha256 must be 64 lowercase hexadecimal characters")
+
+    def _pending_target_sha256(self, pending: PendingMutation) -> str | None:
+        try:
+            data = read_bytes_confined(
+                self.workspace,
+                pending.relative_path,
+                max_bytes=_MAX_ROLLBACK_BYTES,
+                label="pending mutation target",
+                expected_root_identity=self._workspace_identity,
+            )
+        except FileNotFoundError:
+            return None
+        except ValueError as exc:
+            message = str(exc)
+            if "exceeds" in message and "ingestion limit" in message:
+                raise MutationPendingError(
+                    "pending mutation target exceeds 2 MB ownership safety limit"
+                ) from exc
+            raise MutationPendingError(message) from exc
+        except (OSError, RuntimeError) as exc:
+            raise MutationPendingError("pending mutation target ownership is unreadable") from exc
+        return hashlib.sha256(data).hexdigest()
+
+    def bind_pending_mutation_candidate(
+        self,
+        relative_path: str,
+        candidate_sha256: str,
+    ) -> None:
+        """Durably bind a live pending transaction to the exact bytes it produced."""
+
+        with self._lock:
+            pending = self.pending_mutation
+            if pending is None:
+                raise MutationPendingError("no mutation is pending candidate binding")
+            self._target(relative_path)
+            if relative_path != pending.relative_path:
+                raise MutationPendingError(
+                    "mutation candidate path does not match pending rollback authority"
+                )
+            self._validate_candidate_sha256(candidate_sha256)
+            current_sha256 = self._pending_target_sha256(pending)
+            if current_sha256 != candidate_sha256:
+                raise MutationPendingError(
+                    "mutation candidate bytes changed before ownership could be bound"
+                )
+            if pending.existed and candidate_sha256 == pending.original_sha256:
+                raise MutationPendingError("mutation candidate is identical to the original target")
+            if pending.candidate_sha256 is not None:
+                if pending.candidate_sha256 != candidate_sha256:
+                    raise MutationPendingError("mutation candidate ownership is already bound differently")
+                return
+
+            bound = replace(pending, candidate_sha256=candidate_sha256)
+            self.pending_mutation = bound
+            try:
+                # Candidate identity must be durable before validation or rollback can
+                # rely on it. If this first publication fails, revert process-local
+                # authority to the previously durable pending transaction.
+                self.persist()
+            except Exception:
+                self.pending_mutation = pending
+                raise
+
+            try:
+                self.journal.append(
+                    "mutation_candidate_bound",
+                    path=relative_path,
+                    candidate_sha256=candidate_sha256,
+                )
+                self.persist()
+            except (BudgetExceededError, OSError, RuntimeError, ValueError) as exc:
+                # Candidate metadata is already durable. Do not erase that ownership
+                # proof merely because journal extension/binding became ambiguous.
+                raise RuntimeError(
+                    "mutation candidate journal persistence could not be guaranteed"
+                ) from exc
+
+    def _candidate_owned_for_rollback(self, pending: PendingMutation) -> bool:
+        """Return whether rollback must rewrite bytes after proving mutation ownership."""
+
+        if not pending.candidate_required:
+            return True
+        current_sha256 = self._pending_target_sha256(pending)
+        if pending.existed:
+            if current_sha256 == pending.original_sha256:
+                return False
+        elif current_sha256 is None:
+            return False
+
+        if pending.candidate_sha256 is None:
+            raise MutationPendingError(
+                "pending live mutation has no bound candidate bytes; refusing destructive rollback"
+            )
+        if current_sha256 != pending.candidate_sha256:
+            raise MutationPendingError(
+                "pending live mutation target no longer matches owned candidate bytes; refusing rollback"
+            )
+        return True
+
+    def _assert_candidate_owned_for_commit(self, pending: PendingMutation) -> None:
+        if not pending.candidate_required:
+            return
+        if pending.candidate_sha256 is None:
+            raise MutationPendingError(
+                "pending live mutation has no bound candidate bytes; refusing commit"
+            )
+        current_sha256 = self._pending_target_sha256(pending)
+        if current_sha256 != pending.candidate_sha256:
+            raise MutationPendingError(
+                "pending live mutation target no longer matches owned candidate bytes; refusing commit"
+            )
+
     def commit_pending_mutation(self) -> str | None:
         with self._lock:
             pending = self.pending_mutation
             if pending is None:
                 return None
             self._assert_workspace_identity()
+            self._assert_candidate_owned_for_commit(pending)
             backup: Path | None = None
             if pending.existed:
                 backup, _ = self._validated_rollback_backup(pending)
@@ -356,6 +484,7 @@ class RuntimeControl:
             rollback_data: bytes | None = None
             if pending.existed:
                 backup, rollback_data = self._validated_rollback_backup(pending)
+            rewrite_target = self._candidate_owned_for_rollback(pending)
 
             # Canonical lineage must be durably poisoned before rollback can alter
             # target bytes or clear the runtime transaction. A callback failure leaves
@@ -363,7 +492,7 @@ class RuntimeControl:
             if self.rollback_lineage_before_close is not None:
                 self.rollback_lineage_before_close(pending)
 
-            if pending.existed:
+            if rewrite_target and pending.existed:
                 if rollback_data is None:  # pragma: no cover - guarded by backup validation
                     raise RuntimeError("pending rollback bytes are unavailable")
                 atomic_write_bytes_confined(
@@ -375,7 +504,7 @@ class RuntimeControl:
                     label="mutation rollback target",
                     expected_root_identity=self._workspace_identity,
                 )
-            else:
+            elif rewrite_target:
                 try:
                     unlink_file_confined(
                         self.workspace,
@@ -534,6 +663,8 @@ class RuntimeControl:
                         "backup_path": self.pending_mutation.backup_path,
                         "original_sha256": self.pending_mutation.original_sha256,
                         "change_revision_before": self.pending_mutation.change_revision_before,
+                        "candidate_required": self.pending_mutation.candidate_required,
+                        "candidate_sha256": self.pending_mutation.candidate_sha256,
                     }
                     if include_pending_details
                     else self.pending_mutation.relative_path
