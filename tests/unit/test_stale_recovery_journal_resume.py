@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -26,12 +27,22 @@ def _setup_pending_recovery(tmp_path: Path) -> dict[str, object]:
     relative_path = "tests/test_checkout.py"
     target = workspace / relative_path
     target.parent.mkdir(parents=True)
+    original = b"original\n"
+    target.write_bytes(original)
+    subprocess.run(["git", "init", "-q"], cwd=workspace, check=True)
+    subprocess.run(["git", "config", "user.name", "Recovery Fixture"], cwd=workspace, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "recovery-fixture@example.invalid"],
+        cwd=workspace,
+        check=True,
+    )
+    subprocess.run(["git", "add", relative_path], cwd=workspace, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "baseline"], cwd=workspace, check=True)
     target.write_text("candidate\n", encoding="utf-8")
 
     prior_run = artifact_root / "run-old"
     backup = prior_run / "rollback" / "checkout.bin"
     backup.parent.mkdir(parents=True)
-    original = b"original\n"
     backup.write_bytes(original)
 
     journal = RunJournal(prior_run / "journal.jsonl")
