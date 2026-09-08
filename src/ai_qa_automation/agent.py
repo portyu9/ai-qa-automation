@@ -754,7 +754,7 @@ async def run_agent(
                         control=control,
                         cfg=cfg,
                         state_store=state_store,
-                        journal=journal,
+                        journal_audit=terminal_audit,
                         control_plane_capture=control_plane_capture,
                     )
                     final_text = outcome.final_text
