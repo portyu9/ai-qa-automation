@@ -192,11 +192,15 @@ class RepositoryGitAuthorityMixin:
         return self._metadata_signature(observed)
 
     @staticmethod
-    def _assert_git_config_includes_safe(data: bytes, *, label: str) -> None:
+    def _decode_git_config(data: bytes, *, label: str) -> str:
         try:
-            text = data.decode("utf-8", errors="strict")
+            return data.decode("utf-8-sig", errors="strict")
         except UnicodeDecodeError as exc:
             raise RepositorySubjectError(f"{label} is not valid UTF-8") from exc
+
+    @classmethod
+    def _assert_git_config_includes_safe(cls, data: bytes, *, label: str) -> None:
+        text = cls._decode_git_config(data, label=label)
         include_section = re.compile(
             r"^\s*\[\s*include(?:if)?(?:\s|\])",
             re.IGNORECASE,
@@ -206,20 +210,17 @@ class RepositoryGitAuthorityMixin:
                 "repository Git config must not include external configuration"
             )
 
-    @staticmethod
+    @classmethod
     def _git_config_ref_storage_values(
+        cls,
         data: bytes,
         *,
         label: str,
     ) -> tuple[str, ...]:
-        try:
-            text = data.decode("utf-8", errors="strict")
-        except UnicodeDecodeError as exc:
-            raise RepositorySubjectError(f"{label} is not valid UTF-8") from exc
+        text = cls._decode_git_config(data, label=label)
 
         section_header = re.compile(
-            r'^\s*\[\s*([A-Za-z0-9.-]+)(\s+"(?:[^"\\]|\\.)*")?\s*\]'
-            r"\s*(?:[#;].*)?$",
+            r'^\s*\[\s*([A-Za-z0-9.-]+)(\s+"(?:[^"\\]|\\.)*")?\s*\](.*)$',
             re.IGNORECASE,
         )
         ref_storage = re.compile(
@@ -231,7 +232,8 @@ class RepositoryGitAuthorityMixin:
 
         in_plain_extensions = False
         values: list[str] = []
-        for raw_line in text.splitlines():
+        for original_line in text.splitlines():
+            raw_line = original_line
             stripped = raw_line.strip()
             if not stripped or stripped.startswith(("#", ";")):
                 continue
@@ -243,7 +245,10 @@ class RepositoryGitAuthorityMixin:
                 in_plain_extensions = (
                     match.group(1).casefold() == "extensions" and match.group(2) is None
                 )
-                continue
+                raw_line = match.group(3)
+                stripped = raw_line.strip()
+                if not stripped or stripped.startswith(("#", ";")):
+                    continue
             if not in_plain_extensions or ref_storage_prefix.match(raw_line) is None:
                 continue
             match = ref_storage.fullmatch(raw_line)
@@ -518,7 +523,6 @@ class RepositoryGitAuthorityMixin:
                 raise RepositorySubjectError(
                     "repository Git metadata must not redirect to external common/object storage"
                 )
-
         grafts = self._read_git_metadata_file("info/grafts", label="legacy Git graft metadata")
         if grafts is not None and grafts.strip():
             raise RepositorySubjectError(
