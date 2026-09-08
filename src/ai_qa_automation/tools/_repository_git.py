@@ -25,6 +25,10 @@ from .execution_env import (
 )
 
 _MetadataSignature = tuple[int, int, int, int, int, int]
+_GitConfigAuthorityObservation = tuple[
+    _MetadataSignature,
+    tuple[tuple[str, bytes | None, _MetadataSignature | None], ...],
+]
 _BaselineRefObservation = tuple[tuple[str, _MetadataSignature | None], ...]
 _HeadRefObservation = tuple[
     bytes,
@@ -186,6 +190,148 @@ class RepositoryGitAuthorityMixin:
         except (OSError, ValueError) as exc:
             raise RepositorySubjectError(f"{label} could not be observed safely") from exc
         return self._metadata_signature(observed)
+
+    @staticmethod
+    def _decode_git_config(data: bytes, *, label: str) -> str:
+        try:
+            return data.decode("utf-8-sig", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise RepositorySubjectError(f"{label} is not valid UTF-8") from exc
+
+    @classmethod
+    def _assert_git_config_includes_safe(cls, data: bytes, *, label: str) -> None:
+        text = cls._decode_git_config(data, label=label)
+        include_section = re.compile(
+            r"^\s*\[\s*include(?:if)?(?:\s|\])",
+            re.IGNORECASE,
+        )
+        if any(include_section.search(line) for line in text.splitlines()):
+            raise RepositorySubjectError(
+                "repository Git config must not include external configuration"
+            )
+
+    @classmethod
+    def _git_config_ref_storage_values(
+        cls,
+        data: bytes,
+        *,
+        label: str,
+    ) -> tuple[str, ...]:
+        text = cls._decode_git_config(data, label=label)
+
+        section_header = re.compile(
+            r'^\s*\[\s*([A-Za-z0-9.-]+)(\s+"(?:[^"\\]|\\.)*")?\s*\](.*)$',
+            re.IGNORECASE,
+        )
+        ref_storage = re.compile(
+            r'^\s*refstorage\s*=\s*(?:"(files|reftable)"|(files|reftable))'
+            r"\s*(?:[#;].*)?$",
+            re.IGNORECASE,
+        )
+        ref_storage_prefix = re.compile(r"^\s*refstorage(?:\s|=|$)", re.IGNORECASE)
+
+        in_plain_extensions = False
+        values: list[str] = []
+        for original_line in text.splitlines():
+            raw_line = original_line
+            stripped = raw_line.strip()
+            if not stripped or stripped.startswith(("#", ";")):
+                continue
+            if stripped.startswith("["):
+                match = section_header.fullmatch(raw_line)
+                if match is None:
+                    in_plain_extensions = False
+                    continue
+                in_plain_extensions = (
+                    match.group(1).casefold() == "extensions" and match.group(2) is None
+                )
+                raw_line = match.group(3)
+                stripped = raw_line.strip()
+                if not stripped or stripped.startswith(("#", ";")):
+                    continue
+            if not in_plain_extensions or ref_storage_prefix.match(raw_line) is None:
+                continue
+            match = ref_storage.fullmatch(raw_line)
+            if match is None:
+                raise RepositorySubjectError(
+                    f"{label} has unsupported extensions.refStorage syntax or payload"
+                )
+            values.append((match.group(1) or match.group(2)).casefold())
+        return tuple(values)
+
+    def _assert_ref_storage_authority(
+        self,
+        config: bytes | None,
+        worktree_config: bytes | None,
+    ) -> None:
+        values = (
+            self._git_config_ref_storage_values(config, label="repository Git config")
+            if config is not None
+            else ()
+        )
+        worktree_values = (
+            self._git_config_ref_storage_values(
+                worktree_config,
+                label="repository Git worktree config",
+            )
+            if worktree_config is not None
+            else ()
+        )
+        if worktree_values:
+            raise RepositorySubjectError(
+                "repository Git worktree config must not override reference storage authority"
+            )
+        if len(values) > 1:
+            raise RepositorySubjectError(
+                "repository Git config has ambiguous reference storage authority"
+            )
+        if values and values[0] == "reftable":
+            raise RepositorySubjectError(
+                "repository Git metadata must not use unbound reftable ref storage"
+            )
+
+    def _git_config_authority_observation(self) -> _GitConfigAuthorityObservation:
+        if self.workspace_root_identity is None or self.git_dir_identity is None:
+            raise RuntimeError("Git config observation requires a direct authorized repository")
+        try:
+            git_dir = self._stat_confined_entry_adapter(
+                self.workspace,
+                ".git",
+                label="Git config authority metadata directory",
+                expected_root_identity=self.workspace_root_identity,
+            )
+        except (OSError, ValueError) as exc:
+            raise RepositorySubjectError(
+                "Git config authority metadata directory could not be observed safely"
+            ) from exc
+
+        rows: list[tuple[str, bytes | None, _MetadataSignature | None]] = []
+        configs: dict[str, bytes | None] = {}
+        for relative, label in (
+            ("config", "repository Git config"),
+            ("config.worktree", "repository Git worktree config"),
+        ):
+            before = self._stat_git_metadata_signature(relative, label=label)
+            data = self._read_git_metadata_file(relative, label=label)
+            after = self._stat_git_metadata_signature(relative, label=label)
+            if before != after:
+                raise RuntimeError(f"{label} changed during authority observation")
+            if after is None:
+                if data is not None:
+                    raise RuntimeError(f"{label} appeared inconsistently during observation")
+            else:
+                if not stat.S_ISREG(after[2]) or data is None or len(data) != after[3]:
+                    raise RepositorySubjectError(f"{label} must be one stable regular file")
+            if data is not None:
+                self._assert_git_config_includes_safe(data, label=label)
+            configs[relative] = data
+            rows.append((relative, data, after))
+
+        self._assert_ref_storage_authority(
+            configs.get("config"),
+            configs.get("config.worktree"),
+        )
+        return self._metadata_signature(git_dir), tuple(rows)
 
     @staticmethod
     def _validate_baseline_ref(base_ref: str) -> str:
@@ -384,22 +530,20 @@ class RepositoryGitAuthorityMixin:
                 "repository Git metadata must not use legacy graft metadata"
             )
 
-        include_section = re.compile(r"^\s*\[\s*include(?:if)?(?:\s|\])", re.IGNORECASE)
+        configs: dict[str, bytes | None] = {}
         for relative, label in (
             ("config", "repository Git config"),
             ("config.worktree", "repository Git worktree config"),
         ):
             config = self._read_git_metadata_file(relative, label=label)
+            configs[relative] = config
             if config is None:
                 continue
-            try:
-                text = config.decode("utf-8", errors="strict")
-            except UnicodeDecodeError as exc:
-                raise RepositorySubjectError(f"{label} is not valid UTF-8") from exc
-            if any(include_section.search(line) for line in text.splitlines()):
-                raise RepositorySubjectError(
-                    "repository Git config must not include external configuration"
-                )
+            self._assert_git_config_includes_safe(config, label=label)
+        self._assert_ref_storage_authority(
+            configs.get("config"),
+            configs.get("config.worktree"),
+        )
 
     def _assert_git_subject_current(self) -> None:
         self._assert_workspace_subject_current()
@@ -432,6 +576,7 @@ class RepositoryGitAuthorityMixin:
         if self.workspace_root_identity is None or self.git_dir_identity is None:
             raise RuntimeError("Git inspection requires a direct authorized repository")
         self._assert_git_subject_current()
+        config_before = self._git_config_authority_observation()
         try:
             with self._descriptor_bound_child_directory_adapter(
                 self.workspace,
@@ -454,6 +599,10 @@ class RepositoryGitAuthorityMixin:
             ) from exc
         finally:
             self._assert_git_subject_current()
+            if config_before != self._git_config_authority_observation():
+                raise RepositorySubjectError(
+                    "repository Git config authority changed during inspection"
+                )
 
     @staticmethod
     def _validate_git_command(args: tuple[str, ...]) -> None:
