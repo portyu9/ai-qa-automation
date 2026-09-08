@@ -125,7 +125,7 @@ def test_mutation_denies_incomplete_workspace_fingerprint(
 
     with pytest.raises(PermissionError, match="freshness is incomplete"):
         services.consume(
-            "create_test_file",
+            "apply_locator_heal",
             {"path": "tests/test_generated.py"},
         )
 
@@ -185,7 +185,7 @@ def test_post_mutation_incomplete_fingerprint_rolls_candidate_back(
 
     result = posttool_policy_output(
         {
-            "tool_name": "mcp__qa__create_test_file",
+            "tool_name": "mcp__qa__apply_locator_heal",
             "tool_response": {"path": "tests/test_generated.py"},
         },
         state=state,
