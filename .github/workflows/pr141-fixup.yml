@@ -1,0 +1,68 @@
+name: pr141-one-shot-fixup
+
+on:
+  push:
+    branches: [harden-stale-recovery-journal-resume]
+
+permissions:
+  contents: write
+
+jobs:
+  fixup:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: harden-stale-recovery-journal-resume
+          persist-credentials: true
+      - name: Apply exact reviewed corrections
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          runtime = Path('src/ai_qa_automation/runtime/stale_recovery.py')
+          text = runtime.read_text()
+          old = "        or not _is_sha256_fingerprint(recovered_fingerprint)\n"
+          new = "        or not isinstance(recovered_fingerprint, str)\n        or not _is_sha256_fingerprint(recovered_fingerprint)\n"
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one fingerprint narrowing site, found {text.count(old)}')
+          runtime.write_text(text.replace(old, new))
+
+          resume_tests = Path('tests/unit/test_stale_recovery_journal_resume.py')
+          text = resume_tests.read_text()
+          old = 'assert journal.event_count == 2'
+          count = text.count(old)
+          if count != 5:
+              raise SystemExit(f'expected five cached event-count assertions, found {count}')
+          text = text.replace(old, 'assert journal.verify()["events"] == 2')
+          old = 'assert persisted_runtime["journal_head_hash"] == journal.head_hash'
+          if text.count(old) != 1:
+              raise SystemExit('expected one cached journal-head assertion')
+          text = text.replace(
+              old,
+              'assert persisted_runtime["journal_head_hash"] == journal.verify()["head_hash"]',
+          )
+          resume_tests.write_text(text)
+
+          closure_tests = Path('tests/unit/test_phase1_recovery_closure.py')
+          text = closure_tests.read_text()
+          old = 'assert "runtime journal authority does not match persisted journal" in str(second["reason"])'
+          new = 'assert "workspace changed after a durable stale recovery event" in str(second["reason"])'
+          if text.count(old) != 1:
+              raise SystemExit('expected one legacy recovery-closure assertion')
+          closure_tests.write_text(text.replace(old, new))
+          PY
+          python -m compileall -q src tests/unit/test_stale_recovery_journal_resume.py tests/unit/test_phase1_recovery_closure.py
+          git diff --check
+      - name: Commit fixes without temporary workflow
+        run: |
+          git rm .github/workflows/pr141-fixup.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/ai_qa_automation/runtime/stale_recovery.py tests/unit/test_stale_recovery_journal_resume.py tests/unit/test_phase1_recovery_closure.py
+          git diff --cached --check
+          git commit -m 'fix: align stale recovery validation with durable evidence'
+          git push origin HEAD:harden-stale-recovery-journal-resume
