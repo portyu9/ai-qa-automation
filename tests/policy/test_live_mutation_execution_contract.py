@@ -36,3 +36,43 @@ def test_live_locator_heal_rejects_non_python_mutation_path(tmp_path: Path) -> N
 
     assert decision.decision is ToolDecision.DENY
     assert decision.rule_id == "WRITE-RUNTIME-001"
+
+
+def test_generated_test_proposal_does_not_require_write_authority(tmp_path: Path) -> None:
+    target = tmp_path / "target-proposal"
+    target.mkdir()
+    subject = PolicyEngine(tmp_path, target, allow_test_writes=False)
+
+    proposal = subject.authorize_tool(
+        "mcp__qa__create_test_file",
+        {"path": "tests/test_checkout.py"},
+    )
+    mutation = subject.authorize_tool(
+        "mcp__qa__apply_locator_heal",
+        {"path": "tests/test_checkout.py"},
+    )
+
+    assert proposal.decision is ToolDecision.ALLOW
+    assert proposal.rule_id == "QA-TOOL-ALLOW"
+    assert mutation.decision is ToolDecision.REQUIRE_APPROVAL
+    assert mutation.rule_id == "WRITE-001"
+
+
+def test_generated_test_proposal_target_scope_remains_fail_closed(tmp_path: Path) -> None:
+    target = tmp_path / "target-proposal-scope"
+    target.mkdir()
+    subject = PolicyEngine(tmp_path, target, allow_test_writes=False)
+
+    outside_test_scope = subject.authorize_tool(
+        "mcp__qa__create_test_file",
+        {"path": "src/test_generated.py"},
+    )
+    repository_governance_scope = subject.authorize_tool(
+        "mcp__qa__create_test_file",
+        {"path": ".github/workflows/test_generated.py"},
+    )
+
+    assert outside_test_scope.decision is ToolDecision.DENY
+    assert outside_test_scope.rule_id == "WRITE-002"
+    assert repository_governance_scope.decision is ToolDecision.DENY
+    assert repository_governance_scope.rule_id == "WRITE-002"

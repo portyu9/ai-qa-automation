@@ -45,7 +45,8 @@ _NETWORK_TOOLS = {
     "mcp__qa__verify_locator_candidates",
     "mcp__qa__run_k6",
 }
-_MUTATION_TOOLS = {"mcp__qa__create_test_file", "mcp__qa__apply_locator_heal"}
+# Proposal-only create_test_file validates evidence but never writes repository bytes.
+_MUTATION_TOOLS = {"mcp__qa__apply_locator_heal"}
 _VALIDATION_BEARING_TOOLS = {
     "mcp__qa__run_pytest",
     "mcp__qa__inspect_browser",

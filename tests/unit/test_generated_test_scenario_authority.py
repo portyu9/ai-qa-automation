@@ -43,7 +43,11 @@ class _UnusedRunner:
         raise AssertionError(f"pytest execution was not expected: {args}")
 
 
-def _services(tmp_path: Path) -> RuntimeServices:
+def _services(
+    tmp_path: Path,
+    *,
+    allow_test_writes: bool = True,
+) -> RuntimeServices:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     tests_dir = workspace / "tests"
@@ -57,7 +61,11 @@ def _services(tmp_path: Path) -> RuntimeServices:
         workspace=workspace,
         state=state,
         evidence=EvidenceStore(tmp_path / "artifacts", state.run_id),
-        policy=PolicyEngine(tmp_path / "control", workspace, allow_test_writes=True),
+        policy=PolicyEngine(
+            tmp_path / "control",
+            workspace,
+            allow_test_writes=allow_test_writes,
+        ),
         test_runner=cast(Any, _UnusedRunner()),
         max_tool_calls=50,
         max_repeated_action=10,
@@ -385,3 +393,38 @@ def test_proposal_subject_changes_for_every_authority_dimension() -> None:
         generated_test_proposal_subject(**variant)["proposal_subject_id"] != baseline
         for variant in variants
     )
+
+
+@pytest.mark.asyncio
+async def test_proposal_pipeline_does_not_require_autonomous_write_authority(
+    tmp_path: Path,
+) -> None:
+    services = _services(tmp_path, allow_test_writes=False)
+    handlers, _, plan_payload = await _coverage_and_plan(services)
+    target = services.workspace / "tests" / "test_generated_no_write_authority.py"
+
+    response = await handlers["create_test_file"](
+        {
+            "path": "tests/test_generated_no_write_authority.py",
+            "content": (
+                "def test_generated_no_write_authority():\n"
+                "    observed = 7\n"
+                "    assert observed == 7\n"
+            ),
+            "plan_evidence_id": plan_payload["plan_evidence_id"],
+        }
+    )
+
+    assert response["is_error"] is True
+    assert "PROPOSAL_RECORDED" in _response_text(response)
+    assert "no file was written" in _response_text(response)
+    assert not target.exists()
+    proposal = [
+        item
+        for item in services.evidence.all()
+        if item.kind == EvidenceKind.TEST_GENERATION_PROPOSAL
+    ]
+    assert len(proposal) == 1
+    assert proposal[0].structured_data["mutation_authorized"] is False
+    assert services.state.change_revision == 0
+    assert services.state.files_modified == []
