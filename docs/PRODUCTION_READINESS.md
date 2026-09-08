@@ -143,16 +143,12 @@ observed repository coverage
 → deterministic candidate gaps
 → same-run interpreted plan
 → unsupported “already covered” claims cannot suppress candidates
-→ guarded creation
-→ deterministic test-quality review
-→ exact-path targeted execution
-→ independent targeted semantic proof
-→ diagnostic full regression
-→ independent regression semantic proof
-→ mutation closure
+→ bound generated-test proposal
+→ deterministic static path / syntax / assertion / unsafe-diff safety
+→ explicit semantic implementation / mutation authority gap
 ```
 
-Reusable generation/patch components may understand Python/JavaScript/TypeScript syntax, while live autonomous commit authority remains intentionally narrower where deterministic execution proof is pytest-backed. Because the independent targeted and regression semantic producers are not live, positive autonomous generated-test mutation remains fail-closed rather than treating target-controlled pytest output as proof.
+The current generic `create_test_file` path records a repository-, plan-, scenario-, path-, and content-bound proposal without writing repository bytes. Static proposal safety is not execution evidence, semantic implementation proof, mutation authority, or coverage closure. Any future separately authorized generated-test mutation path must establish its own deterministic semantic implementation authority and the applicable mutation-transaction closure; proposal evidence cannot substitute for either.
 
 ### 8. Change intelligence
 
