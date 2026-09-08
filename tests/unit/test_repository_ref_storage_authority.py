@@ -88,8 +88,48 @@ def test_repository_rejects_payload_backed_or_unknown_ref_storage(
 
     with pytest.raises(
         RepositorySubjectError,
-        match="unsupported extensions.refStorage syntax or payload",
+        match=r"unsupported extensions.refStorage syntax or payload",
     ):
+        RepositoryInspector(repo)
+
+
+def test_repository_rejects_same_line_redirected_ref_storage(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    _append_config(repo, "\n[extensions] refStorage = files:///tmp/external-refs\n")
+
+    with pytest.raises(
+        RepositorySubjectError,
+        match=r"unsupported extensions.refStorage syntax or payload",
+    ):
+        RepositoryInspector(repo)
+
+
+def test_repository_rejects_bom_prefixed_redirected_ref_storage(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    config = repo / ".git" / "config"
+    config.write_bytes(
+        b"\xef\xbb\xbf[extensions]\nrefStorage = files:///tmp/external-refs\n"
+    )
+
+    with pytest.raises(
+        RepositorySubjectError,
+        match=r"unsupported extensions.refStorage syntax or payload",
+    ):
+        RepositoryInspector(repo)
+
+
+def test_repository_rejects_bom_prefixed_external_include(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    external = tmp_path / "external.config"
+    external.write_text("[core]\nfilemode = false\n", encoding="utf-8")
+    config = repo / ".git" / "config"
+    config.write_bytes(
+        b"\xef\xbb\xbf[include] path = "
+        + str(external).encode("utf-8")
+        + b"\n"
+    )
+
+    with pytest.raises(RepositorySubjectError, match="external configuration"):
         RepositoryInspector(repo)
 
 
