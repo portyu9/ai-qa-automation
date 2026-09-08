@@ -394,6 +394,7 @@ def test_proposal_subject_changes_for_every_authority_dimension() -> None:
         for variant in variants
     )
 
+
 @pytest.mark.asyncio
 async def test_proposal_pipeline_does_not_require_autonomous_write_authority(
     tmp_path: Path,

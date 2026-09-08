@@ -310,6 +310,7 @@ def test_advisory_tool_failure_does_not_invalidate_unrelated_objective_pass(
     assert terminal is TerminalStatus.SUCCESS
     assert "all current deterministic validation gates passed" in reason
 
+
 def test_pretool_proposal_does_not_consume_mutation_budget_or_require_git(
     tmp_path: Path,
 ) -> None:

@@ -70,7 +70,7 @@ def _runtime(
     return state, control, store, services
 
 
-def test_freshness_denied_mutation_failure_does_not_rebase_workspace_authority(
+def test_freshness_denied_proposal_failure_does_not_rebase_workspace_authority(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -98,7 +98,7 @@ def test_freshness_denied_mutation_failure_does_not_rebase_workspace_authority(
         {
             "tool_name": "mcp__qa__create_test_file",
             "tool_input": {"path": "tests/test_generated.py"},
-            "error": "workspace freshness denied before mutation preparation",
+            "error": "workspace freshness denied before proposal validation",
         },
         state=state,
         state_store=store,
@@ -169,6 +169,7 @@ def test_mutation_success_without_pending_transaction_is_rejected_without_rebase
     assert control.expected_workspace_fingerprint == expected
     assert "mcp__qa__create_test_file" not in control.open_circuits
     assert "mcp__qa__apply_locator_heal" in control.open_circuits
+
 
 def test_proposal_failure_cannot_rollback_bytes_it_never_owned(
     tmp_path: Path,
