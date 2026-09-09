@@ -5,7 +5,7 @@ from typing import Any, cast
 
 import pytest
 
-import ai_qa_automation.runtime.live_services as live_services_module
+import ai_qa_automation.runtime._live_services_legacy as live_services_legacy_module
 from ai_qa_automation.models import AgentRunState, TerminalStatus
 from ai_qa_automation.policy import PolicyEngine
 from ai_qa_automation.runtime.budget import ExecutionBudget
@@ -77,7 +77,7 @@ def test_freshness_denied_proposal_failure_does_not_rebase_workspace_authority(
     state, control, store, services = _runtime(tmp_path)
     expected = control.expected_workspace_fingerprint
     monkeypatch.setattr(
-        live_services_module,
+        live_services_legacy_module,
         "observe_workspace_freshness",
         lambda *_args, **_kwargs: WorkspaceFreshness(
             WorkspaceFreshnessCode.WORKSPACE_DRIFT,
@@ -117,7 +117,7 @@ def test_policy_denied_mutation_never_reaches_rollback_preparation(
     state, control, store, services = _runtime(tmp_path, allow_test_writes=False)
     expected = control.expected_workspace_fingerprint
     monkeypatch.setattr(
-        live_services_module,
+        live_services_legacy_module,
         "observe_workspace_freshness",
         lambda *_args, **_kwargs: WorkspaceFreshness(
             WorkspaceFreshnessCode.FRESH,
@@ -181,7 +181,7 @@ def test_proposal_failure_cannot_rollback_bytes_it_never_owned(
     target.write_text("observed before proposal\n", encoding="utf-8")
     control.set_workspace_fingerprint("sha256:authorized-baseline")
     monkeypatch.setattr(
-        live_services_module,
+        live_services_legacy_module,
         "observe_workspace_freshness",
         lambda *_args, **_kwargs: WorkspaceFreshness(
             WorkspaceFreshnessCode.FRESH,
