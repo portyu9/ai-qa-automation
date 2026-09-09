@@ -12,12 +12,15 @@ from pathlib import Path
 from typing import Any
 
 from ..fs_authority import (
+    atomic_noreplace_rename_supported,
     atomic_write_bytes_confined,
     bind_pending_root_authority,
     clear_pending_root_authority,
     descriptor_relative_authority_supported,
+    move_file_noreplace_between_confined_roots,
     pin_directory_identity,
     read_bytes_confined,
+    stat_confined_entry,
     unlink_file_confined,
 )
 from ..io_safety import fsync_directory
@@ -26,6 +29,31 @@ from .journal import RunJournal
 
 _MAX_ROLLBACK_BYTES = 2_000_000
 _MAX_RUNTIME_METADATA_BYTES = 2_000_000
+
+
+def _is_sha256_fingerprint(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 71
+        and value.startswith("sha256:")
+        and all(character in "0123456789abcdef" for character in value[7:])
+    )
+
+
+def mutation_candidate_proof_relative_path(
+    relative_path: str,
+    candidate_sha256: str,
+) -> Path:
+    """Return the run-owned proof path for one exact pending candidate."""
+
+    if (
+        len(candidate_sha256) != 64
+        or candidate_sha256.lower() != candidate_sha256
+        or any(character not in "0123456789abcdef" for character in candidate_sha256)
+    ):
+        raise ValueError("mutation candidate sha256 must be 64 lowercase hexadecimal characters")
+    path_digest = hashlib.sha256(relative_path.encode("utf-8")).hexdigest()[:24]
+    return Path("rollback") / f"{path_digest}.{candidate_sha256}.candidate.bin"
 
 
 class CircuitOpenError(RuntimeError):
@@ -48,7 +76,10 @@ class PendingMutation:
     original_sha256: str | None
     change_revision_before: int | None = None
     candidate_required: bool = False
+    pre_mutation_workspace_fingerprint: str | None = None
+    pre_mutation_context_fingerprint: str | None = None
     candidate_sha256: str | None = None
+    candidate_workspace_fingerprint: str | None = None
 
 
 @dataclass
@@ -197,10 +228,28 @@ class RuntimeControl:
         *,
         change_revision_before: int | None = None,
         candidate_required: bool = False,
+        pre_mutation_context_fingerprint: str | None = None,
     ) -> None:
         with self._lock:
             if not isinstance(candidate_required, bool):
                 raise ValueError("candidate_required must be a boolean")
+            if candidate_required:
+                if not atomic_noreplace_rename_supported():
+                    raise MutationPendingError(
+                        "strict mutation rollback requires atomic no-replace rename authority"
+                    )
+                if self._workspace_identity is None or self.persistence_root_identity is None:
+                    raise MutationPendingError(
+                        "strict mutation rollback requires descriptor-bound workspace and run roots"
+                    )
+                if not _is_sha256_fingerprint(self.expected_workspace_fingerprint):
+                    raise MutationPendingError(
+                        "strict mutation rollback requires an exact pre-mutation workspace fingerprint"
+                    )
+                if not _is_sha256_fingerprint(pre_mutation_context_fingerprint):
+                    raise MutationPendingError(
+                        "strict mutation rollback requires an exact pre-mutation context fingerprint"
+                    )
             if self.pending_mutation is not None:
                 raise MutationPendingError(
                     f"a mutation is already pending validation: {self.pending_mutation.relative_path}"
@@ -229,6 +278,27 @@ class RuntimeControl:
                 raise MutationPendingError(message) from exc
             except RuntimeError as exc:
                 raise MutationPendingError(str(exc)) from exc
+
+            if candidate_required:
+                if not existed:
+                    raise MutationPendingError(
+                        "strict autonomous mutation currently requires an existing target file"
+                    )
+                try:
+                    target_status = stat_confined_entry(
+                        self.workspace,
+                        relative_path,
+                        label="strict mutation target",
+                        expected_root_identity=self._workspace_identity,
+                    )
+                except (OSError, RuntimeError, ValueError) as exc:
+                    raise MutationPendingError(
+                        "strict mutation target filesystem authority could not be verified"
+                    ) from exc
+                if target_status.st_dev != self.persistence_root_identity[0]:
+                    raise MutationPendingError(
+                        "strict mutation target and run recovery root must share one filesystem"
+                    )
 
             backup_path: Path | None = None
             original_hash: str | None = None
@@ -279,6 +349,12 @@ class RuntimeControl:
                 original_sha256=original_hash,
                 change_revision_before=change_revision_before,
                 candidate_required=candidate_required,
+                pre_mutation_workspace_fingerprint=(
+                    self.expected_workspace_fingerprint if candidate_required else None
+                ),
+                pre_mutation_context_fingerprint=(
+                    pre_mutation_context_fingerprint if candidate_required else None
+                ),
             )
             self.pending_mutation = pending
             pending_persisted = False
@@ -294,6 +370,12 @@ class RuntimeControl:
                     original_sha256=original_hash,
                     change_revision_before=change_revision_before,
                     candidate_required=candidate_required,
+                    pre_mutation_workspace_fingerprint=(
+                        self.expected_workspace_fingerprint if candidate_required else None
+                    ),
+                    pre_mutation_context_fingerprint=(
+                        pre_mutation_context_fingerprint if candidate_required else None
+                    ),
                 )
                 # A successful preparation must not return mutation authority until
                 # runtime metadata is bound to the exact durable journal head/count.
@@ -352,6 +434,8 @@ class RuntimeControl:
         self,
         relative_path: str,
         candidate_sha256: str,
+        *,
+        candidate_workspace_fingerprint: str | None = None,
     ) -> None:
         """Durably bind a live pending transaction to the exact bytes it produced."""
 
@@ -365,6 +449,13 @@ class RuntimeControl:
                     "mutation candidate path does not match pending rollback authority"
                 )
             self._validate_candidate_sha256(candidate_sha256)
+            if (
+                candidate_workspace_fingerprint is not None
+                and not _is_sha256_fingerprint(candidate_workspace_fingerprint)
+            ):
+                raise ValueError(
+                    "mutation candidate workspace fingerprint must be sha256:<64 lowercase hex>"
+                )
             current_sha256 = self._pending_target_sha256(pending)
             if current_sha256 != candidate_sha256:
                 raise MutationPendingError(
@@ -375,9 +466,43 @@ class RuntimeControl:
             if pending.candidate_sha256 is not None:
                 if pending.candidate_sha256 != candidate_sha256:
                     raise MutationPendingError("mutation candidate ownership is already bound differently")
+                if (
+                    candidate_workspace_fingerprint is not None
+                    and pending.candidate_workspace_fingerprint
+                    not in {None, candidate_workspace_fingerprint}
+                ):
+                    raise MutationPendingError(
+                        "mutation candidate workspace authority is already bound differently"
+                    )
+                if (
+                    pending.candidate_workspace_fingerprint is None
+                    and candidate_workspace_fingerprint is not None
+                ):
+                    pending = replace(
+                        pending,
+                        candidate_workspace_fingerprint=candidate_workspace_fingerprint,
+                    )
+                    self.pending_mutation = pending
+                    try:
+                        self.persist()
+                        self.journal.append(
+                            "mutation_candidate_workspace_bound",
+                            path=relative_path,
+                            candidate_sha256=candidate_sha256,
+                            candidate_workspace_fingerprint=candidate_workspace_fingerprint,
+                        )
+                        self.persist()
+                    except (BudgetExceededError, OSError, RuntimeError, ValueError) as exc:
+                        raise RuntimeError(
+                            "mutation candidate workspace binding could not be durably journaled"
+                        ) from exc
                 return
 
-            bound = replace(pending, candidate_sha256=candidate_sha256)
+            bound = replace(
+                pending,
+                candidate_sha256=candidate_sha256,
+                candidate_workspace_fingerprint=candidate_workspace_fingerprint,
+            )
             self.pending_mutation = bound
             try:
                 # Candidate identity must be durable before validation or rollback can
@@ -393,6 +518,7 @@ class RuntimeControl:
                     "mutation_candidate_bound",
                     path=relative_path,
                     candidate_sha256=candidate_sha256,
+                    candidate_workspace_fingerprint=candidate_workspace_fingerprint,
                 )
                 self.persist()
             except (BudgetExceededError, OSError, RuntimeError, ValueError) as exc:
@@ -402,27 +528,149 @@ class RuntimeControl:
                     "mutation candidate journal persistence could not be guaranteed"
                 ) from exc
 
-    def _candidate_owned_for_rollback(self, pending: PendingMutation) -> bool:
-        """Return whether rollback must rewrite bytes after proving mutation ownership."""
+    def _candidate_proof_relative(self, pending: PendingMutation) -> Path:
+        if pending.candidate_sha256 is None:
+            raise MutationPendingError("pending live mutation has no bound candidate bytes")
+        return mutation_candidate_proof_relative_path(
+            pending.relative_path,
+            pending.candidate_sha256,
+        )
 
-        if not pending.candidate_required:
-            return True
-        current_sha256 = self._pending_target_sha256(pending)
-        if pending.existed:
-            if current_sha256 == pending.original_sha256:
-                return False
-        elif current_sha256 is None:
-            return False
+    def _candidate_proof_sha256(self, pending: PendingMutation) -> str | None:
+        proof_relative = self._candidate_proof_relative(pending)
+        run_root = self.metadata_path.parent.expanduser().absolute()
+        try:
+            data = read_bytes_confined(
+                run_root,
+                proof_relative,
+                max_bytes=_MAX_ROLLBACK_BYTES,
+                label="pending mutation candidate proof",
+                expected_root_identity=self.persistence_root_identity,
+            )
+        except FileNotFoundError:
+            return None
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise MutationPendingError(
+                "pending mutation candidate proof is unreadable or ambiguous"
+            ) from exc
+        return hashlib.sha256(data).hexdigest()
+
+    def _restore_misclaimed_target(
+        self,
+        pending: PendingMutation,
+        proof_relative: Path,
+    ) -> None:
+        run_root = self.metadata_path.parent.expanduser().absolute()
+        try:
+            move_file_noreplace_between_confined_roots(
+                run_root,
+                proof_relative,
+                self.workspace,
+                pending.relative_path,
+                create_destination_parents=False,
+                label="mutation rollback ownership restoration",
+                expected_source_root_identity=self.persistence_root_identity,
+                expected_destination_root_identity=self._workspace_identity,
+            )
+        except FileExistsError as exc:
+            raise MutationPendingError(
+                "mutation target changed again while ownership was being checked; "
+                "claimed and current bytes were both preserved for manual reconciliation"
+            ) from exc
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise MutationPendingError(
+                "mutation target ownership check could not restore non-candidate bytes safely"
+            ) from exc
+
+    def _strict_restore_pending_mutation(
+        self,
+        pending: PendingMutation,
+        rollback_data: bytes,
+    ) -> Path | None:
+        """Restore only an atomically claimed exact framework candidate."""
 
         if pending.candidate_sha256 is None:
+            current_sha256 = self._pending_target_sha256(pending)
+            if current_sha256 == pending.original_sha256:
+                return None
             raise MutationPendingError(
                 "pending live mutation has no bound candidate bytes; refusing destructive rollback"
             )
-        if current_sha256 != pending.candidate_sha256:
+
+        proof_relative = self._candidate_proof_relative(pending)
+        run_root = self.metadata_path.parent.expanduser().absolute()
+        proof_sha256 = self._candidate_proof_sha256(pending)
+        current_sha256 = self._pending_target_sha256(pending)
+
+        if proof_sha256 is None and current_sha256 == pending.original_sha256:
+            return None
+
+        if proof_sha256 is None:
+            if current_sha256 is None:
+                raise MutationPendingError(
+                    "pending live mutation target disappeared before candidate ownership could be claimed"
+                )
+            try:
+                move_file_noreplace_between_confined_roots(
+                    self.workspace,
+                    pending.relative_path,
+                    run_root,
+                    proof_relative,
+                    create_destination_parents=False,
+                    label="mutation rollback candidate claim",
+                    expected_source_root_identity=self._workspace_identity,
+                    expected_destination_root_identity=self.persistence_root_identity,
+                )
+            except FileExistsError:
+                proof_sha256 = self._candidate_proof_sha256(pending)
+                if proof_sha256 is None:
+                    raise MutationPendingError(
+                        "mutation candidate proof appeared ambiguously during rollback"
+                    ) from None
+            except (OSError, RuntimeError, ValueError) as exc:
+                raise MutationPendingError(
+                    "mutation candidate could not be atomically claimed for rollback"
+                ) from exc
+            else:
+                proof_sha256 = self._candidate_proof_sha256(pending)
+
+        if proof_sha256 != pending.candidate_sha256:
+            if proof_sha256 is not None and self._pending_target_sha256(pending) is None:
+                self._restore_misclaimed_target(pending, proof_relative)
             raise MutationPendingError(
                 "pending live mutation target no longer matches owned candidate bytes; refusing rollback"
             )
-        return True
+
+        current_sha256 = self._pending_target_sha256(pending)
+        if current_sha256 is None:
+            try:
+                atomic_write_bytes_confined(
+                    self.workspace,
+                    pending.relative_path,
+                    rollback_data,
+                    create_parents=False,
+                    create_only=True,
+                    label="mutation rollback target",
+                    expected_root_identity=self._workspace_identity,
+                )
+            except FileExistsError as exc:
+                raise MutationPendingError(
+                    "mutation rollback target was concurrently repopulated; newer bytes were preserved"
+                ) from exc
+            except (OSError, RuntimeError, ValueError) as exc:
+                raise MutationPendingError(
+                    "mutation rollback target could not be restored without replacement"
+                ) from exc
+        elif current_sha256 != pending.original_sha256:
+            raise MutationPendingError(
+                "mutation rollback target contains newer bytes; refusing to overwrite them"
+            )
+
+        if self._pending_target_sha256(pending) != pending.original_sha256:
+            raise MutationPendingError(
+                "mutation rollback target changed after restoration; pending authority was retained"
+            )
+        return run_root / proof_relative
 
     def _assert_candidate_owned_for_commit(self, pending: PendingMutation) -> None:
         if not pending.candidate_required:
@@ -431,19 +679,40 @@ class RuntimeControl:
             raise MutationPendingError(
                 "pending live mutation has no bound candidate bytes; refusing commit"
             )
+        if not _is_sha256_fingerprint(pending.candidate_workspace_fingerprint):
+            raise MutationPendingError(
+                "pending live mutation has no exact candidate workspace authority; refusing commit"
+            )
+        if self.expected_workspace_fingerprint != pending.candidate_workspace_fingerprint:
+            raise MutationPendingError(
+                "runtime workspace authority is not bound to the exact mutation candidate; refusing commit"
+            )
+        if self._candidate_proof_sha256(pending) is not None:
+            raise MutationPendingError(
+                "mutation candidate is already in rollback proof state; refusing commit"
+            )
         current_sha256 = self._pending_target_sha256(pending)
         if current_sha256 != pending.candidate_sha256:
             raise MutationPendingError(
                 "pending live mutation target no longer matches owned candidate bytes; refusing commit"
             )
 
-    def commit_pending_mutation(self) -> str | None:
+    def commit_pending_mutation(
+        self,
+        *,
+        current_workspace_fingerprint: str | None = None,
+    ) -> str | None:
         with self._lock:
             pending = self.pending_mutation
             if pending is None:
                 return None
             self._assert_workspace_identity()
             self._assert_candidate_owned_for_commit(pending)
+            if pending.candidate_required:
+                if current_workspace_fingerprint != pending.candidate_workspace_fingerprint:
+                    raise MutationPendingError(
+                        "current workspace does not match the exact candidate subject; refusing commit"
+                    )
             backup: Path | None = None
             if pending.existed:
                 backup, _ = self._validated_rollback_backup(pending)
@@ -485,7 +754,6 @@ class RuntimeControl:
             rollback_data: bytes | None = None
             if pending.existed:
                 backup, rollback_data = self._validated_rollback_backup(pending)
-            rewrite_target = self._candidate_owned_for_rollback(pending)
 
             # Canonical lineage must be durably poisoned before rollback can alter
             # target bytes or clear the runtime transaction. A callback failure leaves
@@ -493,7 +761,17 @@ class RuntimeControl:
             if self.rollback_lineage_before_close is not None:
                 self.rollback_lineage_before_close(pending)
 
-            if rewrite_target and pending.existed:
+            candidate_proof: Path | None = None
+            if pending.candidate_required:
+                if rollback_data is None:
+                    raise RuntimeError("strict pending rollback bytes are unavailable")
+                candidate_proof = self._strict_restore_pending_mutation(pending, rollback_data)
+                if not _is_sha256_fingerprint(pending.pre_mutation_workspace_fingerprint):
+                    raise MutationPendingError(
+                        "strict rollback lost pre-mutation workspace authority; pending state retained"
+                    )
+                self.expected_workspace_fingerprint = pending.pre_mutation_workspace_fingerprint
+            elif pending.existed:
                 if rollback_data is None:  # pragma: no cover - guarded by backup validation
                     raise RuntimeError("pending rollback bytes are unavailable")
                 atomic_write_bytes_confined(
@@ -505,7 +783,7 @@ class RuntimeControl:
                     label="mutation rollback target",
                     expected_root_identity=self._workspace_identity,
                 )
-            elif rewrite_target:
+            else:
                 try:
                     unlink_file_confined(
                         self.workspace,
@@ -515,20 +793,11 @@ class RuntimeControl:
                         expected_root_identity=self._workspace_identity,
                     )
                 except FileNotFoundError:
-                    # A prepared new-file mutation may be cancelled before its parent
-                    # directory is ever created. The workspace root itself is checked by
-                    # descriptor authority; a missing nested parent means no target entry
-                    # exists to remove.
                     if not self.workspace.is_dir():
                         raise
 
-            # Rebind pathname identity after the target mutation but before durable
-            # transaction closure. A whole-root replacement at this boundary must retain
-            # pending/backup authority rather than certifying rollback on another tree.
             self._assert_workspace_identity()
 
-            # Clear process-local mutation authority only immediately before the durable
-            # closure. Persistence failure restores both the pending object and binding.
             self._clear_pending_root_authority()
             self.pending_mutation = None
             try:
@@ -543,16 +812,16 @@ class RuntimeControl:
                     ) from bind_exc
                 raise
 
-            # Runtime pending authority is now durably closed. Reconcile canonical
-            # file accounting before rollback backup disposal or terminal reporting.
-            # A callback failure remains fail-closed because the pre-close checkpoint
-            # already persisted NOT_VERIFIED lineage.
             if self.rollback_lineage_after_close is not None:
                 self.rollback_lineage_after_close(pending)
 
             cleanup_failed = False
             if backup is not None:
                 cleanup_failed = not self._discard_backup_best_effort(backup)
+            if candidate_proof is not None:
+                cleanup_failed = (
+                    not self._discard_backup_best_effort(candidate_proof) or cleanup_failed
+                )
             self._journal_after_durable_transition(
                 "mutation_rolled_back",
                 path=pending.relative_path,
@@ -665,7 +934,16 @@ class RuntimeControl:
                         "original_sha256": self.pending_mutation.original_sha256,
                         "change_revision_before": self.pending_mutation.change_revision_before,
                         "candidate_required": self.pending_mutation.candidate_required,
+                        "pre_mutation_workspace_fingerprint": (
+                            self.pending_mutation.pre_mutation_workspace_fingerprint
+                        ),
+                        "pre_mutation_context_fingerprint": (
+                            self.pending_mutation.pre_mutation_context_fingerprint
+                        ),
                         "candidate_sha256": self.pending_mutation.candidate_sha256,
+                        "candidate_workspace_fingerprint": (
+                            self.pending_mutation.candidate_workspace_fingerprint
+                        ),
                     }
                     if include_pending_details
                     else self.pending_mutation.relative_path

@@ -482,43 +482,35 @@ def posttool_policy_output(
                 "transaction. The result was rejected and mutation authority is disabled for this run."
             )
         else:
-            candidate_snapshot = RepositoryInspector(control.workspace).snapshot()
-            if candidate_snapshot.fingerprint_complete:
-                control.set_workspace_fingerprint(candidate_snapshot.fingerprint)
-            else:
-                reasons = ", ".join(candidate_snapshot.fingerprint_incomplete_reasons)
-                rolled_back = control.rollback_pending_mutation(
-                    reason="post-mutation workspace fingerprint became incomplete"
+            if (
+                pending.candidate_required
+                and (
+                    pending.candidate_sha256 is None
+                    or pending.candidate_workspace_fingerprint is None
+                    or control.expected_workspace_fingerprint
+                    != pending.candidate_workspace_fingerprint
                 )
-                _reconcile_rolled_back_mutation(state, pending, rolled_back)
+            ):
+                failed = True
+                mutation_integrity_blocked = True
                 state.terminal_status = TerminalStatus.BLOCKED
                 state.terminal_reason = (
-                    "Candidate mutation was rolled back because the post-mutation workspace "
-                    "fingerprint could not bind every changed subject"
+                    "Mutation result was rejected because exact candidate workspace authority "
+                    "was not durably bound by the controlled mutation service"
                 )
-                control.journal.append(
-                    "post_mutation_fingerprint_incomplete",
-                    reasons=list(candidate_snapshot.fingerprint_incomplete_reasons),
-                )
-                rollback_snapshot = RepositoryInspector(control.workspace).snapshot()
-                control.set_workspace_fingerprint(rollback_snapshot.fingerprint)
                 control.open_circuits.update(_MUTATION_TOOLS)
-                control.journal.append(
-                    "mutation_authority_latched",
-                    reason="post-mutation fingerprint coverage was incomplete",
-                    tools=sorted(_MUTATION_TOOLS),
+                control.journal.try_append(
+                    "mutation_candidate_authority_missing",
+                    tool_name=tool_name,
+                    path=pending.relative_path,
                 )
-                mutation_integrity_blocked = True
                 output["updatedToolOutput"] = {
                     "is_error": True,
-                    "error": (
-                        "Candidate mutation was rolled back because workspace fingerprint "
-                        f"coverage became incomplete ({reasons})."
-                    ),
+                    "error": "Mutation result rejected because exact candidate authority is missing.",
                 }
                 output["additionalContext"] = (
-                    "The candidate mutation executed but was rolled back before validation because "
-                    "the resulting workspace could not be fingerprinted completely. Further "
+                    "The mutation tool returned, but deterministic candidate-byte and workspace "
+                    "authority was not durably bound. The transaction remains pending and further "
                     "autonomous mutation is disabled for this run."
                 )
 
@@ -598,7 +590,7 @@ def posttool_policy_output(
                     reason="mutation tool reported failure"
                 )
                 _reconcile_rolled_back_mutation(state, pending, rolled_back)
-                if rolled_back is not None:
+                if rolled_back is not None and not pending.candidate_required:
                     control.set_workspace_fingerprint(
                         RepositoryInspector(control.workspace).snapshot().fingerprint
                     )
@@ -643,9 +635,8 @@ def posttool_policy_output(
                         # can be durably removed. The checkpoint preserves the pending transaction
                         # if either state or runtime persistence fails at this boundary.
                         _checkpoint(state, state_store, control)
-                        control.commit_pending_mutation()
-                        control.set_workspace_fingerprint(
-                            RepositoryInspector(control.workspace).snapshot().fingerprint
+                        control.commit_pending_mutation(
+                            current_workspace_fingerprint=control.expected_workspace_fingerprint
                         )
         effective_failed = failed or mutation_integrity_blocked
         control.record_tool_result(tool_name, failed=effective_failed)
@@ -708,7 +699,7 @@ def posttool_failure_output(
                     reason="mutation tool raised an execution failure"
                 )
                 _reconcile_rolled_back_mutation(state, pending, rolled_back)
-                if rolled_back is not None:
+                if rolled_back is not None and not pending.candidate_required:
                     control.set_workspace_fingerprint(
                         RepositoryInspector(control.workspace).snapshot().fingerprint
                     )
@@ -726,7 +717,7 @@ def posttool_failure_output(
 def build_permission_handler(
     policy: PolicyEngine,
     *,
-    state: AgentRunState | None = None,
+    state: AgentRunState,
     state_store: StateStore | None = None,
     control: RuntimeControl | None = None,
 ) -> Any:
