@@ -198,6 +198,7 @@ def _reconcile_rolled_back_mutation(
 
 def _rollback_failed_mutation_or_block(
     state: AgentRunState | None,
+    state_store: StateStore | None,
     control: RuntimeControl,
     pending: PendingMutation,
     *,
@@ -224,6 +225,7 @@ def _rollback_failed_mutation_or_block(
             path=pending.relative_path,
             error_type=type(exc).__name__,
         )
+        _checkpoint(state, state_store, control)
         return None, True
 
     _reconcile_rolled_back_mutation(state, pending, rolled_back)
@@ -689,6 +691,7 @@ def posttool_policy_output(
             if pending is not None:
                 rolled_back, rollback_blocked = _rollback_failed_mutation_or_block(
                     state,
+                    state_store,
                     control,
                     pending,
                     reason="mutation tool reported failure",
@@ -897,6 +900,7 @@ def posttool_failure_output(
             if pending is not None:
                 rolled_back, rollback_blocked = _rollback_failed_mutation_or_block(
                     state,
+                    state_store,
                     control,
                     pending,
                     reason="mutation tool raised an execution failure",
