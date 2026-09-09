@@ -196,6 +196,40 @@ def _reconcile_rolled_back_mutation(
     )
 
 
+def _rollback_failed_mutation_or_block(
+    state: AgentRunState | None,
+    control: RuntimeControl,
+    pending: PendingMutation,
+    *,
+    reason: str,
+) -> tuple[str | None, bool]:
+    """Rollback a failed mutation or durably preserve ambiguity as BLOCKED truth."""
+
+    try:
+        rolled_back = control.rollback_pending_mutation(reason=reason)
+    except (MutationPendingError, OSError, RuntimeError, ValueError) as exc:
+        if state is not None and state.terminal_status in {
+            None,
+            TerminalStatus.SUCCESS,
+            TerminalStatus.BLOCKED,
+        }:
+            state.terminal_status = TerminalStatus.BLOCKED
+            state.terminal_reason = (
+                "Failed mutation could not be rolled back without risking independently owned "
+                "workspace bytes; pending rollback authority was retained"
+            )
+        control.open_circuits.update(_MUTATION_TOOLS)
+        control.journal.try_append(
+            "mutation_failure_rollback_blocked",
+            path=pending.relative_path,
+            error_type=type(exc).__name__,
+        )
+        return None, True
+
+    _reconcile_rolled_back_mutation(state, pending, rolled_back)
+    return rolled_back, False
+
+
 def _normalize_selector_path(value: str) -> str:
     normalized = value.split("::", 1)[0].replace("\\", "/")
     while normalized.startswith("./"):
@@ -653,11 +687,27 @@ def posttool_policy_output(
         if tool_name in _MUTATION_TOOLS and failed and not mutation_integrity_blocked:
             pending = control.pending_mutation
             if pending is not None:
-                rolled_back = control.rollback_pending_mutation(
-                    reason="mutation tool reported failure"
+                rolled_back, rollback_blocked = _rollback_failed_mutation_or_block(
+                    state,
+                    control,
+                    pending,
+                    reason="mutation tool reported failure",
                 )
-                _reconcile_rolled_back_mutation(state, pending, rolled_back)
-                if rolled_back is not None and not pending.candidate_required:
+                if rollback_blocked:
+                    mutation_integrity_blocked = True
+                    output["updatedToolOutput"] = {
+                        "is_error": True,
+                        "error": (
+                            "Mutation failed and rollback could not be proven safe; pending "
+                            "authority was retained."
+                        ),
+                    }
+                    output["additionalContext"] = (
+                        "The mutation failed, but rollback could not safely distinguish framework "
+                        "bytes from independently owned workspace bytes. No destructive cleanup "
+                        "was attempted; pending authority remains and further mutation is disabled."
+                    )
+                elif rolled_back is not None and not pending.candidate_required:
                     control.set_workspace_fingerprint(
                         RepositoryInspector(control.workspace).snapshot().fingerprint
                     )
@@ -845,11 +895,19 @@ def posttool_failure_output(
         if tool_name in _MUTATION_TOOLS:
             pending = control.pending_mutation
             if pending is not None:
-                rolled_back = control.rollback_pending_mutation(
-                    reason="mutation tool raised an execution failure"
+                rolled_back, rollback_blocked = _rollback_failed_mutation_or_block(
+                    state,
+                    control,
+                    pending,
+                    reason="mutation tool raised an execution failure",
                 )
-                _reconcile_rolled_back_mutation(state, pending, rolled_back)
-                if rolled_back is not None and not pending.candidate_required:
+                if rollback_blocked:
+                    context = (
+                        "Mutation execution failed and rollback could not be proven safe. "
+                        "Independently owned workspace bytes were preserved, pending authority "
+                        "was retained, and further autonomous mutation is disabled."
+                    )
+                elif rolled_back is not None and not pending.candidate_required:
                     control.set_workspace_fingerprint(
                         RepositoryInspector(control.workspace).snapshot().fingerprint
                     )
