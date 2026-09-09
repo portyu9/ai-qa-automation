@@ -233,7 +233,6 @@ def test_candidate_commit_rejection_is_durable_blocked_truth(
     persisted = state_store.load()
     assert persisted.terminal_status is TerminalStatus.BLOCKED
     assert any(
-        item.name == "mutation_commit_integrity"
-        and item.status is ValidationStatus.NOT_VERIFIED
+        item.name == "mutation_commit_integrity" and item.status is ValidationStatus.NOT_VERIFIED
         for item in persisted.validation_results
     )
