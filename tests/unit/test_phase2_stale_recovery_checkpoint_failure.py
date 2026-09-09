@@ -12,9 +12,9 @@ from ai_qa_automation.models import (
     ValidationResult,
     ValidationStatus,
 )
+from ai_qa_automation.runtime._stale_recovery_legacy import recover_stale_mutation
 from ai_qa_automation.runtime.journal import RunJournal
 from ai_qa_automation.runtime.recovery import inspect_recovery
-from ai_qa_automation.runtime.stale_recovery import recover_stale_mutation
 from ai_qa_automation.runtime.targeted_execution_observer import (
     TRUSTED_TARGETED_EXECUTION_AUTHORITY,
     build_targeted_execution_observation,
