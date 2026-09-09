@@ -4,7 +4,7 @@ import hashlib
 import json
 from contextlib import suppress
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
 from ..fs_authority import (
     atomic_write_bytes_confined,
@@ -13,15 +13,20 @@ from ..fs_authority import (
     unlink_file_confined,
 )
 from . import _stale_recovery_legacy as _legacy
-from .run_control import mutation_candidate_proof_relative_path
+from .journal import RunJournal, validate_runtime_journal_binding
+from .run_control import atomic_write_json, mutation_candidate_proof_relative_path
 
 
-def _is_sha256_hex(value: object) -> bool:
+def _is_sha256_hex(value: object) -> TypeGuard[str]:
     return (
         isinstance(value, str)
         and len(value) == 64
         and all(character in "0123456789abcdef" for character in value)
     )
+
+
+def _is_sha256_fingerprint(value: object) -> TypeGuard[str]:
+    return _legacy._is_sha256_fingerprint(value)
 
 
 def _sha256_or_none(
@@ -196,8 +201,8 @@ def recover_stale_mutation(
     if (
         pending.get("candidate_required") is not True
         or not _is_sha256_hex(candidate_sha)
-        or not _legacy._is_sha256_fingerprint(candidate_fingerprint)
-        or not _legacy._is_sha256_fingerprint(pre_fingerprint)
+        or not _is_sha256_fingerprint(candidate_fingerprint)
+        or not _is_sha256_fingerprint(pre_fingerprint)
     ):
         return {
             "status": "BLOCKED",
@@ -218,7 +223,7 @@ def recover_stale_mutation(
 
     try:
         journal_count = _legacy._validated_journal_event_count(metadata)
-        journal = _legacy.RunJournal(
+        journal = RunJournal(
             prior_run_dir / "journal.jsonl",
             max_events=min(_legacy._MAX_RECOVERY_JOURNAL_EVENTS, max(5000, journal_count + 10)),
             expected_parent_identity=run_identity,
@@ -229,7 +234,7 @@ def recover_stale_mutation(
             "status": "BLOCKED",
             "reason": f"prior run journal could not be verified: {type(exc).__name__}",
         }
-    binding = _legacy.validate_runtime_journal_binding(metadata, journal_status)
+    binding = validate_runtime_journal_binding(metadata, journal_status)
     recovered_fingerprint: str | None = None
     recovery_event_recorded = False
     if not binding["valid"]:
@@ -502,6 +507,24 @@ def recover_stale_mutation(
                 "previous_run_id": previous_run_id,
                 "reason": "stale mutation bytes were restored but the recovery journal event could not be durably recorded; rollback authority was retained and manual reconciliation is required",
             }
+
+    # The recovery event proves the workspace is now the exact pre-mutation subject.
+    # Rebind that subject in runtime metadata before legacy closure clears pending
+    # rollback authority; a crash here remains resumable from the durable event.
+    metadata["workspace_fingerprint"] = pre_fingerprint
+    try:
+        atomic_write_json(
+            prior_run_dir / "runtime.json",
+            metadata,
+            expected_parent_identity=run_identity,
+        )
+        _legacy._current_run_root_identity(prior_run_dir, run_identity)
+    except (OSError, RuntimeError, ValueError):
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": previous_run_id,
+            "reason": "stale mutation bytes were restored but recovered workspace authority could not be durably rebound; pending authority was retained for manual reconciliation",
+        }
 
     closure = _legacy.recover_stale_mutation(
         artifact_root=artifact_root,
