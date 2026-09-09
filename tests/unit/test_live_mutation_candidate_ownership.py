@@ -138,9 +138,7 @@ def test_strict_commit_requires_exact_candidate_workspace_subject(tmp_path: Path
     _bind_strict(subject, relative, target, candidate)
 
     with pytest.raises(MutationPendingError, match="current workspace"):
-        subject.commit_pending_mutation(
-            current_workspace_fingerprint="sha256:" + "9" * 64
-        )
+        subject.commit_pending_mutation(current_workspace_fingerprint="sha256:" + "9" * 64)
 
     assert subject.pending_mutation is not None
     assert (
@@ -237,7 +235,9 @@ def test_candidate_binding_rejects_non_string_digest_deterministically(tmp_path:
     assert subject.pending_mutation.candidate_sha256 is None
 
 
-def test_writer_after_candidate_claim_is_preserved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_writer_after_candidate_claim_is_preserved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     subject = _control(tmp_path)
     relative, target, _original = _existing_target(subject)
     candidate = b"candidate\n"
@@ -428,7 +428,9 @@ def _live_services_for_evidence(
         workspace=subject.workspace,
         state=state,
         evidence=cast(Any, evidence),
-        policy=PolicyEngine(tmp_path / "control-provenance", subject.workspace, allow_test_writes=True),
+        policy=PolicyEngine(
+            tmp_path / "control-provenance", subject.workspace, allow_test_writes=True
+        ),
         test_runner=cast(Any, object()),
         max_tool_calls=20,
         max_repeated_action=3,
@@ -469,7 +471,9 @@ def test_live_locator_proposal_from_other_run_is_rejected_before_authority_resol
         resolver_called = True
         return SimpleNamespace(path=relative)
 
-    monkeypatch.setattr(live_services_module, "resolve_locator_repair_authority", forbidden_resolver)
+    monkeypatch.setattr(
+        live_services_module, "resolve_locator_repair_authority", forbidden_resolver
+    )
 
     with pytest.raises(PermissionError, match="same-run provenance"):
         services._resolved_live_mutation_path(
