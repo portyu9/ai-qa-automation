@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -407,6 +408,7 @@ def test_mutation_preparation_occurs_only_after_fresh_workspace_proof(
         workspace,
         allow_test_writes=True,
     )
+    expected_sha256 = hashlib.sha256(original.encode("utf-8")).hexdigest()
     repair_subject_id = "repair-subject-terminal-freshness"
     proposal = services.evidence.add(
         EvidenceItem(
@@ -419,6 +421,7 @@ def test_mutation_preparation_occurs_only_after_fresh_workspace_proof(
             structured_data={
                 "repair_subject_id": repair_subject_id,
                 "path": relative,
+                "expected_sha256": expected_sha256,
             },
         )
     )
@@ -427,7 +430,7 @@ def test_mutation_preparation_occurs_only_after_fresh_workspace_proof(
 
     def resolve_subject(**kwargs: object) -> SimpleNamespace:
         assert kwargs["subject_id"] == repair_subject_id
-        return SimpleNamespace(path=relative)
+        return SimpleNamespace(path=relative, expected_sha256=expected_sha256)
 
     monkeypatch.setattr(live_services_module, "resolve_locator_repair_authority", resolve_subject)
 
