@@ -8,8 +8,8 @@ import pytest
 
 from ai_qa_automation.fs_authority import descriptor_relative_authority_supported
 from ai_qa_automation.models import AgentRunState
+from ai_qa_automation.runtime._stale_recovery_legacy import recover_stale_mutation
 from ai_qa_automation.runtime.journal import RunJournal
-from ai_qa_automation.runtime.stale_recovery import recover_stale_mutation
 from ai_qa_automation.state import StateStore
 
 
