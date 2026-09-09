@@ -35,7 +35,7 @@ def atomic_noreplace_rename_supported() -> bool:
         return False
     try:
         libc = ctypes.CDLL(None, use_errno=True)
-        getattr(libc, "renameat2")
+        libc.renameat2
     except (AttributeError, OSError):
         return False
     return True
@@ -52,7 +52,7 @@ def _renameat2_noreplace(
     libc = ctypes.CDLL(None, use_errno=True)
     renameat2 = cast(
         Callable[[int, bytes, int, bytes, int], int],
-        getattr(libc, "renameat2"),
+        libc.renameat2,
     )
     result = renameat2(
         source_parent_fd,
