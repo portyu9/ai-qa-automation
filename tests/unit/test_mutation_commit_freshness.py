@@ -110,6 +110,23 @@ def _journal_records(control: RuntimeControl) -> list[dict[str, object]]:
     ]
 
 
+def _journal_has_event(
+    control: RuntimeControl,
+    event: str,
+    *,
+    stage: str | None = None,
+) -> bool:
+    for record in _journal_records(control):
+        if record.get("event") != event:
+            continue
+        if stage is None:
+            return True
+        payload = record.get("payload")
+        if isinstance(payload, dict) and payload.get("stage") == stage:
+            return True
+    return False
+
+
 def test_commit_reproves_candidate_workspace_after_canonical_closure_checkpoint(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -154,12 +171,7 @@ def test_commit_reproves_candidate_workspace_after_canonical_closure_checkpoint(
         and item.revision == state.change_revision
         for item in state.validation_results
     )
-    assert any(
-        record.get("event") == "workspace_freshness_denied"
-        and isinstance(record.get("payload"), dict)
-        and record["payload"].get("stage") == "mutation_commit"
-        for record in _journal_records(control)
-    )
+    assert _journal_has_event(control, "workspace_freshness_denied", stage="mutation_commit")
 
     persisted = state_store.load()
     assert persisted.terminal_status is TerminalStatus.BLOCKED
@@ -216,10 +228,7 @@ def test_candidate_commit_rejection_is_durable_blocked_truth(
         and item.revision == state.change_revision
         for item in state.validation_results
     )
-    assert any(
-        record.get("event") == "mutation_commit_denied_candidate_integrity"
-        for record in _journal_records(control)
-    )
+    assert _journal_has_event(control, "mutation_commit_denied_candidate_integrity")
 
     persisted = state_store.load()
     assert persisted.terminal_status is TerminalStatus.BLOCKED
