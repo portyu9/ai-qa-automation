@@ -86,10 +86,14 @@ class LiveRuntimeServices(_LegacyLiveRuntimeServices):
         try:
             proposal = self.evidence.get(proposal_id)
         except KeyError as exc:  # pragma: no cover - path resolution already proved availability
-            raise RuntimeError("live mutation proposal disappeared after subject resolution") from exc
+            raise RuntimeError(
+                "live mutation proposal disappeared after subject resolution"
+            ) from exc
         expected = proposal.structured_data.get("expected_sha256")
         if not _is_sha256_hex(expected):
-            raise PermissionError("live locator mutation proposal has invalid original-byte authority")
+            raise PermissionError(
+                "live locator mutation proposal has invalid original-byte authority"
+            )
         return expected
 
     def _observe_live_mutation_context(self, relative_path: str) -> tuple[str, str]:
