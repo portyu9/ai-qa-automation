@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, NoReturn, TypeGuard
 
 from ..models import EvidenceKind, EvidenceNature, TerminalStatus, ToolDecision
 from ..tools.repository import RepositoryInspector
@@ -16,7 +16,7 @@ from .tool_input_bounds import validate_tool_request
 _LIVE_MUTATION_TOOL_NAMES = frozenset({"apply_locator_heal"})
 
 
-def _is_sha256_hex(value: object) -> bool:
+def _is_sha256_hex(value: object) -> TypeGuard[str]:
     return (
         isinstance(value, str)
         and len(value) == 64
