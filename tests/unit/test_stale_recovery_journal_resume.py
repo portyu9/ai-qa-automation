@@ -13,6 +13,8 @@ from ai_qa_automation.runtime.stale_recovery import recover_stale_mutation
 from ai_qa_automation.state import StateStore
 from ai_qa_automation.tools.repository import RepositoryInspector
 
+_LEASE_ID = "lease-old"
+
 
 def _git(workspace: Path, *args: str) -> None:
     subprocess.run(
@@ -39,6 +41,7 @@ def _setup_pending_recovery(tmp_path: Path) -> dict[str, object]:
     target = workspace / relative_path
     target.parent.mkdir(parents=True)
     original = b"original\n"
+    candidate = b"candidate\n"
     target.write_bytes(original)
     _git(workspace, "init", "-q")
     _git(workspace, "add", "--", relative_path)
@@ -53,7 +56,9 @@ def _setup_pending_recovery(tmp_path: Path) -> dict[str, object]:
         "-m",
         "fixture baseline",
     )
-    target.write_text("candidate\n", encoding="utf-8")
+    pre_fingerprint = _workspace_fingerprint(workspace)
+    target.write_bytes(candidate)
+    candidate_fingerprint = _workspace_fingerprint(workspace)
 
     prior_run = artifact_root / "run-old"
     backup = prior_run / "rollback" / "checkout.bin"
@@ -62,7 +67,6 @@ def _setup_pending_recovery(tmp_path: Path) -> dict[str, object]:
 
     journal = RunJournal(prior_run / "journal.jsonl")
     journal.append("mutation_prepared")
-    candidate_fingerprint = _workspace_fingerprint(workspace)
     workspace_stat = workspace.stat(follow_symlinks=False)
     run_root_stat = prior_run.stat(follow_symlinks=False)
     runtime = {
@@ -72,6 +76,7 @@ def _setup_pending_recovery(tmp_path: Path) -> dict[str, object]:
             "inode": workspace_stat.st_ino,
         },
         "workspace_fingerprint": candidate_fingerprint,
+        "lease_id": _LEASE_ID,
         "journal_event_count": journal.event_count,
         "journal_head_hash": journal.head_hash,
         "pending_mutation": {
@@ -80,6 +85,10 @@ def _setup_pending_recovery(tmp_path: Path) -> dict[str, object]:
             "backup_path": str(backup.resolve()),
             "original_sha256": hashlib.sha256(original).hexdigest(),
             "change_revision_before": 0,
+            "candidate_required": True,
+            "candidate_sha256": hashlib.sha256(candidate).hexdigest(),
+            "candidate_workspace_fingerprint": candidate_fingerprint,
+            "pre_mutation_workspace_fingerprint": pre_fingerprint,
         },
     }
     runtime_path = prior_run / "runtime.json"
@@ -97,6 +106,7 @@ def _setup_pending_recovery(tmp_path: Path) -> dict[str, object]:
     )
     previous_lease = {
         "run_id": "run-old",
+        "lease_id": _LEASE_ID,
         "run_root_identity": {
             "device": run_root_stat.st_dev,
             "inode": run_root_stat.st_ino,
@@ -112,6 +122,7 @@ def _setup_pending_recovery(tmp_path: Path) -> dict[str, object]:
         "original": original,
         "journal": journal,
         "candidate_fingerprint": candidate_fingerprint,
+        "pre_fingerprint": pre_fingerprint,
         "runtime_path": runtime_path,
         "state_path": state_path,
         "previous_lease": previous_lease,
@@ -165,6 +176,7 @@ def test_stale_recovery_resumes_exact_durable_tail_without_duplicate_append(
     assert tail["event"] == "stale_mutation_recovered"
     assert tail["payload"]["recovering_run_id"] == "run-recovery-1"
     recovered_fingerprint = _workspace_fingerprint(workspace)
+    assert recovered_fingerprint == setup["pre_fingerprint"]
     assert tail["payload"]["recovered_workspace_fingerprint"] == recovered_fingerprint
 
     monkeypatch.undo()

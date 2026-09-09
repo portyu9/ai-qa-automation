@@ -329,6 +329,72 @@ class RepositoryInspector(
             fingerprint_incomplete_reasons=incomplete_reasons,
         )
 
+    def mutation_context_fingerprint(
+        self,
+        excluded_path: str,
+    ) -> tuple[str, str, bool, tuple[str, ...]]:
+        """Bind whole-workspace authority while excluding exactly one mutation subject.
+
+        Returns ``(workspace_fingerprint, context_fingerprint, complete, reasons)``.
+        The context fingerprint covers Git HEAD/branch/index, status, and bounded bytes
+        for every changed subject except ``excluded_path``. A stable full snapshot is
+        observed both before and after context construction so a newly changed path
+        cannot silently fall outside the comparison set.
+        """
+
+        normalized = self._validate_relative_path(excluded_path)
+        before = self.snapshot()
+        if not before.fingerprint_complete:
+            return (
+                before.fingerprint,
+                before.fingerprint,
+                False,
+                before.fingerprint_incomplete_reasons,
+            )
+
+        filtered_lines: list[str] = []
+        for line in before.status.splitlines():
+            if len(line) < 4:
+                filtered_lines.append(line)
+                continue
+            path = self._parse_status_path(line[3:])
+            if path != normalized:
+                filtered_lines.append(line)
+        filtered_changed = tuple(path for path in before.changed_files if path != normalized)
+        index_digest = hashlib.sha256(self._read_index_bytes()).hexdigest()
+        inner_fingerprint, complete, reasons = self._fingerprint(
+            before.git_sha,
+            "\n".join(filtered_lines),
+            filtered_changed,
+            index_digest=index_digest,
+        )
+        after = self.snapshot()
+        if (
+            after.fingerprint != before.fingerprint
+            or after.git_sha != before.git_sha
+            or after.branch != before.branch
+            or after.status != before.status
+            or after.changed_files != before.changed_files
+            or after.fingerprint_complete != before.fingerprint_complete
+            or after.fingerprint_incomplete_reasons != before.fingerprint_incomplete_reasons
+        ):
+            return (
+                after.fingerprint,
+                after.fingerprint,
+                False,
+                ("repository-state-changed-during-mutation-context-inspection",),
+            )
+
+        payload = {
+            "excluded_path": normalized,
+            "git_sha": before.git_sha,
+            "branch": before.branch,
+            "context_fingerprint": inner_fingerprint,
+        }
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        context_fingerprint = f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
+        return before.fingerprint, context_fingerprint, complete, reasons
+
     def _incomplete_snapshot(self, reason: str) -> RepositorySnapshot:
         payload = {
             "workspace": str(self.workspace),

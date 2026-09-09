@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import ctypes
 import errno
 import os
 import stat
+import sys
 from _thread import RLock
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
+from typing import cast
 from uuid import uuid4
 
 _READ_CHUNK_BYTES = 1024 * 1024
@@ -21,6 +24,47 @@ _DESCRIPTOR_RELATIVE_AUTHORITY_SUPPORTED = bool(
     and os.stat in os.supports_follow_symlinks
     and os.link in os.supports_follow_symlinks
 )
+
+_RENAME_NOREPLACE = 1
+
+
+def atomic_noreplace_rename_supported() -> bool:
+    """Return whether descriptor-relative atomic no-replace rename is available."""
+
+    if not _DESCRIPTOR_RELATIVE_AUTHORITY_SUPPORTED or not sys.platform.startswith("linux"):
+        return False
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+    except OSError:
+        return False
+    return hasattr(libc, "renameat2")
+
+
+def _renameat2_noreplace(
+    source_parent_fd: int,
+    source_name: str,
+    destination_parent_fd: int,
+    destination_name: str,
+) -> None:
+    if not atomic_noreplace_rename_supported():
+        raise RuntimeError("atomic no-replace rename authority is unavailable")
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = cast(
+        Callable[[int, bytes, int, bytes, int], int],
+        libc.renameat2,
+    )
+    result = renameat2(
+        source_parent_fd,
+        os.fsencode(source_name),
+        destination_parent_fd,
+        os.fsencode(destination_name),
+        _RENAME_NOREPLACE,
+    )
+    if result != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+
+
 _PENDING_ROOT_AUTHORITY_LOCK = RLock()
 _PENDING_ROOT_AUTHORITIES: dict[str, tuple[tuple[int, int], str]] = {}
 
@@ -479,6 +523,137 @@ def atomic_write_bytes_confined(
             if temp_exists:
                 with suppress(FileNotFoundError):
                     os.unlink(temp_name, dir_fd=parent_fd)
+
+
+def move_file_noreplace_between_confined_roots(
+    source_root: Path,
+    source_relative_path: str | Path,
+    destination_root: Path,
+    destination_relative_path: str | Path,
+    *,
+    create_destination_parents: bool,
+    label: str,
+    expected_source_root_identity: tuple[int, int] | None = None,
+    expected_destination_root_identity: tuple[int, int] | None = None,
+) -> tuple[int, int]:
+    """Atomically move one regular file between pinned roots without replacement.
+
+    The source entry is claimed by one ``renameat2(RENAME_NOREPLACE)`` operation.
+    A concurrently created destination is never overwritten. Both parent directories
+    are fsynced before success is reported, and the moved inode is re-proved through
+    both descriptor and rooted pathname authority.
+    """
+
+    if not atomic_noreplace_rename_supported():
+        raise RuntimeError(f"{label} requires atomic no-replace rename authority")
+    with _open_confined_parent(
+        source_root,
+        source_relative_path,
+        create_parents=False,
+        label=f"{label} source",
+        expected_root_identity=expected_source_root_identity,
+    ) as (source_parent_fd, source_name):
+        source_parent_identity = _identity(os.fstat(source_parent_fd))
+        source = os.stat(source_name, dir_fd=source_parent_fd, follow_symlinks=False)
+        if stat.S_ISLNK(source.st_mode):
+            raise ValueError(f"{label} source is a symlink and has ambiguous ownership")
+        if not stat.S_ISREG(source.st_mode):
+            raise ValueError(f"{label} source must be a regular file")
+        source_identity = _identity(source)
+
+        with _open_confined_parent(
+            destination_root,
+            destination_relative_path,
+            create_parents=create_destination_parents,
+            label=f"{label} destination",
+            expected_root_identity=expected_destination_root_identity,
+        ) as (destination_parent_fd, destination_name):
+            destination_parent_identity = _identity(os.fstat(destination_parent_fd))
+            if source.st_dev != os.fstat(destination_parent_fd).st_dev:
+                raise OSError(errno.EXDEV, f"{label} roots are on different filesystems")
+            try:
+                existing = os.stat(
+                    destination_name,
+                    dir_fd=destination_parent_fd,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                existing = None
+            if existing is not None:
+                raise FileExistsError(errno.EEXIST, f"{label} destination already exists")
+
+            _renameat2_noreplace(
+                source_parent_fd,
+                source_name,
+                destination_parent_fd,
+                destination_name,
+            )
+            os.fsync(source_parent_fd)
+            if destination_parent_fd != source_parent_fd:
+                os.fsync(destination_parent_fd)
+
+            moved = os.stat(
+                destination_name,
+                dir_fd=destination_parent_fd,
+                follow_symlinks=False,
+            )
+            if not stat.S_ISREG(moved.st_mode) or _identity(moved) != source_identity:
+                try:
+                    _renameat2_noreplace(
+                        destination_parent_fd,
+                        destination_name,
+                        source_parent_fd,
+                        source_name,
+                    )
+                    os.fsync(destination_parent_fd)
+                    if destination_parent_fd != source_parent_fd:
+                        os.fsync(source_parent_fd)
+                except OSError as exc:
+                    raise ValueError(
+                        f"{label} claimed an unexpected source inode and could not restore "
+                        "it without replacement; both paths require manual reconciliation"
+                    ) from exc
+                raise ValueError(
+                    f"{label} source changed before atomic claim; the unexpected entry "
+                    "was restored without replacement"
+                )
+            moved_signature = _stable_file_signature(moved)
+
+            try:
+                source_after = os.stat(
+                    source_name,
+                    dir_fd=source_parent_fd,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                source_after_signature = None
+                source_after_missing = True
+            else:
+                # A concurrent writer may legitimately repopulate the source path
+                # after the no-replace claim. Preserve and bind that newer entry rather
+                # than treating its mere existence as a failed candidate claim.
+                source_after_signature = _stable_file_signature(source_after)
+                source_after_missing = False
+
+    _verify_confined_path_current(
+        source_root,
+        source_relative_path,
+        expected_parent_identity=source_parent_identity,
+        expected_entry_signature=source_after_signature,
+        expect_missing=source_after_missing,
+        label=f"{label} source",
+        expected_root_identity=expected_source_root_identity,
+    )
+    _verify_confined_path_current(
+        destination_root,
+        destination_relative_path,
+        expected_parent_identity=destination_parent_identity,
+        expected_entry_signature=moved_signature,
+        expect_missing=False,
+        label=f"{label} destination",
+        expected_root_identity=expected_destination_root_identity,
+    )
+    return source_identity
 
 
 def append_bytes_confined(

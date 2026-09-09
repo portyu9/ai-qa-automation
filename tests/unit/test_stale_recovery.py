@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,9 @@ from ai_qa_automation.models import (
     ValidationResult,
     ValidationStatus,
 )
+from ai_qa_automation.runtime._stale_recovery_legacy import (
+    recover_stale_mutation as recover_legacy_stale_mutation,
+)
 from ai_qa_automation.runtime.journal import RunJournal
 from ai_qa_automation.runtime.recovery import inspect_recovery
 from ai_qa_automation.runtime.stale_recovery import recover_stale_mutation
@@ -21,12 +25,31 @@ from ai_qa_automation.runtime.targeted_execution_observer import (
 )
 from ai_qa_automation.runtime.validation_truth import evaluate_revision_closure
 from ai_qa_automation.state import StateStore
+from ai_qa_automation.tools.repository import RepositoryInspector
 
 _OBSERVER_BACKEND = "controller-observer-test-double"
 _OBSERVER_IDENTITY = "sha256:" + "1" * 64
 _GIT_SHA = "2" * 40
 _SOURCE_FINGERPRINT = "sha256:" + "3" * 64
 _SUBJECT_DIGEST = "sha256:" + "4" * 64
+_STRICT_LEASE_ID = "lease-old"
+
+
+def _git(workspace: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", *args],
+        cwd=workspace,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+
+def _workspace_fingerprint(workspace: Path) -> str:
+    snapshot = RepositoryInspector(workspace).snapshot()
+    assert snapshot.fingerprint_complete is True
+    return snapshot.fingerprint
 
 
 def write_runtime(
@@ -88,16 +111,94 @@ def stale_runtime_payload(
     }
 
 
-def recover(artifact_root: Path, workspace: Path, *, fingerprint: str = "fp") -> dict[str, object]:
+def strict_existing_runtime_payload(
+    workspace: Path,
+    *,
+    relative_path: str,
+    backup_path: str,
+    original: bytes,
+    candidate: bytes,
+) -> tuple[dict[str, object], str, str]:
+    target = workspace / relative_path
+    target.write_bytes(original)
+    _git(workspace, "init", "-q")
+    _git(workspace, "add", "--", relative_path)
+    _git(
+        workspace,
+        "-c",
+        "user.name=QA Fixture",
+        "-c",
+        "user.email=qa-fixture@example.invalid",
+        "commit",
+        "-q",
+        "-m",
+        "fixture baseline",
+    )
+    pre_fingerprint = _workspace_fingerprint(workspace)
+    target.write_bytes(candidate)
+    candidate_fingerprint = _workspace_fingerprint(workspace)
+    payload = stale_runtime_payload(
+        workspace,
+        relative_path=relative_path,
+        existed=True,
+        backup_path=backup_path,
+        original_sha256=hashlib.sha256(original).hexdigest(),
+        fingerprint=candidate_fingerprint,
+    )
+    payload["lease_id"] = _STRICT_LEASE_ID
+    pending = payload["pending_mutation"]
+    assert isinstance(pending, dict)
+    pending.update(
+        {
+            "candidate_required": True,
+            "candidate_sha256": hashlib.sha256(candidate).hexdigest(),
+            "candidate_workspace_fingerprint": candidate_fingerprint,
+            "pre_mutation_workspace_fingerprint": pre_fingerprint,
+        }
+    )
+    return payload, pre_fingerprint, candidate_fingerprint
+
+
+def recover(
+    artifact_root: Path,
+    workspace: Path,
+    *,
+    fingerprint: str = "fp",
+    lease_id: str | None = None,
+) -> dict[str, object]:
     prior_run = artifact_root / "run-old"
     status = prior_run.stat(follow_symlinks=False)
+    previous_lease: dict[str, object] = {
+        "run_id": "run-old",
+        "run_root_identity": {"device": status.st_dev, "inode": status.st_ino},
+    }
+    if lease_id is not None:
+        previous_lease["lease_id"] = lease_id
     return recover_stale_mutation(
         artifact_root=artifact_root,
         workspace=workspace,
-        previous_lease={
-            "run_id": "run-old",
-            "run_root_identity": {"device": status.st_dev, "inode": status.st_ino},
-        },
+        previous_lease=previous_lease,
+        current_workspace_fingerprint=fingerprint,
+        recovering_run_id="run-new",
+    )
+
+
+def recover_legacy(
+    artifact_root: Path,
+    workspace: Path,
+    *,
+    fingerprint: str = "fp",
+) -> dict[str, object]:
+    prior_run = artifact_root / "run-old"
+    status = prior_run.stat(follow_symlinks=False)
+    previous_lease: dict[str, object] = {
+        "run_id": "run-old",
+        "run_root_identity": {"device": status.st_dev, "inode": status.st_ino},
+    }
+    return recover_legacy_stale_mutation(
+        artifact_root=artifact_root,
+        workspace=workspace,
+        previous_lease=previous_lease,
         current_workspace_fingerprint=fingerprint,
         recovering_run_id="run-new",
     )
@@ -199,38 +300,41 @@ def test_stale_existing_file_mutation_is_restored_when_fingerprint_matches(tmp_p
     artifact_root = tmp_path / "artifacts"
     workspace = tmp_path / "sut"
     workspace.mkdir()
-    target = workspace / "tests" / "test_checkout.py"
+    relative_path = "tests/test_checkout.py"
+    target = workspace / relative_path
     target.parent.mkdir(parents=True)
-    target.write_text("mutated\n", encoding="utf-8")
-
     prior_run = artifact_root / "run-old"
     backup = prior_run / "rollback" / "checkout.bin"
     backup.parent.mkdir(parents=True)
     original = b"original\n"
+    candidate = b"mutated\n"
     backup.write_bytes(original)
-    write_runtime(
-        prior_run / "runtime.json",
-        stale_runtime_payload(
-            workspace,
-            relative_path="tests/test_checkout.py",
-            existed=True,
-            backup_path=str(backup.resolve()),
-            original_sha256=hashlib.sha256(original).hexdigest(),
-            fingerprint="fp-after-mutation",
-        ),
+    payload, pre_fingerprint, candidate_fingerprint = strict_existing_runtime_payload(
+        workspace,
+        relative_path=relative_path,
+        backup_path=str(backup.resolve()),
+        original=original,
+        candidate=candidate,
     )
+    write_runtime(prior_run / "runtime.json", payload)
 
-    result = recover(artifact_root, workspace, fingerprint="fp-after-mutation")
+    result = recover(
+        artifact_root,
+        workspace,
+        fingerprint=candidate_fingerprint,
+        lease_id=_STRICT_LEASE_ID,
+    )
 
     assert result == {
         "status": "RECOVERED",
         "previous_run_id": "run-old",
-        "path": "tests/test_checkout.py",
+        "path": relative_path,
     }
     assert target.read_bytes() == original
     assert not backup.exists()
     metadata = json.loads((prior_run / "runtime.json").read_text(encoding="utf-8"))
     assert metadata["pending_mutation"] is None
+    assert metadata["workspace_fingerprint"] == pre_fingerprint
     assert metadata["recovered_by_run_id"] == "run-new"
     assert metadata["recovered_at"]
     journal = RunJournal(prior_run / "journal.jsonl")
@@ -245,24 +349,20 @@ def test_stale_recovery_invalidates_legacy_positive_revision_and_success(tmp_pat
     relative_path = "tests/test_checkout.py"
     target = workspace / relative_path
     target.parent.mkdir(parents=True)
-    target.write_text("mutated\n", encoding="utf-8")
-
     prior_run = artifact_root / "run-old"
     backup = prior_run / "rollback" / "checkout.bin"
     backup.parent.mkdir(parents=True)
     original = b"original\n"
+    candidate = b"mutated\n"
     backup.write_bytes(original)
-    write_runtime(
-        prior_run / "runtime.json",
-        stale_runtime_payload(
-            workspace,
-            relative_path=relative_path,
-            existed=True,
-            backup_path=str(backup.resolve()),
-            original_sha256=hashlib.sha256(original).hexdigest(),
-            fingerprint="fp-after-mutation",
-        ),
+    payload, _pre_fingerprint, candidate_fingerprint = strict_existing_runtime_payload(
+        workspace,
+        relative_path=relative_path,
+        backup_path=str(backup.resolve()),
+        original=original,
+        candidate=candidate,
     )
+    write_runtime(prior_run / "runtime.json", payload)
     prior_state = AgentRunState(
         run_id="run-old",
         objective="crashed validated mutation",
@@ -281,7 +381,12 @@ def test_stale_recovery_invalidates_legacy_positive_revision_and_success(tmp_pat
     assert legacy_closure.closed is False
     assert legacy_closure.code == "unbound_regression_suite"
 
-    result = recover(artifact_root, workspace, fingerprint="fp-after-mutation")
+    result = recover(
+        artifact_root,
+        workspace,
+        fingerprint=candidate_fingerprint,
+        lease_id=_STRICT_LEASE_ID,
+    )
 
     assert result["status"] == "RECOVERED"
     assert target.read_bytes() == original
@@ -331,7 +436,7 @@ def test_operator_edit_after_crash_blocks_automatic_rollback(tmp_path: Path) -> 
         ),
     )
 
-    result = recover(artifact_root, workspace, fingerprint="new-human-fingerprint")
+    result = recover_legacy(artifact_root, workspace, fingerprint="new-human-fingerprint")
 
     assert result["status"] == "BLOCKED"
     assert "overwriting newer work" in str(result["reason"])
@@ -339,7 +444,7 @@ def test_operator_edit_after_crash_blocks_automatic_rollback(tmp_path: Path) -> 
     assert backup.exists()
 
 
-def test_stale_unverified_new_file_is_removed(tmp_path: Path) -> None:
+def test_stale_unverified_new_file_requires_manual_reconciliation(tmp_path: Path) -> None:
     artifact_root = tmp_path / "artifacts"
     workspace = tmp_path / "sut"
     workspace.mkdir()
@@ -359,8 +464,9 @@ def test_stale_unverified_new_file_is_removed(tmp_path: Path) -> None:
 
     result = recover(artifact_root, workspace)
 
-    assert result["status"] == "RECOVERED"
-    assert not target.exists()
+    assert result["status"] == "BLOCKED"
+    assert "lacks exact candidate ownership" in str(result["reason"])
+    assert target.read_text(encoding="utf-8") == "generated but unverified\n"
 
 
 def test_hash_valid_journal_mismatch_blocks_before_stale_rollback(tmp_path: Path) -> None:
@@ -457,7 +563,7 @@ def test_stale_recovery_rejects_symlinked_rollback_backup(tmp_path: Path) -> Non
         ),
     )
 
-    result = recover(artifact_root, workspace)
+    result = recover_legacy(artifact_root, workspace)
 
     assert result["status"] == "BLOCKED"
     assert "symlink" in str(result["reason"])
@@ -496,7 +602,7 @@ def test_stale_recovery_rejects_symlinked_rollback_directory(tmp_path: Path) -> 
         ),
     )
 
-    result = recover(artifact_root, workspace)
+    result = recover_legacy(artifact_root, workspace)
 
     assert result["status"] == "BLOCKED"
     assert "rollback directory" in str(result["reason"])
@@ -619,7 +725,7 @@ def test_oversized_rollback_backup_is_blocked_before_read(tmp_path: Path) -> Non
         ),
     )
 
-    result = recover(artifact_root, workspace)
+    result = recover_legacy(artifact_root, workspace)
 
     assert result["status"] == "BLOCKED"
     assert "2 MB" in str(result["reason"])

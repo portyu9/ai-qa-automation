@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -10,6 +11,7 @@ from typing import Any, cast
 import pytest
 
 import ai_qa_automation.agent as agent_module
+import ai_qa_automation.runtime.live_services as live_services_module
 import ai_qa_automation.runtime.runtime_hooks as runtime_hooks_module
 import ai_qa_automation.runtime.workspace_freshness as workspace_freshness_module
 from ai_qa_automation.agent import _enforce_terminal_workspace_freshness
@@ -17,6 +19,9 @@ from ai_qa_automation.evidence import EvidenceStore
 from ai_qa_automation.fs_authority import descriptor_relative_authority_supported
 from ai_qa_automation.models import (
     AgentRunState,
+    EvidenceItem,
+    EvidenceKind,
+    EvidenceNature,
     MCPStatus,
     TerminalStatus,
     ValidationResult,
@@ -379,33 +384,71 @@ def test_external_posttool_accepts_sanitized_result_when_workspace_is_fresh(tmp_
     assert state.external_evidence[0] in state.evidence_ids
 
 
-def test_mutation_preparation_occurs_only_after_fresh_workspace_proof(tmp_path: Path) -> None:
-    workspace, state, control, _store, services = _runtime(tmp_path)
-    relative = "tests/generated_test.py"
+def test_mutation_preparation_occurs_only_after_fresh_workspace_proof(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace, state, control, store, services = _runtime(tmp_path)
+    relative = "tests/test_generated.py"
+    target = workspace / relative
+    target.parent.mkdir(parents=True)
+    original = "def test_generated():\n    assert True\n"
+    target.write_text(original, encoding="utf-8")
+    _git(workspace, "add", "--", relative)
+    _git(workspace, "commit", "-q", "-m", "add locator-heal target")
     state.target_git_sha = _git(workspace, "rev-parse", "HEAD")
+    snapshot = RepositoryInspector(
+        workspace,
+        expected_root_identity=control.workspace_identity,
+    ).snapshot()
+    assert snapshot.fingerprint_complete is True
+    control.set_workspace_fingerprint(snapshot.fingerprint)
     services.policy = PolicyEngine(
         tmp_path / "control-write",
         workspace,
         allow_test_writes=True,
     )
+    expected_sha256 = hashlib.sha256(original.encode("utf-8")).hexdigest()
+    repair_subject_id = "repair-subject-terminal-freshness"
+    proposal = services.evidence.add(
+        EvidenceItem(
+            run_id=state.run_id,
+            kind=EvidenceKind.HEALING_PROPOSAL,
+            nature=EvidenceNature.MODEL_INTERPRETATION,
+            source="self_healing_engine",
+            source_identifier=repair_subject_id,
+            summary="proposal fixture for mutation freshness preparation",
+            structured_data={
+                "repair_subject_id": repair_subject_id,
+                "path": relative,
+                "expected_sha256": expected_sha256,
+            },
+        )
+    )
+    state.evidence_ids.append(proposal.id)
+    store.save(state)
+
+    def resolve_subject(**kwargs: object) -> SimpleNamespace:
+        assert kwargs["subject_id"] == repair_subject_id
+        return SimpleNamespace(path=relative, expected_sha256=expected_sha256)
+
+    monkeypatch.setattr(live_services_module, "resolve_locator_repair_authority", resolve_subject)
 
     services.consume(
         "apply_locator_heal",
-        {"path": relative, "source": "def test_ok():\n    assert True\n"},
+        {"proposal_evidence_id": proposal.id},
     )
 
-    assert control.pending_mutation is not None
-    assert control.pending_mutation.relative_path == relative
-
-    target = workspace / relative
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
-
-    services.checkpoint()
     assert state.terminal_status is None
     assert control.pending_mutation is not None
+    assert control.pending_mutation.relative_path == relative
+    assert control.pending_mutation.candidate_required is True
+    assert control.pending_mutation.candidate_sha256 is None
+    assert target.read_text(encoding="utf-8") == original
 
-    control.rollback_pending_mutation(reason="test cleanup")
+    assert control.rollback_pending_mutation(reason="test cleanup") == relative
+    assert control.pending_mutation is None
+    assert target.read_text(encoding="utf-8") == original
 
 
 def test_drifted_mutation_never_creates_pending_or_rollback_authority(tmp_path: Path) -> None:

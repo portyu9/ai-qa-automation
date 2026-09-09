@@ -14,7 +14,6 @@ from ...models import (
 )
 from ...redaction import redact_text
 from ...tools.browser_evidence import BrowserProbe, BrowserProbeExecutionError
-from ...tools.safe_patch import SafeTestPatcher
 from ..browser_validation import (
     browser_inspection_subject,
     browser_locator_verification_subject,
@@ -604,7 +603,7 @@ def register_browser_tools(
                 "is_error": True,
             }
 
-        patcher = SafeTestPatcher(services.workspace, services.policy)
+        patcher = services.build_safe_test_patcher()
         try:
             result = patcher.replace_locator_once(
                 relative_path=authority.path,

@@ -7,16 +7,16 @@ from pathlib import Path
 
 import pytest
 
+import ai_qa_automation.runtime._stale_recovery_legacy as stale_recovery_legacy_module
 import ai_qa_automation.runtime.journal as journal_module
-import ai_qa_automation.runtime.stale_recovery as stale_recovery_module
 import ai_qa_automation.tools._repository_worktree as repository_worktree_module
 from ai_qa_automation.evidence import EvidenceStore
 from ai_qa_automation.io_safety import read_bytes_bounded, sha256_file_bounded
 from ai_qa_automation.models import AgentRunState, EvidenceItem, EvidenceKind, EvidenceNature
+from ai_qa_automation.runtime._stale_recovery_legacy import recover_stale_mutation
 from ai_qa_automation.runtime.budget import BudgetExceededError, ExecutionBudget
 from ai_qa_automation.runtime.journal import RunJournal
 from ai_qa_automation.runtime.run_control import MutationPendingError, RuntimeControl
-from ai_qa_automation.runtime.stale_recovery import recover_stale_mutation
 from ai_qa_automation.runtime.workspace_lease import WorkspaceLease
 from ai_qa_automation.state import StateStore
 from ai_qa_automation.tools.repository import RepositoryInspector
@@ -260,7 +260,7 @@ def test_stale_recovery_retains_backup_until_runtime_closure_is_durable(
         assert expected_parent_identity == (prior_status.st_dev, prior_status.st_ino)
         raise OSError("simulated durable metadata failure")
 
-    monkeypatch.setattr(stale_recovery_module, "atomic_write_json", fail_runtime_close)
+    monkeypatch.setattr(stale_recovery_legacy_module, "atomic_write_json", fail_runtime_close)
     result = recover_stale_mutation(
         artifact_root=artifact_root,
         workspace=workspace,

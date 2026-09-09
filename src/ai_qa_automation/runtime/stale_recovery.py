@@ -3,328 +3,115 @@ from __future__ import annotations
 import hashlib
 import json
 from contextlib import suppress
-from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
 from ..fs_authority import (
     atomic_write_bytes_confined,
-    descriptor_relative_authority_supported,
-    pin_directory_identity,
+    move_file_noreplace_between_confined_roots,
     read_bytes_confined,
-    stat_confined_entry,
     unlink_file_confined,
 )
-from ..io_safety import parse_json_object_strict, read_json_object_bounded
-from ..state import StateStore
-from ..tools.repository import RepositoryInspector
+from . import _stale_recovery_legacy as _legacy
 from .journal import RunJournal, validate_runtime_journal_binding
-from .mutation_lineage import reconcile_rolled_back_mutation
-from .run_control import atomic_write_json
-
-_MAX_RUNTIME_METADATA_BYTES = 2_000_000
-_MAX_ROLLBACK_BYTES = 2_000_000
-_MAX_RECOVERY_JOURNAL_EVENTS = 100_000
-_MAX_RECOVERY_RUN_ID_CHARS = 4096
-_RECOVERY_EVENT_KEYS = {
-    "change_revision_before",
-    "path",
-    "previous_run_id",
-    "recovered_workspace_fingerprint",
-    "recovering_run_id",
-    "runtime_event_count",
-    "runtime_head_hash",
-}
+from .run_control import atomic_write_json, mutation_candidate_proof_relative_path
 
 
-def _confined_non_symlink_path(root: Path, requested: Path, *, label: str) -> Path:
-    """Resolve an owned path without accepting traversal or symlink aliases."""
-
-    root = root.expanduser().resolve()
-    if requested.is_absolute() or not requested.parts or ".." in requested.parts:
-        raise ValueError(f"{label} escapes trusted root")
-    cursor = root
-    for part in requested.parts:
-        if part in {"", "."}:
-            continue
-        cursor = cursor / part
-        if cursor.is_symlink():
-            raise ValueError(f"{label} contains a symlink and has ambiguous ownership")
-    resolved = (root / requested).resolve()
-    try:
-        resolved.relative_to(root)
-    except ValueError as exc:
-        raise ValueError(f"{label} escapes trusted root") from exc
-    return resolved
-
-
-def _validated_backup_relative(prior_run_dir: Path, backup_raw: str) -> Path:
-    """Return the rollback backup as a lexical path below the prior run root."""
-
-    prior_run_dir = prior_run_dir.expanduser().absolute()
-    raw = Path(backup_raw).expanduser()
-    absolute = raw if raw.is_absolute() else prior_run_dir / "rollback" / raw
-    try:
-        relative = absolute.absolute().relative_to(prior_run_dir)
-    except ValueError as exc:
-        raise ValueError("prior rollback backup escaped rollback directory") from exc
-    if len(relative.parts) < 2 or relative.parts[0] != "rollback":
-        raise ValueError("prior rollback backup escaped run rollback directory")
-    return relative
-
-
-def _validated_run_root_identity(previous_lease: dict[str, Any]) -> tuple[int, int] | None:
-    """Validate prior lease authority over the run-persistence directory."""
-
-    if "run_root_identity" not in previous_lease:
-        if descriptor_relative_authority_supported():
-            raise ValueError("prior lease run-root identity authority is missing")
-        return None
-    raw = previous_lease["run_root_identity"]
-    if raw is None:
-        if descriptor_relative_authority_supported():
-            raise ValueError("prior lease run-root identity authority is missing")
-        return None
-    if not isinstance(raw, dict) or set(raw) != {"device", "inode"}:
-        raise ValueError("prior lease run-root identity authority is invalid")
-    device = raw.get("device")
-    inode = raw.get("inode")
-    if type(device) is not int or type(inode) is not int or device < 0 or inode < 0:
-        raise ValueError("prior lease run-root identity authority is invalid")
-    return device, inode
-
-
-def _current_run_root_identity(
-    prior_run_dir: Path,
-    expected: tuple[int, int] | None,
-) -> tuple[int, int] | None:
-    if expected is None:
-        return None
-    try:
-        current = pin_directory_identity(prior_run_dir, label="prior run persistence directory")
-    except (OSError, RuntimeError, ValueError) as exc:
-        raise ValueError("prior run persistence directory identity could not be verified") from exc
-    if current != expected:
-        raise ValueError(
-            "prior run persistence directory changed identity after lease publication; automatic recovery is blocked"
-        )
-    return current
-
-
-def _load_runtime_metadata(
-    runtime_path: Path,
-    *,
-    prior_run_dir: Path,
-    expected_run_root_identity: tuple[int, int] | None,
-) -> dict[str, Any]:
-    try:
-        if descriptor_relative_authority_supported():
-            raw = read_bytes_confined(
-                prior_run_dir,
-                runtime_path.name,
-                max_bytes=_MAX_RUNTIME_METADATA_BYTES,
-                label="prior runtime metadata",
-                expected_root_identity=expected_run_root_identity,
-            )
-            return parse_json_object_strict(raw.decode("utf-8"), label="prior runtime metadata")
-        return read_json_object_bounded(
-            runtime_path,
-            max_bytes=_MAX_RUNTIME_METADATA_BYTES,
-            label="prior runtime metadata",
-        )
-    except OSError as exc:
-        raise ValueError("prior runtime metadata is unreadable") from exc
-    except UnicodeError as exc:
-        raise ValueError("prior runtime metadata is not valid UTF-8") from exc
-    except json.JSONDecodeError as exc:
-        raise ValueError("prior runtime metadata is invalid JSON") from exc
-    except ValueError as exc:
-        message = str(exc)
-        if "exceeds" in message and "ingestion limit" in message:
-            raise ValueError("prior runtime metadata exceeds recovery ingestion limit") from exc
-        if "root must be a JSON object" in message:
-            raise ValueError("prior runtime metadata root must be an object") from exc
-        raise ValueError(message) from exc
-
-
-def _validated_journal_event_count(metadata: dict[str, Any]) -> int:
-    if "journal_event_count" not in metadata:
-        raise ValueError("prior runtime journal_event_count authority is missing")
-    raw = metadata["journal_event_count"]
-    if type(raw) is not int:
-        raise ValueError("prior runtime journal_event_count is invalid")
-    if raw < 0 or raw > _MAX_RECOVERY_JOURNAL_EVENTS:
-        raise ValueError("prior runtime journal_event_count exceeds recovery safety bounds")
-    return raw
-
-
-def _validated_workspace_root_identity(metadata: dict[str, Any]) -> tuple[int, int] | None:
-    """Validate persisted workspace-root authority before automatic rollback."""
-
-    if "workspace_root_identity" not in metadata:
-        if descriptor_relative_authority_supported():
-            raise ValueError("prior runtime workspace root identity authority is missing")
-        return None
-    raw = metadata["workspace_root_identity"]
-    if raw is None:
-        if descriptor_relative_authority_supported():
-            raise ValueError("prior runtime workspace root identity authority is missing")
-        return None
-    if not isinstance(raw, dict) or set(raw) != {"device", "inode"}:
-        raise ValueError("prior runtime workspace root identity authority is invalid")
-    device = raw.get("device")
-    inode = raw.get("inode")
-    if type(device) is not int or type(inode) is not int or device < 0 or inode < 0:
-        raise ValueError("prior runtime workspace root identity authority is invalid")
-    return device, inode
-
-
-def _current_workspace_identity(
-    workspace: Path,
-    expected: tuple[int, int] | None,
-) -> tuple[int, int] | None:
-    if expected is None:
-        return None
-    try:
-        current = pin_directory_identity(workspace, label="stale recovery workspace")
-    except (OSError, RuntimeError, ValueError) as exc:
-        raise ValueError("stale recovery workspace root identity could not be verified") from exc
-    if current != expected:
-        raise ValueError(
-            "workspace root identity changed after crashed mutation; automatic rollback would risk targeting a replacement workspace"
-        )
-    return current
-
-
-def _is_sha256_fingerprint(value: object) -> bool:
+def _is_sha256_hex(value: object) -> TypeGuard[str]:
     return (
         isinstance(value, str)
-        and len(value) == 71
-        and value.startswith("sha256:")
-        and all(character in "0123456789abcdef" for character in value[7:])
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
     )
 
 
-def _resumable_recovery_tail(
+def _is_sha256_fingerprint(value: object) -> TypeGuard[str]:
+    return _legacy._is_sha256_fingerprint(value)
+
+
+def _sha256_or_none(
+    root: Path,
+    relative_path: str | Path,
     *,
-    metadata: dict[str, Any],
-    journal_status: dict[str, Any],
-    previous_run_id: str,
-    relative_path: str,
-    change_revision_before: int,
-) -> tuple[str, str] | None:
-    """Recognize one exact durable recovery event beyond stale runtime metadata.
-
-    The event is evidence that rollback bytes were already restored and a complete
-    post-rollback workspace fingerprint was observed. It is not authorization: the
-    predecessor count/head must still be exactly the runtime metadata authority, and
-    every recovery-subject field must bind the same crashed transaction.
-    """
-
-    expected_events = metadata.get("journal_event_count")
-    expected_head = metadata.get("journal_head_hash")
-    actual_events = journal_status.get("events")
-    actual_head = journal_status.get("head_hash")
-    last_record = journal_status.get("last_record")
-    if (
-        journal_status.get("valid") is not True
-        or type(expected_events) is not int
-        or expected_events < 0
-        or type(actual_events) is not int
-        or actual_events != expected_events + 1
-        or not isinstance(actual_head, str)
-        or not isinstance(last_record, dict)
-    ):
-        return None
-    if set(last_record) != {"event", "payload", "prev_hash", "record_hash", "seq", "timestamp"}:
-        return None
-    if (
-        last_record.get("event") != "stale_mutation_recovered"
-        or last_record.get("seq") != actual_events
-        or last_record.get("prev_hash") != expected_head
-        or last_record.get("record_hash") != actual_head
-    ):
-        return None
-    timestamp = last_record.get("timestamp")
-    if not isinstance(timestamp, str) or not timestamp or len(timestamp) > 128:
-        return None
-    payload = last_record.get("payload")
-    if not isinstance(payload, dict) or set(payload) != _RECOVERY_EVENT_KEYS:
-        return None
-    actor = payload.get("recovering_run_id")
-    recovered_fingerprint = payload.get("recovered_workspace_fingerprint")
-    if (
-        not isinstance(actor, str)
-        or not actor.strip()
-        or len(actor) > _MAX_RECOVERY_RUN_ID_CHARS
-        or actor == previous_run_id
-        or payload.get("previous_run_id") != previous_run_id
-        or payload.get("path") != relative_path
-        or payload.get("change_revision_before") != change_revision_before
-        or payload.get("runtime_event_count") != expected_events
-        or payload.get("runtime_head_hash") != expected_head
-        or not isinstance(recovered_fingerprint, str)
-        or not _is_sha256_fingerprint(recovered_fingerprint)
-    ):
-        return None
-    if not isinstance(recovered_fingerprint, str):
-        return None
-    return actor, recovered_fingerprint
-
-
-def _verify_resumed_rollback_target(
-    *,
-    workspace: Path,
-    relative_path: str,
-    existed: bool,
-    backup_data: bytes | None,
-    expected_workspace_identity: tuple[int, int] | None,
-) -> bool:
-    """Prove a durable recovery tail corresponds to the actual rollback target state."""
-
-    if existed:
-        if backup_data is None:
-            return False
-        try:
-            current = read_bytes_confined(
-                workspace,
-                relative_path,
-                max_bytes=_MAX_ROLLBACK_BYTES,
-                label="resumed stale recovery target",
-                expected_root_identity=expected_workspace_identity,
-            )
-        except (OSError, RuntimeError, ValueError):
-            return False
-        return current == backup_data
-    try:
-        stat_confined_entry(
-            workspace,
-            relative_path,
-            label="resumed stale recovery target",
-            expected_root_identity=expected_workspace_identity,
-        )
-    except FileNotFoundError:
-        return True
-    except (OSError, RuntimeError, ValueError):
-        return False
-    return False
-
-
-def _observe_recovered_workspace_fingerprint(
-    workspace: Path,
-    *,
-    expected_workspace_identity: tuple[int, int] | None,
+    label: str,
+    root_identity: tuple[int, int] | None,
 ) -> str | None:
     try:
-        snapshot = RepositoryInspector(
+        data = read_bytes_confined(
+            root,
+            relative_path,
+            max_bytes=_legacy._MAX_ROLLBACK_BYTES,
+            label=label,
+            expected_root_identity=root_identity,
+        )
+    except FileNotFoundError:
+        return None
+    return hashlib.sha256(data).hexdigest()
+
+
+def _restore_misclaimed(
+    *,
+    prior_run_dir: Path,
+    proof_relative: Path,
+    workspace: Path,
+    relative_path: str,
+    run_identity: tuple[int, int] | None,
+    workspace_identity: tuple[int, int] | None,
+) -> str | None:
+    try:
+        move_file_noreplace_between_confined_roots(
+            prior_run_dir,
+            proof_relative,
             workspace,
-            expected_root_identity=expected_workspace_identity,
-        ).snapshot()
-    except (OSError, RuntimeError, ValueError):
-        return None
-    if not snapshot.fingerprint_complete or not _is_sha256_fingerprint(snapshot.fingerprint):
-        return None
-    return snapshot.fingerprint
+            relative_path,
+            create_destination_parents=False,
+            label="stale recovery ownership restoration",
+            expected_source_root_identity=run_identity,
+            expected_destination_root_identity=workspace_identity,
+        )
+    except FileExistsError:
+        return (
+            "stale recovery claimed unexpected bytes and a newer target appeared before "
+            "they could be restored; both entries were preserved for manual reconciliation"
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        return f"stale recovery could not restore misclaimed target safely: {type(exc).__name__}"
+    return None
+
+
+def _load_metadata(
+    *, artifact_root: Path, workspace: Path, previous_lease: dict[str, Any], recovering_run_id: str
+) -> tuple[dict[str, Any], Path, tuple[int, int] | None] | dict[str, Any]:
+    raw_previous_run_id = previous_lease.get("run_id")
+    if not isinstance(raw_previous_run_id, str) or not raw_previous_run_id.strip():
+        return {"status": "BLOCKED", "reason": "prior lease run_id is invalid"}
+    if raw_previous_run_id == recovering_run_id:
+        return {"status": "NONE"}
+    artifact_root = artifact_root.expanduser().resolve()
+    try:
+        prior_run_dir = _legacy._confined_non_symlink_path(
+            artifact_root,
+            Path(raw_previous_run_id),
+            label="prior run directory",
+        )
+        run_identity = _legacy._validated_run_root_identity(previous_lease)
+        _legacy._current_run_root_identity(prior_run_dir, run_identity)
+        runtime_path = prior_run_dir / "runtime.json"
+        metadata = _legacy._load_runtime_metadata(
+            runtime_path,
+            prior_run_dir=prior_run_dir,
+            expected_run_root_identity=run_identity,
+        )
+    except FileNotFoundError:
+        return {"status": "NONE", "previous_run_id": raw_previous_run_id}
+    except (OSError, RuntimeError, ValueError) as exc:
+        return {"status": "BLOCKED", "reason": str(exc)}
+    if metadata.get("workspace") != str(workspace.expanduser().resolve()):
+        return {
+            "status": "BLOCKED",
+            "reason": "prior runtime workspace does not match lease workspace",
+        }
+    return metadata, prior_run_dir, run_identity
 
 
 def recover_stale_mutation(
@@ -337,72 +124,28 @@ def recover_stale_mutation(
     current_workspace_fingerprint_complete: bool = True,
     current_workspace_fingerprint_reasons: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    """Rollback a crashed mutation only when ownership and fingerprint still match."""
+    """Recover only exact strict candidates; legacy/unbound mutation metadata is manual-only."""
 
     if not previous_lease:
         return {"status": "NONE"}
     if (
         not isinstance(recovering_run_id, str)
         or not recovering_run_id.strip()
-        or len(recovering_run_id) > _MAX_RECOVERY_RUN_ID_CHARS
+        or len(recovering_run_id) > _legacy._MAX_RECOVERY_RUN_ID_CHARS
     ):
         return {"status": "BLOCKED", "reason": "recovering run_id is invalid"}
-    raw_previous_run_id = previous_lease.get("run_id")
-    if not isinstance(raw_previous_run_id, str) or not raw_previous_run_id.strip():
-        return {"status": "BLOCKED", "reason": "prior lease run_id is invalid"}
-    previous_run_id = raw_previous_run_id
-    if previous_run_id == recovering_run_id:
-        return {"status": "NONE"}
-    artifact_root = artifact_root.expanduser().resolve()
     workspace = workspace.expanduser().resolve()
-    try:
-        prior_run_dir = _confined_non_symlink_path(
-            artifact_root,
-            Path(previous_run_id),
-            label="prior run directory",
-        )
-        expected_run_root_identity = _validated_run_root_identity(previous_lease)
-        _current_run_root_identity(prior_run_dir, expected_run_root_identity)
-        journal_path = _confined_non_symlink_path(
-            prior_run_dir,
-            Path("journal.jsonl"),
-            label="prior run journal",
-        )
-    except (OSError, RuntimeError, ValueError) as exc:
-        return {"status": "BLOCKED", "reason": str(exc)}
-    runtime_path = prior_run_dir / "runtime.json"
-    try:
-        if descriptor_relative_authority_supported():
-            metadata = _load_runtime_metadata(
-                runtime_path,
-                prior_run_dir=prior_run_dir,
-                expected_run_root_identity=expected_run_root_identity,
-            )
-        else:
-            if runtime_path.is_symlink():
-                return {"status": "BLOCKED", "reason": "prior runtime metadata is a symlink"}
-            if not runtime_path.is_file():
-                return {"status": "NONE", "previous_run_id": previous_run_id}
-            metadata = _load_runtime_metadata(
-                runtime_path,
-                prior_run_dir=prior_run_dir,
-                expected_run_root_identity=expected_run_root_identity,
-            )
-    except FileNotFoundError:
-        return {"status": "NONE", "previous_run_id": previous_run_id}
-    except ValueError as exc:
-        return {"status": "BLOCKED", "reason": str(exc)}
-    try:
-        _current_run_root_identity(prior_run_dir, expected_run_root_identity)
-    except ValueError as exc:
-        return {"status": "BLOCKED", "reason": str(exc)}
+    loaded = _load_metadata(
+        artifact_root=artifact_root,
+        workspace=workspace,
+        previous_lease=previous_lease,
+        recovering_run_id=recovering_run_id,
+    )
+    if isinstance(loaded, dict):
+        return loaded
+    metadata, prior_run_dir, run_identity = loaded
+    previous_run_id = str(previous_lease["run_id"])
 
-    metadata_workspace = metadata.get("workspace")
-    if not isinstance(metadata_workspace, str) or metadata_workspace != str(workspace):
-        return {
-            "status": "BLOCKED",
-            "reason": "prior runtime workspace does not match lease workspace",
-        }
     if "pending_mutation" not in metadata:
         return {
             "status": "BLOCKED",
@@ -414,36 +157,76 @@ def recover_stale_mutation(
     if not isinstance(pending, dict) or not pending:
         return {"status": "BLOCKED", "reason": "prior pending mutation metadata is invalid"}
 
+    # Run the exact legacy parser/journal/state preflight with a fingerprint that can
+    # never equal a valid recovery subject. Its destructive branch is therefore
+    # unreachable; any earlier authority failure is returned unchanged.
+    sentinel = "__aiqa_strict_recovery_preflight__"
+    if metadata.get("workspace_fingerprint") == sentinel:
+        sentinel += "2"
+    preflight = _legacy.recover_stale_mutation(
+        artifact_root=artifact_root,
+        workspace=workspace,
+        previous_lease=previous_lease,
+        current_workspace_fingerprint=sentinel,
+        recovering_run_id=recovering_run_id,
+        current_workspace_fingerprint_complete=current_workspace_fingerprint_complete,
+        current_workspace_fingerprint_reasons=current_workspace_fingerprint_reasons,
+    )
+    expected_preflight_reasons = {
+        "workspace changed after crashed mutation; automatic rollback would risk overwriting newer work",
+        "workspace changed after a durable stale recovery event; automatic recovery closure would risk accepting newer work",
+    }
+    if (
+        preflight.get("status") != "BLOCKED"
+        or preflight.get("reason") not in expected_preflight_reasons
+    ):
+        return preflight
+
+    relative_path = pending.get("relative_path")
     change_revision_before = pending.get("change_revision_before")
+    existed = pending.get("existed")
+    if not isinstance(relative_path, str) or not relative_path:
+        return {"status": "BLOCKED", "reason": "prior pending mutation path is missing or invalid"}
     if type(change_revision_before) is not int or change_revision_before < 0:
         return {
             "status": "BLOCKED",
             "reason": "prior pending mutation change_revision_before authority is invalid",
         }
-    relative_path = pending.get("relative_path")
-    if not isinstance(relative_path, str) or not relative_path:
-        return {"status": "BLOCKED", "reason": "prior pending mutation path is missing or invalid"}
-    existed = pending.get("existed")
     if type(existed) is not bool:
         return {"status": "BLOCKED", "reason": "prior pending mutation existed flag is invalid"}
-    try:
-        _confined_non_symlink_path(
-            workspace,
-            Path(relative_path),
-            label="prior pending mutation path",
-        )
-    except ValueError as exc:
-        return {"status": "BLOCKED", "reason": str(exc)}
+
+    candidate_sha = pending.get("candidate_sha256")
+    candidate_fingerprint = pending.get("candidate_workspace_fingerprint")
+    pre_fingerprint = pending.get("pre_mutation_workspace_fingerprint")
+    if (
+        pending.get("candidate_required") is not True
+        or not _is_sha256_hex(candidate_sha)
+        or not _is_sha256_fingerprint(candidate_fingerprint)
+        or not _is_sha256_fingerprint(pre_fingerprint)
+    ):
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": previous_run_id,
+            "reason": "prior pending mutation lacks exact candidate ownership authority; automatic destructive recovery is disabled and manual reconciliation is required",
+        }
+
+    prior_lease_id = previous_lease.get("lease_id")
+    if (
+        not isinstance(prior_lease_id, str)
+        or not prior_lease_id
+        or metadata.get("lease_id") != prior_lease_id
+    ):
+        return {
+            "status": "BLOCKED",
+            "reason": "prior runtime lease identity does not match stale-recovery lease authority",
+        }
 
     try:
-        journal_event_count = _validated_journal_event_count(metadata)
+        journal_count = _legacy._validated_journal_event_count(metadata)
         journal = RunJournal(
-            journal_path,
-            max_events=min(
-                _MAX_RECOVERY_JOURNAL_EVENTS,
-                max(5000, journal_event_count + 10),
-            ),
-            expected_parent_identity=expected_run_root_identity,
+            prior_run_dir / "journal.jsonl",
+            max_events=min(_legacy._MAX_RECOVERY_JOURNAL_EVENTS, max(5000, journal_count + 10)),
+            expected_parent_identity=run_identity,
         )
         journal_status = journal.verify(include_last_record=True)
     except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
@@ -451,357 +234,324 @@ def recover_stale_mutation(
             "status": "BLOCKED",
             "reason": f"prior run journal could not be verified: {type(exc).__name__}",
         }
-    journal_binding = validate_runtime_journal_binding(metadata, journal_status)
-    recovery_event_actor: str | None = None
-    recovered_workspace_fingerprint: str | None = None
-    recovery_event_already_recorded = False
-    if not journal_binding["valid"]:
-        resumable = _resumable_recovery_tail(
+    binding = validate_runtime_journal_binding(metadata, journal_status)
+    recovered_fingerprint: str | None = None
+    recovery_event_recorded = False
+    if not binding["valid"]:
+        resumed = _legacy._resumable_recovery_tail(
             metadata=metadata,
             journal_status=journal_status,
             previous_run_id=previous_run_id,
             relative_path=relative_path,
             change_revision_before=change_revision_before,
         )
-        if resumable is None:
+        if resumed is None:
             return {
                 "status": "BLOCKED",
-                "reason": f"prior runtime journal authority is invalid: {journal_binding['reason']}",
+                "reason": f"prior runtime journal authority is invalid: {binding['reason']}",
             }
-        recovery_event_actor, recovered_workspace_fingerprint = resumable
-        recovery_event_already_recorded = True
-
-    state_path = prior_run_dir / "state.json"
-    try:
-        prior_state_store = StateStore(
-            state_path,
-            expected_parent_identity=expected_run_root_identity,
-        )
-        prior_state = prior_state_store.load()
-    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
-        return {
-            "status": "BLOCKED",
-            "reason": f"prior canonical state could not be verified: {type(exc).__name__}",
-        }
-    if prior_state.run_id != previous_run_id:
-        return {
-            "status": "BLOCKED",
-            "reason": "prior canonical state run_id does not match lease authority",
-        }
-    if Path(prior_state.workspace).expanduser().resolve() != workspace:
-        return {
-            "status": "BLOCKED",
-            "reason": "prior canonical state workspace does not match lease workspace",
-        }
-    if prior_state.change_revision < change_revision_before:
-        return {
-            "status": "BLOCKED",
-            "reason": "prior canonical change revision is behind pending mutation authority",
-        }
-    if prior_state.change_revision > change_revision_before + 1:
-        return {
-            "status": "BLOCKED",
-            "reason": (
-                "prior canonical change revision is more than one revision ahead of pending "
-                "mutation authority"
-            ),
-        }
-
-    if not current_workspace_fingerprint_complete:
-        reasons = ", ".join(current_workspace_fingerprint_reasons) or "unspecified"
-        return {
-            "status": "BLOCKED",
-            "previous_run_id": previous_run_id,
-            "reason": (
-                "workspace fingerprint is incomplete; automatic stale rollback cannot prove "
-                f"ownership of every changed subject ({reasons})"
-            ),
-        }
-    expected_fingerprint = (
-        recovered_workspace_fingerprint
-        if recovery_event_already_recorded
-        else metadata.get("workspace_fingerprint")
-    )
-    if (
-        not isinstance(expected_fingerprint, str)
-        or not expected_fingerprint
-        or expected_fingerprint != current_workspace_fingerprint
-    ):
-        reason = (
-            "workspace changed after a durable stale recovery event; automatic recovery closure "
-            "would risk accepting newer work"
-            if recovery_event_already_recorded
-            else "workspace changed after crashed mutation; automatic rollback would risk overwriting newer work"
-        )
-        return {
-            "status": "BLOCKED",
-            "previous_run_id": previous_run_id,
-            "reason": reason,
-        }
+        _recovery_actor, recovered_fingerprint = resumed
+        recovery_event_recorded = True
 
     try:
-        expected_workspace_identity = _validated_workspace_root_identity(metadata)
-        _current_workspace_identity(workspace, expected_workspace_identity)
-        _current_run_root_identity(prior_run_dir, expected_run_root_identity)
+        workspace_identity = _legacy._validated_workspace_root_identity(metadata)
+        _legacy._current_workspace_identity(workspace, workspace_identity)
+        _legacy._current_run_root_identity(prior_run_dir, run_identity)
     except ValueError as exc:
-        return {
-            "status": "BLOCKED",
-            "previous_run_id": previous_run_id,
-            "reason": str(exc),
-        }
+        return {"status": "BLOCKED", "previous_run_id": previous_run_id, "reason": str(exc)}
 
-    backup_to_cleanup: Path | None = None
-    backup_data: bytes | None = None
-    if existed:
-        backup_raw = pending.get("backup_path")
-        original_sha = pending.get("original_sha256")
-        if (
-            not isinstance(backup_raw, str)
-            or not backup_raw
-            or not isinstance(original_sha, str)
-            or not original_sha
-        ):
-            return {"status": "BLOCKED", "reason": "prior rollback backup metadata is incomplete"}
-        try:
-            backup_relative = _validated_backup_relative(prior_run_dir, backup_raw)
-            backup_data = read_bytes_confined(
-                prior_run_dir,
-                backup_relative,
-                max_bytes=_MAX_ROLLBACK_BYTES,
-                label="prior rollback backup",
-                expected_root_identity=expected_run_root_identity,
-            )
-            _current_run_root_identity(prior_run_dir, expected_run_root_identity)
-        except OSError:
-            return {"status": "BLOCKED", "reason": "prior rollback backup is unavailable"}
-        except RuntimeError as exc:
-            return {
-                "status": "BLOCKED",
-                "reason": f"prior rollback backup authority is unavailable: {type(exc).__name__}",
-            }
-        except ValueError as exc:
-            if "exceeds" in str(exc) and "ingestion limit" in str(exc):
-                return {
-                    "status": "BLOCKED",
-                    "reason": "prior rollback backup exceeds 2 MB recovery safety limit",
-                }
-            return {"status": "BLOCKED", "reason": str(exc)}
-        if hashlib.sha256(backup_data).hexdigest() != original_sha:
-            return {
-                "status": "BLOCKED",
-                "reason": "prior rollback backup failed integrity verification",
-            }
-        backup_to_cleanup = backup_relative
-
-    if recovery_event_already_recorded and not _verify_resumed_rollback_target(
-        workspace=workspace,
-        relative_path=relative_path,
-        existed=existed,
-        backup_data=backup_data,
-        expected_workspace_identity=expected_workspace_identity,
+    backup_raw = pending.get("backup_path")
+    original_sha = pending.get("original_sha256")
+    if (
+        not existed
+        or not isinstance(backup_raw, str)
+        or not backup_raw
+        or not _is_sha256_hex(original_sha)
     ):
         return {
             "status": "BLOCKED",
             "previous_run_id": previous_run_id,
-            "reason": (
-                "durable stale recovery event does not match the current rollback target bytes; "
-                "pending authority was retained for manual reconciliation"
-            ),
+            "reason": "prior pending mutation lacks exact candidate ownership authority; automatic destructive recovery is disabled and manual reconciliation is required",
+        }
+    try:
+        backup_relative = _legacy._validated_backup_relative(prior_run_dir, backup_raw)
+        backup_data = read_bytes_confined(
+            prior_run_dir,
+            backup_relative,
+            max_bytes=_legacy._MAX_ROLLBACK_BYTES,
+            label="prior rollback backup",
+            expected_root_identity=run_identity,
+        )
+    except OSError:
+        return {"status": "BLOCKED", "reason": "prior rollback backup is unavailable"}
+    except (RuntimeError, ValueError) as exc:
+        if "exceeds" in str(exc) and "ingestion limit" in str(exc):
+            return {
+                "status": "BLOCKED",
+                "reason": "prior rollback backup exceeds 2 MB recovery safety limit",
+            }
+        return {"status": "BLOCKED", "reason": str(exc)}
+    if hashlib.sha256(backup_data).hexdigest() != original_sha:
+        return {
+            "status": "BLOCKED",
+            "reason": "prior rollback backup failed integrity verification",
         }
 
-    if not recovery_event_already_recorded:
-        if existed:
-            if backup_data is None:  # pragma: no cover - guarded by backup validation
-                return {"status": "BLOCKED", "reason": "prior rollback backup is unavailable"}
+    runtime_workspace_fingerprint = metadata.get("workspace_fingerprint")
+    if recovery_event_recorded:
+        if runtime_workspace_fingerprint not in {candidate_fingerprint, pre_fingerprint}:
+            return {
+                "status": "BLOCKED",
+                "previous_run_id": previous_run_id,
+                "reason": "prior runtime workspace authority is not bound to the exact mutation recovery lineage",
+            }
+    elif runtime_workspace_fingerprint != candidate_fingerprint:
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": previous_run_id,
+            "reason": "prior runtime workspace authority is not bound to the exact mutation candidate",
+        }
+
+    proof_relative = mutation_candidate_proof_relative_path(relative_path, candidate_sha)
+    try:
+        proof_sha = _sha256_or_none(
+            prior_run_dir,
+            proof_relative,
+            label="stale mutation candidate proof",
+            root_identity=run_identity,
+        )
+        target_sha = _sha256_or_none(
+            workspace,
+            relative_path,
+            label="stale recovery target",
+            root_identity=workspace_identity,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": previous_run_id,
+            "reason": f"stale candidate ownership could not be observed safely: {type(exc).__name__}",
+        }
+
+    if recovery_event_recorded:
+        if current_workspace_fingerprint != recovered_fingerprint:
+            return {
+                "status": "BLOCKED",
+                "previous_run_id": previous_run_id,
+                "reason": "workspace changed after a durable stale recovery event; automatic recovery closure would risk accepting newer work",
+            }
+        if proof_sha != candidate_sha:
+            return {
+                "status": "BLOCKED",
+                "previous_run_id": previous_run_id,
+                "reason": "durable stale recovery event lost its exact candidate proof; pending authority was retained for manual reconciliation",
+            }
+        if recovered_fingerprint != pre_fingerprint:
+            return {
+                "status": "BLOCKED",
+                "previous_run_id": previous_run_id,
+                "reason": "durable stale recovery event is not bound to the persisted pre-mutation workspace subject",
+            }
+        if target_sha != original_sha:
+            return {
+                "status": "BLOCKED",
+                "previous_run_id": previous_run_id,
+                "reason": "durable stale recovery event does not match the current rollback target bytes; pending authority was retained for manual reconciliation",
+            }
+    else:
+        if proof_sha is None:
+            if target_sha == original_sha:
+                if current_workspace_fingerprint != pre_fingerprint:
+                    return {
+                        "status": "BLOCKED",
+                        "previous_run_id": previous_run_id,
+                        "reason": "stale mutation target is original but the full workspace does not match the persisted pre-mutation subject",
+                    }
+            else:
+                if (
+                    current_workspace_fingerprint != candidate_fingerprint
+                    or target_sha != candidate_sha
+                ):
+                    return {
+                        "status": "BLOCKED",
+                        "previous_run_id": previous_run_id,
+                        "reason": "workspace changed after crashed mutation; automatic rollback would risk overwriting newer work",
+                    }
+                try:
+                    move_file_noreplace_between_confined_roots(
+                        workspace,
+                        relative_path,
+                        prior_run_dir,
+                        proof_relative,
+                        create_destination_parents=False,
+                        label="stale recovery candidate claim",
+                        expected_source_root_identity=workspace_identity,
+                        expected_destination_root_identity=run_identity,
+                    )
+                    proof_sha = _sha256_or_none(
+                        prior_run_dir,
+                        proof_relative,
+                        label="stale mutation candidate proof",
+                        root_identity=run_identity,
+                    )
+                except FileExistsError:
+                    proof_sha = _sha256_or_none(
+                        prior_run_dir,
+                        proof_relative,
+                        label="stale mutation candidate proof",
+                        root_identity=run_identity,
+                    )
+                except (OSError, RuntimeError, ValueError) as exc:
+                    return {
+                        "status": "BLOCKED",
+                        "previous_run_id": previous_run_id,
+                        "reason": f"stale candidate could not be atomically claimed: {type(exc).__name__}",
+                    }
+        if proof_sha != candidate_sha:
             try:
-                _current_run_root_identity(prior_run_dir, expected_run_root_identity)
+                current_after_claim = _sha256_or_none(
+                    workspace,
+                    relative_path,
+                    label="stale recovery target",
+                    root_identity=workspace_identity,
+                )
+            except (OSError, RuntimeError, ValueError):
+                current_after_claim = "unreadable"
+            if proof_sha is not None and current_after_claim is None:
+                restore_error = _restore_misclaimed(
+                    prior_run_dir=prior_run_dir,
+                    proof_relative=proof_relative,
+                    workspace=workspace,
+                    relative_path=relative_path,
+                    run_identity=run_identity,
+                    workspace_identity=workspace_identity,
+                )
+                if restore_error is not None:
+                    return {
+                        "status": "BLOCKED",
+                        "previous_run_id": previous_run_id,
+                        "reason": restore_error,
+                    }
+            return {
+                "status": "BLOCKED",
+                "previous_run_id": previous_run_id,
+                "reason": "run-owned stale candidate proof does not match the exact candidate bytes",
+            }
+
+        target_sha = _sha256_or_none(
+            workspace,
+            relative_path,
+            label="stale recovery target",
+            root_identity=workspace_identity,
+        )
+        if target_sha is None:
+            try:
                 atomic_write_bytes_confined(
                     workspace,
                     relative_path,
                     backup_data,
-                    create_parents=True,
-                    create_only=False,
+                    create_parents=False,
+                    create_only=True,
                     label="stale recovery target",
-                    expected_root_identity=expected_workspace_identity,
+                    expected_root_identity=workspace_identity,
                 )
+            except FileExistsError:
+                return {
+                    "status": "BLOCKED",
+                    "previous_run_id": previous_run_id,
+                    "reason": "stale rollback target was concurrently repopulated; newer bytes were preserved and pending authority remains open",
+                }
             except (OSError, RuntimeError, ValueError) as exc:
                 return {
                     "status": "BLOCKED",
+                    "previous_run_id": previous_run_id,
                     "reason": f"stale rollback target could not be restored safely: {type(exc).__name__}",
                 }
-        else:
-            try:
-                _current_run_root_identity(prior_run_dir, expected_run_root_identity)
-                unlink_file_confined(
-                    workspace,
-                    relative_path,
-                    missing_ok=True,
-                    label="stale recovery target",
-                    expected_root_identity=expected_workspace_identity,
-                )
-            except FileNotFoundError:
-                pass
-            except (OSError, RuntimeError, ValueError) as exc:
-                return {
-                    "status": "BLOCKED",
-                    "reason": f"stale rollback target could not be removed safely: {type(exc).__name__}",
-                }
-
-        try:
-            _current_workspace_identity(workspace, expected_workspace_identity)
-            _current_run_root_identity(prior_run_dir, expected_run_root_identity)
-        except ValueError:
+        elif target_sha != original_sha:
             return {
                 "status": "BLOCKED",
                 "previous_run_id": previous_run_id,
-                "reason": (
-                    "stale mutation bytes were restored but an authority root changed before recovery "
-                    "closure; rollback authority was retained and manual reconciliation is required"
-                ),
+                "reason": "stale rollback target contains newer bytes; refusing to overwrite them",
             }
-        recovered_workspace_fingerprint = _observe_recovered_workspace_fingerprint(
-            workspace,
-            expected_workspace_identity=expected_workspace_identity,
+        if (
+            _sha256_or_none(
+                workspace,
+                relative_path,
+                label="stale recovery target",
+                root_identity=workspace_identity,
+            )
+            != original_sha
+        ):
+            return {
+                "status": "BLOCKED",
+                "previous_run_id": previous_run_id,
+                "reason": "stale rollback target changed after restoration; pending authority was retained",
+            }
+        recovered_fingerprint = _legacy._observe_recovered_workspace_fingerprint(
+            workspace, expected_workspace_identity=workspace_identity
         )
-        if recovered_workspace_fingerprint is None:
+        if recovered_fingerprint != pre_fingerprint:
             return {
                 "status": "BLOCKED",
                 "previous_run_id": previous_run_id,
-                "reason": (
-                    "stale mutation bytes were restored but the post-recovery workspace subject "
-                    "could not be observed completely; rollback authority was retained and manual "
-                    "reconciliation is required"
-                ),
+                "reason": "stale mutation target was restored but unrelated workspace state does not match the persisted pre-mutation subject; pending authority was retained",
             }
         try:
-            recovery_event_recorded = journal.try_append(
+            recorded = journal.try_append(
                 "stale_mutation_recovered",
                 recovering_run_id=recovering_run_id,
                 previous_run_id=previous_run_id,
                 path=relative_path,
                 change_revision_before=change_revision_before,
-                runtime_event_count=journal_event_count,
+                runtime_event_count=journal_count,
                 runtime_head_hash=metadata.get("journal_head_hash"),
-                recovered_workspace_fingerprint=recovered_workspace_fingerprint,
+                recovered_workspace_fingerprint=recovered_fingerprint,
             )
         except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
-            recovery_event_recorded = False
-        if not recovery_event_recorded:
+            recorded = False
+        if not recorded:
             return {
                 "status": "BLOCKED",
                 "previous_run_id": previous_run_id,
-                "reason": (
-                    "stale mutation bytes were restored but the recovery journal event could not be "
-                    "durably recorded; rollback authority was retained and manual reconciliation is "
-                    "required"
-                ),
+                "reason": "stale mutation bytes were restored but the recovery journal event could not be durably recorded; rollback authority was retained and manual reconciliation is required",
             }
-        recovery_event_actor = recovering_run_id
 
-    try:
-        post_recovery_journal = journal.verify()
-        _current_run_root_identity(prior_run_dir, expected_run_root_identity)
-    except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
-        return {
-            "status": "BLOCKED",
-            "previous_run_id": previous_run_id,
-            "reason": (
-                "stale mutation bytes were restored but prior journal authority became unreadable; "
-                "rollback authority was retained and manual reconciliation is required"
-            ),
-        }
-    if not post_recovery_journal["valid"]:
-        return {
-            "status": "BLOCKED",
-            "previous_run_id": previous_run_id,
-            "reason": (
-                "stale mutation bytes were restored but prior journal authority became invalid; "
-                "rollback authority was retained and manual reconciliation is required"
-            ),
-        }
-    if recovered_workspace_fingerprint is None:
-        return {
-            "status": "BLOCKED",
-            "previous_run_id": previous_run_id,
-            "reason": "stale recovery workspace fingerprint authority is unavailable",
-        }
-    closure_fingerprint = _observe_recovered_workspace_fingerprint(
-        workspace,
-        expected_workspace_identity=expected_workspace_identity,
-    )
-    if closure_fingerprint != recovered_workspace_fingerprint:
-        return {
-            "status": "BLOCKED",
-            "previous_run_id": previous_run_id,
-            "reason": (
-                "workspace changed after stale recovery evidence was recorded and before durable "
-                "closure; pending authority was retained for manual reconciliation"
-            ),
-        }
-
-    reconcile_rolled_back_mutation(
-        prior_state,
-        relative_path=relative_path,
-        change_revision_before=change_revision_before,
-    )
-    try:
-        prior_state_store.save(prior_state)
-        _current_run_root_identity(prior_run_dir, expected_run_root_identity)
-    except (OSError, RuntimeError, ValueError):
-        return {
-            "status": "BLOCKED",
-            "previous_run_id": previous_run_id,
-            "reason": (
-                "stale mutation bytes were restored but prior canonical validation lineage could "
-                "not be durably reconciled; rollback authority was retained and manual "
-                "reconciliation is required"
-            ),
-        }
-
-    if recovery_event_actor is None:  # pragma: no cover - append/resume paths both bind an actor
-        return {
-            "status": "BLOCKED",
-            "previous_run_id": previous_run_id,
-            "reason": "stale recovery event authority is unavailable",
-        }
-    metadata["pending_mutation"] = None
-    metadata["recovered_by_run_id"] = recovery_event_actor
-    metadata["recovered_at"] = datetime.now(UTC).isoformat()
-    metadata["journal_event_count"] = post_recovery_journal["events"]
-    metadata["journal_head_hash"] = post_recovery_journal["head_hash"]
+    # The recovery event proves the workspace is now the exact pre-mutation subject.
+    # Rebind that subject in runtime metadata before legacy closure clears pending
+    # rollback authority; either journal-proven intermediate stage remains resumable.
+    metadata["workspace_fingerprint"] = pre_fingerprint
     try:
         atomic_write_json(
-            runtime_path,
+            prior_run_dir / "runtime.json",
             metadata,
-            expected_parent_identity=expected_run_root_identity,
+            expected_parent_identity=run_identity,
         )
-        _current_run_root_identity(prior_run_dir, expected_run_root_identity)
+        _legacy._current_run_root_identity(prior_run_dir, run_identity)
     except (OSError, RuntimeError, ValueError):
         return {
             "status": "BLOCKED",
             "previous_run_id": previous_run_id,
-            "reason": (
-                "stale mutation bytes were restored but recovery metadata could not be "
-                "durably closed; rollback authority was retained and manual reconciliation "
-                "is required before another automatic recovery attempt"
-            ),
+            "reason": "stale mutation bytes were restored but recovered workspace authority could not be durably rebound; pending authority was retained for manual reconciliation",
         }
 
-    if backup_to_cleanup is not None:
+    closure = _legacy.recover_stale_mutation(
+        artifact_root=artifact_root,
+        workspace=workspace,
+        previous_lease=previous_lease,
+        current_workspace_fingerprint=pre_fingerprint,
+        recovering_run_id=recovering_run_id,
+        current_workspace_fingerprint_complete=current_workspace_fingerprint_complete,
+        current_workspace_fingerprint_reasons=current_workspace_fingerprint_reasons,
+    )
+    if closure.get("status") == "RECOVERED":
+        if not recovery_event_recorded:
+            closure.pop("resumed_recovery_event", None)
         with suppress(OSError, RuntimeError, ValueError):
             unlink_file_confined(
                 prior_run_dir,
-                backup_to_cleanup,
+                proof_relative,
                 missing_ok=True,
-                label="stale recovery backup cleanup",
-                expected_root_identity=expected_run_root_identity,
+                label="stale recovery candidate proof cleanup",
+                expected_root_identity=run_identity,
             )
-
-    result: dict[str, Any] = {
-        "status": "RECOVERED",
-        "previous_run_id": previous_run_id,
-        "path": relative_path,
-    }
-    if recovery_event_already_recorded:
-        result["resumed_recovery_event"] = True
-    return result
+    return closure

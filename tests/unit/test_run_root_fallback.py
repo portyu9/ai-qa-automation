@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-import ai_qa_automation.runtime.stale_recovery as stale_recovery_module
+import ai_qa_automation.runtime._stale_recovery_legacy as stale_recovery_legacy_module
 import ai_qa_automation.state as state_module
-from ai_qa_automation.runtime.stale_recovery import recover_stale_mutation
+from ai_qa_automation.runtime._stale_recovery_legacy import recover_stale_mutation
 from ai_qa_automation.runtime.workspace_lease import WorkspaceLease
 from ai_qa_automation.state import StateStore
 
@@ -38,7 +38,7 @@ def test_unenforceable_run_root_identity_is_not_published_as_lease_authority(
     assert previous_lease["run_root_identity"] is None
 
     monkeypatch.setattr(
-        stale_recovery_module,
+        stale_recovery_legacy_module,
         "descriptor_relative_authority_supported",
         lambda: False,
     )

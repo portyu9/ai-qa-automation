@@ -29,7 +29,13 @@ from ..state import StateStore
 from ..tools.repository import RepositoryInspector
 from .budget import BudgetExceededError
 from .mutation_lineage import reconcile_rolled_back_mutation
-from .run_control import CircuitOpenError, PendingMutation, RepeatedActionError, RuntimeControl
+from .run_control import (
+    CircuitOpenError,
+    MutationPendingError,
+    PendingMutation,
+    RepeatedActionError,
+    RuntimeControl,
+)
 from .tool_input_bounds import ToolInputBoundsError, tool_input_fingerprint, validate_tool_request
 from .tool_output_bounds import (
     ToolOutputBoundsError,
@@ -150,6 +156,31 @@ def _record_workspace_freshness_validation_failure(
     )
 
 
+def _record_mutation_commit_integrity_failure(
+    state: AgentRunState,
+    *,
+    relative_path: str,
+) -> None:
+    """Poison closure when candidate ownership changes after deterministic validation."""
+
+    state.validation_results.append(
+        ValidationResult(
+            name="mutation_commit_integrity",
+            gate_id=f"mutation_commit_integrity:{state.change_revision}:{relative_path}",
+            revision=state.change_revision,
+            status=ValidationStatus.NOT_VERIFIED,
+            summary=(
+                "Validated mutation could not commit because exact candidate ownership changed "
+                "at the closure boundary."
+            ),
+            details={
+                "scope": "mutation_commit_candidate_integrity",
+                "path": relative_path,
+            },
+        )
+    )
+
+
 def _reconcile_rolled_back_mutation(
     state: AgentRunState | None,
     pending: PendingMutation | None,
@@ -163,6 +194,42 @@ def _reconcile_rolled_back_mutation(
         relative_path=rolled_back_path,
         change_revision_before=pending.change_revision_before,
     )
+
+
+def _rollback_failed_mutation_or_block(
+    state: AgentRunState | None,
+    state_store: StateStore | None,
+    control: RuntimeControl,
+    pending: PendingMutation,
+    *,
+    reason: str,
+) -> tuple[str | None, bool]:
+    """Rollback a failed mutation or durably preserve ambiguity as BLOCKED truth."""
+
+    try:
+        rolled_back = control.rollback_pending_mutation(reason=reason)
+    except (MutationPendingError, OSError, RuntimeError, ValueError) as exc:
+        if state is not None and state.terminal_status in {
+            None,
+            TerminalStatus.SUCCESS,
+            TerminalStatus.BLOCKED,
+        }:
+            state.terminal_status = TerminalStatus.BLOCKED
+            state.terminal_reason = (
+                "Failed mutation could not be rolled back without risking independently owned "
+                "workspace bytes; pending rollback authority was retained"
+            )
+        control.open_circuits.update(_MUTATION_TOOLS)
+        control.journal.try_append(
+            "mutation_failure_rollback_blocked",
+            path=pending.relative_path,
+            error_type=type(exc).__name__,
+        )
+        _checkpoint(state, state_store, control)
+        return None, True
+
+    _reconcile_rolled_back_mutation(state, pending, rolled_back)
+    return rolled_back, False
 
 
 def _normalize_selector_path(value: str) -> str:
@@ -481,6 +548,34 @@ def posttool_policy_output(
                 "A mutation-shaped tool result arrived without a fresh, durable pending mutation "
                 "transaction. The result was rejected and mutation authority is disabled for this run."
             )
+        elif pending.candidate_required:
+            if (
+                pending.candidate_sha256 is None
+                or pending.candidate_workspace_fingerprint is None
+                or control.expected_workspace_fingerprint != pending.candidate_workspace_fingerprint
+            ):
+                failed = True
+                mutation_integrity_blocked = True
+                state.terminal_status = TerminalStatus.BLOCKED
+                state.terminal_reason = (
+                    "Mutation result was rejected because exact candidate workspace authority "
+                    "was not durably bound by the controlled mutation service"
+                )
+                control.open_circuits.update(_MUTATION_TOOLS)
+                control.journal.try_append(
+                    "mutation_candidate_authority_missing",
+                    tool_name=tool_name,
+                    path=pending.relative_path,
+                )
+                output["updatedToolOutput"] = {
+                    "is_error": True,
+                    "error": "Mutation result rejected because exact candidate authority is missing.",
+                }
+                output["additionalContext"] = (
+                    "The mutation tool returned, but deterministic candidate-byte and workspace "
+                    "authority was not durably bound. The transaction remains pending and further "
+                    "autonomous mutation is disabled for this run."
+                )
         else:
             candidate_snapshot = RepositoryInspector(control.workspace).snapshot()
             if candidate_snapshot.fingerprint_complete:
@@ -594,11 +689,28 @@ def posttool_policy_output(
         if tool_name in _MUTATION_TOOLS and failed and not mutation_integrity_blocked:
             pending = control.pending_mutation
             if pending is not None:
-                rolled_back = control.rollback_pending_mutation(
-                    reason="mutation tool reported failure"
+                rolled_back, rollback_blocked = _rollback_failed_mutation_or_block(
+                    state,
+                    state_store,
+                    control,
+                    pending,
+                    reason="mutation tool reported failure",
                 )
-                _reconcile_rolled_back_mutation(state, pending, rolled_back)
-                if rolled_back is not None:
+                if rollback_blocked:
+                    mutation_integrity_blocked = True
+                    output["updatedToolOutput"] = {
+                        "is_error": True,
+                        "error": (
+                            "Mutation failed and rollback could not be proven safe; pending "
+                            "authority was retained."
+                        ),
+                    }
+                    output["additionalContext"] = (
+                        "The mutation failed, but rollback could not safely distinguish framework "
+                        "bytes from independently owned workspace bytes. No destructive cleanup "
+                        "was attempted; pending authority remains and further mutation is disabled."
+                    )
+                elif rolled_back is not None and not pending.candidate_required:
                     control.set_workspace_fingerprint(
                         RepositoryInspector(control.workspace).snapshot().fingerprint
                     )
@@ -643,10 +755,92 @@ def posttool_policy_output(
                         # can be durably removed. The checkpoint preserves the pending transaction
                         # if either state or runtime persistence fails at this boundary.
                         _checkpoint(state, state_store, control)
-                        control.commit_pending_mutation()
-                        control.set_workspace_fingerprint(
-                            RepositoryInspector(control.workspace).snapshot().fingerprint
-                        )
+                        pending_for_commit = control.pending_mutation
+                        if pending_for_commit is None:
+                            raise RuntimeError("mutation commit lost pending transaction authority")
+                        if not pending_for_commit.candidate_required:
+                            committed_path = control.commit_pending_mutation()
+                            if committed_path is None:
+                                raise RuntimeError(
+                                    "mutation commit lost pending transaction authority"
+                                )
+                            control.set_workspace_fingerprint(
+                                RepositoryInspector(control.workspace).snapshot().fingerprint
+                            )
+                        else:
+                            freshness_reason = _workspace_freshness_denial(
+                                state,
+                                control,
+                                tool_name=tool_name,
+                                stage="mutation_commit",
+                            )
+                            if freshness_reason is not None:
+                                failed = True
+                                mutation_integrity_blocked = True
+                                control.open_circuits.update(_MUTATION_TOOLS)
+                                _record_workspace_freshness_validation_failure(
+                                    state,
+                                    tool_name=tool_name,
+                                    tool_input=tool_input,
+                                )
+                                output["updatedToolOutput"] = {
+                                    "is_error": True,
+                                    "error": (
+                                        "Validated mutation remains pending because workspace "
+                                        "freshness changed before commit."
+                                    ),
+                                }
+                                output["additionalContext"] = (
+                                    "Deterministic validation had closed the candidate revision, "
+                                    "but the workspace no longer matched the exact candidate "
+                                    "fingerprint at the commit boundary. Rollback authority remains "
+                                    "pending and further autonomous mutation is disabled for this run."
+                                )
+                            else:
+                                try:
+                                    committed_path = control.commit_pending_mutation(
+                                        current_workspace_fingerprint=(
+                                            control.expected_workspace_fingerprint
+                                        )
+                                    )
+                                except MutationPendingError:
+                                    failed = True
+                                    mutation_integrity_blocked = True
+                                    control.open_circuits.update(_MUTATION_TOOLS)
+                                    relative_path = pending_for_commit.relative_path
+                                    if state.terminal_status in {None, TerminalStatus.SUCCESS}:
+                                        state.terminal_status = TerminalStatus.BLOCKED
+                                        state.terminal_reason = (
+                                            "Validated mutation lost exact candidate ownership "
+                                            "before commit closure"
+                                        )
+                                    _record_mutation_commit_integrity_failure(
+                                        state,
+                                        relative_path=relative_path,
+                                    )
+                                    control.journal.try_append(
+                                        "mutation_commit_denied_candidate_integrity",
+                                        path=relative_path,
+                                        revision=state.change_revision,
+                                    )
+                                    output["updatedToolOutput"] = {
+                                        "is_error": True,
+                                        "error": (
+                                            "Validated mutation remains pending because exact "
+                                            "candidate ownership changed before commit."
+                                        ),
+                                    }
+                                    output["additionalContext"] = (
+                                        "The candidate revision passed deterministic validation, "
+                                        "but candidate ownership changed at the commit boundary. No "
+                                        "commit was accepted; rollback authority remains pending and "
+                                        "further autonomous mutation is disabled for this run."
+                                    )
+                                else:
+                                    if committed_path is None:
+                                        raise RuntimeError(
+                                            "mutation commit lost pending transaction authority"
+                                        )
         effective_failed = failed or mutation_integrity_blocked
         control.record_tool_result(tool_name, failed=effective_failed)
         control.journal.append(
@@ -704,11 +898,20 @@ def posttool_failure_output(
         if tool_name in _MUTATION_TOOLS:
             pending = control.pending_mutation
             if pending is not None:
-                rolled_back = control.rollback_pending_mutation(
-                    reason="mutation tool raised an execution failure"
+                rolled_back, rollback_blocked = _rollback_failed_mutation_or_block(
+                    state,
+                    state_store,
+                    control,
+                    pending,
+                    reason="mutation tool raised an execution failure",
                 )
-                _reconcile_rolled_back_mutation(state, pending, rolled_back)
-                if rolled_back is not None:
+                if rollback_blocked:
+                    context = (
+                        "Mutation execution failed and rollback could not be proven safe. "
+                        "Independently owned workspace bytes were preserved, pending authority "
+                        "was retained, and further autonomous mutation is disabled."
+                    )
+                elif rolled_back is not None and not pending.candidate_required:
                     control.set_workspace_fingerprint(
                         RepositoryInspector(control.workspace).snapshot().fingerprint
                     )
@@ -726,7 +929,7 @@ def posttool_failure_output(
 def build_permission_handler(
     policy: PolicyEngine,
     *,
-    state: AgentRunState | None = None,
+    state: AgentRunState,
     state_store: StateStore | None = None,
     control: RuntimeControl | None = None,
 ) -> Any:
