@@ -107,7 +107,9 @@ def publish_pending_candidate(
     with control._lock:
         pending = control.pending_mutation
         if pending is None or not pending.candidate_required:
-            raise MutationPendingError("strict candidate publication requires pending strict authority")
+            raise MutationPendingError(
+                "strict candidate publication requires pending strict authority"
+            )
         if pending.relative_path != relative_path:
             raise MutationPendingError(
                 "strict candidate publication path does not match pending rollback authority"
