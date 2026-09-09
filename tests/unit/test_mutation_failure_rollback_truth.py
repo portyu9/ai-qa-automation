@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+
+import pytest
 
 from ai_qa_automation.models import AgentRunState, TerminalStatus
 from ai_qa_automation.runtime.budget import ExecutionBudget
@@ -118,3 +121,41 @@ def test_failure_hook_normalizes_unsafe_rollback_refusal(tmp_path: Path) -> None
     assert isinstance(hook, dict)
     assert "rollback" in str(hook["additionalContext"]).lower()
     _assert_blocked_preserved(control, state, store, relative, target, independent)
+
+
+def test_rollback_refusal_is_durable_before_later_failure_hook_bookkeeping(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    control, state, store, relative, target, independent = _ambiguous_failed_mutation(tmp_path)
+
+    def fail_later_bookkeeping(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("later hook bookkeeping failed")
+
+    monkeypatch.setattr(control, "record_tool_result", fail_later_bookkeeping)
+
+    with pytest.raises(RuntimeError, match="later hook bookkeeping failed"):
+        posttool_failure_output(
+            {
+                "tool_name": _TOOL,
+                "tool_input": {"proposal_evidence_id": "proposal"},
+                "error": "publisher failed",
+            },
+            state=state,
+            state_store=store,
+            control=control,
+        )
+
+    assert target.read_bytes() == independent
+    persisted = store.load()
+    assert persisted.terminal_status is TerminalStatus.BLOCKED
+    assert persisted.terminal_reason is not None
+    assert "rollback" in persisted.terminal_reason.lower()
+
+    runtime = json.loads(control.metadata_path.read_text(encoding="utf-8"))
+    pending = runtime["pending_mutation"]
+    assert isinstance(pending, dict)
+    assert pending["relative_path"] == relative
+    assert pending["candidate_required"] is True
+    assert pending["candidate_sha256"] is None
+    assert _TOOL in runtime["open_circuits"]
