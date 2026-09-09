@@ -631,9 +631,38 @@ def posttool_policy_output(
                         # can be durably removed. The checkpoint preserves the pending transaction
                         # if either state or runtime persistence fails at this boundary.
                         _checkpoint(state, state_store, control)
-                        control.commit_pending_mutation(
-                            current_workspace_fingerprint=control.expected_workspace_fingerprint
+                        freshness_reason = _workspace_freshness_denial(
+                            state,
+                            control,
+                            tool_name=tool_name,
+                            stage="mutation_commit",
                         )
+                        if freshness_reason is not None:
+                            failed = True
+                            mutation_integrity_blocked = True
+                            control.open_circuits.update(_MUTATION_TOOLS)
+                            _record_workspace_freshness_validation_failure(
+                                state,
+                                tool_name=tool_name,
+                                tool_input=tool_input,
+                            )
+                            output["updatedToolOutput"] = {
+                                "is_error": True,
+                                "error": (
+                                    "Validated mutation remains pending because workspace freshness "
+                                    "changed before commit."
+                                ),
+                            }
+                            output["additionalContext"] = (
+                                "Deterministic validation had closed the candidate revision, but the "
+                                "workspace no longer matched the exact candidate fingerprint at the "
+                                "commit boundary. Rollback authority remains pending and further "
+                                "autonomous mutation is disabled for this run."
+                            )
+                        else:
+                            control.commit_pending_mutation(
+                                current_workspace_fingerprint=control.expected_workspace_fingerprint
+                            )
         effective_failed = failed or mutation_integrity_blocked
         control.record_tool_result(tool_name, failed=effective_failed)
         control.journal.append(
