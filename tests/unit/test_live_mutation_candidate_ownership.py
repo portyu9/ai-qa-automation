@@ -380,6 +380,11 @@ def test_live_locator_prepare_uses_evidence_resolved_subject_without_raw_path(
     )
     monkeypatch.setattr(
         services,
+        "_live_mutation_original_sha256",
+        lambda _proposal_id: _sha256(original),
+    )
+    monkeypatch.setattr(
+        services,
         "_observe_live_mutation_context",
         lambda *_args, **_kwargs: (
             _PRE_WORKSPACE_FINGERPRINT,
