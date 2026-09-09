@@ -65,6 +65,7 @@ def _renameat2_noreplace(
         error = ctypes.get_errno()
         raise OSError(error, os.strerror(error))
 
+
 _PENDING_ROOT_AUTHORITY_LOCK = RLock()
 _PENDING_ROOT_AUTHORITIES: dict[str, tuple[tuple[int, int], str]] = {}
 
@@ -525,7 +526,6 @@ def atomic_write_bytes_confined(
                     os.unlink(temp_name, dir_fd=parent_fd)
 
 
-
 def move_file_noreplace_between_confined_roots(
     source_root: Path,
     source_relative_path: str | Path,
@@ -655,6 +655,7 @@ def move_file_noreplace_between_confined_roots(
         expected_root_identity=expected_destination_root_identity,
     )
     return source_identity
+
 
 def append_bytes_confined(
     root: Path,
