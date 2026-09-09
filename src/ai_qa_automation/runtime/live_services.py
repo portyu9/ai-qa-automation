@@ -44,7 +44,9 @@ class LiveRuntimeServices(_LegacyLiveRuntimeServices):
             or proposal.run_id != self.state.run_id
             or proposal.id not in self.state.evidence_ids
         ):
-            raise PermissionError("live locator mutation proposal lacks trusted same-run provenance")
+            raise PermissionError(
+                "live locator mutation proposal lacks trusted same-run provenance"
+            )
         repair_subject_id = data.get("repair_subject_id")
         if not isinstance(repair_subject_id, str) or not repair_subject_id:
             raise PermissionError("live locator mutation proposal lost repair subject identity")
@@ -59,7 +61,9 @@ class LiveRuntimeServices(_LegacyLiveRuntimeServices):
         except LocatorRepairAuthorityError as exc:
             raise PermissionError("live locator mutation subject authority is invalid") from exc
         if proposal.source_identifier != repair_subject_id or data.get("path") != authority.path:
-            raise PermissionError("live locator mutation proposal does not match repair subject path")
+            raise PermissionError(
+                "live locator mutation proposal does not match repair subject path"
+            )
         return authority.path
 
     def _observe_live_mutation_context(self, relative_path: str) -> tuple[str, str]:
@@ -73,8 +77,7 @@ class LiveRuntimeServices(_LegacyLiveRuntimeServices):
         if not complete:
             rendered = ", ".join(reasons) or "unspecified"
             raise RuntimeError(
-                "live mutation workspace context could not be bound completely "
-                f"({rendered})"
+                f"live mutation workspace context could not be bound completely ({rendered})"
             )
         return workspace_fingerprint, context_fingerprint
 
@@ -215,8 +218,7 @@ class LiveRuntimeServices(_LegacyLiveRuntimeServices):
             )
         except (OSError, RuntimeError, ValueError) as exc:
             self._block_live_mutation_integrity(
-                "live mutation pre-state could not be observed completely: "
-                f"{type(exc).__name__}"
+                f"live mutation pre-state could not be observed completely: {type(exc).__name__}"
             )
         if pre_workspace_fingerprint != self.control.expected_workspace_fingerprint:
             self._block_live_mutation_integrity(
