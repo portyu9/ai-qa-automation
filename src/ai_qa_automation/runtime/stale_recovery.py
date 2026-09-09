@@ -102,7 +102,10 @@ def _load_metadata(
     except (OSError, RuntimeError, ValueError) as exc:
         return {"status": "BLOCKED", "reason": str(exc)}
     if metadata.get("workspace") != str(workspace.expanduser().resolve()):
-        return {"status": "BLOCKED", "reason": "prior runtime workspace does not match lease workspace"}
+        return {
+            "status": "BLOCKED",
+            "reason": "prior runtime workspace does not match lease workspace",
+        }
     return metadata, prior_run_dir, run_identity
 
 
@@ -163,7 +166,10 @@ def recover_stale_mutation(
         "workspace changed after crashed mutation; automatic rollback would risk overwriting newer work",
         "workspace changed after a durable stale recovery event; automatic recovery closure would risk accepting newer work",
     }
-    if preflight.get("status") != "BLOCKED" or preflight.get("reason") not in expected_preflight_reasons:
+    if (
+        preflight.get("status") != "BLOCKED"
+        or preflight.get("reason") not in expected_preflight_reasons
+    ):
         return preflight
 
     relative_path = pending.get("relative_path")
@@ -172,13 +178,23 @@ def recover_stale_mutation(
     if not isinstance(relative_path, str) or not relative_path:
         return {"status": "BLOCKED", "reason": "prior pending mutation path is missing or invalid"}
     if type(change_revision_before) is not int or change_revision_before < 0:
-        return {"status": "BLOCKED", "reason": "prior pending mutation change_revision_before authority is invalid"}
+        return {
+            "status": "BLOCKED",
+            "reason": "prior pending mutation change_revision_before authority is invalid",
+        }
     if type(existed) is not bool:
         return {"status": "BLOCKED", "reason": "prior pending mutation existed flag is invalid"}
 
     prior_lease_id = previous_lease.get("lease_id")
-    if not isinstance(prior_lease_id, str) or not prior_lease_id or metadata.get("lease_id") != prior_lease_id:
-        return {"status": "BLOCKED", "reason": "prior runtime lease identity does not match stale-recovery lease authority"}
+    if (
+        not isinstance(prior_lease_id, str)
+        or not prior_lease_id
+        or metadata.get("lease_id") != prior_lease_id
+    ):
+        return {
+            "status": "BLOCKED",
+            "reason": "prior runtime lease identity does not match stale-recovery lease authority",
+        }
 
     try:
         journal_count = _legacy._validated_journal_event_count(metadata)
@@ -189,9 +205,11 @@ def recover_stale_mutation(
         )
         journal_status = journal.verify(include_last_record=True)
     except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
-        return {"status": "BLOCKED", "reason": f"prior run journal could not be verified: {type(exc).__name__}"}
+        return {
+            "status": "BLOCKED",
+            "reason": f"prior run journal could not be verified: {type(exc).__name__}",
+        }
     binding = _legacy.validate_runtime_journal_binding(metadata, journal_status)
-    recovery_actor: str | None = None
     recovered_fingerprint: str | None = None
     recovery_event_recorded = False
     if not binding["valid"]:
@@ -203,8 +221,11 @@ def recover_stale_mutation(
             change_revision_before=change_revision_before,
         )
         if resumed is None:
-            return {"status": "BLOCKED", "reason": f"prior runtime journal authority is invalid: {binding['reason']}"}
-        recovery_actor, recovered_fingerprint = resumed
+            return {
+                "status": "BLOCKED",
+                "reason": f"prior runtime journal authority is invalid: {binding['reason']}",
+            }
+        _recovery_actor, recovered_fingerprint = resumed
         recovery_event_recorded = True
 
     try:
@@ -216,7 +237,12 @@ def recover_stale_mutation(
 
     backup_raw = pending.get("backup_path")
     original_sha = pending.get("original_sha256")
-    if not existed or not isinstance(backup_raw, str) or not backup_raw or not _is_sha256_hex(original_sha):
+    if (
+        not existed
+        or not isinstance(backup_raw, str)
+        or not backup_raw
+        or not _is_sha256_hex(original_sha)
+    ):
         return {
             "status": "BLOCKED",
             "previous_run_id": previous_run_id,
@@ -235,10 +261,16 @@ def recover_stale_mutation(
         return {"status": "BLOCKED", "reason": "prior rollback backup is unavailable"}
     except (RuntimeError, ValueError) as exc:
         if "exceeds" in str(exc) and "ingestion limit" in str(exc):
-            return {"status": "BLOCKED", "reason": "prior rollback backup exceeds 2 MB recovery safety limit"}
+            return {
+                "status": "BLOCKED",
+                "reason": "prior rollback backup exceeds 2 MB recovery safety limit",
+            }
         return {"status": "BLOCKED", "reason": str(exc)}
     if hashlib.sha256(backup_data).hexdigest() != original_sha:
-        return {"status": "BLOCKED", "reason": "prior rollback backup failed integrity verification"}
+        return {
+            "status": "BLOCKED",
+            "reason": "prior rollback backup failed integrity verification",
+        }
 
     candidate_sha = pending.get("candidate_sha256")
     candidate_fingerprint = pending.get("candidate_workspace_fingerprint")
@@ -255,32 +287,77 @@ def recover_stale_mutation(
             "reason": "prior pending mutation lacks exact candidate ownership authority; automatic destructive recovery is disabled and manual reconciliation is required",
         }
     if metadata.get("workspace_fingerprint") != candidate_fingerprint:
-        return {"status": "BLOCKED", "previous_run_id": previous_run_id, "reason": "prior runtime workspace authority is not bound to the exact mutation candidate"}
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": previous_run_id,
+            "reason": "prior runtime workspace authority is not bound to the exact mutation candidate",
+        }
 
     proof_relative = mutation_candidate_proof_relative_path(relative_path, candidate_sha)
     try:
-        proof_sha = _sha256_or_none(prior_run_dir, proof_relative, label="stale mutation candidate proof", root_identity=run_identity)
-        target_sha = _sha256_or_none(workspace, relative_path, label="stale recovery target", root_identity=workspace_identity)
+        proof_sha = _sha256_or_none(
+            prior_run_dir,
+            proof_relative,
+            label="stale mutation candidate proof",
+            root_identity=run_identity,
+        )
+        target_sha = _sha256_or_none(
+            workspace,
+            relative_path,
+            label="stale recovery target",
+            root_identity=workspace_identity,
+        )
     except (OSError, RuntimeError, ValueError) as exc:
-        return {"status": "BLOCKED", "previous_run_id": previous_run_id, "reason": f"stale candidate ownership could not be observed safely: {type(exc).__name__}"}
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": previous_run_id,
+            "reason": f"stale candidate ownership could not be observed safely: {type(exc).__name__}",
+        }
 
     if recovery_event_recorded:
         if current_workspace_fingerprint != recovered_fingerprint:
-            return {"status": "BLOCKED", "previous_run_id": previous_run_id, "reason": "workspace changed after a durable stale recovery event; automatic recovery closure would risk accepting newer work"}
+            return {
+                "status": "BLOCKED",
+                "previous_run_id": previous_run_id,
+                "reason": "workspace changed after a durable stale recovery event; automatic recovery closure would risk accepting newer work",
+            }
         if proof_sha != candidate_sha:
-            return {"status": "BLOCKED", "previous_run_id": previous_run_id, "reason": "durable stale recovery event lost its exact candidate proof; pending authority was retained for manual reconciliation"}
+            return {
+                "status": "BLOCKED",
+                "previous_run_id": previous_run_id,
+                "reason": "durable stale recovery event lost its exact candidate proof; pending authority was retained for manual reconciliation",
+            }
         if recovered_fingerprint != pre_fingerprint:
-            return {"status": "BLOCKED", "previous_run_id": previous_run_id, "reason": "durable stale recovery event is not bound to the persisted pre-mutation workspace subject"}
+            return {
+                "status": "BLOCKED",
+                "previous_run_id": previous_run_id,
+                "reason": "durable stale recovery event is not bound to the persisted pre-mutation workspace subject",
+            }
         if target_sha != original_sha:
-            return {"status": "BLOCKED", "previous_run_id": previous_run_id, "reason": "durable stale recovery event does not match the current rollback target bytes; pending authority was retained for manual reconciliation"}
+            return {
+                "status": "BLOCKED",
+                "previous_run_id": previous_run_id,
+                "reason": "durable stale recovery event does not match the current rollback target bytes; pending authority was retained for manual reconciliation",
+            }
     else:
         if proof_sha is None:
             if target_sha == original_sha:
                 if current_workspace_fingerprint != pre_fingerprint:
-                    return {"status": "BLOCKED", "previous_run_id": previous_run_id, "reason": "stale mutation target is original but the full workspace does not match the persisted pre-mutation subject"}
+                    return {
+                        "status": "BLOCKED",
+                        "previous_run_id": previous_run_id,
+                        "reason": "stale mutation target is original but the full workspace does not match the persisted pre-mutation subject",
+                    }
             else:
-                if current_workspace_fingerprint != candidate_fingerprint or target_sha != candidate_sha:
-                    return {"status": "BLOCKED", "previous_run_id": previous_run_id, "reason": "workspace changed after crashed mutation; automatic rollback would risk overwriting newer work"}
+                if (
+                    current_workspace_fingerprint != candidate_fingerprint
+                    or target_sha != candidate_sha
+                ):
+                    return {
+                        "status": "BLOCKED",
+                        "previous_run_id": previous_run_id,
+                        "reason": "workspace changed after crashed mutation; automatic rollback would risk overwriting newer work",
+                    }
                 try:
                     move_file_noreplace_between_confined_roots(
                         workspace,
@@ -292,14 +369,33 @@ def recover_stale_mutation(
                         expected_source_root_identity=workspace_identity,
                         expected_destination_root_identity=run_identity,
                     )
-                    proof_sha = _sha256_or_none(prior_run_dir, proof_relative, label="stale mutation candidate proof", root_identity=run_identity)
+                    proof_sha = _sha256_or_none(
+                        prior_run_dir,
+                        proof_relative,
+                        label="stale mutation candidate proof",
+                        root_identity=run_identity,
+                    )
                 except FileExistsError:
-                    proof_sha = _sha256_or_none(prior_run_dir, proof_relative, label="stale mutation candidate proof", root_identity=run_identity)
+                    proof_sha = _sha256_or_none(
+                        prior_run_dir,
+                        proof_relative,
+                        label="stale mutation candidate proof",
+                        root_identity=run_identity,
+                    )
                 except (OSError, RuntimeError, ValueError) as exc:
-                    return {"status": "BLOCKED", "previous_run_id": previous_run_id, "reason": f"stale candidate could not be atomically claimed: {type(exc).__name__}"}
+                    return {
+                        "status": "BLOCKED",
+                        "previous_run_id": previous_run_id,
+                        "reason": f"stale candidate could not be atomically claimed: {type(exc).__name__}",
+                    }
         if proof_sha != candidate_sha:
             try:
-                current_after_claim = _sha256_or_none(workspace, relative_path, label="stale recovery target", root_identity=workspace_identity)
+                current_after_claim = _sha256_or_none(
+                    workspace,
+                    relative_path,
+                    label="stale recovery target",
+                    root_identity=workspace_identity,
+                )
             except (OSError, RuntimeError, ValueError):
                 current_after_claim = "unreadable"
             if proof_sha is not None and current_after_claim is None:
@@ -312,10 +408,23 @@ def recover_stale_mutation(
                     workspace_identity=workspace_identity,
                 )
                 if restore_error is not None:
-                    return {"status": "BLOCKED", "previous_run_id": previous_run_id, "reason": restore_error}
-            return {"status": "BLOCKED", "previous_run_id": previous_run_id, "reason": "run-owned stale candidate proof does not match the exact candidate bytes"}
+                    return {
+                        "status": "BLOCKED",
+                        "previous_run_id": previous_run_id,
+                        "reason": restore_error,
+                    }
+            return {
+                "status": "BLOCKED",
+                "previous_run_id": previous_run_id,
+                "reason": "run-owned stale candidate proof does not match the exact candidate bytes",
+            }
 
-        target_sha = _sha256_or_none(workspace, relative_path, label="stale recovery target", root_identity=workspace_identity)
+        target_sha = _sha256_or_none(
+            workspace,
+            relative_path,
+            label="stale recovery target",
+            root_identity=workspace_identity,
+        )
         if target_sha is None:
             try:
                 atomic_write_bytes_confined(
@@ -328,16 +437,46 @@ def recover_stale_mutation(
                     expected_root_identity=workspace_identity,
                 )
             except FileExistsError:
-                return {"status": "BLOCKED", "previous_run_id": previous_run_id, "reason": "stale rollback target was concurrently repopulated; newer bytes were preserved and pending authority remains open"}
+                return {
+                    "status": "BLOCKED",
+                    "previous_run_id": previous_run_id,
+                    "reason": "stale rollback target was concurrently repopulated; newer bytes were preserved and pending authority remains open",
+                }
             except (OSError, RuntimeError, ValueError) as exc:
-                return {"status": "BLOCKED", "previous_run_id": previous_run_id, "reason": f"stale rollback target could not be restored safely: {type(exc).__name__}"}
+                return {
+                    "status": "BLOCKED",
+                    "previous_run_id": previous_run_id,
+                    "reason": f"stale rollback target could not be restored safely: {type(exc).__name__}",
+                }
         elif target_sha != original_sha:
-            return {"status": "BLOCKED", "previous_run_id": previous_run_id, "reason": "stale rollback target contains newer bytes; refusing to overwrite them"}
-        if _sha256_or_none(workspace, relative_path, label="stale recovery target", root_identity=workspace_identity) != original_sha:
-            return {"status": "BLOCKED", "previous_run_id": previous_run_id, "reason": "stale rollback target changed after restoration; pending authority was retained"}
-        recovered_fingerprint = _legacy._observe_recovered_workspace_fingerprint(workspace, expected_workspace_identity=workspace_identity)
+            return {
+                "status": "BLOCKED",
+                "previous_run_id": previous_run_id,
+                "reason": "stale rollback target contains newer bytes; refusing to overwrite them",
+            }
+        if (
+            _sha256_or_none(
+                workspace,
+                relative_path,
+                label="stale recovery target",
+                root_identity=workspace_identity,
+            )
+            != original_sha
+        ):
+            return {
+                "status": "BLOCKED",
+                "previous_run_id": previous_run_id,
+                "reason": "stale rollback target changed after restoration; pending authority was retained",
+            }
+        recovered_fingerprint = _legacy._observe_recovered_workspace_fingerprint(
+            workspace, expected_workspace_identity=workspace_identity
+        )
         if recovered_fingerprint != pre_fingerprint:
-            return {"status": "BLOCKED", "previous_run_id": previous_run_id, "reason": "stale mutation target was restored but unrelated workspace state does not match the persisted pre-mutation subject; pending authority was retained"}
+            return {
+                "status": "BLOCKED",
+                "previous_run_id": previous_run_id,
+                "reason": "stale mutation target was restored but unrelated workspace state does not match the persisted pre-mutation subject; pending authority was retained",
+            }
         try:
             recorded = journal.try_append(
                 "stale_mutation_recovered",
@@ -352,8 +491,11 @@ def recover_stale_mutation(
         except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
             recorded = False
         if not recorded:
-            return {"status": "BLOCKED", "previous_run_id": previous_run_id, "reason": "stale mutation bytes were restored but the recovery journal event could not be durably recorded; rollback authority was retained and manual reconciliation is required"}
-        recovery_actor = recovering_run_id
+            return {
+                "status": "BLOCKED",
+                "previous_run_id": previous_run_id,
+                "reason": "stale mutation bytes were restored but the recovery journal event could not be durably recorded; rollback authority was retained and manual reconciliation is required",
+            }
 
     closure = _legacy.recover_stale_mutation(
         artifact_root=artifact_root,
