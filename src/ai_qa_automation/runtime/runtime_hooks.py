@@ -29,7 +29,13 @@ from ..state import StateStore
 from ..tools.repository import RepositoryInspector
 from .budget import BudgetExceededError
 from .mutation_lineage import reconcile_rolled_back_mutation
-from .run_control import CircuitOpenError, PendingMutation, RepeatedActionError, RuntimeControl
+from .run_control import (
+    CircuitOpenError,
+    MutationPendingError,
+    PendingMutation,
+    RepeatedActionError,
+    RuntimeControl,
+)
 from .tool_input_bounds import ToolInputBoundsError, tool_input_fingerprint, validate_tool_request
 from .tool_output_bounds import (
     ToolOutputBoundsError,
@@ -145,6 +151,31 @@ def _record_workspace_freshness_validation_failure(
                 "tool_name": tool_name,
                 "scope": "post_execution_workspace_drift",
                 "input_hash": fingerprint,
+            },
+        )
+    )
+
+
+def _record_mutation_commit_integrity_failure(
+    state: AgentRunState,
+    *,
+    relative_path: str,
+) -> None:
+    """Poison closure when candidate ownership changes after deterministic validation."""
+
+    state.validation_results.append(
+        ValidationResult(
+            name="mutation_commit_integrity",
+            gate_id=f"mutation_commit_integrity:{state.change_revision}:{relative_path}",
+            revision=state.change_revision,
+            status=ValidationStatus.NOT_VERIFIED,
+            summary=(
+                "Validated mutation could not commit because exact candidate ownership changed "
+                "at the closure boundary."
+            ),
+            details={
+                "scope": "mutation_commit_candidate_integrity",
+                "path": relative_path,
             },
         )
     )
@@ -660,9 +691,55 @@ def posttool_policy_output(
                                 "autonomous mutation is disabled for this run."
                             )
                         else:
-                            control.commit_pending_mutation(
-                                current_workspace_fingerprint=control.expected_workspace_fingerprint
-                            )
+                            pending_for_commit = control.pending_mutation
+                            try:
+                                committed_path = control.commit_pending_mutation(
+                                    current_workspace_fingerprint=(
+                                        control.expected_workspace_fingerprint
+                                    )
+                                )
+                            except MutationPendingError:
+                                failed = True
+                                mutation_integrity_blocked = True
+                                control.open_circuits.update(_MUTATION_TOOLS)
+                                relative_path = (
+                                    pending_for_commit.relative_path
+                                    if pending_for_commit is not None
+                                    else "unknown"
+                                )
+                                if state.terminal_status in {None, TerminalStatus.SUCCESS}:
+                                    state.terminal_status = TerminalStatus.BLOCKED
+                                    state.terminal_reason = (
+                                        "Validated mutation lost exact candidate ownership before "
+                                        "commit closure"
+                                    )
+                                _record_mutation_commit_integrity_failure(
+                                    state,
+                                    relative_path=relative_path,
+                                )
+                                control.journal.try_append(
+                                    "mutation_commit_denied_candidate_integrity",
+                                    path=relative_path,
+                                    revision=state.change_revision,
+                                )
+                                output["updatedToolOutput"] = {
+                                    "is_error": True,
+                                    "error": (
+                                        "Validated mutation remains pending because exact candidate "
+                                        "ownership changed before commit."
+                                    ),
+                                }
+                                output["additionalContext"] = (
+                                    "The candidate revision passed deterministic validation, but "
+                                    "candidate ownership changed at the commit boundary. No commit "
+                                    "was accepted; rollback authority remains pending and further "
+                                    "autonomous mutation is disabled for this run."
+                                )
+                            else:
+                                if committed_path is None:
+                                    raise RuntimeError(
+                                        "mutation commit lost pending transaction authority"
+                                    )
         effective_failed = failed or mutation_integrity_blocked
         control.record_tool_result(tool_name, failed=effective_failed)
         control.journal.append(
