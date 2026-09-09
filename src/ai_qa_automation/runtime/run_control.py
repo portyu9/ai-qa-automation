@@ -295,7 +295,12 @@ class RuntimeControl:
                     raise MutationPendingError(
                         "strict mutation target filesystem authority could not be verified"
                     ) from exc
-                if target_status.st_dev != self.persistence_root_identity[0]:
+                persistence_root_identity = self.persistence_root_identity
+                if persistence_root_identity is None:
+                    raise MutationPendingError(
+                        "strict mutation lost run recovery root authority before backup preparation"
+                    )
+                if target_status.st_dev != persistence_root_identity[0]:
                     raise MutationPendingError(
                         "strict mutation target and run recovery root must share one filesystem"
                     )
