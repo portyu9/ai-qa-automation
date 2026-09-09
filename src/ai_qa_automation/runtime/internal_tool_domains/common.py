@@ -17,6 +17,7 @@ from ...network_authority import (
 )
 from ...policy import PolicyEngine
 from ...state import StateStore
+from ...tools.safe_patch import SafeTestPatcher
 from ...tools.test_execution import TestRunner
 from ..model_source_observation import CoverageSearchObservation, search_test_coverage_confined
 from ..validation_truth import evaluate_revision_closure
@@ -190,6 +191,11 @@ class RuntimeServices:
     def checkpoint(self) -> None:
         if self.state_store is not None:
             self.state_store.save(self.state)
+
+    def build_safe_test_patcher(self) -> SafeTestPatcher:
+        """Build the default patcher; live runtimes may narrow publication authority."""
+
+        return SafeTestPatcher(self.workspace, self.policy)
 
     def network_hosts(self, url: str) -> set[str]:
         authorize_network_url(
