@@ -22,10 +22,6 @@ from ai_qa_automation.runtime.run_control import (
     RuntimeControl,
     mutation_candidate_proof_relative_path,
 )
-from ai_qa_automation.runtime.workspace_freshness import (
-    WorkspaceFreshness,
-    WorkspaceFreshnessCode,
-)
 from ai_qa_automation.state import StateStore
 
 _PRE_WORKSPACE_FINGERPRINT = "sha256:" + "1" * 64
@@ -373,12 +369,9 @@ def test_live_locator_prepare_uses_evidence_resolved_subject_without_raw_path(
         control=subject,
     )
     monkeypatch.setattr(
-        live_services_module,
-        "observe_workspace_freshness",
-        lambda *_args, **_kwargs: WorkspaceFreshness(
-            WorkspaceFreshnessCode.FRESH,
-            "fresh",
-        ),
+        services,
+        "_require_workspace_freshness",
+        lambda **_kwargs: None,
     )
     monkeypatch.setattr(
         services,
