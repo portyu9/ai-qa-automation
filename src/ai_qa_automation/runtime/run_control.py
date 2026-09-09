@@ -406,7 +406,9 @@ class RuntimeControl:
             or candidate_sha256.lower() != candidate_sha256
             or any(character not in "0123456789abcdef" for character in candidate_sha256)
         ):
-            raise ValueError("mutation candidate sha256 must be 64 lowercase hexadecimal characters")
+            raise ValueError(
+                "mutation candidate sha256 must be 64 lowercase hexadecimal characters"
+            )
 
     def _pending_target_sha256(self, pending: PendingMutation) -> str | None:
         try:
@@ -449,9 +451,8 @@ class RuntimeControl:
                     "mutation candidate path does not match pending rollback authority"
                 )
             self._validate_candidate_sha256(candidate_sha256)
-            if (
-                candidate_workspace_fingerprint is not None
-                and not _is_sha256_fingerprint(candidate_workspace_fingerprint)
+            if candidate_workspace_fingerprint is not None and not _is_sha256_fingerprint(
+                candidate_workspace_fingerprint
             ):
                 raise ValueError(
                     "mutation candidate workspace fingerprint must be sha256:<64 lowercase hex>"
@@ -465,7 +466,9 @@ class RuntimeControl:
                 raise MutationPendingError("mutation candidate is identical to the original target")
             if pending.candidate_sha256 is not None:
                 if pending.candidate_sha256 != candidate_sha256:
-                    raise MutationPendingError("mutation candidate ownership is already bound differently")
+                    raise MutationPendingError(
+                        "mutation candidate ownership is already bound differently"
+                    )
                 if (
                     candidate_workspace_fingerprint is not None
                     and pending.candidate_workspace_fingerprint
