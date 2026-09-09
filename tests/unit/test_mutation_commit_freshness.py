@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -125,7 +126,16 @@ def test_commit_reproves_candidate_workspace_after_canonical_closure_checkpoint(
         and item.revision == state.change_revision
         for item in state.validation_results
     )
-    assert '"stage":"mutation_commit"' in control.journal.path.read_text(encoding="utf-8")
+    journal_records = [
+        json.loads(line)
+        for line in control.journal.path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    assert any(
+        record.get("event") == "workspace_freshness_denied"
+        and record.get("payload", {}).get("stage") == "mutation_commit"
+        for record in journal_records
+    )
 
     persisted = state_store.load()
     assert persisted.terminal_status is TerminalStatus.BLOCKED
