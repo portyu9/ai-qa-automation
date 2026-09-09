@@ -13,6 +13,9 @@ from ai_qa_automation.models import (
     ValidationResult,
     ValidationStatus,
 )
+from ai_qa_automation.runtime._stale_recovery_legacy import (
+    recover_stale_mutation as recover_legacy_stale_mutation,
+)
 from ai_qa_automation.runtime.journal import RunJournal
 from ai_qa_automation.runtime.recovery import inspect_recovery
 from ai_qa_automation.runtime.stale_recovery import recover_stale_mutation
@@ -172,6 +175,27 @@ def recover(
     if lease_id is not None:
         previous_lease["lease_id"] = lease_id
     return recover_stale_mutation(
+        artifact_root=artifact_root,
+        workspace=workspace,
+        previous_lease=previous_lease,
+        current_workspace_fingerprint=fingerprint,
+        recovering_run_id="run-new",
+    )
+
+
+def recover_legacy(
+    artifact_root: Path,
+    workspace: Path,
+    *,
+    fingerprint: str = "fp",
+) -> dict[str, object]:
+    prior_run = artifact_root / "run-old"
+    status = prior_run.stat(follow_symlinks=False)
+    previous_lease: dict[str, object] = {
+        "run_id": "run-old",
+        "run_root_identity": {"device": status.st_dev, "inode": status.st_ino},
+    }
+    return recover_legacy_stale_mutation(
         artifact_root=artifact_root,
         workspace=workspace,
         previous_lease=previous_lease,
@@ -412,7 +436,7 @@ def test_operator_edit_after_crash_blocks_automatic_rollback(tmp_path: Path) -> 
         ),
     )
 
-    result = recover(artifact_root, workspace, fingerprint="new-human-fingerprint")
+    result = recover_legacy(artifact_root, workspace, fingerprint="new-human-fingerprint")
 
     assert result["status"] == "BLOCKED"
     assert "overwriting newer work" in str(result["reason"])
@@ -539,7 +563,7 @@ def test_stale_recovery_rejects_symlinked_rollback_backup(tmp_path: Path) -> Non
         ),
     )
 
-    result = recover(artifact_root, workspace)
+    result = recover_legacy(artifact_root, workspace)
 
     assert result["status"] == "BLOCKED"
     assert "symlink" in str(result["reason"])
@@ -578,7 +602,7 @@ def test_stale_recovery_rejects_symlinked_rollback_directory(tmp_path: Path) -> 
         ),
     )
 
-    result = recover(artifact_root, workspace)
+    result = recover_legacy(artifact_root, workspace)
 
     assert result["status"] == "BLOCKED"
     assert "rollback directory" in str(result["reason"])
@@ -701,7 +725,7 @@ def test_oversized_rollback_backup_is_blocked_before_read(tmp_path: Path) -> Non
         ),
     )
 
-    result = recover(artifact_root, workspace)
+    result = recover_legacy(artifact_root, workspace)
 
     assert result["status"] == "BLOCKED"
     assert "2 MB" in str(result["reason"])
