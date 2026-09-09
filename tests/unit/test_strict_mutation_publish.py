@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import pytest
 
+import ai_qa_automation.runtime.live_services as live_services_module
 import ai_qa_automation.runtime.strict_mutation_publish as strict_publish_module
 from ai_qa_automation.models import (
     AgentRunState,
@@ -323,12 +324,7 @@ def test_live_consume_preserves_writer_during_post_prepare_reproof(
     services = _live_services(tmp_path, control, state, _FakeEvidence(proposal))
     monkeypatch.setattr(services, "_require_workspace_freshness", lambda **_kwargs: None)
     monkeypatch.setattr(
-        strict_publish_module,
-        "publish_pending_candidate",
-        strict_publish_module.publish_pending_candidate,
-    )
-    monkeypatch.setattr(
-        __import__("ai_qa_automation.runtime.live_services", fromlist=["x"]),
+        live_services_module,
         "resolve_locator_repair_authority",
         lambda **_kwargs: SimpleNamespace(
             path=relative,
