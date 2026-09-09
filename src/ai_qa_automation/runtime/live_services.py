@@ -5,12 +5,24 @@ from typing import Any, NoReturn
 
 from ..models import EvidenceKind, EvidenceNature, TerminalStatus, ToolDecision
 from ..tools.repository import RepositoryInspector
+from ..tools.safe_patch import SafeTestPatcher
 from ._live_services_legacy import LiveRuntimeServices as _LegacyLiveRuntimeServices
 from .internal_tools import RuntimeServices
 from .locator_repair import LocatorRepairAuthorityError, resolve_locator_repair_authority
+from .run_control import MutationPendingError
+from .strict_mutation_publish import publish_pending_candidate
 from .tool_input_bounds import validate_tool_request
 
 _LIVE_MUTATION_TOOL_NAMES = frozenset({"apply_locator_heal"})
+
+
+def _is_sha256_hex(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and value == value.lower()
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 class LiveRuntimeServices(_LegacyLiveRuntimeServices):
@@ -60,11 +72,25 @@ class LiveRuntimeServices(_LegacyLiveRuntimeServices):
             )
         except LocatorRepairAuthorityError as exc:
             raise PermissionError("live locator mutation subject authority is invalid") from exc
-        if proposal.source_identifier != repair_subject_id or data.get("path") != authority.path:
+        if (
+            proposal.source_identifier != repair_subject_id
+            or data.get("path") != authority.path
+            or data.get("expected_sha256") != authority.expected_sha256
+        ):
             raise PermissionError(
-                "live locator mutation proposal does not match repair subject path"
+                "live locator mutation proposal does not match repair subject path and bytes"
             )
         return authority.path
+
+    def _live_mutation_original_sha256(self, proposal_id: str) -> str:
+        try:
+            proposal = self.evidence.get(proposal_id)
+        except KeyError as exc:  # pragma: no cover - path resolution already proved availability
+            raise RuntimeError("live mutation proposal disappeared after subject resolution") from exc
+        expected = proposal.structured_data.get("expected_sha256")
+        if not _is_sha256_hex(expected):
+            raise PermissionError("live locator mutation proposal has invalid original-byte authority")
+        return expected
 
     def _observe_live_mutation_context(self, relative_path: str) -> tuple[str, str]:
         inspector = RepositoryInspector(
@@ -92,6 +118,44 @@ class LiveRuntimeServices(_LegacyLiveRuntimeServices):
         self.control.persist()
         raise RuntimeError(reason)
 
+    def _abort_prepared_live_mutation(self, reason: str) -> NoReturn:
+        if self.control is None:  # pragma: no cover - constructor guard
+            raise RuntimeError("live runtime services lost RuntimeControl")
+        rollback_note = ""
+        if self.control.pending_mutation is not None:
+            try:
+                self.control.rollback_pending_mutation(reason=reason)
+            except (MutationPendingError, OSError, RuntimeError, ValueError) as exc:
+                rollback_note = (
+                    "; rollback could not be proven safe and pending authority was retained: "
+                    f"{type(exc).__name__}"
+                )
+        self._block_live_mutation_integrity(reason + rollback_note)
+
+    def _publish_live_mutation_candidate(
+        self,
+        relative_path: str,
+        expected_original_sha256: str,
+        candidate_bytes: bytes,
+    ) -> str:
+        if self.control is None:  # pragma: no cover - constructor guard
+            raise RuntimeError("live runtime services lost RuntimeControl")
+        return publish_pending_candidate(
+            self.control,
+            relative_path=relative_path,
+            expected_original_sha256=expected_original_sha256,
+            candidate_bytes=candidate_bytes,
+        )
+
+    def build_safe_test_patcher(self) -> SafeTestPatcher:
+        """Bind strict live patch publication to the current pending transaction."""
+
+        return SafeTestPatcher(
+            self.workspace,
+            self.policy,
+            candidate_publisher=self._publish_live_mutation_candidate,
+        )
+
     def _bind_active_mutation_candidate(self) -> None:
         if self.control is None:  # pragma: no cover - constructor guard
             raise RuntimeError("live runtime services lost RuntimeControl")
@@ -99,41 +163,51 @@ class LiveRuntimeServices(_LegacyLiveRuntimeServices):
         if pending is None or not pending.candidate_required:
             return
 
-        candidate_sha256 = pending.candidate_sha256
-        if candidate_sha256 is None:
-            for evidence_id in reversed(self.state.evidence_ids):
-                try:
-                    item = self.evidence.get(evidence_id)
-                except KeyError:
-                    continue
-                if (
-                    item.kind is not EvidenceKind.GIT_DIFF
-                    or item.nature is not EvidenceNature.OBSERVED_FACT
-                    or item.source != "safe_test_patcher"
-                    or item.run_id != self.state.run_id
-                ):
-                    continue
-                path = item.structured_data.get("path")
-                observed_sha256 = item.structured_data.get("new_sha256")
-                proposal_evidence_id = item.structured_data.get("proposal_evidence_id")
-                if (
-                    path != pending.relative_path
-                    or not isinstance(observed_sha256, str)
-                    or not isinstance(proposal_evidence_id, str)
-                    or proposal_evidence_id != self._active_mutation_proposal_id
-                    or item.source_identifier != proposal_evidence_id
-                ):
-                    continue
-                candidate_sha256 = observed_sha256
-                break
-            if candidate_sha256 is None:
-                raise RuntimeError(
-                    "live mutation produced no exact candidate evidence; "
-                    "pending rollback authority remains open"
-                )
+        matching_candidates: list[str] = []
+        for evidence_id in reversed(self.state.evidence_ids):
+            try:
+                item = self.evidence.get(evidence_id)
+            except KeyError:
+                continue
+            if (
+                item.kind is not EvidenceKind.GIT_DIFF
+                or item.nature is not EvidenceNature.OBSERVED_FACT
+                or item.source != "safe_test_patcher"
+                or item.run_id != self.state.run_id
+            ):
+                continue
+            path = item.structured_data.get("path")
+            observed_sha256 = item.structured_data.get("new_sha256")
+            proposal_evidence_id = item.structured_data.get("proposal_evidence_id")
+            if (
+                path != pending.relative_path
+                or not _is_sha256_hex(observed_sha256)
+                or not isinstance(proposal_evidence_id, str)
+                or proposal_evidence_id != self._active_mutation_proposal_id
+                or item.source_identifier != proposal_evidence_id
+            ):
+                continue
+            matching_candidates.append(observed_sha256)
+
+        if len(matching_candidates) != 1:
+            reason = (
+                "live mutation produced no exact candidate evidence; pending rollback authority "
+                "remains open"
+                if not matching_candidates
+                else "live mutation produced ambiguous exact candidate evidence; pending rollback "
+                "authority remains open"
+            )
+            self._block_live_mutation_integrity(reason)
+        candidate_sha256 = matching_candidates[0]
+
+        if pending.candidate_sha256 is None:
             self.control.bind_pending_mutation_candidate(
                 pending.relative_path,
                 candidate_sha256,
+            )
+        elif pending.candidate_sha256 != candidate_sha256:
+            self._block_live_mutation_integrity(
+                "runtime-bound candidate bytes do not match exact same-run patch evidence"
             )
 
         try:
@@ -196,6 +270,7 @@ class LiveRuntimeServices(_LegacyLiveRuntimeServices):
         proposal_id = tool_input.get("proposal_evidence_id")
         if not isinstance(proposal_id, str):  # pragma: no cover - resolved above
             raise RuntimeError("live mutation proposal identity was lost after resolution")
+        expected_original_sha256 = self._live_mutation_original_sha256(proposal_id)
         self._active_mutation_proposal_id = proposal_id
         path_decision = self.policy.authorize_path(Path(subject_path), write=True)
         self.state.policy_decisions.append(path_decision)
@@ -230,5 +305,33 @@ class LiveRuntimeServices(_LegacyLiveRuntimeServices):
             candidate_required=True,
             pre_mutation_context_fingerprint=pre_context_fingerprint,
         )
+
+        pending = self.control.pending_mutation
+        if (
+            pending is None
+            or not pending.candidate_required
+            or pending.relative_path != subject_path
+            or pending.original_sha256 != expected_original_sha256
+        ):
+            self._abort_prepared_live_mutation(
+                "strict mutation rollback authority does not match the evidence-bound original bytes"
+            )
+        try:
+            prepared_workspace_fingerprint, prepared_context_fingerprint = (
+                self._observe_live_mutation_context(subject_path)
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            self._abort_prepared_live_mutation(
+                "strict mutation prepared state could not be re-observed completely: "
+                f"{type(exc).__name__}"
+            )
+        if (
+            prepared_workspace_fingerprint != pre_workspace_fingerprint
+            or prepared_context_fingerprint != pre_context_fingerprint
+        ):
+            self._abort_prepared_live_mutation(
+                "workspace changed while strict mutation rollback authority was being prepared"
+            )
+
         self._active_tool_name = tool_name
         RuntimeServices.checkpoint(self)
