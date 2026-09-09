@@ -141,7 +141,12 @@ def recover_stale_mutation(
     metadata, prior_run_dir, run_identity = loaded
     previous_run_id = str(previous_lease["run_id"])
 
-    pending = metadata.get("pending_mutation")
+    if "pending_mutation" not in metadata:
+        return {
+            "status": "BLOCKED",
+            "reason": "prior runtime metadata is missing pending_mutation authority",
+        }
+    pending = metadata["pending_mutation"]
     if pending is None:
         return {"status": "NONE", "previous_run_id": previous_run_id}
     if not isinstance(pending, dict) or not pending:
@@ -184,6 +189,21 @@ def recover_stale_mutation(
         }
     if type(existed) is not bool:
         return {"status": "BLOCKED", "reason": "prior pending mutation existed flag is invalid"}
+
+    candidate_sha = pending.get("candidate_sha256")
+    candidate_fingerprint = pending.get("candidate_workspace_fingerprint")
+    pre_fingerprint = pending.get("pre_mutation_workspace_fingerprint")
+    if (
+        pending.get("candidate_required") is not True
+        or not _is_sha256_hex(candidate_sha)
+        or not _legacy._is_sha256_fingerprint(candidate_fingerprint)
+        or not _legacy._is_sha256_fingerprint(pre_fingerprint)
+    ):
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": previous_run_id,
+            "reason": "prior pending mutation lacks exact candidate ownership authority; automatic destructive recovery is disabled and manual reconciliation is required",
+        }
 
     prior_lease_id = previous_lease.get("lease_id")
     if (
@@ -272,20 +292,6 @@ def recover_stale_mutation(
             "reason": "prior rollback backup failed integrity verification",
         }
 
-    candidate_sha = pending.get("candidate_sha256")
-    candidate_fingerprint = pending.get("candidate_workspace_fingerprint")
-    pre_fingerprint = pending.get("pre_mutation_workspace_fingerprint")
-    if (
-        pending.get("candidate_required") is not True
-        or not _is_sha256_hex(candidate_sha)
-        or not _legacy._is_sha256_fingerprint(candidate_fingerprint)
-        or not _legacy._is_sha256_fingerprint(pre_fingerprint)
-    ):
-        return {
-            "status": "BLOCKED",
-            "previous_run_id": previous_run_id,
-            "reason": "prior pending mutation lacks exact candidate ownership authority; automatic destructive recovery is disabled and manual reconciliation is required",
-        }
     if metadata.get("workspace_fingerprint") != candidate_fingerprint:
         return {
             "status": "BLOCKED",
@@ -507,6 +513,8 @@ def recover_stale_mutation(
         current_workspace_fingerprint_reasons=current_workspace_fingerprint_reasons,
     )
     if closure.get("status") == "RECOVERED":
+        if not recovery_event_recorded:
+            closure.pop("resumed_recovery_event", None)
         with suppress(OSError, RuntimeError, ValueError):
             unlink_file_confined(
                 prior_run_dir,
