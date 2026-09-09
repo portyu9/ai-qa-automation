@@ -205,10 +205,16 @@ class LiveRuntimeServices(_LegacyLiveRuntimeServices):
         candidate_sha256 = matching_candidates[0]
 
         if pending.candidate_sha256 is None:
-            self.control.bind_pending_mutation_candidate(
-                pending.relative_path,
-                candidate_sha256,
-            )
+            try:
+                self.control.bind_pending_mutation_candidate(
+                    pending.relative_path,
+                    candidate_sha256,
+                )
+            except (MutationPendingError, OSError, RuntimeError, ValueError) as exc:
+                self._block_live_mutation_integrity(
+                    "live mutation candidate bytes could not be bound to exact patch evidence: "
+                    f"{type(exc).__name__}"
+                )
         elif pending.candidate_sha256 != candidate_sha256:
             self._block_live_mutation_integrity(
                 "runtime-bound candidate bytes do not match exact same-run patch evidence"
@@ -227,11 +233,17 @@ class LiveRuntimeServices(_LegacyLiveRuntimeServices):
         pending = self.control.pending_mutation
         if pending is None:  # pragma: no cover - binding cannot close transaction
             raise RuntimeError("live mutation candidate binding lost pending authority")
-        self.control.bind_pending_mutation_candidate(
-            pending.relative_path,
-            candidate_sha256,
-            candidate_workspace_fingerprint=workspace_fingerprint,
-        )
+        try:
+            self.control.bind_pending_mutation_candidate(
+                pending.relative_path,
+                candidate_sha256,
+                candidate_workspace_fingerprint=workspace_fingerprint,
+            )
+        except (MutationPendingError, OSError, RuntimeError, ValueError) as exc:
+            self._block_live_mutation_integrity(
+                "live mutation candidate ownership changed before workspace authority binding: "
+                f"{type(exc).__name__}"
+            )
         if pending.pre_mutation_context_fingerprint != context_fingerprint:
             self._block_live_mutation_integrity(
                 "workspace changed outside the authorized live mutation subject"
