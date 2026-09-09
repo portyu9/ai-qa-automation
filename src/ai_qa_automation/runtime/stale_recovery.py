@@ -297,7 +297,15 @@ def recover_stale_mutation(
             "reason": "prior rollback backup failed integrity verification",
         }
 
-    if metadata.get("workspace_fingerprint") != candidate_fingerprint:
+    runtime_workspace_fingerprint = metadata.get("workspace_fingerprint")
+    if recovery_event_recorded:
+        if runtime_workspace_fingerprint not in {candidate_fingerprint, pre_fingerprint}:
+            return {
+                "status": "BLOCKED",
+                "previous_run_id": previous_run_id,
+                "reason": "prior runtime workspace authority is not bound to the exact mutation recovery lineage",
+            }
+    elif runtime_workspace_fingerprint != candidate_fingerprint:
         return {
             "status": "BLOCKED",
             "previous_run_id": previous_run_id,
@@ -510,7 +518,7 @@ def recover_stale_mutation(
 
     # The recovery event proves the workspace is now the exact pre-mutation subject.
     # Rebind that subject in runtime metadata before legacy closure clears pending
-    # rollback authority; a crash here remains resumable from the durable event.
+    # rollback authority; either journal-proven intermediate stage remains resumable.
     metadata["workspace_fingerprint"] = pre_fingerprint
     try:
         atomic_write_json(
