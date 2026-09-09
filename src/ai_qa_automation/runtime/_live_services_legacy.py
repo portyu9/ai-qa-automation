@@ -239,7 +239,9 @@ class LiveRuntimeServices(RuntimeServices):
             or proposal.source != "self_healing_engine"
             or proposal.id not in self.state.evidence_ids
         ):
-            raise PermissionError("live locator mutation proposal lacks trusted same-run provenance")
+            raise PermissionError(
+                "live locator mutation proposal lacks trusted same-run provenance"
+            )
         repair_subject_id = data.get("repair_subject_id")
         if not isinstance(repair_subject_id, str) or not repair_subject_id:
             raise PermissionError("live locator mutation proposal lost repair subject identity")
@@ -254,14 +256,20 @@ class LiveRuntimeServices(RuntimeServices):
         except LocatorRepairAuthorityError as exc:
             raise PermissionError("live locator mutation subject authority is invalid") from exc
         if proposal.source_identifier != repair_subject_id or data.get("path") != authority.path:
-            raise PermissionError("live locator mutation proposal does not match repair subject path")
+            raise PermissionError(
+                "live locator mutation proposal does not match repair subject path"
+            )
         return authority.path
 
     def _bind_active_mutation_candidate(self) -> None:
         if self.control is None:  # pragma: no cover - guarded by __post_init__
             raise RuntimeError("live runtime services lost RuntimeControl")
         pending = self.control.pending_mutation
-        if pending is None or not pending.candidate_required or pending.candidate_sha256 is not None:
+        if (
+            pending is None
+            or not pending.candidate_required
+            or pending.candidate_sha256 is not None
+        ):
             return
 
         for evidence_id in reversed(self.state.evidence_ids):
