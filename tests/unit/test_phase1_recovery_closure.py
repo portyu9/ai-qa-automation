@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-import ai_qa_automation.runtime.stale_recovery as stale_recovery_module
+import ai_qa_automation.runtime._stale_recovery_legacy as stale_recovery_legacy_module
 from ai_qa_automation.models import AgentRunState
+from ai_qa_automation.runtime._stale_recovery_legacy import recover_stale_mutation
 from ai_qa_automation.runtime.journal import RunJournal
-from ai_qa_automation.runtime.stale_recovery import recover_stale_mutation
 from ai_qa_automation.state import StateStore
 
 
@@ -74,7 +74,7 @@ def test_failed_stale_recovery_close_retains_authority_but_requires_reconciliati
         raise OSError("simulated durable metadata failure")
 
     with monkeypatch.context() as patch:
-        patch.setattr(stale_recovery_module, "atomic_write_json", fail_runtime_close)
+        patch.setattr(stale_recovery_legacy_module, "atomic_write_json", fail_runtime_close)
         first = recover_stale_mutation(
             artifact_root=artifact_root,
             workspace=workspace,
