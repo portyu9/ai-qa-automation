@@ -7,7 +7,7 @@
 **Evidence-First Agentic Quality Engineering**  
 Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
-[Repository](../README.md) · [Architecture](ARCHITECTURE.md) · [Result Contract](RESULT_CONTRACT.md) · [Control-Plane Provenance](CONTROL_PLANE_PROVENANCE.md) · [Security](SECURITY.md) · [CI/CD](CI_CD.md) · [Release Candidate](RELEASE_CANDIDATE.md) · [Setup](SETUP.md)
+[Repository](../README.md) · [Architecture](ARCHITECTURE.md) · [Result Contract](RESULT_CONTRACT.md) · [Runtime Lifecycle](RUNTIME_LIFECYCLE.md) · [Control-Plane Provenance](CONTROL_PLANE_PROVENANCE.md) · [Security](SECURITY.md) · [CI/CD](CI_CD.md) · [Release Candidate](RELEASE_CANDIDATE.md) · [Setup](SETUP.md)
 
 </div>
 
@@ -20,19 +20,20 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
 | Reviewer goal | Recommended path |
 |---|---|
-| **Architecture / principal engineering** | [Architecture](ARCHITECTURE.md) → [Result Contract](RESULT_CONTRACT.md) → [Runtime Control](RUNTIME_CONTROL.md) → [Workspace Freshness Boundary](WORKSPACE_FRESHNESS_BOUNDARY.md) → [Traceability](TRACEABILITY.md) → [Technical Walkthrough](TECHNICAL_WALKTHROUGH.md) |
+| **Architecture / principal engineering** | [Architecture](ARCHITECTURE.md) → [Result Contract](RESULT_CONTRACT.md) → [Runtime Lifecycle](RUNTIME_LIFECYCLE.md) → [Runtime Control](RUNTIME_CONTROL.md) → [Workspace Freshness Boundary](WORKSPACE_FRESHNESS_BOUNDARY.md) → [Traceability](TRACEABILITY.md) → [Technical Walkthrough](TECHNICAL_WALKTHROUGH.md) |
 | **Security / red team** | [Security](SECURITY.md) → [Threat Model](THREAT_MODEL.md) → [Tool Input Boundaries](TOOL_INPUT_BOUNDARIES.md) → [Controller Executable Authority](CONTROLLER_EXECUTABLE_AUTHORITY.md) → [Objective Input Boundary](OBJECTIVE_INPUT_BOUNDARY.md) → [Agent SDK Result Boundary](SDK_RESULT_BOUNDARY.md) → [Persistence Resource Boundary](PERSISTENCE_RESOURCE_BOUNDARY.md) → [API Observation Boundary](API_OBSERVATION_BOUNDARY.md) → [Remote API Mutation Authority](REMOTE_API_MUTATION_AUTHORITY.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Supply Chain](SUPPLY_CHAIN.md) → [CI/CD](CI_CD.md) → [Release Candidate](RELEASE_CANDIDATE.md) → [Trusted PR Control Plane](TRUSTED_PR_CONTROL_PLANE.md) → [MCP](MCP.md) → [Verification Boundaries](VERIFICATION_BOUNDARIES.md) → [Workspace Freshness Boundary](WORKSPACE_FRESHNESS_BOUNDARY.md) → [Pytest Execution Isolation](PYTEST_EXECUTION_ISOLATION.md) → [Limitations](LIMITATIONS.md) |
-| **QA automation / AI engineering** | [Change Intelligence](CHANGE_INTELLIGENCE.md) → [Contract Drift Boundary](CONTRACT_DRIFT_BOUNDARY.md) → [Skills](SKILLS.md) → [Evaluation](EVALUATION.md) → [Result Contract](RESULT_CONTRACT.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Production Readiness](PRODUCTION_READINESS.md) |
-| **Operator / adopter** | [Setup](SETUP.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Pytest Execution Isolation](PYTEST_EXECUTION_ISOLATION.md) → [Operations](OPERATIONS.md) → [CI/CD](CI_CD.md) → [Release Candidate](RELEASE_CANDIDATE.md) → [Troubleshooting](TROUBLESHOOTING.md) → [Runtime Control](RUNTIME_CONTROL.md) → [MCP](MCP.md) |
+| **QA automation / AI engineering** | [Change Intelligence](CHANGE_INTELLIGENCE.md) → [Contract Drift Boundary](CONTRACT_DRIFT_BOUNDARY.md) → [Skills](SKILLS.md) → [Evaluation](EVALUATION.md) → [Result Contract](RESULT_CONTRACT.md) → [Runtime Lifecycle](RUNTIME_LIFECYCLE.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Production Readiness](PRODUCTION_READINESS.md) |
+| **Operator / adopter** | [Setup](SETUP.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Pytest Execution Isolation](PYTEST_EXECUTION_ISOLATION.md) → [Operations](OPERATIONS.md) → [CI/CD](CI_CD.md) → [Release Candidate](RELEASE_CANDIDATE.md) → [Troubleshooting](TROUBLESHOOTING.md) → [Runtime Lifecycle](RUNTIME_LIFECYCLE.md) → [Runtime Control](RUNTIME_CONTROL.md) → [MCP](MCP.md) |
 
 ### Architecture / principal engineering
 
 1. [`ARCHITECTURE.md`](ARCHITECTURE.md) — authority, trust zones, execution flow
 2. [`RESULT_CONTRACT.md`](RESULT_CONTRACT.md) — terminal truth and revision-aware validation
-3. [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md) — leases, mutation transactions, rollback, recovery
-4. [`WORKSPACE_FRESHNESS_BOUNDARY.md`](WORKSPACE_FRESHNESS_BOUNDARY.md) — target fingerprint lineage, execution admission, result acceptance, terminal freshness
-5. [`TRACEABILITY.md`](TRACEABILITY.md) — evidence lineage, journal integrity, attestation
-6. [`TECHNICAL_WALKTHROUGH.md`](TECHNICAL_WALKTHROUGH.md) — end-to-end implementation review
+3. [`RUNTIME_LIFECYCLE.md`](RUNTIME_LIFECYCLE.md) — request/evidence flow, mutation closure, crash-recovery diagrams
+4. [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md) — leases, mutation transactions, rollback, recovery
+5. [`WORKSPACE_FRESHNESS_BOUNDARY.md`](WORKSPACE_FRESHNESS_BOUNDARY.md) — target fingerprint lineage, execution admission, result acceptance, terminal freshness
+6. [`TRACEABILITY.md`](TRACEABILITY.md) — evidence lineage, journal integrity, attestation
+7. [`TECHNICAL_WALKTHROUGH.md`](TECHNICAL_WALKTHROUGH.md) — end-to-end implementation review
 
 ### Security / red team
 
@@ -63,8 +64,9 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 3. [`SKILLS.md`](SKILLS.md) — five trusted Claude QA procedures
 4. [`EVALUATION.md`](EVALUATION.md) — deterministic primary and repository-visible sequestered readiness evaluation architecture
 5. [`RESULT_CONTRACT.md`](RESULT_CONTRACT.md) — how evidence becomes a runtime outcome
-6. [`BROWSER_VALIDATION.md`](BROWSER_VALIDATION.md) — how browser evidence is subject-bound without overstating page health
-7. [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) — production control model
+6. [`RUNTIME_LIFECYCLE.md`](RUNTIME_LIFECYCLE.md) — runtime request/evidence, mutation closure, and crash-recovery flow
+7. [`BROWSER_VALIDATION.md`](BROWSER_VALIDATION.md) — how browser evidence is subject-bound without overstating page health
+8. [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) — production control model
 
 ### Operator / adopter
 
@@ -75,8 +77,9 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 5. [`CI_CD.md`](CI_CD.md) — automatic PR feedback, routine trusted admission, external protected maintenance, and repository-governance authority
 6. [`RELEASE_CANDIDATE.md`](RELEASE_CANDIDATE.md) — manual deterministic release-preparation evidence without publishing authority
 7. [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) — diagnose without weakening controls
-8. [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md) — recovery and mutation mechanics
-9. [`MCP.md`](MCP.md) — optional GitHub/Atlassian integration policy
+8. [`RUNTIME_LIFECYCLE.md`](RUNTIME_LIFECYCLE.md) — lifecycle and mutation/recovery visual reference
+9. [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md) — recovery and mutation mechanics
+10. [`MCP.md`](MCP.md) — optional GitHub/Atlassian integration policy
 
 ---
 
@@ -86,6 +89,7 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 |---|---|
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Where does authority live, and how does evidence flow? |
 | **[`RESULT_CONTRACT.md`](RESULT_CONTRACT.md)** | What exactly makes a run `SUCCESS`, `FAILURE`, `BLOCKED`, or `NOT_VERIFIED`? |
+| [`RUNTIME_LIFECYCLE.md`](RUNTIME_LIFECYCLE.md) | How does a request move through authorization/evidence/validation, and how do mutation and crash recovery close? |
 | [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md) | How are autonomous mutations, concurrency, rollback, and crash recovery controlled? |
 | [`WORKSPACE_FRESHNESS_BOUNDARY.md`](WORKSPACE_FRESHNESS_BOUNDARY.md) | How are controlled local-target execution and terminal `SUCCESS` bound to the authorized current workspace subject? |
 | [`SECURITY.md`](SECURITY.md) | Which security controls are deterministic rather than prompt-based? |
