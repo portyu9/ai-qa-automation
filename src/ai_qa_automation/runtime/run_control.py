@@ -306,8 +306,6 @@ class RuntimeControl:
                 if data is None:
                     raise MutationPendingError("mutation rollback bytes are unavailable")
                 try:
-                    # Existing-file rollback requires a durable run root before its
-                    # descriptor-confined backup can be published below that root.
                     self.persist()
                 except (OSError, RuntimeError, ValueError) as exc:
                     raise MutationPendingError(
@@ -359,8 +357,6 @@ class RuntimeControl:
             self.pending_mutation = pending
             pending_persisted = False
             try:
-                # Durable runtime metadata is the recovery authority. Persist the pending
-                # transaction before allowing the target mutation tool to execute.
                 self.persist()
                 pending_persisted = True
                 self.journal.append(
@@ -377,8 +373,6 @@ class RuntimeControl:
                         pre_mutation_context_fingerprint if candidate_required else None
                     ),
                 )
-                # A successful preparation must not return mutation authority until
-                # runtime metadata is bound to the exact durable journal head/count.
                 self.persist()
             except Exception:
                 self.pending_mutation = None
@@ -386,9 +380,6 @@ class RuntimeControl:
                     try:
                         self.persist()
                     except Exception as cleanup_exc:
-                        # The durable metadata may still describe a pending transaction.
-                        # Keep the live object aligned with that conservative state so a
-                        # later finalizer/recovery path cannot assume preparation vanished.
                         self.pending_mutation = pending
                         raise RuntimeError(
                             "mutation preparation failed and pending metadata could not be cleared"
@@ -508,9 +499,6 @@ class RuntimeControl:
             )
             self.pending_mutation = bound
             try:
-                # Candidate identity must be durable before validation or rollback can
-                # rely on it. If this first publication fails, revert process-local
-                # authority to the previously durable pending transaction.
                 self.persist()
             except Exception:
                 self.pending_mutation = pending
@@ -525,8 +513,6 @@ class RuntimeControl:
                 )
                 self.persist()
             except (BudgetExceededError, OSError, RuntimeError, ValueError) as exc:
-                # Candidate metadata is already durable. Do not erase that ownership
-                # proof merely because journal extension/binding became ambiguous.
                 raise RuntimeError(
                     "mutation candidate journal persistence could not be guaranteed"
                 ) from exc
@@ -711,17 +697,17 @@ class RuntimeControl:
                 return None
             self._assert_workspace_identity()
             self._assert_candidate_owned_for_commit(pending)
-            if pending.candidate_required:
-                if current_workspace_fingerprint != pending.candidate_workspace_fingerprint:
-                    raise MutationPendingError(
-                        "current workspace does not match the exact candidate subject; refusing commit"
-                    )
+            if (
+                pending.candidate_required
+                and current_workspace_fingerprint != pending.candidate_workspace_fingerprint
+            ):
+                raise MutationPendingError(
+                    "current workspace does not match the exact candidate subject; refusing commit"
+                )
             backup: Path | None = None
             if pending.existed:
                 backup, _ = self._validated_rollback_backup(pending)
 
-            # Clear process-local mutation authority only immediately before the durable
-            # pending-state transition. If persistence fails it is rebound before return.
             self._clear_pending_root_authority()
             self.pending_mutation = None
             try:
@@ -758,9 +744,6 @@ class RuntimeControl:
             if pending.existed:
                 backup, rollback_data = self._validated_rollback_backup(pending)
 
-            # Canonical lineage must be durably poisoned before rollback can alter
-            # target bytes or clear the runtime transaction. A callback failure leaves
-            # both target bytes and pending recovery authority untouched.
             if self.rollback_lineage_before_close is not None:
                 self.rollback_lineage_before_close(pending)
 
@@ -775,7 +758,7 @@ class RuntimeControl:
                     )
                 self.expected_workspace_fingerprint = pending.pre_mutation_workspace_fingerprint
             elif pending.existed:
-                if rollback_data is None:  # pragma: no cover - guarded by backup validation
+                if rollback_data is None:
                     raise RuntimeError("pending rollback bytes are unavailable")
                 atomic_write_bytes_confined(
                     self.workspace,
@@ -834,27 +817,20 @@ class RuntimeControl:
             return pending.relative_path
 
     def _journal_after_durable_transition(self, event: str, **payload: Any) -> None:
-        """Bind lifecycle provenance to runtime truth before reporting transition success."""
         try:
             self.journal.append(event, **payload)
         except (BudgetExceededError, OSError, RuntimeError, ValueError) as exc:
-            # The transition itself is already durable and must never be undone here.
-            # Journal append failures can be ambiguous after fsync, so they cannot be
-            # converted into a successful transaction return.
             raise RuntimeError(
                 "mutation transition journal persistence could not be guaranteed"
             ) from exc
         try:
             self.persist()
         except (OSError, RuntimeError, ValueError) as exc:
-            # A verified journal extension without an exact runtime head/count binding
-            # is legitimate infrastructure uncertainty, not a successful transition.
             raise RuntimeError(
                 "mutation transition journal binding could not be durably persisted"
             ) from exc
 
     def _validated_rollback_backup(self, pending: PendingMutation) -> tuple[Path, bytes]:
-        """Validate rollback ownership and bytes before either restore or commit disposal."""
         if not pending.backup_path or not pending.original_sha256:
             raise RuntimeError("pending rollback backup metadata is incomplete")
 
@@ -999,7 +975,6 @@ class RuntimeControl:
 
 
 def _owned_atomic_target(path: Path) -> Path:
-    """Resolve an owned parent without ever following a symlink at the write target."""
     requested = path.expanduser()
     if requested.is_symlink():
         raise RuntimeError("atomic write target is a symlink and has ambiguous ownership")
