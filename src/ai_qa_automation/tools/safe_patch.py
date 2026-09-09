@@ -7,6 +7,7 @@ import os
 import re
 import tempfile
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
@@ -22,6 +23,8 @@ from ..io_safety import fsync_directory
 from ..models import ToolDecision
 from ..policy import PolicyEngine
 from .locators import parse_locator_expression
+
+CandidatePublisher = Callable[[str, str, bytes], object]
 
 
 @dataclass(frozen=True)
@@ -46,9 +49,16 @@ class SafeTestPatcher:
         re.I,
     )
 
-    def __init__(self, workspace: Path, policy: PolicyEngine) -> None:
+    def __init__(
+        self,
+        workspace: Path,
+        policy: PolicyEngine,
+        *,
+        candidate_publisher: CandidatePublisher | None = None,
+    ) -> None:
         self.workspace = workspace.expanduser().resolve()
         self.policy = policy
+        self._candidate_publisher = candidate_publisher
         self._workspace_identity: tuple[int, int] | None
         current_identity = (
             pin_directory_identity(self.workspace, label="test patch workspace")
@@ -154,15 +164,22 @@ class SafeTestPatcher:
         if violations:
             raise PermissionError(f"unsafe patch rejected: {', '.join(violations)}")
 
-        atomic_write_bytes_confined(
-            self.workspace,
-            path,
-            updated_bytes,
-            create_parents=False,
-            create_only=False,
-            label="test patch target",
-            expected_root_identity=self._workspace_identity,
-        )
+        if self._candidate_publisher is None:
+            atomic_write_bytes_confined(
+                self.workspace,
+                path,
+                updated_bytes,
+                create_parents=False,
+                create_only=False,
+                label="test patch target",
+                expected_root_identity=self._workspace_identity,
+            )
+        else:
+            self._candidate_publisher(
+                normalized_relative,
+                expected_sha256,
+                updated_bytes,
+            )
         return PatchResult(
             path=normalized_relative,
             old_sha256=actual_sha,
