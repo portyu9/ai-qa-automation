@@ -7,7 +7,7 @@ from typing import Any, cast
 
 import pytest
 
-import ai_qa_automation.runtime.live_services as live_services_module
+import ai_qa_automation.runtime._live_services_legacy as live_services_legacy_module
 from ai_qa_automation.models import AgentRunState, TerminalStatus, ValidationStatus
 from ai_qa_automation.policy import PolicyEngine
 from ai_qa_automation.runtime.budget import ExecutionBudget
@@ -115,7 +115,7 @@ def test_mutation_denies_incomplete_workspace_fingerprint(
         control=control,
     )
     monkeypatch.setattr(
-        live_services_module,
+        live_services_legacy_module,
         "observe_workspace_freshness",
         lambda *_args, **_kwargs: WorkspaceFreshness(
             WorkspaceFreshnessCode.FINGERPRINT_INCOMPLETE,
