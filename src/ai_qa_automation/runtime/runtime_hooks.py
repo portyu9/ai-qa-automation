@@ -482,14 +482,10 @@ def posttool_policy_output(
                 "transaction. The result was rejected and mutation authority is disabled for this run."
             )
         else:
-            if (
-                pending.candidate_required
-                and (
-                    pending.candidate_sha256 is None
-                    or pending.candidate_workspace_fingerprint is None
-                    or control.expected_workspace_fingerprint
-                    != pending.candidate_workspace_fingerprint
-                )
+            if pending.candidate_required and (
+                pending.candidate_sha256 is None
+                or pending.candidate_workspace_fingerprint is None
+                or control.expected_workspace_fingerprint != pending.candidate_workspace_fingerprint
             ):
                 failed = True
                 mutation_integrity_blocked = True
