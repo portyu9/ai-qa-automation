@@ -47,6 +47,7 @@ from .validation_truth import evaluate_revision_closure
 from .workspace_freshness import WorkspaceFreshnessCode, observe_workspace_freshness
 
 _INTERNAL_TOOL_PREFIX = "mcp__qa__"
+_INVALID_INTERNAL_TOOL_NAME = "mcp__qa__<invalid-name>"
 _MAX_TOOL_USE_ID_CHARS = 256
 _MAX_INTERNAL_TOOL_NAME_CHARS = 256
 _NETWORK_TOOLS = {
@@ -73,6 +74,7 @@ class _InternalToolLifecycleGate:
     def __init__(self) -> None:
         self._lock = Lock()
         self._active: tuple[str, str] | None = None
+        self._used_tool_use_ids: set[str] = set()
         self._poisoned_reason: str | None = None
 
     @staticmethod
@@ -89,12 +91,15 @@ class _InternalToolLifecycleGate:
         with self._lock:
             if self._poisoned_reason is not None:
                 return self._poisoned_reason
+            if tool_use_id in self._used_tool_use_ids:
+                return "internal tool lifecycle tool_use_id was reused; replay is denied"
             if self._active is not None:
                 return (
                     "another framework-owned internal tool lifecycle is still active; "
                     "concurrent internal execution is denied"
                 )
             self._active = (tool_name, tool_use_id)
+            self._used_tool_use_ids.add(tool_use_id)
         return None
 
     def completion_error(self, tool_name: str, tool_use_id: str | None) -> str | None:
@@ -123,6 +128,18 @@ class _InternalToolLifecycleGate:
                 return
             self._active = None
 
+    def abandon_unbudgeted(self, tool_name: str, tool_use_id: str) -> None:
+        """Release an ID that never passed the canonical request-budget boundary."""
+
+        with self._lock:
+            if self._active != (tool_name, tool_use_id):
+                self._poisoned_reason = (
+                    "internal tool lifecycle changed before budget-denial closure"
+                )
+                return
+            self._active = None
+            self._used_tool_use_ids.discard(tool_use_id)
+
     def poison(self, *, reason: str) -> None:
         with self._lock:
             self._poisoned_reason = reason
@@ -136,13 +153,15 @@ class _InternalToolLifecycleGate:
 
 def _internal_tool_name(input_data: dict[str, Any]) -> str | None:
     raw_tool_name = input_data.get("tool_name")
+    if not isinstance(raw_tool_name, str) or not raw_tool_name.startswith(_INTERNAL_TOOL_PREFIX):
+        return None
     if (
-        isinstance(raw_tool_name, str)
-        and len(raw_tool_name) <= _MAX_INTERNAL_TOOL_NAME_CHARS
-        and raw_tool_name.startswith(_INTERNAL_TOOL_PREFIX)
+        len(raw_tool_name) > _MAX_INTERNAL_TOOL_NAME_CHARS
+        or not raw_tool_name.isascii()
+        or not raw_tool_name.isprintable()
     ):
-        return raw_tool_name
-    return None
+        return _INVALID_INTERNAL_TOOL_NAME
+    return raw_tool_name
 
 
 def _pretool_output_denies_execution(output: dict[str, Any]) -> bool:
@@ -1239,7 +1258,10 @@ def build_hooks(
                 )
                 if budget_denial is not None:
                     if reserved_tool_use_id is not None:
-                        lifecycle_gate.finish(internal_tool_name, reserved_tool_use_id)
+                        lifecycle_gate.abandon_unbudgeted(
+                            internal_tool_name,
+                            reserved_tool_use_id,
+                        )
                     return cast(HookJSONOutput, budget_denial)
                 tool_budget_already_charged = True
             output = pretool_policy_output(
