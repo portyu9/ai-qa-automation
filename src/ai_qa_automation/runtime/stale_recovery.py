@@ -811,6 +811,7 @@ def recover_stale_mutation(
             "reason": "stale recovery requires exact live deferred successor workspace lease authority",
         }
 
+    authority_entered = False
     try:
         with recovery_lease.stale_recovery_authority(
             artifact_root=artifact_root,
@@ -818,6 +819,7 @@ def recover_stale_mutation(
             recovering_run_id=recovering_run_id,
             previous_lease=previous_lease,
         ):
+            authority_entered = True
             return _recover_stale_mutation_authorized(
                 artifact_root=artifact_root,
                 workspace=normalized_workspace,
@@ -829,6 +831,8 @@ def recover_stale_mutation(
                 _authority=_STALE_RECOVERY_AUTHORITY,
             )
     except (OSError, RuntimeError, ValueError) as exc:
+        if authority_entered:
+            raise
         return {
             "status": "BLOCKED",
             "previous_run_id": previous_run_id,
