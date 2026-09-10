@@ -28,6 +28,8 @@ The lease path itself is part of the trust boundary:
 - the target workspace root is revalidated against its pinned identity before and after lease acquisition; and
 - where descriptor-relative authority is available, the workspace directory inode remains locked for the lease lifetime in addition to the artifact-store lock file.
 
+The current owner is published with `mutation_recovery_closed=false`. During release, while lease and workspace authority are still held, the runtime may promote that marker to `true` only after a bounded descriptor-confined read of the same run's `runtime.json` proves matching lease/workspace identity and `pending_mutation: null`. A missing, malformed, mismatched, or unreadable production runtime record cannot be converted into clean recovery closure; release reports infrastructure failure after relinquishing the locks. The marker means only that no stale framework mutation requires recovery. It does not certify run success, validation, evidence, or workspace immutability.
+
 The lease prevents cooperating framework processes from simultaneously holding mutation authority over the same worktree, but it is only the first layer. Autonomous writes also require a Git-backed isolated target, a content-sensitive workspace fingerprint, descriptor-pinned target-path ownership, and unambiguous mutation provenance.
 
 Trusted artifact storage remains a deployment-owned control-plane boundary. Repository code rejects ambiguous/symlinked control paths and validates persisted authority, but it does not claim to defend against an already-compromised operating-system account with arbitrary write authority over the trusted artifact root.
@@ -212,6 +214,8 @@ Recovery validates the complete ownership and lineage chain before touching the 
 - missing, malformed, or mismatched historical run-root identity blocks automatic rollback before any target write;
 - prior `journal.jsonl` ownership is checked before recovery mutation and is opened under the authorized prior run root where enforceable;
 - `runtime.json` is a regular non-symlink file and is read under the authorized prior run root where enforceable;
+- if the prior run directory or `runtime.json` is unavailable, recovery returns `NONE` only when the prior lease carries exact `mutation_recovery_closed=true` authority with a valid historical run-root identity; absent/false/invalid closure is `BLOCKED` for manual reconciliation;
+- a surviving `runtime.json` always remains authoritative even when the lease carries a clean-closure marker, so an observed pending transaction cannot be bypassed by the marker;
 - canonical `state.json` must load under its strict schema/JSON bounds and the same prior run-root authority where enforceable;
 - prior state `run_id` and workspace must match lease/runtime authority; and
 - runtime workspace exactly matches the newly leased workspace.
@@ -279,7 +283,7 @@ A later successful invocation resets the circuit. A broken provider/tool therefo
 | `journal.jsonl` | append-only hash-chained lifecycle/tool events | shares the pinned run-persistence-root identity where enforceable; final entry and parent substitution are rejected and records remain byte-bounded |
 | `evidence-manifest.json` | evidence/artifact identities and hashes | evidence shares the pinned run-persistence-root identity where enforceable and rejects root/nested-parent substitution, strict-JSON ambiguity, cross-run records, and bounded-registry violations |
 | `rollback/` | temporary authoritative prior bytes | backup reads/cleanup are bound beneath the authorized run root where enforceable; directory + backup ownership, size, and hashes are revalidated |
-| `.leases/*.lock` | cross-process workspace ownership + historical recovery metadata | lease-directory/file identities are revalidated; POSIX-capable runtimes additionally lock the target workspace inode; the lease records enforceable run-root identity for later stale recovery or `null` when equivalent authority is unavailable |
+| `.leases/*.lock` | cross-process workspace ownership + historical recovery metadata | lease-directory/file identities are revalidated; POSIX-capable runtimes additionally lock the target workspace inode; the lease records enforceable run-root identity and a fail-closed mutation-recovery closure marker for later stale recovery |
 
 Keeping these concerns separate prevents process recovery metadata from becoming test evidence or a QA conclusion while still requiring their authority-bearing transitions to remain coherent.
 
@@ -305,6 +309,8 @@ It does not replay or reconstruct hidden Claude conversational state; it decides
 | Lease path ownership is ambiguous | infrastructure/lease failure before agent execution |
 | Live run-persistence root changes after authority is pinned | authority-bearing persistence/inspection fails closed |
 | Prior lease run-root identity missing/invalid/mismatched where enforceable | stale recovery `BLOCKED` before target write |
+| Prior runtime recovery metadata missing without exact durable lease closure | stale recovery `BLOCKED` / manual reconciliation |
+| Lease release cannot prove or persist mutation-recovery closure | `INFRASTRUCTURE_FAILURE`; locks are still relinquished safely |
 | Workspace root identity changes after authorization | `BLOCKED` / manual reconciliation |
 | Workspace drift before mutation | `BLOCKED` |
 | Target path has traversal/symlink ambiguity | `BLOCKED` |
