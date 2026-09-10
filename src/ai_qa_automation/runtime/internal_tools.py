@@ -91,13 +91,13 @@ def _serializing_tool_decorator(
         def decorate_serialized(handler: _common.ToolHandler) -> object:
             @wraps(handler)
             async def serialized(args: dict[str, Any]) -> dict[str, Any]:
-                try:
-                    async with execution_lock:
+                async with execution_lock:
+                    try:
                         return await handler(args)
-                except asyncio.CancelledError:
-                    if cancellation_callback is not None:
-                        cancellation_callback(name)
-                    raise
+                    except asyncio.CancelledError:
+                        if cancellation_callback is not None:
+                            cancellation_callback(name)
+                        raise
 
             return decorate(serialized)
 
