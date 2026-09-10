@@ -19,6 +19,9 @@ from ..io_safety import parse_json_object_strict, read_json_object_bounded
 from . import _stale_recovery_legacy as _legacy
 from .journal import RunJournal, validate_runtime_journal_binding
 from .run_control import atomic_write_json, mutation_candidate_proof_relative_path
+from .workspace_lease import WorkspaceLease
+
+_STALE_RECOVERY_AUTHORITY = object()
 
 
 def _is_sha256_hex(value: object) -> TypeGuard[str]:
@@ -288,7 +291,7 @@ def _load_metadata(
     return metadata, prior_run_dir, run_identity
 
 
-def recover_stale_mutation(
+def _recover_stale_mutation_authorized(
     *,
     artifact_root: Path,
     workspace: Path,
@@ -297,9 +300,15 @@ def recover_stale_mutation(
     recovering_run_id: str,
     current_workspace_fingerprint_complete: bool = True,
     current_workspace_fingerprint_reasons: tuple[str, ...] = (),
+    _authority: object,
 ) -> dict[str, Any]:
-    """Recover only exact strict candidates; legacy/unbound mutation metadata is manual-only."""
+    """Execute stale recovery only after the public boundary holds successor authority."""
 
+    if _authority is not _STALE_RECOVERY_AUTHORITY:
+        return {
+            "status": "BLOCKED",
+            "reason": "stale recovery internal authority capability is invalid",
+        }
     if not previous_lease:
         return {"status": "NONE"}
     if (
@@ -745,3 +754,83 @@ def recover_stale_mutation(
                 expected_root_identity=run_identity,
             )
     return closure
+
+
+def recover_stale_mutation(
+    *,
+    artifact_root: Path,
+    workspace: Path,
+    previous_lease: dict[str, Any] | None,
+    current_workspace_fingerprint: str,
+    recovering_run_id: str,
+    current_workspace_fingerprint_complete: bool = True,
+    current_workspace_fingerprint_reasons: tuple[str, ...] = (),
+    recovery_lease: WorkspaceLease | None = None,
+) -> dict[str, Any]:
+    """Recover stale mutation only while exact deferred successor lease authority is held."""
+
+    if not previous_lease:
+        return {"status": "NONE"}
+    if (
+        not isinstance(recovering_run_id, str)
+        or not recovering_run_id.strip()
+        or len(recovering_run_id) > _legacy._MAX_RECOVERY_RUN_ID_CHARS
+    ):
+        return {"status": "BLOCKED", "reason": "recovering run_id is invalid"}
+
+    normalized_workspace = workspace.expanduser().resolve()
+    loaded = _load_metadata(
+        artifact_root=artifact_root,
+        workspace=normalized_workspace,
+        previous_lease=previous_lease,
+        recovering_run_id=recovering_run_id,
+    )
+    if isinstance(loaded, dict):
+        return loaded
+    metadata, _prior_run_dir, _run_identity = loaded
+    previous_run_id = str(previous_lease["run_id"])
+    if "pending_mutation" not in metadata:
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": previous_run_id,
+            "reason": "prior runtime metadata is missing pending_mutation authority",
+        }
+    pending = metadata["pending_mutation"]
+    if pending is None and pending_root_authority(normalized_workspace) is None:
+        return {"status": "NONE", "previous_run_id": previous_run_id}
+    if pending is not None and (not isinstance(pending, dict) or not pending):
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": previous_run_id,
+            "reason": "prior pending mutation metadata is invalid",
+        }
+    if recovery_lease is None:
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": previous_run_id,
+            "reason": "stale recovery requires exact live deferred successor workspace lease authority",
+        }
+
+    try:
+        with recovery_lease.stale_recovery_authority(
+            artifact_root=artifact_root,
+            workspace=normalized_workspace,
+            recovering_run_id=recovering_run_id,
+            previous_lease=previous_lease,
+        ):
+            return _recover_stale_mutation_authorized(
+                artifact_root=artifact_root,
+                workspace=normalized_workspace,
+                previous_lease=previous_lease,
+                current_workspace_fingerprint=current_workspace_fingerprint,
+                recovering_run_id=recovering_run_id,
+                current_workspace_fingerprint_complete=current_workspace_fingerprint_complete,
+                current_workspace_fingerprint_reasons=current_workspace_fingerprint_reasons,
+                _authority=_STALE_RECOVERY_AUTHORITY,
+            )
+    except (OSError, RuntimeError, ValueError) as exc:
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": previous_run_id,
+            "reason": f"stale recovery successor lease authority is invalid: {exc}",
+        }
