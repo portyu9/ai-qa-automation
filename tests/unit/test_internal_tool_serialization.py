@@ -85,14 +85,19 @@ def test_cancelled_internal_tool_releases_serialization_authority() -> None:
     async def scenario() -> None:
         registry: dict[str, common_module.ToolHandler] = {}
         cancelled: list[str] = []
-        tool = internal_tools._serializing_tool_decorator(
-            _capturing_tool_decorator(registry),
-            cancellation_callback=cancelled.append,
-        )
         first_entered = asyncio.Event()
         first_hold = asyncio.Event()
         second_attempted = asyncio.Event()
         second_entered = asyncio.Event()
+
+        def on_cancel(tool_name: str) -> None:
+            assert not second_entered.is_set()
+            cancelled.append(tool_name)
+
+        tool = internal_tools._serializing_tool_decorator(
+            _capturing_tool_decorator(registry),
+            cancellation_callback=on_cancel,
+        )
 
         async def first_handler(_args: dict[str, Any]) -> dict[str, Any]:
             first_entered.set()
