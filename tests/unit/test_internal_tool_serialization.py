@@ -27,9 +27,7 @@ def _capturing_tool_decorator(
 def test_internal_tool_handlers_are_serialized_across_tool_names() -> None:
     async def scenario() -> None:
         registry: dict[str, common_module.ToolHandler] = {}
-        tool = internal_tools._serializing_tool_decorator(
-            _capturing_tool_decorator(registry)
-        )
+        tool = internal_tools._serializing_tool_decorator(_capturing_tool_decorator(registry))
         first_entered = asyncio.Event()
         first_release = asyncio.Event()
         second_attempted = asyncio.Event()
@@ -86,9 +84,7 @@ def test_internal_tool_handlers_are_serialized_across_tool_names() -> None:
 def test_cancelled_internal_tool_releases_serialization_authority() -> None:
     async def scenario() -> None:
         registry: dict[str, common_module.ToolHandler] = {}
-        tool = internal_tools._serializing_tool_decorator(
-            _capturing_tool_decorator(registry)
-        )
+        tool = internal_tools._serializing_tool_decorator(_capturing_tool_decorator(registry))
         first_entered = asyncio.Event()
         first_hold = asyncio.Event()
         second_attempted = asyncio.Event()
