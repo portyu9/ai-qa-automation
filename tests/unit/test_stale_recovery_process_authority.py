@@ -158,6 +158,62 @@ def _recover(
         successor.release()
 
 
+def test_valid_stale_recovery_without_successor_lease_is_read_only(tmp_path: Path) -> None:
+    (
+        artifact_root,
+        workspace,
+        target,
+        original,
+        candidate_fingerprint,
+        _workspace_identity,
+        previous_lease,
+    ) = _strict_recovery_fixture(tmp_path)
+    runtime_path = artifact_root / "run-old" / "runtime.json"
+    before_runtime = runtime_path.read_bytes()
+    before_journal = (artifact_root / "run-old" / "journal.jsonl").read_bytes()
+
+    result = recover_stale_mutation(
+        artifact_root=artifact_root,
+        workspace=workspace,
+        previous_lease=previous_lease,
+        current_workspace_fingerprint=candidate_fingerprint,
+        recovering_run_id="run-new",
+    )
+
+    assert result["status"] == "BLOCKED"
+    assert "live deferred successor" in str(result["reason"])
+    assert target.read_bytes() == b"candidate\n"
+    assert target.read_bytes() != original
+    assert runtime_path.read_bytes() == before_runtime
+    assert (artifact_root / "run-old" / "journal.jsonl").read_bytes() == before_journal
+
+
+def test_same_run_id_handoff_is_blocked_as_ambiguous_before_recovery(tmp_path: Path) -> None:
+    (
+        artifact_root,
+        workspace,
+        target,
+        _original,
+        candidate_fingerprint,
+        _workspace_identity,
+        previous_lease,
+    ) = _strict_recovery_fixture(tmp_path)
+    colliding_lease = dict(previous_lease)
+    colliding_lease["run_id"] = "run-new"
+
+    result = recover_stale_mutation(
+        artifact_root=artifact_root,
+        workspace=workspace,
+        previous_lease=colliding_lease,
+        current_workspace_fingerprint=candidate_fingerprint,
+        recovering_run_id="run-new",
+    )
+
+    assert result["status"] == "BLOCKED"
+    assert "collides with recovering run_id" in str(result["reason"])
+    assert target.read_bytes() == b"candidate\n"
+
+
 def test_stale_recovery_releases_exact_prior_process_local_root_owner(tmp_path: Path) -> None:
     (
         artifact_root,
