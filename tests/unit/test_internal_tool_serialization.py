@@ -124,7 +124,7 @@ def test_cancelled_internal_tool_releases_serialization_authority() -> None:
             await first_task
         except asyncio.CancelledError:
             pass
-        else:  # pragma: no cover - asyncio task cancellation is deterministic here
+        else:
             raise AssertionError("cancelled serialized tool unexpectedly completed")
 
         assert await second_task == {"second": True}
