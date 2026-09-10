@@ -8,6 +8,7 @@ from typing import Any, TypeGuard
 
 from ..fs_authority import (
     atomic_write_bytes_confined,
+    clear_pending_root_authority,
     descriptor_relative_authority_supported,
     move_file_noreplace_between_confined_roots,
     read_bytes_confined,
@@ -666,6 +667,16 @@ def recover_stale_mutation(
         current_workspace_fingerprint_reasons=current_workspace_fingerprint_reasons,
     )
     if closure.get("status") == "RECOVERED":
+        if not clear_pending_root_authority(
+            workspace,
+            workspace_identity,
+            owner=prior_lease_id,
+        ):
+            return {
+                "status": "BLOCKED",
+                "previous_run_id": previous_run_id,
+                "reason": "stale mutation recovered durably but process-local pending root authority is owned by another runtime; current run must not proceed",
+            }
         if not recovery_event_recorded:
             closure.pop("resumed_recovery_event", None)
         with suppress(OSError, RuntimeError, ValueError):
