@@ -137,11 +137,14 @@ async def test_matching_failure_hook_releases_internal_lifecycle(
     assert closed["hookSpecificOutput"]["additionalContext"] == "failed"
     assert failure_calls == ["mcp__qa__probe_api"]
 
-    assert await pre(
-        _internal_input("mcp__qa__inspect_repository"),
-        "toolu-second",
-        cast(Any, None),
-    ) == {}
+    assert (
+        await pre(
+            _internal_input("mcp__qa__inspect_repository"),
+            "toolu-second",
+            cast(Any, None),
+        )
+        == {}
+    )
     assert pre_calls == ["mcp__qa__probe_api", "mcp__qa__inspect_repository"]
 
 
@@ -164,9 +167,9 @@ async def test_invalid_internal_tool_use_id_is_denied_without_poisoning_gate(
 
     denied = await pre(internal, tool_use_id, cast(Any, None))
     assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "bounded non-empty tool_use_id" in denied["hookSpecificOutput"][
-        "permissionDecisionReason"
-    ]
+    assert (
+        "bounded non-empty tool_use_id" in denied["hookSpecificOutput"]["permissionDecisionReason"]
+    )
     assert pre_calls == []
 
     assert await pre(internal, "toolu-valid", cast(Any, None)) == {}
