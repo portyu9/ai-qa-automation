@@ -12,11 +12,7 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 from uuid import uuid4
 
-from ..fs_authority import (
-    descriptor_relative_authority_supported,
-    pin_directory_identity,
-    read_bytes_confined,
-)
+from ..fs_authority import descriptor_relative_authority_supported, pin_directory_identity
 from ..io_safety import fsync_directory, parse_json_object_strict
 from ..tools.subprocess_subject import (
     bind_active_workspace_authority,
@@ -31,6 +27,19 @@ class _MSVCRTLocking(Protocol):
     def locking(self, fd: int, mode: int, nbytes: int) -> None: ...
 
 
+class MutationRecoveryClosureGuard(Protocol):
+    """Bind one runtime's frozen mutation authority to lease teardown."""
+
+    def __call__(
+        self,
+        *,
+        lease_id: str,
+        workspace: Path,
+        run_root_identity: tuple[int, int] | None,
+        workspace_root_identity: tuple[int, int] | None,
+    ) -> AbstractContextManager[bool]: ...
+
+
 def _load_msvcrt() -> _MSVCRTLocking:
     return cast(_MSVCRTLocking, importlib.import_module("msvcrt"))
 
@@ -40,7 +49,6 @@ def _identity(value: os.stat_result) -> tuple[int, int]:
 
 
 _MAX_LEASE_METADATA_BYTES = 64_000
-_MAX_RUNTIME_METADATA_BYTES = 2_000_000
 _DESCRIPTOR_RELATIVE_LEASE_OPEN_SUPPORTED = bool(
     os.name != "nt"
     and getattr(os, "O_DIRECTORY", 0)
@@ -388,52 +396,6 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
         self._revalidate_run_root()
         self._revalidate_workspace_root()
 
-    def _durable_runtime_has_no_pending_mutation(self) -> bool:
-        if self._run_root_identity is None:
-            return False
-        self._revalidate_run_root()
-        try:
-            raw = read_bytes_confined(
-                self.run_root,
-                "runtime.json",
-                max_bytes=_MAX_RUNTIME_METADATA_BYTES,
-                label="runtime metadata for workspace lease recovery closure",
-                expected_root_identity=self._run_root_identity,
-            )
-        except FileNotFoundError as exc:
-            raise OSError(
-                "runtime metadata is missing during workspace lease recovery closure"
-            ) from exc
-        except (OSError, RuntimeError, ValueError) as exc:
-            raise OSError(
-                "runtime metadata could not be read safely for workspace lease recovery closure"
-            ) from exc
-        try:
-            decoded = raw.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise OSError(
-                "runtime metadata is not valid UTF-8 during workspace lease recovery closure"
-            ) from exc
-        try:
-            metadata = parse_json_object_strict(decoded, label="runtime metadata")
-        except (json.JSONDecodeError, ValueError) as exc:
-            raise OSError(
-                "runtime metadata is corrupt or ambiguous during workspace lease recovery closure"
-            ) from exc
-        if metadata.get("lease_id") != self.lease_id:
-            raise OSError(
-                "runtime metadata lease identity does not match workspace lease recovery closure"
-            )
-        if metadata.get("workspace") != str(self.workspace):
-            raise OSError(
-                "runtime metadata workspace does not match workspace lease recovery closure"
-            )
-        if "pending_mutation" not in metadata:
-            raise OSError("runtime metadata is missing pending mutation recovery authority")
-        self._revalidate_run_root()
-        self._revalidate_workspace_root()
-        return metadata["pending_mutation"] is None
-
     def acquire(self, *, publish: bool = True) -> WorkspaceLease:
         self._revalidate_run_root()
         self._revalidate_workspace_root()
@@ -515,15 +477,27 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
         self._owner_published = True
         return self
 
-    def release(self) -> None:
+    def release(
+        self,
+        *,
+        recovery_closure_guard: MutationRecoveryClosureGuard | None = None,
+    ) -> None:
         stream = self._stream
         workspace_lock_fd = self._workspace_lock_fd
         closure_error: BaseException | None = None
-        if stream is not None and self._owner_published:
+        if stream is not None and self._owner_published and recovery_closure_guard is not None:
             try:
-                if self._durable_runtime_has_no_pending_mutation():
-                    self._mutation_recovery_closed = True
-                    self._persist_current_owner(stream, None)
+                with recovery_closure_guard(
+                    lease_id=self.lease_id,
+                    workspace=self.workspace,
+                    run_root_identity=self._run_root_identity,
+                    workspace_root_identity=self._workspace_root_identity,
+                ) as recovery_closed:
+                    if type(recovery_closed) is not bool:
+                        raise OSError("mutation recovery closure guard returned invalid authority")
+                    if recovery_closed:
+                        self._mutation_recovery_closed = True
+                        self._persist_current_owner(stream, None)
             except BaseException as exc:
                 closure_error = exc
 
