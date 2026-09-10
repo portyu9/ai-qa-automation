@@ -648,6 +648,7 @@ async def run_agent(
             current_workspace_fingerprint_complete=pre_recovery_snapshot.fingerprint_complete,
             current_workspace_fingerprint_reasons=pre_recovery_snapshot.fingerprint_incomplete_reasons,
             recovering_run_id=state.run_id,
+            recovery_lease=lease,
         )
         if stale_recovery.get("status") == "BLOCKED":
             state.terminal_status = TerminalStatus.BLOCKED
