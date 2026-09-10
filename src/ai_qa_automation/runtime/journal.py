@@ -444,12 +444,15 @@ class RunJournal:
         stream: BinaryIO,
         *,
         include_last_record: bool = False,
+        prefix_event_count: int | None = None,
     ) -> dict[str, Any]:
         previous: str | None = None
         count = 0
         total_bytes = 0
         expected_seq = 1
         last_record: dict[str, Any] | None = None
+        prefix_observed = prefix_event_count == 0
+        prefix_head_hash: str | None = None
         restore_limit = max(self.max_events, _MAX_RESTORE_EVENTS)
         while True:
             raw = stream.readline(_MAX_JOURNAL_LINE_BYTES + 1)
@@ -482,19 +485,41 @@ class RunJournal:
             previous = actual
             last_record = record
             count += 1
+            if prefix_event_count is not None and count == prefix_event_count:
+                prefix_observed = True
+                prefix_head_hash = previous
             expected_seq += 1
         result: dict[str, Any] = {"valid": True, "events": count, "head_hash": previous}
         if include_last_record:
             result["last_record"] = last_record
+        if prefix_event_count is not None:
+            result["prefix_observed"] = prefix_observed
+            result["prefix_head_hash"] = prefix_head_hash
         return result
 
-    def verify(self, *, include_last_record: bool = False) -> dict[str, Any]:
+    def verify(
+        self,
+        *,
+        include_last_record: bool = False,
+        prefix_event_count: int | None = None,
+    ) -> dict[str, Any]:
+        if prefix_event_count is not None:
+            restore_limit = max(self.max_events, _MAX_RESTORE_EVENTS)
+            if (
+                type(prefix_event_count) is not int
+                or prefix_event_count < 0
+                or prefix_event_count > restore_limit
+            ):
+                raise ValueError("journal prefix event count is outside verification bounds")
         with self._lock, self._pinned_parent() as parent_fd:
             self._assert_owned_path(parent_fd)
             if not self._entry_exists(parent_fd):
                 result: dict[str, Any] = {"valid": True, "events": 0, "head_hash": None}
                 if include_last_record:
                     result["last_record"] = None
+                if prefix_event_count is not None:
+                    result["prefix_observed"] = prefix_event_count == 0
+                    result["prefix_head_hash"] = None
                 return result
 
             if parent_fd is None:
@@ -502,6 +527,7 @@ class RunJournal:
                     return self._verify_stream(
                         stream,
                         include_last_record=include_last_record,
+                        prefix_event_count=prefix_event_count,
                     )
 
             flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
@@ -520,6 +546,7 @@ class RunJournal:
                     result = self._verify_stream(
                         stream,
                         include_last_record=include_last_record,
+                        prefix_event_count=prefix_event_count,
                     )
                 finally:
                     stream.close()
