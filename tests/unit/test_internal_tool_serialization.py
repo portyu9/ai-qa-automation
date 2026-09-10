@@ -81,3 +81,53 @@ def test_internal_tool_handlers_are_serialized_across_tool_names() -> None:
         assert second_entered.is_set()
 
     asyncio.run(scenario())
+
+
+def test_cancelled_internal_tool_releases_serialization_authority() -> None:
+    async def scenario() -> None:
+        registry: dict[str, common_module.ToolHandler] = {}
+        tool = internal_tools._serializing_tool_decorator(
+            _capturing_tool_decorator(registry)
+        )
+        first_entered = asyncio.Event()
+        first_hold = asyncio.Event()
+        second_attempted = asyncio.Event()
+        second_entered = asyncio.Event()
+
+        async def first_handler(_args: dict[str, Any]) -> dict[str, Any]:
+            first_entered.set()
+            await first_hold.wait()
+            return {"first": True}
+
+        async def second_handler(_args: dict[str, Any]) -> dict[str, Any]:
+            second_entered.set()
+            return {"second": True}
+
+        tool("probe_api", "first", {})(first_handler)
+        tool("inspect_repository", "second", {})(second_handler)
+        first = registry["probe_api"]
+        second = registry["inspect_repository"]
+
+        first_task = asyncio.create_task(first({}))
+        await first_entered.wait()
+
+        async def invoke_second() -> dict[str, Any]:
+            second_attempted.set()
+            return await second({})
+
+        second_task = asyncio.create_task(invoke_second())
+        await second_attempted.wait()
+        assert not second_entered.is_set()
+
+        first_task.cancel()
+        try:
+            await first_task
+        except asyncio.CancelledError:
+            pass
+        else:  # pragma: no cover - asyncio task cancellation is deterministic here
+            raise AssertionError("cancelled serialized tool unexpectedly completed")
+
+        assert await second_task == {"second": True}
+        assert second_entered.is_set()
+
+    asyncio.run(scenario())
