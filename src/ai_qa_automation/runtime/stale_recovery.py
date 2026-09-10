@@ -87,6 +87,25 @@ def _load_metadata(
         return {"status": "BLOCKED", "reason": "prior lease run_id is invalid"}
     if raw_previous_run_id == recovering_run_id:
         return {"status": "NONE"}
+
+    recovery_closed = previous_lease.get("mutation_recovery_closed")
+    if "mutation_recovery_closed" in previous_lease and type(recovery_closed) is not bool:
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": raw_previous_run_id,
+            "reason": "prior lease mutation recovery closure authority is invalid",
+        }
+    try:
+        run_identity = _legacy._validated_run_root_identity(previous_lease)
+    except ValueError as exc:
+        return {"status": "BLOCKED", "reason": str(exc)}
+    if recovery_closed is True and run_identity is None:
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": raw_previous_run_id,
+            "reason": "prior lease mutation recovery closure lacks exact run-root identity authority",
+        }
+
     artifact_root = artifact_root.expanduser().resolve()
     try:
         prior_run_dir = _legacy._confined_non_symlink_path(
@@ -94,7 +113,6 @@ def _load_metadata(
             Path(raw_previous_run_id),
             label="prior run directory",
         )
-        run_identity = _legacy._validated_run_root_identity(previous_lease)
         _legacy._current_run_root_identity(prior_run_dir, run_identity)
         runtime_path = prior_run_dir / "runtime.json"
         metadata = _legacy._load_runtime_metadata(
@@ -103,7 +121,13 @@ def _load_metadata(
             expected_run_root_identity=run_identity,
         )
     except FileNotFoundError:
-        return {"status": "NONE", "previous_run_id": raw_previous_run_id}
+        if recovery_closed is True:
+            return {"status": "NONE", "previous_run_id": raw_previous_run_id}
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": raw_previous_run_id,
+            "reason": "prior runtime recovery metadata is unavailable and the prior lease has no durable mutation-recovery closure; manual reconciliation is required",
+        }
     except (OSError, RuntimeError, ValueError) as exc:
         return {"status": "BLOCKED", "reason": str(exc)}
     if metadata.get("workspace") != str(workspace.expanduser().resolve()):
