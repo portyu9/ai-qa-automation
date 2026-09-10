@@ -461,7 +461,8 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             self._workspace_lock_fd = workspace_lock_fd
             self._owner_published = publish
             return self
-        except BaseException:
+        except BaseException as acquisition_error:
+            authority_cleared = True
             if authority_cleanup_required:
                 try:
                     authority_cleared = clear_active_workspace_authority(
@@ -471,8 +472,22 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
                     )
                 except BaseException:
                     authority_cleared = False
+                    # Exact owner/identity cleanup is idempotent and replay-safe. One
+                    # retry prevents an interruption from stranding process authority.
+                    try:
+                        authority_cleared = clear_active_workspace_authority(
+                            self.workspace,
+                            self._workspace_root_identity,
+                            owner=self.lease_id,
+                        )
+                    except BaseException:
+                        authority_cleared = False
                 if authority_cleared:
                     self._authority_bound = False
+                else:
+                    acquisition_error.add_note(
+                        "Process-local workspace authority cleanup could not be guaranteed."
+                    )
             try:
                 if locked:
                     with suppress(OSError):
@@ -515,7 +530,9 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             if self.run_id != recovering_run_id:
                 raise OSError("stale recovery successor lease is bound to a different run")
             if self.artifact_root != artifact_root.expanduser().resolve():
-                raise OSError("stale recovery successor lease is bound to a different artifact root")
+                raise OSError(
+                    "stale recovery successor lease is bound to a different artifact root"
+                )
             if self.workspace != workspace.expanduser().resolve():
                 raise OSError("stale recovery successor lease is bound to a different workspace")
 
@@ -526,7 +543,9 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
                 opened_lease = os.fstat(stream.fileno())
                 current_lease = self.path.stat(follow_symlinks=False)
             except OSError as exc:
-                raise OSError("stale recovery successor lease file could not be revalidated") from exc
+                raise OSError(
+                    "stale recovery successor lease file could not be revalidated"
+                ) from exc
             if (
                 not stat.S_ISREG(opened_lease.st_mode)
                 or not stat.S_ISREG(current_lease.st_mode)
@@ -642,17 +661,19 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
                     self._authority_bound = False
         finally:
             try:
-                if stream is not None:
-                    try:
-                        self._unlock_stream(stream)
-                    finally:
-                        stream.close()
+                try:
+                    if stream is not None:
+                        try:
+                            self._unlock_stream(stream)
+                        finally:
+                            stream.close()
+                finally:
+                    if workspace_lock_fd is not None:
+                        try:
+                            self._unlock_workspace_root(workspace_lock_fd)
+                        finally:
+                            os.close(workspace_lock_fd)
             finally:
-                if workspace_lock_fd is not None:
-                    try:
-                        self._unlock_workspace_root(workspace_lock_fd)
-                    finally:
-                        os.close(workspace_lock_fd)
                 self._stream = None
                 self._workspace_lock_fd = None
                 self._owner_published = False
