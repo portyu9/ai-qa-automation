@@ -157,9 +157,7 @@ def _load_metadata(
     except ValueError as exc:
         reason = str(exc)
         if recovery_closed is True and "run-root identity authority is missing" in reason:
-            reason = (
-                "prior lease mutation recovery closure lacks exact run-root identity authority"
-            )
+            reason = "prior lease mutation recovery closure lacks exact run-root identity authority"
         return {
             "status": "BLOCKED",
             "previous_run_id": raw_previous_run_id,
