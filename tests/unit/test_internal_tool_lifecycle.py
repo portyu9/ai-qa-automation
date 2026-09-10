@@ -113,11 +113,14 @@ async def test_busy_internal_lifecycle_persists_precharged_budget_without_state_
     )
     pre, _post, _failure = _hook_callbacks(cast(dict[Any, list[Any]], hooks))
 
-    assert await pre(
-        _internal_input("mcp__qa__inspect_browser"),
-        "toolu-first",
-        cast(Any, None),
-    ) == {}
+    assert (
+        await pre(
+            _internal_input("mcp__qa__inspect_browser"),
+            "toolu-first",
+            cast(Any, None),
+        )
+        == {}
+    )
     assert control.budget.tool_calls == 1
     assert control.persisted_tool_calls == []
     assert state_saves == []
