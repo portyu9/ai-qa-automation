@@ -16,10 +16,10 @@ from ai_qa_automation.fs_authority import (
 from ai_qa_automation.models import AgentRunState
 from ai_qa_automation.runtime.journal import RunJournal
 from ai_qa_automation.runtime.stale_recovery import recover_stale_mutation
+from ai_qa_automation.runtime.workspace_lease import WorkspaceLease
 from ai_qa_automation.state import StateStore
 from ai_qa_automation.tools.repository import RepositoryInspector
 
-_PRIOR_LEASE_ID = "lease-old"
 _SUCCESSOR_LEASE_ID = "lease-new"
 
 
@@ -77,11 +77,23 @@ def _strict_recovery_fixture(
     backup.parent.mkdir(parents=True)
     backup.write_bytes(original)
     workspace_status = workspace.stat(follow_symlinks=False)
+    run_status = prior_run.stat(follow_symlinks=False)
+
+    prior = WorkspaceLease(
+        artifact_root,
+        workspace,
+        "run-old",
+        run_root_identity=(run_status.st_dev, run_status.st_ino),
+    ).acquire()
+    prior_lease_id = prior.lease_id
+    lease_path = prior.path
+    prior.release()
+    previous_lease = json.loads(lease_path.read_text(encoding="utf-8"))
 
     journal = RunJournal(prior_run / "journal.jsonl")
     journal.append("mutation_prepared")
     runtime = {
-        "lease_id": _PRIOR_LEASE_ID,
+        "lease_id": prior_lease_id,
         "workspace": str(workspace.resolve()),
         "workspace_root_identity": {
             "device": workspace_status.st_dev,
@@ -113,15 +125,6 @@ def _strict_recovery_fixture(
             workspace=str(workspace.resolve()),
         )
     )
-    run_status = prior_run.stat(follow_symlinks=False)
-    previous_lease: dict[str, object] = {
-        "run_id": "run-old",
-        "lease_id": _PRIOR_LEASE_ID,
-        "run_root_identity": {
-            "device": run_status.st_dev,
-            "inode": run_status.st_ino,
-        },
-    }
     workspace_identity = (workspace_status.st_dev, workspace_status.st_ino)
     return (
         artifact_root,
@@ -140,13 +143,19 @@ def _recover(
     candidate_fingerprint: str,
     previous_lease: dict[str, object],
 ) -> dict[str, object]:
-    return recover_stale_mutation(
-        artifact_root=artifact_root,
-        workspace=workspace,
-        previous_lease=previous_lease,
-        current_workspace_fingerprint=candidate_fingerprint,
-        recovering_run_id="run-new",
-    )
+    successor = WorkspaceLease(artifact_root, workspace, "run-new").acquire(publish=False)
+    try:
+        assert successor.previous_metadata == previous_lease
+        return recover_stale_mutation(
+            artifact_root=artifact_root,
+            workspace=workspace,
+            previous_lease=previous_lease,
+            current_workspace_fingerprint=candidate_fingerprint,
+            recovering_run_id="run-new",
+            recovery_lease=successor,
+        )
+    finally:
+        successor.release()
 
 
 def test_stale_recovery_releases_exact_prior_process_local_root_owner(tmp_path: Path) -> None:
@@ -159,7 +168,8 @@ def test_stale_recovery_releases_exact_prior_process_local_root_owner(tmp_path: 
         workspace_identity,
         previous_lease,
     ) = _strict_recovery_fixture(tmp_path)
-    bind_pending_root_authority(workspace, workspace_identity, owner=_PRIOR_LEASE_ID)
+    prior_lease_id = str(previous_lease["lease_id"])
+    bind_pending_root_authority(workspace, workspace_identity, owner=prior_lease_id)
 
     result = _recover(artifact_root, workspace, candidate_fingerprint, previous_lease)
 
