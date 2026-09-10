@@ -276,6 +276,111 @@ def test_clean_closure_requires_exact_run_root_identity_authority(tmp_path: Path
     assert "lacks exact run-root identity authority" in str(recovered["reason"])
 
 
+def test_clean_closure_cannot_be_replayed_for_a_different_workspace(tmp_path: Path) -> None:
+    artifacts = tmp_path / "artifacts"
+    workspace = tmp_path / "workspace"
+    other_workspace = tmp_path / "other-workspace"
+    prior_run = artifacts / "run-prior"
+    artifacts.mkdir()
+    workspace.mkdir()
+    other_workspace.mkdir()
+    prior_run.mkdir()
+    prior_identity = _identity(prior_run)
+    other_workspace_identity = _identity(other_workspace)
+    previous_lease = {
+        "run_id": "run-prior",
+        "lease_id": "lease-prior",
+        "workspace": str(other_workspace.resolve()),
+        "mutation_recovery_closed": True,
+        "run_root_identity": {
+            "device": prior_identity[0],
+            "inode": prior_identity[1],
+        },
+        "workspace_root_identity": {
+            "device": other_workspace_identity[0],
+            "inode": other_workspace_identity[1],
+        },
+    }
+
+    recovered = recover_stale_mutation(
+        artifact_root=artifacts,
+        workspace=workspace,
+        previous_lease=previous_lease,
+        current_workspace_fingerprint="sha256:" + "0" * 64,
+        recovering_run_id="run-next",
+    )
+
+    assert recovered["status"] == "BLOCKED"
+    assert "bound to a different workspace" in str(recovered["reason"])
+
+
+def test_clean_closure_requires_exact_lease_identity_authority(tmp_path: Path) -> None:
+    artifacts = tmp_path / "artifacts"
+    workspace = tmp_path / "workspace"
+    prior_run = artifacts / "run-prior"
+    artifacts.mkdir()
+    workspace.mkdir()
+    prior_run.mkdir()
+    prior_identity = _identity(prior_run)
+    workspace_identity = _identity(workspace)
+    previous_lease = {
+        "run_id": "run-prior",
+        "workspace": str(workspace.resolve()),
+        "mutation_recovery_closed": True,
+        "run_root_identity": {
+            "device": prior_identity[0],
+            "inode": prior_identity[1],
+        },
+        "workspace_root_identity": {
+            "device": workspace_identity[0],
+            "inode": workspace_identity[1],
+        },
+    }
+
+    recovered = recover_stale_mutation(
+        artifact_root=artifacts,
+        workspace=workspace,
+        previous_lease=previous_lease,
+        current_workspace_fingerprint="sha256:" + "0" * 64,
+        recovering_run_id="run-next",
+    )
+
+    assert recovered["status"] == "BLOCKED"
+    assert "lacks exact lease identity authority" in str(recovered["reason"])
+
+
+def test_clean_closure_requires_exact_workspace_root_identity_authority(tmp_path: Path) -> None:
+    artifacts = tmp_path / "artifacts"
+    workspace = tmp_path / "workspace"
+    prior_run = artifacts / "run-prior"
+    artifacts.mkdir()
+    workspace.mkdir()
+    prior_run.mkdir()
+    prior_identity = _identity(prior_run)
+    previous_lease = {
+        "run_id": "run-prior",
+        "lease_id": "lease-prior",
+        "workspace": str(workspace.resolve()),
+        "mutation_recovery_closed": True,
+        "run_root_identity": {
+            "device": prior_identity[0],
+            "inode": prior_identity[1],
+        },
+        "workspace_root_identity": None,
+    }
+
+    recovered = recover_stale_mutation(
+        artifact_root=artifacts,
+        workspace=workspace,
+        previous_lease=previous_lease,
+        current_workspace_fingerprint="sha256:" + "0" * 64,
+        recovering_run_id="run-next",
+    )
+
+    assert recovered["status"] == "BLOCKED"
+    assert "lacks exact workspace-root identity authority" in str(recovered["reason"])
+
+
 def test_invalid_clean_closure_marker_is_never_authority(tmp_path: Path) -> None:
     artifacts = tmp_path / "artifacts"
     workspace = tmp_path / "workspace"
