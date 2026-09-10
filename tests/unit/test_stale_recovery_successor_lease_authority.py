@@ -248,6 +248,32 @@ def test_wrong_predecessor_handoff_cannot_clear_residual_authority(tmp_path: Pat
         _clear_fixture_authority(workspace, workspace_identity, prior_lease_id)
 
 
+def test_mutated_live_predecessor_metadata_cannot_bypass_successor_authority(
+    tmp_path: Path,
+) -> None:
+    artifact_root, workspace, workspace_identity, _previous_lease, prior_lease_id = (
+        _setup_residual_authority(tmp_path)
+    )
+    successor = WorkspaceLease(artifact_root, workspace, "run-new").acquire(publish=False)
+    mutated_previous = successor.previous_metadata
+    assert mutated_previous is not None
+    mutated_previous["run_id"] = "run-new"
+    try:
+        result = _recover(
+            artifact_root=artifact_root,
+            workspace=workspace,
+            previous_lease=mutated_previous,
+            recovery_lease=successor,
+        )
+
+        assert result["status"] == "BLOCKED"
+        assert "predecessor handoff" in str(result["reason"])
+        assert pending_root_authority(workspace) == workspace_identity
+    finally:
+        successor.release()
+        _clear_fixture_authority(workspace, workspace_identity, prior_lease_id)
+
+
 def test_recovery_body_infrastructure_failure_is_not_laundered_as_invalid_lease(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
