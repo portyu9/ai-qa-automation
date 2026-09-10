@@ -5,7 +5,8 @@ import json
 import os
 import tempfile
 from _thread import RLock
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,7 +24,7 @@ from ..fs_authority import (
     stat_confined_entry,
     unlink_file_confined,
 )
-from ..io_safety import fsync_directory
+from ..io_safety import fsync_directory, parse_json_object_strict
 from .budget import BudgetExceededError, ExecutionBudget
 from .journal import RunJournal
 
@@ -116,6 +117,12 @@ class RuntimeControl:
         repr=False,
         compare=False,
     )
+    _mutation_authority_closed: bool = field(
+        default=False,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         if type(self.circuit_failure_threshold) is not int or self.circuit_failure_threshold < 1:
@@ -164,6 +171,18 @@ class RuntimeControl:
         """Return the run-lifetime filesystem identity authorized for target mutations."""
 
         return self._workspace_identity
+
+    def _assert_mutation_authority_open(self) -> None:
+        if self._mutation_authority_closed:
+            raise MutationPendingError(
+                "runtime mutation authority is closed for workspace lease release"
+            )
+
+    def assert_mutation_authority_open(self) -> None:
+        """Reject target mutation after teardown has frozen this runtime."""
+
+        with self._lock:
+            self._assert_mutation_authority_open()
 
     def _assert_workspace_identity(self) -> None:
         if self._workspace_identity is None:
@@ -231,6 +250,7 @@ class RuntimeControl:
         pre_mutation_context_fingerprint: str | None = None,
     ) -> None:
         with self._lock:
+            self._assert_mutation_authority_open()
             if not isinstance(candidate_required, bool):
                 raise ValueError("candidate_required must be a boolean")
             if candidate_required:
@@ -438,6 +458,7 @@ class RuntimeControl:
         """Durably bind a live pending transaction to the exact bytes it produced."""
 
         with self._lock:
+            self._assert_mutation_authority_open()
             pending = self.pending_mutation
             if pending is None:
                 raise MutationPendingError("no mutation is pending candidate binding")
@@ -697,6 +718,7 @@ class RuntimeControl:
         current_workspace_fingerprint: str | None = None,
     ) -> str | None:
         with self._lock:
+            self._assert_mutation_authority_open()
             pending = self.pending_mutation
             if pending is None:
                 return None
@@ -739,6 +761,7 @@ class RuntimeControl:
 
     def rollback_pending_mutation(self, *, reason: str) -> str | None:
         with self._lock:
+            self._assert_mutation_authority_open()
             pending = self.pending_mutation
             if pending is None:
                 return None
@@ -897,6 +920,111 @@ class RuntimeControl:
         with self._lock:
             self.expected_workspace_fingerprint = fingerprint
             self.persist()
+
+    def _assert_durable_mutation_authority_for_closure(
+        self,
+        *,
+        current_journal_authority: tuple[int, str | None],
+    ) -> None:
+        persistence_root_identity = self.persistence_root_identity
+        if persistence_root_identity is None:
+            raise RuntimeError("runtime recovery closure lacks exact run persistence authority")
+        run_root = self.metadata_path.parent.expanduser().absolute()
+        raw = read_bytes_confined(
+            run_root,
+            self.metadata_path.name,
+            max_bytes=_MAX_RUNTIME_METADATA_BYTES,
+            label="runtime metadata for mutation recovery closure",
+            expected_root_identity=persistence_root_identity,
+        )
+        metadata = parse_json_object_strict(
+            raw.decode("utf-8"),
+            label="runtime metadata for mutation recovery closure",
+        )
+        expected = self.snapshot(include_pending_details=True)
+        for key in (
+            "lease_id",
+            "workspace",
+            "workspace_root_identity",
+            "workspace_fingerprint",
+            "pending_mutation",
+        ):
+            if key not in metadata or metadata[key] != expected[key]:
+                raise RuntimeError(
+                    f"durable runtime {key} authority does not match live mutation recovery state"
+                )
+        if "journal_event_count" not in metadata or "journal_head_hash" not in metadata:
+            raise RuntimeError("durable runtime journal binding authority is incomplete")
+        journal_count = metadata["journal_event_count"]
+        journal_head = metadata["journal_head_hash"]
+        if type(journal_count) is not int or journal_count < 0:
+            raise RuntimeError("durable runtime journal event-count authority is invalid")
+        if journal_head is not None and (
+            not isinstance(journal_head, str)
+            or len(journal_head) != 64
+            or any(character not in "0123456789abcdef" for character in journal_head)
+        ):
+            raise RuntimeError("durable runtime journal head authority is invalid")
+        if (journal_count == 0) != (journal_head is None):
+            raise RuntimeError("durable runtime journal binding authority is incoherent")
+
+        try:
+            journal_status = self.journal.verify(prefix_event_count=journal_count)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise RuntimeError(
+                "durable runtime journal ancestry could not be verified for recovery closure"
+            ) from exc
+        if journal_status.get("valid") is not True:
+            raise RuntimeError("runtime recovery closure journal hash chain is invalid")
+        if journal_status.get("prefix_observed") is not True:
+            raise RuntimeError(
+                "durable runtime journal event-count is not a prefix of the verified journal"
+            )
+        if journal_status.get("prefix_head_hash") != journal_head:
+            raise RuntimeError(
+                "durable runtime journal head is not the exact persisted journal prefix"
+            )
+        verified_authority = (
+            journal_status.get("events"),
+            journal_status.get("head_hash"),
+        )
+        if verified_authority != current_journal_authority:
+            raise RuntimeError(
+                "verified journal authority does not match the lock-held runtime journal subject"
+            )
+
+    @contextmanager
+    def mutation_recovery_closure_binding(
+        self,
+        *,
+        lease_id: str,
+        workspace: Path,
+        run_root_identity: tuple[int, int] | None,
+        workspace_root_identity: tuple[int, int] | None,
+    ) -> Iterator[bool]:
+        """Freeze target mutation and bind durable no-pending truth through lease publication."""
+
+        with self._lock, self.journal.authority_binding() as journal_authority:
+            self._mutation_authority_closed = True
+            if run_root_identity is None or workspace_root_identity is None:
+                yield False
+                return
+            if lease_id != self.lease_id:
+                raise RuntimeError("workspace lease release is bound to a different runtime lease")
+            if workspace.expanduser().resolve() != self.workspace:
+                raise RuntimeError(
+                    "workspace lease release is bound to a different runtime workspace"
+                )
+            if run_root_identity != self.persistence_root_identity:
+                raise RuntimeError("workspace lease release lost exact run persistence authority")
+            if workspace_root_identity != self._workspace_identity:
+                raise RuntimeError("workspace lease release lost exact workspace root authority")
+            self._assert_workspace_identity()
+            self._assert_durable_mutation_authority_for_closure(
+                current_journal_authority=journal_authority,
+            )
+            self.persist()
+            yield self.pending_mutation is None
 
     def persist(self) -> None:
         with self._lock, self.journal.authority_binding():

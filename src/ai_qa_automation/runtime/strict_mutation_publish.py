@@ -105,6 +105,7 @@ def publish_pending_candidate(
         raise MutationPendingError("strict mutation candidate is identical to the original target")
 
     with control._lock:
+        control.assert_mutation_authority_open()
         pending = control.pending_mutation
         if pending is None or not pending.candidate_required:
             raise MutationPendingError(

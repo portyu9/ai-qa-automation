@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -119,10 +120,10 @@ async def test_workspace_lease_release_failure_is_reported_after_single_release_
     original_release = WorkspaceLease.release
     release_calls = 0
 
-    def release_then_fail(self: WorkspaceLease) -> None:
+    def release_then_fail(self: WorkspaceLease, **kwargs: Any) -> None:
         nonlocal release_calls
         release_calls += 1
-        original_release(self)
+        original_release(self, **kwargs)
         raise OSError("post-release authority verification failed")
 
     monkeypatch.setattr(WorkspaceLease, "release", release_then_fail)

@@ -8,10 +8,12 @@ from typing import Any, TypeGuard
 
 from ..fs_authority import (
     atomic_write_bytes_confined,
+    descriptor_relative_authority_supported,
     move_file_noreplace_between_confined_roots,
     read_bytes_confined,
     unlink_file_confined,
 )
+from ..io_safety import parse_json_object_strict, read_json_object_bounded
 from . import _stale_recovery_legacy as _legacy
 from .journal import RunJournal, validate_runtime_journal_binding
 from .run_control import atomic_write_json, mutation_candidate_proof_relative_path
@@ -79,6 +81,46 @@ def _restore_misclaimed(
     return None
 
 
+def _load_runtime_metadata_preserving_missing(
+    runtime_path: Path,
+    *,
+    prior_run_dir: Path,
+    expected_run_root_identity: tuple[int, int] | None,
+) -> dict[str, Any]:
+    """Load prior runtime authority without collapsing an absent file into corruption."""
+
+    try:
+        if descriptor_relative_authority_supported():
+            raw = read_bytes_confined(
+                prior_run_dir,
+                runtime_path.name,
+                max_bytes=_legacy._MAX_RUNTIME_METADATA_BYTES,
+                label="prior runtime metadata",
+                expected_root_identity=expected_run_root_identity,
+            )
+            return parse_json_object_strict(raw.decode("utf-8"), label="prior runtime metadata")
+        return read_json_object_bounded(
+            runtime_path,
+            max_bytes=_legacy._MAX_RUNTIME_METADATA_BYTES,
+            label="prior runtime metadata",
+        )
+    except FileNotFoundError:
+        raise
+    except OSError as exc:
+        raise ValueError("prior runtime metadata is unreadable") from exc
+    except UnicodeError as exc:
+        raise ValueError("prior runtime metadata is not valid UTF-8") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError("prior runtime metadata is invalid JSON") from exc
+    except ValueError as exc:
+        message = str(exc)
+        if "exceeds" in message and "ingestion limit" in message:
+            raise ValueError("prior runtime metadata exceeds recovery ingestion limit") from exc
+        if "root must be a JSON object" in message:
+            raise ValueError("prior runtime metadata root must be an object") from exc
+        raise ValueError(message) from exc
+
+
 def _load_metadata(
     *, artifact_root: Path, workspace: Path, previous_lease: dict[str, Any], recovering_run_id: str
 ) -> tuple[dict[str, Any], Path, tuple[int, int] | None] | dict[str, Any]:
@@ -87,6 +129,32 @@ def _load_metadata(
         return {"status": "BLOCKED", "reason": "prior lease run_id is invalid"}
     if raw_previous_run_id == recovering_run_id:
         return {"status": "NONE"}
+
+    recovery_closed = previous_lease.get("mutation_recovery_closed")
+    if "mutation_recovery_closed" in previous_lease and type(recovery_closed) is not bool:
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": raw_previous_run_id,
+            "reason": "prior lease mutation recovery closure authority is invalid",
+        }
+    if recovery_closed is True:
+        prior_lease_id = previous_lease.get("lease_id")
+        if not isinstance(prior_lease_id, str) or not prior_lease_id.strip():
+            return {
+                "status": "BLOCKED",
+                "previous_run_id": raw_previous_run_id,
+                "reason": "prior lease mutation recovery closure lacks exact lease identity authority",
+            }
+        prior_workspace = previous_lease.get("workspace")
+        if not isinstance(prior_workspace, str) or prior_workspace != str(
+            workspace.expanduser().resolve()
+        ):
+            return {
+                "status": "BLOCKED",
+                "previous_run_id": raw_previous_run_id,
+                "reason": "prior lease mutation recovery closure is bound to a different workspace",
+            }
+
     artifact_root = artifact_root.expanduser().resolve()
     try:
         prior_run_dir = _legacy._confined_non_symlink_path(
@@ -94,18 +162,72 @@ def _load_metadata(
             Path(raw_previous_run_id),
             label="prior run directory",
         )
+    except (OSError, RuntimeError, ValueError) as exc:
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": raw_previous_run_id,
+            "reason": str(exc),
+        }
+
+    try:
         run_identity = _legacy._validated_run_root_identity(previous_lease)
+    except ValueError as exc:
+        reason = str(exc)
+        if recovery_closed is True and "run-root identity authority is missing" in reason:
+            reason = "prior lease mutation recovery closure lacks exact run-root identity authority"
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": raw_previous_run_id,
+            "reason": reason,
+        }
+    if recovery_closed is True and run_identity is None:
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": raw_previous_run_id,
+            "reason": "prior lease mutation recovery closure lacks exact run-root identity authority",
+        }
+    if recovery_closed is True:
+        raw_workspace_identity = previous_lease.get("workspace_root_identity")
+        if not isinstance(raw_workspace_identity, dict) or set(raw_workspace_identity) != {
+            "device",
+            "inode",
+        }:
+            return {
+                "status": "BLOCKED",
+                "previous_run_id": raw_previous_run_id,
+                "reason": "prior lease mutation recovery closure lacks exact workspace-root identity authority",
+            }
+        device = raw_workspace_identity.get("device")
+        inode = raw_workspace_identity.get("inode")
+        if type(device) is not int or type(inode) is not int or device < 0 or inode < 0:
+            return {
+                "status": "BLOCKED",
+                "previous_run_id": raw_previous_run_id,
+                "reason": "prior lease mutation recovery closure lacks exact workspace-root identity authority",
+            }
+
+    try:
         _legacy._current_run_root_identity(prior_run_dir, run_identity)
         runtime_path = prior_run_dir / "runtime.json"
-        metadata = _legacy._load_runtime_metadata(
+        metadata = _load_runtime_metadata_preserving_missing(
             runtime_path,
             prior_run_dir=prior_run_dir,
             expected_run_root_identity=run_identity,
         )
     except FileNotFoundError:
-        return {"status": "NONE", "previous_run_id": raw_previous_run_id}
+        if recovery_closed is True:
+            return {"status": "NONE", "previous_run_id": raw_previous_run_id}
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": raw_previous_run_id,
+            "reason": "prior runtime recovery metadata is unavailable and the prior lease has no durable mutation-recovery closure; manual reconciliation is required",
+        }
     except (OSError, RuntimeError, ValueError) as exc:
-        return {"status": "BLOCKED", "reason": str(exc)}
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": raw_previous_run_id,
+            "reason": str(exc),
+        }
     if metadata.get("workspace") != str(workspace.expanduser().resolve()):
         return {
             "status": "BLOCKED",

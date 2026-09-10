@@ -27,6 +27,19 @@ class _MSVCRTLocking(Protocol):
     def locking(self, fd: int, mode: int, nbytes: int) -> None: ...
 
 
+class MutationRecoveryClosureGuard(Protocol):
+    """Bind one runtime's frozen mutation authority to lease teardown."""
+
+    def __call__(
+        self,
+        *,
+        lease_id: str,
+        workspace: Path,
+        run_root_identity: tuple[int, int] | None,
+        workspace_root_identity: tuple[int, int] | None,
+    ) -> AbstractContextManager[bool]: ...
+
+
 def _load_msvcrt() -> _MSVCRTLocking:
     return cast(_MSVCRTLocking, importlib.import_module("msvcrt"))
 
@@ -91,6 +104,7 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
         self._workspace_lock_fd: int | None = None
         self._authority_bound = False
         self._owner_published = False
+        self._mutation_recovery_closed = False
         self._acquired_at: str | None = None
         self.previous_metadata: dict[str, Any] | None = None
 
@@ -303,6 +317,11 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             raise OSError("workspace lease run_id must be a non-empty string")
         if not isinstance(previous_lease_id, str) or not previous_lease_id.strip():
             raise OSError("workspace lease lease_id must be a non-empty string")
+        if (
+            "mutation_recovery_closed" in previous
+            and type(previous["mutation_recovery_closed"]) is not bool
+        ):
+            raise OSError("workspace lease mutation recovery closure authority is invalid")
         if "workspace_root_identity" in previous:
             root_identity = previous["workspace_root_identity"]
             if root_identity is not None:
@@ -352,6 +371,7 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             "workspace": str(self.workspace),
             "workspace_root_identity": workspace_root_identity,
             "run_root_identity": run_root_identity,
+            "mutation_recovery_closed": self._mutation_recovery_closed,
             "pid": os.getpid(),
             "hostname": socket.gethostname(),
             "acquired_at": acquired_at,
@@ -396,6 +416,7 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             self._revalidate_lease_root(directory_fd)
             self._revalidate_workspace_root()
             self._acquired_at = datetime.now(UTC).isoformat()
+            self._mutation_recovery_closed = False
             stream.seek(0)
             raw = stream.read(_MAX_LEASE_METADATA_BYTES + 1)
             if len(raw) > _MAX_LEASE_METADATA_BYTES:
@@ -435,6 +456,7 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
                     self._unlock_workspace_root(workspace_lock_fd)
                 os.close(workspace_lock_fd)
             self._acquired_at = None
+            self._mutation_recovery_closed = False
             raise
         finally:
             if directory_fd is not None:
@@ -450,13 +472,35 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             return self
         self._revalidate_run_root()
         self._revalidate_workspace_root()
+        self._mutation_recovery_closed = False
         self._persist_current_owner(stream, None)
         self._owner_published = True
         return self
 
-    def release(self) -> None:
+    def release(
+        self,
+        *,
+        recovery_closure_guard: MutationRecoveryClosureGuard | None = None,
+    ) -> None:
         stream = self._stream
         workspace_lock_fd = self._workspace_lock_fd
+        closure_error: BaseException | None = None
+        if stream is not None and self._owner_published and recovery_closure_guard is not None:
+            try:
+                with recovery_closure_guard(
+                    lease_id=self.lease_id,
+                    workspace=self.workspace,
+                    run_root_identity=self._run_root_identity,
+                    workspace_root_identity=self._workspace_root_identity,
+                ) as recovery_closed:
+                    if type(recovery_closed) is not bool:
+                        raise OSError("mutation recovery closure guard returned invalid authority")
+                    if recovery_closed:
+                        self._mutation_recovery_closed = True
+                        self._persist_current_owner(stream, None)
+            except BaseException as exc:
+                closure_error = exc
+
         self._stream = None
         self._workspace_lock_fd = None
         self._owner_published = False
@@ -482,8 +526,20 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
                     self._unlock_workspace_root(workspace_lock_fd)
                 finally:
                     os.close(workspace_lock_fd)
+        self._mutation_recovery_closed = False
         if not authority_cleared:
-            raise OSError("active workspace authority is owned by another lease")
+            error = OSError("active workspace authority is owned by another lease")
+            if closure_error is not None:
+                error.add_note(
+                    "Workspace lease mutation recovery closure also could not be persisted safely."
+                )
+            raise error
+        if closure_error is not None:
+            if isinstance(closure_error, Exception):
+                raise OSError(
+                    "workspace lease mutation recovery closure could not be persisted safely"
+                ) from closure_error
+            raise closure_error
 
     def __enter__(self) -> WorkspaceLease:
         return self.acquire()
