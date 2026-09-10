@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Callable
+from functools import wraps
 from typing import Any, cast
 
+from ..models import TerminalStatus
 from ..tools.api_testing import ApiProbe
 from ..tools.browser_evidence import BrowserProbe
 from ..tools.performance import K6Runner
@@ -57,6 +61,51 @@ def _k6_runner_factory(*args: Any, **kwargs: Any) -> Any:
     return K6Runner(*args, **kwargs)
 
 
+def _mark_cancelled_internal_tool(services: RuntimeServices, tool_name: str) -> None:
+    """Prevent incomplete internal execution from later resolving as successful truth."""
+
+    if services.state.terminal_status in {None, TerminalStatus.SUCCESS}:
+        services.state.terminal_status = TerminalStatus.INFRASTRUCTURE_FAILURE
+        services.state.terminal_reason = (
+            f"Framework-owned internal tool {tool_name} was cancelled before lifecycle closure"
+        )
+    services.checkpoint()
+
+
+def _serializing_tool_decorator(
+    tool_decorator: _common.ToolDecorator,
+    *,
+    cancellation_callback: Callable[[str], None] | None = None,
+) -> _common.ToolDecorator:
+    """Serialize complete in-process tool handlers on one live runtime subject."""
+
+    execution_lock = asyncio.Lock()
+
+    def serializing_tool(
+        name: str,
+        description: str,
+        input_schema: dict[str, Any],
+    ) -> Callable[[_common.ToolHandler], object]:
+        decorate = tool_decorator(name, description, input_schema)
+
+        def decorate_serialized(handler: _common.ToolHandler) -> object:
+            @wraps(handler)
+            async def serialized(args: dict[str, Any]) -> dict[str, Any]:
+                async with execution_lock:
+                    try:
+                        return await handler(args)
+                    except asyncio.CancelledError:
+                        if cancellation_callback is not None:
+                            cancellation_callback(name)
+                        raise
+
+            return decorate(serialized)
+
+        return decorate_serialized
+
+    return serializing_tool
+
+
 def _merge_registered_tools(target: dict[str, Any], registered: dict[str, Any]) -> None:
     for name, handler in registered.items():
         if name in target:
@@ -71,7 +120,11 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError("claude-agent-sdk is required for live agent mode") from exc
 
-    tool_decorator = cast(_common.ToolDecorator, tool)
+    sdk_tool_decorator = cast(_common.ToolDecorator, tool)
+    tool_decorator = _serializing_tool_decorator(
+        sdk_tool_decorator,
+        cancellation_callback=lambda name: _mark_cancelled_internal_tool(services, name),
+    )
     registered: dict[str, Any] = {}
     _merge_registered_tools(registered, register_repository_tools(services, tool_decorator))
     _merge_registered_tools(registered, register_testing_tools(services, tool_decorator))

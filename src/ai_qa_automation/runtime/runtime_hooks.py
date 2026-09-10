@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-from typing import Any, cast
+from threading import Lock
+from typing import Any, TypeGuard, cast
 
 from claude_agent_sdk.types import (
     HookContext,
@@ -45,6 +46,10 @@ from .tool_output_bounds import (
 from .validation_truth import evaluate_revision_closure
 from .workspace_freshness import WorkspaceFreshnessCode, observe_workspace_freshness
 
+_INTERNAL_TOOL_PREFIX = "mcp__qa__"
+_INVALID_INTERNAL_TOOL_NAME = "mcp__qa__<invalid-name>"
+_MAX_TOOL_USE_ID_CHARS = 256
+_MAX_INTERNAL_TOOL_NAME_CHARS = 256
 _NETWORK_TOOLS = {
     "mcp__qa__probe_api",
     "mcp__qa__inspect_browser",
@@ -61,6 +66,168 @@ _VALIDATION_BEARING_TOOLS = {
     "mcp__qa__inspect_mobile_runtime",
     "mcp__qa__run_k6",
 }
+
+
+class _InternalToolLifecycleGate:
+    """Bind one framework-owned internal tool from admission through terminal hook."""
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._active: tuple[str, str] | None = None
+        self._used_tool_use_ids: set[str] = set()
+        self._poisoned_reason: str | None = None
+
+    @staticmethod
+    def _valid_tool_use_id(tool_use_id: object) -> TypeGuard[str]:
+        return (
+            isinstance(tool_use_id, str)
+            and bool(tool_use_id)
+            and len(tool_use_id) <= _MAX_TOOL_USE_ID_CHARS
+        )
+
+    def reserve(self, tool_name: str, tool_use_id: str | None) -> str | None:
+        if not self._valid_tool_use_id(tool_use_id):
+            return "internal tool lifecycle requires a bounded non-empty tool_use_id"
+        with self._lock:
+            if self._poisoned_reason is not None:
+                return self._poisoned_reason
+            if tool_use_id in self._used_tool_use_ids:
+                return "internal tool lifecycle tool_use_id was reused; replay is denied"
+            if self._active is not None:
+                return (
+                    "another framework-owned internal tool lifecycle is still active; "
+                    "concurrent internal execution is denied"
+                )
+            self._active = (tool_name, tool_use_id)
+            self._used_tool_use_ids.add(tool_use_id)
+        return None
+
+    def completion_error(self, tool_name: str, tool_use_id: str | None) -> str | None:
+        with self._lock:
+            if not self._valid_tool_use_id(tool_use_id):
+                reason = "internal tool completion is missing a bounded tool_use_id"
+                self._poisoned_reason = reason
+                return reason
+            expected = self._active
+            if expected is None:
+                reason = "internal tool completion arrived without active lifecycle authority"
+                self._poisoned_reason = reason
+                return reason
+            if expected != (tool_name, tool_use_id):
+                reason = "internal tool completion does not match active lifecycle identity"
+                self._poisoned_reason = reason
+                return reason
+        return None
+
+    def finish(self, tool_name: str, tool_use_id: str) -> None:
+        with self._lock:
+            if self._active != (tool_name, tool_use_id):
+                self._poisoned_reason = (
+                    "internal tool lifecycle changed before deterministic hook closure"
+                )
+                return
+            self._active = None
+
+    def abandon_unbudgeted(self, tool_name: str, tool_use_id: str) -> None:
+        """Release an ID that never passed the canonical request-budget boundary."""
+
+        with self._lock:
+            if self._active != (tool_name, tool_use_id):
+                self._poisoned_reason = (
+                    "internal tool lifecycle changed before budget-denial closure"
+                )
+                return
+            self._active = None
+            self._used_tool_use_ids.discard(tool_use_id)
+
+    def poison(self, *, reason: str) -> None:
+        with self._lock:
+            self._poisoned_reason = reason
+
+    def poison_active(self, tool_name: str, tool_use_id: str, *, reason: str) -> None:
+        with self._lock:
+            self._poisoned_reason = reason
+            if self._active == (tool_name, tool_use_id):
+                self._active = None
+
+
+def _internal_tool_name(input_data: dict[str, Any]) -> str | None:
+    raw_tool_name = input_data.get("tool_name")
+    if not isinstance(raw_tool_name, str) or not raw_tool_name.startswith(_INTERNAL_TOOL_PREFIX):
+        return None
+    if (
+        len(raw_tool_name) > _MAX_INTERNAL_TOOL_NAME_CHARS
+        or not raw_tool_name.isascii()
+        or not raw_tool_name.isprintable()
+    ):
+        return _INVALID_INTERNAL_TOOL_NAME
+    return raw_tool_name
+
+
+def _pretool_output_denies_execution(output: dict[str, Any]) -> bool:
+    hook_output = output.get("hookSpecificOutput")
+    return isinstance(hook_output, dict) and hook_output.get("permissionDecision") == "deny"
+
+
+def _internal_lifecycle_pretool_denial(reason: str) -> dict[str, Any]:
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": f"runtime-serialization: {reason}",
+        }
+    }
+
+
+def _latch_internal_lifecycle_processing_failure(
+    state: AgentRunState | None,
+    *,
+    event_name: str,
+) -> None:
+    """Prevent a failed admitted hook from later being recomputed as successful truth."""
+
+    if state is not None and state.terminal_status in {None, TerminalStatus.SUCCESS}:
+        state.terminal_status = TerminalStatus.INFRASTRUCTURE_FAILURE
+        state.terminal_reason = (
+            f"Internal tool lifecycle {event_name} processing failed before deterministic closure"
+        )
+
+
+def _record_internal_lifecycle_integrity_failure(
+    *,
+    event_name: str,
+    tool_name: str,
+    reason: str,
+    state: AgentRunState | None,
+    state_store: StateStore | None,
+    control: RuntimeControl | None,
+) -> dict[str, Any]:
+    if state is not None and state.terminal_status in {None, TerminalStatus.SUCCESS}:
+        state.terminal_status = TerminalStatus.INFRASTRUCTURE_FAILURE
+        state.terminal_reason = (
+            "Internal tool lifecycle identity could not be reconciled deterministically"
+        )
+    if control is not None:
+        control.journal.try_append(
+            "internal_tool_lifecycle_integrity_failed",
+            event_name=event_name,
+            tool_name=tool_name,
+            reason=reason,
+        )
+    _checkpoint(state, state_store, control)
+    hook_output: dict[str, Any] = {
+        "hookEventName": event_name,
+        "additionalContext": (
+            "Internal tool result ownership could not be matched to the admitted lifecycle. "
+            "The result was not accepted as authoritative and further internal execution is denied."
+        ),
+    }
+    if event_name == "PostToolUse":
+        hook_output["updatedToolOutput"] = {
+            "is_error": True,
+            "error": "Internal tool result rejected because lifecycle identity is ambiguous.",
+        }
+    return {"hookSpecificOutput": hook_output}
 
 
 def _input_fingerprint(tool_name: str, tool_input: dict[str, Any]) -> str:
@@ -84,6 +251,82 @@ def _checkpoint(
 def _sync_tool_count(state: AgentRunState | None, control: RuntimeControl | None) -> None:
     if state is not None and control is not None:
         state.tool_call_count = control.budget.snapshot().tool_calls
+
+
+def _charge_tool_request_budget(
+    *,
+    state: AgentRunState | None,
+    state_store: StateStore | None,
+    control: RuntimeControl | None,
+) -> dict[str, Any] | None:
+    """Charge every SDK tool request before any execution-specific admission work."""
+
+    try:
+        if control is not None:
+            control.budget.charge_tool()
+            _sync_tool_count(state, control)
+    except BudgetExceededError as exc:
+        if state is not None:
+            state.terminal_status = TerminalStatus.BUDGET_EXCEEDED
+            state.terminal_reason = str(exc)
+        if control is not None:
+            control.journal.append(
+                "budget_denied",
+                tool_name_state="unvalidated",
+                reason=str(exc),
+            )
+        _checkpoint(state, state_store, control)
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": f"runtime-budget: {exc}",
+            }
+        }
+    return None
+
+
+def _charge_denied_internal_lifecycle_budget(
+    *,
+    state: AgentRunState | None,
+    control: RuntimeControl | None,
+    tool_name: str,
+    denial_reason: str,
+) -> dict[str, Any] | None:
+    """Bound a rejected internal request without checkpointing in-flight semantic state."""
+
+    try:
+        if control is not None:
+            control.budget.charge_tool()
+            _sync_tool_count(state, control)
+    except BudgetExceededError as exc:
+        if state is not None:
+            state.terminal_status = TerminalStatus.BUDGET_EXCEEDED
+            state.terminal_reason = str(exc)
+        if control is not None:
+            control.journal.append(
+                "budget_denied",
+                tool_name=tool_name,
+                admission="internal_lifecycle",
+                reason=str(exc),
+            )
+            control.persist()
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": f"runtime-budget: {exc}",
+            }
+        }
+
+    if control is not None:
+        control.journal.append(
+            "internal_tool_lifecycle_denied",
+            tool_name=tool_name,
+            reason=denial_reason,
+        )
+        control.persist()
+    return None
 
 
 def _tool_response_failed(response: Any) -> bool:
@@ -324,34 +567,21 @@ def pretool_policy_output(
     state: AgentRunState | None = None,
     state_store: StateStore | None = None,
     control: RuntimeControl | None = None,
+    tool_budget_already_charged: bool = False,
 ) -> dict[str, Any]:
     """Apply the one live request-budget/repetition/policy authority before execution."""
     raw_tool_name = input_data.get("tool_name", "")
     raw_tool_input = input_data.get("tool_input")
     tool_input = {} if raw_tool_input is None else raw_tool_input
 
-    try:
-        if control is not None:
-            control.budget.charge_tool()
-            _sync_tool_count(state, control)
-    except BudgetExceededError as exc:
-        if state is not None:
-            state.terminal_status = TerminalStatus.BUDGET_EXCEEDED
-            state.terminal_reason = str(exc)
-        if control is not None:
-            control.journal.append(
-                "budget_denied",
-                tool_name_state="unvalidated",
-                reason=str(exc),
-            )
-        _checkpoint(state, state_store, control)
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": f"runtime-budget: {exc}",
-            }
-        }
+    if not tool_budget_already_charged:
+        budget_denial = _charge_tool_request_budget(
+            state=state,
+            state_store=state_store,
+            control=control,
+        )
+        if budget_denial is not None:
+            return budget_denial
 
     try:
         validate_tool_request(raw_tool_name, tool_input)
@@ -981,52 +1211,180 @@ def build_hooks(
 ) -> dict[HookEvent, list[HookMatcher]]:
     """Build the single live hook surface for policy, execution control, and provenance."""
 
+    lifecycle_gate = _InternalToolLifecycleGate()
+
     async def pre_tool_use(
         input_data: HookInput,
-        _tool_use_id: str | None,
+        tool_use_id: str | None,
         _context: HookContext,
     ) -> HookJSONOutput:
-        return cast(
-            HookJSONOutput,
-            pretool_policy_output(
+        data = cast(dict[str, Any], input_data)
+        internal_tool_name = _internal_tool_name(data)
+        reserved_tool_use_id: str | None = None
+        tool_budget_already_charged = False
+        if internal_tool_name is not None:
+            denial_reason = lifecycle_gate.reserve(internal_tool_name, tool_use_id)
+            if denial_reason is not None:
+                try:
+                    budget_denial = _charge_denied_internal_lifecycle_budget(
+                        state=state,
+                        control=control,
+                        tool_name=internal_tool_name,
+                        denial_reason=denial_reason,
+                    )
+                except BaseException:
+                    _latch_internal_lifecycle_processing_failure(
+                        state,
+                        event_name="PreToolUse denial accounting",
+                    )
+                    lifecycle_gate.poison(
+                        reason="internal lifecycle denial accounting could not be persisted"
+                    )
+                    raise
+                if budget_denial is not None:
+                    return cast(HookJSONOutput, budget_denial)
+                return cast(
+                    HookJSONOutput,
+                    _internal_lifecycle_pretool_denial(denial_reason),
+                )
+            reserved_tool_use_id = cast(str, tool_use_id)
+
+        try:
+            if internal_tool_name is not None:
+                budget_denial = _charge_tool_request_budget(
+                    state=state,
+                    state_store=state_store,
+                    control=control,
+                )
+                if budget_denial is not None:
+                    if reserved_tool_use_id is not None:
+                        lifecycle_gate.abandon_unbudgeted(
+                            internal_tool_name,
+                            reserved_tool_use_id,
+                        )
+                    return cast(HookJSONOutput, budget_denial)
+                tool_budget_already_charged = True
+            output = pretool_policy_output(
                 policy,
-                cast(dict[str, Any], input_data),
+                data,
                 state=state,
                 state_store=state_store,
                 control=control,
-            ),
-        )
+                tool_budget_already_charged=tool_budget_already_charged,
+            )
+        except BaseException:
+            if internal_tool_name is not None and reserved_tool_use_id is not None:
+                _latch_internal_lifecycle_processing_failure(state, event_name="PreToolUse")
+                lifecycle_gate.poison_active(
+                    internal_tool_name,
+                    reserved_tool_use_id,
+                    reason="internal PreToolUse processing failed before lifecycle admission",
+                )
+            raise
+
+        if (
+            internal_tool_name is not None
+            and reserved_tool_use_id is not None
+            and _pretool_output_denies_execution(output)
+        ):
+            lifecycle_gate.finish(internal_tool_name, reserved_tool_use_id)
+        return cast(HookJSONOutput, output)
 
     async def post_tool_use(
         input_data: HookInput,
-        _tool_use_id: str | None,
+        tool_use_id: str | None,
         _context: HookContext,
     ) -> HookJSONOutput:
-        return cast(
-            HookJSONOutput,
-            posttool_policy_output(
-                cast(dict[str, Any], input_data),
+        data = cast(dict[str, Any], input_data)
+        internal_tool_name = _internal_tool_name(data)
+        reserved_tool_use_id: str | None = None
+        if internal_tool_name is not None:
+            lifecycle_error = lifecycle_gate.completion_error(internal_tool_name, tool_use_id)
+            if lifecycle_error is not None:
+                return cast(
+                    HookJSONOutput,
+                    _record_internal_lifecycle_integrity_failure(
+                        event_name="PostToolUse",
+                        tool_name=internal_tool_name,
+                        reason=lifecycle_error,
+                        state=state,
+                        state_store=state_store,
+                        control=control,
+                    ),
+                )
+            reserved_tool_use_id = cast(str, tool_use_id)
+
+        try:
+            output = posttool_policy_output(
+                data,
                 state=state,
                 evidence=evidence,
                 state_store=state_store,
                 control=control,
-            ),
-        )
+            )
+        except BaseException:
+            if internal_tool_name is not None and reserved_tool_use_id is not None:
+                _latch_internal_lifecycle_processing_failure(state, event_name="PostToolUse")
+                lifecycle_gate.poison_active(
+                    internal_tool_name,
+                    reserved_tool_use_id,
+                    reason="internal PostToolUse processing failed before durable lifecycle closure",
+                )
+            raise
+
+        if internal_tool_name is not None and reserved_tool_use_id is not None:
+            lifecycle_gate.finish(internal_tool_name, reserved_tool_use_id)
+        return cast(HookJSONOutput, output)
 
     async def post_tool_use_failure(
         input_data: HookInput,
-        _tool_use_id: str | None,
+        tool_use_id: str | None,
         _context: HookContext,
     ) -> HookJSONOutput:
-        return cast(
-            HookJSONOutput,
-            posttool_failure_output(
-                cast(dict[str, Any], input_data),
+        data = cast(dict[str, Any], input_data)
+        internal_tool_name = _internal_tool_name(data)
+        reserved_tool_use_id: str | None = None
+        if internal_tool_name is not None:
+            lifecycle_error = lifecycle_gate.completion_error(internal_tool_name, tool_use_id)
+            if lifecycle_error is not None:
+                return cast(
+                    HookJSONOutput,
+                    _record_internal_lifecycle_integrity_failure(
+                        event_name="PostToolUseFailure",
+                        tool_name=internal_tool_name,
+                        reason=lifecycle_error,
+                        state=state,
+                        state_store=state_store,
+                        control=control,
+                    ),
+                )
+            reserved_tool_use_id = cast(str, tool_use_id)
+
+        try:
+            output = posttool_failure_output(
+                data,
                 state=state,
                 state_store=state_store,
                 control=control,
-            ),
-        )
+            )
+        except BaseException:
+            if internal_tool_name is not None and reserved_tool_use_id is not None:
+                _latch_internal_lifecycle_processing_failure(
+                    state,
+                    event_name="PostToolUseFailure",
+                )
+                lifecycle_gate.poison_active(
+                    internal_tool_name,
+                    reserved_tool_use_id,
+                    reason=(
+                        "internal PostToolUseFailure processing failed before durable lifecycle closure"
+                    ),
+                )
+            raise
+
+        if internal_tool_name is not None and reserved_tool_use_id is not None:
+            lifecycle_gate.finish(internal_tool_name, reserved_tool_use_id)
+        return cast(HookJSONOutput, output)
 
     return {
         "PreToolUse": [HookMatcher(matcher=None, hooks=[pre_tool_use], timeout=10)],
