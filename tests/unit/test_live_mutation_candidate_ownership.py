@@ -22,7 +22,12 @@ from ai_qa_automation.runtime.run_control import (
     RuntimeControl,
     mutation_candidate_proof_relative_path,
 )
+from ai_qa_automation.runtime.workspace_freshness import (
+    WorkspaceFreshness,
+    WorkspaceFreshnessCode,
+)
 from ai_qa_automation.state import StateStore
+from ai_qa_automation.tools.repository import RepositoryInspector
 
 _PRE_WORKSPACE_FINGERPRINT = "sha256:" + "1" * 64
 _PRE_CONTEXT_FINGERPRINT = "sha256:" + "2" * 64
@@ -62,6 +67,12 @@ def _sha256(data: bytes) -> str:
 
 
 def _prepare_strict(subject: RuntimeControl, relative: str) -> None:
+    snapshot = RepositoryInspector(
+        subject.workspace,
+        expected_root_identity=subject.workspace_identity,
+    ).snapshot()
+    assert snapshot.fingerprint_complete
+    subject.set_workspace_fingerprint(snapshot.fingerprint)
     subject.prepare_mutation(
         relative,
         change_revision_before=0,
@@ -153,12 +164,114 @@ def test_strict_rollback_restores_exact_owned_candidate(tmp_path: Path) -> None:
     candidate = b"def test_target():\n    assert 3 == 3\n"
 
     _prepare_strict(subject, relative)
+    pending = subject.pending_mutation
+    assert pending is not None
+    pre_fingerprint = pending.pre_mutation_workspace_fingerprint
     _bind_strict(subject, relative, target, candidate)
 
     assert subject.rollback_pending_mutation(reason="semantic validation failed") == relative
     assert target.read_bytes() == original
     assert subject.pending_mutation is None
-    assert subject.expected_workspace_fingerprint == _PRE_WORKSPACE_FINGERPRINT
+    assert subject.expected_workspace_fingerprint == pre_fingerprint
+
+
+def test_strict_rollback_retains_authority_when_restored_workspace_is_not_fresh(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    subject = _control(tmp_path)
+    relative, target, original = _existing_target(subject)
+    candidate = b"def test_target():\n    assert 30 == 30\n"
+
+    _prepare_strict(subject, relative)
+    pending = subject.pending_mutation
+    assert pending is not None
+    pre_fingerprint = pending.pre_mutation_workspace_fingerprint
+    backup = Path(cast(str, pending.backup_path))
+    _bind_strict(subject, relative, target, candidate)
+
+    monkeypatch.setattr(
+        run_control_module,
+        "observe_workspace_freshness",
+        lambda *_args, **_kwargs: WorkspaceFreshness(
+            WorkspaceFreshnessCode.WORKSPACE_DRIFT,
+            "unrelated workspace drift",
+        ),
+    )
+
+    with pytest.raises(MutationPendingError, match="full workspace does not match"):
+        subject.rollback_pending_mutation(reason="semantic validation failed")
+
+    assert target.read_bytes() == original
+    retained = subject.pending_mutation
+    assert retained is not None
+    assert retained.candidate_sha256 == _sha256(candidate)
+    assert subject.expected_workspace_fingerprint == _CANDIDATE_WORKSPACE_FINGERPRINT
+    proof = subject.metadata_path.parent / mutation_candidate_proof_relative_path(
+        relative,
+        _sha256(candidate),
+    )
+    assert proof.read_bytes() == candidate
+    assert backup.read_bytes() == original
+
+    monkeypatch.setattr(
+        run_control_module,
+        "observe_workspace_freshness",
+        lambda *_args, **_kwargs: WorkspaceFreshness(
+            WorkspaceFreshnessCode.FRESH,
+            "exact pre-mutation subject restored",
+        ),
+    )
+
+    assert subject.rollback_pending_mutation(reason="workspace reconciled") == relative
+    assert subject.pending_mutation is None
+    assert subject.expected_workspace_fingerprint == pre_fingerprint
+    assert not proof.exists()
+    assert not backup.exists()
+
+
+def test_strict_rollback_rechecks_target_after_full_workspace_observation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    subject = _control(tmp_path)
+    relative, target, original = _existing_target(subject)
+    candidate = b"def test_target():\n    assert 31 == 31\n"
+    newer = b"def test_target():\n    assert 'writer after workspace observation'\n"
+
+    _prepare_strict(subject, relative)
+    pending = subject.pending_mutation
+    assert pending is not None
+    backup = Path(cast(str, pending.backup_path))
+    _bind_strict(subject, relative, target, candidate)
+
+    def racing_observer(*_args: object, **_kwargs: object) -> WorkspaceFreshness:
+        target.write_bytes(newer)
+        return WorkspaceFreshness(
+            WorkspaceFreshnessCode.FRESH,
+            "snapshot completed before independent writer",
+        )
+
+    monkeypatch.setattr(
+        run_control_module,
+        "observe_workspace_freshness",
+        racing_observer,
+    )
+
+    with pytest.raises(MutationPendingError, match="changed during full-workspace closure"):
+        subject.rollback_pending_mutation(reason="semantic validation failed")
+
+    assert target.read_bytes() == newer
+    retained = subject.pending_mutation
+    assert retained is not None
+    assert retained.candidate_sha256 == _sha256(candidate)
+    assert subject.expected_workspace_fingerprint == _CANDIDATE_WORKSPACE_FINGERPRINT
+    proof = subject.metadata_path.parent / mutation_candidate_proof_relative_path(
+        relative,
+        _sha256(candidate),
+    )
+    assert proof.read_bytes() == candidate
+    assert backup.read_bytes() == original
 
 
 def test_strict_rollback_closes_safely_when_existing_target_never_changed(tmp_path: Path) -> None:
