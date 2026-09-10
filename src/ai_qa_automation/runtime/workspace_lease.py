@@ -6,7 +6,9 @@ import json
 import os
 import socket
 import stat
-from contextlib import AbstractContextManager, suppress
+from _thread import RLock
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, contextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -17,6 +19,7 @@ from ..io_safety import fsync_directory, parse_json_object_strict
 from ..tools.subprocess_subject import (
     bind_active_workspace_authority,
     clear_active_workspace_authority,
+    owns_active_workspace_authority,
 )
 
 
@@ -100,6 +103,7 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
         if self.path.is_symlink():
             raise OSError("workspace lease file is a symlink and has ambiguous ownership")
         self.lease_id = f"lease-{uuid4().hex[:16]}"
+        self._lifecycle_lock = RLock()
         self._stream: Any | None = None
         self._workspace_lock_fd: int | None = None
         self._authority_bound = False
@@ -462,25 +466,106 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             if directory_fd is not None:
                 os.close(directory_fd)
 
+    @contextmanager
+    def stale_recovery_authority(
+        self,
+        *,
+        artifact_root: Path,
+        workspace: Path,
+        recovering_run_id: str,
+        previous_lease: dict[str, Any],
+    ) -> Iterator[None]:
+        """Hold exact live deferred-successor authority across stale recovery."""
+
+        with self._lifecycle_lock:
+            stream = self._stream
+            if stream is None or self._acquired_at is None:
+                raise OSError("stale recovery successor lease is not acquired")
+            if self._owner_published:
+                raise OSError("stale recovery successor lease was already published")
+            if self.run_id != recovering_run_id:
+                raise OSError("stale recovery successor lease is bound to a different run")
+            if self.artifact_root != artifact_root.expanduser().resolve():
+                raise OSError("stale recovery successor lease is bound to a different artifact root")
+            if self.workspace != workspace.expanduser().resolve():
+                raise OSError("stale recovery successor lease is bound to a different workspace")
+
+            self._revalidate_lease_root(None)
+            self._revalidate_run_root()
+            self._revalidate_workspace_root()
+            try:
+                opened_lease = os.fstat(stream.fileno())
+                current_lease = self.path.stat(follow_symlinks=False)
+            except OSError as exc:
+                raise OSError("stale recovery successor lease file could not be revalidated") from exc
+            if (
+                not stat.S_ISREG(opened_lease.st_mode)
+                or not stat.S_ISREG(current_lease.st_mode)
+                or _identity(opened_lease) != _identity(current_lease)
+            ):
+                raise OSError("stale recovery successor lease file changed identity")
+
+            stream.seek(0)
+            raw = stream.read(_MAX_LEASE_METADATA_BYTES + 1)
+            if len(raw) > _MAX_LEASE_METADATA_BYTES:
+                raise OSError("stale recovery predecessor lease metadata exceeds ingestion limit")
+            observed_previous = self._parse_previous_metadata(raw)
+            if observed_previous != self.previous_metadata or observed_previous != previous_lease:
+                raise OSError("stale recovery predecessor handoff does not match successor lease")
+
+            if self._workspace_root_identity is not None:
+                workspace_lock_fd = self._workspace_lock_fd
+                if workspace_lock_fd is None:
+                    raise OSError("stale recovery successor workspace lock is unavailable")
+                try:
+                    opened_workspace = os.fstat(workspace_lock_fd)
+                except OSError as exc:
+                    raise OSError(
+                        "stale recovery successor workspace lock could not be revalidated"
+                    ) from exc
+                if (
+                    not stat.S_ISDIR(opened_workspace.st_mode)
+                    or _identity(opened_workspace) != self._workspace_root_identity
+                ):
+                    raise OSError("stale recovery successor workspace lock changed identity")
+                if not self._authority_bound or not owns_active_workspace_authority(
+                    self.workspace,
+                    self._workspace_root_identity,
+                    owner=self.lease_id,
+                ):
+                    raise OSError(
+                        "stale recovery successor process-local workspace authority is not live"
+                    )
+            yield
+
     def publish_current_owner(self) -> WorkspaceLease:
         """Durably replace predecessor metadata only after stale recovery is resolved."""
 
-        stream = self._stream
-        if stream is None:
-            raise OSError("workspace lease must be acquired before owner publication")
-        if self._owner_published:
+        with self._lifecycle_lock:
+            stream = self._stream
+            if stream is None:
+                raise OSError("workspace lease must be acquired before owner publication")
+            if self._owner_published:
+                return self
+            self._revalidate_run_root()
+            self._revalidate_workspace_root()
+            self._mutation_recovery_closed = False
+            self._persist_current_owner(stream, None)
+            self._owner_published = True
             return self
-        self._revalidate_run_root()
-        self._revalidate_workspace_root()
-        self._mutation_recovery_closed = False
-        self._persist_current_owner(stream, None)
-        self._owner_published = True
-        return self
 
     def release(
         self,
         *,
         recovery_closure_guard: MutationRecoveryClosureGuard | None = None,
+    ) -> None:
+        with self._lifecycle_lock:
+            self._release_locked(recovery_closure_guard=recovery_closure_guard)
+
+    def _release_locked(
+        self,
+        *,
+        recovery_closure_guard: MutationRecoveryClosureGuard | None,
     ) -> None:
         stream = self._stream
         workspace_lock_fd = self._workspace_lock_fd
