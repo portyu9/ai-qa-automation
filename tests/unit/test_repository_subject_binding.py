@@ -134,7 +134,7 @@ def test_workspace_lease_bind_failure_releases_os_locks(
             raise RuntimeError("synthetic authority publication failure")
 
         scoped.setattr(workspace_lease_module, "bind_active_workspace_authority", reject_bind)
-        with pytest.raises(RuntimeError, match="synthetic authority publication failure"):
+        with pytest.raises(OSError, match="process-local workspace lease authority conflicts"):
             failed.acquire()
 
     assert active_workspace_authority(workspace) is None
