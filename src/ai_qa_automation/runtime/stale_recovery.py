@@ -11,6 +11,7 @@ from ..fs_authority import (
     clear_pending_root_authority,
     descriptor_relative_authority_supported,
     move_file_noreplace_between_confined_roots,
+    pending_root_authority,
     read_bytes_confined,
     unlink_file_confined,
 )
@@ -30,6 +31,56 @@ def _is_sha256_hex(value: object) -> TypeGuard[str]:
 
 def _is_sha256_fingerprint(value: object) -> TypeGuard[str]:
     return _legacy._is_sha256_fingerprint(value)
+
+
+def _reconcile_process_local_root_authority(
+    *,
+    workspace: Path,
+    metadata: dict[str, Any],
+    previous_lease: dict[str, Any],
+    previous_run_id: str,
+) -> dict[str, Any] | None:
+    """Release only the exact recovered process-local mutation owner, if one survives."""
+
+    if pending_root_authority(workspace) is None:
+        return None
+    prior_lease_id = previous_lease.get("lease_id")
+    if (
+        not isinstance(prior_lease_id, str)
+        or not prior_lease_id
+        or metadata.get("lease_id") != prior_lease_id
+    ):
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": previous_run_id,
+            "reason": "closed stale recovery state cannot reconcile process-local pending root authority without exact prior lease identity",
+        }
+    try:
+        workspace_identity = _legacy._validated_workspace_root_identity(metadata)
+        _legacy._current_workspace_identity(workspace, workspace_identity)
+    except ValueError as exc:
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": previous_run_id,
+            "reason": str(exc),
+        }
+    if workspace_identity is None:
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": previous_run_id,
+            "reason": "closed stale recovery state cannot reconcile process-local pending root authority without exact workspace-root identity",
+        }
+    if not clear_pending_root_authority(
+        workspace,
+        workspace_identity,
+        owner=prior_lease_id,
+    ):
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": previous_run_id,
+            "reason": "stale mutation recovered durably but process-local pending root authority is owned by another runtime; current run must not proceed",
+        }
+    return None
 
 
 def _sha256_or_none(
@@ -276,6 +327,14 @@ def recover_stale_mutation(
         }
     pending = metadata["pending_mutation"]
     if pending is None:
+        process_authority_error = _reconcile_process_local_root_authority(
+            workspace=workspace,
+            metadata=metadata,
+            previous_lease=previous_lease,
+            previous_run_id=previous_run_id,
+        )
+        if process_authority_error is not None:
+            return process_authority_error
         return {"status": "NONE", "previous_run_id": previous_run_id}
     if not isinstance(pending, dict) or not pending:
         return {"status": "BLOCKED", "reason": "prior pending mutation metadata is invalid"}
@@ -667,16 +726,14 @@ def recover_stale_mutation(
         current_workspace_fingerprint_reasons=current_workspace_fingerprint_reasons,
     )
     if closure.get("status") == "RECOVERED":
-        if not clear_pending_root_authority(
-            workspace,
-            workspace_identity,
-            owner=prior_lease_id,
-        ):
-            return {
-                "status": "BLOCKED",
-                "previous_run_id": previous_run_id,
-                "reason": "stale mutation recovered durably but process-local pending root authority is owned by another runtime; current run must not proceed",
-            }
+        process_authority_error = _reconcile_process_local_root_authority(
+            workspace=workspace,
+            metadata=metadata,
+            previous_lease=previous_lease,
+            previous_run_id=previous_run_id,
+        )
+        if process_authority_error is not None:
+            return process_authority_error
         if not recovery_event_recorded:
             closure.pop("resumed_recovery_event", None)
         with suppress(OSError, RuntimeError, ValueError):
