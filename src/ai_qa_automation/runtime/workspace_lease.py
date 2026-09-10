@@ -400,8 +400,10 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
                 label="runtime metadata for workspace lease recovery closure",
                 expected_root_identity=self._run_root_identity,
             )
-        except FileNotFoundError:
-            return False
+        except FileNotFoundError as exc:
+            raise OSError(
+                "runtime metadata is missing during workspace lease recovery closure"
+            ) from exc
         except (OSError, RuntimeError, ValueError) as exc:
             raise OSError(
                 "runtime metadata could not be read safely for workspace lease recovery closure"
