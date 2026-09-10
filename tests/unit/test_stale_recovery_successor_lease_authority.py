@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+import ai_qa_automation.runtime.stale_recovery as stale_recovery_module
 from ai_qa_automation.fs_authority import (
     bind_pending_root_authority,
     clear_pending_root_authority,
@@ -241,6 +242,37 @@ def test_wrong_predecessor_handoff_cannot_clear_residual_authority(tmp_path: Pat
 
         assert result["status"] == "BLOCKED"
         assert "predecessor handoff" in str(result["reason"])
+        assert pending_root_authority(workspace) == workspace_identity
+    finally:
+        successor.release()
+        _clear_fixture_authority(workspace, workspace_identity, prior_lease_id)
+
+
+def test_recovery_body_infrastructure_failure_is_not_laundered_as_invalid_lease(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact_root, workspace, workspace_identity, previous_lease, prior_lease_id = (
+        _setup_residual_authority(tmp_path)
+    )
+    successor = WorkspaceLease(artifact_root, workspace, "run-new").acquire(publish=False)
+
+    def fail_after_authority(**_kwargs: object) -> dict[str, Any]:
+        raise OSError("simulated recovery infrastructure failure")
+
+    monkeypatch.setattr(
+        stale_recovery_module,
+        "_recover_stale_mutation_authorized",
+        fail_after_authority,
+    )
+    try:
+        with pytest.raises(OSError, match="simulated recovery infrastructure failure"):
+            _recover(
+                artifact_root=artifact_root,
+                workspace=workspace,
+                previous_lease=previous_lease,
+                recovery_lease=successor,
+            )
         assert pending_root_authority(workspace) == workspace_identity
     finally:
         successor.release()
