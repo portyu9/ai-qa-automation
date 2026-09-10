@@ -8,7 +8,11 @@ import pytest
 import ai_qa_automation.runtime.workspace_lease as workspace_lease_module
 from ai_qa_automation.runtime.budget import ExecutionBudget
 from ai_qa_automation.runtime.journal import RunJournal
-from ai_qa_automation.runtime.run_control import MutationPendingError, PendingMutation, RuntimeControl
+from ai_qa_automation.runtime.run_control import (
+    MutationPendingError,
+    PendingMutation,
+    RuntimeControl,
+)
 from ai_qa_automation.runtime.stale_recovery import recover_stale_mutation
 from ai_qa_automation.runtime.workspace_lease import WorkspaceLease
 
