@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from copy import deepcopy
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, TypeGuard
@@ -348,9 +349,6 @@ def _recover_stale_mutation_authorized(
     if not isinstance(pending, dict) or not pending:
         return {"status": "BLOCKED", "reason": "prior pending mutation metadata is invalid"}
 
-    # Run the exact legacy parser/journal/state preflight with a fingerprint that can
-    # never equal a valid recovery subject. Its destructive branch is therefore
-    # unreachable; any earlier authority failure is returned unchanged.
     sentinel = "__aiqa_strict_recovery_preflight__"
     if metadata.get("workspace_fingerprint") == sentinel:
         sentinel += "2"
@@ -707,9 +705,6 @@ def _recover_stale_mutation_authorized(
                 "reason": "stale mutation bytes were restored but the recovery journal event could not be durably recorded; rollback authority was retained and manual reconciliation is required",
             }
 
-    # The recovery event proves the workspace is now the exact pre-mutation subject.
-    # Rebind that subject in runtime metadata before legacy closure clears pending
-    # rollback authority; either journal-proven intermediate stage remains resumable.
     metadata["workspace_fingerprint"] = pre_fingerprint
     try:
         atomic_write_json(
@@ -769,8 +764,10 @@ def recover_stale_mutation(
 ) -> dict[str, Any]:
     """Recover stale mutation only while exact deferred successor lease authority is held."""
 
-    if not previous_lease:
+    if previous_lease is None:
         return {"status": "NONE"}
+    if not previous_lease:
+        return {"status": "BLOCKED", "reason": "prior lease metadata is empty or invalid"}
     if (
         not isinstance(recovering_run_id, str)
         or not recovering_run_id.strip()
@@ -779,6 +776,46 @@ def recover_stale_mutation(
         return {"status": "BLOCKED", "reason": "recovering run_id is invalid"}
 
     normalized_workspace = workspace.expanduser().resolve()
+    if recovery_lease is not None:
+        try:
+            previous_lease_snapshot = deepcopy(previous_lease)
+        except Exception as exc:
+            return {
+                "status": "BLOCKED",
+                "reason": f"prior lease handoff could not be snapshotted safely: {type(exc).__name__}",
+            }
+        raw_previous_run_id = previous_lease_snapshot.get("run_id")
+        previous_run_id = raw_previous_run_id if isinstance(raw_previous_run_id, str) else ""
+        authority_entered = False
+        try:
+            with recovery_lease.stale_recovery_authority(
+                artifact_root=artifact_root,
+                workspace=normalized_workspace,
+                recovering_run_id=recovering_run_id,
+                previous_lease=previous_lease_snapshot,
+            ):
+                authority_entered = True
+                return _recover_stale_mutation_authorized(
+                    artifact_root=artifact_root,
+                    workspace=normalized_workspace,
+                    previous_lease=previous_lease_snapshot,
+                    current_workspace_fingerprint=current_workspace_fingerprint,
+                    recovering_run_id=recovering_run_id,
+                    current_workspace_fingerprint_complete=current_workspace_fingerprint_complete,
+                    current_workspace_fingerprint_reasons=current_workspace_fingerprint_reasons,
+                    _authority=_STALE_RECOVERY_AUTHORITY,
+                )
+        except (OSError, RuntimeError, ValueError) as exc:
+            if authority_entered:
+                raise
+            result: dict[str, Any] = {
+                "status": "BLOCKED",
+                "reason": f"stale recovery successor lease authority is invalid: {exc}",
+            }
+            if previous_run_id:
+                result["previous_run_id"] = previous_run_id
+            return result
+
     loaded = _load_metadata(
         artifact_root=artifact_root,
         workspace=normalized_workspace,
@@ -804,37 +841,8 @@ def recover_stale_mutation(
             "previous_run_id": previous_run_id,
             "reason": "prior pending mutation metadata is invalid",
         }
-    if recovery_lease is None:
-        return {
-            "status": "BLOCKED",
-            "previous_run_id": previous_run_id,
-            "reason": "stale recovery requires exact live deferred successor workspace lease authority",
-        }
-
-    authority_entered = False
-    try:
-        with recovery_lease.stale_recovery_authority(
-            artifact_root=artifact_root,
-            workspace=normalized_workspace,
-            recovering_run_id=recovering_run_id,
-            previous_lease=previous_lease,
-        ):
-            authority_entered = True
-            return _recover_stale_mutation_authorized(
-                artifact_root=artifact_root,
-                workspace=normalized_workspace,
-                previous_lease=previous_lease,
-                current_workspace_fingerprint=current_workspace_fingerprint,
-                recovering_run_id=recovering_run_id,
-                current_workspace_fingerprint_complete=current_workspace_fingerprint_complete,
-                current_workspace_fingerprint_reasons=current_workspace_fingerprint_reasons,
-                _authority=_STALE_RECOVERY_AUTHORITY,
-            )
-    except (OSError, RuntimeError, ValueError) as exc:
-        if authority_entered:
-            raise
-        return {
-            "status": "BLOCKED",
-            "previous_run_id": previous_run_id,
-            "reason": f"stale recovery successor lease authority is invalid: {exc}",
-        }
+    return {
+        "status": "BLOCKED",
+        "previous_run_id": previous_run_id,
+        "reason": "stale recovery requires exact live deferred successor workspace lease authority",
+    }
