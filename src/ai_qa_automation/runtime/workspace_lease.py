@@ -309,9 +309,10 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             raise OSError("workspace lease run_id must be a non-empty string")
         if not isinstance(previous_lease_id, str) or not previous_lease_id.strip():
             raise OSError("workspace lease lease_id must be a non-empty string")
-        if "mutation_recovery_closed" in previous and type(
-            previous["mutation_recovery_closed"]
-        ) is not bool:
+        if (
+            "mutation_recovery_closed" in previous
+            and type(previous["mutation_recovery_closed"]) is not bool
+        ):
             raise OSError("workspace lease mutation recovery closure authority is invalid")
         if "workspace_root_identity" in previous:
             root_identity = previous["workspace_root_identity"]
