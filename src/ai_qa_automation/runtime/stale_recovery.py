@@ -146,9 +146,8 @@ def _load_metadata(
                 "reason": "prior lease mutation recovery closure lacks exact lease identity authority",
             }
         prior_workspace = previous_lease.get("workspace")
-        if (
-            not isinstance(prior_workspace, str)
-            or prior_workspace != str(workspace.expanduser().resolve())
+        if not isinstance(prior_workspace, str) or prior_workspace != str(
+            workspace.expanduser().resolve()
         ):
             return {
                 "status": "BLOCKED",
@@ -189,10 +188,10 @@ def _load_metadata(
         }
     if recovery_closed is True:
         raw_workspace_identity = previous_lease.get("workspace_root_identity")
-        if (
-            not isinstance(raw_workspace_identity, dict)
-            or set(raw_workspace_identity) != {"device", "inode"}
-        ):
+        if not isinstance(raw_workspace_identity, dict) or set(raw_workspace_identity) != {
+            "device",
+            "inode",
+        }:
             return {
                 "status": "BLOCKED",
                 "previous_run_id": raw_previous_run_id,
