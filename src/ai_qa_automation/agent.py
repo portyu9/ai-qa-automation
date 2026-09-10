@@ -928,7 +928,7 @@ async def run_agent(
 
     release_error: BaseException | None = None
     try:
-        lease.release()
+        lease.release(recovery_closure_guard=control.mutation_recovery_closure_binding)
     except BaseException as exc:
         release_error = exc
 
