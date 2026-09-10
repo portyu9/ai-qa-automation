@@ -139,6 +139,22 @@ def test_deferred_publication_replaces_predecessor_only_after_handoff(tmp_path: 
         successor.release()
 
 
+def test_workspace_lease_rejects_double_acquire_while_authority_is_live(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+
+    lease = WorkspaceLease(artifact_root, workspace, "run-a").acquire(publish=False)
+    try:
+        with pytest.raises(OSError, match="already acquired"):
+            lease.acquire(publish=False)
+    finally:
+        lease.release()
+
+    successor = WorkspaceLease(artifact_root, workspace, "run-b").acquire(publish=False)
+    successor.release()
+
+
 @pytest.mark.asyncio
 async def test_run_agent_publishes_current_owner_only_after_stale_recovery(
     tmp_path: Path,
@@ -156,12 +172,21 @@ async def test_run_agent_publishes_current_owner_only_after_stale_recovery(
         nonlocal recovery_observed
         recovery_observed = True
         previous = kwargs["previous_lease"]
+        recovery_lease = kwargs["recovery_lease"]
         assert isinstance(previous, dict)
+        assert isinstance(recovery_lease, WorkspaceLease)
+        assert recovery_lease.previous_metadata == previous
         assert previous["run_id"] == "run-prior"
         assert previous["lease_id"] == predecessor_lease_id
-        durable = _metadata(lease_path)
-        assert durable["run_id"] == "run-prior"
-        assert durable["lease_id"] == predecessor_lease_id
+        with recovery_lease.stale_recovery_authority(
+            artifact_root=artifacts,
+            workspace=workspace,
+            recovering_run_id=recovery_lease.run_id,
+            previous_lease=previous,
+        ):
+            durable = _metadata(lease_path)
+            assert durable["run_id"] == "run-prior"
+            assert durable["lease_id"] == predecessor_lease_id
         return {"status": "NONE"}
 
     monkeypatch.setattr(agent_module, "recover_stale_mutation", observe_recovery)
@@ -194,7 +219,10 @@ async def test_run_agent_publication_failure_is_pre_provider_infrastructure_fail
 
     def no_stale_mutation(**kwargs: object) -> dict[str, str]:
         previous = kwargs["previous_lease"]
+        recovery_lease = kwargs["recovery_lease"]
         assert isinstance(previous, dict)
+        assert isinstance(recovery_lease, WorkspaceLease)
+        assert recovery_lease.previous_metadata == previous
         assert previous["run_id"] == "run-prior"
         assert lease_path.read_bytes() == predecessor_bytes
         return {"status": "NONE"}
