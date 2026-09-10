@@ -48,6 +48,7 @@ from .workspace_freshness import WorkspaceFreshnessCode, observe_workspace_fresh
 
 _INTERNAL_TOOL_PREFIX = "mcp__qa__"
 _MAX_TOOL_USE_ID_CHARS = 256
+_MAX_INTERNAL_TOOL_NAME_CHARS = 256
 _NETWORK_TOOLS = {
     "mcp__qa__probe_api",
     "mcp__qa__inspect_browser",
@@ -122,6 +123,10 @@ class _InternalToolLifecycleGate:
                 return
             self._active = None
 
+    def poison(self, *, reason: str) -> None:
+        with self._lock:
+            self._poisoned_reason = reason
+
     def poison_active(self, tool_name: str, tool_use_id: str, *, reason: str) -> None:
         with self._lock:
             self._poisoned_reason = reason
@@ -131,7 +136,11 @@ class _InternalToolLifecycleGate:
 
 def _internal_tool_name(input_data: dict[str, Any]) -> str | None:
     raw_tool_name = input_data.get("tool_name")
-    if isinstance(raw_tool_name, str) and raw_tool_name.startswith(_INTERNAL_TOOL_PREFIX):
+    if (
+        isinstance(raw_tool_name, str)
+        and len(raw_tool_name) <= _MAX_INTERNAL_TOOL_NAME_CHARS
+        and raw_tool_name.startswith(_INTERNAL_TOOL_PREFIX)
+    ):
         return raw_tool_name
     return None
 
@@ -255,6 +264,49 @@ def _charge_tool_request_budget(
                 "permissionDecisionReason": f"runtime-budget: {exc}",
             }
         }
+    return None
+
+
+def _charge_denied_internal_lifecycle_budget(
+    *,
+    state: AgentRunState | None,
+    control: RuntimeControl | None,
+    tool_name: str,
+    denial_reason: str,
+) -> dict[str, Any] | None:
+    """Bound a rejected internal request without checkpointing in-flight semantic state."""
+
+    try:
+        if control is not None:
+            control.budget.charge_tool()
+            _sync_tool_count(state, control)
+    except BudgetExceededError as exc:
+        if state is not None:
+            state.terminal_status = TerminalStatus.BUDGET_EXCEEDED
+            state.terminal_reason = str(exc)
+        if control is not None:
+            control.journal.append(
+                "budget_denied",
+                tool_name=tool_name,
+                admission="internal_lifecycle",
+                reason=str(exc),
+            )
+            control.persist()
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": f"runtime-budget: {exc}",
+            }
+        }
+
+    if control is not None:
+        control.journal.append(
+            "internal_tool_lifecycle_denied",
+            tool_name=tool_name,
+            reason=denial_reason,
+        )
+        control.persist()
     return None
 
 
@@ -1152,18 +1204,26 @@ def build_hooks(
         reserved_tool_use_id: str | None = None
         tool_budget_already_charged = False
         if internal_tool_name is not None:
-            budget_denial = _charge_tool_request_budget(
-                state=state,
-                state_store=state_store,
-                control=control,
-            )
-            if budget_denial is not None:
-                return cast(HookJSONOutput, budget_denial)
-            tool_budget_already_charged = True
             denial_reason = lifecycle_gate.reserve(internal_tool_name, tool_use_id)
             if denial_reason is not None:
-                if control is not None:
-                    control.persist()
+                try:
+                    budget_denial = _charge_denied_internal_lifecycle_budget(
+                        state=state,
+                        control=control,
+                        tool_name=internal_tool_name,
+                        denial_reason=denial_reason,
+                    )
+                except BaseException:
+                    _latch_internal_lifecycle_processing_failure(
+                        state,
+                        event_name="PreToolUse denial accounting",
+                    )
+                    lifecycle_gate.poison(
+                        reason="internal lifecycle denial accounting could not be persisted"
+                    )
+                    raise
+                if budget_denial is not None:
+                    return cast(HookJSONOutput, budget_denial)
                 return cast(
                     HookJSONOutput,
                     _internal_lifecycle_pretool_denial(denial_reason),
@@ -1171,6 +1231,17 @@ def build_hooks(
             reserved_tool_use_id = cast(str, tool_use_id)
 
         try:
+            if internal_tool_name is not None:
+                budget_denial = _charge_tool_request_budget(
+                    state=state,
+                    state_store=state_store,
+                    control=control,
+                )
+                if budget_denial is not None:
+                    if reserved_tool_use_id is not None:
+                        lifecycle_gate.finish(internal_tool_name, reserved_tool_use_id)
+                    return cast(HookJSONOutput, budget_denial)
+                tool_budget_already_charged = True
             output = pretool_policy_output(
                 policy,
                 data,
