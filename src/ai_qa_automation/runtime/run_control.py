@@ -27,6 +27,7 @@ from ..fs_authority import (
 from ..io_safety import fsync_directory, parse_json_object_strict
 from .budget import BudgetExceededError, ExecutionBudget
 from .journal import RunJournal
+from .workspace_freshness import observe_workspace_freshness
 
 _MAX_ROLLBACK_BYTES = 2_000_000
 _MAX_RUNTIME_METADATA_BYTES = 2_000_000
@@ -783,6 +784,21 @@ class RuntimeControl:
                 if not _is_sha256_fingerprint(pending.pre_mutation_workspace_fingerprint):
                     raise MutationPendingError(
                         "strict rollback lost pre-mutation workspace authority; pending state retained"
+                    )
+                freshness = observe_workspace_freshness(
+                    self.workspace,
+                    expected_fingerprint=pending.pre_mutation_workspace_fingerprint,
+                    expected_root_identity=self._workspace_identity,
+                )
+                if not freshness.fresh:
+                    raise MutationPendingError(
+                        "strict rollback restored the target but the full workspace does not match "
+                        "the exact pre-mutation subject; pending authority was retained"
+                    )
+                if self._pending_target_sha256(pending) != pending.original_sha256:
+                    raise MutationPendingError(
+                        "mutation rollback target changed during full-workspace closure validation; "
+                        "pending authority was retained"
                     )
                 self.expected_workspace_fingerprint = pending.pre_mutation_workspace_fingerprint
             elif pending.existed:
