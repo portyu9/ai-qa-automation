@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Callable
+from functools import wraps
 from typing import Any, cast
 
 from ..tools.api_testing import ApiProbe
@@ -57,6 +60,31 @@ def _k6_runner_factory(*args: Any, **kwargs: Any) -> Any:
     return K6Runner(*args, **kwargs)
 
 
+def _serializing_tool_decorator(tool_decorator: _common.ToolDecorator) -> _common.ToolDecorator:
+    """Serialize complete in-process tool handlers on one live runtime subject."""
+
+    execution_lock = asyncio.Lock()
+
+    def serializing_tool(
+        name: str,
+        description: str,
+        input_schema: dict[str, Any],
+    ) -> Callable[[_common.ToolHandler], object]:
+        decorate = tool_decorator(name, description, input_schema)
+
+        def decorate_serialized(handler: _common.ToolHandler) -> object:
+            @wraps(handler)
+            async def serialized(args: dict[str, Any]) -> dict[str, Any]:
+                async with execution_lock:
+                    return await handler(args)
+
+            return decorate(serialized)
+
+        return decorate_serialized
+
+    return serializing_tool
+
+
 def _merge_registered_tools(target: dict[str, Any], registered: dict[str, Any]) -> None:
     for name, handler in registered.items():
         if name in target:
@@ -71,7 +99,8 @@ def build_internal_mcp_server(services: RuntimeServices) -> tuple[Any, list[str]
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError("claude-agent-sdk is required for live agent mode") from exc
 
-    tool_decorator = cast(_common.ToolDecorator, tool)
+    sdk_tool_decorator = cast(_common.ToolDecorator, tool)
+    tool_decorator = _serializing_tool_decorator(sdk_tool_decorator)
     registered: dict[str, Any] = {}
     _merge_registered_tools(registered, register_repository_tools(services, tool_decorator))
     _merge_registered_tools(registered, register_testing_tools(services, tool_decorator))
