@@ -89,6 +89,61 @@ def test_acquire_interruption_after_process_authority_bind_releases_all_authorit
     successor.release()
 
 
+def test_acquire_cleanup_retries_exact_authority_clear_after_interruption(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_descriptor_authority()
+    artifacts = tmp_path / "artifacts"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    lease = WorkspaceLease(artifacts, workspace, "run-interrupted-cleanup")
+    real_bind = workspace_lease_module.bind_active_workspace_authority
+    real_clear = workspace_lease_module.clear_active_workspace_authority
+    clear_calls = 0
+
+    def bind_then_interrupt(
+        root: Path,
+        identity: tuple[int, int] | None,
+        *,
+        owner: str,
+    ) -> None:
+        real_bind(root, identity, owner=owner)
+        raise KeyboardInterrupt("simulated acquisition interruption")
+
+    def interrupt_first_clear(
+        root: Path,
+        identity: tuple[int, int] | None,
+        *,
+        owner: str,
+    ) -> bool:
+        nonlocal clear_calls
+        clear_calls += 1
+        if clear_calls == 1:
+            raise KeyboardInterrupt("simulated cleanup interruption")
+        return real_clear(root, identity, owner=owner)
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(
+            workspace_lease_module,
+            "bind_active_workspace_authority",
+            bind_then_interrupt,
+        )
+        scoped.setattr(
+            workspace_lease_module,
+            "clear_active_workspace_authority",
+            interrupt_first_clear,
+        )
+        with pytest.raises(KeyboardInterrupt, match="acquisition interruption"):
+            lease.acquire(publish=False)
+
+    assert clear_calls == 2
+    assert active_workspace_authority(workspace) is None
+    successor = WorkspaceLease(artifacts, workspace, "run-successor")
+    successor.acquire(publish=False)
+    successor.release()
+
+
 def test_release_interruption_during_process_authority_clear_still_releases_os_locks(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -97,9 +152,7 @@ def test_release_interruption_during_process_authority_clear_still_releases_os_l
     artifacts = tmp_path / "artifacts"
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    lease = WorkspaceLease(artifacts, workspace, "run-interrupted-release").acquire(
-        publish=False
-    )
+    lease = WorkspaceLease(artifacts, workspace, "run-interrupted-release").acquire(publish=False)
     real_clear = workspace_lease_module.clear_active_workspace_authority
     interrupted = False
 
@@ -129,6 +182,33 @@ def test_release_interruption_during_process_authority_clear_still_releases_os_l
     successor = WorkspaceLease(artifacts, workspace, "run-successor")
     successor.acquire(publish=False)
     successor.release()
+
+
+def test_release_unlock_interruption_resets_lease_object_and_closes_os_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_descriptor_authority()
+    artifacts = tmp_path / "artifacts"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    lease = WorkspaceLease(artifacts, workspace, "run-reusable").acquire(publish=False)
+
+    def interrupt_unlock(_fd: int) -> None:
+        raise KeyboardInterrupt("simulated workspace unlock interruption")
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(
+            workspace_lease_module.WorkspaceLease,
+            "_unlock_workspace_root",
+            staticmethod(interrupt_unlock),
+        )
+        with pytest.raises(KeyboardInterrupt, match="workspace unlock interruption"):
+            lease.release()
+
+    assert active_workspace_authority(workspace) is None
+    lease.acquire(publish=False)
+    lease.release()
 
 
 def test_process_authority_conflict_does_not_publish_failed_lease_owner(tmp_path: Path) -> None:
