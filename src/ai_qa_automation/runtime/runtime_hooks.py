@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from threading import Lock
-from typing import Any, cast
+from typing import Any, TypeGuard, cast
 
 from claude_agent_sdk.types import (
     HookContext,
@@ -75,7 +75,7 @@ class _InternalToolLifecycleGate:
         self._poisoned_reason: str | None = None
 
     @staticmethod
-    def _valid_tool_use_id(tool_use_id: str | None) -> bool:
+    def _valid_tool_use_id(tool_use_id: object) -> TypeGuard[str]:
         return (
             isinstance(tool_use_id, str)
             and bool(tool_use_id)
@@ -209,6 +209,39 @@ def _checkpoint(
 def _sync_tool_count(state: AgentRunState | None, control: RuntimeControl | None) -> None:
     if state is not None and control is not None:
         state.tool_call_count = control.budget.snapshot().tool_calls
+
+
+def _charge_tool_request_budget(
+    *,
+    state: AgentRunState | None,
+    state_store: StateStore | None,
+    control: RuntimeControl | None,
+) -> dict[str, Any] | None:
+    """Charge every SDK tool request before any execution-specific admission work."""
+
+    try:
+        if control is not None:
+            control.budget.charge_tool()
+            _sync_tool_count(state, control)
+    except BudgetExceededError as exc:
+        if state is not None:
+            state.terminal_status = TerminalStatus.BUDGET_EXCEEDED
+            state.terminal_reason = str(exc)
+        if control is not None:
+            control.journal.append(
+                "budget_denied",
+                tool_name_state="unvalidated",
+                reason=str(exc),
+            )
+        _checkpoint(state, state_store, control)
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": f"runtime-budget: {exc}",
+            }
+        }
+    return None
 
 
 def _tool_response_failed(response: Any) -> bool:
@@ -449,34 +482,21 @@ def pretool_policy_output(
     state: AgentRunState | None = None,
     state_store: StateStore | None = None,
     control: RuntimeControl | None = None,
+    tool_budget_already_charged: bool = False,
 ) -> dict[str, Any]:
     """Apply the one live request-budget/repetition/policy authority before execution."""
     raw_tool_name = input_data.get("tool_name", "")
     raw_tool_input = input_data.get("tool_input")
     tool_input = {} if raw_tool_input is None else raw_tool_input
 
-    try:
-        if control is not None:
-            control.budget.charge_tool()
-            _sync_tool_count(state, control)
-    except BudgetExceededError as exc:
-        if state is not None:
-            state.terminal_status = TerminalStatus.BUDGET_EXCEEDED
-            state.terminal_reason = str(exc)
-        if control is not None:
-            control.journal.append(
-                "budget_denied",
-                tool_name_state="unvalidated",
-                reason=str(exc),
-            )
-        _checkpoint(state, state_store, control)
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": f"runtime-budget: {exc}",
-            }
-        }
+    if not tool_budget_already_charged:
+        budget_denial = _charge_tool_request_budget(
+            state=state,
+            state_store=state_store,
+            control=control,
+        )
+        if budget_denial is not None:
+            return budget_denial
 
     try:
         validate_tool_request(raw_tool_name, tool_input)
@@ -1116,7 +1136,16 @@ def build_hooks(
         data = cast(dict[str, Any], input_data)
         internal_tool_name = _internal_tool_name(data)
         reserved_tool_use_id: str | None = None
+        tool_budget_already_charged = False
         if internal_tool_name is not None:
+            budget_denial = _charge_tool_request_budget(
+                state=state,
+                state_store=state_store,
+                control=control,
+            )
+            if budget_denial is not None:
+                return cast(HookJSONOutput, budget_denial)
+            tool_budget_already_charged = True
             denial_reason = lifecycle_gate.reserve(internal_tool_name, tool_use_id)
             if denial_reason is not None:
                 return cast(
@@ -1132,6 +1161,7 @@ def build_hooks(
                 state=state,
                 state_store=state_store,
                 control=control,
+                tool_budget_already_charged=tool_budget_already_charged,
             )
         except BaseException:
             if internal_tool_name is not None and reserved_tool_use_id is not None:
