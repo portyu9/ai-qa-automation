@@ -143,6 +143,86 @@ async def test_busy_internal_lifecycle_persists_precharged_budget_without_state_
 
 
 @pytest.mark.asyncio
+async def test_admitted_internal_pretool_exception_latches_infrastructure_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = AgentRunState(objective="test pretool lifecycle failure", workspace="/workspace")
+
+    def fail_pre(_policy: Any, _input_data: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("pretool exploded")
+
+    monkeypatch.setattr(runtime_hooks, "pretool_policy_output", fail_pre)
+    hooks = runtime_hooks.build_hooks(cast(Any, object()), state=state)
+    pre, _post, _failure = _hook_callbacks(cast(dict[Any, list[Any]], hooks))
+
+    with pytest.raises(RuntimeError, match="pretool exploded"):
+        await pre(
+            _internal_input("mcp__qa__inspect_browser"),
+            "toolu-first",
+            cast(Any, None),
+        )
+
+    assert state.terminal_status is TerminalStatus.INFRASTRUCTURE_FAILURE
+    assert "PreToolUse" in cast(str, state.terminal_reason)
+
+    denied = await pre(
+        _internal_input("mcp__qa__inspect_repository"),
+        "toolu-second",
+        cast(Any, None),
+    )
+    assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "processing failed" in denied["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("event_name", "patched_name", "callback_index"),
+    [
+        ("PostToolUse", "posttool_policy_output", 1),
+        ("PostToolUseFailure", "posttool_failure_output", 2),
+    ],
+)
+async def test_admitted_internal_terminal_hook_exception_latches_infrastructure_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    event_name: str,
+    patched_name: str,
+    callback_index: int,
+) -> None:
+    state = AgentRunState(objective="test terminal lifecycle failure", workspace="/workspace")
+
+    monkeypatch.setattr(
+        runtime_hooks,
+        "pretool_policy_output",
+        lambda _policy, _input_data, **_kwargs: {},
+    )
+
+    def fail_terminal(_input_data: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("terminal hook exploded")
+
+    monkeypatch.setattr(runtime_hooks, patched_name, fail_terminal)
+    hooks = runtime_hooks.build_hooks(cast(Any, object()), state=state)
+    callbacks = _hook_callbacks(cast(dict[Any, list[Any]], hooks))
+    pre = callbacks[0]
+    terminal_hook = callbacks[callback_index]
+    internal = _internal_input("mcp__qa__inspect_browser")
+
+    assert await pre(internal, "toolu-first", cast(Any, None)) == {}
+    with pytest.raises(RuntimeError, match="terminal hook exploded"):
+        await terminal_hook(internal, "toolu-first", cast(Any, None))
+
+    assert state.terminal_status is TerminalStatus.INFRASTRUCTURE_FAILURE
+    assert event_name in cast(str, state.terminal_reason)
+
+    denied = await pre(
+        _internal_input("mcp__qa__inspect_repository"),
+        "toolu-second",
+        cast(Any, None),
+    )
+    assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "processing failed" in denied["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+@pytest.mark.asyncio
 async def test_internal_completion_identity_mismatch_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
