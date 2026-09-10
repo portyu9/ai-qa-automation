@@ -151,6 +151,20 @@ def _internal_lifecycle_pretool_denial(reason: str) -> dict[str, Any]:
     }
 
 
+def _latch_internal_lifecycle_processing_failure(
+    state: AgentRunState | None,
+    *,
+    event_name: str,
+) -> None:
+    """Prevent a failed admitted hook from later being recomputed as successful truth."""
+
+    if state is not None and state.terminal_status in {None, TerminalStatus.SUCCESS}:
+        state.terminal_status = TerminalStatus.INFRASTRUCTURE_FAILURE
+        state.terminal_reason = (
+            f"Internal tool lifecycle {event_name} processing failed before deterministic closure"
+        )
+
+
 def _record_internal_lifecycle_integrity_failure(
     *,
     event_name: str,
@@ -1167,6 +1181,7 @@ def build_hooks(
             )
         except BaseException:
             if internal_tool_name is not None and reserved_tool_use_id is not None:
+                _latch_internal_lifecycle_processing_failure(state, event_name="PreToolUse")
                 lifecycle_gate.poison_active(
                     internal_tool_name,
                     reserved_tool_use_id,
@@ -1216,6 +1231,7 @@ def build_hooks(
             )
         except BaseException:
             if internal_tool_name is not None and reserved_tool_use_id is not None:
+                _latch_internal_lifecycle_processing_failure(state, event_name="PostToolUse")
                 lifecycle_gate.poison_active(
                     internal_tool_name,
                     reserved_tool_use_id,
@@ -1260,6 +1276,10 @@ def build_hooks(
             )
         except BaseException:
             if internal_tool_name is not None and reserved_tool_use_id is not None:
+                _latch_internal_lifecycle_processing_failure(
+                    state,
+                    event_name="PostToolUseFailure",
+                )
                 lifecycle_gate.poison_active(
                     internal_tool_name,
                     reserved_tool_use_id,
