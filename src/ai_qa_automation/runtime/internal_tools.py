@@ -60,7 +60,9 @@ def _k6_runner_factory(*args: Any, **kwargs: Any) -> Any:
     return K6Runner(*args, **kwargs)
 
 
-def _serializing_tool_decorator(tool_decorator: _common.ToolDecorator) -> _common.ToolDecorator:
+def _serializing_tool_decorator(
+    tool_decorator: _common.ToolDecorator,
+) -> _common.ToolDecorator:
     """Serialize complete in-process tool handlers on one live runtime subject."""
 
     execution_lock = asyncio.Lock()
