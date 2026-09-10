@@ -202,6 +202,12 @@ def test_stale_recovery_blocks_when_process_local_root_owner_is_not_prior_lease(
             (artifact_root / "run-old" / "runtime.json").read_text(encoding="utf-8")
         )
         assert metadata["pending_mutation"] is None
+
+        retry = _recover(artifact_root, workspace, candidate_fingerprint, previous_lease)
+        assert retry["status"] == "BLOCKED"
+        assert "process-local pending root authority" in str(retry["reason"])
+        assert target.read_bytes() == original
+        assert pending_root_authority(workspace) == workspace_identity
     finally:
         assert clear_pending_root_authority(
             workspace,
