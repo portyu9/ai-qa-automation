@@ -74,6 +74,7 @@ async def test_busy_internal_lifecycle_persists_precharged_budget_without_state_
 ) -> None:
     pre_calls: list[str] = []
     state_saves: list[int] = []
+    journal_events: list[tuple[str, dict[str, Any]]] = []
     state = AgentRunState(objective="test durable lifecycle denial", workspace="/workspace")
 
     class FakeBudget:
@@ -86,9 +87,14 @@ async def test_busy_internal_lifecycle_persists_precharged_budget_without_state_
         def snapshot(self) -> SimpleNamespace:
             return SimpleNamespace(tool_calls=self.tool_calls)
 
+    class FakeJournal:
+        def append(self, event: str, **payload: Any) -> None:
+            journal_events.append((event, payload))
+
     class FakeControl:
         def __init__(self) -> None:
             self.budget = FakeBudget()
+            self.journal = FakeJournal()
             self.persisted_tool_calls: list[int] = []
 
         def persist(self) -> None:
@@ -140,6 +146,109 @@ async def test_busy_internal_lifecycle_persists_precharged_budget_without_state_
     assert state_saves == []
     assert state.observations == ["in-flight semantic marker"]
     assert pre_calls == ["mcp__qa__inspect_browser"]
+    assert journal_events == [
+        (
+            "internal_tool_lifecycle_denied",
+            {
+                "tool_name": "mcp__qa__apply_locator_heal",
+                "reason": (
+                    "another framework-owned internal tool lifecycle is still active; "
+                    "concurrent internal execution is denied"
+                ),
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_busy_internal_lifecycle_budget_exhaustion_never_checkpoints_active_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_saves: list[int] = []
+    journal_events: list[tuple[str, dict[str, Any]]] = []
+    state = AgentRunState(objective="test busy budget exhaustion", workspace="/workspace")
+
+    class FakeBudget:
+        def __init__(self) -> None:
+            self.tool_calls = 0
+            self.exhausted = False
+
+        def charge_tool(self) -> None:
+            if self.exhausted:
+                raise runtime_hooks.BudgetExceededError("tool-call budget exhausted")
+            self.tool_calls += 1
+
+        def snapshot(self) -> SimpleNamespace:
+            return SimpleNamespace(tool_calls=self.tool_calls)
+
+    class FakeJournal:
+        def append(self, event: str, **payload: Any) -> None:
+            journal_events.append((event, payload))
+
+    class FakeControl:
+        def __init__(self) -> None:
+            self.budget = FakeBudget()
+            self.journal = FakeJournal()
+            self.persisted_tool_calls: list[int] = []
+
+        def persist(self) -> None:
+            self.persisted_tool_calls.append(self.budget.tool_calls)
+
+    class FakeStateStore:
+        def save(self, _state: AgentRunState) -> None:
+            state_saves.append(_state.tool_call_count)
+
+    control = FakeControl()
+    monkeypatch.setattr(
+        runtime_hooks,
+        "pretool_policy_output",
+        lambda _policy, _input_data, **_kwargs: {},
+    )
+    hooks = runtime_hooks.build_hooks(
+        cast(Any, object()),
+        state=state,
+        state_store=cast(Any, FakeStateStore()),
+        control=cast(Any, control),
+    )
+    pre, _post, _failure = _hook_callbacks(cast(dict[Any, list[Any]], hooks))
+
+    assert (
+        await pre(
+            _internal_input("mcp__qa__inspect_browser"),
+            "toolu-first",
+            cast(Any, None),
+        )
+        == {}
+    )
+    control.budget.exhausted = True
+    state.observations.append("in-flight semantic marker")
+
+    denied = await pre(
+        _internal_input("mcp__qa__inspect_repository"),
+        "toolu-second",
+        cast(Any, None),
+    )
+
+    assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert denied["hookSpecificOutput"]["permissionDecisionReason"] == (
+        "runtime-budget: tool-call budget exhausted"
+    )
+    assert control.budget.tool_calls == 1
+    assert control.persisted_tool_calls == [1]
+    assert state.tool_call_count == 1
+    assert state.terminal_status is TerminalStatus.BUDGET_EXCEEDED
+    assert state_saves == []
+    assert state.observations == ["in-flight semantic marker"]
+    assert journal_events == [
+        (
+            "budget_denied",
+            {
+                "tool_name": "mcp__qa__inspect_repository",
+                "admission": "internal_lifecycle",
+                "reason": "tool-call budget exhausted",
+            },
+        )
+    ]
 
 
 @pytest.mark.asyncio
