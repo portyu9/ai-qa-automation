@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -65,6 +66,77 @@ async def test_internal_lifecycle_remains_reserved_through_matching_post_hook(
 
     assert await pre(third, "toolu-third", cast(Any, None)) == {}
     assert pre_calls == ["mcp__qa__inspect_browser", "mcp__qa__inspect_repository"]
+
+
+@pytest.mark.asyncio
+async def test_busy_internal_lifecycle_persists_precharged_budget_without_state_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pre_calls: list[str] = []
+    state_saves: list[int] = []
+    state = AgentRunState(objective="test durable lifecycle denial", workspace="/workspace")
+
+    class FakeBudget:
+        def __init__(self) -> None:
+            self.tool_calls = 0
+
+        def charge_tool(self) -> None:
+            self.tool_calls += 1
+
+        def snapshot(self) -> SimpleNamespace:
+            return SimpleNamespace(tool_calls=self.tool_calls)
+
+    class FakeControl:
+        def __init__(self) -> None:
+            self.budget = FakeBudget()
+            self.persisted_tool_calls: list[int] = []
+
+        def persist(self) -> None:
+            self.persisted_tool_calls.append(self.budget.tool_calls)
+
+    class FakeStateStore:
+        def save(self, _state: AgentRunState) -> None:
+            state_saves.append(_state.tool_call_count)
+
+    control = FakeControl()
+
+    def fake_pre(_policy: Any, input_data: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+        pre_calls.append(cast(str, input_data["tool_name"]))
+        return {}
+
+    monkeypatch.setattr(runtime_hooks, "pretool_policy_output", fake_pre)
+    hooks = runtime_hooks.build_hooks(
+        cast(Any, object()),
+        state=state,
+        state_store=cast(Any, FakeStateStore()),
+        control=cast(Any, control),
+    )
+    pre, _post, _failure = _hook_callbacks(cast(dict[Any, list[Any]], hooks))
+
+    assert await pre(
+        _internal_input("mcp__qa__inspect_browser"),
+        "toolu-first",
+        cast(Any, None),
+    ) == {}
+    assert control.budget.tool_calls == 1
+    assert control.persisted_tool_calls == []
+    assert state_saves == []
+
+    state.observations.append("in-flight semantic marker")
+    denied = await pre(
+        _internal_input("mcp__qa__apply_locator_heal"),
+        "toolu-second",
+        cast(Any, None),
+    )
+
+    assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "still active" in denied["hookSpecificOutput"]["permissionDecisionReason"]
+    assert control.budget.tool_calls == 2
+    assert control.persisted_tool_calls == [2]
+    assert state.tool_call_count == 2
+    assert state_saves == []
+    assert state.observations == ["in-flight semantic marker"]
+    assert pre_calls == ["mcp__qa__inspect_browser"]
 
 
 @pytest.mark.asyncio
