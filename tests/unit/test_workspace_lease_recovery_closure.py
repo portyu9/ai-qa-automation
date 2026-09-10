@@ -203,6 +203,31 @@ def test_invalid_clean_closure_marker_is_never_authority(tmp_path: Path) -> None
     assert "closure authority is invalid" in str(recovered["reason"])
 
 
+def test_missing_runtime_during_release_is_infrastructure_failure_and_unlocks(
+    tmp_path: Path,
+) -> None:
+    artifacts = tmp_path / "artifacts"
+    workspace = tmp_path / "workspace"
+    artifacts.mkdir()
+    workspace.mkdir()
+    lease, _run_dir = _lease_with_run_root(artifacts, workspace, "run-missing-runtime")
+
+    with pytest.raises(OSError, match="mutation recovery closure"):
+        lease.release()
+
+    assert _lease_metadata(lease)["mutation_recovery_closed"] is False
+
+    successor_run = artifacts / "run-successor"
+    successor_run.mkdir()
+    successor = WorkspaceLease(
+        artifacts,
+        workspace,
+        "run-successor",
+        run_root_identity=_identity(successor_run),
+    ).acquire(publish=False)
+    successor.release()
+
+
 def test_release_closure_persistence_failure_releases_locks_and_reports_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
