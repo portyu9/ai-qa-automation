@@ -137,6 +137,24 @@ def _load_metadata(
             "previous_run_id": raw_previous_run_id,
             "reason": "prior lease mutation recovery closure authority is invalid",
         }
+    if recovery_closed is True:
+        prior_lease_id = previous_lease.get("lease_id")
+        if not isinstance(prior_lease_id, str) or not prior_lease_id.strip():
+            return {
+                "status": "BLOCKED",
+                "previous_run_id": raw_previous_run_id,
+                "reason": "prior lease mutation recovery closure lacks exact lease identity authority",
+            }
+        prior_workspace = previous_lease.get("workspace")
+        if (
+            not isinstance(prior_workspace, str)
+            or prior_workspace != str(workspace.expanduser().resolve())
+        ):
+            return {
+                "status": "BLOCKED",
+                "previous_run_id": raw_previous_run_id,
+                "reason": "prior lease mutation recovery closure is bound to a different workspace",
+            }
 
     artifact_root = artifact_root.expanduser().resolve()
     try:
@@ -169,6 +187,25 @@ def _load_metadata(
             "previous_run_id": raw_previous_run_id,
             "reason": "prior lease mutation recovery closure lacks exact run-root identity authority",
         }
+    if recovery_closed is True:
+        raw_workspace_identity = previous_lease.get("workspace_root_identity")
+        if (
+            not isinstance(raw_workspace_identity, dict)
+            or set(raw_workspace_identity) != {"device", "inode"}
+        ):
+            return {
+                "status": "BLOCKED",
+                "previous_run_id": raw_previous_run_id,
+                "reason": "prior lease mutation recovery closure lacks exact workspace-root identity authority",
+            }
+        device = raw_workspace_identity.get("device")
+        inode = raw_workspace_identity.get("inode")
+        if type(device) is not int or type(inode) is not int or device < 0 or inode < 0:
+            return {
+                "status": "BLOCKED",
+                "previous_run_id": raw_previous_run_id,
+                "reason": "prior lease mutation recovery closure lacks exact workspace-root identity authority",
+            }
 
     try:
         _legacy._current_run_root_identity(prior_run_dir, run_identity)
