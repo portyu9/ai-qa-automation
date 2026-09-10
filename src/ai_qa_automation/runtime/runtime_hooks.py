@@ -1148,6 +1148,8 @@ def build_hooks(
             tool_budget_already_charged = True
             denial_reason = lifecycle_gate.reserve(internal_tool_name, tool_use_id)
             if denial_reason is not None:
+                if control is not None:
+                    control.persist()
                 return cast(
                     HookJSONOutput,
                     _internal_lifecycle_pretool_denial(denial_reason),
