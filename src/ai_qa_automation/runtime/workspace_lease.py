@@ -401,6 +401,12 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
         self._revalidate_workspace_root()
 
     def acquire(self, *, publish: bool = True) -> WorkspaceLease:
+        with self._lifecycle_lock:
+            if self._stream is not None:
+                raise OSError("workspace lease is already acquired")
+            return self._acquire_locked(publish=publish)
+
+    def _acquire_locked(self, *, publish: bool) -> WorkspaceLease:
         self._revalidate_run_root()
         self._revalidate_workspace_root()
         workspace_lock_fd = self._lock_workspace_root()
