@@ -55,7 +55,7 @@ def _runtime_roots(tmp_path: Path) -> tuple[Path, Path, Path]:
 def _historical_state(artifacts: Path, workspace: Path) -> tuple[Path, bytes, bytes, bytes]:
     run_root = artifacts / _RUN_ID
     state_path = run_root / "state.json"
-    state_store = StateStore(state_path)
+    state_store = StateStore(state_path, claim_parent_exclusively=True)
     state_store.save(
         AgentRunState(
             run_id=_RUN_ID,
@@ -85,7 +85,10 @@ def test_fresh_run_root_claim_allows_initial_and_subsequent_state_writes(tmp_pat
         objective="fresh run root claim",
         workspace=str(workspace),
     )
-    store = StateStore(tmp_path / "artifacts" / state.run_id / "state.json")
+    store = StateStore(
+        tmp_path / "artifacts" / state.run_id / "state.json",
+        claim_parent_exclusively=True,
+    )
 
     store.save(state)
     state.phase = "RUNNING"
@@ -108,7 +111,10 @@ def test_fresh_claim_creates_shared_persistence_parent_before_run_root(tmp_path:
         workspace=str(workspace),
     )
 
-    store = StateStore(artifacts / state.run_id / "state.json")
+    store = StateStore(
+        artifacts / state.run_id / "state.json",
+        claim_parent_exclusively=True,
+    )
     store.save(state)
 
     assert artifacts.is_dir()
@@ -130,7 +136,7 @@ def test_existing_run_root_requires_load_before_any_update(tmp_path: Path) -> No
         workspace=str(workspace),
     )
 
-    reopened = StateStore(state_path)
+    reopened = StateStore(state_path, claim_parent_exclusively=True)
     with pytest.raises(FileExistsError, match="not freshly claimed"):
         reopened.save(colliding)
     assert state_path.read_bytes() == historical_state
@@ -147,7 +153,7 @@ def test_preexisting_empty_run_root_cannot_be_claimed_by_first_state_write(tmp_p
     run_root = tmp_path / "artifacts" / "run-existing-empty"
     run_root.mkdir(parents=True)
     state_path = run_root / "state.json"
-    store = StateStore(state_path)
+    store = StateStore(state_path, claim_parent_exclusively=True)
     state = AgentRunState(
         run_id=run_root.name,
         session_id="session-new",
@@ -164,7 +170,7 @@ def test_first_state_write_is_create_only_after_fresh_root_claim(tmp_path: Path)
     workspace = tmp_path / "sut"
     workspace.mkdir()
     state_path = tmp_path / "artifacts" / "run-first-write-race" / "state.json"
-    store = StateStore(state_path)
+    store = StateStore(state_path, claim_parent_exclusively=True)
     unexpected = b"unexpected concurrent state\n"
     state_path.write_bytes(unexpected)
     state = AgentRunState(
@@ -186,7 +192,7 @@ def test_concurrent_same_run_root_claim_has_exactly_one_writer(tmp_path: Path) -
     barrier = Barrier(2)
 
     def attempt(index: int) -> str:
-        store = StateStore(state_path)
+        store = StateStore(state_path, claim_parent_exclusively=True)
         state = AgentRunState(
             run_id="run-race",
             session_id=f"session-{index}",
@@ -222,7 +228,7 @@ def test_symlinked_existing_run_root_is_rejected_without_touching_target(tmp_pat
         pytest.skip(f"symlink creation unavailable: {exc}")
 
     with pytest.raises(ValueError, match="state directory is a symlink"):
-        StateStore(run_root / "state.json")
+        StateStore(run_root / "state.json", claim_parent_exclusively=True)
     assert marker.read_text(encoding="utf-8") == "do not touch\n"
     assert not (outside / "state.json").exists()
 
