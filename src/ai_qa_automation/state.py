@@ -60,6 +60,82 @@ def _identity(value: os.stat_result) -> tuple[int, int]:
     return value.st_dev, value.st_ino
 
 
+def _claim_child_directory(
+    root: Path,
+    name: str,
+    *,
+    label: str,
+    expected_root_identity: tuple[int, int] | None,
+) -> tuple[int, int] | None:
+    """Create one direct child directory without replacement under pinned root authority."""
+
+    if not name or name in {".", ".."} or Path(name).name != name:
+        raise ValueError(f"{label} must be one direct child directory")
+
+    root = root.expanduser().absolute()
+    if not descriptor_relative_authority_supported():
+        (root / name).mkdir(exist_ok=False)
+        fsync_directory(root)
+        return None
+
+    if expected_root_identity is None:
+        raise RuntimeError(f"{label} requires pinned persistence-root identity")
+
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    try:
+        root_fd = os.open(root, directory_flags)
+    except OSError as exc:
+        raise ValueError(f"{label} persistence root could not be opened safely") from exc
+
+    child_fd = -1
+    try:
+        opened_root = os.fstat(root_fd)
+        current_root = root.stat(follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(opened_root.st_mode)
+            or not stat.S_ISDIR(current_root.st_mode)
+            or _identity(opened_root) != expected_root_identity
+            or _identity(current_root) != expected_root_identity
+        ):
+            raise ValueError(f"{label} persistence root changed identity before run-root claim")
+
+        os.mkdir(name, 0o755, dir_fd=root_fd)
+        os.fsync(root_fd)
+        try:
+            child_fd = os.open(name, directory_flags, dir_fd=root_fd)
+        except OSError as exc:
+            raise ValueError(f"{label} could not be opened safely after claim") from exc
+
+        opened_child = os.fstat(child_fd)
+        current_child = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+        child_identity = _identity(opened_child)
+        if (
+            not stat.S_ISDIR(opened_child.st_mode)
+            or not stat.S_ISDIR(current_child.st_mode)
+            or _identity(current_child) != child_identity
+        ):
+            raise ValueError(f"{label} changed identity during run-root claim")
+
+        current_root = root.stat(follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(current_root.st_mode)
+            or _identity(current_root) != expected_root_identity
+        ):
+            raise ValueError(f"{label} persistence root changed identity during run-root claim")
+    finally:
+        if child_fd >= 0:
+            os.close(child_fd)
+        os.close(root_fd)
+
+    try:
+        current_child_identity = pin_directory_identity(root / name, label=label)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ValueError(f"{label} could not be revalidated after run-root claim") from exc
+    if current_child_identity != child_identity:
+        raise ValueError(f"{label} changed identity after run-root claim")
+    return child_identity
+
+
 class StateStore:
     """Canonical run state persisted independently from conversational context."""
 
@@ -68,6 +144,7 @@ class StateStore:
         path: Path,
         *,
         expected_parent_identity: tuple[int, int] | None = None,
+        claim_parent_exclusively: bool = False,
     ) -> None:
         requested = path.expanduser()
         if requested.is_symlink():
@@ -75,12 +152,53 @@ class StateStore:
         raw_parent = requested.parent
         if raw_parent.is_symlink():
             raise ValueError("state directory is a symlink and has ambiguous ownership")
-        parent_existed = raw_parent.exists()
-        raw_parent.mkdir(parents=True, exist_ok=True)
+
+        parent_created = False
+        claimed_parent_identity: tuple[int, int] | None = None
+        if claim_parent_exclusively:
+            raw_persistence_root = raw_parent.parent
+            if raw_persistence_root.is_symlink():
+                raise ValueError("state persistence root is a symlink and has ambiguous ownership")
+            persistence_root_existed = raw_persistence_root.exists()
+            raw_persistence_root.mkdir(parents=True, exist_ok=True)
+            if raw_persistence_root.is_symlink():
+                raise ValueError("state persistence root became a symlink")
+            if not raw_persistence_root.is_dir():
+                raise ValueError("state persistence root must remain a regular directory")
+            persistence_root = raw_persistence_root.resolve()
+            if not persistence_root_existed:
+                fsync_directory(persistence_root.parent)
+            persistence_root_identity = (
+                pin_directory_identity(persistence_root, label="state persistence root")
+                if descriptor_relative_authority_supported()
+                else None
+            )
+
+            if not raw_parent.exists():
+                try:
+                    # The final run-root component is the allocation boundary. Keep shared
+                    # artifact-root creation separate, then create exactly this child relative
+                    # to pinned persistence-root authority without replacement.
+                    claimed_parent_identity = _claim_child_directory(
+                        persistence_root,
+                        raw_parent.name,
+                        label="state directory",
+                        expected_root_identity=persistence_root_identity,
+                    )
+                    parent_created = True
+                except FileExistsError:
+                    parent_created = False
+        else:
+            parent_existed = raw_parent.exists()
+            raw_parent.mkdir(parents=True, exist_ok=True)
+            if not parent_existed:
+                fsync_directory(raw_parent.resolve().parent)
+
         if raw_parent.is_symlink():
             raise ValueError("state directory became a symlink")
-        if not parent_existed:
-            fsync_directory(raw_parent.resolve().parent)
+        if not raw_parent.is_dir():
+            raise ValueError("state directory must remain a regular directory")
+
         self.path = raw_parent.resolve() / requested.name
         parent_status = self.path.parent.stat(follow_symlinks=False)
         if not stat.S_ISDIR(parent_status.st_mode):
@@ -91,12 +209,17 @@ class StateStore:
             if self._descriptor_relative_parent
             else _identity(parent_status)
         )
+        if claimed_parent_identity is not None and self._parent_identity != claimed_parent_identity:
+            raise ValueError("state directory changed identity after exclusive run-root claim")
         if (
             expected_parent_identity is not None
             and self._parent_identity != expected_parent_identity
         ):
             raise ValueError("state directory does not match authorized run persistence root")
         self._lock = threading.RLock()
+        self._claim_parent_exclusively = claim_parent_exclusively
+        self._exclusive_parent_owned = parent_created
+        self._state_bound = False
         self._assert_owned()
 
     @property
@@ -142,21 +265,62 @@ class StateStore:
             ) from exc
         return b"".join(chunks)
 
+    def _save_initial_fallback(self, rendered: bytes) -> None:
+        handle, raw_temp = tempfile.mkstemp(
+            dir=self.path.parent,
+            prefix=f".{self.path.name}.",
+            suffix=".tmp",
+            text=False,
+        )
+        temp = Path(raw_temp)
+        try:
+            offset = 0
+            while offset < len(rendered):
+                written = os.write(handle, rendered[offset:])
+                if written <= 0:
+                    raise OSError("initial canonical state write made no forward progress")
+                offset += written
+            os.fsync(handle)
+            os.close(handle)
+            handle = -1
+            self._assert_owned()
+            os.link(temp, self.path)
+            fsync_directory(self.path.parent)
+            self._revalidate_parent()
+        finally:
+            if handle >= 0:
+                os.close(handle)
+            temp.unlink(missing_ok=True)
+
     def save(self, state: AgentRunState) -> None:
         with self._lock:
             self._assert_owned()
+            if self._claim_parent_exclusively and not self._exclusive_parent_owned:
+                raise FileExistsError(
+                    "run persistence root was not freshly claimed; existing canonical state "
+                    "cannot be adopted by a new-run store"
+                )
+
             rendered = self._render(state)
+            initial_write = not self._state_bound
+            create_only = self._claim_parent_exclusively and initial_write
             if self._descriptor_relative_parent:
                 atomic_write_bytes_confined(
                     self.path.parent,
                     self.path.name,
                     rendered,
                     create_parents=False,
-                    create_only=False,
+                    create_only=create_only,
                     label="canonical state",
                     expected_root_identity=self._parent_identity,
                 )
                 self._revalidate_parent()
+                self._state_bound = True
+                return
+
+            if create_only:
+                self._save_initial_fallback(rendered)
+                self._state_bound = True
                 return
 
             handle, raw_temp = tempfile.mkstemp(
@@ -177,6 +341,7 @@ class StateStore:
                 self._revalidate_parent()
             finally:
                 temp.unlink(missing_ok=True)
+            self._state_bound = True
 
     def load(self) -> AgentRunState:
         with self._lock:
@@ -203,4 +368,6 @@ class StateStore:
             # validation then prevents string/number/boolean coercion in authority fields
             # while still accepting the JSON representations of enums and datetimes.
             parse_json_object_strict(rendered, label="canonical state")
-            return AgentRunState.model_validate_json(rendered, strict=True)
+            state = AgentRunState.model_validate_json(rendered, strict=True)
+            self._state_bound = True
+            return state
