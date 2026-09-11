@@ -182,7 +182,7 @@ def _persist_closed_run(
     )
     StateStore(run_dir / "state.json").save(state)
     journal = RunJournal(run_dir / "journal.jsonl")
-    journal.append("validation_closed")
+    journal.append("validation_closed" if change_revision > 0 else "run_started")
     journal_status = journal.verify()
     workspace_status = workspace.stat(follow_symlinks=False)
     (run_dir / "runtime.json").write_text(
