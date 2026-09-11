@@ -248,6 +248,27 @@ def test_recovery_denies_closed_validation_with_incoherent_modified_file_lineage
     assert result["resume_policy"] == "manual-review-required-before-new-session"
 
 
+def test_recovery_denies_closed_revision_with_noncanonical_historical_lineage(
+    tmp_path: Path,
+) -> None:
+    result = inspect_recovery(
+        _persist_closed_run(
+            tmp_path,
+            files_modified=[_MUTATION_PATH, "../outside.py"],
+        )
+    )
+
+    assert result["recoverable"] is True
+    assert result["revision_closed"] is False
+    assert result["revision_closure"] == {
+        "closed": False,
+        "code": "canonical_mutation_lineage_mismatch",
+        "reason": "Persisted modified-file lineage contains a noncanonical repository path.",
+        "mutation_path": _MUTATION_PATH,
+    }
+    assert result["resume_policy"] == "manual-review-required-before-new-session"
+
+
 def test_recovery_denies_revision_zero_with_modified_file_lineage(tmp_path: Path) -> None:
     result = inspect_recovery(
         _persist_closed_run(
