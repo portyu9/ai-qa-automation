@@ -21,6 +21,7 @@ from ai_qa_automation.state import StateStore
 
 _RUN_ID = "run-phase2-recovery-lineage"
 _MUTATION_PATH = "tests/test_checkout.py"
+_PRIOR_MUTATION_PATH = "tests/test_prior.py"
 _TARGETED_BACKEND = "controller-observer-test-double"
 _REGRESSION_BACKEND = "controller-regression-observer-test-double"
 _TARGETED_IDENTITY = "sha256:" + "1" * 64
@@ -32,10 +33,14 @@ _SUITE_ID = "sha256:" + "a" * 64
 _NODEIDS_SHA256 = "b" * 64
 
 
-def _trusted_validations(path: str = _MUTATION_PATH) -> list[ValidationResult]:
+def _trusted_validations(
+    path: str = _MUTATION_PATH,
+    *,
+    revision: int = 1,
+) -> list[ValidationResult]:
     targeted = build_targeted_execution_observation(
         run_id=_RUN_ID,
-        change_revision=1,
+        change_revision=revision,
         mutation_path=path,
         pytest_args=(path,),
         observer_backend=_TARGETED_BACKEND,
@@ -75,7 +80,7 @@ def _trusted_validations(path: str = _MUTATION_PATH) -> list[ValidationResult]:
     }
     regression = build_regression_execution_observation(
         run_id=_RUN_ID,
-        change_revision=1,
+        change_revision=revision,
         pytest_args=(),
         observer_backend=_REGRESSION_BACKEND,
         observer_identity=_REGRESSION_IDENTITY,
@@ -103,7 +108,7 @@ def _trusted_validations(path: str = _MUTATION_PATH) -> list[ValidationResult]:
         ValidationResult(
             name="test_patch_safety",
             gate_id=f"test_patch_safety:{path}",
-            revision=1,
+            revision=revision,
             status=ValidationStatus.PASS,
             summary="safe mutation subject",
             details={"path": path, "scope": "static_patch_safety"},
@@ -111,7 +116,7 @@ def _trusted_validations(path: str = _MUTATION_PATH) -> list[ValidationResult]:
         ValidationResult(
             name="pytest",
             gate_id="pytest:targeted",
-            revision=1,
+            revision=revision,
             status=ValidationStatus.PASS,
             summary="trusted targeted pass",
             details={
@@ -141,7 +146,7 @@ def _trusted_validations(path: str = _MUTATION_PATH) -> list[ValidationResult]:
         ValidationResult(
             name="pytest",
             gate_id="pytest:regression",
-            revision=1,
+            revision=revision,
             status=ValidationStatus.PASS,
             summary="trusted regression pass",
             details={
@@ -161,11 +166,30 @@ def _trusted_validations(path: str = _MUTATION_PATH) -> list[ValidationResult]:
     ]
 
 
+def _append_mutation_prepared(
+    journal: RunJournal,
+    *,
+    path: str,
+    change_revision_before: int,
+) -> None:
+    journal.append(
+        "mutation_prepared",
+        path=path,
+        existed=True,
+        original_sha256="f" * 64,
+        change_revision_before=change_revision_before,
+        candidate_required=True,
+        pre_mutation_workspace_fingerprint="sha256:" + "7" * 64,
+        pre_mutation_context_fingerprint="sha256:" + "8" * 64,
+    )
+
+
 def _persist_closed_run(
     tmp_path: Path,
     *,
     files_modified: list[str],
     change_revision: int = 1,
+    journal_mode: str = "committed",
 ) -> Path:
     if not descriptor_relative_authority_supported():
         pytest.skip("workspace root recovery authority is unavailable")
@@ -178,11 +202,44 @@ def _persist_closed_run(
         workspace=str(workspace),
         change_revision=change_revision,
         files_modified=files_modified,
-        validation_results=_trusted_validations() if change_revision == 1 else [],
+        validation_results=(
+            _trusted_validations(revision=change_revision) if change_revision > 0 else []
+        ),
     )
     StateStore(run_dir / "state.json").save(state)
     journal = RunJournal(run_dir / "journal.jsonl")
-    journal.append("validation_closed" if change_revision > 0 else "run_started")
+    if change_revision == 0:
+        journal.append("run_started")
+    elif journal_mode == "stale_prior_commit":
+        _append_mutation_prepared(
+            journal,
+            path=_PRIOR_MUTATION_PATH,
+            change_revision_before=0,
+        )
+        journal.append("mutation_committed", path=_PRIOR_MUTATION_PATH)
+    else:
+        _append_mutation_prepared(
+            journal,
+            path=_MUTATION_PATH,
+            change_revision_before=change_revision - 1,
+        )
+        if journal_mode == "committed":
+            journal.append("mutation_committed", path=_MUTATION_PATH)
+        elif journal_mode == "rolled_back":
+            journal.append("mutation_rolled_back", path=_MUTATION_PATH, reason="test rollback")
+        elif journal_mode == "prepared_only":
+            pass
+        elif journal_mode == "wrong_commit_path":
+            journal.append("mutation_committed", path="tests/test_other.py")
+        elif journal_mode == "committed_then_prepared":
+            journal.append("mutation_committed", path=_MUTATION_PATH)
+            _append_mutation_prepared(
+                journal,
+                path="tests/test_next.py",
+                change_revision_before=change_revision,
+            )
+        else:  # pragma: no cover - test helper guard
+            raise ValueError(f"unsupported journal mode: {journal_mode}")
     journal_status = journal.verify()
     workspace_status = workspace.stat(follow_symlinks=False)
     (run_dir / "runtime.json").write_text(
@@ -213,6 +270,15 @@ def test_recovery_accepts_closed_revision_when_mutation_path_is_canonical(tmp_pa
         "code": "closed",
         "reason": "Current changed revision is deterministically closed.",
         "mutation_path": _MUTATION_PATH,
+    }
+    assert result["journal_mutation_lifecycle"] == {
+        "valid": True,
+        "code": "valid",
+        "expected_commit_count": 1,
+        "pending_open": False,
+        "prepared_count": 1,
+        "committed_count": 1,
+        "rolled_back_count": 0,
     }
     assert result["resume_policy"] == "safe-to-start-a-new-agent-session-from-persisted-evidence"
 
@@ -295,9 +361,104 @@ def test_recovery_accepts_current_closure_path_among_historical_modified_paths(
     result = inspect_recovery(
         _persist_closed_run(
             tmp_path,
-            files_modified=["tests/test_prior.py", _MUTATION_PATH],
+            files_modified=[_PRIOR_MUTATION_PATH, _MUTATION_PATH],
         )
     )
 
     assert result["revision_closed"] is True
     assert result["resume_policy"] == "safe-to-start-a-new-agent-session-from-persisted-evidence"
+
+
+def test_recovery_denies_crash_window_after_runtime_pending_clear_before_commit_event(
+    tmp_path: Path,
+) -> None:
+    result = inspect_recovery(
+        _persist_closed_run(
+            tmp_path,
+            files_modified=[_MUTATION_PATH],
+            journal_mode="prepared_only",
+        )
+    )
+
+    assert result["recoverable"] is True
+    assert result["runtime"]["pending_mutation"] is None
+    assert result["journal_mutation_lifecycle"]["pending_open"] is True
+    assert result["revision_closed"] is False
+    assert result["revision_closure"]["code"] == "journal_runtime_pending_mismatch"
+    assert result["resume_policy"] == "manual-review-required-before-new-session"
+
+
+def test_recovery_denies_rollback_when_canonical_state_claims_committed_closed_revision(
+    tmp_path: Path,
+) -> None:
+    result = inspect_recovery(
+        _persist_closed_run(
+            tmp_path,
+            files_modified=[_MUTATION_PATH],
+            journal_mode="rolled_back",
+        )
+    )
+
+    assert result["journal_mutation_lifecycle"]["rolled_back_count"] == 1
+    assert result["journal_mutation_lifecycle"]["expected_commit_count"] == 0
+    assert result["revision_closed"] is False
+    assert result["revision_closure"]["code"] == "journal_mutation_commit_missing"
+    assert result["resume_policy"] == "manual-review-required-before-new-session"
+
+
+def test_recovery_denies_stale_prior_revision_commit_for_current_closed_revision(
+    tmp_path: Path,
+) -> None:
+    result = inspect_recovery(
+        _persist_closed_run(
+            tmp_path,
+            files_modified=[_PRIOR_MUTATION_PATH, _MUTATION_PATH],
+            change_revision=2,
+            journal_mode="stale_prior_commit",
+        )
+    )
+
+    assert result["journal_mutation_lifecycle"]["committed_count"] == 1
+    assert result["journal_mutation_lifecycle"]["expected_commit_count"] == 0
+    assert result["revision_closed"] is False
+    assert result["revision_closure"]["code"] == "journal_mutation_commit_missing"
+    assert result["resume_policy"] == "manual-review-required-before-new-session"
+
+
+def test_recovery_denies_invalid_commit_path_pairing_even_with_closed_validation(
+    tmp_path: Path,
+) -> None:
+    result = inspect_recovery(
+        _persist_closed_run(
+            tmp_path,
+            files_modified=[_MUTATION_PATH],
+            journal_mode="wrong_commit_path",
+        )
+    )
+
+    assert result["journal_mutation_lifecycle"]["valid"] is False
+    assert (
+        result["journal_mutation_lifecycle"]["code"]
+        == "journal_mutation_transition_without_matching_prepare"
+    )
+    assert result["revision_closed"] is False
+    assert result["revision_closure"]["code"] == "journal_mutation_lifecycle_mismatch"
+    assert result["resume_policy"] == "manual-review-required-before-new-session"
+
+
+def test_recovery_denies_dangling_later_prepare_when_runtime_reports_no_pending_mutation(
+    tmp_path: Path,
+) -> None:
+    result = inspect_recovery(
+        _persist_closed_run(
+            tmp_path,
+            files_modified=[_MUTATION_PATH],
+            journal_mode="committed_then_prepared",
+        )
+    )
+
+    assert result["journal_mutation_lifecycle"]["expected_commit_count"] == 1
+    assert result["journal_mutation_lifecycle"]["pending_open"] is True
+    assert result["revision_closed"] is False
+    assert result["revision_closure"]["code"] == "journal_runtime_pending_mismatch"
+    assert result["resume_policy"] == "manual-review-required-before-new-session"
