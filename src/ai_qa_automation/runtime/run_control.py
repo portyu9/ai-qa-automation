@@ -1217,9 +1217,7 @@ def atomic_write_json(
         if expected_parent_identity is not None and current_identity != expected_parent_identity:
             raise RuntimeError("runtime metadata directory changed identity since authorization")
         authorized_identity = (
-            expected_parent_identity
-            if expected_parent_identity is not None
-            else current_identity
+            expected_parent_identity if expected_parent_identity is not None else current_identity
         )
         try:
             atomic_write_bytes_confined(
