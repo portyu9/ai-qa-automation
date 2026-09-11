@@ -81,3 +81,39 @@ def test_fallback_exclusive_claim_refuses_existing_run_root_without_overwrite(
         )
 
     assert state_path.read_bytes() == historical_bytes
+
+
+def test_fallback_interrupted_initial_write_never_publishes_partial_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(state_module, "descriptor_relative_authority_supported", lambda: False)
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+    state_path = tmp_path / "artifacts" / "run-fallback-interrupted" / "state.json"
+    store = StateStore(state_path, claim_parent_exclusively=True)
+    state = AgentRunState(
+        run_id="run-fallback-interrupted",
+        session_id="session-interrupted",
+        objective="fallback publication must remain atomic",
+        workspace=str(workspace),
+    )
+    real_write = os.write
+    write_calls = 0
+
+    def interrupted_write(fd: int, data: bytes | bytearray | memoryview) -> int:
+        nonlocal write_calls
+        write_calls += 1
+        if write_calls == 1:
+            partial = bytes(data[: max(1, len(data) // 2)])
+            return real_write(fd, partial)
+        raise OSError("simulated interrupted fallback state write")
+
+    monkeypatch.setattr(state_module.os, "write", interrupted_write)
+
+    with pytest.raises(OSError, match="simulated interrupted fallback state write"):
+        store.save(state)
+
+    assert write_calls == 2
+    assert not state_path.exists()
+    assert list(state_path.parent.glob(f".{state_path.name}.*.tmp")) == []
