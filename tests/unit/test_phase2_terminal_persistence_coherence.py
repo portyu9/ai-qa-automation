@@ -15,10 +15,9 @@ from ai_qa_automation.runtime.run_control import RuntimeControl
 from ai_qa_automation.state import StateStore
 
 
-def test_final_runtime_persistence_failure_supersedes_prior_finished_status(
+def _terminal_subject(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+) -> tuple[AgentRunState, StateStore, RunJournal, RuntimeControl]:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     run_dir = tmp_path / "run"
@@ -46,7 +45,14 @@ def test_final_runtime_persistence_failure_supersedes_prior_finished_status(
         lease_id="terminal-persistence-test",
     )
     control.persist()
-    audit = _TerminalJournalAudit(journal)
+    return state, state_store, journal, control
+
+
+def test_final_runtime_persistence_failure_supersedes_prior_finished_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state, state_store, journal, control = _terminal_subject(tmp_path)
     persist_attempts = 0
 
     def fail_final_runtime_persist() -> None:
@@ -60,7 +66,7 @@ def test_final_runtime_persistence_failure_supersedes_prior_finished_status(
         state=state,
         state_store=state_store,
         control=control,
-        audit=audit,
+        audit=_TerminalJournalAudit(journal),
         logger=logging.getLogger("terminal-persistence-coherence-test"),
         started=time.monotonic(),
     )
@@ -74,7 +80,7 @@ def test_final_runtime_persistence_failure_supersedes_prior_finished_status(
 
     records = [
         json.loads(line)
-        for line in (run_dir / "journal.jsonl").read_text(encoding="utf-8").splitlines()
+        for line in journal.path.read_text(encoding="utf-8").splitlines()
     ]
     assert [record["event"] for record in records] == [
         "agent_run_finished",
@@ -85,4 +91,65 @@ def test_final_runtime_persistence_failure_supersedes_prior_finished_status(
     assert correction["terminal_status"] == TerminalStatus.INFRASTRUCTURE_FAILURE.value
     assert correction["supersedes_event"] == "agent_run_finished"
     assert correction["error_type"] == "OSError"
+    assert journal.verify()["valid"] is True
+
+
+def test_terminal_correction_journal_ambiguity_is_not_replayed_and_is_canonical(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state, state_store, journal, control = _terminal_subject(tmp_path)
+    persist_attempts = 0
+    correction_attempts = 0
+    original_try_append = RunJournal.try_append
+
+    def fail_final_runtime_persist() -> None:
+        nonlocal persist_attempts
+        persist_attempts += 1
+        raise OSError("post-write runtime identity is ambiguous")
+
+    def fail_correction_append(
+        self: RunJournal,
+        event: str,
+        **payload: object,
+    ) -> bool:
+        nonlocal correction_attempts
+        if self is journal and event == "terminal_runtime_metadata_persistence_failed":
+            correction_attempts += 1
+            raise OSError("post-fsync correction journal identity is ambiguous")
+        return original_try_append(self, event, **payload)
+
+    monkeypatch.setattr(control, "persist", fail_final_runtime_persist)
+    monkeypatch.setattr(RunJournal, "try_append", fail_correction_append)
+    audit = _TerminalJournalAudit(journal)
+
+    _finish_terminal_state(
+        state=state,
+        state_store=state_store,
+        control=control,
+        audit=audit,
+        logger=logging.getLogger("terminal-persistence-correction-ambiguity-test"),
+        started=time.monotonic(),
+    )
+
+    assert persist_attempts == 1
+    assert correction_attempts == 1
+    assert audit.failure_event == "terminal_runtime_metadata_persistence_failed"
+    assert audit.failure_type == "OSError"
+
+    persisted = state_store.load()
+    assert persisted.terminal_status is TerminalStatus.INFRASTRUCTURE_FAILURE
+    assert "terminal journal persistence could not be guaranteed" in (
+        persisted.terminal_reason or ""
+    ).lower()
+    assert "terminal_runtime_metadata_persistence_failed" in (
+        persisted.terminal_reason or ""
+    )
+
+    records = [
+        json.loads(line)
+        for line in journal.path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [record["event"] for record in records] == ["agent_run_finished"]
+    assert records[0]["payload"]["terminal_status"] == TerminalStatus.SUCCESS.value
     assert journal.verify()["valid"] is True
