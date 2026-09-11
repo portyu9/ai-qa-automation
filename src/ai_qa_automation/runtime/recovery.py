@@ -12,6 +12,7 @@ from ..fs_authority import (
 from ..io_safety import parse_json_object_strict, read_json_object_bounded
 from ..state import StateStore
 from .journal import RunJournal, validate_runtime_journal_binding
+from .targeted_execution_observer import normalize_targeted_path
 from .validation_truth import RevisionClosure, evaluate_revision_closure
 
 _MAX_RUNTIME_METADATA_BYTES = 2_000_000
@@ -69,6 +70,13 @@ def _bind_closure_to_canonical_mutation_lineage(
 
     if not closure.closed:
         return closure
+    if any(normalize_targeted_path(path) != path for path in state_files_modified):
+        return RevisionClosure(
+            False,
+            "canonical_mutation_lineage_mismatch",
+            "Persisted modified-file lineage contains a noncanonical repository path.",
+            closure.mutation_path,
+        )
     if change_revision == 0:
         if not state_files_modified:
             return closure
