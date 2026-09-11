@@ -76,24 +76,36 @@ class StateStore:
         if raw_parent.is_symlink():
             raise ValueError("state directory is a symlink and has ambiguous ownership")
 
+        raw_persistence_root = raw_parent.parent
+        if raw_persistence_root.is_symlink():
+            raise ValueError("state persistence root is a symlink and has ambiguous ownership")
+        persistence_root_existed = raw_persistence_root.exists()
+        raw_persistence_root.mkdir(parents=True, exist_ok=True)
+        if raw_persistence_root.is_symlink():
+            raise ValueError("state persistence root became a symlink")
+        if not raw_persistence_root.is_dir():
+            raise ValueError("state persistence root must remain a regular directory")
+        persistence_root = raw_persistence_root.resolve()
+        if not persistence_root_existed:
+            fsync_directory(persistence_root.parent)
+
         parent_created = False
         if not raw_parent.exists():
             try:
-                # The final run-root component is the allocation boundary. ``exist_ok=False``
-                # means concurrent/new-run collision has exactly one winner; a loser must
-                # open the existing state explicitly before it can ever update that root.
-                raw_parent.mkdir(parents=True, exist_ok=False)
+                # The final run-root component is the allocation boundary. Keep shared
+                # artifact-root creation separate, then claim exactly this directory with
+                # one non-recursive no-replace mkdir. A concurrent same-run winner leaves
+                # this store unbound and unable to write until existing state is loaded.
+                raw_parent.mkdir(exist_ok=False)
                 parent_created = True
             except FileExistsError:
-                # Another actor won the same final-directory claim between observation and
-                # mkdir. Treat it as an existing authority-bearing root, never as ours.
                 parent_created = False
         if raw_parent.is_symlink():
             raise ValueError("state directory became a symlink")
         if not raw_parent.is_dir():
             raise ValueError("state directory must remain a regular directory")
         if parent_created:
-            fsync_directory(raw_parent.resolve().parent)
+            fsync_directory(persistence_root)
 
         self.path = raw_parent.resolve() / requested.name
         parent_status = self.path.parent.stat(follow_symlinks=False)
