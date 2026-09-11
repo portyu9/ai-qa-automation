@@ -65,10 +65,18 @@ def _bind_closure_to_canonical_mutation_lineage(
     change_revision: int,
     closure: RevisionClosure,
 ) -> RevisionClosure:
-    """Refuse persisted changed-revision closure when canonical file lineage disagrees."""
+    """Refuse persisted revision closure when canonical modified-file lineage disagrees."""
 
-    if not closure.closed or change_revision == 0:
+    if not closure.closed:
         return closure
+    if change_revision == 0:
+        if not state_files_modified:
+            return closure
+        return RevisionClosure(
+            False,
+            "canonical_mutation_lineage_mismatch",
+            "Persisted revision zero contains modified-file lineage without a canonical changed revision.",
+        )
     mutation_path = closure.mutation_path
     if mutation_path is not None and mutation_path in state_files_modified:
         return closure
