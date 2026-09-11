@@ -166,11 +166,7 @@ def _inspect_verified_journal_mutation_lifecycle(
         if not isinstance(payload, dict):
             return invalid("journal_mutation_payload_invalid")
         path = payload.get("path")
-        if (
-            not isinstance(path, str)
-            or not path
-            or normalize_targeted_path(path) != path
-        ):
+        if not isinstance(path, str) or not path or normalize_targeted_path(path) != path:
             return invalid("journal_mutation_path_invalid")
 
         if event == "mutation_prepared":
@@ -212,9 +208,9 @@ def _bind_closed_revision_to_journal_mutation_commit(
     change_revision: int,
     journal_mutation_lifecycle: dict[str, object],
 ) -> RevisionClosure:
-    """Require exact durable commit semantics before recovery grants changed-revision closure."""
+    """Require coherent durable mutation semantics before recovery grants revision closure."""
 
-    if not closure.closed or change_revision == 0:
+    if not closure.closed:
         return closure
     if journal_mutation_lifecycle.get("valid") is not True:
         return RevisionClosure(
@@ -228,6 +224,15 @@ def _bind_closed_revision_to_journal_mutation_commit(
             False,
             "journal_runtime_pending_mismatch",
             "Verified journal retains an open mutation transaction while runtime authority reports none.",
+            closure.mutation_path,
+        )
+    if change_revision == 0:
+        if journal_mutation_lifecycle.get("committed_count") == 0:
+            return closure
+        return RevisionClosure(
+            False,
+            "journal_revision_zero_commit_mismatch",
+            "Verified journal contains a committed mutation while canonical state remains at revision zero.",
             closure.mutation_path,
         )
     if journal_mutation_lifecycle.get("expected_commit_count") != 1:
