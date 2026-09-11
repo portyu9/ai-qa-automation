@@ -502,7 +502,10 @@ async def run_agent(
         if artifact_root is None:
             raise RuntimeError("artifact_root was not resolved") from exc
         state.duration = max(0.0, time.monotonic() - started)
-        StateStore(artifact_root / state.run_id / "state.json").save(state)
+        StateStore(
+            artifact_root / state.run_id / "state.json",
+            claim_parent_exclusively=True,
+        ).save(state)
         return _final_response(
             state,
             agent_result="",
@@ -527,7 +530,10 @@ async def run_agent(
     if artifact_root is None:
         raise RuntimeError("artifact_root was not resolved")
     run_dir = artifact_root / state.run_id
-    state_store = StateStore(run_dir / "state.json")
+    state_store = StateStore(
+        run_dir / "state.json",
+        claim_parent_exclusively=True,
+    )
     # Establish canonical state before constructing any other run subsystem. If this
     # write is ambiguous, do not replay it and do not claim structured terminal closure.
     state_store.save(state)
