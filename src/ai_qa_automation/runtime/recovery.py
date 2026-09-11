@@ -11,11 +11,13 @@ from ..fs_authority import (
     pin_directory_identity,
     read_bytes_confined,
 )
-from ..io_safety import parse_json_object_strict, read_bytes_bounded, read_json_object_bounded
+from ..io_safety import parse_json_object_strict, read_bytes_bounded
 from ..state import StateStore
 from .journal import RunJournal, validate_runtime_journal_binding
+from .recovery_snapshot_guard import recovery_workspace_observation_guard
 from .targeted_execution_observer import normalize_targeted_path
 from .validation_truth import RevisionClosure, evaluate_revision_closure
+from .workspace_lease import WorkspaceBusyError
 
 _MAX_RUNTIME_METADATA_BYTES = 2_000_000
 _MAX_JOURNAL_BYTES = 64_000_000
@@ -24,6 +26,8 @@ _MAX_JOURNAL_BYTES = 64_000_000
 def _validate_workspace_root_authority(
     metadata: dict[str, Any],
     workspace: Path,
+    *,
+    expected_workspace_identity: tuple[int, int],
 ) -> dict[str, object]:
     if "workspace_root_identity" not in metadata or metadata["workspace_root_identity"] is None:
         return {
@@ -54,6 +58,11 @@ def _validate_workspace_root_authority(
         return {
             "valid": False,
             "reason": "runtime.json workspace root identity could not be verified",
+        }
+    if current != expected_workspace_identity:
+        return {
+            "valid": False,
+            "reason": "recovery workspace identity changed after observation lock",
         }
     if current != (device, inode):
         return {
@@ -119,6 +128,29 @@ def _read_journal_snapshot(
         journal_path,
         max_bytes=_MAX_JOURNAL_BYTES,
         label="journal.jsonl",
+    )
+
+
+def _read_runtime_snapshot(
+    run_dir: Path,
+    runtime_path: Path,
+    *,
+    run_root_identity: tuple[int, int] | None,
+) -> bytes:
+    """Read one bounded runtime metadata subject under the run-root authority."""
+
+    if run_root_identity is not None:
+        return read_bytes_confined(
+            run_dir,
+            runtime_path.name,
+            max_bytes=_MAX_RUNTIME_METADATA_BYTES,
+            label="runtime.json",
+            expected_root_identity=run_root_identity,
+        )
+    return read_bytes_bounded(
+        runtime_path,
+        max_bytes=_MAX_RUNTIME_METADATA_BYTES,
+        label="runtime.json",
     )
 
 
@@ -263,45 +295,38 @@ def _bind_closed_revision_to_journal_mutation_commit(
     return closure
 
 
-def inspect_recovery(run_dir: Path) -> dict[str, Any]:
-    """Assess persisted run integrity without claiming model-session replay."""
-    requested_run_dir = run_dir.expanduser()
-    if requested_run_dir.is_symlink():
-        return {"recoverable": False, "reason": "run directory has ambiguous symlink ownership"}
-    run_dir = requested_run_dir.resolve()
-    if not run_dir.is_dir():
-        return {"recoverable": False, "reason": "run directory is missing"}
-    try:
-        run_root_identity = (
-            pin_directory_identity(run_dir, label="recovery run directory")
-            if descriptor_relative_authority_supported()
-            else None
-        )
-    except (OSError, RuntimeError, ValueError):
-        return {
-            "recoverable": False,
-            "reason": "run directory identity could not be verified",
-        }
-    state_path = run_dir / "state.json"
-    journal_path = run_dir / "journal.jsonl"
-    runtime_path = run_dir / "runtime.json"
-    for path, label in (
-        (state_path, "state.json"),
-        (journal_path, "journal.jsonl"),
-        (runtime_path, "runtime.json"),
-    ):
-        if path.is_symlink():
-            return {"recoverable": False, "reason": f"{label} has ambiguous symlink ownership"}
-        if not path.is_file():
-            return {"recoverable": False, "reason": f"{label} is missing"}
+def _load_state(
+    state_path: Path,
+    *,
+    run_root_identity: tuple[int, int] | None,
+) -> Any:
+    return StateStore(
+        state_path,
+        expected_parent_identity=run_root_identity,
+    ).load()
 
+
+def _inspect_recovery_guarded(
+    run_dir: Path,
+    *,
+    state_path: Path,
+    journal_path: Path,
+    runtime_path: Path,
+    run_root_identity: tuple[int, int] | None,
+    preliminary_workspace: Path,
+    workspace_identity: tuple[int, int],
+) -> dict[str, Any]:
     try:
-        state = StateStore(
-            state_path,
-            expected_parent_identity=run_root_identity,
-        ).load()
+        state = _load_state(state_path, run_root_identity=run_root_identity)
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         return {"recoverable": False, "reason": f"state could not be loaded: {type(exc).__name__}"}
+
+    canonical_workspace = Path(state.workspace).expanduser().resolve()
+    if canonical_workspace != preliminary_workspace:
+        return {
+            "recoverable": False,
+            "reason": "state.json workspace changed before recovery observation lock",
+        }
 
     closure = evaluate_revision_closure(
         state.validation_results,
@@ -330,8 +355,6 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
             journal_path,
             run_root_identity=run_root_identity,
         )
-        # RunJournal owns the canonical hash-chain algorithm. Verify the immutable bytes
-        # recovery will interpret so path replacement cannot split validation and semantics.
         journal_status = journal._verify_stream(io.BytesIO(verified_journal))
     except (OSError, UnicodeError, json.JSONDecodeError, RuntimeError, ValueError) as exc:
         return {
@@ -349,24 +372,17 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
     del verified_journal
 
     try:
-        if run_root_identity is not None:
-            raw_runtime = read_bytes_confined(
-                run_dir,
-                runtime_path.name,
-                max_bytes=_MAX_RUNTIME_METADATA_BYTES,
-                label="runtime.json",
-                expected_root_identity=run_root_identity,
-            )
-            runtime_metadata = parse_json_object_strict(
-                raw_runtime.decode("utf-8"),
-                label="runtime.json",
-            )
-        else:
-            runtime_metadata = read_json_object_bounded(
-                runtime_path,
-                max_bytes=_MAX_RUNTIME_METADATA_BYTES,
-                label="runtime.json",
-            )
+        raw_runtime = _read_runtime_snapshot(
+            run_dir,
+            runtime_path,
+            run_root_identity=run_root_identity,
+        )
+        runtime_digest = hashlib.sha256(raw_runtime).digest()
+        runtime_metadata = parse_json_object_strict(
+            raw_runtime.decode("utf-8"),
+            label="runtime.json",
+        )
+        del raw_runtime
     except UnicodeError:
         return {"recoverable": False, "reason": "runtime.json is not valid UTF-8"}
     except OSError:
@@ -390,13 +406,16 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
             "recoverable": False,
             "reason": "runtime.json workspace identity is invalid",
         }
-    canonical_workspace = Path(state.workspace).expanduser().resolve()
     if runtime_workspace != str(canonical_workspace):
         return {
             "recoverable": False,
             "reason": "runtime.json workspace does not match canonical state workspace",
         }
-    workspace_authority = _validate_workspace_root_authority(runtime_metadata, canonical_workspace)
+    workspace_authority = _validate_workspace_root_authority(
+        runtime_metadata,
+        canonical_workspace,
+        expected_workspace_identity=workspace_identity,
+    )
     if not workspace_authority["valid"]:
         return {"recoverable": False, "reason": workspace_authority["reason"]}
 
@@ -424,6 +443,37 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
             "reason": "journal changed after runtime authority was read",
         }
     del final_journal
+
+    try:
+        final_runtime = _read_runtime_snapshot(
+            run_dir,
+            runtime_path,
+            run_root_identity=run_root_identity,
+        )
+    except (OSError, RuntimeError, ValueError):
+        return {
+            "recoverable": False,
+            "reason": "runtime.json could not be revalidated after recovery inspection",
+        }
+    if hashlib.sha256(final_runtime).digest() != runtime_digest:
+        return {
+            "recoverable": False,
+            "reason": "runtime.json changed during recovery inspection",
+        }
+    del final_runtime
+
+    try:
+        final_state = _load_state(state_path, run_root_identity=run_root_identity)
+    except (OSError, json.JSONDecodeError, ValueError):
+        return {
+            "recoverable": False,
+            "reason": "state.json could not be revalidated after recovery inspection",
+        }
+    if final_state.model_dump(mode="json") != state.model_dump(mode="json"):
+        return {
+            "recoverable": False,
+            "reason": "state.json changed during recovery inspection",
+        }
 
     if "pending_mutation" not in runtime_metadata:
         return {
@@ -475,3 +525,66 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
         ),
         "note": "This verifies persisted state; it does not replay or continue a prior model conversation.",
     }
+
+
+def inspect_recovery(run_dir: Path) -> dict[str, Any]:
+    """Assess persisted run integrity only while the workspace is quiescent."""
+
+    requested_run_dir = run_dir.expanduser()
+    if requested_run_dir.is_symlink():
+        return {"recoverable": False, "reason": "run directory has ambiguous symlink ownership"}
+    run_dir = requested_run_dir.resolve()
+    if not run_dir.is_dir():
+        return {"recoverable": False, "reason": "run directory is missing"}
+    try:
+        run_root_identity = (
+            pin_directory_identity(run_dir, label="recovery run directory")
+            if descriptor_relative_authority_supported()
+            else None
+        )
+    except (OSError, RuntimeError, ValueError):
+        return {
+            "recoverable": False,
+            "reason": "run directory identity could not be verified",
+        }
+
+    state_path = run_dir / "state.json"
+    journal_path = run_dir / "journal.jsonl"
+    runtime_path = run_dir / "runtime.json"
+    for path, label in (
+        (state_path, "state.json"),
+        (journal_path, "journal.jsonl"),
+        (runtime_path, "runtime.json"),
+    ):
+        if path.is_symlink():
+            return {"recoverable": False, "reason": f"{label} has ambiguous symlink ownership"}
+        if not path.is_file():
+            return {"recoverable": False, "reason": f"{label} is missing"}
+
+    try:
+        preliminary_state = _load_state(state_path, run_root_identity=run_root_identity)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        return {"recoverable": False, "reason": f"state could not be loaded: {type(exc).__name__}"}
+    preliminary_workspace = Path(preliminary_state.workspace).expanduser().resolve()
+
+    try:
+        with recovery_workspace_observation_guard(preliminary_workspace) as workspace_identity:
+            return _inspect_recovery_guarded(
+                run_dir,
+                state_path=state_path,
+                journal_path=journal_path,
+                runtime_path=runtime_path,
+                run_root_identity=run_root_identity,
+                preliminary_workspace=preliminary_workspace,
+                workspace_identity=workspace_identity,
+            )
+    except WorkspaceBusyError:
+        return {
+            "recoverable": False,
+            "reason": "target workspace is actively leased; recovery inspection requires quiescence",
+        }
+    except (OSError, RuntimeError, ValueError):
+        return {
+            "recoverable": False,
+            "reason": "recovery workspace observation authority could not be maintained",
+        }
