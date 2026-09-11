@@ -60,6 +60,82 @@ def _identity(value: os.stat_result) -> tuple[int, int]:
     return value.st_dev, value.st_ino
 
 
+def _claim_child_directory(
+    root: Path,
+    name: str,
+    *,
+    label: str,
+    expected_root_identity: tuple[int, int] | None,
+) -> tuple[int, int] | None:
+    """Create one direct child directory without replacement under pinned root authority."""
+
+    if not name or name in {".", ".."} or Path(name).name != name:
+        raise ValueError(f"{label} must be one direct child directory")
+
+    root = root.expanduser().absolute()
+    if not descriptor_relative_authority_supported():
+        (root / name).mkdir(exist_ok=False)
+        fsync_directory(root)
+        return None
+
+    if expected_root_identity is None:
+        raise RuntimeError(f"{label} requires pinned persistence-root identity")
+
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    try:
+        root_fd = os.open(root, directory_flags)
+    except OSError as exc:
+        raise ValueError(f"{label} persistence root could not be opened safely") from exc
+
+    child_fd = -1
+    try:
+        opened_root = os.fstat(root_fd)
+        current_root = root.stat(follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(opened_root.st_mode)
+            or not stat.S_ISDIR(current_root.st_mode)
+            or _identity(opened_root) != expected_root_identity
+            or _identity(current_root) != expected_root_identity
+        ):
+            raise ValueError(f"{label} persistence root changed identity before run-root claim")
+
+        os.mkdir(name, 0o755, dir_fd=root_fd)
+        os.fsync(root_fd)
+        try:
+            child_fd = os.open(name, directory_flags, dir_fd=root_fd)
+        except OSError as exc:
+            raise ValueError(f"{label} could not be opened safely after claim") from exc
+
+        opened_child = os.fstat(child_fd)
+        current_child = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+        child_identity = _identity(opened_child)
+        if (
+            not stat.S_ISDIR(opened_child.st_mode)
+            or not stat.S_ISDIR(current_child.st_mode)
+            or _identity(current_child) != child_identity
+        ):
+            raise ValueError(f"{label} changed identity during run-root claim")
+
+        current_root = root.stat(follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(current_root.st_mode)
+            or _identity(current_root) != expected_root_identity
+        ):
+            raise ValueError(f"{label} persistence root changed identity during run-root claim")
+    finally:
+        if child_fd >= 0:
+            os.close(child_fd)
+        os.close(root_fd)
+
+    try:
+        current_child_identity = pin_directory_identity(root / name, label=label)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ValueError(f"{label} could not be revalidated after run-root claim") from exc
+    if current_child_identity != child_identity:
+        raise ValueError(f"{label} changed identity after run-root claim")
+    return child_identity
+
+
 class StateStore:
     """Canonical run state persisted independently from conversational context."""
 
@@ -78,6 +154,7 @@ class StateStore:
             raise ValueError("state directory is a symlink and has ambiguous ownership")
 
         parent_created = False
+        claimed_parent_identity: tuple[int, int] | None = None
         if claim_parent_exclusively:
             raw_persistence_root = raw_parent.parent
             if raw_persistence_root.is_symlink():
@@ -91,19 +168,26 @@ class StateStore:
             persistence_root = raw_persistence_root.resolve()
             if not persistence_root_existed:
                 fsync_directory(persistence_root.parent)
+            persistence_root_identity = (
+                pin_directory_identity(persistence_root, label="state persistence root")
+                if descriptor_relative_authority_supported()
+                else None
+            )
 
             if not raw_parent.exists():
                 try:
                     # The final run-root component is the allocation boundary. Keep shared
-                    # artifact-root creation separate, then claim exactly this directory with
-                    # one non-recursive no-replace mkdir. A concurrent same-run winner leaves
-                    # this store unbound and unable to perform an initial canonical-state write.
-                    raw_parent.mkdir(exist_ok=False)
+                    # artifact-root creation separate, then create exactly this child relative
+                    # to pinned persistence-root authority without replacement.
+                    claimed_parent_identity = _claim_child_directory(
+                        persistence_root,
+                        raw_parent.name,
+                        label="state directory",
+                        expected_root_identity=persistence_root_identity,
+                    )
                     parent_created = True
                 except FileExistsError:
                     parent_created = False
-            if parent_created:
-                fsync_directory(persistence_root)
         else:
             parent_existed = raw_parent.exists()
             raw_parent.mkdir(parents=True, exist_ok=True)
@@ -125,6 +209,8 @@ class StateStore:
             if self._descriptor_relative_parent
             else _identity(parent_status)
         )
+        if claimed_parent_identity is not None and self._parent_identity != claimed_parent_identity:
+            raise ValueError("state directory changed identity after exclusive run-root claim")
         if (
             expected_parent_identity is not None
             and self._parent_identity != expected_parent_identity
