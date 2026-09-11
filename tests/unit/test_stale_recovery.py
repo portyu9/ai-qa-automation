@@ -26,6 +26,10 @@ from ai_qa_automation.runtime.targeted_execution_observer import (
 from ai_qa_automation.runtime.validation_truth import evaluate_revision_closure
 from ai_qa_automation.state import StateStore
 from ai_qa_automation.tools.repository import RepositoryInspector
+from tests.unit.stale_recovery_lease_helpers import (
+    publish_predecessor_lease,
+    recover_with_deferred_successor,
+)
 
 _OBSERVER_BACKEND = "controller-observer-test-double"
 _OBSERVER_IDENTITY = "sha256:" + "1" * 64
@@ -168,13 +172,28 @@ def recover(
 ) -> dict[str, object]:
     prior_run = artifact_root / "run-old"
     status = prior_run.stat(follow_symlinks=False)
-    previous_lease: dict[str, object] = {
-        "run_id": "run-old",
-        "run_root_identity": {"device": status.st_dev, "inode": status.st_ino},
-    }
-    if lease_id is not None:
-        previous_lease["lease_id"] = lease_id
-    return recover_stale_mutation(
+    run_root_identity = (status.st_dev, status.st_ino)
+    if lease_id is None:
+        previous_lease: dict[str, object] = {
+            "run_id": "run-old",
+            "run_root_identity": {"device": status.st_dev, "inode": status.st_ino},
+        }
+        return recover_stale_mutation(
+            artifact_root=artifact_root,
+            workspace=workspace,
+            previous_lease=previous_lease,
+            current_workspace_fingerprint=fingerprint,
+            recovering_run_id="run-new",
+        )
+
+    previous_lease = publish_predecessor_lease(
+        artifact_root,
+        workspace,
+        run_id="run-old",
+        run_root_identity=run_root_identity,
+        lease_id=lease_id,
+    )
+    return recover_with_deferred_successor(
         artifact_root=artifact_root,
         workspace=workspace,
         previous_lease=previous_lease,

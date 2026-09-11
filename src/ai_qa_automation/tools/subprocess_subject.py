@@ -50,6 +50,20 @@ def active_workspace_authority(root: Path) -> tuple[int, int] | None:
         return authority[0] if authority is not None else None
 
 
+def owns_active_workspace_authority(
+    root: Path,
+    identity: tuple[int, int] | None,
+    *,
+    owner: str,
+) -> bool:
+    """Return whether the exact process-local workspace lease authority is still live."""
+
+    if identity is None:
+        return False
+    with _ACTIVE_WORKSPACE_AUTHORITIES_LOCK:
+        return _ACTIVE_WORKSPACE_AUTHORITIES.get(_authority_key(root)) == (identity, owner)
+
+
 def clear_active_workspace_authority(
     root: Path,
     identity: tuple[int, int] | None,

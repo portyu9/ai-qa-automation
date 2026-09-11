@@ -9,9 +9,12 @@ import pytest
 
 from ai_qa_automation.models import AgentRunState
 from ai_qa_automation.runtime.journal import RunJournal
-from ai_qa_automation.runtime.stale_recovery import recover_stale_mutation
 from ai_qa_automation.state import StateStore
 from ai_qa_automation.tools.repository import RepositoryInspector
+from tests.unit.stale_recovery_lease_helpers import (
+    publish_predecessor_lease,
+    recover_with_deferred_successor,
+)
 
 _LEASE_ID = "lease-old"
 
@@ -74,6 +77,14 @@ def test_stale_recovery_cannot_claim_recovered_when_journal_event_is_not_durable
     journal.append("mutation_prepared")
     workspace_stat = workspace.stat(follow_symlinks=False)
     run_root_stat = prior_run.stat(follow_symlinks=False)
+    run_root_identity = (run_root_stat.st_dev, run_root_stat.st_ino)
+    previous_lease = publish_predecessor_lease(
+        artifact_root,
+        workspace,
+        run_id="run-old",
+        run_root_identity=run_root_identity,
+        lease_id=_LEASE_ID,
+    )
     runtime = {
         "workspace": str(workspace.resolve()),
         "workspace_root_identity": {
@@ -119,17 +130,10 @@ def test_stale_recovery_cannot_claim_recovered_when_journal_event_is_not_durable
 
     monkeypatch.setattr(RunJournal, "try_append", fail_recovery_event)
 
-    result = recover_stale_mutation(
+    result = recover_with_deferred_successor(
         artifact_root=artifact_root,
         workspace=workspace,
-        previous_lease={
-            "run_id": "run-old",
-            "lease_id": _LEASE_ID,
-            "run_root_identity": {
-                "device": run_root_stat.st_dev,
-                "inode": run_root_stat.st_ino,
-            },
-        },
+        previous_lease=previous_lease,
         current_workspace_fingerprint=candidate_fingerprint,
         recovering_run_id="run-new",
     )

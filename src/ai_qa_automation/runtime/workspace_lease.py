@@ -6,7 +6,9 @@ import json
 import os
 import socket
 import stat
-from contextlib import AbstractContextManager, suppress
+from _thread import RLock
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, contextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -17,6 +19,7 @@ from ..io_safety import fsync_directory, parse_json_object_strict
 from ..tools.subprocess_subject import (
     bind_active_workspace_authority,
     clear_active_workspace_authority,
+    owns_active_workspace_authority,
 )
 
 
@@ -100,6 +103,7 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
         if self.path.is_symlink():
             raise OSError("workspace lease file is a symlink and has ambiguous ownership")
         self.lease_id = f"lease-{uuid4().hex[:16]}"
+        self._lifecycle_lock = RLock()
         self._stream: Any | None = None
         self._workspace_lock_fd: int | None = None
         self._authority_bound = False
@@ -176,8 +180,9 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
                 raise WorkspaceBusyError("target workspace is already leased") from exc
             self._revalidate_workspace_root()
             return fd
-        except Exception:
-            os.close(fd)
+        except BaseException:
+            with suppress(OSError):
+                os.close(fd)
             raise
 
     @staticmethod
@@ -227,11 +232,13 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
                         raise OSError("workspace lease file changed identity during lock open")
                     self._revalidate_lease_root(directory_fd)
                     return os.fdopen(fd, "r+b"), directory_fd
-                except Exception:
-                    os.close(fd)
+                except BaseException:
+                    with suppress(OSError):
+                        os.close(fd)
                     raise
-            except Exception:
-                os.close(directory_fd)
+            except BaseException:
+                with suppress(OSError):
+                    os.close(directory_fd)
                 raise
 
         # Windows and other platforms without descriptor-relative no-follow opens
@@ -259,8 +266,9 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             ):
                 raise OSError("workspace lease file changed identity during lock open")
             return os.fdopen(fd, "r+b"), None
-        except Exception:
-            os.close(fd)
+        except BaseException:
+            with suppress(OSError):
+                os.close(fd)
             raise
 
     def _revalidate_lease_root(self, directory_fd: int | None) -> None:
@@ -397,19 +405,28 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
         self._revalidate_workspace_root()
 
     def acquire(self, *, publish: bool = True) -> WorkspaceLease:
+        with self._lifecycle_lock:
+            if self._stream is not None:
+                raise OSError("workspace lease is already acquired")
+            return self._acquire_locked(publish=publish)
+
+    def _acquire_locked(self, *, publish: bool) -> WorkspaceLease:
         self._revalidate_run_root()
         self._revalidate_workspace_root()
         workspace_lock_fd = self._lock_workspace_root()
         try:
             stream, directory_fd = self._open_owned_stream()
-        except Exception:
+        except BaseException:
             if workspace_lock_fd is not None:
-                with suppress(OSError):
-                    self._unlock_workspace_root(workspace_lock_fd)
-                os.close(workspace_lock_fd)
+                try:
+                    with suppress(OSError):
+                        self._unlock_workspace_root(workspace_lock_fd)
+                finally:
+                    with suppress(OSError):
+                        os.close(workspace_lock_fd)
             raise
         locked = False
-        authority_bound = False
+        authority_cleanup_required = False
         try:
             self._lock_stream(stream)
             locked = True
@@ -424,63 +441,179 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             self.previous_metadata = self._parse_previous_metadata(raw)
             self._revalidate_run_root()
 
+            authority_cleanup_required = self._workspace_root_identity is not None
+            try:
+                bind_active_workspace_authority(
+                    self.workspace,
+                    self._workspace_root_identity,
+                    owner=self.lease_id,
+                )
+            except RuntimeError as exc:
+                raise OSError(
+                    "process-local workspace lease authority conflicts with another live run"
+                ) from exc
+            self._authority_bound = authority_cleanup_required
             if publish:
                 self._persist_current_owner(stream, directory_fd)
-            bind_active_workspace_authority(
-                self.workspace,
-                self._workspace_root_identity,
-                owner=self.lease_id,
-            )
-            authority_bound = self._workspace_root_identity is not None
-            self._authority_bound = authority_bound
             self._revalidate_run_root()
             self._revalidate_workspace_root()
             self._stream = stream
             self._workspace_lock_fd = workspace_lock_fd
             self._owner_published = publish
             return self
-        except Exception:
-            if authority_bound:
-                clear_active_workspace_authority(
-                    self.workspace,
-                    self._workspace_root_identity,
-                    owner=self.lease_id,
-                )
-                self._authority_bound = False
-            if locked:
+        except BaseException as acquisition_error:
+            authority_cleared = True
+            if authority_cleanup_required:
+                try:
+                    authority_cleared = clear_active_workspace_authority(
+                        self.workspace,
+                        self._workspace_root_identity,
+                        owner=self.lease_id,
+                    )
+                except BaseException:
+                    authority_cleared = False
+                    # Exact owner/identity cleanup is idempotent and replay-safe. One
+                    # retry prevents an interruption from stranding process authority.
+                    try:
+                        authority_cleared = clear_active_workspace_authority(
+                            self.workspace,
+                            self._workspace_root_identity,
+                            owner=self.lease_id,
+                        )
+                    except BaseException:
+                        authority_cleared = False
+                if authority_cleared:
+                    self._authority_bound = False
+                else:
+                    acquisition_error.add_note(
+                        "Process-local workspace authority cleanup could not be guaranteed."
+                    )
+            try:
+                if locked:
+                    with suppress(OSError):
+                        self._unlock_stream(stream)
+            finally:
                 with suppress(OSError):
-                    self._unlock_stream(stream)
-            stream.close()
-            if workspace_lock_fd is not None:
-                with suppress(OSError):
-                    self._unlock_workspace_root(workspace_lock_fd)
-                os.close(workspace_lock_fd)
+                    stream.close()
+                if workspace_lock_fd is not None:
+                    try:
+                        with suppress(OSError):
+                            self._unlock_workspace_root(workspace_lock_fd)
+                    finally:
+                        with suppress(OSError):
+                            os.close(workspace_lock_fd)
             self._acquired_at = None
             self._mutation_recovery_closed = False
             raise
         finally:
             if directory_fd is not None:
-                os.close(directory_fd)
+                with suppress(OSError):
+                    os.close(directory_fd)
+
+    @contextmanager
+    def stale_recovery_authority(
+        self,
+        *,
+        artifact_root: Path,
+        workspace: Path,
+        recovering_run_id: str,
+        previous_lease: dict[str, Any],
+    ) -> Iterator[None]:
+        """Hold exact live deferred-successor authority across stale recovery."""
+
+        with self._lifecycle_lock:
+            stream = self._stream
+            if stream is None or self._acquired_at is None:
+                raise OSError("stale recovery successor lease is not acquired")
+            if self._owner_published:
+                raise OSError("stale recovery successor lease was already published")
+            if self.run_id != recovering_run_id:
+                raise OSError("stale recovery successor lease is bound to a different run")
+            if self.artifact_root != artifact_root.expanduser().resolve():
+                raise OSError(
+                    "stale recovery successor lease is bound to a different artifact root"
+                )
+            if self.workspace != workspace.expanduser().resolve():
+                raise OSError("stale recovery successor lease is bound to a different workspace")
+
+            self._revalidate_lease_root(None)
+            self._revalidate_run_root()
+            self._revalidate_workspace_root()
+            try:
+                opened_lease = os.fstat(stream.fileno())
+                current_lease = self.path.stat(follow_symlinks=False)
+            except OSError as exc:
+                raise OSError(
+                    "stale recovery successor lease file could not be revalidated"
+                ) from exc
+            if (
+                not stat.S_ISREG(opened_lease.st_mode)
+                or not stat.S_ISREG(current_lease.st_mode)
+                or _identity(opened_lease) != _identity(current_lease)
+            ):
+                raise OSError("stale recovery successor lease file changed identity")
+
+            stream.seek(0)
+            raw = stream.read(_MAX_LEASE_METADATA_BYTES + 1)
+            if len(raw) > _MAX_LEASE_METADATA_BYTES:
+                raise OSError("stale recovery predecessor lease metadata exceeds ingestion limit")
+            observed_previous = self._parse_previous_metadata(raw)
+            if observed_previous != self.previous_metadata or observed_previous != previous_lease:
+                raise OSError("stale recovery predecessor handoff does not match successor lease")
+
+            if self._workspace_root_identity is not None:
+                workspace_lock_fd = self._workspace_lock_fd
+                if workspace_lock_fd is None:
+                    raise OSError("stale recovery successor workspace lock is unavailable")
+                try:
+                    opened_workspace = os.fstat(workspace_lock_fd)
+                except OSError as exc:
+                    raise OSError(
+                        "stale recovery successor workspace lock could not be revalidated"
+                    ) from exc
+                if (
+                    not stat.S_ISDIR(opened_workspace.st_mode)
+                    or _identity(opened_workspace) != self._workspace_root_identity
+                ):
+                    raise OSError("stale recovery successor workspace lock changed identity")
+                if not self._authority_bound or not owns_active_workspace_authority(
+                    self.workspace,
+                    self._workspace_root_identity,
+                    owner=self.lease_id,
+                ):
+                    raise OSError(
+                        "stale recovery successor process-local workspace authority is not live"
+                    )
+            yield
 
     def publish_current_owner(self) -> WorkspaceLease:
         """Durably replace predecessor metadata only after stale recovery is resolved."""
 
-        stream = self._stream
-        if stream is None:
-            raise OSError("workspace lease must be acquired before owner publication")
-        if self._owner_published:
+        with self._lifecycle_lock:
+            stream = self._stream
+            if stream is None:
+                raise OSError("workspace lease must be acquired before owner publication")
+            if self._owner_published:
+                return self
+            self._revalidate_run_root()
+            self._revalidate_workspace_root()
+            self._mutation_recovery_closed = False
+            self._persist_current_owner(stream, None)
+            self._owner_published = True
             return self
-        self._revalidate_run_root()
-        self._revalidate_workspace_root()
-        self._mutation_recovery_closed = False
-        self._persist_current_owner(stream, None)
-        self._owner_published = True
-        return self
 
     def release(
         self,
         *,
         recovery_closure_guard: MutationRecoveryClosureGuard | None = None,
+    ) -> None:
+        with self._lifecycle_lock:
+            self._release_locked(recovery_closure_guard=recovery_closure_guard)
+
+    def _release_locked(
+        self,
+        *,
+        recovery_closure_guard: MutationRecoveryClosureGuard | None,
     ) -> None:
         stream = self._stream
         workspace_lock_fd = self._workspace_lock_fd
@@ -501,32 +634,62 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             except BaseException as exc:
                 closure_error = exc
 
-        self._stream = None
-        self._workspace_lock_fd = None
-        self._owner_published = False
-        self._acquired_at = None
         authority_cleared = True
-        if self._authority_bound:
-            authority_cleared = clear_active_workspace_authority(
-                self.workspace,
-                self._workspace_root_identity,
-                owner=self.lease_id,
-            )
-            if authority_cleared:
-                self._authority_bound = False
+        authority_error: BaseException | None = None
         try:
-            if stream is not None:
+            if self._authority_bound:
                 try:
-                    self._unlock_stream(stream)
-                finally:
-                    stream.close()
+                    authority_cleared = clear_active_workspace_authority(
+                        self.workspace,
+                        self._workspace_root_identity,
+                        owner=self.lease_id,
+                    )
+                except BaseException as exc:
+                    authority_error = exc
+                    authority_cleared = False
+                    # Exact process-local release is idempotent and replay-safe. Retry only
+                    # this same owner/identity once so interruption cannot strand authority.
+                    try:
+                        authority_cleared = clear_active_workspace_authority(
+                            self.workspace,
+                            self._workspace_root_identity,
+                            owner=self.lease_id,
+                        )
+                    except BaseException:
+                        authority_cleared = False
+                if authority_cleared:
+                    self._authority_bound = False
         finally:
-            if workspace_lock_fd is not None:
+            try:
                 try:
-                    self._unlock_workspace_root(workspace_lock_fd)
+                    if stream is not None:
+                        try:
+                            self._unlock_stream(stream)
+                        finally:
+                            stream.close()
                 finally:
-                    os.close(workspace_lock_fd)
-        self._mutation_recovery_closed = False
+                    if workspace_lock_fd is not None:
+                        try:
+                            self._unlock_workspace_root(workspace_lock_fd)
+                        finally:
+                            os.close(workspace_lock_fd)
+            finally:
+                self._stream = None
+                self._workspace_lock_fd = None
+                self._owner_published = False
+                self._acquired_at = None
+                self._mutation_recovery_closed = False
+
+        if authority_error is not None:
+            if closure_error is not None:
+                authority_error.add_note(
+                    "Workspace lease mutation recovery closure also could not be persisted safely."
+                )
+            if isinstance(authority_error, Exception):
+                raise OSError(
+                    "active workspace authority release was interrupted or failed"
+                ) from authority_error
+            raise authority_error
         if not authority_cleared:
             error = OSError("active workspace authority is owned by another lease")
             if closure_error is not None:

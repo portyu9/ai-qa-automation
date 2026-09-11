@@ -3,13 +3,16 @@ from __future__ import annotations
 import hashlib
 import json
 from contextlib import suppress
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, TypeGuard
 
 from ..fs_authority import (
     atomic_write_bytes_confined,
+    clear_pending_root_authority,
     descriptor_relative_authority_supported,
     move_file_noreplace_between_confined_roots,
+    pending_root_authority,
     read_bytes_confined,
     unlink_file_confined,
 )
@@ -17,6 +20,9 @@ from ..io_safety import parse_json_object_strict, read_json_object_bounded
 from . import _stale_recovery_legacy as _legacy
 from .journal import RunJournal, validate_runtime_journal_binding
 from .run_control import atomic_write_json, mutation_candidate_proof_relative_path
+from .workspace_lease import WorkspaceLease
+
+_STALE_RECOVERY_AUTHORITY = object()
 
 
 def _is_sha256_hex(value: object) -> TypeGuard[str]:
@@ -29,6 +35,64 @@ def _is_sha256_hex(value: object) -> TypeGuard[str]:
 
 def _is_sha256_fingerprint(value: object) -> TypeGuard[str]:
     return _legacy._is_sha256_fingerprint(value)
+
+
+def _recovery_write_requires_successor(previous_run_id: str) -> dict[str, Any]:
+    return {
+        "status": "BLOCKED",
+        "previous_run_id": previous_run_id,
+        "reason": "stale recovery requires exact live deferred successor workspace lease authority",
+    }
+
+
+def _reconcile_process_local_root_authority(
+    *,
+    workspace: Path,
+    metadata: dict[str, Any],
+    previous_lease: dict[str, Any],
+    previous_run_id: str,
+) -> dict[str, Any] | None:
+    """Release only the exact recovered process-local mutation owner, if one survives."""
+
+    if pending_root_authority(workspace) is None:
+        return None
+    prior_lease_id = previous_lease.get("lease_id")
+    if (
+        not isinstance(prior_lease_id, str)
+        or not prior_lease_id
+        or metadata.get("lease_id") != prior_lease_id
+    ):
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": previous_run_id,
+            "reason": "closed stale recovery state cannot reconcile process-local pending root authority without exact prior lease identity",
+        }
+    try:
+        workspace_identity = _legacy._validated_workspace_root_identity(metadata)
+        _legacy._current_workspace_identity(workspace, workspace_identity)
+    except ValueError as exc:
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": previous_run_id,
+            "reason": str(exc),
+        }
+    if workspace_identity is None:
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": previous_run_id,
+            "reason": "closed stale recovery state cannot reconcile process-local pending root authority without exact workspace-root identity",
+        }
+    if not clear_pending_root_authority(
+        workspace,
+        workspace_identity,
+        owner=prior_lease_id,
+    ):
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": previous_run_id,
+            "reason": "stale mutation recovered durably but process-local pending root authority is owned by another runtime; current run must not proceed",
+        }
+    return None
 
 
 def _sha256_or_none(
@@ -128,7 +192,11 @@ def _load_metadata(
     if not isinstance(raw_previous_run_id, str) or not raw_previous_run_id.strip():
         return {"status": "BLOCKED", "reason": "prior lease run_id is invalid"}
     if raw_previous_run_id == recovering_run_id:
-        return {"status": "NONE"}
+        return {
+            "status": "BLOCKED",
+            "previous_run_id": raw_previous_run_id,
+            "reason": "prior lease run_id collides with recovering run_id; recovery authority is ambiguous",
+        }
 
     recovery_closed = previous_lease.get("mutation_recovery_closed")
     if "mutation_recovery_closed" in previous_lease and type(recovery_closed) is not bool:
@@ -236,7 +304,7 @@ def _load_metadata(
     return metadata, prior_run_dir, run_identity
 
 
-def recover_stale_mutation(
+def _recover_stale_mutation_authorized(
     *,
     artifact_root: Path,
     workspace: Path,
@@ -245,9 +313,16 @@ def recover_stale_mutation(
     recovering_run_id: str,
     current_workspace_fingerprint_complete: bool = True,
     current_workspace_fingerprint_reasons: tuple[str, ...] = (),
+    _authority: object | None,
 ) -> dict[str, Any]:
-    """Recover only exact strict candidates; legacy/unbound mutation metadata is manual-only."""
+    """Inspect stale recovery safely and write only with exact successor lease authority."""
 
+    write_authorized = _authority is _STALE_RECOVERY_AUTHORITY
+    if _authority is not None and not write_authorized:
+        return {
+            "status": "BLOCKED",
+            "reason": "stale recovery internal authority capability is invalid",
+        }
     if not previous_lease:
         return {"status": "NONE"}
     if (
@@ -275,6 +350,18 @@ def recover_stale_mutation(
         }
     pending = metadata["pending_mutation"]
     if pending is None:
+        if pending_root_authority(workspace) is None:
+            return {"status": "NONE", "previous_run_id": previous_run_id}
+        if not write_authorized:
+            return _recovery_write_requires_successor(previous_run_id)
+        process_authority_error = _reconcile_process_local_root_authority(
+            workspace=workspace,
+            metadata=metadata,
+            previous_lease=previous_lease,
+            previous_run_id=previous_run_id,
+        )
+        if process_authority_error is not None:
+            return process_authority_error
         return {"status": "NONE", "previous_run_id": previous_run_id}
     if not isinstance(pending, dict) or not pending:
         return {"status": "BLOCKED", "reason": "prior pending mutation metadata is invalid"}
@@ -499,6 +586,8 @@ def recover_stale_mutation(
                         "previous_run_id": previous_run_id,
                         "reason": "workspace changed after crashed mutation; automatic rollback would risk overwriting newer work",
                     }
+                if not write_authorized:
+                    return _recovery_write_requires_successor(previous_run_id)
                 try:
                     move_file_noreplace_between_confined_roots(
                         workspace,
@@ -540,6 +629,8 @@ def recover_stale_mutation(
             except (OSError, RuntimeError, ValueError):
                 current_after_claim = "unreadable"
             if proof_sha is not None and current_after_claim is None:
+                if not write_authorized:
+                    return _recovery_write_requires_successor(previous_run_id)
                 restore_error = _restore_misclaimed(
                     prior_run_dir=prior_run_dir,
                     proof_relative=proof_relative,
@@ -567,6 +658,8 @@ def recover_stale_mutation(
             root_identity=workspace_identity,
         )
         if target_sha is None:
+            if not write_authorized:
+                return _recovery_write_requires_successor(previous_run_id)
             try:
                 atomic_write_bytes_confined(
                     workspace,
@@ -618,6 +711,8 @@ def recover_stale_mutation(
                 "previous_run_id": previous_run_id,
                 "reason": "stale mutation target was restored but unrelated workspace state does not match the persisted pre-mutation subject; pending authority was retained",
             }
+        if not write_authorized:
+            return _recovery_write_requires_successor(previous_run_id)
         try:
             recorded = journal.try_append(
                 "stale_mutation_recovered",
@@ -641,6 +736,8 @@ def recover_stale_mutation(
     # The recovery event proves the workspace is now the exact pre-mutation subject.
     # Rebind that subject in runtime metadata before legacy closure clears pending
     # rollback authority; either journal-proven intermediate stage remains resumable.
+    if not write_authorized:
+        return _recovery_write_requires_successor(previous_run_id)
     metadata["workspace_fingerprint"] = pre_fingerprint
     try:
         atomic_write_json(
@@ -666,6 +763,14 @@ def recover_stale_mutation(
         current_workspace_fingerprint_reasons=current_workspace_fingerprint_reasons,
     )
     if closure.get("status") == "RECOVERED":
+        process_authority_error = _reconcile_process_local_root_authority(
+            workspace=workspace,
+            metadata=metadata,
+            previous_lease=previous_lease,
+            previous_run_id=previous_run_id,
+        )
+        if process_authority_error is not None:
+            return process_authority_error
         if not recovery_event_recorded:
             closure.pop("resumed_recovery_event", None)
         with suppress(OSError, RuntimeError, ValueError):
@@ -677,3 +782,81 @@ def recover_stale_mutation(
                 expected_root_identity=run_identity,
             )
     return closure
+
+
+def recover_stale_mutation(
+    *,
+    artifact_root: Path,
+    workspace: Path,
+    previous_lease: dict[str, Any] | None,
+    current_workspace_fingerprint: str,
+    recovering_run_id: str,
+    current_workspace_fingerprint_complete: bool = True,
+    current_workspace_fingerprint_reasons: tuple[str, ...] = (),
+    recovery_lease: WorkspaceLease | None = None,
+) -> dict[str, Any]:
+    """Inspect stale state read-only; mutate only with exact deferred successor authority."""
+
+    if previous_lease is None:
+        return {"status": "NONE"}
+    if not previous_lease:
+        return {"status": "BLOCKED", "reason": "prior lease metadata is empty or invalid"}
+    if (
+        not isinstance(recovering_run_id, str)
+        or not recovering_run_id.strip()
+        or len(recovering_run_id) > _legacy._MAX_RECOVERY_RUN_ID_CHARS
+    ):
+        return {"status": "BLOCKED", "reason": "recovering run_id is invalid"}
+
+    try:
+        previous_lease_snapshot = deepcopy(previous_lease)
+    except Exception as exc:
+        return {
+            "status": "BLOCKED",
+            "reason": f"prior lease handoff could not be snapshotted safely: {type(exc).__name__}",
+        }
+
+    normalized_workspace = workspace.expanduser().resolve()
+    if recovery_lease is None:
+        return _recover_stale_mutation_authorized(
+            artifact_root=artifact_root,
+            workspace=normalized_workspace,
+            previous_lease=previous_lease_snapshot,
+            current_workspace_fingerprint=current_workspace_fingerprint,
+            recovering_run_id=recovering_run_id,
+            current_workspace_fingerprint_complete=current_workspace_fingerprint_complete,
+            current_workspace_fingerprint_reasons=current_workspace_fingerprint_reasons,
+            _authority=None,
+        )
+
+    raw_previous_run_id = previous_lease_snapshot.get("run_id")
+    previous_run_id = raw_previous_run_id if isinstance(raw_previous_run_id, str) else ""
+    authority_entered = False
+    try:
+        with recovery_lease.stale_recovery_authority(
+            artifact_root=artifact_root,
+            workspace=normalized_workspace,
+            recovering_run_id=recovering_run_id,
+            previous_lease=previous_lease_snapshot,
+        ):
+            authority_entered = True
+            return _recover_stale_mutation_authorized(
+                artifact_root=artifact_root,
+                workspace=normalized_workspace,
+                previous_lease=previous_lease_snapshot,
+                current_workspace_fingerprint=current_workspace_fingerprint,
+                recovering_run_id=recovering_run_id,
+                current_workspace_fingerprint_complete=current_workspace_fingerprint_complete,
+                current_workspace_fingerprint_reasons=current_workspace_fingerprint_reasons,
+                _authority=_STALE_RECOVERY_AUTHORITY,
+            )
+    except (OSError, RuntimeError, ValueError) as exc:
+        if authority_entered:
+            raise
+        result: dict[str, Any] = {
+            "status": "BLOCKED",
+            "reason": f"stale recovery successor lease authority is invalid: {exc}",
+        }
+        if previous_run_id:
+            result["previous_run_id"] = previous_run_id
+        return result

@@ -12,6 +12,10 @@ from ai_qa_automation.runtime.journal import RunJournal
 from ai_qa_automation.runtime.stale_recovery import recover_stale_mutation
 from ai_qa_automation.state import StateStore
 from ai_qa_automation.tools.repository import RepositoryInspector
+from tests.unit.stale_recovery_lease_helpers import (
+    publish_predecessor_lease,
+    recover_with_deferred_successor,
+)
 
 _LEASE_ID = "lease-old"
 
@@ -69,6 +73,14 @@ def _setup_pending_recovery(tmp_path: Path) -> dict[str, object]:
     journal.append("mutation_prepared")
     workspace_stat = workspace.stat(follow_symlinks=False)
     run_root_stat = prior_run.stat(follow_symlinks=False)
+    run_root_identity = (run_root_stat.st_dev, run_root_stat.st_ino)
+    previous_lease = publish_predecessor_lease(
+        artifact_root,
+        workspace,
+        run_id="run-old",
+        run_root_identity=run_root_identity,
+        lease_id=_LEASE_ID,
+    )
     runtime = {
         "workspace": str(workspace.resolve()),
         "workspace_root_identity": {
@@ -104,14 +116,6 @@ def _setup_pending_recovery(tmp_path: Path) -> dict[str, object]:
             files_modified=[relative_path],
         )
     )
-    previous_lease = {
-        "run_id": "run-old",
-        "lease_id": _LEASE_ID,
-        "run_root_identity": {
-            "device": run_root_stat.st_dev,
-            "inode": run_root_stat.st_ino,
-        },
-    }
     return {
         "artifact_root": artifact_root,
         "workspace": workspace,
@@ -144,7 +148,7 @@ def test_stale_recovery_resumes_exact_durable_tail_without_duplicate_append(
         original_save(self, state)
 
     monkeypatch.setattr(StateStore, "save", fail_prior_state_save)
-    first = recover_stale_mutation(
+    first = recover_with_deferred_successor(
         artifact_root=setup["artifact_root"],  # type: ignore[arg-type]
         workspace=setup["workspace"],  # type: ignore[arg-type]
         previous_lease=setup["previous_lease"],  # type: ignore[arg-type]
@@ -180,7 +184,7 @@ def test_stale_recovery_resumes_exact_durable_tail_without_duplicate_append(
     assert tail["payload"]["recovered_workspace_fingerprint"] == recovered_fingerprint
 
     monkeypatch.undo()
-    resumed = recover_stale_mutation(
+    resumed = recover_with_deferred_successor(
         artifact_root=setup["artifact_root"],  # type: ignore[arg-type]
         workspace=workspace,
         previous_lease=setup["previous_lease"],  # type: ignore[arg-type]
@@ -293,7 +297,7 @@ def test_stale_recovery_rejects_workspace_drift_after_durable_recovery_event(
         original_save(self, state)
 
     monkeypatch.setattr(StateStore, "save", fail_prior_state_save)
-    first = recover_stale_mutation(
+    first = recover_with_deferred_successor(
         artifact_root=setup["artifact_root"],  # type: ignore[arg-type]
         workspace=workspace,
         previous_lease=setup["previous_lease"],  # type: ignore[arg-type]

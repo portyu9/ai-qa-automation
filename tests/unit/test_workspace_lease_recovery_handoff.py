@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -139,6 +140,67 @@ def test_deferred_publication_replaces_predecessor_only_after_handoff(tmp_path: 
         successor.release()
 
 
+def test_workspace_lease_rejects_double_acquire_while_authority_is_live(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+
+    lease = WorkspaceLease(artifact_root, workspace, "run-a").acquire(publish=False)
+    try:
+        with pytest.raises(OSError, match="already acquired"):
+            lease.acquire(publish=False)
+    finally:
+        lease.release()
+
+    successor = WorkspaceLease(artifact_root, workspace, "run-b").acquire(publish=False)
+    successor.release()
+
+
+def test_torn_publication_metadata_fails_closed_until_exact_predecessor_is_restored(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact_root = tmp_path / "artifacts"
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+
+    predecessor = WorkspaceLease(artifact_root, workspace, "run-a").acquire()
+    lease_path = predecessor.path
+    predecessor_bytes = lease_path.read_bytes()
+    predecessor.release()
+
+    successor = WorkspaceLease(artifact_root, workspace, "run-b").acquire(publish=False)
+    torn_bytes = b'{"run_id":"run-b"'
+
+    def tear_publication(self: WorkspaceLease, stream: object, directory_fd: int | None) -> None:
+        del self, directory_fd
+        stream.seek(0)  # type: ignore[attr-defined]
+        stream.truncate(0)  # type: ignore[attr-defined]
+        stream.write(torn_bytes)  # type: ignore[attr-defined]
+        stream.flush()  # type: ignore[attr-defined]
+        os.fsync(stream.fileno())  # type: ignore[attr-defined]
+        raise OSError("simulated torn lease publication")
+
+    monkeypatch.setattr(WorkspaceLease, "_persist_current_owner", tear_publication)
+    try:
+        with pytest.raises(OSError, match="simulated torn lease publication"):
+            successor.publish_current_owner()
+    finally:
+        successor.release()
+
+    assert lease_path.read_bytes() == torn_bytes
+    with pytest.raises(OSError, match="metadata is corrupt; manual review is required"):
+        WorkspaceLease(artifact_root, workspace, "run-c").acquire(publish=False)
+
+    lease_path.write_bytes(predecessor_bytes)
+    repaired = WorkspaceLease(artifact_root, workspace, "run-d").acquire(publish=False)
+    try:
+        assert repaired.previous_metadata is not None
+        assert repaired.previous_metadata["run_id"] == "run-a"
+    finally:
+        repaired.release()
+
+
 @pytest.mark.asyncio
 async def test_run_agent_publishes_current_owner_only_after_stale_recovery(
     tmp_path: Path,
@@ -156,12 +218,21 @@ async def test_run_agent_publishes_current_owner_only_after_stale_recovery(
         nonlocal recovery_observed
         recovery_observed = True
         previous = kwargs["previous_lease"]
+        recovery_lease = kwargs["recovery_lease"]
         assert isinstance(previous, dict)
+        assert isinstance(recovery_lease, WorkspaceLease)
+        assert recovery_lease.previous_metadata == previous
         assert previous["run_id"] == "run-prior"
         assert previous["lease_id"] == predecessor_lease_id
-        durable = _metadata(lease_path)
-        assert durable["run_id"] == "run-prior"
-        assert durable["lease_id"] == predecessor_lease_id
+        with recovery_lease.stale_recovery_authority(
+            artifact_root=artifacts,
+            workspace=workspace,
+            recovering_run_id=recovery_lease.run_id,
+            previous_lease=previous,
+        ):
+            durable = _metadata(lease_path)
+            assert durable["run_id"] == "run-prior"
+            assert durable["lease_id"] == predecessor_lease_id
         return {"status": "NONE"}
 
     monkeypatch.setattr(agent_module, "recover_stale_mutation", observe_recovery)
@@ -194,7 +265,10 @@ async def test_run_agent_publication_failure_is_pre_provider_infrastructure_fail
 
     def no_stale_mutation(**kwargs: object) -> dict[str, str]:
         previous = kwargs["previous_lease"]
+        recovery_lease = kwargs["recovery_lease"]
         assert isinstance(previous, dict)
+        assert isinstance(recovery_lease, WorkspaceLease)
+        assert recovery_lease.previous_metadata == previous
         assert previous["run_id"] == "run-prior"
         assert lease_path.read_bytes() == predecessor_bytes
         return {"status": "NONE"}

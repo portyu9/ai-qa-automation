@@ -15,7 +15,6 @@ from ai_qa_automation.models import (
 )
 from ai_qa_automation.runtime.journal import RunJournal
 from ai_qa_automation.runtime.recovery import inspect_recovery
-from ai_qa_automation.runtime.stale_recovery import recover_stale_mutation
 from ai_qa_automation.runtime.targeted_execution_observer import (
     TRUSTED_TARGETED_EXECUTION_AUTHORITY,
     build_targeted_execution_observation,
@@ -23,6 +22,10 @@ from ai_qa_automation.runtime.targeted_execution_observer import (
 from ai_qa_automation.runtime.validation_truth import evaluate_revision_closure
 from ai_qa_automation.state import StateStore
 from ai_qa_automation.tools.repository import RepositoryInspector
+from tests.unit.stale_recovery_lease_helpers import (
+    publish_predecessor_lease,
+    recover_with_deferred_successor,
+)
 
 _OBSERVER_BACKEND = "controller-observer-test-double"
 _OBSERVER_IDENTITY = "sha256:" + "1" * 64
@@ -180,6 +183,14 @@ def test_stale_recovery_state_checkpoint_failure_keeps_runtime_pending_after_res
     journal.append("mutation_prepared")
     root_stat = workspace.stat(follow_symlinks=False)
     run_root_stat = prior_run.stat(follow_symlinks=False)
+    run_root_identity = (run_root_stat.st_dev, run_root_stat.st_ino)
+    previous_lease = publish_predecessor_lease(
+        artifact_root,
+        workspace,
+        run_id="run-old",
+        run_root_identity=run_root_identity,
+        lease_id=_STRICT_LEASE_ID,
+    )
     runtime = {
         "workspace": str(workspace.resolve()),
         "workspace_root_identity": {
@@ -236,17 +247,10 @@ def test_stale_recovery_state_checkpoint_failure_keeps_runtime_pending_after_res
 
     monkeypatch.setattr(StateStore, "save", fail_prior_state_save)
 
-    result = recover_stale_mutation(
+    result = recover_with_deferred_successor(
         artifact_root=artifact_root,
         workspace=workspace,
-        previous_lease={
-            "run_id": "run-old",
-            "lease_id": _STRICT_LEASE_ID,
-            "run_root_identity": {
-                "device": run_root_stat.st_dev,
-                "inode": run_root_stat.st_ino,
-            },
-        },
+        previous_lease=previous_lease,
         current_workspace_fingerprint=candidate_fingerprint,
         recovering_run_id="run-new",
     )
