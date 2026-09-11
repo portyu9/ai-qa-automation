@@ -258,8 +258,17 @@ def _persist_terminal_state(
             state,
             f"Terminal runtime metadata persistence could not be guaranteed: {type(exc).__name__}.",
         )
-        # The first state write completed before runtime metadata persistence began, so
-        # this second atomic state write is not a replay of the ambiguous operation.
+        _record_terminal_event(
+            state,
+            audit,
+            "terminal_runtime_metadata_persistence_failed",
+            terminal_status=TerminalStatus.INFRASTRUCTURE_FAILURE.value,
+            supersedes_event="agent_run_finished",
+            error_type=type(exc).__name__,
+        )
+        # The ambiguous runtime write is never replayed. The correction append is a
+        # distinct operation and may itself revise terminal truth if durability is
+        # ambiguous, so persist exactly the latest canonical state afterward.
         state_store.save(state)
 
 
