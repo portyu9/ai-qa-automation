@@ -8,9 +8,9 @@ from pathlib import Path
 import pytest
 
 from ai_qa_automation.agent import (
-    _TerminalJournalAudit,
     _finish_terminal_state,
     _persist_terminal_state,
+    _TerminalJournalAudit,
 )
 from ai_qa_automation.models import AgentRunState, TerminalStatus
 from ai_qa_automation.runtime.budget import ExecutionBudget
