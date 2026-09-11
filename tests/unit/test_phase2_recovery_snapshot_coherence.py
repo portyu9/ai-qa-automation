@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -13,17 +14,20 @@ from ai_qa_automation.runtime.recovery import inspect_recovery
 from ai_qa_automation.state import StateStore
 
 
-def _persist_revision_zero_run(tmp_path: Path) -> tuple[Path, Path, dict[str, object]]:
+def _persist_revision_zero_run(
+    tmp_path: Path,
+) -> tuple[Path, Path, Path, Path, dict[str, object]]:
     if not descriptor_relative_authority_supported():
         pytest.skip("workspace root recovery authority is unavailable")
 
     run_dir = tmp_path / "run-recovery-snapshot"
     workspace = tmp_path / "sut"
     workspace.mkdir()
-    StateStore(run_dir / "state.json").save(
+    state_path = run_dir / "state.json"
+    StateStore(state_path).save(
         AgentRunState(
             run_id=run_dir.name,
-            objective="prove recovery observes one runtime snapshot",
+            objective="prove recovery observes one coherent persisted snapshot",
             workspace=str(workspace.resolve()),
         )
     )
@@ -43,7 +47,7 @@ def _persist_revision_zero_run(tmp_path: Path) -> tuple[Path, Path, dict[str, ob
     }
     runtime_path = run_dir / "runtime.json"
     runtime_path.write_text(json.dumps(runtime_payload, sort_keys=True), encoding="utf-8")
-    return run_dir, runtime_path, runtime_payload
+    return run_dir, workspace, state_path, runtime_path, runtime_payload
 
 
 def _pending_runtime_payload(runtime_payload: dict[str, object]) -> dict[str, object]:
@@ -63,11 +67,25 @@ def _pending_runtime_payload(runtime_payload: dict[str, object]) -> dict[str, ob
     return changed
 
 
+def test_recovery_accepts_unchanged_quiescent_revision_zero(tmp_path: Path) -> None:
+    run_dir, _workspace, _state_path, _runtime_path, _runtime_payload = (
+        _persist_revision_zero_run(tmp_path)
+    )
+
+    result = inspect_recovery(run_dir)
+
+    assert result["recoverable"] is True
+    assert result["revision_closed"] is True
+    assert result["resume_policy"] == "safe-to-start-a-new-agent-session-from-persisted-evidence"
+
+
 def test_recovery_rejects_runtime_change_during_final_journal_revalidation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    run_dir, runtime_path, runtime_payload = _persist_revision_zero_run(tmp_path)
+    run_dir, _workspace, _state_path, runtime_path, runtime_payload = (
+        _persist_revision_zero_run(tmp_path)
+    )
     real_read_journal_snapshot = recovery_module._read_journal_snapshot
     journal_reads = 0
 
@@ -103,4 +121,71 @@ def test_recovery_rejects_runtime_change_during_final_journal_revalidation(
     assert result == {
         "recoverable": False,
         "reason": "runtime.json changed during recovery inspection",
+    }
+
+
+def test_recovery_rejects_canonical_state_change_during_inspection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir, _workspace, state_path, _runtime_path, _runtime_payload = (
+        _persist_revision_zero_run(tmp_path)
+    )
+    real_read_journal_snapshot = recovery_module._read_journal_snapshot
+    journal_reads = 0
+
+    def mutate_state_on_final_journal_read(
+        observed_run_dir: Path,
+        journal_path: Path,
+        *,
+        run_root_identity: tuple[int, int] | None,
+    ) -> bytes:
+        nonlocal journal_reads
+        journal_reads += 1
+        if journal_reads == 2:
+            changed = StateStore(state_path).load()
+            changed.observations.append("concurrent canonical checkpoint")
+            StateStore(state_path).save(changed)
+        return real_read_journal_snapshot(
+            observed_run_dir,
+            journal_path,
+            run_root_identity=run_root_identity,
+        )
+
+    monkeypatch.setattr(
+        recovery_module,
+        "_read_journal_snapshot",
+        mutate_state_on_final_journal_read,
+    )
+
+    result = inspect_recovery(run_dir)
+
+    assert journal_reads == 2
+    assert result == {
+        "recoverable": False,
+        "reason": "state.json changed during recovery inspection",
+    }
+
+
+def test_recovery_refuses_workspace_with_active_exclusive_lease(tmp_path: Path) -> None:
+    run_dir, workspace, _state_path, _runtime_path, _runtime_payload = (
+        _persist_revision_zero_run(tmp_path)
+    )
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover - POSIX CI exercises this path
+        pytest.skip("workspace flock authority is unavailable")
+
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    fd = os.open(workspace, flags)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = inspect_recovery(run_dir)
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+    assert result == {
+        "recoverable": False,
+        "reason": "target workspace is actively leased; recovery inspection requires quiescence",
     }
