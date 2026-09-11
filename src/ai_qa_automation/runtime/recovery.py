@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import io
 import json
 from pathlib import Path
 from typing import Any
@@ -9,13 +11,14 @@ from ..fs_authority import (
     pin_directory_identity,
     read_bytes_confined,
 )
-from ..io_safety import parse_json_object_strict, read_json_object_bounded
+from ..io_safety import parse_json_object_strict, read_bytes_bounded, read_json_object_bounded
 from ..state import StateStore
 from .journal import RunJournal, validate_runtime_journal_binding
 from .targeted_execution_observer import normalize_targeted_path
 from .validation_truth import RevisionClosure, evaluate_revision_closure
 
 _MAX_RUNTIME_METADATA_BYTES = 2_000_000
+_MAX_JOURNAL_BYTES = 64_000_000
 
 
 def _validate_workspace_root_authority(
@@ -96,6 +99,147 @@ def _bind_closure_to_canonical_mutation_lineage(
     )
 
 
+def _read_journal_snapshot(
+    run_dir: Path,
+    journal_path: Path,
+    *,
+    run_root_identity: tuple[int, int] | None,
+) -> bytes:
+    """Read one bounded journal subject for exact-snapshot semantic inspection."""
+
+    if run_root_identity is not None:
+        return read_bytes_confined(
+            run_dir,
+            journal_path.name,
+            max_bytes=_MAX_JOURNAL_BYTES,
+            label="journal.jsonl",
+            expected_root_identity=run_root_identity,
+        )
+    return read_bytes_bounded(
+        journal_path,
+        max_bytes=_MAX_JOURNAL_BYTES,
+        label="journal.jsonl",
+    )
+
+
+def _inspect_verified_journal_mutation_lifecycle(
+    raw_journal: bytes,
+    *,
+    expected_commit: tuple[str, int] | None,
+) -> dict[str, object]:
+    """Interpret mutation transitions only after RunJournal verified these exact bytes."""
+
+    pending: tuple[str, int | None] | None = None
+    expected_commit_count = 0
+    prepared_count = 0
+    committed_count = 0
+    rolled_back_count = 0
+
+    def invalid(code: str) -> dict[str, object]:
+        return {
+            "valid": False,
+            "code": code,
+            "expected_commit_count": expected_commit_count,
+            "pending_open": pending is not None,
+            "prepared_count": prepared_count,
+            "committed_count": committed_count,
+            "rolled_back_count": rolled_back_count,
+        }
+
+    stream = io.BytesIO(raw_journal)
+    record_number = 0
+    for raw_line in stream:
+        if not raw_line.strip():
+            continue
+        record_number += 1
+        try:
+            record = parse_json_object_strict(
+                raw_line.decode("utf-8"),
+                label=f"verified run journal semantic record {record_number}",
+            )
+        except (UnicodeDecodeError, ValueError):
+            return invalid("journal_semantic_parse_failed")
+        event = record.get("event")
+        if event not in {"mutation_prepared", "mutation_committed", "mutation_rolled_back"}:
+            continue
+        payload = record.get("payload")
+        if not isinstance(payload, dict):
+            return invalid("journal_mutation_payload_invalid")
+        path = payload.get("path")
+        if (
+            not isinstance(path, str)
+            or not path
+            or normalize_targeted_path(path) != path
+        ):
+            return invalid("journal_mutation_path_invalid")
+
+        if event == "mutation_prepared":
+            prepared_count += 1
+            if pending is not None:
+                return invalid("journal_mutation_prepare_overlap")
+            change_revision_before = payload.get("change_revision_before")
+            if change_revision_before is not None and (
+                type(change_revision_before) is not int or change_revision_before < 0
+            ):
+                return invalid("journal_mutation_revision_invalid")
+            pending = (path, change_revision_before)
+            continue
+
+        if pending is None or pending[0] != path:
+            return invalid("journal_mutation_transition_without_matching_prepare")
+        if event == "mutation_committed":
+            committed_count += 1
+            if expected_commit is not None and pending == expected_commit:
+                expected_commit_count += 1
+        else:
+            rolled_back_count += 1
+        pending = None
+
+    return {
+        "valid": True,
+        "code": "valid",
+        "expected_commit_count": expected_commit_count,
+        "pending_open": pending is not None,
+        "prepared_count": prepared_count,
+        "committed_count": committed_count,
+        "rolled_back_count": rolled_back_count,
+    }
+
+
+def _bind_closed_revision_to_journal_mutation_commit(
+    closure: RevisionClosure,
+    *,
+    change_revision: int,
+    journal_mutation_lifecycle: dict[str, object],
+) -> RevisionClosure:
+    """Require exact durable commit semantics before recovery grants changed-revision closure."""
+
+    if not closure.closed or change_revision == 0:
+        return closure
+    if journal_mutation_lifecycle.get("valid") is not True:
+        return RevisionClosure(
+            False,
+            "journal_mutation_lifecycle_mismatch",
+            "Verified journal mutation lifecycle is structurally inconsistent.",
+            closure.mutation_path,
+        )
+    if journal_mutation_lifecycle.get("pending_open") is not False:
+        return RevisionClosure(
+            False,
+            "journal_runtime_pending_mismatch",
+            "Verified journal retains an open mutation transaction while runtime authority reports none.",
+            closure.mutation_path,
+        )
+    if journal_mutation_lifecycle.get("expected_commit_count") != 1:
+        return RevisionClosure(
+            False,
+            "journal_mutation_commit_missing",
+            "Verified journal does not contain exactly one committed transition for the current changed revision.",
+            closure.mutation_path,
+        )
+    return closure
+
+
 def inspect_recovery(run_dir: Path) -> dict[str, Any]:
     """Assess persisted run integrity without claiming model-session replay."""
     requested_run_dir = run_dir.expanduser()
@@ -135,12 +279,41 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
         ).load()
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         return {"recoverable": False, "reason": f"state could not be loaded: {type(exc).__name__}"}
+
+    closure = evaluate_revision_closure(
+        state.validation_results,
+        current_revision=state.change_revision,
+        expected_run_id=state.run_id,
+    )
+    closure = _bind_closure_to_canonical_mutation_lineage(
+        state.files_modified,
+        change_revision=state.change_revision,
+        closure=closure,
+    )
+    expected_commit = (
+        (closure.mutation_path, state.change_revision - 1)
+        if closure.closed and state.change_revision > 0 and closure.mutation_path is not None
+        else None
+    )
+
     try:
+        before_journal = _read_journal_snapshot(
+            run_dir,
+            journal_path,
+            run_root_identity=run_root_identity,
+        )
+        before_journal_digest = hashlib.sha256(before_journal).digest()
+        del before_journal
         journal_status = RunJournal(
             journal_path,
             regulated_mode=False,
             expected_parent_identity=run_root_identity,
         ).verify()
+        verified_journal = _read_journal_snapshot(
+            run_dir,
+            journal_path,
+            run_root_identity=run_root_identity,
+        )
     except (OSError, UnicodeError, json.JSONDecodeError, RuntimeError, ValueError) as exc:
         return {
             "recoverable": False,
@@ -148,6 +321,16 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
         }
     if not journal_status["valid"]:
         return {"recoverable": False, "reason": "journal hash chain is invalid"}
+    verified_journal_digest = hashlib.sha256(verified_journal).digest()
+    if verified_journal_digest != before_journal_digest:
+        return {
+            "recoverable": False,
+            "reason": "journal changed while its recovery snapshot was being verified",
+        }
+    journal_mutation_lifecycle = _inspect_verified_journal_mutation_lifecycle(
+        verified_journal,
+        expected_commit=expected_commit,
+    )
 
     try:
         if run_root_identity is not None:
@@ -208,6 +391,25 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
             "reason": f"runtime journal authority is invalid: {journal_binding['reason']}",
         }
 
+    try:
+        final_journal = _read_journal_snapshot(
+            run_dir,
+            journal_path,
+            run_root_identity=run_root_identity,
+        )
+    except (OSError, RuntimeError, ValueError):
+        return {
+            "recoverable": False,
+            "reason": "journal could not be revalidated after runtime binding",
+        }
+    if hashlib.sha256(final_journal).digest() != verified_journal_digest:
+        return {
+            "recoverable": False,
+            "reason": "journal changed after runtime authority was read",
+        }
+    del final_journal
+    del verified_journal
+
     if "pending_mutation" not in runtime_metadata:
         return {
             "recoverable": False,
@@ -222,16 +424,12 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
             "reason": "runtime.json pending_mutation authority is invalid",
         }
 
-    closure = evaluate_revision_closure(
-        state.validation_results,
-        current_revision=state.change_revision,
-        expected_run_id=state.run_id,
-    )
-    closure = _bind_closure_to_canonical_mutation_lineage(
-        state.files_modified,
-        change_revision=state.change_revision,
-        closure=closure,
-    )
+    if pending_mutation is None:
+        closure = _bind_closed_revision_to_journal_mutation_commit(
+            closure,
+            change_revision=state.change_revision,
+            journal_mutation_lifecycle=journal_mutation_lifecycle,
+        )
     revision_closed = closure.closed
     if pending_mutation is not None:
         revision_closed = False
@@ -250,6 +448,7 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
         },
         "journal": journal_status,
         "journal_binding": journal_binding,
+        "journal_mutation_lifecycle": journal_mutation_lifecycle,
         "workspace_authority": workspace_authority,
         "runtime": runtime_metadata,
         "pending_mutation": pending_mutation,
