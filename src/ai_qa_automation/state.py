@@ -266,8 +266,13 @@ class StateStore:
         return b"".join(chunks)
 
     def _save_initial_fallback(self, rendered: bytes) -> None:
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
-        handle = os.open(self.path, flags, 0o600)
+        handle, raw_temp = tempfile.mkstemp(
+            dir=self.path.parent,
+            prefix=f".{self.path.name}.",
+            suffix=".tmp",
+            text=False,
+        )
+        temp = Path(raw_temp)
         try:
             offset = 0
             while offset < len(rendered):
@@ -276,10 +281,16 @@ class StateStore:
                     raise OSError("initial canonical state write made no forward progress")
                 offset += written
             os.fsync(handle)
-        finally:
             os.close(handle)
-        fsync_directory(self.path.parent)
-        self._revalidate_parent()
+            handle = -1
+            self._assert_owned()
+            os.link(temp, self.path)
+            fsync_directory(self.path.parent)
+            self._revalidate_parent()
+        finally:
+            if handle >= 0:
+                os.close(handle)
+            temp.unlink(missing_ok=True)
 
     def save(self, state: AgentRunState) -> None:
         with self._lock:
