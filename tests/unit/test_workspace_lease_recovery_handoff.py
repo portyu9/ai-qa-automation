@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -153,6 +154,51 @@ def test_workspace_lease_rejects_double_acquire_while_authority_is_live(tmp_path
 
     successor = WorkspaceLease(artifact_root, workspace, "run-b").acquire(publish=False)
     successor.release()
+
+
+def test_torn_publication_metadata_fails_closed_until_exact_predecessor_is_restored(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact_root = tmp_path / "artifacts"
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+
+    predecessor = WorkspaceLease(artifact_root, workspace, "run-a").acquire()
+    lease_path = predecessor.path
+    predecessor_bytes = lease_path.read_bytes()
+    predecessor.release()
+
+    successor = WorkspaceLease(artifact_root, workspace, "run-b").acquire(publish=False)
+    torn_bytes = b'{"run_id":"run-b"'
+
+    def tear_publication(self: WorkspaceLease, stream: object, directory_fd: int | None) -> None:
+        del self, directory_fd
+        stream.seek(0)  # type: ignore[attr-defined]
+        stream.truncate(0)  # type: ignore[attr-defined]
+        stream.write(torn_bytes)  # type: ignore[attr-defined]
+        stream.flush()  # type: ignore[attr-defined]
+        os.fsync(stream.fileno())  # type: ignore[attr-defined]
+        raise OSError("simulated torn lease publication")
+
+    monkeypatch.setattr(WorkspaceLease, "_persist_current_owner", tear_publication)
+    try:
+        with pytest.raises(OSError, match="simulated torn lease publication"):
+            successor.publish_current_owner()
+    finally:
+        successor.release()
+
+    assert lease_path.read_bytes() == torn_bytes
+    with pytest.raises(OSError, match="metadata is corrupt; manual review is required"):
+        WorkspaceLease(artifact_root, workspace, "run-c").acquire(publish=False)
+
+    lease_path.write_bytes(predecessor_bytes)
+    repaired = WorkspaceLease(artifact_root, workspace, "run-d").acquire(publish=False)
+    try:
+        assert repaired.previous_metadata is not None
+        assert repaired.previous_metadata["run_id"] == "run-a"
+    finally:
+        repaired.release()
 
 
 @pytest.mark.asyncio
