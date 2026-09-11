@@ -209,10 +209,7 @@ class StateStore:
             if self._descriptor_relative_parent
             else _identity(parent_status)
         )
-        if (
-            claimed_parent_identity is not None
-            and self._parent_identity != claimed_parent_identity
-        ):
+        if claimed_parent_identity is not None and self._parent_identity != claimed_parent_identity:
             raise ValueError("state directory changed identity after exclusive run-root claim")
         if (
             expected_parent_identity is not None
