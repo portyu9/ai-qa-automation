@@ -245,6 +245,8 @@ def _persist_terminal_state(
     state_store: StateStore,
     control: RuntimeControl,
     audit: _TerminalJournalAudit,
+    *,
+    supersedes_event: str | None = None,
 ) -> None:
     """Persist terminal truth without rebinding runtime metadata after journal ambiguity."""
 
@@ -258,13 +260,17 @@ def _persist_terminal_state(
             state,
             f"Terminal runtime metadata persistence could not be guaranteed: {type(exc).__name__}.",
         )
+        correction_payload: dict[str, object] = {
+            "terminal_status": TerminalStatus.INFRASTRUCTURE_FAILURE.value,
+            "error_type": type(exc).__name__,
+        }
+        if supersedes_event is not None:
+            correction_payload["supersedes_event"] = supersedes_event
         _record_terminal_event(
             state,
             audit,
             "terminal_runtime_metadata_persistence_failed",
-            terminal_status=TerminalStatus.INFRASTRUCTURE_FAILURE.value,
-            supersedes_event="agent_run_finished",
-            error_type=type(exc).__name__,
+            **correction_payload,
         )
         # The ambiguous runtime write is never replayed. The correction append is a
         # distinct operation and may itself revise terminal truth if durability is
@@ -445,7 +451,13 @@ def _finish_terminal_state(
         duration_seconds=state.duration,
         tool_calls=state.tool_call_count,
     )
-    _persist_terminal_state(state, state_store, control, audit)
+    _persist_terminal_state(
+        state,
+        state_store,
+        control,
+        audit,
+        supersedes_event="agent_run_finished",
+    )
     final_status = state.terminal_status or TerminalStatus.INFRASTRUCTURE_FAILURE
     emit_event(
         logger,
