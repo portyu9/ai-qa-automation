@@ -55,7 +55,9 @@ def test_published_terminal_runtime_write_is_reconciled_before_correction_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     if not descriptor_relative_authority_supported():
-        pytest.skip("exact runtime publication reconciliation requires descriptor-relative authority")
+        pytest.skip(
+            "exact runtime publication reconciliation requires descriptor-relative authority"
+        )
 
     state, state_store, journal, control = _terminal_subject(tmp_path)
     original_persist = control.persist
@@ -86,7 +88,9 @@ def test_published_terminal_runtime_write_is_reconciled_before_correction_path(
         nonlocal state_save_attempts
         state_save_attempts += 1
         if state_save_attempts > 1:
-            raise OSError("second terminal state save must be unreachable after exact runtime proof")
+            raise OSError(
+                "second terminal state save must be unreachable after exact runtime proof"
+            )
         original_state_save(observed_state)
 
     monkeypatch.setattr(control, "persist", publish_runtime_then_raise)
