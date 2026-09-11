@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import ai_qa_automation.runtime.run_control as run_control_module
 from ai_qa_automation.agent import _finish_terminal_state, _TerminalJournalAudit
 from ai_qa_automation.fs_authority import descriptor_relative_authority_supported
 from ai_qa_automation.models import AgentRunState, TerminalStatus
@@ -50,6 +51,36 @@ def _terminal_subject(
     return state, state_store, journal, control
 
 
+def _publish_then_raise(
+    original_write: object,
+    attempt_counter: list[int],
+):
+    def wrapped(
+        root: Path,
+        relative_path: str | Path,
+        data: bytes,
+        *,
+        create_parents: bool,
+        create_only: bool,
+        label: str,
+        expected_root_identity: tuple[int, int] | None = None,
+    ) -> None:
+        attempt_counter[0] += 1
+        assert callable(original_write)
+        original_write(
+            root,
+            relative_path,
+            data,
+            create_parents=create_parents,
+            create_only=create_only,
+            label=label,
+            expected_root_identity=expected_root_identity,
+        )
+        raise OSError("post-publication runtime verification became ambiguous")
+
+    return wrapped
+
+
 def test_published_terminal_runtime_write_is_reconciled_before_correction_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -60,18 +91,18 @@ def test_published_terminal_runtime_write_is_reconciled_before_correction_path(
         )
 
     state, state_store, journal, control = _terminal_subject(tmp_path)
-    original_persist = control.persist
+    original_atomic_write = run_control_module.atomic_write_bytes_confined
     original_try_append = RunJournal.try_append
     original_state_save = state_store.save
-    persist_attempts = 0
+    persist_attempts = [0]
     correction_attempts = 0
     state_save_attempts = 0
 
-    def publish_runtime_then_raise() -> None:
-        nonlocal persist_attempts
-        persist_attempts += 1
-        original_persist()
-        raise OSError("post-publication runtime verification became ambiguous")
+    monkeypatch.setattr(
+        run_control_module,
+        "atomic_write_bytes_confined",
+        _publish_then_raise(original_atomic_write, persist_attempts),
+    )
 
     def reject_any_correction_append(
         self: RunJournal,
@@ -93,7 +124,6 @@ def test_published_terminal_runtime_write_is_reconciled_before_correction_path(
             )
         original_state_save(observed_state)
 
-    monkeypatch.setattr(control, "persist", publish_runtime_then_raise)
     monkeypatch.setattr(RunJournal, "try_append", reject_any_correction_append)
     monkeypatch.setattr(state_store, "save", reject_any_second_terminal_state_save)
 
@@ -106,7 +136,7 @@ def test_published_terminal_runtime_write_is_reconciled_before_correction_path(
         started=time.monotonic(),
     )
 
-    assert persist_attempts == 1
+    assert persist_attempts == [1]
     assert correction_attempts == 0
     assert state_save_attempts == 1
 
@@ -121,3 +151,118 @@ def test_published_terminal_runtime_write_is_reconciled_before_correction_path(
     assert recovery["terminal_status"] == TerminalStatus.SUCCESS.value
     assert recovery["revision_closed"] is True
     assert recovery["resume_policy"] == "safe-to-start-a-new-agent-session-from-persisted-evidence"
+
+
+def test_prepublication_runtime_failure_is_not_reconciled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if not descriptor_relative_authority_supported():
+        pytest.skip(
+            "exact runtime publication reconciliation requires descriptor-relative authority"
+        )
+
+    _, _, _, control = _terminal_subject(tmp_path)
+
+    def fail_before_publication(*args: object, **kwargs: object) -> None:
+        raise OSError("runtime publication did not occur")
+
+    monkeypatch.setattr(
+        run_control_module,
+        "atomic_write_bytes_confined",
+        fail_before_publication,
+    )
+
+    with pytest.raises(OSError, match="runtime publication did not occur"):
+        control.persist()
+
+
+def test_reconciled_runtime_publication_requires_fresh_directory_fsync(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if not descriptor_relative_authority_supported():
+        pytest.skip(
+            "exact runtime publication reconciliation requires descriptor-relative authority"
+        )
+
+    _, _, _, control = _terminal_subject(tmp_path)
+    original_atomic_write = run_control_module.atomic_write_bytes_confined
+
+    def publish_then_disable_fsync(
+        root: Path,
+        relative_path: str | Path,
+        data: bytes,
+        *,
+        create_parents: bool,
+        create_only: bool,
+        label: str,
+        expected_root_identity: tuple[int, int] | None = None,
+    ) -> None:
+        original_atomic_write(
+            root,
+            relative_path,
+            data,
+            create_parents=create_parents,
+            create_only=create_only,
+            label=label,
+            expected_root_identity=expected_root_identity,
+        )
+
+        def fail_fsync(fd: int) -> None:
+            raise OSError("fresh directory durability barrier failed")
+
+        monkeypatch.setattr(run_control_module.os, "fsync", fail_fsync)
+        raise OSError("post-publication runtime verification became ambiguous")
+
+    monkeypatch.setattr(
+        run_control_module,
+        "atomic_write_bytes_confined",
+        publish_then_disable_fsync,
+    )
+
+    with pytest.raises(OSError, match="post-publication runtime verification became ambiguous"):
+        control.persist()
+
+
+def test_reconciliation_rejects_wrong_published_runtime_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if not descriptor_relative_authority_supported():
+        pytest.skip(
+            "exact runtime publication reconciliation requires descriptor-relative authority"
+        )
+
+    _, _, _, control = _terminal_subject(tmp_path)
+    original_atomic_write = run_control_module.atomic_write_bytes_confined
+
+    def publish_wrong_bytes_then_raise(
+        root: Path,
+        relative_path: str | Path,
+        data: bytes,
+        *,
+        create_parents: bool,
+        create_only: bool,
+        label: str,
+        expected_root_identity: tuple[int, int] | None = None,
+    ) -> None:
+        original_atomic_write(
+            root,
+            relative_path,
+            data + b"\n",
+            create_parents=create_parents,
+            create_only=create_only,
+            label=label,
+            expected_root_identity=expected_root_identity,
+        )
+        raise OSError("post-publication runtime verification became ambiguous")
+
+    monkeypatch.setattr(
+        run_control_module,
+        "atomic_write_bytes_confined",
+        publish_wrong_bytes_then_raise,
+    )
+
+    with pytest.raises(OSError, match="post-publication runtime verification became ambiguous"):
+        control.persist()
