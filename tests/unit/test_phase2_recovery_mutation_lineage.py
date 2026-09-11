@@ -210,6 +210,22 @@ def _persist_closed_run(
     journal = RunJournal(run_dir / "journal.jsonl")
     if change_revision == 0:
         journal.append("run_started")
+        if journal_mode in {"revision_zero_committed", "revision_zero_rolled_back"}:
+            _append_mutation_prepared(
+                journal,
+                path=_MUTATION_PATH,
+                change_revision_before=0,
+            )
+            if journal_mode == "revision_zero_committed":
+                journal.append("mutation_committed", path=_MUTATION_PATH)
+            else:
+                journal.append(
+                    "mutation_rolled_back",
+                    path=_MUTATION_PATH,
+                    reason="failed mutation restored before revision advance",
+                )
+        elif journal_mode != "committed":  # pragma: no cover - test helper guard
+            raise ValueError(f"unsupported revision-zero journal mode: {journal_mode}")
     elif journal_mode == "stale_prior_commit":
         _append_mutation_prepared(
             journal,
@@ -353,6 +369,45 @@ def test_recovery_denies_revision_zero_with_modified_file_lineage(tmp_path: Path
         "mutation_path": None,
     }
     assert result["resume_policy"] == "manual-review-required-before-new-session"
+
+
+def test_recovery_denies_revision_zero_with_committed_mutation_journal_lineage(
+    tmp_path: Path,
+) -> None:
+    result = inspect_recovery(
+        _persist_closed_run(
+            tmp_path,
+            files_modified=[],
+            change_revision=0,
+            journal_mode="revision_zero_committed",
+        )
+    )
+
+    assert result["recoverable"] is True
+    assert result["change_revision"] == 0
+    assert result["journal_mutation_lifecycle"]["committed_count"] == 1
+    assert result["revision_closed"] is False
+    assert result["revision_closure"]["code"] == "journal_revision_zero_commit_mismatch"
+    assert result["resume_policy"] == "manual-review-required-before-new-session"
+
+
+def test_recovery_accepts_revision_zero_after_pre_revision_mutation_attempt_was_rolled_back(
+    tmp_path: Path,
+) -> None:
+    result = inspect_recovery(
+        _persist_closed_run(
+            tmp_path,
+            files_modified=[],
+            change_revision=0,
+            journal_mode="revision_zero_rolled_back",
+        )
+    )
+
+    assert result["recoverable"] is True
+    assert result["journal_mutation_lifecycle"]["committed_count"] == 0
+    assert result["journal_mutation_lifecycle"]["rolled_back_count"] == 1
+    assert result["revision_closed"] is True
+    assert result["resume_policy"] == "safe-to-start-a-new-agent-session-from-persisted-evidence"
 
 
 def test_recovery_accepts_current_closure_path_among_historical_modified_paths(
