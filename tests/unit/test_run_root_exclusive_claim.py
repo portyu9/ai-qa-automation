@@ -66,7 +66,7 @@ def _historical_state(artifacts: Path, workspace: Path) -> tuple[Path, bytes, by
     )
     journal_path = run_root / "journal.jsonl"
     runtime_path = run_root / "runtime.json"
-    journal_path.write_bytes(b'historical journal bytes\n')
+    journal_path.write_bytes(b"historical journal bytes\n")
     runtime_path.write_bytes(b'{"historical":true}\n')
     return (
         state_path,
