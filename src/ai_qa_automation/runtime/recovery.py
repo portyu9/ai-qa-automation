@@ -12,7 +12,7 @@ from ..fs_authority import (
 from ..io_safety import parse_json_object_strict, read_json_object_bounded
 from ..state import StateStore
 from .journal import RunJournal, validate_runtime_journal_binding
-from .validation_truth import evaluate_revision_closure
+from .validation_truth import RevisionClosure, evaluate_revision_closure
 
 _MAX_RUNTIME_METADATA_BYTES = 2_000_000
 
@@ -57,6 +57,27 @@ def _validate_workspace_root_authority(
             "reason": "runtime.json workspace root identity does not match current workspace",
         }
     return {"valid": True}
+
+
+def _bind_closure_to_canonical_mutation_lineage(
+    state_files_modified: list[str],
+    *,
+    change_revision: int,
+    closure: RevisionClosure,
+) -> RevisionClosure:
+    """Refuse persisted changed-revision closure when canonical file lineage disagrees."""
+
+    if not closure.closed or change_revision == 0:
+        return closure
+    mutation_path = closure.mutation_path
+    if mutation_path is not None and mutation_path in state_files_modified:
+        return closure
+    return RevisionClosure(
+        False,
+        "canonical_mutation_lineage_mismatch",
+        "Persisted validation closure mutation subject is absent from canonical modified-file lineage.",
+        mutation_path,
+    )
 
 
 def inspect_recovery(run_dir: Path) -> dict[str, Any]:
@@ -189,6 +210,11 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
         state.validation_results,
         current_revision=state.change_revision,
         expected_run_id=state.run_id,
+    )
+    closure = _bind_closure_to_canonical_mutation_lineage(
+        state.files_modified,
+        change_revision=state.change_revision,
+        closure=closure,
     )
     revision_closed = closure.closed
     if pending_mutation is not None:
