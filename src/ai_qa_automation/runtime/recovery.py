@@ -320,23 +320,19 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
     )
 
     try:
-        before_journal = _read_journal_snapshot(
-            run_dir,
-            journal_path,
-            run_root_identity=run_root_identity,
-        )
-        before_journal_digest = hashlib.sha256(before_journal).digest()
-        del before_journal
-        journal_status = RunJournal(
+        journal = RunJournal(
             journal_path,
             regulated_mode=False,
             expected_parent_identity=run_root_identity,
-        ).verify()
+        )
         verified_journal = _read_journal_snapshot(
             run_dir,
             journal_path,
             run_root_identity=run_root_identity,
         )
+        # RunJournal owns the canonical hash-chain algorithm. Verify the immutable bytes
+        # recovery will interpret so path replacement cannot split validation and semantics.
+        journal_status = journal._verify_stream(io.BytesIO(verified_journal))
     except (OSError, UnicodeError, json.JSONDecodeError, RuntimeError, ValueError) as exc:
         return {
             "recoverable": False,
@@ -345,11 +341,6 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
     if not journal_status["valid"]:
         return {"recoverable": False, "reason": "journal hash chain is invalid"}
     verified_journal_digest = hashlib.sha256(verified_journal).digest()
-    if verified_journal_digest != before_journal_digest:
-        return {
-            "recoverable": False,
-            "reason": "journal changed while its recovery snapshot was being verified",
-        }
     journal_mutation_lifecycle = _inspect_verified_journal_mutation_lifecycle(
         verified_journal,
         expected_commit=expected_commit,
