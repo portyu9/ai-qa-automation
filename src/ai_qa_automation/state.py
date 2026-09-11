@@ -60,6 +60,23 @@ def _identity(value: os.stat_result) -> tuple[int, int]:
     return value.st_dev, value.st_ino
 
 
+def _validate_run_id_component(run_id: str) -> str:
+    if not isinstance(run_id, str):
+        raise TypeError("run_id must be a string")
+    normalized = run_id.strip()
+    if (
+        not normalized
+        or normalized != run_id
+        or normalized in {".", ".."}
+        or "/" in normalized
+        or "\\" in normalized
+        or Path(normalized).is_absolute()
+        or Path(normalized).name != normalized
+    ):
+        raise ValueError("run_id must be one non-empty relative path component")
+    return normalized
+
+
 class StateStore:
     """Canonical run state persisted independently from conversational context."""
 
@@ -68,6 +85,7 @@ class StateStore:
         path: Path,
         *,
         expected_parent_identity: tuple[int, int] | None = None,
+        create_parent: bool = True,
     ) -> None:
         requested = path.expanduser()
         if requested.is_symlink():
@@ -76,10 +94,13 @@ class StateStore:
         if raw_parent.is_symlink():
             raise ValueError("state directory is a symlink and has ambiguous ownership")
         parent_existed = raw_parent.exists()
-        raw_parent.mkdir(parents=True, exist_ok=True)
+        if create_parent:
+            raw_parent.mkdir(parents=True, exist_ok=True)
+        elif not parent_existed:
+            raise ValueError("authorized state directory does not exist")
         if raw_parent.is_symlink():
             raise ValueError("state directory became a symlink")
-        if not parent_existed:
+        if create_parent and not parent_existed:
             fsync_directory(raw_parent.resolve().parent)
         self.path = raw_parent.resolve() / requested.name
         parent_status = self.path.parent.stat(follow_symlinks=False)
@@ -98,6 +119,98 @@ class StateStore:
             raise ValueError("state directory does not match authorized run persistence root")
         self._lock = threading.RLock()
         self._assert_owned()
+
+    @classmethod
+    def claim_new_run(cls, artifact_root: Path, run_id: str) -> StateStore:
+        """Exclusively claim a fresh run directory before the first canonical write.
+
+        Existing run roots are authority-bearing history and are never reused. The
+        directory entry is created with no replacement, durably synced in its artifact
+        parent, and its exact identity is carried into ``StateStore`` construction so a
+        replacement between claim and use fails closed rather than being recreated.
+        """
+
+        component = _validate_run_id_component(run_id)
+        requested_artifacts = artifact_root.expanduser()
+        if requested_artifacts.is_symlink():
+            raise ValueError("artifact root is a symlink and has ambiguous ownership")
+        artifacts_existed = requested_artifacts.exists()
+        requested_artifacts.mkdir(parents=True, exist_ok=True)
+        if requested_artifacts.is_symlink():
+            raise ValueError("artifact root became a symlink")
+        artifacts = requested_artifacts.resolve()
+        artifact_status = artifacts.stat(follow_symlinks=False)
+        if not stat.S_ISDIR(artifact_status.st_mode):
+            raise ValueError("artifact root must remain a regular directory")
+        artifact_identity = _identity(artifact_status)
+        if not artifacts_existed:
+            fsync_directory(artifacts.parent)
+
+        run_root = artifacts / component
+        if descriptor_relative_authority_supported():
+            pinned_artifact_identity = pin_directory_identity(artifacts, label="artifact root")
+            if pinned_artifact_identity != artifact_identity:
+                raise ValueError("artifact root changed identity before run claim")
+            directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+            artifact_fd = os.open(artifacts, directory_flags)
+            try:
+                opened_artifact = os.fstat(artifact_fd)
+                current_artifact = artifacts.stat(follow_symlinks=False)
+                if (
+                    not stat.S_ISDIR(opened_artifact.st_mode)
+                    or not stat.S_ISDIR(current_artifact.st_mode)
+                    or _identity(opened_artifact) != pinned_artifact_identity
+                    or _identity(current_artifact) != pinned_artifact_identity
+                ):
+                    raise ValueError("artifact root changed identity during run claim")
+                try:
+                    os.mkdir(component, dir_fd=artifact_fd)
+                except FileExistsError as exc:
+                    raise FileExistsError(
+                        "run persistence root already exists; refusing to reuse run_id"
+                    ) from exc
+                os.fsync(artifact_fd)
+                claimed = os.stat(component, dir_fd=artifact_fd, follow_symlinks=False)
+                if not stat.S_ISDIR(claimed.st_mode):
+                    raise ValueError("claimed run persistence root is not a directory")
+                run_root_identity = _identity(claimed)
+            finally:
+                os.close(artifact_fd)
+        else:
+            try:
+                run_root.mkdir()
+            except FileExistsError as exc:
+                raise FileExistsError(
+                    "run persistence root already exists; refusing to reuse run_id"
+                ) from exc
+            fsync_directory(artifacts)
+            claimed = run_root.stat(follow_symlinks=False)
+            if not stat.S_ISDIR(claimed.st_mode) or run_root.is_symlink():
+                raise ValueError("claimed run persistence root has ambiguous ownership")
+            current_artifact = artifacts.stat(follow_symlinks=False)
+            if _identity(current_artifact) != artifact_identity:
+                raise ValueError("artifact root changed identity during run claim")
+            run_root_identity = _identity(claimed)
+
+        try:
+            current_run_root = run_root.stat(follow_symlinks=False)
+        except OSError as exc:
+            raise ValueError("claimed run persistence root is no longer reachable") from exc
+        if (
+            run_root.is_symlink()
+            or not stat.S_ISDIR(current_run_root.st_mode)
+            or _identity(current_run_root) != run_root_identity
+        ):
+            raise ValueError("claimed run persistence root changed identity before state binding")
+        current_artifact = artifacts.stat(follow_symlinks=False)
+        if not stat.S_ISDIR(current_artifact.st_mode) or _identity(current_artifact) != artifact_identity:
+            raise ValueError("artifact root changed identity before state binding")
+
+        return cls(
+            run_root / "state.json",
+            expected_parent_identity=run_root_identity,
+            create_parent=False,
+        )
 
     @property
     def parent_identity(self) -> tuple[int, int] | None:
