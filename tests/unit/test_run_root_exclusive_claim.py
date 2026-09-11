@@ -122,7 +122,7 @@ def test_fresh_claim_creates_shared_persistence_parent_before_run_root(tmp_path:
     assert StateStore(store.path).load().run_id == state.run_id
 
 
-def test_existing_run_root_requires_load_before_any_update(tmp_path: Path) -> None:
+def test_existing_run_root_cannot_be_adopted_by_exclusive_store(tmp_path: Path) -> None:
     workspace = tmp_path / "sut"
     workspace.mkdir()
     state_path, historical_state, _journal, _runtime = _historical_state(
@@ -143,7 +143,14 @@ def test_existing_run_root_requires_load_before_any_update(tmp_path: Path) -> No
 
     loaded = reopened.load()
     loaded.phase = "RECOVERED"
-    reopened.save(loaded)
+    with pytest.raises(FileExistsError, match="cannot be adopted"):
+        reopened.save(loaded)
+    assert state_path.read_bytes() == historical_state
+
+    recovery_store = StateStore(state_path)
+    recovered = recovery_store.load()
+    recovered.phase = "RECOVERED"
+    recovery_store.save(recovered)
     assert StateStore(state_path).load().phase == "RECOVERED"
 
 
