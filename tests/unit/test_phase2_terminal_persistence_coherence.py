@@ -78,14 +78,12 @@ def test_final_runtime_persistence_failure_supersedes_prior_finished_status(
     assert persist_attempts == 1
     persisted = state_store.load()
     assert persisted.terminal_status is TerminalStatus.INFRASTRUCTURE_FAILURE
-    assert "runtime metadata persistence could not be guaranteed" in (
-        persisted.terminal_reason or ""
-    ).lower()
+    assert (
+        "runtime metadata persistence could not be guaranteed"
+        in (persisted.terminal_reason or "").lower()
+    )
 
-    records = [
-        json.loads(line)
-        for line in journal.path.read_text(encoding="utf-8").splitlines()
-    ]
+    records = [json.loads(line) for line in journal.path.read_text(encoding="utf-8").splitlines()]
     assert [record["event"] for record in records] == [
         "agent_run_finished",
         "terminal_runtime_metadata_persistence_failed",
@@ -143,17 +141,13 @@ def test_terminal_correction_journal_ambiguity_is_not_replayed_and_is_canonical(
 
     persisted = state_store.load()
     assert persisted.terminal_status is TerminalStatus.INFRASTRUCTURE_FAILURE
-    assert "terminal journal persistence could not be guaranteed" in (
-        persisted.terminal_reason or ""
-    ).lower()
-    assert "terminal_runtime_metadata_persistence_failed" in (
-        persisted.terminal_reason or ""
+    assert (
+        "terminal journal persistence could not be guaranteed"
+        in (persisted.terminal_reason or "").lower()
     )
+    assert "terminal_runtime_metadata_persistence_failed" in (persisted.terminal_reason or "")
 
-    records = [
-        json.loads(line)
-        for line in journal.path.read_text(encoding="utf-8").splitlines()
-    ]
+    records = [json.loads(line) for line in journal.path.read_text(encoding="utf-8").splitlines()]
     assert [record["event"] for record in records] == ["agent_run_finished"]
     assert records[0]["payload"]["terminal_status"] == TerminalStatus.SUCCESS.value
     assert journal.verify()["valid"] is True
@@ -185,10 +179,7 @@ def test_runtime_persistence_failure_without_finish_event_has_no_supersession_cl
     assert persist_attempts == 1
     persisted = state_store.load()
     assert persisted.terminal_status is TerminalStatus.INFRASTRUCTURE_FAILURE
-    records = [
-        json.loads(line)
-        for line in journal.path.read_text(encoding="utf-8").splitlines()
-    ]
+    records = [json.loads(line) for line in journal.path.read_text(encoding="utf-8").splitlines()]
     assert [record["event"] for record in records] == [
         "terminal_runtime_metadata_persistence_failed"
     ]
