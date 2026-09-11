@@ -331,6 +331,7 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
         verified_journal,
         expected_commit=expected_commit,
     )
+    del verified_journal
 
     try:
         if run_root_identity is not None:
@@ -408,7 +409,6 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
             "reason": "journal changed after runtime authority was read",
         }
     del final_journal
-    del verified_journal
 
     if "pending_mutation" not in runtime_metadata:
         return {
