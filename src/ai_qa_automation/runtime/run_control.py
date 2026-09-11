@@ -1180,25 +1180,26 @@ def _reconcile_runtime_metadata_publication(
             # directory is the only side effect used to close a rename/fsync
             # ambiguity after exact bytes have already been observed.
             os.fsync(directory_fd)
+            if (
+                pin_directory_identity(
+                    run_root,
+                    label="runtime metadata reconciliation directory",
+                )
+                != expected_parent_identity
+            ):
+                return False
+            final_observed = read_bytes_confined(
+                run_root,
+                path.name,
+                max_bytes=_MAX_RUNTIME_METADATA_BYTES,
+                label="runtime metadata reconciliation",
+                expected_root_identity=expected_parent_identity,
+            )
+            pinned = os.fstat(directory_fd)
+            if (pinned.st_dev, pinned.st_ino) != expected_parent_identity:
+                return False
         finally:
             os.close(directory_fd)
-
-        if (
-            pin_directory_identity(
-                run_root,
-                label="runtime metadata reconciliation directory",
-            )
-            != expected_parent_identity
-        ):
-            return False
-
-        final_observed = read_bytes_confined(
-            run_root,
-            path.name,
-            max_bytes=_MAX_RUNTIME_METADATA_BYTES,
-            label="runtime metadata reconciliation",
-            expected_root_identity=expected_parent_identity,
-        )
     except (OSError, RuntimeError, ValueError):
         return False
     return final_observed == rendered_bytes
