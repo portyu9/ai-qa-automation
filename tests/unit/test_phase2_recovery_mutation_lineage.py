@@ -165,6 +165,7 @@ def _persist_closed_run(
     tmp_path: Path,
     *,
     files_modified: list[str],
+    change_revision: int = 1,
 ) -> Path:
     if not descriptor_relative_authority_supported():
         pytest.skip("workspace root recovery authority is unavailable")
@@ -175,9 +176,9 @@ def _persist_closed_run(
         run_id=_RUN_ID,
         objective="prove persisted recovery mutation lineage",
         workspace=str(workspace),
-        change_revision=1,
+        change_revision=change_revision,
         files_modified=files_modified,
-        validation_results=_trusted_validations(),
+        validation_results=_trusted_validations() if change_revision == 1 else [],
     )
     StateStore(run_dir / "state.json").save(state)
     journal = RunJournal(run_dir / "journal.jsonl")
@@ -243,6 +244,30 @@ def test_recovery_denies_closed_validation_with_incoherent_modified_file_lineage
             "modified-file lineage."
         ),
         "mutation_path": _MUTATION_PATH,
+    }
+    assert result["resume_policy"] == "manual-review-required-before-new-session"
+
+
+def test_recovery_denies_revision_zero_with_modified_file_lineage(tmp_path: Path) -> None:
+    result = inspect_recovery(
+        _persist_closed_run(
+            tmp_path,
+            files_modified=[_MUTATION_PATH],
+            change_revision=0,
+        )
+    )
+
+    assert result["recoverable"] is True
+    assert result["change_revision"] == 0
+    assert result["revision_closed"] is False
+    assert result["revision_closure"] == {
+        "closed": False,
+        "code": "canonical_mutation_lineage_mismatch",
+        "reason": (
+            "Persisted revision zero contains modified-file lineage without a canonical changed "
+            "revision."
+        ),
+        "mutation_path": None,
     }
     assert result["resume_policy"] == "manual-review-required-before-new-session"
 
