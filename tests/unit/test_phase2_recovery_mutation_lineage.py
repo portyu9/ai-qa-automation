@@ -204,9 +204,7 @@ def _persist_closed_run(
 
 
 def test_recovery_accepts_closed_revision_when_mutation_path_is_canonical(tmp_path: Path) -> None:
-    result = inspect_recovery(
-        _persist_closed_run(tmp_path, files_modified=[_MUTATION_PATH])
-    )
+    result = inspect_recovery(_persist_closed_run(tmp_path, files_modified=[_MUTATION_PATH]))
 
     assert result["recoverable"] is True
     assert result["revision_closed"] is True
@@ -230,9 +228,7 @@ def test_recovery_denies_closed_validation_with_incoherent_modified_file_lineage
     tmp_path: Path,
     files_modified: list[str],
 ) -> None:
-    result = inspect_recovery(
-        _persist_closed_run(tmp_path, files_modified=files_modified)
-    )
+    result = inspect_recovery(_persist_closed_run(tmp_path, files_modified=files_modified))
 
     assert result["recoverable"] is True
     assert result["revision_closed"] is False
