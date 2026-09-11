@@ -184,6 +184,20 @@ def _append_mutation_prepared(
     )
 
 
+def _append_committed_mutation(
+    journal: RunJournal,
+    *,
+    path: str,
+    change_revision_before: int,
+) -> None:
+    _append_mutation_prepared(
+        journal,
+        path=path,
+        change_revision_before=change_revision_before,
+    )
+    journal.append("mutation_committed", path=path)
+
+
 def _persist_closed_run(
     tmp_path: Path,
     *,
@@ -226,13 +240,25 @@ def _persist_closed_run(
                 )
         elif journal_mode != "committed":  # pragma: no cover - test helper guard
             raise ValueError(f"unsupported revision-zero journal mode: {journal_mode}")
+    elif journal_mode == "full_history":
+        for revision_before, path in enumerate(files_modified):
+            _append_committed_mutation(
+                journal,
+                path=path,
+                change_revision_before=revision_before,
+            )
     elif journal_mode == "stale_prior_commit":
-        _append_mutation_prepared(
+        _append_committed_mutation(
             journal,
             path=_PRIOR_MUTATION_PATH,
             change_revision_before=0,
         )
-        journal.append("mutation_committed", path=_PRIOR_MUTATION_PATH)
+    elif journal_mode == "current_commit_without_prior_history":
+        _append_committed_mutation(
+            journal,
+            path=_MUTATION_PATH,
+            change_revision_before=change_revision - 1,
+        )
     else:
         _append_mutation_prepared(
             journal,
@@ -410,18 +436,63 @@ def test_recovery_accepts_revision_zero_after_pre_revision_mutation_attempt_was_
     assert result["resume_policy"] == "safe-to-start-a-new-agent-session-from-persisted-evidence"
 
 
-def test_recovery_accepts_current_closure_path_among_historical_modified_paths(
+def test_recovery_accepts_continuous_historical_committed_mutation_lineage(
     tmp_path: Path,
 ) -> None:
     result = inspect_recovery(
         _persist_closed_run(
             tmp_path,
             files_modified=[_PRIOR_MUTATION_PATH, _MUTATION_PATH],
+            change_revision=2,
+            journal_mode="full_history",
         )
     )
 
+    assert result["journal_mutation_lifecycle"]["committed_count"] == 2
+    assert result["journal_mutation_lifecycle"]["expected_commit_count"] == 1
     assert result["revision_closed"] is True
     assert result["resume_policy"] == "safe-to-start-a-new-agent-session-from-persisted-evidence"
+
+
+def test_recovery_denies_current_commit_when_prior_committed_revision_is_missing(
+    tmp_path: Path,
+) -> None:
+    result = inspect_recovery(
+        _persist_closed_run(
+            tmp_path,
+            files_modified=[_PRIOR_MUTATION_PATH, _MUTATION_PATH],
+            change_revision=2,
+            journal_mode="current_commit_without_prior_history",
+        )
+    )
+
+    assert result["journal_mutation_lifecycle"]["valid"] is False
+    assert (
+        result["journal_mutation_lifecycle"]["code"]
+        == "journal_mutation_commit_revision_discontinuity"
+    )
+    assert result["revision_closed"] is False
+    assert result["revision_closure"]["code"] == "journal_mutation_lifecycle_mismatch"
+    assert result["resume_policy"] == "manual-review-required-before-new-session"
+
+
+def test_recovery_denies_commit_history_beyond_canonical_revision_accounting(
+    tmp_path: Path,
+) -> None:
+    result = inspect_recovery(
+        _persist_closed_run(
+            tmp_path,
+            files_modified=[_PRIOR_MUTATION_PATH, _MUTATION_PATH, "tests/test_extra.py"],
+            change_revision=2,
+            journal_mode="full_history",
+        )
+    )
+
+    assert result["journal_mutation_lifecycle"]["valid"] is True
+    assert result["journal_mutation_lifecycle"]["committed_count"] == 3
+    assert result["revision_closed"] is False
+    assert result["revision_closure"]["code"] == "journal_mutation_revision_count_mismatch"
+    assert result["resume_policy"] == "manual-review-required-before-new-session"
 
 
 def test_recovery_denies_crash_window_after_runtime_pending_clear_before_commit_event(
@@ -457,7 +528,7 @@ def test_recovery_denies_rollback_when_canonical_state_claims_committed_closed_r
     assert result["journal_mutation_lifecycle"]["rolled_back_count"] == 1
     assert result["journal_mutation_lifecycle"]["expected_commit_count"] == 0
     assert result["revision_closed"] is False
-    assert result["revision_closure"]["code"] == "journal_mutation_commit_missing"
+    assert result["revision_closure"]["code"] == "journal_mutation_revision_count_mismatch"
     assert result["resume_policy"] == "manual-review-required-before-new-session"
 
 
@@ -476,7 +547,7 @@ def test_recovery_denies_stale_prior_revision_commit_for_current_closed_revision
     assert result["journal_mutation_lifecycle"]["committed_count"] == 1
     assert result["journal_mutation_lifecycle"]["expected_commit_count"] == 0
     assert result["revision_closed"] is False
-    assert result["revision_closure"]["code"] == "journal_mutation_commit_missing"
+    assert result["revision_closure"]["code"] == "journal_mutation_revision_count_mismatch"
     assert result["resume_policy"] == "manual-review-required-before-new-session"
 
 
