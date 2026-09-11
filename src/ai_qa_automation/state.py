@@ -209,7 +209,10 @@ class StateStore:
             if self._descriptor_relative_parent
             else _identity(parent_status)
         )
-        if claimed_parent_identity is not None and self._parent_identity != claimed_parent_identity:
+        if (
+            claimed_parent_identity is not None
+            and self._parent_identity != claimed_parent_identity
+        ):
             raise ValueError("state directory changed identity after exclusive run-root claim")
         if (
             expected_parent_identity is not None
@@ -218,7 +221,7 @@ class StateStore:
             raise ValueError("state directory does not match authorized run persistence root")
         self._lock = threading.RLock()
         self._claim_parent_exclusively = claim_parent_exclusively
-        self._fresh_parent_claim = parent_created
+        self._exclusive_parent_owned = parent_created
         self._state_bound = False
         self._assert_owned()
 
@@ -284,18 +287,14 @@ class StateStore:
     def save(self, state: AgentRunState) -> None:
         with self._lock:
             self._assert_owned()
-            initial_write = not self._state_bound
-            if (
-                self._claim_parent_exclusively
-                and initial_write
-                and not self._fresh_parent_claim
-            ):
+            if self._claim_parent_exclusively and not self._exclusive_parent_owned:
                 raise FileExistsError(
                     "run persistence root was not freshly claimed; existing canonical state "
-                    "must be loaded before it can be updated"
+                    "cannot be adopted by a new-run store"
                 )
 
             rendered = self._render(state)
+            initial_write = not self._state_bound
             create_only = self._claim_parent_exclusively and initial_write
             if self._descriptor_relative_parent:
                 atomic_write_bytes_confined(
@@ -309,13 +308,11 @@ class StateStore:
                 )
                 self._revalidate_parent()
                 self._state_bound = True
-                self._fresh_parent_claim = False
                 return
 
             if create_only:
                 self._save_initial_fallback(rendered)
                 self._state_bound = True
-                self._fresh_parent_claim = False
                 return
 
             handle, raw_temp = tempfile.mkstemp(
@@ -337,7 +334,6 @@ class StateStore:
             finally:
                 temp.unlink(missing_ok=True)
             self._state_bound = True
-            self._fresh_parent_claim = False
 
     def load(self) -> AgentRunState:
         with self._lock:
@@ -366,5 +362,4 @@ class StateStore:
             parse_json_object_strict(rendered, label="canonical state")
             state = AgentRunState.model_validate_json(rendered, strict=True)
             self._state_bound = True
-            self._fresh_parent_claim = False
             return state
