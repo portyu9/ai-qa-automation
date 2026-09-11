@@ -68,6 +68,7 @@ class StateStore:
         path: Path,
         *,
         expected_parent_identity: tuple[int, int] | None = None,
+        claim_parent_exclusively: bool = False,
     ) -> None:
         requested = path.expanduser()
         if requested.is_symlink():
@@ -76,36 +77,43 @@ class StateStore:
         if raw_parent.is_symlink():
             raise ValueError("state directory is a symlink and has ambiguous ownership")
 
-        raw_persistence_root = raw_parent.parent
-        if raw_persistence_root.is_symlink():
-            raise ValueError("state persistence root is a symlink and has ambiguous ownership")
-        persistence_root_existed = raw_persistence_root.exists()
-        raw_persistence_root.mkdir(parents=True, exist_ok=True)
-        if raw_persistence_root.is_symlink():
-            raise ValueError("state persistence root became a symlink")
-        if not raw_persistence_root.is_dir():
-            raise ValueError("state persistence root must remain a regular directory")
-        persistence_root = raw_persistence_root.resolve()
-        if not persistence_root_existed:
-            fsync_directory(persistence_root.parent)
-
         parent_created = False
-        if not raw_parent.exists():
-            try:
-                # The final run-root component is the allocation boundary. Keep shared
-                # artifact-root creation separate, then claim exactly this directory with
-                # one non-recursive no-replace mkdir. A concurrent same-run winner leaves
-                # this store unbound and unable to write until existing state is loaded.
-                raw_parent.mkdir(exist_ok=False)
-                parent_created = True
-            except FileExistsError:
-                parent_created = False
+        if claim_parent_exclusively:
+            raw_persistence_root = raw_parent.parent
+            if raw_persistence_root.is_symlink():
+                raise ValueError("state persistence root is a symlink and has ambiguous ownership")
+            persistence_root_existed = raw_persistence_root.exists()
+            raw_persistence_root.mkdir(parents=True, exist_ok=True)
+            if raw_persistence_root.is_symlink():
+                raise ValueError("state persistence root became a symlink")
+            if not raw_persistence_root.is_dir():
+                raise ValueError("state persistence root must remain a regular directory")
+            persistence_root = raw_persistence_root.resolve()
+            if not persistence_root_existed:
+                fsync_directory(persistence_root.parent)
+
+            if not raw_parent.exists():
+                try:
+                    # The final run-root component is the allocation boundary. Keep shared
+                    # artifact-root creation separate, then claim exactly this directory with
+                    # one non-recursive no-replace mkdir. A concurrent same-run winner leaves
+                    # this store unbound and unable to perform an initial canonical-state write.
+                    raw_parent.mkdir(exist_ok=False)
+                    parent_created = True
+                except FileExistsError:
+                    parent_created = False
+            if parent_created:
+                fsync_directory(persistence_root)
+        else:
+            parent_existed = raw_parent.exists()
+            raw_parent.mkdir(parents=True, exist_ok=True)
+            if not parent_existed:
+                fsync_directory(raw_parent.resolve().parent)
+
         if raw_parent.is_symlink():
             raise ValueError("state directory became a symlink")
         if not raw_parent.is_dir():
             raise ValueError("state directory must remain a regular directory")
-        if parent_created:
-            fsync_directory(persistence_root)
 
         self.path = raw_parent.resolve() / requested.name
         parent_status = self.path.parent.stat(follow_symlinks=False)
@@ -123,6 +131,7 @@ class StateStore:
         ):
             raise ValueError("state directory does not match authorized run persistence root")
         self._lock = threading.RLock()
+        self._claim_parent_exclusively = claim_parent_exclusively
         self._fresh_parent_claim = parent_created
         self._state_bound = False
         self._assert_owned()
@@ -189,21 +198,26 @@ class StateStore:
     def save(self, state: AgentRunState) -> None:
         with self._lock:
             self._assert_owned()
-            if not self._state_bound and not self._fresh_parent_claim:
+            initial_write = not self._state_bound
+            if (
+                self._claim_parent_exclusively
+                and initial_write
+                and not self._fresh_parent_claim
+            ):
                 raise FileExistsError(
                     "run persistence root was not freshly claimed; existing canonical state "
                     "must be loaded before it can be updated"
                 )
 
             rendered = self._render(state)
-            initial_write = not self._state_bound
+            create_only = self._claim_parent_exclusively and initial_write
             if self._descriptor_relative_parent:
                 atomic_write_bytes_confined(
                     self.path.parent,
                     self.path.name,
                     rendered,
                     create_parents=False,
-                    create_only=initial_write,
+                    create_only=create_only,
                     label="canonical state",
                     expected_root_identity=self._parent_identity,
                 )
@@ -212,7 +226,7 @@ class StateStore:
                 self._fresh_parent_claim = False
                 return
 
-            if initial_write:
+            if create_only:
                 self._save_initial_fallback(rendered)
                 self._state_bound = True
                 self._fresh_parent_claim = False
@@ -236,6 +250,8 @@ class StateStore:
                 self._revalidate_parent()
             finally:
                 temp.unlink(missing_ok=True)
+            self._state_bound = True
+            self._fresh_parent_claim = False
 
     def load(self) -> AgentRunState:
         with self._lock:
