@@ -126,6 +126,7 @@ def _inspect_verified_journal_mutation_lifecycle(
     raw_journal: bytes,
     *,
     expected_commit: tuple[str, int] | None,
+    state_files_modified: list[str],
 ) -> dict[str, object]:
     """Interpret mutation transitions only after RunJournal verified these exact bytes."""
 
@@ -184,6 +185,14 @@ def _inspect_verified_journal_mutation_lifecycle(
         if pending is None or pending[0] != path:
             return invalid("journal_mutation_transition_without_matching_prepare")
         if event == "mutation_committed":
+            change_revision_before = pending[1]
+            if type(change_revision_before) is not int or change_revision_before != committed_count:
+                return invalid("journal_mutation_commit_revision_discontinuity")
+            if (
+                committed_count < len(state_files_modified)
+                and path != state_files_modified[committed_count]
+            ):
+                return invalid("journal_mutation_commit_path_lineage_mismatch")
             committed_count += 1
             if expected_commit is not None and pending == expected_commit:
                 expected_commit_count += 1
@@ -206,6 +215,7 @@ def _bind_closed_revision_to_journal_mutation_commit(
     closure: RevisionClosure,
     *,
     change_revision: int,
+    state_files_modified_count: int,
     journal_mutation_lifecycle: dict[str, object],
 ) -> RevisionClosure:
     """Require coherent durable mutation semantics before recovery grants revision closure."""
@@ -226,13 +236,21 @@ def _bind_closed_revision_to_journal_mutation_commit(
             "Verified journal retains an open mutation transaction while runtime authority reports none.",
             closure.mutation_path,
         )
+    committed_count = journal_mutation_lifecycle.get("committed_count")
     if change_revision == 0:
-        if journal_mutation_lifecycle.get("committed_count") == 0:
+        if committed_count == 0:
             return closure
         return RevisionClosure(
             False,
             "journal_revision_zero_commit_mismatch",
             "Verified journal contains a committed mutation while canonical state remains at revision zero.",
+            closure.mutation_path,
+        )
+    if committed_count != change_revision or committed_count != state_files_modified_count:
+        return RevisionClosure(
+            False,
+            "journal_mutation_revision_count_mismatch",
+            "Verified committed mutation lineage does not match canonical revision and modified-file accounting.",
             closure.mutation_path,
         )
     if journal_mutation_lifecycle.get("expected_commit_count") != 1:
@@ -335,6 +353,7 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
     journal_mutation_lifecycle = _inspect_verified_journal_mutation_lifecycle(
         verified_journal,
         expected_commit=expected_commit,
+        state_files_modified=state.files_modified,
     )
     del verified_journal
 
@@ -433,6 +452,7 @@ def inspect_recovery(run_dir: Path) -> dict[str, Any]:
         closure = _bind_closed_revision_to_journal_mutation_commit(
             closure,
             change_revision=state.change_revision,
+            state_files_modified_count=len(state.files_modified),
             journal_mutation_lifecycle=journal_mutation_lifecycle,
         )
     revision_closed = closure.closed
