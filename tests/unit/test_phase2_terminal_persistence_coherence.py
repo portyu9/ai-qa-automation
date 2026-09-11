@@ -7,7 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from ai_qa_automation.agent import _TerminalJournalAudit, _finish_terminal_state
+from ai_qa_automation.agent import (
+    _TerminalJournalAudit,
+    _finish_terminal_state,
+    _persist_terminal_state,
+)
 from ai_qa_automation.models import AgentRunState, TerminalStatus
 from ai_qa_automation.runtime.budget import ExecutionBudget
 from ai_qa_automation.runtime.journal import RunJournal
@@ -152,4 +156,44 @@ def test_terminal_correction_journal_ambiguity_is_not_replayed_and_is_canonical(
     ]
     assert [record["event"] for record in records] == ["agent_run_finished"]
     assert records[0]["payload"]["terminal_status"] == TerminalStatus.SUCCESS.value
+    assert journal.verify()["valid"] is True
+
+
+def test_runtime_persistence_failure_without_finish_event_has_no_supersession_claim(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state, state_store, journal, control = _terminal_subject(tmp_path)
+    state.terminal_status = TerminalStatus.BLOCKED
+    state.terminal_reason = "Workspace lease could not be acquired."
+    persist_attempts = 0
+
+    def fail_runtime_persist() -> None:
+        nonlocal persist_attempts
+        persist_attempts += 1
+        raise OSError("post-write runtime identity is ambiguous")
+
+    monkeypatch.setattr(control, "persist", fail_runtime_persist)
+
+    _persist_terminal_state(
+        state,
+        state_store,
+        control,
+        _TerminalJournalAudit(journal),
+    )
+
+    assert persist_attempts == 1
+    persisted = state_store.load()
+    assert persisted.terminal_status is TerminalStatus.INFRASTRUCTURE_FAILURE
+    records = [
+        json.loads(line)
+        for line in journal.path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [record["event"] for record in records] == [
+        "terminal_runtime_metadata_persistence_failed"
+    ]
+    correction = records[0]["payload"]
+    assert correction["terminal_status"] == TerminalStatus.INFRASTRUCTURE_FAILURE.value
+    assert correction["error_type"] == "OSError"
+    assert "supersedes_event" not in correction
     assert journal.verify()["valid"] is True
