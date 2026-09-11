@@ -97,6 +97,25 @@ def test_fresh_run_root_claim_allows_initial_and_subsequent_state_writes(tmp_pat
     assert loaded.phase == "RUNNING"
 
 
+def test_fresh_claim_creates_shared_persistence_parent_before_run_root(tmp_path: Path) -> None:
+    workspace = tmp_path / "sut"
+    workspace.mkdir()
+    artifacts = tmp_path / "nested" / "artifacts"
+    state = AgentRunState(
+        run_id="run-nested-parent",
+        session_id="session-nested-parent",
+        objective="separate shared persistence parent from run claim",
+        workspace=str(workspace),
+    )
+
+    store = StateStore(artifacts / state.run_id / "state.json")
+    store.save(state)
+
+    assert artifacts.is_dir()
+    assert store.path.parent.parent == artifacts.resolve()
+    assert StateStore(store.path).load().run_id == state.run_id
+
+
 def test_existing_run_root_requires_load_before_any_update(tmp_path: Path) -> None:
     workspace = tmp_path / "sut"
     workspace.mkdir()
