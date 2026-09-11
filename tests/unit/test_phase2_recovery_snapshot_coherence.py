@@ -68,8 +68,8 @@ def _pending_runtime_payload(runtime_payload: dict[str, object]) -> dict[str, ob
 
 
 def test_recovery_accepts_unchanged_quiescent_revision_zero(tmp_path: Path) -> None:
-    run_dir, _workspace, _state_path, _runtime_path, _runtime_payload = (
-        _persist_revision_zero_run(tmp_path)
+    run_dir, _workspace, _state_path, _runtime_path, _runtime_payload = _persist_revision_zero_run(
+        tmp_path
     )
 
     result = inspect_recovery(run_dir)
@@ -83,8 +83,8 @@ def test_recovery_rejects_runtime_change_during_final_journal_revalidation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    run_dir, _workspace, _state_path, runtime_path, runtime_payload = (
-        _persist_revision_zero_run(tmp_path)
+    run_dir, _workspace, _state_path, runtime_path, runtime_payload = _persist_revision_zero_run(
+        tmp_path
     )
     real_read_journal_snapshot = recovery_module._read_journal_snapshot
     journal_reads = 0
@@ -128,8 +128,8 @@ def test_recovery_rejects_canonical_state_change_during_inspection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    run_dir, _workspace, state_path, _runtime_path, _runtime_payload = (
-        _persist_revision_zero_run(tmp_path)
+    run_dir, _workspace, state_path, _runtime_path, _runtime_payload = _persist_revision_zero_run(
+        tmp_path
     )
     real_read_journal_snapshot = recovery_module._read_journal_snapshot
     journal_reads = 0
@@ -168,8 +168,8 @@ def test_recovery_rejects_canonical_state_change_during_inspection(
 
 
 def test_recovery_refuses_workspace_with_active_exclusive_lease(tmp_path: Path) -> None:
-    run_dir, workspace, _state_path, _runtime_path, _runtime_payload = (
-        _persist_revision_zero_run(tmp_path)
+    run_dir, workspace, _state_path, _runtime_path, _runtime_payload = _persist_revision_zero_run(
+        tmp_path
     )
     try:
         import fcntl
