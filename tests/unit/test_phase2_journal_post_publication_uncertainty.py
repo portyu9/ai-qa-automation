@@ -13,7 +13,9 @@ from ai_qa_automation.runtime.journal import RunJournal
 
 def _require_descriptor_authority() -> None:
     if not descriptor_relative_authority_supported():
-        pytest.skip("post-publication journal authority test requires descriptor-relative authority")
+        pytest.skip(
+            "post-publication journal authority test requires descriptor-relative authority"
+        )
 
 
 def test_post_publication_parent_revalidation_failure_latches_uncertain_journal(
@@ -33,10 +35,16 @@ def test_post_publication_parent_revalidation_failure_latches_uncertain_journal(
         calls += 1
         real_revalidate(parent_fd)
         if calls == 4:
-            raise OSError(errno.EIO, "post-publication parent revalidation became ambiguous")
+            raise OSError(
+                errno.EIO,
+                "post-publication parent revalidation became ambiguous",
+            )
 
     monkeypatch.setattr(journal, "_revalidate_parent", fail_after_publication)
-    with pytest.raises(OSError, match="post-publication parent revalidation became ambiguous"):
+    with pytest.raises(
+        OSError,
+        match="post-publication parent revalidation became ambiguous",
+    ):
         journal.append("published-before-parent-revalidation-failure")
 
     monkeypatch.setattr(journal, "_revalidate_parent", real_revalidate)
