@@ -95,6 +95,41 @@ def test_post_publication_parent_close_failure_latches_uncertain_journal(
     assert journal.verify() == persisted
 
 
+def test_post_publication_parent_close_interrupt_latches_uncertain_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_descriptor_authority()
+    path = tmp_path / "journal.jsonl"
+    journal = RunJournal(path)
+    first = journal.append("first")
+    real_close = os.close
+    calls = 0
+
+    def parent_close_then_interrupt(fd: int) -> None:
+        nonlocal calls
+        calls += 1
+        real_close(fd)
+        if calls == 2:
+            raise KeyboardInterrupt("post-publication parent close interrupted")
+
+    monkeypatch.setattr(journal_module.os, "close", parent_close_then_interrupt)
+    with pytest.raises(KeyboardInterrupt, match="post-publication parent close interrupted"):
+        journal.append("published-before-parent-close-interruption")
+
+    monkeypatch.setattr(journal_module.os, "close", real_close)
+    persisted = journal.verify()
+    assert persisted["valid"] is True
+    assert persisted["events"] == 2
+    assert journal.event_count == 1
+    assert journal.head_hash == first
+
+    with pytest.raises(OSError, match="run journal write state is uncertain"):
+        journal.append("must-not-continue-from-stale-authority")
+
+    assert journal.verify() == persisted
+
+
 def test_pre_publication_parent_failure_remains_retryable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

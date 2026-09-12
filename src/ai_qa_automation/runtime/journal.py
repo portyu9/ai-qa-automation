@@ -327,7 +327,7 @@ class RunJournal:
                 raise ValueError("run-journal event exceeds line-size bound")
 
             flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0)
-            publication_completed = False
+            tail_mutation_unreconciled = False
             try:
                 with self._pinned_parent() as parent_fd:
                     self._assert_owned_path(parent_fd)
@@ -344,6 +344,7 @@ class RunJournal:
                             raise BudgetExceededError("run-journal byte budget exhausted")
                         written_bytes = 0
                         try:
+                            tail_mutation_unreconciled = True
                             view = memoryview(rendered_bytes)
                             while view:
                                 written = os.write(fd, view)
@@ -414,6 +415,7 @@ class RunJournal:
                                         os.fsync(parent_fd)
                                     else:
                                         fsync_directory(self.path.parent)
+                                tail_mutation_unreconciled = False
                             except BaseException as rollback_exc:
                                 self._write_uncertain = True
                                 raise OSError(
@@ -428,13 +430,13 @@ class RunJournal:
                             raise OSError(
                                 "run journal descriptor close could not be proven"
                             ) from close_exc
-                        publication_completed = True
+                self._seq += 1
+                self._head = record_hash
+                tail_mutation_unreconciled = False
             except BaseException:
-                if publication_completed:
+                if tail_mutation_unreconciled:
                     self._write_uncertain = True
                 raise
-            self._seq += 1
-            self._head = record_hash
         if isinstance(safe_payload, dict):
             _record_event_metrics(event, safe_payload)
         return record_hash
