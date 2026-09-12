@@ -93,3 +93,38 @@ def test_post_publication_parent_close_failure_latches_uncertain_journal(
         journal.append("must-not-continue-from-stale-authority")
 
     assert journal.verify() == persisted
+
+
+def test_pre_publication_parent_failure_remains_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_descriptor_authority()
+    path = tmp_path / "journal.jsonl"
+    journal = RunJournal(path)
+    first = journal.append("first")
+
+    real_revalidate = journal._revalidate_parent
+    calls = 0
+
+    def fail_before_publication(parent_fd: int | None = None) -> None:
+        nonlocal calls
+        calls += 1
+        real_revalidate(parent_fd)
+        if calls == 2:
+            raise OSError(errno.EIO, "pre-publication parent revalidation failed")
+
+    monkeypatch.setattr(journal, "_revalidate_parent", fail_before_publication)
+    with pytest.raises(OSError, match="pre-publication parent revalidation failed"):
+        journal.append("must-not-publish")
+
+    monkeypatch.setattr(journal, "_revalidate_parent", real_revalidate)
+    assert journal.event_count == 1
+    assert journal.head_hash == first
+    assert journal.verify() == {"valid": True, "events": 1, "head_hash": first}
+
+    second = journal.append("retry-after-pre-publication-failure")
+    assert second != first
+    assert journal.event_count == 2
+    assert journal.head_hash == second
+    assert journal.verify() == {"valid": True, "events": 2, "head_hash": second}
