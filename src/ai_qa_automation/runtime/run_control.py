@@ -1140,6 +1140,71 @@ def _owned_atomic_target(path: Path) -> Path:
     return target
 
 
+def _render_runtime_metadata(payload: dict[str, Any]) -> bytes:
+    rendered_bytes = json.dumps(payload, indent=2, sort_keys=True, default=str).encode("utf-8")
+    if len(rendered_bytes) > _MAX_RUNTIME_METADATA_BYTES:
+        raise ValueError("runtime metadata exceeds persistence size bound")
+    return rendered_bytes
+
+
+def _reconcile_runtime_metadata_publication(
+    path: Path,
+    rendered_bytes: bytes,
+    *,
+    expected_parent_identity: tuple[int, int] | None,
+) -> bool:
+    """Prove an ambiguous runtime publication without replaying the content write."""
+
+    if not descriptor_relative_authority_supported() or expected_parent_identity is None:
+        return False
+
+    run_root = path.parent.expanduser().absolute()
+    try:
+        observed = read_bytes_confined(
+            run_root,
+            path.name,
+            max_bytes=_MAX_RUNTIME_METADATA_BYTES,
+            label="runtime metadata reconciliation",
+            expected_root_identity=expected_parent_identity,
+        )
+        if observed != rendered_bytes:
+            return False
+
+        directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        directory_fd = os.open(run_root, directory_flags)
+        try:
+            opened = os.fstat(directory_fd)
+            if (opened.st_dev, opened.st_ino) != expected_parent_identity:
+                return False
+            # The content write is never replayed. A fresh fsync on the pinned
+            # directory is the only side effect used to close a rename/fsync
+            # ambiguity after exact bytes have already been observed.
+            os.fsync(directory_fd)
+            if (
+                pin_directory_identity(
+                    run_root,
+                    label="runtime metadata reconciliation directory",
+                )
+                != expected_parent_identity
+            ):
+                return False
+            final_observed = read_bytes_confined(
+                run_root,
+                path.name,
+                max_bytes=_MAX_RUNTIME_METADATA_BYTES,
+                label="runtime metadata reconciliation",
+                expected_root_identity=expected_parent_identity,
+            )
+            pinned = os.fstat(directory_fd)
+            if (pinned.st_dev, pinned.st_ino) != expected_parent_identity:
+                return False
+        finally:
+            os.close(directory_fd)
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return final_observed == rendered_bytes
+
+
 def atomic_write_json(
     path: Path,
     payload: dict[str, Any],
@@ -1147,26 +1212,32 @@ def atomic_write_json(
     expected_parent_identity: tuple[int, int] | None = None,
 ) -> None:
     path = _owned_atomic_target(path)
-    rendered_bytes = json.dumps(payload, indent=2, sort_keys=True, default=str).encode("utf-8")
-    if len(rendered_bytes) > _MAX_RUNTIME_METADATA_BYTES:
-        raise ValueError("runtime metadata exceeds persistence size bound")
+    rendered_bytes = _render_runtime_metadata(payload)
     if descriptor_relative_authority_supported():
         current_identity = pin_directory_identity(path.parent, label="runtime metadata directory")
         if expected_parent_identity is not None and current_identity != expected_parent_identity:
             raise RuntimeError("runtime metadata directory changed identity since authorization")
-        atomic_write_bytes_confined(
-            path.parent,
-            path.name,
-            rendered_bytes,
-            create_parents=False,
-            create_only=False,
-            label="runtime metadata",
-            expected_root_identity=(
-                expected_parent_identity
-                if expected_parent_identity is not None
-                else current_identity
-            ),
+        authorized_identity = (
+            expected_parent_identity if expected_parent_identity is not None else current_identity
         )
+        try:
+            atomic_write_bytes_confined(
+                path.parent,
+                path.name,
+                rendered_bytes,
+                create_parents=False,
+                create_only=False,
+                label="runtime metadata",
+                expected_root_identity=authorized_identity,
+            )
+        except (OSError, RuntimeError, ValueError):
+            if _reconcile_runtime_metadata_publication(
+                path,
+                rendered_bytes,
+                expected_parent_identity=authorized_identity,
+            ):
+                return
+            raise
         return
     if expected_parent_identity is not None:
         before = path.parent.stat(follow_symlinks=False)
