@@ -327,107 +327,116 @@ class RunJournal:
                 raise ValueError("run-journal event exceeds line-size bound")
 
             flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0)
-            with self._pinned_parent() as parent_fd:
-                self._assert_owned_path(parent_fd)
-                fd = self._open_entry(parent_fd, flags)
-                try:
-                    initial = os.fstat(fd)
-                    self._assert_opened_entry_current(
-                        parent_fd=parent_fd,
-                        opened=initial,
-                        label="append open",
-                    )
-                    self._revalidate_parent(parent_fd)
-                    if initial.st_size + len(rendered_bytes) > _MAX_JOURNAL_BYTES:
-                        raise BudgetExceededError("run-journal byte budget exhausted")
-                    written_bytes = 0
+            tail_mutation_unreconciled = False
+            try:
+                with self._pinned_parent() as parent_fd:
+                    self._assert_owned_path(parent_fd)
+                    fd = self._open_entry(parent_fd, flags)
                     try:
-                        view = memoryview(rendered_bytes)
-                        while view:
-                            written = os.write(fd, view)
-                            if written <= 0:
-                                raise OSError(
-                                    errno.EIO,
-                                    "run-journal append made no forward progress",
-                                )
-                            written_bytes += written
-                            view = view[written:]
-                        # Journal lineage is authority-bearing in every runtime mode.
-                        # Regulated mode may add policy, but durability is not optional.
-                        os.fsync(fd)
-                        final_opened = os.fstat(fd)
-                        final_current = self._assert_opened_entry_current(
+                        initial = os.fstat(fd)
+                        self._assert_opened_entry_current(
                             parent_fd=parent_fd,
-                            opened=final_opened,
-                            label="append",
+                            opened=initial,
+                            label="append open",
                         )
-                        expected_size = initial.st_size + len(rendered_bytes)
-                        if (
-                            final_opened.st_size != expected_size
-                            or final_current.st_size != expected_size
-                        ):
-                            raise RuntimeError("run journal size changed during append")
-                        if initial.st_size == 0:
-                            if parent_fd is not None:
-                                os.fsync(parent_fd)
-                            else:
-                                fsync_directory(self.path.parent)
-                    except BaseException:
+                        self._revalidate_parent(parent_fd)
+                        if initial.st_size + len(rendered_bytes) > _MAX_JOURNAL_BYTES:
+                            raise BudgetExceededError("run-journal byte budget exhausted")
+                        written_bytes = 0
                         try:
-                            rollback_opened = os.fstat(fd)
-                            rollback_current = self._assert_opened_entry_current(
-                                parent_fd=parent_fd,
-                                opened=rollback_opened,
-                                label="append rollback preflight",
-                            )
-                            self._revalidate_parent(parent_fd)
-                            expected_partial_size = initial.st_size + written_bytes
-                            if (
-                                rollback_opened.st_size != expected_partial_size
-                                or rollback_current.st_size != expected_partial_size
-                            ):
-                                raise OSError(
-                                    errno.EIO,
-                                    "run-journal append tail changed before rollback",
-                                )
-                            os.ftruncate(fd, initial.st_size)
+                            tail_mutation_unreconciled = True
+                            view = memoryview(rendered_bytes)
+                            while view:
+                                written = os.write(fd, view)
+                                if written <= 0:
+                                    raise OSError(
+                                        errno.EIO,
+                                        "run-journal append made no forward progress",
+                                    )
+                                written_bytes += written
+                                view = view[written:]
+                            # Journal lineage is authority-bearing in every runtime mode.
+                            # Regulated mode may add policy, but durability is not optional.
                             os.fsync(fd)
-                            rolled_back = os.fstat(fd)
-                            current = self._assert_opened_entry_current(
+                            final_opened = os.fstat(fd)
+                            final_current = self._assert_opened_entry_current(
                                 parent_fd=parent_fd,
-                                opened=rolled_back,
-                                label="append rollback",
+                                opened=final_opened,
+                                label="append",
                             )
-                            self._revalidate_parent(parent_fd)
+                            expected_size = initial.st_size + len(rendered_bytes)
                             if (
-                                rolled_back.st_size != initial.st_size
-                                or current.st_size != initial.st_size
+                                final_opened.st_size != expected_size
+                                or final_current.st_size != expected_size
                             ):
-                                raise OSError(
-                                    errno.EIO,
-                                    "run-journal rollback did not restore the prior length",
-                                )
+                                raise RuntimeError("run journal size changed during append")
                             if initial.st_size == 0:
                                 if parent_fd is not None:
                                     os.fsync(parent_fd)
                                 else:
                                     fsync_directory(self.path.parent)
-                        except BaseException as rollback_exc:
+                        except BaseException:
+                            try:
+                                rollback_opened = os.fstat(fd)
+                                rollback_current = self._assert_opened_entry_current(
+                                    parent_fd=parent_fd,
+                                    opened=rollback_opened,
+                                    label="append rollback preflight",
+                                )
+                                self._revalidate_parent(parent_fd)
+                                expected_partial_size = initial.st_size + written_bytes
+                                if (
+                                    rollback_opened.st_size != expected_partial_size
+                                    or rollback_current.st_size != expected_partial_size
+                                ):
+                                    raise OSError(
+                                        errno.EIO,
+                                        "run-journal append tail changed before rollback",
+                                    )
+                                os.ftruncate(fd, initial.st_size)
+                                os.fsync(fd)
+                                rolled_back = os.fstat(fd)
+                                current = self._assert_opened_entry_current(
+                                    parent_fd=parent_fd,
+                                    opened=rolled_back,
+                                    label="append rollback",
+                                )
+                                self._revalidate_parent(parent_fd)
+                                if (
+                                    rolled_back.st_size != initial.st_size
+                                    or current.st_size != initial.st_size
+                                ):
+                                    raise OSError(
+                                        errno.EIO,
+                                        "run-journal rollback did not restore the prior length",
+                                    )
+                                if initial.st_size == 0:
+                                    if parent_fd is not None:
+                                        os.fsync(parent_fd)
+                                    else:
+                                        fsync_directory(self.path.parent)
+                                tail_mutation_unreconciled = False
+                            except BaseException as rollback_exc:
+                                self._write_uncertain = True
+                                raise OSError(
+                                    "run journal append failed and rollback could not be durably proven"
+                                ) from rollback_exc
+                            raise
+                    finally:
+                        try:
+                            os.close(fd)
+                        except BaseException as close_exc:
                             self._write_uncertain = True
                             raise OSError(
-                                "run journal append failed and rollback could not be durably proven"
-                            ) from rollback_exc
-                        raise
-                finally:
-                    try:
-                        os.close(fd)
-                    except BaseException as close_exc:
-                        self._write_uncertain = True
-                        raise OSError(
-                            "run journal descriptor close could not be proven"
-                        ) from close_exc
-            self._seq += 1
-            self._head = record_hash
+                                "run journal descriptor close could not be proven"
+                            ) from close_exc
+                self._seq += 1
+                self._head = record_hash
+                tail_mutation_unreconciled = False
+            except BaseException:
+                if tail_mutation_unreconciled:
+                    self._write_uncertain = True
+                raise
         if isinstance(safe_payload, dict):
             _record_event_metrics(event, safe_payload)
         return record_hash
