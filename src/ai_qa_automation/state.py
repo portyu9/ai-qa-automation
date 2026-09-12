@@ -292,6 +292,57 @@ class StateStore:
                 os.close(handle)
             temp.unlink(missing_ok=True)
 
+    def _reconcile_publication(self, rendered: bytes) -> bool:
+        """Prove one ambiguous replacement publication without replaying the state write."""
+
+        if not self._descriptor_relative_parent:
+            return False
+        expected_parent_identity = self._parent_identity
+        try:
+            observed = read_bytes_confined(
+                self.path.parent,
+                self.path.name,
+                max_bytes=_MAX_STATE_BYTES,
+                label="canonical state reconciliation",
+                expected_root_identity=expected_parent_identity,
+            )
+            if observed != rendered:
+                return False
+
+            directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+            directory_fd = os.open(self.path.parent, directory_flags)
+            try:
+                opened = os.fstat(directory_fd)
+                if _identity(opened) != expected_parent_identity:
+                    return False
+                # The canonical state write is never replayed. A fresh fsync on
+                # the pinned directory closes rename/fsync ambiguity only after
+                # the exact attempted bytes are observed at the authorized path.
+                os.fsync(directory_fd)
+                if (
+                    pin_directory_identity(
+                        self.path.parent,
+                        label="canonical state reconciliation directory",
+                    )
+                    != expected_parent_identity
+                ):
+                    return False
+                final_observed = read_bytes_confined(
+                    self.path.parent,
+                    self.path.name,
+                    max_bytes=_MAX_STATE_BYTES,
+                    label="canonical state reconciliation",
+                    expected_root_identity=expected_parent_identity,
+                )
+                pinned = os.fstat(directory_fd)
+                if _identity(pinned) != expected_parent_identity:
+                    return False
+            finally:
+                os.close(directory_fd)
+        except (OSError, RuntimeError, ValueError):
+            return False
+        return final_observed == rendered
+
     def save(self, state: AgentRunState) -> None:
         with self._lock:
             self._assert_owned()
@@ -305,16 +356,20 @@ class StateStore:
             initial_write = not self._state_bound
             create_only = self._claim_parent_exclusively and initial_write
             if self._descriptor_relative_parent:
-                atomic_write_bytes_confined(
-                    self.path.parent,
-                    self.path.name,
-                    rendered,
-                    create_parents=False,
-                    create_only=create_only,
-                    label="canonical state",
-                    expected_root_identity=self._parent_identity,
-                )
-                self._revalidate_parent()
+                try:
+                    atomic_write_bytes_confined(
+                        self.path.parent,
+                        self.path.name,
+                        rendered,
+                        create_parents=False,
+                        create_only=create_only,
+                        label="canonical state",
+                        expected_root_identity=self._parent_identity,
+                    )
+                    self._revalidate_parent()
+                except (OSError, RuntimeError, ValueError):
+                    if create_only or not self._reconcile_publication(rendered):
+                        raise
                 self._state_bound = True
                 return
 
