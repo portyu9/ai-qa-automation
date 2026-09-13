@@ -201,6 +201,8 @@ class RunJournal:
         """Hold the exact journal head/count stable across an authority-bearing publication."""
 
         with self._lock:
+            if self._write_uncertain:
+                raise OSError("run journal authority state is uncertain")
             yield self._seq, self._head
 
     def _revalidate_parent(self, parent_fd: int | None = None) -> None:
