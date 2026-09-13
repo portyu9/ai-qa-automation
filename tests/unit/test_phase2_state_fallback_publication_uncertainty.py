@@ -226,3 +226,54 @@ def test_descriptor_interrupted_unreconciled_publication_latches_state_write_unc
 
     retained = json.loads(store.path.read_text(encoding="utf-8"))
     assert retained["phase"] == "INTERRUPTED_DESCRIPTOR_PUBLICATION"
+
+
+def test_descriptor_reconciliation_interruption_latches_state_write_uncertainty(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, state = _descriptor_store(tmp_path)
+    real_writer = state_module.atomic_write_bytes_confined
+    real_reconcile = store._reconcile_publication
+
+    def publish_then_raise(
+        root,
+        relative_path,
+        data,
+        *,
+        create_parents,
+        create_only,
+        label,
+        expected_root_identity=None,
+    ) -> None:
+        real_writer(
+            root,
+            relative_path,
+            data,
+            create_parents=create_parents,
+            create_only=create_only,
+            label=label,
+            expected_root_identity=expected_root_identity,
+        )
+        raise OSError("post-publication verification unavailable")
+
+    def interrupt_reconciliation(rendered: bytes) -> bool:
+        raise KeyboardInterrupt("state reconciliation interrupted")
+
+    monkeypatch.setattr(state_module, "atomic_write_bytes_confined", publish_then_raise)
+    monkeypatch.setattr(store, "_reconcile_publication", interrupt_reconciliation)
+    state.phase = "INTERRUPTED_RECONCILIATION"
+    with pytest.raises(KeyboardInterrupt, match="state reconciliation interrupted"):
+        store.save(state)
+
+    published = json.loads(store.path.read_text(encoding="utf-8"))
+    assert published["phase"] == "INTERRUPTED_RECONCILIATION"
+
+    monkeypatch.setattr(state_module, "atomic_write_bytes_confined", real_writer)
+    monkeypatch.setattr(store, "_reconcile_publication", real_reconcile)
+    state.phase = "MUST_NOT_OVERWRITE_INTERRUPTED_RECONCILIATION"
+    with pytest.raises(OSError, match="canonical state write state is uncertain"):
+        store.save(state)
+
+    retained = json.loads(store.path.read_text(encoding="utf-8"))
+    assert retained["phase"] == "INTERRUPTED_RECONCILIATION"
