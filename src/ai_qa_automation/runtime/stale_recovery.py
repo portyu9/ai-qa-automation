@@ -350,10 +350,9 @@ def _recover_stale_mutation_authorized(
         }
     pending = metadata["pending_mutation"]
     if pending is None:
-        if (
-            ("recovered_by_run_id" in metadata or "recovered_at" in metadata)
-            and previous_lease.get("mutation_recovery_closed") is not True
-        ):
+        if ("recovered_by_run_id" in metadata or "recovered_at" in metadata) and previous_lease.get(
+            "mutation_recovery_closed"
+        ) is not True:
             return {
                 "status": "BLOCKED",
                 "previous_run_id": previous_run_id,
