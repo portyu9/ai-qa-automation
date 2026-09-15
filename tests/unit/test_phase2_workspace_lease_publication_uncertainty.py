@@ -68,21 +68,20 @@ def test_failed_post_publication_clean_closure_cannot_authorize_missing_runtime(
     assert lease.path.is_file()
 
     real_revalidate = workspace_lease_module.WorkspaceLease._revalidate_lease_root
+    closure_revalidations = 0
     post_publication_failure_injected = False
 
     def fail_once_after_clean_closure_publication(
         self: WorkspaceLease,
         directory_fd: int | None,
     ) -> None:
-        nonlocal post_publication_failure_injected
+        nonlocal closure_revalidations, post_publication_failure_injected
         real_revalidate(self, directory_fd)
-        if (
-            self is lease
-            and self._mutation_recovery_closed
-            and not post_publication_failure_injected
-        ):
-            post_publication_failure_injected = True
-            raise OSError("simulated failure after clean closure publication")
+        if self is lease and self._mutation_recovery_closed:
+            closure_revalidations += 1
+            if closure_revalidations == 2:
+                post_publication_failure_injected = True
+                raise OSError("simulated failure after clean closure publication")
 
     release_failed = False
     with monkeypatch.context() as patch:
@@ -132,21 +131,20 @@ def test_unreconciled_clean_closure_publication_restores_previous_authority(
     control, _journal = _runtime_control(run_dir, lease)
     real_revalidate = workspace_lease_module.WorkspaceLease._revalidate_lease_root
     real_reconcile = workspace_lease_module.WorkspaceLease._reconcile_persisted_owner
+    closure_revalidations = 0
     post_publication_failure_injected = False
 
     def fail_once_after_clean_closure_publication(
         self: WorkspaceLease,
         directory_fd: int | None,
     ) -> None:
-        nonlocal post_publication_failure_injected
+        nonlocal closure_revalidations, post_publication_failure_injected
         real_revalidate(self, directory_fd)
-        if (
-            self is lease
-            and self._mutation_recovery_closed
-            and not post_publication_failure_injected
-        ):
-            post_publication_failure_injected = True
-            raise OSError("simulated unreconciled clean closure publication")
+        if self is lease and self._mutation_recovery_closed:
+            closure_revalidations += 1
+            if closure_revalidations == 2:
+                post_publication_failure_injected = True
+                raise OSError("simulated unreconciled clean closure publication")
 
     def refuse_clean_closure_reconciliation(
         self: WorkspaceLease,
@@ -255,21 +253,20 @@ def test_interrupted_clean_closure_publication_restores_previous_authority(
     lease, run_dir = _lease_with_run_root(artifacts, workspace, "run-interrupted-close")
     control, _journal = _runtime_control(run_dir, lease)
     real_revalidate = workspace_lease_module.WorkspaceLease._revalidate_lease_root
+    closure_revalidations = 0
     post_publication_interrupt_injected = False
 
     def interrupt_once_after_clean_closure_publication(
         self: WorkspaceLease,
         directory_fd: int | None,
     ) -> None:
-        nonlocal post_publication_interrupt_injected
+        nonlocal closure_revalidations, post_publication_interrupt_injected
         real_revalidate(self, directory_fd)
-        if (
-            self is lease
-            and self._mutation_recovery_closed
-            and not post_publication_interrupt_injected
-        ):
-            post_publication_interrupt_injected = True
-            raise KeyboardInterrupt("simulated interruption after clean closure publication")
+        if self is lease and self._mutation_recovery_closed:
+            closure_revalidations += 1
+            if closure_revalidations == 2:
+                post_publication_interrupt_injected = True
+                raise KeyboardInterrupt("simulated interruption after clean closure publication")
 
     with monkeypatch.context() as patch:
         patch.setattr(
