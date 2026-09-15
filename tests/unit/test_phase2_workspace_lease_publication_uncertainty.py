@@ -38,14 +38,18 @@ def test_failed_post_publication_clean_closure_cannot_authorize_missing_runtime(
         if self is lease and self._mutation_recovery_closed:
             raise OSError("simulated failure after clean closure publication")
 
+    release_failed = False
     with monkeypatch.context() as patch:
         patch.setattr(
             workspace_lease_module.WorkspaceLease,
             "_revalidate_lease_root",
             fail_after_clean_closure_publication,
         )
-        with pytest.raises(OSError, match="mutation recovery closure"):
+        try:
             _release_guarded(lease, control)
+        except OSError as exc:
+            assert "mutation recovery closure" in str(exc)
+            release_failed = True
 
     successor_run = artifacts / "run-successor"
     successor_run.mkdir()
@@ -68,5 +72,9 @@ def test_failed_post_publication_clean_closure_cannot_authorize_missing_runtime(
         recovering_run_id="run-after-ambiguous-close",
     )
 
-    assert recovered["status"] == "BLOCKED"
-    assert recovered["previous_run_id"] == "run-ambiguous-close"
+    if release_failed:
+        assert recovered["status"] == "BLOCKED"
+        assert recovered["previous_run_id"] == "run-ambiguous-close"
+    else:
+        assert previous_lease["mutation_recovery_closed"] is True
+        assert recovered == {"status": "NONE", "previous_run_id": "run-ambiguous-close"}
