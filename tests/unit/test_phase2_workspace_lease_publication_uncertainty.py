@@ -29,13 +29,20 @@ def test_failed_post_publication_clean_closure_cannot_authorize_missing_runtime(
     assert lease.path.is_file()
 
     real_revalidate = workspace_lease_module.WorkspaceLease._revalidate_lease_root
+    post_publication_failure_injected = False
 
-    def fail_after_clean_closure_publication(
+    def fail_once_after_clean_closure_publication(
         self: WorkspaceLease,
         directory_fd: int | None,
     ) -> None:
+        nonlocal post_publication_failure_injected
         real_revalidate(self, directory_fd)
-        if self is lease and self._mutation_recovery_closed:
+        if (
+            self is lease
+            and self._mutation_recovery_closed
+            and not post_publication_failure_injected
+        ):
+            post_publication_failure_injected = True
             raise OSError("simulated failure after clean closure publication")
 
     release_failed = False
@@ -43,7 +50,7 @@ def test_failed_post_publication_clean_closure_cannot_authorize_missing_runtime(
         patch.setattr(
             workspace_lease_module.WorkspaceLease,
             "_revalidate_lease_root",
-            fail_after_clean_closure_publication,
+            fail_once_after_clean_closure_publication,
         )
         try:
             _release_guarded(lease, control)
@@ -51,6 +58,7 @@ def test_failed_post_publication_clean_closure_cannot_authorize_missing_runtime(
             assert "mutation recovery closure" in str(exc)
             release_failed = True
 
+    assert post_publication_failure_injected is True
     successor_run = artifacts / "run-successor"
     successor_run.mkdir()
     successor = WorkspaceLease(
