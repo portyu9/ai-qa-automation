@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -86,9 +86,11 @@ def test_runtime_persist_holds_journal_authority_through_metadata_publication(
         payload: dict[str, Any],
         *,
         expected_parent_identity: tuple[int, int] | None = None,
+        on_uncertain: Callable[[], None] | None = None,
     ) -> None:
         del path, expected_parent_identity
         assert binding_depth >= 1
+        assert on_uncertain is not None
         published.update(payload)
 
     monkeypatch.setattr(control.journal, "authority_binding", tracked_binding)
