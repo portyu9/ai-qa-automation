@@ -562,9 +562,7 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
                 error = OSError(
                     "workspace lease publication failed and previous authority could not be durably restored"
                 )
-                error.add_note(
-                    f"Original publication failure: {type(publication_error).__name__}."
-                )
+                error.add_note(f"Original publication failure: {type(publication_error).__name__}.")
                 raise error from rollback_error
             if reconciliation_error is not None:
                 raise reconciliation_error
