@@ -36,7 +36,9 @@ def test_fallback_post_publication_failure_blocks_later_runtime_write(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(run_control_module, "descriptor_relative_authority_supported", lambda: False)
+    monkeypatch.setattr(
+        run_control_module, "descriptor_relative_authority_supported", lambda: False
+    )
     control = _control(tmp_path)
     original_fsync_directory = run_control_module.fsync_directory
 
@@ -66,7 +68,9 @@ def test_fallback_prepublication_failure_remains_retryable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(run_control_module, "descriptor_relative_authority_supported", lambda: False)
+    monkeypatch.setattr(
+        run_control_module, "descriptor_relative_authority_supported", lambda: False
+    )
     control = _control(tmp_path)
     original_mkstemp = run_control_module.tempfile.mkstemp
 
