@@ -389,20 +389,131 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             raise OSError("workspace lease metadata exceeds persistence limit")
         return rendered
 
-    def _persist_current_owner(self, stream: Any, directory_fd: int | None) -> None:
-        rendered = self._current_metadata_bytes()
+    @staticmethod
+    def _read_locked_lease_bytes(stream: Any) -> bytes:
         stream.seek(0)
-        stream.truncate(0)
-        stream.write(rendered)
-        stream.flush()
-        os.fsync(stream.fileno())
+        raw = stream.read(_MAX_LEASE_METADATA_BYTES + 1)
+        if len(raw) > _MAX_LEASE_METADATA_BYTES:
+            raise OSError("workspace lease metadata exceeds bounded ingestion limit")
+        return raw
+
+    def _assert_locked_lease_file_identity(self, stream: Any, directory_fd: int | None) -> None:
+        opened = os.fstat(stream.fileno())
+        current = (
+            self.path.stat(follow_symlinks=False)
+            if directory_fd is None
+            else os.stat(self.path.name, dir_fd=directory_fd, follow_symlinks=False)
+        )
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or not stat.S_ISREG(current.st_mode)
+            or _identity(opened) != _identity(current)
+        ):
+            raise OSError("workspace lease file changed identity during publication")
+
+    def _sync_lease_parent(self, directory_fd: int | None) -> None:
         if directory_fd is not None:
             os.fsync(directory_fd)
         else:
             fsync_directory(self.path.parent)
+
+    def _write_owner_bytes(
+        self,
+        stream: Any,
+        directory_fd: int | None,
+        rendered: bytes,
+    ) -> None:
         self._revalidate_lease_root(directory_fd)
         self._revalidate_run_root()
         self._revalidate_workspace_root()
+        self._assert_locked_lease_file_identity(stream, directory_fd)
+        stream.seek(0)
+        stream.truncate(0)
+        written = stream.write(rendered)
+        if written is not None and written != len(rendered):
+            raise OSError("workspace lease publication write was incomplete")
+        stream.flush()
+        os.fsync(stream.fileno())
+        self._sync_lease_parent(directory_fd)
+        self._revalidate_lease_root(directory_fd)
+        self._revalidate_run_root()
+        self._revalidate_workspace_root()
+        self._assert_locked_lease_file_identity(stream, directory_fd)
+        if self._read_locked_lease_bytes(stream) != rendered:
+            raise OSError("workspace lease publication bytes changed after persistence")
+
+    def _reconcile_persisted_owner(
+        self,
+        stream: Any,
+        directory_fd: int | None,
+        expected: bytes,
+    ) -> bool:
+        """Prove an ambiguous lease publication without replaying its content write."""
+
+        try:
+            self._revalidate_lease_root(directory_fd)
+            self._revalidate_run_root()
+            self._revalidate_workspace_root()
+            self._assert_locked_lease_file_identity(stream, directory_fd)
+            if self._read_locked_lease_bytes(stream) != expected:
+                return False
+            stream.flush()
+            os.fsync(stream.fileno())
+            self._sync_lease_parent(directory_fd)
+            self._revalidate_lease_root(directory_fd)
+            self._revalidate_run_root()
+            self._revalidate_workspace_root()
+            self._assert_locked_lease_file_identity(stream, directory_fd)
+            return self._read_locked_lease_bytes(stream) == expected
+        except (OSError, RuntimeError, ValueError):
+            return False
+
+    def _restore_previous_owner(
+        self,
+        stream: Any,
+        directory_fd: int | None,
+        previous: bytes,
+    ) -> None:
+        try:
+            self._write_owner_bytes(stream, directory_fd, previous)
+        except BaseException as rollback_error:
+            try:
+                if self._reconcile_persisted_owner(stream, directory_fd, previous):
+                    return
+            except BaseException as reconciliation_error:
+                raise OSError(
+                    "workspace lease publication rollback could not be durably proven"
+                ) from reconciliation_error
+            raise OSError(
+                "workspace lease publication rollback could not be durably proven"
+            ) from rollback_error
+
+    def _persist_current_owner(self, stream: Any, directory_fd: int | None) -> None:
+        rendered = self._current_metadata_bytes()
+        previous = self._read_locked_lease_bytes(stream)
+        try:
+            self._write_owner_bytes(stream, directory_fd, rendered)
+        except BaseException as publication_error:
+            reconciliation_error: BaseException | None = None
+            if isinstance(publication_error, Exception):
+                try:
+                    if self._reconcile_persisted_owner(stream, directory_fd, rendered):
+                        return
+                except BaseException as exc:
+                    reconciliation_error = exc
+            try:
+                self._restore_previous_owner(stream, directory_fd, previous)
+            except BaseException as rollback_error:
+                error = OSError(
+                    "workspace lease publication failed and previous authority could not be durably restored"
+                )
+                error.add_note(
+                    f"Original publication failure: {type(publication_error).__name__}."
+                )
+                raise error from rollback_error
+            if reconciliation_error is not None:
+                raise reconciliation_error
+            raise
 
     def acquire(self, *, publish: bool = True) -> WorkspaceLease:
         with self._lifecycle_lock:
