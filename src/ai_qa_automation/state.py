@@ -220,6 +220,7 @@ class StateStore:
         self._claim_parent_exclusively = claim_parent_exclusively
         self._exclusive_parent_owned = parent_created
         self._state_bound = False
+        self._write_uncertain = False
         self._assert_owned()
 
     @property
@@ -345,6 +346,8 @@ class StateStore:
 
     def save(self, state: AgentRunState) -> None:
         with self._lock:
+            if self._write_uncertain:
+                raise OSError("canonical state write state is uncertain")
             self._assert_owned()
             if self._claim_parent_exclusively and not self._exclusive_parent_owned:
                 raise FileExistsError(
@@ -367,8 +370,18 @@ class StateStore:
                         expected_root_identity=self._parent_identity,
                     )
                     self._revalidate_parent()
-                except (OSError, RuntimeError, ValueError):
-                    if create_only or not self._reconcile_publication(rendered):
+                except BaseException as exc:
+                    if create_only:
+                        raise
+                    try:
+                        reconciled = self._reconcile_publication(rendered)
+                    except BaseException:
+                        self._write_uncertain = True
+                        raise
+                    if not reconciled:
+                        self._write_uncertain = True
+                        raise
+                    if not isinstance(exc, Exception):
                         raise
                 self._state_bound = True
                 return
@@ -385,18 +398,26 @@ class StateStore:
                 text=False,
             )
             temp = Path(raw_temp)
+            publication_unreconciled = False
             try:
-                with os.fdopen(handle, "wb") as stream:
-                    stream.write(rendered)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                self._assert_owned()
-                temp.replace(self.path)
-                fsync_directory(self.path.parent)
-                self._revalidate_parent()
-            finally:
-                temp.unlink(missing_ok=True)
-            self._state_bound = True
+                try:
+                    with os.fdopen(handle, "wb") as stream:
+                        stream.write(rendered)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    self._assert_owned()
+                    publication_unreconciled = True
+                    temp.replace(self.path)
+                    fsync_directory(self.path.parent)
+                    self._revalidate_parent()
+                finally:
+                    temp.unlink(missing_ok=True)
+                self._state_bound = True
+                publication_unreconciled = False
+            except BaseException:
+                if publication_unreconciled:
+                    self._write_uncertain = True
+                raise
 
     def load(self) -> AgentRunState:
         with self._lock:
