@@ -351,6 +351,14 @@ def _recover_stale_mutation_authorized(
     pending = metadata["pending_mutation"]
     if pending is None:
         if pending_root_authority(workspace) is None:
+            if (
+                "recovered_by_run_id" in metadata or "recovered_at" in metadata
+            ) and previous_lease.get("mutation_recovery_closed") is not True:
+                return {
+                    "status": "BLOCKED",
+                    "previous_run_id": previous_run_id,
+                    "reason": "prior stale recovery closure is not durably bound to predecessor lease authority; manual reconciliation is required",
+                }
             return {"status": "NONE", "previous_run_id": previous_run_id}
         if not write_authorized:
             return _recovery_write_requires_successor(previous_run_id)
