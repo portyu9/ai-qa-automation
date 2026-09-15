@@ -124,6 +124,12 @@ class RuntimeControl:
         repr=False,
         compare=False,
     )
+    _metadata_write_uncertain: bool = field(
+        default=False,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         if type(self.circuit_failure_threshold) is not int or self.circuit_failure_threshold < 1:
@@ -1043,12 +1049,19 @@ class RuntimeControl:
             yield self.pending_mutation is None
 
     def persist(self) -> None:
-        with self._lock, self.journal.authority_binding():
-            atomic_write_json(
-                self.metadata_path,
-                self.snapshot(include_pending_details=True),
-                expected_parent_identity=self.persistence_root_identity,
-            )
+        with self._lock:
+            if self._metadata_write_uncertain:
+                raise OSError("runtime metadata write state is uncertain")
+            with self.journal.authority_binding():
+                atomic_write_json(
+                    self.metadata_path,
+                    self.snapshot(include_pending_details=True),
+                    expected_parent_identity=self.persistence_root_identity,
+                    on_uncertain=self._mark_metadata_write_uncertain,
+                )
+
+    def _mark_metadata_write_uncertain(self) -> None:
+        self._metadata_write_uncertain = True
 
     def snapshot(self, *, include_pending_details: bool = False) -> dict[str, Any]:
         with self._lock, self.journal.authority_binding() as journal_authority:
@@ -1210,6 +1223,7 @@ def atomic_write_json(
     payload: dict[str, Any],
     *,
     expected_parent_identity: tuple[int, int] | None = None,
+    on_uncertain: Callable[[], None] | None = None,
 ) -> None:
     path = _owned_atomic_target(path)
     rendered_bytes = _render_runtime_metadata(payload)
@@ -1230,13 +1244,23 @@ def atomic_write_json(
                 label="runtime metadata",
                 expected_root_identity=authorized_identity,
             )
-        except (OSError, RuntimeError, ValueError):
-            if _reconcile_runtime_metadata_publication(
-                path,
-                rendered_bytes,
-                expected_parent_identity=authorized_identity,
-            ):
-                return
+        except BaseException as exc:
+            try:
+                reconciled = _reconcile_runtime_metadata_publication(
+                    path,
+                    rendered_bytes,
+                    expected_parent_identity=authorized_identity,
+                )
+            except BaseException:
+                if on_uncertain is not None:
+                    on_uncertain()
+                raise
+            if reconciled:
+                if isinstance(exc, Exception):
+                    return
+                raise
+            if on_uncertain is not None:
+                on_uncertain()
             raise
         return
     if expected_parent_identity is not None:
@@ -1256,12 +1280,19 @@ def atomic_write_json(
                 raise RuntimeError(
                     "runtime metadata directory changed identity since authorization"
                 )
-        temp.replace(path)
-        fsync_directory(path.parent)
-        if expected_parent_identity is not None:
-            after = path.parent.stat(follow_symlinks=False)
-            if (after.st_dev, after.st_ino) != expected_parent_identity:
-                raise RuntimeError("runtime metadata directory changed identity during persistence")
+        try:
+            temp.replace(path)
+            fsync_directory(path.parent)
+            if expected_parent_identity is not None:
+                after = path.parent.stat(follow_symlinks=False)
+                if (after.st_dev, after.st_ino) != expected_parent_identity:
+                    raise RuntimeError(
+                        "runtime metadata directory changed identity during persistence"
+                    )
+        except BaseException:
+            if on_uncertain is not None:
+                on_uncertain()
+            raise
     finally:
         temp.unlink(missing_ok=True)
 
