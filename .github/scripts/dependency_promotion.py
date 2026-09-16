@@ -95,6 +95,7 @@ def _normalized_semantics(document: dict[str, Any]) -> tuple[dict[str, Any], dic
     optional = project.get("optional-dependencies")
     if not isinstance(optional, dict) or not optional:
         raise PolicyBlock("optional dependency groups are missing")
+    optional_specs: dict[str, str] = {}
     for group in sorted(optional):
         values = optional[group]
         if not isinstance(group, str) or not group or not isinstance(values, list) or not values:
@@ -105,7 +106,14 @@ def _normalized_semantics(document: dict[str, Any]) -> tuple[dict[str, Any], dic
             scoped = f"optional:{group}:{identity}"
             if scoped in versions:
                 raise PolicyBlock(f"duplicate dependency identity in optional group: {identity}")
-            versions[scoped] = str(value)
+            rendered = str(value)
+            prior = optional_specs.get(identity)
+            if prior is not None and prior != rendered:
+                raise PolicyBlock(
+                    f"duplicate optional dependency specs disagree across groups: {identity}"
+                )
+            optional_specs[identity] = rendered
+            versions[scoped] = rendered
             identities.append(identity)
         optional[group] = identities
 
@@ -490,28 +498,78 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
 
 
 def selftest() -> None:
-    base = tomllib.loads(
-        '[build-system]\nrequires=["hatchling==1.32.0"]\nbuild-backend="hatchling.build"\n'
-        '[project]\nname="ai-qa-automation"\ndependencies=["httpx>=0.28,<1"]\n'
-        '[project.optional-dependencies]\ndev=["mypy>=1.15,<2"]\n'
+    base_raw = b"""[build-system]
+requires = ["hatchling==1.32.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ai-qa-automation"
+dependencies = ["httpx>=0.28,<1"]
+
+[project.optional-dependencies]
+browser = ["playwright>=1.51,<2"]
+dev = ["mypy>=1.14,<2", "playwright>=1.51,<2"]
+"""
+    head_raw = b"""[build-system]
+requires = ["hatchling==1.33.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ai-qa-automation"
+dependencies = ["httpx>=0.29,<1"]
+
+[project.optional-dependencies]
+browser = ["playwright>=1.52,<2"]
+dev = ["mypy>=2,<3", "playwright>=1.52,<2"]
+"""
+    validate_pyproject_transition(base_raw, head_raw)
+
+    added_identity = head_raw.replace(
+        b'dependencies = ["httpx>=0.29,<1"]',
+        b'dependencies = ["httpx>=0.29,<1", "requests>=2,<3"]',
     )
-    head = copy.deepcopy(base)
-    head["project"]["dependencies"][0] = "httpx>=0.29,<1"
-    head["project"]["optional-dependencies"]["dev"][0] = "mypy>=2,<3"
-    base_raw = json.dumps(base, sort_keys=True).encode()
-    head_raw = json.dumps(head, sort_keys=True).encode()
-    # tomllib needs TOML; direct pure semantic comparator coverage follows.
-    base_sem, base_versions = _normalized_semantics(base)
-    head_sem, head_versions = _normalized_semantics(head)
-    if base_sem != head_sem or base_versions == head_versions:
-        raise GovernanceError("dependency promotion semantic comparator self-test failed")
-    bad = copy.deepcopy(head)
-    bad["project"]["dependencies"].append("requests>=2,<3")
-    bad_sem, _ = _normalized_semantics(bad)
-    if bad_sem == base_sem:
-        raise GovernanceError("dependency promotion self-test failed to reject added identity")
-    if base_raw == head_raw:
-        raise GovernanceError("dependency promotion self-test fixtures did not differ")
+    try:
+        validate_pyproject_transition(base_raw, added_identity)
+    except PolicyBlock:
+        pass
+    else:
+        raise GovernanceError("dependency promotion self-test accepted an added dependency identity")
+
+    semantic_drift = head_raw.replace(
+        b'name = "ai-qa-automation"',
+        b'name = "ai-qa-automation-renamed"',
+    )
+    try:
+        validate_pyproject_transition(base_raw, semantic_drift)
+    except PolicyBlock:
+        pass
+    else:
+        raise GovernanceError("dependency promotion self-test accepted non-version TOML drift")
+
+    url_authority = head_raw.replace(
+        b'"httpx>=0.29,<1"',
+        b'"httpx @ https://example.invalid/httpx.whl"',
+    )
+    try:
+        validate_pyproject_transition(base_raw, url_authority)
+    except PolicyBlock:
+        pass
+    else:
+        raise GovernanceError("dependency promotion self-test accepted URL dependency authority")
+
+    conflicting_optional = head_raw.replace(
+        b'browser = ["playwright>=1.52,<2"]',
+        b'browser = ["playwright>=1.53,<2"]',
+    )
+    try:
+        validate_pyproject_transition(base_raw, conflicting_optional)
+    except PolicyBlock:
+        pass
+    else:
+        raise GovernanceError(
+            "dependency promotion self-test accepted conflicting duplicate optional specs"
+        )
+
     print("dependency-promotion self-test: ok")
 
 

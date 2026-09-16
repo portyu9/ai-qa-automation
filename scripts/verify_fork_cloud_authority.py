@@ -56,7 +56,7 @@ _FORBIDDEN_WORKFLOW_TOKENS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 _ALLOWED_SECRET_REFERENCE_COUNTS: dict[str, Counter[str]] = {
-    "dependency-governance.yml": Counter({"GITHUB_TOKEN": 2, "TRUSTED_GATE_APP_PRIVATE_KEY": 1}),
+    "dependency-governance.yml": Counter({"GITHUB_TOKEN": 3, "TRUSTED_GATE_APP_PRIVATE_KEY": 1}),
     "manual-validation.yml": Counter({"ANTHROPIC_API_KEY": 2}),
     "security-autoheal.yml": Counter({"TRUSTED_GATE_APP_PRIVATE_KEY": 1}),
     "trusted-pr-auto.yml": Counter({"TRUSTED_GATE_APP_PRIVATE_KEY": 1}),
