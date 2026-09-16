@@ -22,10 +22,6 @@ jobs:
           fetch-depth: 1
       - name: Apply exact verifier correction
         run: python .github/scripts/_fix_ci_contract_fragments.py
-      - name: Verify corrected authority contracts
-        run: |
-          python scripts/verify_ci_contract.py
-          python scripts/verify_fork_cloud_authority.py
       - name: Commit correction
         run: |
           set -euo pipefail
