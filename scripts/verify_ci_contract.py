@@ -37,7 +37,7 @@ EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
     "068537f4638fa1559c21e31cfdfd5aa99e135b2f"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
-    "66c0bf8aee2638fb51c83029b0251f2d81dae29"  # pragma: allowlist secret
+    "66c0bf8aee2633bfb51c83029b0251f2d81dae29"  # pragma: allowlist secret
 )
 EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "fbe47dcf9a201dfb9da390b01e68f5b662689538"  # pragma: allowlist secret
@@ -409,15 +409,14 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "repository_dispatch:",
         "ubuntu-latest",
         "continue-on-error: true",
-        "statuses: write",
         "ref: ${{ github.event.pull_request.head.sha }}",
         "ref: ${{ github.event.workflow_run.head_sha }}",
     ):
-        if forbidden in semantic and forbidden != "statuses: write":
+        if forbidden in semantic:
             raise ValueError(
                 f"dependency-governance.yml contains forbidden authority token: {forbidden}"
             )
-    # The only statuses:write occurrence must be inside the dedicated App token request.
+    # The only status-write authority is embedded in the dedicated App token request.
     if semantic.count('"statuses":"write"') != 1 or semantic.count("statuses: write") != 0:
         raise ValueError("native workflow authority must remain status-read-only")
     recovery = semantic.index("      - name: Attempt one bounded transient recovery")
