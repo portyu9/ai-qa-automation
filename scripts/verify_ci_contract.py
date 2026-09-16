@@ -35,7 +35,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
-    "c5cf6a2615655c2d9381047e7474b760314b6fdc"  # pragma: allowlist secret
+    "1068e4382985bca48216548f240df979207e2928"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
     "32d2538339b1a57112495b00d552e49b79594f0e"  # pragma: allowlist secret
@@ -55,7 +55,6 @@ CODEQL_ACTION_RE = re.compile(
     r"\s+#\s+v(\d+(?:\.\d+){0,2})\s*$",
     re.MULTILINE,
 )
-# Compatibility alias for adversarial tests and callers that imported the historical helper name.
 EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA
 
 _trusted_auto.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
@@ -439,7 +438,6 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
             raise ValueError(
                 f"dependency-governance.yml contains forbidden authority token: {forbidden}"
             )
-    # The only status-write authority is embedded in the dedicated App token request.
     if semantic.count('"statuses":"write"') != 1 or semantic.count("statuses: write") != 0:
         raise ValueError("native workflow authority must remain status-read-only")
     recovery = semantic.index("      - name: Attempt one bounded transient recovery")
