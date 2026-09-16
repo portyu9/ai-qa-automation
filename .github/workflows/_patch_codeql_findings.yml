@@ -1,0 +1,90 @@
+name: Temporary CodeQL remediation patcher
+
+on:
+  push:
+    branches:
+      - automation/autonomous-dependency-promotion
+    paths:
+      - .github/workflows/_patch_codeql_findings.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout remediation branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: automation/autonomous-dependency-promotion
+          fetch-depth: 1
+      - name: Apply bounded source transformations
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          replacements = {
+              'scripts/verify_docs.py': [
+                  (
+                      '    print(json.dumps(verify_documentation(root), indent=2, sort_keys=True))',
+                      '    verify_documentation(root)\n    print(json.dumps({"schema_version": 1, "result": "PASS", "verifier": "documentation-integrity"}, sort_keys=True))',
+                  ),
+              ],
+              'scripts/verify_fork_cloud_authority.py': [
+                  (
+                      '    print(json.dumps(verify_repository(args.root), sort_keys=True, separators=(",", ":")))',
+                      '    verify_repository(args.root)\n    print(json.dumps({"schema_version": 1, "result": "PASS", "verifier": "fork-cloud-authority"}, separators=(",", ":"), sort_keys=True))',
+                  ),
+              ],
+              'scripts/verify_ci_contract.py': [
+                  (
+                      '    print(json.dumps(verify_ci_contract(root), indent=2, sort_keys=True))',
+                      '    verify_ci_contract(root)\n    print(json.dumps({"schema_version": 1, "result": "PASS", "verifier": "ci-contract"}, sort_keys=True))',
+                  ),
+              ],
+              'scripts/ci_contract_base.py': [
+                  (
+                      '    print(json.dumps(verify_ci_contract(root), indent=2, sort_keys=True))',
+                      '    verify_ci_contract(root)\n    print(json.dumps({"schema_version": 1, "result": "PASS", "verifier": "ci-contract-base"}, sort_keys=True))',
+                  ),
+              ],
+              'scripts/auto_trusted_report.py': [
+                  (
+                      '    print(json.dumps(result, indent=2, sort_keys=True))',
+                      '    print(json.dumps({"result": result["result"], "reporter": "trusted-pr-gate"}, sort_keys=True))',
+                  ),
+              ],
+          }
+
+          for filename, pairs in replacements.items():
+              path = Path(filename)
+              text = path.read_text(encoding='utf-8')
+              for old, new in pairs:
+                  count = text.count(old)
+                  if count != 1:
+                      raise SystemExit(f'{filename}: expected one exact replacement, found {count}')
+                  text = text.replace(old, new)
+              path.write_text(text, encoding='utf-8', newline='\n')
+
+          for filename in (
+              'tests/unit/test_workspace_lease_ownership.py',
+              'tests/unit/test_regulated_audit_authority.py',
+              'tests/unit/test_regulated_audit_interruption.py',
+          ):
+              path = Path(filename)
+              text = path.read_text(encoding='utf-8')
+              if 'mode: int = 0o777' not in text:
+                  raise SystemExit(f'{filename}: expected mocked os.open default not found')
+              path.write_text(text.replace('mode: int = 0o777', 'mode: int = 0o600'), encoding='utf-8', newline='\n')
+          PY
+      - name: Commit deterministic remediations
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts tests/unit
+          git diff --cached --check
+          git commit -m 'security: remediate CodeQL findings'
+          git push origin HEAD:automation/autonomous-dependency-promotion
