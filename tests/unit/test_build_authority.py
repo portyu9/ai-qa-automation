@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -32,7 +33,12 @@ def test_repository_build_authority_is_static() -> None:
     assert result["project_name"] == "ai-qa-automation"
     assert result["project_scripts"] == {"ai-qa": "ai_qa_automation.cli:app"}
     assert result["project_entry_points"] is False
-    assert result["reviewed_lock_blobs"] == build_authority.EXPECTED_LOCK_BLOB_SHAS
+    authority = json.loads(
+        (ROOT / "requirements" / build_authority.LOCK_AUTHORITY_FILENAME).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert result["reviewed_lock_blobs"] == authority["lockBlobs"]
     assert result["project_file_inputs"] == {
         "readme": "README.md",
         "license": {"file": "LICENSE"},
@@ -60,7 +66,7 @@ def test_build_authority_rejects_backend_path(tmp_path: Path) -> None:
     )
     path.write_text(text, encoding="utf-8")
 
-    with pytest.raises(ValueError, match="build-system authority"):
+    with pytest.raises(ValueError, match=r"build-system(?: backend)? authority"):
         build_authority.verify_build_authority(root)
 
 
@@ -74,7 +80,7 @@ def test_build_authority_rejects_custom_backend(tmp_path: Path) -> None:
     )
     path.write_text(text, encoding="utf-8")
 
-    with pytest.raises(ValueError, match="build-system authority"):
+    with pytest.raises(ValueError, match=r"build-system(?: backend)? authority"):
         build_authority.verify_build_authority(root)
 
 

@@ -41,7 +41,11 @@ def _reviewed_governance_secret_payload() -> str:
         env:
           TRUSTED_GATE_APP_CLIENT_ID: ${{ vars.TRUSTED_GATE_APP_CLIENT_ID }}
           TRUSTED_GATE_APP_PRIVATE_KEY: ${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}
-      - name: Reconcile Dependabot merge authority
+      - name: Reconcile exact-subject Python dependency promotion
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRUSTED_STATUS_TOKEN: ${{ steps.trusted-app.outputs.token }}
+      - name: Reconcile Dependabot action merge authority
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TRUSTED_STATUS_TOKEN: ${{ steps.trusted-app.outputs.token }}
@@ -127,7 +131,7 @@ def test_reviewed_governance_secret_consumers_do_not_create_aws_authority() -> N
     assert result["aws_authentication"] == "forbidden"
     assert result["pull_request_target"] == "forbidden"
     assert result["secrets"] == {
-        "GITHUB_TOKEN": 2,
+        "GITHUB_TOKEN": 3,
         "TRUSTED_GATE_APP_PRIVATE_KEY": 1,
     }
 
@@ -176,5 +180,6 @@ def test_current_repository_has_no_github_actions_aws_authority() -> None:
         "dependency-governance.yml",
         "manual-validation.yml",
         "release-candidate.yml",
+        "security-autoheal.yml",
         "trusted-pr-auto.yml",
     }
