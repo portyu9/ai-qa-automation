@@ -20,14 +20,14 @@ jobs:
         with:
           ref: automation/autonomous-dependency-promotion
           fetch-depth: 1
-      - name: Apply exact deterministic repairs
+      - name: Rebind exact reviewed ordinary CI digest
         run: python .github/scripts/_finalize_ci_blockers.py
-      - name: Commit repairs
+      - name: Commit frozen digest rebind
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add tests/unit/test_build_authority.py .github/workflows/ci.yml scripts/verify_ci_contract.py
+          git add scripts/verify_ci_contract.py
           git diff --cached --check
-          git commit -m 'ci: fix final deterministic qualification blockers'
+          git commit -m 'ci: bind repaired ordinary CI definition'
           git push origin HEAD:automation/autonomous-dependency-promotion
