@@ -32,7 +32,7 @@ class FakeAPI:
 
 def _tree(*, changed_path: str | None = None) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    for path in preflight.PROTECTED_PATHS:
+    for path in dict.fromkeys((*preflight.PROTECTED_PATHS, *preflight.MAINTENANCE_TRUST_ROOTS)):
         sha = UNCHANGED
         if path == changed_path:
             sha = "7" * 40
@@ -72,6 +72,8 @@ def _responses(*, changed_path: str | None = None) -> dict[str, Any]:
     pr = {
         **candidate,
         "draft": False,
+        "body": None,
+        "user": {"login": preflight.EXPECTED_OWNER, "id": preflight.EXPECTED_OWNER_ID},
         "base": {
             "ref": preflight.EXPECTED_DEFAULT_BRANCH,
             "sha": BASE,
@@ -155,6 +157,75 @@ def test_protected_change_is_observed_but_not_auto_authorized(changed_path: str)
             "subject_oid": "7" * 40,
         },
     )
+
+
+def test_exact_head_owner_marker_authorizes_reviewed_protected_maintenance() -> None:
+    responses = _responses(changed_path="requirements")
+    responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]["body"] = (
+        f"maintenance intent\nTrusted-Maintenance-Head: {HEAD}\n"
+    )
+
+    admission = preflight.evaluate_admission(FakeAPI(responses), event=_event())
+
+    assert admission.eligible is True
+    assert admission.maintenance is True
+    assert admission.maintenance_requested is True
+    assert admission.maintenance_trust_root_changes == ()
+
+
+def test_stale_maintenance_marker_does_not_authorize_protected_change() -> None:
+    responses = _responses(changed_path="requirements")
+    responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]["body"] = (
+        f"Trusted-Maintenance-Head: {'8' * 40}\n"
+    )
+
+    admission = preflight.evaluate_admission(FakeAPI(responses), event=_event())
+
+    assert admission.eligible is False
+    assert admission.maintenance is False
+
+
+def test_non_owner_marker_does_not_authorize_protected_change() -> None:
+    responses = _responses(changed_path="requirements")
+    pr = responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]
+    pr["body"] = f"Trusted-Maintenance-Head: {HEAD}\n"
+    pr["user"] = {"login": "attacker", "id": 999}
+
+    admission = preflight.evaluate_admission(FakeAPI(responses), event=_event())
+
+    assert admission.eligible is False
+    assert admission.maintenance is False
+
+
+def test_maintenance_cannot_modify_its_own_trust_root() -> None:
+    responses = _responses(changed_path="requirements")
+    pr = responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]
+    pr["body"] = f"Trusted-Maintenance-Head: {HEAD}\n"
+    merge_tree = responses[
+        f"/repos/{preflight.EXPECTED_REPOSITORY}/git/trees/{MERGE_TREE}?recursive=1"
+    ]["tree"]
+    for row in merge_tree:
+        if row["path"] == "scripts/auto_trusted_preflight.py":
+            row["sha"] = "8" * 40
+            break
+    else:
+        raise AssertionError("maintenance trust root missing from synthetic tree")
+
+    admission = preflight.evaluate_admission(FakeAPI(responses), event=_event())
+
+    assert admission.eligible is False
+    assert admission.maintenance is False
+    assert admission.maintenance_trust_root_changes
+
+
+def test_duplicate_maintenance_markers_fail_closed() -> None:
+    responses = _responses(changed_path="requirements")
+    responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]["body"] = (
+        f"Trusted-Maintenance-Head: {HEAD}\nTrusted-Maintenance-Head: {HEAD}\n"
+    )
+
+    with pytest.raises(ValueError, match="at most one exact-head marker"):
+        preflight.evaluate_admission(FakeAPI(responses), event=_event())
 
 
 def test_fork_head_is_rejected_before_pr_admission() -> None:

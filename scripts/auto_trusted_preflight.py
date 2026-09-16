@@ -14,6 +14,7 @@ from urllib.parse import quote
 
 EXPECTED_REPOSITORY = "portyu9/ai-qa-automation"
 EXPECTED_OWNER = "portyu9"
+EXPECTED_OWNER_ID = 35150859
 EXPECTED_DEFAULT_BRANCH = "main"
 EXPECTED_WORKFLOW_ID = 339754724
 EXPECTED_WORKFLOW_NAME = "CI — ƳƤ AI QA Automation Framework"
@@ -22,6 +23,11 @@ MAX_EVENT_BYTES = 2 * 1024 * 1024
 MAX_API_BYTES = 8 * 1024 * 1024
 MAX_PULL_REQUEST_CANDIDATES = 100
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+MAINTENANCE_MARKER_RE = re.compile(r"(?m)^Trusted-Maintenance-Head: ([0-9a-f]{40})$")
+MAINTENANCE_TRUST_ROOTS = (
+    ".github/workflows/trusted-pr-auto.yml",
+    "scripts/auto_trusted_preflight.py",
+)
 PROTECTED_PATHS = (
     ".claude",
     ".dockerignore",
@@ -49,10 +55,20 @@ class Admission:
     merge_sha: str
     trusted_sha: str
     protected_changes: tuple[dict[str, str], ...]
+    maintenance_requested: bool
+    maintenance_trust_root_changes: tuple[dict[str, str], ...]
+
+    @property
+    def maintenance(self) -> bool:
+        return (
+            bool(self.protected_changes)
+            and self.maintenance_requested
+            and not self.maintenance_trust_root_changes
+        )
 
     @property
     def eligible(self) -> bool:
-        return not self.protected_changes
+        return not self.protected_changes or self.maintenance
 
 
 class GitHubAPI:
@@ -287,16 +303,50 @@ def _tree_index(payload: Any, *, label: str) -> dict[str, str]:
     return index
 
 
-def _protected_changes(
-    base_tree: dict[str, str], subject_tree: dict[str, str]
+def _changes_for_paths(
+    base_tree: dict[str, str],
+    subject_tree: dict[str, str],
+    *,
+    paths: tuple[str, ...],
 ) -> tuple[dict[str, str], ...]:
     rows: list[dict[str, str]] = []
-    for path in PROTECTED_PATHS:
+    for path in paths:
         base_oid = base_tree.get(path, "MISSING")
         subject_oid = subject_tree.get(path, "MISSING")
         if base_oid != subject_oid:
             rows.append({"path": path, "base_oid": base_oid, "subject_oid": subject_oid})
     return tuple(rows)
+
+
+def _protected_changes(
+    base_tree: dict[str, str], subject_tree: dict[str, str]
+) -> tuple[dict[str, str], ...]:
+    return _changes_for_paths(base_tree, subject_tree, paths=PROTECTED_PATHS)
+
+
+def _maintenance_trust_root_changes(
+    base_tree: dict[str, str], subject_tree: dict[str, str]
+) -> tuple[dict[str, str], ...]:
+    return _changes_for_paths(base_tree, subject_tree, paths=MAINTENANCE_TRUST_ROOTS)
+
+
+def _maintenance_requested(pr: dict[str, Any], *, head_sha: str) -> bool:
+    body = pr.get("body")
+    if body is None:
+        return False
+    if not isinstance(body, str):
+        raise ValueError("pull request body must be a string when present")
+    markers = MAINTENANCE_MARKER_RE.findall(body)
+    if len(markers) > 1:
+        raise ValueError("trusted maintenance request must contain at most one exact-head marker")
+    if markers != [head_sha]:
+        return False
+    author = _require_dict(pr.get("user"), label="live pull request author")
+    return (
+        author.get("login") == EXPECTED_OWNER
+        and _require_positive_int(author.get("id"), label="live pull request author id")
+        == EXPECTED_OWNER_ID
+    )
 
 
 def evaluate_admission(api: GitHubAPI, *, event: dict[str, Any]) -> Admission:
@@ -385,12 +435,15 @@ def evaluate_admission(api: GitHubAPI, *, event: dict[str, Any]) -> Admission:
         merge_sha=merge_sha,
         trusted_sha=trusted_sha,
         protected_changes=_protected_changes(base_tree, merge_tree),
+        maintenance_requested=_maintenance_requested(pr, head_sha=head_sha),
+        maintenance_trust_root_changes=_maintenance_trust_root_changes(base_tree, merge_tree),
     )
 
 
 def write_github_outputs(path: Path, admission: Admission) -> None:
     values = {
         "eligible": "true" if admission.eligible else "false",
+        "maintenance": "true" if admission.maintenance else "false",
         "pr_number": str(admission.pr_number),
         "head_sha": admission.head_sha,
         "base_sha": admission.base_sha,
@@ -427,6 +480,7 @@ def main() -> None:
     write_github_outputs(args.github_output, admission)
     summary = {
         "eligible": admission.eligible,
+        "maintenance": admission.maintenance,
         "pr_number": admission.pr_number,
         "head_sha": admission.head_sha,
         "base_sha": admission.base_sha,

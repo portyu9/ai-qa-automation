@@ -1,6 +1,6 @@
 name: Trusted PR Auto Gate — ƳƤ AI QA Automation Framework
 
-# Default-branch-owned automatic admission for routine same-repository PRs.
+# Default-branch-owned admission for routine PRs plus explicit exact-head owner maintenance.
 # The workflow_run event is a wake-up signal only. No candidate code executes until
 # live PR identity, exact merge parents, current main, and protected Git objects agree.
 on:
@@ -30,6 +30,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       eligible: ${{ steps.admission.outputs.eligible }}
+      maintenance: ${{ steps.admission.outputs.maintenance }}
       pr_number: ${{ steps.admission.outputs.pr_number }}
       head_sha: ${{ steps.admission.outputs.head_sha }}
       base_sha: ${{ steps.admission.outputs.base_sha }}
@@ -65,15 +66,22 @@ jobs:
       - name: Bind admission to this trusted workflow revision
         env:
           ELIGIBLE: ${{ steps.admission.outputs.eligible }}
+          MAINTENANCE: ${{ steps.admission.outputs.maintenance }}
           TRUSTED_SHA: ${{ steps.admission.outputs.trusted_sha }}
           PROTECTED_CHANGES_JSON: ${{ steps.admission.outputs.protected_changes_json }}
         run: |
           set -euo pipefail
           test "$TRUSTED_SHA" = "$GITHUB_SHA"
           if test "$ELIGIBLE" = "true"; then
-            test "$PROTECTED_CHANGES_JSON" = "[]"
+            if test "$MAINTENANCE" = "true"; then
+              test "$PROTECTED_CHANGES_JSON" != "[]"
+            else
+              test "$MAINTENANCE" = "false"
+              test "$PROTECTED_CHANGES_JSON" = "[]"
+            fi
           else
             test "$ELIGIBLE" = "false"
+            test "$MAINTENANCE" = "false"
             test "$PROTECTED_CHANGES_JSON" != "[]"
           fi
 
@@ -97,6 +105,7 @@ jobs:
           EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
           EXPECTED_MERGE_SHA: ${{ needs.preflight.outputs.merge_sha }}
           EXPECTED_TRUSTED_SHA: ${{ needs.preflight.outputs.trusted_sha }}
+          MAINTENANCE: ${{ needs.preflight.outputs.maintenance }}
         run: |
           set -euo pipefail
           sha_re='^[0-9a-f]{40}$'
@@ -130,6 +139,10 @@ jobs:
             src/ai_qa_automation/tools/__init__.py
             src/ai_qa_automation/tools/execution_env.py
           )
+          maintenance_root_paths=(
+            .github/workflows/trusted-pr-auto.yml
+            scripts/auto_trusted_preflight.py
+          )
           oid_for() {
             local revision="$1"
             local path="$2"
@@ -142,7 +155,13 @@ jobs:
             [[ "$oid" =~ ^[0-9a-f]{40}$ ]]
             printf '%s' "$oid"
           }
-          for path in "${protected_paths[@]}"; do
+          if test "$MAINTENANCE" = "true"; then
+            paths_to_check=("${maintenance_root_paths[@]}")
+          else
+            test "$MAINTENANCE" = "false"
+            paths_to_check=("${protected_paths[@]}")
+          fi
+          for path in "${paths_to_check[@]}"; do
             base_oid="$(oid_for "$EXPECTED_BASE_SHA" "$path")"
             subject_oid="$(oid_for "$EXPECTED_MERGE_SHA" "$path")"
             test "$base_oid" = "$subject_oid"
@@ -656,7 +675,9 @@ jobs:
           EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
           EXPECTED_MERGE_SHA: ${{ needs.preflight.outputs.merge_sha }}
           EXPECTED_TRUSTED_SHA: ${{ needs.preflight.outputs.trusted_sha }}
+          EXPECTED_MAINTENANCE: ${{ needs.preflight.outputs.maintenance }}
           FINAL_ELIGIBLE: ${{ steps.final-admission.outputs.eligible }}
+          FINAL_MAINTENANCE: ${{ steps.final-admission.outputs.maintenance }}
           FINAL_PR_NUMBER: ${{ steps.final-admission.outputs.pr_number }}
           FINAL_HEAD_SHA: ${{ steps.final-admission.outputs.head_sha }}
           FINAL_BASE_SHA: ${{ steps.final-admission.outputs.base_sha }}
@@ -666,7 +687,13 @@ jobs:
         run: |
           set -euo pipefail
           test "$FINAL_ELIGIBLE" = "true"
-          test "$FINAL_PROTECTED_CHANGES" = "[]"
+          test "$FINAL_MAINTENANCE" = "$EXPECTED_MAINTENANCE"
+          if test "$EXPECTED_MAINTENANCE" = "true"; then
+            test "$FINAL_PROTECTED_CHANGES" != "[]"
+          else
+            test "$EXPECTED_MAINTENANCE" = "false"
+            test "$FINAL_PROTECTED_CHANGES" = "[]"
+          fi
           test "$FINAL_PR_NUMBER" = "$EXPECTED_PR_NUMBER"
           test "$FINAL_HEAD_SHA" = "$EXPECTED_HEAD_SHA"
           test "$FINAL_BASE_SHA" = "$EXPECTED_BASE_SHA"
