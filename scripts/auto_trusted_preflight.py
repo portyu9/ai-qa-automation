@@ -68,7 +68,9 @@ class Admission:
 
     @property
     def eligible(self) -> bool:
-        return not self.protected_changes or self.maintenance
+        return not self.maintenance_trust_root_changes and (
+            not self.protected_changes or self.maintenance
+        )
 
 
 class GitHubAPI:

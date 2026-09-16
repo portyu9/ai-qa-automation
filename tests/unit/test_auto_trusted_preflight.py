@@ -197,6 +197,26 @@ def test_non_owner_marker_does_not_authorize_protected_change() -> None:
     assert admission.maintenance is False
 
 
+def test_trust_root_change_alone_is_never_auto_eligible() -> None:
+    responses = _responses()
+    merge_tree = responses[
+        f"/repos/{preflight.EXPECTED_REPOSITORY}/git/trees/{MERGE_TREE}?recursive=1"
+    ]["tree"]
+    for row in merge_tree:
+        if row["path"] == "scripts/auto_trusted_preflight.py":
+            row["sha"] = "8" * 40
+            break
+    else:
+        raise AssertionError("maintenance trust root missing from synthetic tree")
+
+    admission = preflight.evaluate_admission(FakeAPI(responses), event=_event())
+
+    assert admission.protected_changes == ()
+    assert admission.maintenance_trust_root_changes
+    assert admission.eligible is False
+    assert admission.maintenance is False
+
+
 def test_maintenance_cannot_modify_its_own_trust_root() -> None:
     responses = _responses(changed_path="requirements")
     pr = responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]
