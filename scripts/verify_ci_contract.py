@@ -43,7 +43,7 @@ EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "fbe47dcf9a201dfb9da390b01e68f5b662689538"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
-    "bc35a5c6ab035f17892144dff9d5f467fef25f5e"  # pragma: allowlist secret
+    "675e0e8831821181aaf4524b374625b5efc8f38d"  # pragma: allowlist secret
 )
 EXPECTED_CODEQL_MAJOR = 4
 CODEQL_ACTION_RE = re.compile(
@@ -367,6 +367,8 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
 def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
     base = _trusted_auto._base
     semantic = base._semantic_text(text)
+    if "  pull_request_target:" in semantic:
+        raise ValueError("dependency-governance.yml must not use pull_request_target")
     if base._git_blob_sha1(text) != EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA:
         raise ValueError(
             "dependency-governance.yml bytes differ from the exact reviewed dependency authority"
@@ -374,8 +376,6 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
     required = (
         "name: dependency-governance",
         "  pull_request:",
-        "  pull_request_target:",
-        "    types: [opened, reopened, synchronize, ready_for_review]",
         "  workflow_run:",
         "    workflows: ['CI — ƳƤ AI QA Automation Framework', CodeQL]",
         "    types: [completed]",
