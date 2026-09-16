@@ -1,0 +1,12 @@
+{
+  "lockBlobs": {
+    "base-image.lock": "ba4fdd5d0944e5cefe925743d21d661f2eed0d7d",
+    "build-py311.lock": "3b7da9eed4eaede5653c54133cf15da9ee06390e",
+    "dev-py311.lock": "d34c0fafd46403aeb93877d19fa03628278375c4",
+    "dev-py314.lock": "b03147fb5b26ddcdf426299ff46b58533a6ddca8",
+    "runtime-py311.lock": "ae2856b5bde92b398454081058f6082af915b532"
+  },
+  "resolverPolicy": "pypi-https-wheel-only-double-resolve-hash-replay",
+  "schemaVersion": 1,
+  "sourcePyprojectSha256": "1bb4709e205c04ebf56bb42cf969a49b4e81c6a4025e3c38f407c7e40a19d29d"
+}
