@@ -1,4 +1,4 @@
-name: Temporary exact-subject finalizer
+name: Temporary promotion adversarial finalizer
 
 on:
   push:
@@ -20,14 +20,14 @@ jobs:
         with:
           ref: automation/autonomous-dependency-promotion
           fetch-depth: 1
-      - name: Apply exact dispatch subject hardening
+      - name: Apply final promotion adversarial checks
         run: python .github/scripts/_bind_dispatch_subject.py
-      - name: Commit exact dispatch subject hardening
+      - name: Commit final promotion adversarial checks
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add .github/scripts/dependency_promotion.py .github/scripts/security_autoheal.py scripts/verify_ci_contract.py
+          git add .github/scripts/dependency_promotion.py scripts/verify_fork_cloud_authority.py
           git diff --cached --check
-          git commit -m 'ci: bind generated qualification to event SHA'
+          git commit -m 'test: harden dependency promotion policy'
           git push origin HEAD:automation/autonomous-dependency-promotion
