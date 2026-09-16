@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "enabled": true,
+  "maxRunAttempts": 2,
+  "workflow": "CI — ƳƤ AI QA Automation Framework",
+  "aggregateJobs": [
+    "Required PR Gate"
+  ],
+  "transientSteps": [
+    "Set up Python",
+    "Install hash-locked development graph",
+    "Install hash-locked project environment",
+    "Install hash-locked security environment",
+    "Install hash-locked verification environment",
+    "Upload deterministic test evidence",
+    "Upload deterministic control evaluation evidence",
+    "Upload supply-chain evidence",
+    "Upload security scan metadata",
+    "Upload browser test metadata"
+  ]
+}
