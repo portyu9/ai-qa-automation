@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from html import escape
 from typing import Annotated, Literal
-from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
@@ -71,10 +69,6 @@ def checkout(mode: Annotated[Mode, Query()] = "pass") -> str:
         )
 
     quantity = "0" if mode == "invalid-data" else "1"
-    # The query parameter is validated by FastAPI's Literal contract, percent-encoded for the
-    # request URL, and HTML-escaped before crossing into an HTML response. The defense-in-depth
-    # encoding keeps this deterministic reference SUT safe even if the route type changes later.
-    rendered_mode = escape(quote(mode, safe=""), quote=True)
 
     return f"""
 <!doctype html>
@@ -95,7 +89,7 @@ def checkout(mode: Annotated[Mode, Query()] = "pass") -> str:
       // data-testid-based test fails for the right reason.
       const button = document.querySelector('button[role="button"][aria-label="Place order"]');
       if (button) button.addEventListener('click', async () => {{
-        const response = await fetch('/api/orders?mode={rendered_mode}', {{
+        const response = await fetch('/api/orders?mode={mode}', {{
           method: 'POST', headers: {{'content-type': 'application/json'}},
           body: JSON.stringify({{sku: document.querySelector('#sku').value, quantity: Number(document.querySelector('#qty').value)}})
         }});

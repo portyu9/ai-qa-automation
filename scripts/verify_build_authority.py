@@ -18,7 +18,7 @@ MAX_BUILD_SOURCE_FILE_BYTES = 8 * 1024 * 1024
 MAX_BUILD_SOURCE_TOTAL_BYTES = 32 * 1024 * 1024
 MAX_REQUIREMENTS_ENTRIES = 32
 MAX_LOCK_BYTES = 1024 * 1024
-LOCK_AUTHORITY_FILENAME = "lock-authority.json"
+LOCK_AUTHORITY_PATH = Path(".github/lock-authority.json")
 EXPECTED_LOCK_NAMES = {
     "base-image.lock",
     "build-py311.lock",
@@ -231,7 +231,7 @@ def _verify_reviewed_lock_authority(root: Path, *, pyproject_sha256: str) -> dic
                 "dependency lock set differs from the exact manifest-bound automatic-install authority"
             )
 
-        authority_path = requirements / LOCK_AUTHORITY_FILENAME
+        authority_path = root / LOCK_AUTHORITY_PATH
         if authority_path.is_symlink() or not authority_path.is_file():
             raise ValueError("lock authority manifest must be a regular non-symlink file")
         authority_raw = authority_path.read_bytes()

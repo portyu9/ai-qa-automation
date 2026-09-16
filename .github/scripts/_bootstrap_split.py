@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path.cwd()
-OLD_MANIFEST = "requirements/lock-authority.json"
+OLD_MANIFEST = ".github/lock-authority.json"
 NEW_MANIFEST = ".github/lock-authority.json"
 
 
@@ -28,7 +28,7 @@ old_manifest = ROOT / OLD_MANIFEST
 new_manifest = ROOT / NEW_MANIFEST
 new_manifest.parent.mkdir(parents=True, exist_ok=True)
 if not old_manifest.is_file() or old_manifest.is_symlink():
-    raise SystemExit("expected regular requirements/lock-authority.json before bootstrap split")
+    raise SystemExit("expected regular .github/lock-authority.json before bootstrap split")
 old_manifest.replace(new_manifest)
 
 # Rebind all literal repository references to the new authority location.

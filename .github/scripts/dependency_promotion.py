@@ -49,7 +49,7 @@ PROMOTION_PATHS = {
     "requirements/dev-py311.lock",
     "requirements/dev-py314.lock",
     "requirements/runtime-py311.lock",
-    "requirements/lock-authority.json",
+    ".github/lock-authority.json",
 }
 REQUIRED_CHECKS = ("Required PR Gate", "CodeQL")
 
@@ -277,9 +277,9 @@ def _compile(source: dict[str, Any]) -> dict[str, bytes]:
             "dev-py311.lock",
             "dev-py314.lock",
             "runtime-py311.lock",
-            "lock-authority.json",
         ):
             result[f"requirements/{name}"] = (output / name).read_bytes()
+        result[".github/lock-authority.json"] = (output / "lock-authority.json").read_bytes()
         return result
 
 
@@ -443,7 +443,7 @@ def _validate_promotion(
         not paths
         or not paths <= PROMOTION_PATHS
         or "pyproject.toml" not in paths
-        or "requirements/lock-authority.json" not in paths
+        or ".github/lock-authority.json" not in paths
     ):
         raise PolicyBlock(
             f"promotion changed-path set is outside generated authority: {sorted(paths)}"

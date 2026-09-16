@@ -19,6 +19,8 @@ def _copy_build_inputs(tmp_path: Path) -> Path:
     shutil.copyfile(ROOT / "README.md", root / "README.md")
     shutil.copyfile(ROOT / "LICENSE", root / "LICENSE")
     shutil.copytree(ROOT / "requirements", root / "requirements")
+    (root / ".github").mkdir()
+    shutil.copyfile(ROOT / build_authority.LOCK_AUTHORITY_PATH, root / build_authority.LOCK_AUTHORITY_PATH)
     (root / "src").mkdir()
     shutil.copytree(ROOT / "src" / "ai_qa_automation", root / "src" / "ai_qa_automation")
     return root
@@ -34,7 +36,7 @@ def test_repository_build_authority_is_static() -> None:
     assert result["project_scripts"] == {"ai-qa": "ai_qa_automation.cli:app"}
     assert result["project_entry_points"] is False
     authority = json.loads(
-        (ROOT / "requirements" / build_authority.LOCK_AUTHORITY_FILENAME).read_text(
+        (ROOT / build_authority.LOCK_AUTHORITY_PATH).read_text(
             encoding="utf-8"
         )
     )
