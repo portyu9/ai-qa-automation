@@ -35,18 +35,50 @@ TRANSIENT_SIGNATURES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("network-unreachable", re.compile(r"\bENETUNREACH\b", re.I)),
     ("host-unreachable", re.compile(r"\bEHOSTUNREACH\b", re.I)),
     ("socket-hang-up", re.compile(r"\bsocket hang up\b", re.I)),
-    ("http-5xx", re.compile(r"(?:status(?: code)?|HTTP(?:/\d(?:\.\d)?)?|server returned code)\s*[:=]?\s*(?:502|503|504)\b", re.I)),
-    ("gateway-service-outage", re.compile(r"\b(?:502 Bad Gateway|503 Service Unavailable|504 Gateway Timeout)\b", re.I)),
-    ("tls-transient", re.compile(r"\bTLS\b.*\b(?:handshake|connection)\b.*\b(?:timeout|timed out|unexpected EOF)\b", re.I)),
+    (
+        "http-5xx",
+        re.compile(
+            r"(?:status(?: code)?|HTTP(?:/\d(?:\.\d)?)?|server returned code)\s*[:=]?\s*(?:502|503|504)\b",
+            re.I,
+        ),
+    ),
+    (
+        "gateway-service-outage",
+        re.compile(r"\b(?:502 Bad Gateway|503 Service Unavailable|504 Gateway Timeout)\b", re.I),
+    ),
+    (
+        "tls-transient",
+        re.compile(
+            r"\bTLS\b.*\b(?:handshake|connection)\b.*\b(?:timeout|timed out|unexpected EOF)\b", re.I
+        ),
+    ),
 )
 
 NON_TRANSIENT_SIGNATURES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("pip-resolution-impossible", re.compile(r"\bResolutionImpossible\b", re.I)),
-    ("pip-unsatisfied-requirement", re.compile(r"Could not find a version that satisfies the requirement", re.I)),
+    (
+        "pip-unsatisfied-requirement",
+        re.compile(r"Could not find a version that satisfies the requirement", re.I),
+    ),
     ("pip-no-matching-distribution", re.compile(r"No matching distribution found", re.I)),
-    ("pip-hash-mismatch", re.compile(r"(?:THESE PACKAGES DO NOT MATCH THE HASHES|HashMismatch|hashes? from the requirements file)", re.I)),
-    ("pip-dependency-conflict", re.compile(r"(?:conflicting dependencies|dependency conflict|ResolutionTooDeep)", re.I)),
-    ("http-client-or-policy", re.compile(r"(?:status(?: code)?|HTTP(?:/\d(?:\.\d)?)?|server returned code)\s*[:=]?\s*(?:400|401|403|404|409|422|429)\b", re.I)),
+    (
+        "pip-hash-mismatch",
+        re.compile(
+            r"(?:THESE PACKAGES DO NOT MATCH THE HASHES|HashMismatch|hashes? from the requirements file)",
+            re.I,
+        ),
+    ),
+    (
+        "pip-dependency-conflict",
+        re.compile(r"(?:conflicting dependencies|dependency conflict|ResolutionTooDeep)", re.I),
+    ),
+    (
+        "http-client-or-policy",
+        re.compile(
+            r"(?:status(?: code)?|HTTP(?:/\d(?:\.\d)?)?|server returned code)\s*[:=]?\s*(?:400|401|403|404|409|422|429)\b",
+            re.I,
+        ),
+    ),
     ("permission-denied", re.compile(r"\b(?:EACCES|EPERM|Permission denied)\b", re.I)),
     ("disk-space", re.compile(r"\b(?:ENOSPC|No space left on device)\b", re.I)),
 )
@@ -87,7 +119,9 @@ SAFE_POLICIES = {
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req: urllib.request.Request, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> None:
+    def redirect_request(
+        self, req: urllib.request.Request, fp: Any, code: int, msg: str, headers: Any, newurl: str
+    ) -> None:
         return None
 
 
@@ -171,22 +205,37 @@ def extract_step_log_window(logs: str, step: dict[str, Any]) -> str | None:
 def classify_failed_job(job: dict[str, Any], logs: str, config: dict[str, Any]) -> dict[str, Any]:
     if job.get("conclusion") != "failure":
         return {"transient": False, "reason": "job conclusion is not failure"}
-    failed_steps = [step for step in (job.get("steps") or []) if step.get("conclusion") == "failure"]
+    failed_steps = [
+        step for step in (job.get("steps") or []) if step.get("conclusion") == "failure"
+    ]
     if len(failed_steps) != 1:
-        return {"transient": False, "reason": f"expected exactly one failed step, found {len(failed_steps)}"}
+        return {
+            "transient": False,
+            "reason": f"expected exactly one failed step, found {len(failed_steps)}",
+        }
     failed = failed_steps[0]
     name = str(failed.get("name") or "")
     if name not in config["transientSteps"]:
         return {"transient": False, "reason": f"failed step is outside recovery allowlist: {name}"}
     window = extract_step_log_window(logs, failed)
     if window is None:
-        return {"transient": False, "reason": f"no timestamp-bounded log window for failed step: {name}"}
+        return {
+            "transient": False,
+            "reason": f"no timestamp-bounded log window for failed step: {name}",
+        }
     blockers = matching_non_transient_signatures(window)
     if blockers:
-        return {"transient": False, "reason": "deterministic/policy blocker outranks transient evidence", "blockers": blockers}
+        return {
+            "transient": False,
+            "reason": "deterministic/policy blocker outranks transient evidence",
+            "blockers": blockers,
+        }
     transient = matching_transient_signatures(window)
     if not transient:
-        return {"transient": False, "reason": "no approved transient signature in failed-step log window"}
+        return {
+            "transient": False,
+            "reason": "no approved transient signature in failed-step log window",
+        }
     return {"transient": True, "failedStep": name, "signatures": transient}
 
 
@@ -214,10 +263,20 @@ def _fetch_job_logs(api: GitHubApi, job_id: int) -> str:
         raise GovernanceError("job log endpoint did not return the expected signed redirect")
     parsed = urllib.parse.urlsplit(location)
     host = (parsed.hostname or "").lower()
-    allowed_host = host.endswith(".actions.githubusercontent.com") or host.endswith(".blob.core.windows.net")
-    if parsed.scheme != "https" or not allowed_host or parsed.username or parsed.password or len(location) > 8192:
+    allowed_host = host.endswith(".actions.githubusercontent.com") or host.endswith(
+        ".blob.core.windows.net"
+    )
+    if (
+        parsed.scheme != "https"
+        or not allowed_host
+        or parsed.username
+        or parsed.password
+        or len(location) > 8192
+    ):
         raise GovernanceError("job log redirect target is not an approved GitHub Actions log host")
-    unsigned = urllib.request.Request(location, method="GET", headers={"User-Agent": "dependabot-recovery"})
+    unsigned = urllib.request.Request(
+        location, method="GET", headers={"User-Agent": "dependabot-recovery"}
+    )
     try:
         with urllib.request.urlopen(unsigned, timeout=30) as response:
             raw = response.read(4 * 1024 * 1024 + 1)
@@ -280,10 +339,17 @@ def _recover_run(api: GitHubApi, run: dict[str, Any], config: dict[str, Any]) ->
         raise GovernanceError("failed job id is invalid")
     decision = classify_failed_job(job, _fetch_job_logs(api, job_id), config)
     if decision.get("transient") is not True:
-        print(json.dumps({"recovery": "blocked", "job": job.get("name"), **decision}, sort_keys=True))
+        print(
+            json.dumps({"recovery": "blocked", "job": job.get("name"), **decision}, sort_keys=True)
+        )
         return False
     api.post(f"/actions/jobs/{job_id}/rerun")
-    print(json.dumps({"recovery": "rerun-requested", "job": job.get("name"), "jobId": job_id, **decision}, sort_keys=True))
+    print(
+        json.dumps(
+            {"recovery": "rerun-requested", "job": job.get("name"), "jobId": job_id, **decision},
+            sort_keys=True,
+        )
+    )
     return True
 
 
@@ -302,7 +368,11 @@ def recover(config: dict[str, Any], recovery: dict[str, Any]) -> int:
             live = api.get(f"/pulls/{number}")
             subject = assess(api, live, config, require_checks=False)
         except PolicyBlock as exc:
-            print(json.dumps({"pr": number, "recovery": "blocked", "reason": str(exc)}, sort_keys=True))
+            print(
+                json.dumps(
+                    {"pr": number, "recovery": "blocked", "reason": str(exc)}, sort_keys=True
+                )
+            )
             continue
         run = _latest_failed_run(api, subject["headSha"], recovery["workflow"])
         if run is None:

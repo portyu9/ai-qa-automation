@@ -80,10 +80,18 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         if not isinstance(value, int) or isinstance(value, bool) or not (1 <= value <= maximum):
             errors.append(f"{key} must be an integer from 1 to {maximum}")
     labels = config.get("manualReviewLabels")
-    if not isinstance(labels, list) or not labels or not all(isinstance(x, str) and x.strip() for x in labels):
+    if (
+        not isinstance(labels, list)
+        or not labels
+        or not all(isinstance(x, str) and x.strip() for x in labels)
+    ):
         errors.append("manualReviewLabels must be a non-empty string list")
     paths = config.get("manualReviewPaths")
-    if not isinstance(paths, list) or not paths or not all(isinstance(x, str) and x.strip() for x in paths):
+    if (
+        not isinstance(paths, list)
+        or not paths
+        or not all(isinstance(x, str) and x.strip() for x in paths)
+    ):
         errors.append("manualReviewPaths must be a non-empty string list")
         paths = []
     critical = {
@@ -95,13 +103,22 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         ".github/scripts/dependency_recovery.py",
         ".github/scripts/dependency_recovery_selfcheck.py",
         ".github/workflows/dependency-governance.yml",
-        ".github/workflows/codeql.yml",
+        ".github/workflows/trusted-pr-auto.yml",
+        "scripts/auto_trusted_preflight.py",
+        "scripts/auto_trusted_report.py",
+        "scripts/trusted_pr_control.py",
+        "scripts/verify_ci_contract.py",
+        "scripts/verify_fork_cloud_authority.py",
     }
     for item in sorted(critical):
         if item not in paths:
             errors.append(f"{item} must require manual review")
     checks = config.get("requiredChecks")
-    if not isinstance(checks, list) or not checks or not all(isinstance(x, str) and x.strip() for x in checks):
+    if (
+        not isinstance(checks, list)
+        or not checks
+        or not all(isinstance(x, str) and x.strip() for x in checks)
+    ):
         errors.append("requiredChecks must be a non-empty string list")
     elif len(set(checks)) != len(checks):
         errors.append("requiredChecks must not contain duplicates")
@@ -113,7 +130,9 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         "security-update:semver-minor",
     }
     if not isinstance(allowed, list) or set(allowed) != expected_allowed:
-        errors.append("allowedActionUpdateTypes must be exactly patch/minor version and security updates")
+        errors.append(
+            "allowedActionUpdateTypes must be exactly patch/minor version and security updates"
+        )
     publish = config.get("publishTrustedStatus")
     if not isinstance(publish, bool):
         errors.append("publishTrustedStatus must be boolean")
@@ -161,7 +180,9 @@ class GitHubApi:
                 raw = response.read(max_bytes + 1)
         except urllib.error.HTTPError as exc:
             detail = exc.read(4096).decode("utf-8", errors="replace")
-            raise GovernanceError(f"GitHub API {method} {path} failed HTTP {exc.code}: {detail}") from exc
+            raise GovernanceError(
+                f"GitHub API {method} {path} failed HTTP {exc.code}: {detail}"
+            ) from exc
         except urllib.error.URLError as exc:
             raise GovernanceError(f"GitHub API {method} {path} transport failure: {exc}") from exc
         if len(raw) > max_bytes:
@@ -190,7 +211,9 @@ class GitHubApi:
     def get(self, path: str) -> Any:
         return self.request("GET", path)
 
-    def post(self, path: str, payload: dict[str, Any] | None = None, *, token: str | None = None) -> Any:
+    def post(
+        self, path: str, payload: dict[str, Any] | None = None, *, token: str | None = None
+    ) -> Any:
         return self.request("POST", path, payload, token=token)
 
     def put(self, path: str, payload: dict[str, Any]) -> Any:
@@ -202,7 +225,9 @@ class GitHubApi:
         for page in range(1, max_pages + 1):
             payload = self.get(f"{path}{separator}per_page=100&page={page}")
             if isinstance(payload, dict):
-                rows = payload.get("check_runs") or payload.get("workflow_runs") or payload.get("jobs")
+                rows = (
+                    payload.get("check_runs") or payload.get("workflow_runs") or payload.get("jobs")
+                )
             else:
                 rows = payload
             if not isinstance(rows, list):
@@ -246,7 +271,9 @@ def _parse_time(value: Any) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
-def validate_pr_identity(api: GitHubApi, pr: dict[str, Any], config: dict[str, Any]) -> tuple[str, str, int]:
+def validate_pr_identity(
+    api: GitHubApi, pr: dict[str, Any], config: dict[str, Any]
+) -> tuple[str, str, int]:
     number = pr.get("number")
     if not isinstance(number, int) or number < 1:
         raise PolicyBlock("invalid pull request number")
@@ -261,7 +288,10 @@ def validate_pr_identity(api: GitHubApi, pr: dict[str, Any], config: dict[str, A
     base = pr.get("base") or {}
     head_repo = head.get("repo") or {}
     base_repo = base.get("repo") or {}
-    if head_repo.get("full_name") != config["repository"] or base_repo.get("full_name") != config["repository"]:
+    if (
+        head_repo.get("full_name") != config["repository"]
+        or base_repo.get("full_name") != config["repository"]
+    ):
         raise PolicyBlock("Dependabot pull request must use repository-owned head and base")
     if base.get("ref") != config["baseBranch"]:
         raise PolicyBlock("pull request does not target main")
@@ -273,7 +303,9 @@ def validate_pr_identity(api: GitHubApi, pr: dict[str, Any], config: dict[str, A
         raise PolicyBlock("pull request base is stale; wait for Dependabot native rebase")
     if _labels(pr) & set(config["manualReviewLabels"]):
         raise PolicyBlock("pull request carries a manual-review blocker label")
-    age_days = (datetime.now(timezone.utc) - _parse_time(pr.get("created_at"))).total_seconds() / 86400
+    age_days = (
+        datetime.now(timezone.utc) - _parse_time(pr.get("created_at"))
+    ).total_seconds() / 86400
     if age_days < 0 or age_days > config["maxPullRequestAgeDays"]:
         raise PolicyBlock("pull request is outside the bounded automatic-merge age")
     return head_sha, base_sha, number
@@ -282,7 +314,9 @@ def validate_pr_identity(api: GitHubApi, pr: dict[str, Any], config: dict[str, A
 def validate_commits(api: GitHubApi, number: int, config: dict[str, Any]) -> None:
     commits = api.list_all(f"/pulls/{number}/commits", max_pages=2)
     if len(commits) != 1:
-        raise PolicyBlock(f"automatic governance requires exactly one Dependabot commit, found {len(commits)}")
+        raise PolicyBlock(
+            f"automatic governance requires exactly one Dependabot commit, found {len(commits)}"
+        )
     row = commits[0]
     author = row.get("author") or {}
     committer = row.get("committer") or {}
@@ -297,7 +331,10 @@ def validate_commits(api: GitHubApi, number: int, config: dict[str, Any]) -> Non
         raise PolicyBlock("commit author email does not match canonical Dependabot identity")
     if committer.get("login") != TRUSTED_COMMITTER_LOGIN:
         raise PolicyBlock("commit committer is not GitHub web-flow")
-    if raw_committer.get("name") != TRUSTED_COMMITTER_NAME or raw_committer.get("email") != TRUSTED_COMMITTER_EMAIL:
+    if (
+        raw_committer.get("name") != TRUSTED_COMMITTER_NAME
+        or raw_committer.get("email") != TRUSTED_COMMITTER_EMAIL
+    ):
         raise PolicyBlock("commit committer metadata is not canonical GitHub metadata")
     if verification.get("verified") is not True or verification.get("reason") != "valid":
         raise PolicyBlock("Dependabot commit signature is not verified-valid")
@@ -357,7 +394,9 @@ def validate_action_semantics(files: list[dict[str, Any]]) -> None:
                 continue
             parsed = parse_action_change(raw[1:])
             if parsed is None:
-                raise PolicyBlock(f"non-action semantic change requires manual review in {path}: {raw[:160]}")
+                raise PolicyBlock(
+                    f"non-action semantic change requires manual review in {path}: {raw[:160]}"
+                )
             (added if raw[0] == "+" else removed).append(parsed)
         if not removed or len(removed) != len(added):
             raise PolicyBlock(f"workflow update must replace action pins one-for-one: {path}")
@@ -370,8 +409,15 @@ def validate_action_semantics(files: list[dict[str, Any]]) -> None:
             new_versions = {item[2] for item in new}
             old_shas = {item[1] for item in old}
             new_shas = {item[1] for item in new}
-            if len(old_versions) != 1 or len(new_versions) != 1 or len(old_shas) != 1 or len(new_shas) != 1:
-                raise PolicyBlock(f"ambiguous repeated action update requires manual review: {action}")
+            if (
+                len(old_versions) != 1
+                or len(new_versions) != 1
+                or len(old_shas) != 1
+                or len(new_shas) != 1
+            ):
+                raise PolicyBlock(
+                    f"ambiguous repeated action update requires manual review: {action}"
+                )
             old_v = next(iter(old_versions))
             new_v = next(iter(new_versions))
             if old_v[0] != new_v[0]:
@@ -380,7 +426,9 @@ def validate_action_semantics(files: list[dict[str, Any]]) -> None:
                 raise PolicyBlock(f"action SHA did not change: {action}")
 
 
-def verify_merge_subject(api: GitHubApi, pr: dict[str, Any], number: int, head_sha: str, base_sha: str) -> str:
+def verify_merge_subject(
+    api: GitHubApi, pr: dict[str, Any], number: int, head_sha: str, base_sha: str
+) -> str:
     merge_sha = require_sha(pr.get("merge_commit_sha"), "prospective merge SHA")
     ref = api.get(f"/git/ref/pull/{number}/merge")
     if (ref or {}).get("ref") != f"refs/pull/{number}/merge":
@@ -425,7 +473,9 @@ def require_green_checks(api: GitHubApi, head_sha: str, config: dict[str, Any]) 
             )
 
 
-def assess(api: GitHubApi, pr: dict[str, Any], config: dict[str, Any], *, require_checks: bool) -> dict[str, Any]:
+def assess(
+    api: GitHubApi, pr: dict[str, Any], config: dict[str, Any], *, require_checks: bool
+) -> dict[str, Any]:
     head_sha, base_sha, number = validate_pr_identity(api, pr, config)
     validate_commits(api, number, config)
     files = changed_files(api, number, config)
@@ -508,9 +558,18 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
             if allow_merge and config["automergeEnabled"]:
                 _post_trusted_status(api, subject, config)
                 _merge(api, subject, config)
-                print(json.dumps({"pr": number, "decision": "merged", "headSha": subject["headSha"]}, sort_keys=True))
+                print(
+                    json.dumps(
+                        {"pr": number, "decision": "merged", "headSha": subject["headSha"]},
+                        sort_keys=True,
+                    )
+                )
         except PolicyBlock as exc:
-            print(json.dumps({"pr": number, "decision": "blocked", "reason": str(exc)}, sort_keys=True))
+            print(
+                json.dumps(
+                    {"pr": number, "decision": "blocked", "reason": str(exc)}, sort_keys=True
+                )
+            )
     return eligible
 
 
@@ -524,30 +583,42 @@ def selftest(config: dict[str, Any]) -> None:
         raise GovernanceError("immutable action-line parser rejected canonical pinned action")
     if parse_action_change(bad_tag) is not None:
         raise GovernanceError("immutable action-line parser accepted mutable tag")
-    synthetic = [{
-        "filename": ".github/workflows/ci.yml",
-        "status": "modified",
-        "patch": "@@ -1 +1 @@\n-      - uses: actions/checkout@" + "a"*40 + " # v7.0.0\n"
-                 "+      - uses: actions/checkout@" + "b"*40 + " # v7.0.1\n",
-    }]
-    validate_action_semantics(synthetic)
-    try:
-        validate_action_semantics([{
+    synthetic = [
+        {
             "filename": ".github/workflows/ci.yml",
             "status": "modified",
-            "patch": "@@ -1 +1 @@\n-run: echo old\n+run: echo new\n",
-        }])
+            "patch": "@@ -1 +1 @@\n-      - uses: actions/checkout@" + "a" * 40 + " # v7.0.0\n"
+            "+      - uses: actions/checkout@" + "b" * 40 + " # v7.0.1\n",
+        }
+    ]
+    validate_action_semantics(synthetic)
+    try:
+        validate_action_semantics(
+            [
+                {
+                    "filename": ".github/workflows/ci.yml",
+                    "status": "modified",
+                    "patch": "@@ -1 +1 @@\n-run: echo old\n+run: echo new\n",
+                }
+            ]
+        )
     except PolicyBlock:
         pass
     else:
         raise GovernanceError("semantic validator accepted non-action workflow mutation")
     try:
-        validate_action_semantics([{
-            "filename": ".github/workflows/ci.yml",
-            "status": "modified",
-            "patch": "@@ -1 +1 @@\n-      - uses: actions/checkout@" + "a"*40 + " # v7.0.1\n"
-                     "+      - uses: actions/checkout@" + "b"*40 + " # v8.0.0\n",
-        }])
+        validate_action_semantics(
+            [
+                {
+                    "filename": ".github/workflows/ci.yml",
+                    "status": "modified",
+                    "patch": "@@ -1 +1 @@\n-      - uses: actions/checkout@"
+                    + "a" * 40
+                    + " # v7.0.1\n"
+                    "+      - uses: actions/checkout@" + "b" * 40 + " # v8.0.0\n",
+                }
+            ]
+        )
     except PolicyBlock:
         pass
     else:

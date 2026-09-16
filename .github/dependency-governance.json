@@ -32,10 +32,11 @@
     ".github/scripts/dependency_recovery.py",
     ".github/scripts/dependency_recovery_selfcheck.py",
     ".github/workflows/dependency-governance.yml",
-    ".github/workflows/codeql.yml",
     ".github/workflows/trusted-pr-auto.yml",
     "scripts/auto_trusted_preflight.py",
     "scripts/auto_trusted_report.py",
-    "scripts/trusted_pr_control.py"
+    "scripts/trusted_pr_control.py",
+    "scripts/verify_ci_contract.py",
+    "scripts/verify_fork_cloud_authority.py"
   ]
 }

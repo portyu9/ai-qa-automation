@@ -322,16 +322,23 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
             raise ValueError(f"codeql.yml missing reviewed invariant: {fragment}")
     uses = base.ACTION_RE.findall(text)
     if len(uses) != 3:
-        raise ValueError("codeql.yml must contain exactly checkout, CodeQL init, and CodeQL analyze")
+        raise ValueError(
+            "codeql.yml must contain exactly checkout, CodeQL init, and CodeQL analyze"
+        )
     checkout = [item for item in uses if item[0] == "actions/checkout"]
-    if len(checkout) != 1 or checkout[0][1].lower() != base.EXPECTED_ACTION_SHAS["actions/checkout"]:
+    if (
+        len(checkout) != 1
+        or checkout[0][1].lower() != base.EXPECTED_ACTION_SHAS["actions/checkout"]
+    ):
         raise ValueError("codeql.yml checkout action must use the reviewed immutable revision")
     codeql = CODEQL_ACTION_RE.findall(text)
     if len(codeql) != 2 or {item[0] for item in codeql} != {
         "github/codeql-action/init",
         "github/codeql-action/analyze",
     }:
-        raise ValueError("codeql.yml must use exactly one CodeQL init and one CodeQL analyze action")
+        raise ValueError(
+            "codeql.yml must use exactly one CodeQL init and one CodeQL analyze action"
+        )
     codeql_refs = {item[1].lower() for item in codeql}
     codeql_versions = {item[2] for item in codeql}
     if len(codeql_refs) != 1:
@@ -396,9 +403,9 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "      - name: Reconcile Dependabot merge authority",
         "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
         "          TRUSTED_STATUS_TOKEN: ${{ steps.trusted-app.outputs.token }}",
-        "          case \"$GITHUB_EVENT_NAME\" in",
+        '          case "$GITHUB_EVENT_NAME" in',
         "            workflow_run|schedule|workflow_dispatch) args+=(--allow-merge) ;;",
-        "          python .github/scripts/dependency_governance.py \"${args[@]}\"",
+        '          python .github/scripts/dependency_governance.py "${args[@]}"',
     )
     for fragment in required:
         if fragment not in semantic:
@@ -423,7 +430,9 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
     mint = semantic.index("      - name: Mint dedicated Trusted PR Gate token")
     reconcile = semantic.index("      - name: Reconcile Dependabot merge authority")
     if not recovery < mint < reconcile:
-        raise ValueError("dependency recovery, trusted-token minting, and merge reconciliation are out of order")
+        raise ValueError(
+            "dependency recovery, trusted-token minting, and merge reconciliation are out of order"
+        )
     return {
         "triggers": [
             "pull_request",
