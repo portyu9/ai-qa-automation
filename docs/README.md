@@ -23,7 +23,7 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 | **Architecture / principal engineering** | [Architecture](ARCHITECTURE.md) → [Result Contract](RESULT_CONTRACT.md) → [Runtime Lifecycle](RUNTIME_LIFECYCLE.md) → [Runtime Control](RUNTIME_CONTROL.md) → [Workspace Freshness Boundary](WORKSPACE_FRESHNESS_BOUNDARY.md) → [Traceability](TRACEABILITY.md) → [Technical Walkthrough](TECHNICAL_WALKTHROUGH.md) |
 | **Security / red team** | [Security](SECURITY.md) → [Threat Model](THREAT_MODEL.md) → [Tool Input Boundaries](TOOL_INPUT_BOUNDARIES.md) → [Controller Executable Authority](CONTROLLER_EXECUTABLE_AUTHORITY.md) → [Objective Input Boundary](OBJECTIVE_INPUT_BOUNDARY.md) → [Agent SDK Result Boundary](SDK_RESULT_BOUNDARY.md) → [Persistence Resource Boundary](PERSISTENCE_RESOURCE_BOUNDARY.md) → [API Observation Boundary](API_OBSERVATION_BOUNDARY.md) → [Remote API Mutation Authority](REMOTE_API_MUTATION_AUTHORITY.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Supply Chain](SUPPLY_CHAIN.md) → [CI/CD](CI_CD.md) → [Release Candidate](RELEASE_CANDIDATE.md) → [Trusted PR Control Plane](TRUSTED_PR_CONTROL_PLANE.md) → [MCP](MCP.md) → [Verification Boundaries](VERIFICATION_BOUNDARIES.md) → [Workspace Freshness Boundary](WORKSPACE_FRESHNESS_BOUNDARY.md) → [Pytest Execution Isolation](PYTEST_EXECUTION_ISOLATION.md) → [Limitations](LIMITATIONS.md) |
 | **QA automation / AI engineering** | [Change Intelligence](CHANGE_INTELLIGENCE.md) → [Contract Drift Boundary](CONTRACT_DRIFT_BOUNDARY.md) → [Skills](SKILLS.md) → [Evaluation](EVALUATION.md) → [Result Contract](RESULT_CONTRACT.md) → [Runtime Lifecycle](RUNTIME_LIFECYCLE.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Production Readiness](PRODUCTION_READINESS.md) |
-| **Operator / adopter** | [Setup](SETUP.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Pytest Execution Isolation](PYTEST_EXECUTION_ISOLATION.md) → [Operations](OPERATIONS.md) → [CI/CD](CI_CD.md) → [Release Candidate](RELEASE_CANDIDATE.md) → [Troubleshooting](TROUBLESHOOTING.md) → [Runtime Lifecycle](RUNTIME_LIFECYCLE.md) → [Runtime Control](RUNTIME_CONTROL.md) → [MCP](MCP.md) |
+| **Operator / adopter** | [Setup](SETUP.md) → [Browser Validation](BROWSER_VALIDATION.md) → [Pytest Execution Isolation](PYTEST_EXECUTION_ISOLATION.md) → [Operations](OPERATIONS.md) → [CI/CD](CI_CD.md) → [Dependabot Automation](DEPENDABOT_AUTOMATION.md) → [Release Candidate](RELEASE_CANDIDATE.md) → [Troubleshooting](TROUBLESHOOTING.md) → [Runtime Lifecycle](RUNTIME_LIFECYCLE.md) → [Runtime Control](RUNTIME_CONTROL.md) → [MCP](MCP.md) |
 
 ### Architecture / principal engineering
 
@@ -75,11 +75,12 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 3. [`PYTEST_EXECUTION_ISOLATION.md`](PYTEST_EXECUTION_ISOLATION.md) — deployment containment required before live target-controlled pytest code may execute
 4. [`OPERATIONS.md`](OPERATIONS.md) — operating ladder and artifact handling
 5. [`CI_CD.md`](CI_CD.md) — automatic PR feedback, routine trusted admission, external protected maintenance, and repository-governance authority
-6. [`RELEASE_CANDIDATE.md`](RELEASE_CANDIDATE.md) — manual deterministic release-preparation evidence without publishing authority
-7. [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) — diagnose without weakening controls
-8. [`RUNTIME_LIFECYCLE.md`](RUNTIME_LIFECYCLE.md) — lifecycle and mutation/recovery visual reference
-9. [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md) — recovery and mutation mechanics
-10. [`MCP.md`](MCP.md) — optional GitHub/Atlassian integration policy
+6. [`DEPENDABOT_AUTOMATION.md`](DEPENDABOT_AUTOMATION.md) — provenance-qualified green merges, bounded transient recovery, and manual-review boundaries
+7. [`RELEASE_CANDIDATE.md`](RELEASE_CANDIDATE.md) — manual deterministic release-preparation evidence without publishing authority
+8. [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) — diagnose without weakening controls
+9. [`RUNTIME_LIFECYCLE.md`](RUNTIME_LIFECYCLE.md) — lifecycle and mutation/recovery visual reference
+10. [`RUNTIME_CONTROL.md`](RUNTIME_CONTROL.md) — recovery and mutation mechanics
+11. [`MCP.md`](MCP.md) — optional GitHub/Atlassian integration policy
 
 ---
 
@@ -104,6 +105,7 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 | [`BROWSER_VALIDATION.md`](BROWSER_VALIDATION.md) | How are browser operations bound to exact subjects without confusing evidence collection with page correctness? |
 | [`SUPPLY_CHAIN.md`](SUPPLY_CHAIN.md) | How are dependency, build, Action, container-base, SBOM, reproducibility, protected-root, and trusted-status identity inputs bound and evidenced? |
 | [`CI_CD.md`](CI_CD.md) | How are ordinary CI, routine source-only admission, external protected-maintenance admission, manual validation, and external repository settings separated? |
+| [`DEPENDABOT_AUTOMATION.md`](DEPENDABOT_AUTOMATION.md) | How are eligible Dependabot action updates merged, transient infrastructure failures retried once, and deterministic or control-plane changes kept manual? |
 | [`RELEASE_CANDIDATE.md`](RELEASE_CANDIDATE.md) | How is a non-publishing candidate package bound to exact current `main`, static version identity, reproducible bytes, and checksums? |
 | [`TRUSTED_PR_CONTROL_PLANE.md`](TRUSTED_PR_CONTROL_PLANE.md) | How is protected PR merge authority separated from candidate GitHub Actions workflows and bound to a dedicated external App plus exact live subject validation? |
 | [`CHANGE_INTELLIGENCE.md`](CHANGE_INTELLIGENCE.md) | How are committed changes, risk, ownership, test impact, and API drift analyzed? |

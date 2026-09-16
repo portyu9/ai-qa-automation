@@ -27,6 +27,27 @@ def _reviewed_manual_secret_payload() -> str:
 """
 
 
+def _reviewed_governance_secret_payload() -> str:
+    return """jobs:
+  govern:
+    steps:
+      - name: Attempt one bounded transient recovery
+        if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Mint dedicated Trusted PR Gate token
+        id: trusted-app
+        if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        env:
+          TRUSTED_GATE_APP_CLIENT_ID: ${{ vars.TRUSTED_GATE_APP_CLIENT_ID }}
+          TRUSTED_GATE_APP_PRIVATE_KEY: ${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}
+      - name: Reconcile Dependabot merge authority
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRUSTED_STATUS_TOKEN: ${{ steps.trusted-app.outputs.token }}
+"""
+
+
 @pytest.mark.parametrize(
     ("payload", "expected"),
     [
@@ -99,6 +120,28 @@ def test_reviewed_non_aws_secret_consumers_do_not_create_cloud_authority() -> No
     assert result["secrets"] == {"ANTHROPIC_API_KEY": 2}
 
 
+def test_reviewed_governance_secret_consumers_do_not_create_aws_authority() -> None:
+    result = _verify_workflow_text(
+        "dependency-governance.yml", _reviewed_governance_secret_payload()
+    )
+    assert result["aws_authentication"] == "forbidden"
+    assert result["pull_request_target"] == "forbidden"
+    assert result["secrets"] == {
+        "GITHUB_TOKEN": 2,
+        "TRUSTED_GATE_APP_PRIVATE_KEY": 1,
+    }
+
+
+def test_reviewed_governance_secret_consumer_movement_fails_closed() -> None:
+    payload = _reviewed_governance_secret_payload().replace(
+        "- name: Mint dedicated Trusted PR Gate token",
+        "- name: Export trusted app private key elsewhere",
+        1,
+    )
+    with pytest.raises(ValueError, match="reviewed credential consumers moved or changed"):
+        _verify_workflow_text("dependency-governance.yml", payload)
+
+
 def test_trusted_preflight_requires_canonical_repository_and_fork_rejection() -> None:
     preflight = (Path(__file__).parents[2] / "scripts" / "auto_trusted_preflight.py").read_text()
     result = _verify_trusted_preflight(preflight)
@@ -129,6 +172,8 @@ def test_current_repository_has_no_github_actions_aws_authority() -> None:
     assert result["trusted_preflight"]["fork_heads"] == "rejected"
     assert {row["workflow"] for row in result["workflows"]} == {
         "ci.yml",
+        "codeql.yml",
+        "dependency-governance.yml",
         "manual-validation.yml",
         "release-candidate.yml",
         "trusted-pr-auto.yml",

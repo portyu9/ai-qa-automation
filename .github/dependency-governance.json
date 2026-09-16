@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "repository": "portyu9/ai-qa-automation",
+  "baseBranch": "main",
+  "mergeMethod": "merge",
+  "automergeEnabled": true,
+  "pipMode": "manual",
+  "maxChangedFiles": 25,
+  "maxPullRequestAgeDays": 14,
+  "manualReviewLabels": [
+    "manual-review",
+    "do-not-merge"
+  ],
+  "requiredChecks": [
+    "Required PR Gate",
+    "CodeQL"
+  ],
+  "allowedActionUpdateTypes": [
+    "version-update:semver-patch",
+    "version-update:semver-minor",
+    "security-update:semver-patch",
+    "security-update:semver-minor"
+  ],
+  "publishTrustedStatus": true,
+  "trustedStatusContext": "Trusted PR Gate",
+  "manualReviewPaths": [
+    ".github/dependabot.yml",
+    ".github/dependency-governance.json",
+    ".github/dependency-recovery.json",
+    ".github/scripts/dependency_governance.py",
+    ".github/scripts/dependency_governance_selfcheck.py",
+    ".github/scripts/dependency_recovery.py",
+    ".github/scripts/dependency_recovery_selfcheck.py",
+    ".github/workflows/dependency-governance.yml",
+    ".github/workflows/trusted-pr-auto.yml",
+    "scripts/auto_trusted_preflight.py",
+    "scripts/auto_trusted_report.py",
+    "scripts/trusted_pr_control.py",
+    "scripts/verify_ci_contract.py",
+    "scripts/verify_fork_cloud_authority.py"
+  ]
+}

@@ -13,6 +13,8 @@ EXPECTED_REPOSITORY = "portyu9/ai-qa-automation"
 EXPECTED_OWNER = "portyu9"
 EXPECTED_WORKFLOW_NAMES = {
     "ci.yml",
+    "codeql.yml",
+    "dependency-governance.yml",
     "manual-validation.yml",
     "release-candidate.yml",
     "trusted-pr-auto.yml",
@@ -53,6 +55,7 @@ _FORBIDDEN_WORKFLOW_TOKENS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 _ALLOWED_SECRET_REFERENCE_COUNTS: dict[str, Counter[str]] = {
+    "dependency-governance.yml": Counter({"GITHUB_TOKEN": 2, "TRUSTED_GATE_APP_PRIVATE_KEY": 1}),
     "manual-validation.yml": Counter({"ANTHROPIC_API_KEY": 2}),
     "trusted-pr-auto.yml": Counter({"TRUSTED_GATE_APP_PRIVATE_KEY": 1}),
 }
@@ -62,6 +65,11 @@ _MANUAL_SECRET_CONTEXT_FRAGMENTS = (
     "if: ${{ inputs.run_model && github.ref == 'refs/heads/main' }}",
     "- name: Require explicit credential\n        env:\n          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}",
     "- name: Run bounded live Agent SDK evaluation\n        env:\n          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}",
+)
+_GOVERNANCE_SECRET_CONTEXT_FRAGMENTS = (
+    "- name: Attempt one bounded transient recovery\n        if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+    "- name: Mint dedicated Trusted PR Gate token\n        id: trusted-app\n        if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'\n        env:\n          TRUSTED_GATE_APP_CLIENT_ID: ${{ vars.TRUSTED_GATE_APP_CLIENT_ID }}\n          TRUSTED_GATE_APP_PRIVATE_KEY: ${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}",
+    "- name: Reconcile Dependabot merge authority\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n          TRUSTED_STATUS_TOKEN: ${{ steps.trusted-app.outputs.token }}",
 )
 
 _REQUIRED_PREFLIGHT_FRAGMENTS = (
@@ -142,6 +150,14 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
         if missing:
             raise ValueError(
                 "manual-validation.yml: reviewed credential consumers moved or changed"
+            )
+    if name == "dependency-governance.yml":
+        missing = [
+            fragment for fragment in _GOVERNANCE_SECRET_CONTEXT_FRAGMENTS if fragment not in text
+        ]
+        if missing:
+            raise ValueError(
+                "dependency-governance.yml: reviewed credential consumers moved or changed"
             )
 
     return {
