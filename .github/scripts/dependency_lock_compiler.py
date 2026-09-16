@@ -11,10 +11,14 @@ import tempfile
 import tomllib
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
+MAX_PYPROJECT_BYTES = 256 * 1024
 MAX_REPORT_BYTES = 8 * 1024 * 1024
 MAX_PACKAGES = 512
+MAX_REQUIREMENTS = 256
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+REQUIREMENT_NAME = re.compile(r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[A-Za-z0-9_,.-]+\])?(?P<specifier>[^;@\s]*)$")
 EXACT_BUILD_REQUIREMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*==[^\s;@]+$")
 ALLOWED_DOWNLOAD_HOSTS = {"files.pythonhosted.org", "pypi.org"}
 
@@ -48,7 +52,7 @@ def _read_json(path: Path) -> dict[str, Any]:
 def _resolver_env() -> dict[str, str]:
     env = dict(os.environ)
     for key in list(env):
-        if key.startswith("PIP_") or key.startswith("PYTHONPATH") or key.startswith("UV_"):
+        if key.startswith(("PIP_", "PYTHONPATH", "UV_")):
             env.pop(key, None)
     env.update(
         {
@@ -62,9 +66,47 @@ def _resolver_env() -> dict[str, str]:
     return env
 
 
-def _run_report(python: str, root: Path, requirement: str) -> dict[str, Any]:
+def _validate_requirement(raw: Any, *, context: str) -> str:
+    if not isinstance(raw, str) or not raw or len(raw) > 512:
+        raise LockCompileError(f"{context} requirement must be a bounded non-empty string")
+    if any(token in raw for token in (";", "@", "://", "\\", "../", "./")):
+        raise LockCompileError(f"{context} requirement contains forbidden URL/path/marker authority")
+    match = REQUIREMENT_NAME.fullmatch(raw)
+    if match is None:
+        raise LockCompileError(f"{context} requirement uses unsupported syntax: {raw!r}")
+    if not match.group("specifier"):
+        raise LockCompileError(f"{context} requirement must constrain a version: {raw!r}")
+    return raw
+
+
+def _requirement_name(raw: str) -> str:
+    match = REQUIREMENT_NAME.fullmatch(raw)
+    if match is None:  # already validated; defensive invariant
+        raise LockCompileError(f"invalid requirement syntax: {raw!r}")
+    return _canonical_name(match.group("name"))
+
+
+def _validated_requirements(values: Any, *, context: str) -> list[str]:
+    if not isinstance(values, list) or not values:
+        raise LockCompileError(f"{context} requirements must be a non-empty list")
+    if len(values) > MAX_REQUIREMENTS:
+        raise LockCompileError(f"{context} requirements exceed {MAX_REQUIREMENTS} entries")
+    rendered = [_validate_requirement(value, context=context) for value in values]
+    names = [_requirement_name(value) for value in rendered]
+    if len(names) != len(set(names)):
+        raise LockCompileError(f"{context} requirements contain duplicate package identities")
+    return rendered
+
+
+def _write_requirements(path: Path, requirements: list[str]) -> None:
+    path.write_text("\n".join(sorted(requirements, key=_requirement_name)) + "\n", encoding="utf-8", newline="\n")
+
+
+def _run_report(python: str, root: Path, requirements: list[str]) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="dependency-report-") as temporary:
         report = Path(temporary) / "report.json"
+        input_file = Path(temporary) / "requirements.in"
+        _write_requirements(input_file, requirements)
         command = [
             python,
             "-m",
@@ -73,13 +115,12 @@ def _run_report(python: str, root: Path, requirement: str) -> dict[str, Any]:
             "--dry-run",
             "--ignore-installed",
             "--no-input",
+            "--only-binary=:all:",
             "--report",
             str(report),
+            "-r",
+            str(input_file),
         ]
-        if requirement.startswith("requirements-file:"):
-            command.extend(["-r", requirement.removeprefix("requirements-file:")])
-        else:
-            command.append(requirement)
         completed = subprocess.run(
             command,
             cwd=root,
@@ -91,20 +132,18 @@ def _run_report(python: str, root: Path, requirement: str) -> dict[str, Any]:
             check=False,
         )
         if completed.returncode != 0:
-            tail = completed.stdout[-6000:]
-            raise LockCompileError(f"pip resolver failed for {requirement!r}:\n{tail}")
+            raise LockCompileError(f"wheel-only pip resolver failed:\n{completed.stdout[-6000:]}")
         return _read_json(report)
 
 
-def _report_to_lock(payload: dict[str, Any], *, project_name: str) -> str:
+def _report_to_lock(payload: dict[str, Any]) -> str:
     installs = payload.get("install")
     if not isinstance(installs, list):
         raise LockCompileError("pip report install field must be a list")
-    if len(installs) > MAX_PACKAGES:
-        raise LockCompileError(f"resolved graph exceeds {MAX_PACKAGES} packages")
+    if not installs or len(installs) > MAX_PACKAGES:
+        raise LockCompileError(f"resolved graph must contain 1..{MAX_PACKAGES} packages")
 
-    packages: dict[str, tuple[str, str, str]] = {}
-    project_key = _canonical_name(project_name)
+    packages: dict[str, tuple[str, str]] = {}
     for row in installs:
         if not isinstance(row, dict):
             raise LockCompileError("pip report install entry must be an object")
@@ -116,47 +155,44 @@ def _report_to_lock(payload: dict[str, Any], *, project_name: str) -> str:
         if not isinstance(name, str) or not name or not isinstance(version, str) or not version:
             raise LockCompileError("pip report package identity/version is invalid")
         canonical = _canonical_name(name)
-        if canonical == project_key:
-            continue
         download = row.get("download_info")
         if not isinstance(download, dict):
             raise LockCompileError(f"resolved package {canonical} lacks download provenance")
         url = download.get("url")
         if not isinstance(url, str) or not url.startswith("https://"):
             raise LockCompileError(f"resolved package {canonical} is not HTTPS-backed")
-        from urllib.parse import urlparse
-
         parsed = urlparse(url)
         if parsed.hostname not in ALLOWED_DOWNLOAD_HOSTS:
             raise LockCompileError(
                 f"resolved package {canonical} came from unreviewed host {parsed.hostname!r}"
             )
+        filename = Path(parsed.path).name.lower()
+        if not filename.endswith(".whl"):
+            raise LockCompileError(f"resolved package {canonical} is not wheel-backed")
         archive = download.get("archive_info")
         hashes = archive.get("hashes") if isinstance(archive, dict) else None
         digest = hashes.get("sha256") if isinstance(hashes, dict) else None
         if not isinstance(digest, str) or SHA256.fullmatch(digest) is None:
             raise LockCompileError(f"resolved package {canonical} lacks a canonical SHA-256 digest")
+        current = (version, digest)
         previous = packages.get(canonical)
-        current = (version, digest, name)
         if previous is not None and previous != current:
             raise LockCompileError(f"resolved graph contains conflicting package identity {canonical}")
         packages[canonical] = current
 
-    if not packages:
-        raise LockCompileError("resolved graph contains no external packages")
     lines: list[str] = []
     for canonical in sorted(packages):
-        version, digest, _display = packages[canonical]
+        version, digest = packages[canonical]
         lines.append(f"{canonical}=={version} \\")
         lines.append(f"    --hash=sha256:{digest}")
     return "\n".join(lines) + "\n"
 
 
-def _resolve_twice(python: str, root: Path, requirement: str, *, project_name: str) -> str:
-    first = _report_to_lock(_run_report(python, root, requirement), project_name=project_name)
-    second = _report_to_lock(_run_report(python, root, requirement), project_name=project_name)
+def _resolve_twice(python: str, root: Path, requirements: list[str]) -> str:
+    first = _report_to_lock(_run_report(python, root, requirements))
+    second = _report_to_lock(_run_report(python, root, requirements))
     if first != second:
-        raise LockCompileError(f"resolver output is not deterministic for {requirement!r}")
+        raise LockCompileError("resolver output is not deterministic across identical wheel-only runs")
     return first
 
 
@@ -170,6 +206,7 @@ def _verify_hash_lock(python: str, root: Path, lock: Path) -> None:
             "--dry-run",
             "--ignore-installed",
             "--no-input",
+            "--only-binary=:all:",
             "--require-hashes",
             "-r",
             str(lock),
@@ -184,28 +221,29 @@ def _verify_hash_lock(python: str, root: Path, lock: Path) -> None:
     )
     if completed.returncode != 0:
         raise LockCompileError(
-            f"generated lock {lock.name} failed hash-required verification:\n{completed.stdout[-6000:]}"
+            f"generated lock {lock.name} failed wheel-only hash verification:\n{completed.stdout[-6000:]}"
         )
 
 
 def compile_locks(root: Path, python311: str, python314: str, output_dir: Path) -> dict[str, Any]:
     pyproject_path = root / "pyproject.toml"
     raw = pyproject_path.read_bytes()
-    if len(raw) > 256 * 1024:
-        raise LockCompileError("pyproject.toml exceeds 256 KiB")
+    if not raw or len(raw) > MAX_PYPROJECT_BYTES:
+        raise LockCompileError(f"pyproject.toml must be 1..{MAX_PYPROJECT_BYTES} bytes")
     try:
         pyproject = tomllib.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
         raise LockCompileError("pyproject.toml is not canonical UTF-8 TOML") from exc
+
     project = pyproject.get("project")
     build = pyproject.get("build-system")
     if not isinstance(project, dict) or not isinstance(build, dict):
         raise LockCompileError("pyproject.toml lacks project/build-system tables")
-    project_name = project.get("name")
-    if project_name != "ai-qa-automation":
+    if project.get("name") != "ai-qa-automation":
         raise LockCompileError("project identity changed")
     if build.get("build-backend") != "hatchling.build":
         raise LockCompileError("build backend identity changed")
+
     build_requires = build.get("requires")
     if (
         not isinstance(build_requires, list)
@@ -215,51 +253,49 @@ def compile_locks(root: Path, python311: str, python314: str, output_dir: Path) 
         or _canonical_name(build_requires[0].split("==", 1)[0]) != "hatchling"
     ):
         raise LockCompileError("build-system.requires must be exactly one hatchling==VERSION requirement")
-    optional = project.get("optional-dependencies", {})
-    if not isinstance(optional, dict) or not optional:
-        raise LockCompileError("project optional dependency groups are missing")
-    if not all(isinstance(key, str) and key and isinstance(value, list) for key, value in optional.items()):
-        raise LockCompileError("project optional dependency groups are malformed")
+
+    runtime = _validated_requirements(project.get("dependencies"), context="runtime")
+    optional = project.get("optional-dependencies")
+    if not isinstance(optional, dict) or "dev" not in optional:
+        raise LockCompileError("project.optional-dependencies.dev is required")
+    dev = _validated_requirements(optional.get("dev"), context="dev")
+    runtime_names = {_requirement_name(item) for item in runtime}
+    dev_names = {_requirement_name(item) for item in dev}
+    if runtime_names & dev_names:
+        raise LockCompileError("dev requirements must not duplicate runtime dependency identities")
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    extras = ",".join(sorted(optional))
-    runtime = _resolve_twice(python311, root, ".", project_name=project_name)
-    dev311 = _resolve_twice(python311, root, f".[{extras}]", project_name=project_name)
-    dev314 = _resolve_twice(python314, root, f".[{extras}]", project_name=project_name)
-
-    with tempfile.TemporaryDirectory(prefix="build-requirement-") as temporary:
-        build_input = Path(temporary) / "build-requirements.txt"
-        build_input.write_text(build_requires[0] + "\n", encoding="utf-8")
-        build_lock = _resolve_twice(
-            python311,
-            root,
-            f"requirements-file:{build_input}",
-            project_name=project_name,
-        )
-
-    generated = {
-        "runtime-py311.lock": runtime,
-        "dev-py311.lock": dev311,
-        "dev-py314.lock": dev314,
-        "build-py311.lock": build_lock,
+    graphs = {
+        "runtime-py311.lock": (python311, runtime),
+        "dev-py311.lock": (python311, runtime + dev),
+        "dev-py314.lock": (python314, runtime + dev),
+        "build-py311.lock": (python311, [build_requires[0]]),
     }
+    generated: dict[str, str] = {}
+    for name, (python, requirements) in graphs.items():
+        generated[name] = _resolve_twice(python, root, requirements)
+
     for name, content in generated.items():
         path = output_dir / name
         path.write_text(content, encoding="utf-8", newline="\n")
-        _verify_hash_lock(python311 if name != "dev-py314.lock" else python314, root, path)
+        python = python314 if name == "dev-py314.lock" else python311
+        _verify_hash_lock(python, root, path)
 
     base_image = root / "requirements" / "base-image.lock"
-    if not base_image.is_file():
-        raise LockCompileError("base-image.lock is missing")
-    authority: dict[str, str] = {
-        "base-image.lock": _git_blob_sha1(base_image.read_bytes()),
-        **{
-            name: _git_blob_sha1((output_dir / name).read_bytes())
-            for name in sorted(generated)
-        },
+    if not base_image.is_file() or base_image.is_symlink():
+        raise LockCompileError("base-image.lock must be a regular non-symlink file")
+    base_bytes = base_image.read_bytes()
+    if len(base_bytes) > 4096:
+        raise LockCompileError("base-image.lock exceeds bounded size")
+
+    authority = {
+        "base-image.lock": _git_blob_sha1(base_bytes),
+        **{name: _git_blob_sha1((output_dir / name).read_bytes()) for name in sorted(generated)},
     }
     authority_payload = {
         "schemaVersion": 1,
+        "sourcePyprojectSha256": hashlib.sha256(raw).hexdigest(),
+        "resolverPolicy": "pypi-https-wheel-only-double-resolve-hash-replay",
         "lockBlobs": dict(sorted(authority.items())),
     }
     (output_dir / "lock-authority.json").write_text(
@@ -269,7 +305,7 @@ def compile_locks(root: Path, python311: str, python314: str, output_dir: Path) 
     )
     return {
         "schemaVersion": 1,
-        "project": project_name,
+        "project": "ai-qa-automation",
         "pyprojectSha256": hashlib.sha256(raw).hexdigest(),
         "locks": {
             name: {
@@ -283,13 +319,17 @@ def compile_locks(root: Path, python311: str, python314: str, output_dir: Path) 
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Deterministically compile hash-locked dependency graphs")
+    parser = argparse.ArgumentParser(
+        description="Compile deterministic wheel-only hash locks for trusted dependency promotion"
+    )
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--python311", required=True)
     parser.add_argument("--python314", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
-    result = compile_locks(args.root.resolve(), args.python311, args.python314, args.output_dir.resolve())
+    result = compile_locks(
+        args.root.resolve(), args.python311, args.python314, args.output_dir.resolve()
+    )
     print(json.dumps(result, indent=2, sort_keys=True))
 
 
