@@ -620,9 +620,7 @@ def selftest(config: dict[str, Any]) -> None:
             {
                 "filename": ".github/workflows/ci.yml",
                 "status": "modified",
-                "patch": "@@ -1 +1 @@\n-      - uses: actions/checkout@"
-                + "a" * 40
-                + " # v7.0.1\n"
+                "patch": "@@ -1 +1 @@\n-      - uses: actions/checkout@" + "a" * 40 + " # v7.0.1\n"
                 "+      - uses: actions/checkout@" + "b" * 40 + " # v8.0.0\n",
             }
         ]

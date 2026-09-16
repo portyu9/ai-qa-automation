@@ -41,19 +41,19 @@ SAFE_VERIFIER_LABELS = {
 
 DETERMINISTIC_LOG_REPAIRS = {
     "scripts/auto_trusted_report.py": (
-        '    print(json.dumps(result, indent=2, sort_keys=True))',
+        "    print(json.dumps(result, indent=2, sort_keys=True))",
         '    print(json.dumps({"result": result["result"], "reporter": "trusted-pr-gate"}, sort_keys=True))',
     ),
     "scripts/ci_contract_base.py": (
-        '    print(json.dumps(verify_ci_contract(root), indent=2, sort_keys=True))',
+        "    print(json.dumps(verify_ci_contract(root), indent=2, sort_keys=True))",
         '    verify_ci_contract(root)\n    print(json.dumps({"schema_version": 1, "result": "PASS", "verifier": "ci-contract-base"}, sort_keys=True))',
     ),
     "scripts/verify_ci_contract.py": (
-        '    print(json.dumps(verify_ci_contract(root), indent=2, sort_keys=True))',
+        "    print(json.dumps(verify_ci_contract(root), indent=2, sort_keys=True))",
         '    verify_ci_contract(root)\n    print(json.dumps({"schema_version": 1, "result": "PASS", "verifier": "ci-contract"}, sort_keys=True))',
     ),
     "scripts/verify_docs.py": (
-        '    print(json.dumps(verify_documentation(root), indent=2, sort_keys=True))',
+        "    print(json.dumps(verify_documentation(root), indent=2, sort_keys=True))",
         '    verify_documentation(root)\n    print(json.dumps({"schema_version": 1, "result": "PASS", "verifier": "documentation-integrity"}, sort_keys=True))',
     ),
     "scripts/verify_fork_cloud_authority.py": (
@@ -317,9 +317,7 @@ def _alert_fingerprint(alert: dict[str, Any], main_sha: str) -> str:
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
-def validate_alert(
-    alert: dict[str, Any], main_sha: str, config: dict[str, Any]
-) -> dict[str, Any]:
+def validate_alert(alert: dict[str, Any], main_sha: str, config: dict[str, Any]) -> dict[str, Any]:
     number = alert.get("number")
     if not isinstance(number, int) or isinstance(number, bool) or number < 1:
         raise PolicyBlock("CodeQL alert number is invalid")
@@ -353,7 +351,9 @@ def validate_alert(
 
 
 def _marker(metadata: dict[str, Any]) -> str:
-    return MARKER_PREFIX + json.dumps(metadata, separators=(",", ":"), sort_keys=True) + MARKER_SUFFIX
+    return (
+        MARKER_PREFIX + json.dumps(metadata, separators=(",", ":"), sort_keys=True) + MARKER_SUFFIX
+    )
 
 
 def _parse_marker(body: Any) -> dict[str, Any] | None:
@@ -409,7 +409,6 @@ def _deterministic_repair(subject: dict[str, Any]) -> str | None:
             return None
         return text.replace(old, new, 1)
 
-
     return None
 
 
@@ -428,7 +427,9 @@ def _create_branch(api: GitHubApi, branch: str, base_sha: str) -> None:
         if "HTTP 404" not in str(exc):
             raise
     else:
-        observed = _require_sha(((existing or {}).get("object") or {}).get("sha"), "existing branch SHA")
+        observed = _require_sha(
+            ((existing or {}).get("object") or {}).get("sha"), "existing branch SHA"
+        )
         if observed == base_sha:
             return
         api.delete(f"/git/refs/heads/{encoded}")
@@ -467,7 +468,10 @@ def _commit_deterministic_repair(
     head_sha = _require_sha((commit or {}).get("sha"), "generated repair commit SHA")
     encoded = urllib.parse.quote(branch, safe="")
     updated = api.patch(f"/git/refs/heads/{encoded}", {"sha": head_sha, "force": False})
-    if _require_sha(((updated or {}).get("object") or {}).get("sha"), "updated repair ref SHA") != head_sha:
+    if (
+        _require_sha(((updated or {}).get("object") or {}).get("sha"), "updated repair ref SHA")
+        != head_sha
+    ):
         raise AutohealError("generated repair branch did not advance to the exact repair commit")
     return head_sha
 
@@ -482,9 +486,7 @@ def _ensure_copilot_autofix(api: GitHubApi, alert_number: int) -> None:
         raise PolicyBlock(f"GitHub CodeQL Autofix is unavailable: status={status} state={state}")
 
 
-def _commit_copilot_autofix(
-    api: GitHubApi, alert_number: int, branch: str, base_sha: str
-) -> str:
+def _commit_copilot_autofix(api: GitHubApi, alert_number: int, branch: str, base_sha: str) -> str:
     _create_branch(api, branch, base_sha)
     payload = api.post(
         f"/code-scanning/alerts/{alert_number}/autofix/commits",
@@ -512,7 +514,11 @@ def _changed_files(api: GitHubApi, base_sha: str, head_sha: str) -> list[dict[st
 
 
 def _validate_candidate_diff(
-    files: list[dict[str, Any]], subject: dict[str, Any], config: dict[str, Any], *, deterministic: bool
+    files: list[dict[str, Any]],
+    subject: dict[str, Any],
+    config: dict[str, Any],
+    *,
+    deterministic: bool,
 ) -> None:
     if len(files) > config["maxChangedFiles"]:
         raise PolicyBlock("repair candidate exceeds the automatic changed-file limit")
@@ -674,7 +680,9 @@ def _validate_generated_pr(
     base = pr.get("base") or {}
     if (head.get("repo") or {}).get("full_name") != config["repository"]:
         raise PolicyBlock("generated repair head is not repository-owned")
-    if (base.get("repo") or {}).get("full_name") != config["repository"] or base.get("ref") != "main":
+    if (base.get("repo") or {}).get("full_name") != config["repository"] or base.get(
+        "ref"
+    ) != "main":
         raise PolicyBlock("generated repair no longer targets repository main")
     branch = head.get("ref")
     if not isinstance(branch, str) or not branch.startswith(BRANCH_PREFIX):
@@ -708,7 +716,9 @@ def _post_trusted_status(
 ) -> None:
     token = os.environ.get("TRUSTED_STATUS_TOKEN", "")
     if not token:
-        raise AutohealError("TRUSTED_STATUS_TOKEN is required for security auto-heal merge authority")
+        raise AutohealError(
+            "TRUSTED_STATUS_TOKEN is required for security auto-heal merge authority"
+        )
     run_id = os.environ.get("GITHUB_RUN_ID", "")
     if not run_id.isdigit() or int(run_id) < 1:
         raise AutohealError("GITHUB_RUN_ID is invalid")
@@ -811,9 +821,7 @@ def _create_repair(
         if not _model_path_allowed(subject["path"], config):
             raise PolicyBlock("alert path is outside model-autofix authority")
         _ensure_copilot_autofix(api, subject["number"])
-        head_sha = _commit_copilot_autofix(
-            api, subject["number"], branch, subject["baseSha"]
-        )
+        head_sha = _commit_copilot_autofix(api, subject["number"], branch, subject["baseSha"])
 
     files = _changed_files(api, subject["baseSha"], head_sha)
     _validate_candidate_diff(files, subject, config, deterministic=deterministic)

@@ -108,7 +108,9 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
     )
     on_block = base._semantic_text(base._top_level_block(text, "on")).strip("\n")
     if on_block != expected_on:
-        raise ValueError("ci.yml: trigger set must be exactly pull_request/push/merge_group/workflow_dispatch")
+        raise ValueError(
+            "ci.yml: trigger set must be exactly pull_request/push/merge_group/workflow_dispatch"
+        )
     if base._top_level_keys(base._top_level_block(text, "on")) != {
         "pull_request",
         "push",
@@ -455,7 +457,9 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
     base = _trusted_auto._base
     semantic = base._semantic_text(text)
     if base._git_blob_sha1(text) != EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA:
-        raise ValueError("security-autoheal.yml bytes differ from the exact reviewed security authority")
+        raise ValueError(
+            "security-autoheal.yml bytes differ from the exact reviewed security authority"
+        )
     required = (
         "name: Security Auto-Heal",
         "  pull_request:",
@@ -486,7 +490,9 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
     )
     for fragment in required:
         if fragment not in semantic:
-            raise ValueError(f"security-autoheal.yml missing reviewed authority invariant: {fragment}")
+            raise ValueError(
+                f"security-autoheal.yml missing reviewed authority invariant: {fragment}"
+            )
     for forbidden in (
         "pull_request_target:",
         "repository_dispatch:",
@@ -495,9 +501,13 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         "id-token: write",
     ):
         if forbidden in semantic:
-            raise ValueError(f"security-autoheal.yml contains forbidden authority token: {forbidden}")
+            raise ValueError(
+                f"security-autoheal.yml contains forbidden authority token: {forbidden}"
+            )
     if semantic.count('"statuses":"write"') != 1 or semantic.count("statuses: write") != 0:
-        raise ValueError("security auto-heal native workflow authority must remain status-read-only")
+        raise ValueError(
+            "security auto-heal native workflow authority must remain status-read-only"
+        )
     return {
         "triggers": ["pull_request", "workflow_run", "schedule", "workflow_dispatch"],
         "trusted_code_source": "default-branch-only-for-authority-job",
@@ -746,7 +756,11 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
 def main() -> None:
     root = Path(__file__).resolve().parents[1]
     verify_ci_contract(root)
-    print(json.dumps({"schema_version": 1, "result": "PASS", "verifier": "ci-contract"}, sort_keys=True))
+    print(
+        json.dumps(
+            {"schema_version": 1, "result": "PASS", "verifier": "ci-contract"}, sort_keys=True
+        )
+    )
 
 
 if __name__ == "__main__":

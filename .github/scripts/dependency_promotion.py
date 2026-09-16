@@ -86,7 +86,9 @@ def _normalized_semantics(document: dict[str, Any]) -> tuple[dict[str, Any], dic
         for value in values:
             identity = _requirement_identity(value, context=context)
             if identity in versions:
-                raise PolicyBlock(f"duplicate dependency identity across reviewed groups: {identity}")
+                raise PolicyBlock(
+                    f"duplicate dependency identity across reviewed groups: {identity}"
+                )
             versions[identity] = str(value)
             identities.append(identity)
         container[key] = identities
@@ -141,7 +143,9 @@ def validate_pyproject_transition(base_raw: bytes, head_raw: bytes) -> None:
     base_semantics, base_versions = _normalized_semantics(base)
     head_semantics, head_versions = _normalized_semantics(head)
     if base_semantics != head_semantics:
-        raise PolicyBlock("pip update changes non-version pyproject semantics or dependency identities")
+        raise PolicyBlock(
+            "pip update changes non-version pyproject semantics or dependency identities"
+        )
     if set(base_versions) != set(head_versions):
         raise PolicyBlock("pip update adds, removes, or renames a dependency identity")
     changed = [name for name in base_versions if base_versions[name] != head_versions[name]]
@@ -170,7 +174,9 @@ def _contents_bytes(api: GitHubApi, path: str, ref: str) -> bytes:
 def _validate_dependabot_provenance(api: GitHubApi, number: int) -> None:
     commits = api.list_all(f"/pulls/{number}/commits", max_pages=2)
     if len(commits) != 1:
-        raise PolicyBlock(f"pip promotion requires exactly one Dependabot commit, found {len(commits)}")
+        raise PolicyBlock(
+            f"pip promotion requires exactly one Dependabot commit, found {len(commits)}"
+        )
     row = commits[0]
     author = row.get("author") or {}
     committer = row.get("committer") or {}
@@ -200,13 +206,24 @@ def source_subject(api: GitHubApi, pr: dict[str, Any], config: dict[str, Any]) -
     head_sha, base_sha, number = validate_pr_identity(api, pr, config)
     _validate_dependabot_provenance(api, number)
     files = changed_files(api, number, config)
-    if len(files) != 1 or files[0].get("filename") != "pyproject.toml" or files[0].get("status") != "modified":
+    if (
+        len(files) != 1
+        or files[0].get("filename") != "pyproject.toml"
+        or files[0].get("status") != "modified"
+    ):
         raise PolicyBlock("pip promotion source must modify only existing pyproject.toml")
     base_raw = _contents_bytes(api, "pyproject.toml", base_sha)
     head_raw = _contents_bytes(api, "pyproject.toml", head_sha)
     validate_pyproject_transition(base_raw, head_raw)
     fingerprint = hashlib.sha256(
-        b"\0".join((str(number).encode(), base_sha.encode(), head_sha.encode(), hashlib.sha256(head_raw).hexdigest().encode()))
+        b"\0".join(
+            (
+                str(number).encode(),
+                base_sha.encode(),
+                head_sha.encode(),
+                hashlib.sha256(head_raw).hexdigest().encode(),
+            )
+        )
     ).hexdigest()
     return {
         "number": number,
@@ -222,7 +239,9 @@ def _branch_name(source: dict[str, Any]) -> str:
 
 
 def _marker(metadata: dict[str, Any]) -> str:
-    return MARKER_PREFIX + json.dumps(metadata, separators=(",", ":"), sort_keys=True) + MARKER_SUFFIX
+    return (
+        MARKER_PREFIX + json.dumps(metadata, separators=(",", ":"), sort_keys=True) + MARKER_SUFFIX
+    )
 
 
 def _parse_marker(body: Any) -> dict[str, Any] | None:
@@ -248,7 +267,9 @@ def _compile(source: dict[str, Any]) -> dict[str, bytes]:
         output = Path(temporary) / "locks"
         (root / "requirements").mkdir(parents=True)
         (root / "pyproject.toml").write_bytes(source["pyproject"])
-        shutil.copy2(ROOT / "requirements" / "base-image.lock", root / "requirements" / "base-image.lock")
+        shutil.copy2(
+            ROOT / "requirements" / "base-image.lock", root / "requirements" / "base-image.lock"
+        )
         compile_locks(root, python311, python314, output)
         result = {"pyproject.toml": source["pyproject"]}
         for name in (
@@ -266,13 +287,19 @@ def _git_blob_sha1(raw: bytes) -> str:
     return hashlib.sha1(f"blob {len(raw)}\0".encode() + raw, usedforsecurity=False).hexdigest()
 
 
-def _create_promotion_commit(api: GitHubApi, source: dict[str, Any], branch: str) -> tuple[str, dict[str, bytes]]:
+def _create_promotion_commit(
+    api: GitHubApi, source: dict[str, Any], branch: str
+) -> tuple[str, dict[str, bytes]]:
     generated = _compile(source)
     base_commit = api.get(f"/git/commits/{source['baseSha']}")
-    base_tree = require_sha(((base_commit or {}).get("tree") or {}).get("sha"), "promotion base tree SHA")
+    base_tree = require_sha(
+        ((base_commit or {}).get("tree") or {}).get("sha"), "promotion base tree SHA"
+    )
     tree_rows = []
     for path, raw in sorted(generated.items()):
-        blob = api.post("/git/blobs", {"content": base64.b64encode(raw).decode(), "encoding": "base64"})
+        blob = api.post(
+            "/git/blobs", {"content": base64.b64encode(raw).decode(), "encoding": "base64"}
+        )
         blob_sha = require_sha((blob or {}).get("sha"), f"generated blob SHA for {path}")
         if blob_sha != _git_blob_sha1(raw):
             raise GovernanceError(f"GitHub blob identity mismatch for generated path {path}")
@@ -366,17 +393,23 @@ def _validate_generated_bytes(api: GitHubApi, source: dict[str, Any], head_sha: 
             raise PolicyBlock(f"promotion path does not match deterministic regeneration: {path}")
 
 
-def _validate_promotion(api: GitHubApi, pr: dict[str, Any], config: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+def _validate_promotion(
+    api: GitHubApi, pr: dict[str, Any], config: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
     metadata = _parse_marker(pr.get("body"))
     if metadata is None or metadata.get("version") != 1:
         raise PolicyBlock("promotion PR lacks exact promotion marker")
-    if (pr.get("user") or {}).get("login") != GITHUB_ACTIONS_LOGIN or (pr.get("user") or {}).get("id") != GITHUB_ACTIONS_USER_ID:
+    if (pr.get("user") or {}).get("login") != GITHUB_ACTIONS_LOGIN or (pr.get("user") or {}).get(
+        "id"
+    ) != GITHUB_ACTIONS_USER_ID:
         raise PolicyBlock("promotion PR is not authored by canonical GitHub Actions")
     if pr.get("state") != "open" or pr.get("draft") is not False or pr.get("mergeable") is not True:
         raise PolicyBlock("promotion PR is not open, non-draft, and definitively mergeable")
     head = pr.get("head") or {}
     base = pr.get("base") or {}
-    if (head.get("repo") or {}).get("full_name") != config["repository"] or (base.get("repo") or {}).get("full_name") != config["repository"]:
+    if (head.get("repo") or {}).get("full_name") != config["repository"] or (
+        base.get("repo") or {}
+    ).get("full_name") != config["repository"]:
         raise PolicyBlock("promotion PR is not repository-owned")
     if base.get("ref") != config["baseBranch"]:
         raise PolicyBlock("promotion PR no longer targets main")
@@ -392,16 +425,29 @@ def _validate_promotion(api: GitHubApi, pr: dict[str, Any], config: dict[str, An
     if not isinstance(source_number, int) or source_number < 1:
         raise PolicyBlock("promotion source PR number is invalid")
     source = source_subject(api, api.get(f"/pulls/{source_number}"), config)
-    if source["headSha"] != metadata.get("sourceHead") or source["fingerprint"] != metadata.get("fingerprint"):
+    if source["headSha"] != metadata.get("sourceHead") or source["fingerprint"] != metadata.get(
+        "fingerprint"
+    ):
         raise PolicyBlock("source Dependabot PR changed after promotion generation")
     commit = api.get(f"/git/commits/{head_sha}")
     parents = (commit or {}).get("parents")
-    if not isinstance(parents, list) or len(parents) != 1 or require_sha((parents[0] or {}).get("sha"), "promotion parent SHA") != live_sha:
+    if (
+        not isinstance(parents, list)
+        or len(parents) != 1
+        or require_sha((parents[0] or {}).get("sha"), "promotion parent SHA") != live_sha
+    ):
         raise PolicyBlock("promotion commit is not directly parented to exact current main")
     files = api.list_all(f"/pulls/{pr['number']}/files", max_pages=2)
     paths = {str(row.get("filename")) for row in files if isinstance(row.get("filename"), str)}
-    if not paths or not paths <= PROMOTION_PATHS or "pyproject.toml" not in paths or "requirements/lock-authority.json" not in paths:
-        raise PolicyBlock(f"promotion changed-path set is outside generated authority: {sorted(paths)}")
+    if (
+        not paths
+        or not paths <= PROMOTION_PATHS
+        or "pyproject.toml" not in paths
+        or "requirements/lock-authority.json" not in paths
+    ):
+        raise PolicyBlock(
+            f"promotion changed-path set is outside generated authority: {sorted(paths)}"
+        )
     _validate_generated_bytes(api, source, head_sha)
     _require_green(api, head_sha)
     return source, {"number": pr["number"], "headSha": head_sha, "baseSha": base_sha}
@@ -439,7 +485,9 @@ def _publish_and_merge(api: GitHubApi, promotion: dict[str, Any], config: dict[s
         {"sha": promotion["headSha"], "merge_method": config["mergeMethod"]},
     )
     if not isinstance(result, dict) or result.get("merged") is not True:
-        raise GovernanceError(f"GitHub declined dependency promotion merge: {(result or {}).get('message')}")
+        raise GovernanceError(
+            f"GitHub declined dependency promotion merge: {(result or {}).get('message')}"
+        )
 
 
 def _close_stale(api: GitHubApi, number: int, branch: str) -> None:
@@ -475,15 +523,25 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
                 print(json.dumps({"pr": number, "decision": "promotion-merged"}, sort_keys=True))
         except PolicyBlock as exc:
             reason = str(exc)
-            print(json.dumps({"pr": number, "decision": "promotion-waiting", "reason": reason}, sort_keys=True))
-            if "stale relative to current main" in reason or "source Dependabot PR changed" in reason:
+            print(
+                json.dumps(
+                    {"pr": number, "decision": "promotion-waiting", "reason": reason},
+                    sort_keys=True,
+                )
+            )
+            if (
+                "stale relative to current main" in reason
+                or "source Dependabot PR changed" in reason
+            ):
                 _close_stale(api, int(number), branch)
                 if isinstance(source_number, int):
                     active_sources.discard(source_number)
 
     created = 0
     for summary in api.list_all("/pulls?state=open&sort=created&direction=asc", max_pages=4):
-        if (summary.get("user") or {}).get("login") != BOT_LOGIN or (summary.get("user") or {}).get("id") != BOT_USER_ID:
+        if (summary.get("user") or {}).get("login") != BOT_LOGIN or (summary.get("user") or {}).get(
+            "id"
+        ) != BOT_USER_ID:
             continue
         number = summary.get("number")
         if not isinstance(number, int) or number in active_sources:
@@ -495,9 +553,23 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
             promotion_number = _create_promotion_pr(api, source, branch, head_sha)
             active_sources.add(number)
             created += 1
-            print(json.dumps({"sourcePr": number, "promotionPr": promotion_number, "decision": "promotion-created"}, sort_keys=True))
+            print(
+                json.dumps(
+                    {
+                        "sourcePr": number,
+                        "promotionPr": promotion_number,
+                        "decision": "promotion-created",
+                    },
+                    sort_keys=True,
+                )
+            )
         except PolicyBlock as exc:
-            print(json.dumps({"pr": number, "decision": "not-pip-promotion", "reason": str(exc)}, sort_keys=True))
+            print(
+                json.dumps(
+                    {"pr": number, "decision": "not-pip-promotion", "reason": str(exc)},
+                    sort_keys=True,
+                )
+            )
     return created
 
 
@@ -550,9 +622,9 @@ dev = ["mypy>=2,<3", "playwright>=1.52,<2"]
         raise GovernanceError("promotion self-test accepted unrelated pyproject mutation")
 
     for bad in (
-        b'httpx @ https://example.invalid/httpx.whl',
+        b"httpx @ https://example.invalid/httpx.whl",
         b'httpx>=0.29,<1; python_version > "3.11"',
-        b'httpx @ ../local-wheel.whl',
+        b"httpx @ ../local-wheel.whl",
     ):
         candidate = head_raw.replace(b"httpx>=0.29,<1", bad)
         try:
@@ -560,7 +632,9 @@ dev = ["mypy>=2,<3", "playwright>=1.52,<2"]
         except PolicyBlock:
             pass
         else:
-            raise GovernanceError(f"promotion self-test accepted external dependency authority: {bad!r}")
+            raise GovernanceError(
+                f"promotion self-test accepted external dependency authority: {bad!r}"
+            )
 
     print("dependency-promotion self-test: ok")
 

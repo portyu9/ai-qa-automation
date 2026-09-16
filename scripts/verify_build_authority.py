@@ -246,7 +246,9 @@ def _verify_reviewed_lock_authority(root: Path, *, pyproject_sha256: str) -> dic
         if authority.get("sourcePyprojectSha256") != pyproject_sha256:
             raise ValueError("lock authority manifest is not bound to exact pyproject.toml bytes")
         if authority.get("resolverPolicy") != EXPECTED_LOCK_RESOLVER_POLICY:
-            raise ValueError("lock authority resolver policy differs from reviewed wheel-only policy")
+            raise ValueError(
+                "lock authority resolver policy differs from reviewed wheel-only policy"
+            )
         expected_blobs = authority.get("lockBlobs")
         if (
             not isinstance(expected_blobs, dict)
@@ -463,7 +465,9 @@ def verify_build_authority(root: Path) -> dict[str, Any]:
         or not isinstance(build_requirements[0], str)
         or re.fullmatch(r"hatchling==[^\s;@]+", build_requirements[0]) is None
     ):
-        raise ValueError("build-system requires must remain one exact hatchling==VERSION declaration")
+        raise ValueError(
+            "build-system requires must remain one exact hatchling==VERSION declaration"
+        )
 
     project = pyproject.get("project")
     if not isinstance(project, dict):

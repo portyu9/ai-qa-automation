@@ -1082,7 +1082,11 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
 def main() -> None:
     root = Path(__file__).resolve().parents[1]
     verify_ci_contract(root)
-    print(json.dumps({"schema_version": 1, "result": "PASS", "verifier": "ci-contract-base"}, sort_keys=True))
+    print(
+        json.dumps(
+            {"schema_version": 1, "result": "PASS", "verifier": "ci-contract-base"}, sort_keys=True
+        )
+    )
 
 
 if __name__ == "__main__":

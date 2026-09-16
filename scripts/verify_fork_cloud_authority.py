@@ -171,7 +171,9 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
             )
     if name == "security-autoheal.yml":
         missing = [
-            fragment for fragment in _SECURITY_AUTOHEAL_SECRET_CONTEXT_FRAGMENTS if fragment not in text
+            fragment
+            for fragment in _SECURITY_AUTOHEAL_SECRET_CONTEXT_FRAGMENTS
+            if fragment not in text
         ]
         if missing:
             raise ValueError(
@@ -255,7 +257,13 @@ def main() -> int:
     parser.add_argument("--root", type=Path, default=Path.cwd())
     args = parser.parse_args()
     verify_repository(args.root)
-    print(json.dumps({"schema_version": 1, "result": "PASS", "verifier": "fork-cloud-authority"}, separators=(",", ":"), sort_keys=True))
+    print(
+        json.dumps(
+            {"schema_version": 1, "result": "PASS", "verifier": "fork-cloud-authority"},
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    )
     return 0
 
 

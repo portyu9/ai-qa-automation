@@ -18,7 +18,9 @@ MAX_REPORT_BYTES = 8 * 1024 * 1024
 MAX_PACKAGES = 512
 MAX_REQUIREMENTS = 256
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
-REQUIREMENT_NAME = re.compile(r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[A-Za-z0-9_,.-]+\])?(?P<specifier>[^;@\s]*)$")
+REQUIREMENT_NAME = re.compile(
+    r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[A-Za-z0-9_,.-]+\])?(?P<specifier>[^;@\s]*)$"
+)
 EXACT_BUILD_REQUIREMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*==[^\s;@]+$")
 ALLOWED_DOWNLOAD_HOSTS = {"files.pythonhosted.org", "pypi.org"}
 
@@ -70,7 +72,9 @@ def _validate_requirement(raw: Any, *, context: str) -> str:
     if not isinstance(raw, str) or not raw or len(raw) > 512:
         raise LockCompileError(f"{context} requirement must be a bounded non-empty string")
     if any(token in raw for token in (";", "@", "://", "\\", "../", "./")):
-        raise LockCompileError(f"{context} requirement contains forbidden URL/path/marker authority")
+        raise LockCompileError(
+            f"{context} requirement contains forbidden URL/path/marker authority"
+        )
     match = REQUIREMENT_NAME.fullmatch(raw)
     if match is None:
         raise LockCompileError(f"{context} requirement uses unsupported syntax: {raw!r}")
@@ -99,7 +103,11 @@ def _validated_requirements(values: Any, *, context: str) -> list[str]:
 
 
 def _write_requirements(path: Path, requirements: list[str]) -> None:
-    path.write_text("\n".join(sorted(requirements, key=_requirement_name)) + "\n", encoding="utf-8", newline="\n")
+    path.write_text(
+        "\n".join(sorted(requirements, key=_requirement_name)) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
 
 
 def _run_report(python: str, root: Path, requirements: list[str]) -> dict[str, Any]:
@@ -177,7 +185,9 @@ def _report_to_lock(payload: dict[str, Any]) -> str:
         current = (version, digest)
         previous = packages.get(canonical)
         if previous is not None and previous != current:
-            raise LockCompileError(f"resolved graph contains conflicting package identity {canonical}")
+            raise LockCompileError(
+                f"resolved graph contains conflicting package identity {canonical}"
+            )
         packages[canonical] = current
 
     lines: list[str] = []
@@ -192,7 +202,9 @@ def _resolve_twice(python: str, root: Path, requirements: list[str]) -> str:
     first = _report_to_lock(_run_report(python, root, requirements))
     second = _report_to_lock(_run_report(python, root, requirements))
     if first != second:
-        raise LockCompileError("resolver output is not deterministic across identical wheel-only runs")
+        raise LockCompileError(
+            "resolver output is not deterministic across identical wheel-only runs"
+        )
     return first
 
 
@@ -252,7 +264,9 @@ def compile_locks(root: Path, python311: str, python314: str, output_dir: Path) 
         or EXACT_BUILD_REQUIREMENT.fullmatch(build_requires[0]) is None
         or _canonical_name(build_requires[0].split("==", 1)[0]) != "hatchling"
     ):
-        raise LockCompileError("build-system.requires must be exactly one hatchling==VERSION requirement")
+        raise LockCompileError(
+            "build-system.requires must be exactly one hatchling==VERSION requirement"
+        )
 
     runtime = _validated_requirements(project.get("dependencies"), context="runtime")
     optional = project.get("optional-dependencies")
