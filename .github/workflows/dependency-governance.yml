@@ -8,6 +8,8 @@ on:
       - '.github/dependency-recovery.json'
       - '.github/scripts/dependency_governance.py'
       - '.github/scripts/dependency_governance_selfcheck.py'
+      - '.github/scripts/dependency_lock_compiler.py'
+      - '.github/scripts/dependency_promotion.py'
       - '.github/scripts/dependency_recovery.py'
       - '.github/scripts/dependency_recovery_selfcheck.py'
       - '.github/workflows/dependency-governance.yml'
@@ -46,12 +48,14 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.11'
+          python-version: '3.11.16'
       - name: Compile governance control plane
         run: >-
           python -m compileall -q
           .github/scripts/dependency_governance.py
           .github/scripts/dependency_governance_selfcheck.py
+          .github/scripts/dependency_lock_compiler.py
+          .github/scripts/dependency_promotion.py
           .github/scripts/dependency_recovery.py
           .github/scripts/dependency_recovery_selfcheck.py
       - name: Validate governance and recovery configuration
@@ -61,13 +65,14 @@ jobs:
       - name: Exercise fail-closed policy self-checks
         run: |
           python .github/scripts/dependency_governance_selfcheck.py
+          python .github/scripts/dependency_promotion.py --self-test
           python .github/scripts/dependency_recovery_selfcheck.py
 
   govern:
     name: govern-dependabot
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 20
     environment:
       name: trusted-pr-gate
       deployment: false
@@ -84,13 +89,22 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
           fetch-depth: 1
-      - name: Set up Python
+      - name: Set up Python 3.11
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.11'
+          python-version: '3.11.16'
+      - name: Capture Python 3.11 resolver
+        run: printf 'PROMOTION_PYTHON311=%s\n' "$(command -v python)" >> "$GITHUB_ENV"
+      - name: Set up Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14.7'
+      - name: Capture Python 3.14 resolver
+        run: printf 'PROMOTION_PYTHON314=%s\n' "$(command -v python)" >> "$GITHUB_ENV"
       - name: Validate trusted governance and recovery policy
         run: |
           python .github/scripts/dependency_governance.py --validate-config --self-test
+          python .github/scripts/dependency_promotion.py --self-test
           python .github/scripts/dependency_recovery.py --validate-config --self-test
       - name: Attempt one bounded transient recovery
         if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -141,7 +155,12 @@ jobs:
           token="$(TOKEN_JSON="$token_json" python -c 'import json, os; value=json.loads(os.environ["TOKEN_JSON"])["token"]; assert isinstance(value, str) and value; print(value)')"
           echo "::add-mask::$token"
           printf 'token=%s\n' "$token" >> "$GITHUB_OUTPUT"
-      - name: Reconcile Dependabot merge authority
+      - name: Reconcile exact-subject Python dependency promotion
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRUSTED_STATUS_TOKEN: ${{ steps.trusted-app.outputs.token }}
+        run: python .github/scripts/dependency_promotion.py --reconcile --allow-merge
+      - name: Reconcile Dependabot action merge authority
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TRUSTED_STATUS_TOKEN: ${{ steps.trusted-app.outputs.token }}
