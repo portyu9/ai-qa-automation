@@ -9,6 +9,12 @@ on:
   push:
     branches: [main]
   merge_group:
+  workflow_dispatch:
+    inputs:
+      subject_sha:
+        description: Exact repository commit SHA to validate
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -21,7 +27,7 @@ env:
   PYTHONUNBUFFERED: "1"
   PYTHONSAFEPATH: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
-  CI_SUBJECT_SHA: ${{ github.sha }}
+  CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_sha || github.sha }}
 
 jobs:
   quality:
