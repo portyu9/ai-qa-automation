@@ -255,7 +255,7 @@ def _capture_audit_descriptor(monkeypatch: pytest.MonkeyPatch) -> dict[str, int 
     def capture_open(
         path: object,
         flags: int,
-        mode: int = 0o777,
+        mode: int = 0o600,
         *,
         dir_fd: int | None = None,
     ) -> int:

@@ -83,7 +83,7 @@ def test_workspace_lease_descriptor_capability_survives_os_open_wrapper(
     def wrapped_open(
         path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
         flags: int,
-        mode: int = 0o777,
+        mode: int = 0o600,
         *,
         dir_fd: int | None = None,
     ) -> int:
@@ -162,7 +162,7 @@ def test_workspace_lease_rejects_directory_swap_during_lock_open(
     def racing_open(
         path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
         flags: int,
-        mode: int = 0o777,
+        mode: int = 0o600,
         *,
         dir_fd: int | None = None,
     ) -> int:
