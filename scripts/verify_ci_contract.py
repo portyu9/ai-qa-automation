@@ -37,7 +37,7 @@ EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
     "068537f4638fa1559c21e31cfdfd5aa99e135b2f"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
-    "66c0bf8aee2633bfb51c83029b0251f2d81dae29"  # pragma: allowlist secret
+    "66c0bf8aee2638fb51c83029b0251f2d81dae29"  # pragma: allowlist secret
 )
 EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "fbe47dcf9a201dfb9da390b01e68f5b662689538"  # pragma: allowlist secret
@@ -46,6 +46,11 @@ EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
     "bc35a5c6ab035f17892144dff9d5f467fef25f5e"  # pragma: allowlist secret
 )
 EXPECTED_CODEQL_MAJOR = 4
+CODEQL_ACTION_RE = re.compile(
+    r"^\s*uses:\s*(github/codeql-action/(?:init|analyze))@([0-9a-f]{40})"
+    r"\s+#\s+v(\d+(?:\.\d+){0,2})\s*$",
+    re.MULTILINE,
+)
 # Compatibility alias for adversarial tests and callers that imported the historical helper name.
 EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA
 
@@ -315,20 +320,20 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
     for fragment in required:
         if fragment not in semantic:
             raise ValueError(f"codeql.yml missing reviewed invariant: {fragment}")
-    uses = [match.groupdict() for match in base.ACTION_RE.finditer(semantic)]
+    uses = base.ACTION_RE.findall(text)
     if len(uses) != 3:
         raise ValueError("codeql.yml must contain exactly checkout, CodeQL init, and CodeQL analyze")
-    checkout = [item for item in uses if item["action"] == "actions/checkout"]
-    codeql = [item for item in uses if item["action"] in {"github/codeql-action/init", "github/codeql-action/analyze"}]
-    if len(checkout) != 1 or checkout[0]["ref"].lower() != base.EXPECTED_ACTION_SHAS["actions/checkout"]:
+    checkout = [item for item in uses if item[0] == "actions/checkout"]
+    if len(checkout) != 1 or checkout[0][1].lower() != base.EXPECTED_ACTION_SHAS["actions/checkout"]:
         raise ValueError("codeql.yml checkout action must use the reviewed immutable revision")
-    if len(codeql) != 2 or {item["action"] for item in codeql} != {
+    codeql = CODEQL_ACTION_RE.findall(text)
+    if len(codeql) != 2 or {item[0] for item in codeql} != {
         "github/codeql-action/init",
         "github/codeql-action/analyze",
     }:
         raise ValueError("codeql.yml must use exactly one CodeQL init and one CodeQL analyze action")
-    codeql_refs = {item["ref"].lower() for item in codeql}
-    codeql_versions = {item["version"] for item in codeql}
+    codeql_refs = {item[1].lower() for item in codeql}
+    codeql_versions = {item[2] for item in codeql}
     if len(codeql_refs) != 1:
         raise ValueError("CodeQL init and analyze must use the same immutable revision")
     if len(codeql_versions) != 1:
@@ -365,7 +370,7 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "  pull_request_target:",
         "    types: [opened, reopened, synchronize, ready_for_review]",
         "  workflow_run:",
-        "    workflows: [CI — ƳƤ AI QA Automation Framework, CodeQL]",
+        "    workflows: ['CI — ƳƤ AI QA Automation Framework', CodeQL]",
         "    types: [completed]",
         "  schedule:",
         "  workflow_dispatch:",
@@ -375,22 +380,25 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "    name: govern-dependabot",
         "    if: github.event_name != 'pull_request'",
         "      actions: write",
+        "      checks: read",
         "      contents: write",
-        "      issues: write",
         "      pull-requests: write",
-        "      statuses: write",
+        "      statuses: read",
         "          ref: ${{ github.event.repository.default_branch }}",
         "          persist-credentials: false",
         "          fetch-depth: 1",
-        "      - name: Attempt bounded dependency recovery",
+        "      - name: Attempt one bounded transient recovery",
+        "        run: python .github/scripts/dependency_recovery.py --recover",
         "      - name: Mint dedicated Trusted PR Gate token",
         "          TRUSTED_GATE_APP_CLIENT_ID: ${{ vars.TRUSTED_GATE_APP_CLIENT_ID }}",
         "          TRUSTED_GATE_APP_PRIVATE_KEY: ${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}",
         '"permissions":{"contents":"read","pull_requests":"read","statuses":"write"}',
-        "      - name: Reconcile dependency governance",
+        "      - name: Reconcile Dependabot merge authority",
         "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
-        "          TRUSTED_GATE_TOKEN: ${{ steps.trusted-app.outputs.token }}",
-        "        run: python .github/scripts/dependency_governance.py",
+        "          TRUSTED_STATUS_TOKEN: ${{ steps.trusted-app.outputs.token }}",
+        "          case \"$GITHUB_EVENT_NAME\" in",
+        "            workflow_run|schedule|workflow_dispatch) args+=(--allow-merge) ;;",
+        "          python .github/scripts/dependency_governance.py \"${args[@]}\"",
     )
     for fragment in required:
         if fragment not in semantic:
@@ -401,22 +409,22 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "repository_dispatch:",
         "ubuntu-latest",
         "continue-on-error: true",
+        "statuses: write",
         "ref: ${{ github.event.pull_request.head.sha }}",
         "ref: ${{ github.event.workflow_run.head_sha }}",
     ):
-        if forbidden in semantic:
+        if forbidden in semantic and forbidden != "statuses: write":
             raise ValueError(
                 f"dependency-governance.yml contains forbidden authority token: {forbidden}"
             )
-    recovery = semantic.index("      - name: Attempt bounded dependency recovery")
+    # The only statuses:write occurrence must be inside the dedicated App token request.
+    if semantic.count('"statuses":"write"') != 1 or semantic.count("statuses: write") != 0:
+        raise ValueError("native workflow authority must remain status-read-only")
+    recovery = semantic.index("      - name: Attempt one bounded transient recovery")
     mint = semantic.index("      - name: Mint dedicated Trusted PR Gate token")
-    reconcile = semantic.index("      - name: Reconcile dependency governance")
+    reconcile = semantic.index("      - name: Reconcile Dependabot merge authority")
     if not recovery < mint < reconcile:
         raise ValueError("dependency recovery, trusted-token minting, and merge reconciliation are out of order")
-    if "ALLOW_RERUN: ${{ github.event_name == 'workflow_run' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}" not in semantic:
-        raise ValueError("dependency recovery authority differs from the reviewed event boundary")
-    if "ALLOW_MERGE: ${{ github.event_name == 'workflow_run' || github.event_name == 'schedule' || inputs['allow-merge'] }}" not in semantic:
-        raise ValueError("dependency merge authority differs from the reviewed event boundary")
     return {
         "triggers": [
             "pull_request",
