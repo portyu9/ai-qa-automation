@@ -43,7 +43,7 @@ EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "fbe47dcf9a201dfb9da390b01e68f5b662689538"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
-    "675e0e8831821181aaf4524b374625b5efc8f38d"  # pragma: allowlist secret
+    "481821de8f4ae59430b1a9c28aae0d07a58e7201"  # pragma: allowlist secret
 )
 EXPECTED_CODEQL_MAJOR = 4
 CODEQL_ACTION_RE = re.compile(
@@ -386,6 +386,7 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "    if: github.event_name == 'pull_request'",
         "    name: govern-dependabot",
         "    if: github.event_name != 'pull_request'",
+        "    environment:\n      name: trusted-pr-gate\n      deployment: false",
         "      actions: write",
         "      checks: read",
         "      contents: write",
