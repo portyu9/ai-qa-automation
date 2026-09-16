@@ -20,14 +20,14 @@ jobs:
         with:
           ref: automation/autonomous-dependency-promotion
           fetch-depth: 1
-      - name: Apply lock patch
-        run: python .github/scripts/_patch_lock_only.py
-      - name: Commit lock authority
+      - name: Apply governance policy patch
+        run: python .github/scripts/_patch_governance_policy.py
+      - name: Commit governance policy
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add requirements/lock-authority.json scripts/verify_build_authority.py
+          git add .github/scripts/dependency_governance.py
           git diff --cached --check
-          git commit -m 'ci: bind lock bytes to manifest authority'
+          git commit -m 'ci: expand governed dependency update authority'
           git push origin HEAD:automation/autonomous-dependency-promotion
