@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import stat
 import tomllib
 from importlib import metadata as importlib_metadata
@@ -44,6 +45,7 @@ EXPECTED_PROJECT_FILE_INPUTS = {
 EXPECTED_PROJECT_NAME = "ai-qa-automation"
 EXPECTED_PROJECT_SCRIPTS = {"ai-qa": "ai_qa_automation.cli:app"}
 FORBIDDEN_PROJECT_ENTRY_POINT_KEYS = ("gui-scripts", "entry-points")
+
 
 def _identity(value: os.stat_result) -> tuple[int, int]:
     return value.st_dev, value.st_ino
