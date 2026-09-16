@@ -1,4 +1,4 @@
-name: Temporary subject-lock patch runner
+name: Temporary authority finalizer
 
 on:
   push:
@@ -20,14 +20,14 @@ jobs:
         with:
           ref: automation/autonomous-dependency-promotion
           fetch-depth: 1
-      - name: Apply governance policy patch
-        run: python .github/scripts/_patch_governance_policy.py
-      - name: Commit governance policy
+      - name: Apply final authority integration
+        run: python .github/scripts/_finalize_authority.py
+      - name: Commit final authority integration
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add .github/scripts/dependency_governance.py
+          git add .github/scripts/security_autoheal.py scripts/verify_ci_contract.py scripts/verify_fork_cloud_authority.py
           git diff --cached --check
-          git commit -m 'ci: expand governed dependency update authority'
+          git commit -m 'ci: finalize dependency and security authority contracts'
           git push origin HEAD:automation/autonomous-dependency-promotion
