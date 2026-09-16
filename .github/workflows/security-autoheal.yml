@@ -1,0 +1,133 @@
+name: Security Auto-Heal
+
+on:
+  pull_request:
+    paths:
+      - '.github/security-autoheal.json'
+      - '.github/scripts/security_autoheal.py'
+      - '.github/scripts/security_autoheal_selfcheck.py'
+      - '.github/workflows/security-autoheal.yml'
+      - '.github/workflows/ci.yml'
+  workflow_run:
+    workflows:
+      - CodeQL
+      - 'CI — ƳƤ AI QA Automation Framework'
+    types: [completed]
+  schedule:
+    - cron: '41 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-autoheal-${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'reconcile' }}
+  cancel-in-progress: false
+
+env:
+  SECURITY_AUTOHEAL_CONFIG: .github/security-autoheal.json
+
+jobs:
+  self-test:
+    name: security-autoheal-self-test
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout proposed security control plane without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11.16'
+      - name: Compile security control plane
+        run: >-
+          python -m compileall -q
+          .github/scripts/security_autoheal.py
+          .github/scripts/security_autoheal_selfcheck.py
+          .github/scripts/dependency_lock_compiler.py
+      - name: Validate security auto-heal policy
+        run: python .github/scripts/security_autoheal.py --validate-config --self-test
+      - name: Exercise security auto-heal self-check
+        run: python .github/scripts/security_autoheal_selfcheck.py
+
+  reconcile:
+    name: reconcile-codeql-autoheal
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: trusted-pr-gate
+      deployment: false
+    permissions:
+      actions: write
+      checks: read
+      contents: write
+      pull-requests: write
+      security-events: write
+      statuses: read
+    steps:
+      - name: Checkout trusted default-branch security controller only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11.16'
+      - name: Validate trusted security auto-heal policy
+        run: python .github/scripts/security_autoheal.py --validate-config --self-test
+      - name: Mint dedicated Trusted PR Gate token
+        id: trusted-app
+        env:
+          TRUSTED_GATE_APP_CLIENT_ID: ${{ vars.TRUSTED_GATE_APP_CLIENT_ID }}
+          TRUSTED_GATE_APP_PRIVATE_KEY: ${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$TRUSTED_GATE_APP_CLIENT_ID"
+          test -n "$TRUSTED_GATE_APP_PRIVATE_KEY"
+          b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
+          now="$(date +%s)"
+          issued_at="$((now - 60))"
+          expires_at="$((now + 540))"
+          header="$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)"
+          payload="$(printf '{"iat":%s,"exp":%s,"iss":"%s"}' "$issued_at" "$expires_at" "$TRUSTED_GATE_APP_CLIENT_ID" | b64url)"
+          unsigned="$header.$payload"
+          key_file="$RUNNER_TEMP/trusted-gate-app-key.pem"
+          umask 077
+          printf '%s' "$TRUSTED_GATE_APP_PRIVATE_KEY" > "$key_file"
+          trap 'rm -f "$key_file"' EXIT
+          signature="$(printf '%s' "$unsigned" | openssl dgst -sha256 -sign "$key_file" -binary | b64url)"
+          jwt="$unsigned.$signature"
+          rm -f "$key_file"
+          trap - EXIT
+          installation_json="$(curl --fail-with-body --silent --show-error \
+            -H "Authorization: Bearer $jwt" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/installation")"
+          installation_id="$(INSTALLATION_JSON="$installation_json" python -c 'import json, os; value=json.loads(os.environ["INSTALLATION_JSON"])["id"]; assert isinstance(value, int) and value > 0; print(value)')"
+          repo_name="${GITHUB_REPOSITORY#*/}"
+          request_json="$(REPO_NAME="$repo_name" python -c 'import json, os; print(json.dumps({"repositories":[os.environ["REPO_NAME"]],"permissions":{"contents":"read","pull_requests":"read","statuses":"write"}}, separators=(",", ":"), sort_keys=True))')"
+          token_json="$(curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "Authorization: Bearer $jwt" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            -H 'Content-Type: application/json' \
+            --data "$request_json" \
+            "$GITHUB_API_URL/app/installations/$installation_id/access_tokens")"
+          token="$(TOKEN_JSON="$token_json" python -c 'import json, os; value=json.loads(os.environ["TOKEN_JSON"])["token"]; assert isinstance(value, str) and value; print(value)')"
+          echo "::add-mask::$token"
+          printf 'token=%s\n' "$token" >> "$GITHUB_OUTPUT"
+      - name: Reconcile exact-subject CodeQL remediations
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TRUSTED_STATUS_TOKEN: ${{ steps.trusted-app.outputs.token }}
+        run: python .github/scripts/security_autoheal.py --reconcile --allow-merge
