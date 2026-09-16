@@ -47,3 +47,5 @@ jobs:
             .github/scripts/dependency_recovery_selfcheck.py
           git commit -m "style: satisfy governance Ruff contract"
           git push origin HEAD:automation/harden-dependabot-governance
+
+# Trigger after workflow registration on the branch.
