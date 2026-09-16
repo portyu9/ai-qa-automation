@@ -1,0 +1,33 @@
+name: Temporary secure bootstrap split
+
+on:
+  push:
+    branches:
+      - automation/autonomous-dependency-promotion
+    paths:
+      - .github/workflows/_bootstrap_split.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout implementation branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: automation/autonomous-dependency-promotion
+          fetch-depth: 0
+      - name: Apply secure bootstrap split
+        run: python .github/scripts/_bootstrap_split.py
+      - name: Commit bootstrap split
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A .github requirements scripts tests examples/reference_sut/app.py
+          git diff --cached --check
+          git commit -m 'security: split bootstrap from protected auto-heal subjects'
+          git push origin HEAD:automation/autonomous-dependency-promotion
