@@ -1,0 +1,33 @@
+name: Temporary subject-lock patch runner
+
+on:
+  push:
+    branches:
+      - automation/autonomous-dependency-promotion
+    paths:
+      - .github/workflows/_run_subject_and_locks_patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout authority branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: automation/autonomous-dependency-promotion
+          fetch-depth: 1
+      - name: Apply patch
+        run: python .github/scripts/_patch_subject_and_locks.py
+      - name: Commit patch
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/ci.yml requirements/lock-authority.json scripts/verify_build_authority.py
+          git diff --cached --check
+          git commit -m 'ci: bind generated subjects to lock authority'
+          git push origin HEAD:automation/autonomous-dependency-promotion
