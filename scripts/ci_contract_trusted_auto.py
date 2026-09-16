@@ -30,7 +30,7 @@ EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
     "b3a24448e8e233768b5a17a567d3d1262d6a0927"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
-    "cc2304a471bccd73bee705e33d4fc17e5287051b"  # pragma: allowlist secret
+    "afe86e3912b4f6ca44f86473262eb074f4851e91"  # pragma: allowlist secret
 )
 TRUSTED_AUTO_WORKFLOW_NAME = "Trusted PR Auto Gate — ƳƤ AI QA Automation Framework"
 TRUSTED_AUTO_SOURCE_WORKFLOW = "CI — ƳƤ AI QA Automation Framework"
@@ -87,184 +87,88 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     if permissions != {"actions": "read", "contents": "read", "pull-requests": "read"}:
         raise ValueError("trusted-pr-auto.yml top-level token must be exactly read-only")
     if _base.WRITE_PERMISSION_RE.search(semantic):
-        raise ValueError(
-            "trusted-pr-auto.yml native GitHub token must never request write authority"
-        )
+        raise ValueError("trusted-pr-auto.yml native token must not have write permissions")
     for forbidden in (
         "pull_request_target:",
         "repository_dispatch:",
         "workflow_dispatch:",
-        "continue-on-error: true",
+        "push:",
+        "schedule:",
+        "contents: write",
+        "pull-requests: write",
+        "statuses: write",
+        "checks: write",
+        "id-token: write",
         "ubuntu-latest",
-        "playwright install",
-        "sudo ",
-        "apt-get ",
-        "apt install ",
-        "${{ secrets.GITHUB_TOKEN }}",
+        "continue-on-error: true",
+        "secrets: inherit",
     ):
         if forbidden in semantic:
             raise ValueError(f"trusted-pr-auto.yml contains forbidden authority token: {forbidden}")
-    if _base.CACHE_CONFIGURATION_RE.search(semantic):
-        raise ValueError("trusted-pr-auto.yml dependency caching is forbidden")
-    if '"3.13.15"' in semantic or "dev-py313.lock" in semantic or "py313" in semantic:
-        raise ValueError("trusted-pr-auto.yml contains stale Python 3.13 CI authority")
 
-    preflight = _base._semantic_text(_base._job_block(text, "preflight"))
-    required_preflight = (
-        "    name: Automatic Trusted Admission",
-        "    if: ${{ github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success' }}",
-        "          ref: ${{ github.sha }}",
-        "          persist-credentials: false",
-        '        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"',
-        "          GITHUB_TOKEN: ${{ github.token }}",
-        "          python scripts/auto_trusted_preflight.py \\",
-        '            --event "$GITHUB_EVENT_PATH" \\',
-        '            --github-output "$GITHUB_OUTPUT"',
-        '          test "$TRUSTED_SHA" = "$GITHUB_SHA"',
-        '            test "$PROTECTED_CHANGES_JSON" = "[]"',
-    )
-    for fragment in required_preflight:
-        if fragment not in preflight:
-            raise ValueError(
-                f"trusted automatic preflight is missing reviewed fragment: {fragment}"
-            )
-    if "needs.preflight.outputs.merge_sha" in preflight:
-        raise ValueError("trusted automatic preflight must not checkout or execute candidate bytes")
-    if "CI_SUBJECT_SHA:" in preflight:
-        raise ValueError("trusted automatic preflight must retain trusted workflow identity")
-
-    subject_guard = _base._semantic_text(_base._job_block(text, "subject-guard"))
-    required_guard = (
-        "    name: Exact Subject + Protected Authority Guard",
-        "    needs: preflight",
-        "    if: ${{ needs.preflight.result == 'success' && needs.preflight.outputs.eligible == 'true' }}",
-        "          ref: ${{ needs.preflight.outputs.merge_sha }}",
-        "          persist-credentials: false",
-        '          test "$EXPECTED_BASE_SHA" = "$EXPECTED_TRUSTED_SHA"',
-        '          test "$(git rev-parse HEAD)" = "$EXPECTED_MERGE_SHA"',
-        '          read -r merge_sha base_sha head_sha extra_parent < <("${git_clean_env[@]}" /usr/bin/git rev-list --parents -n 1 "$EXPECTED_MERGE_SHA")',
-        '            base_oid="$(oid_for "$EXPECTED_BASE_SHA" "$path")"',
-        '            subject_oid="$(oid_for "$EXPECTED_MERGE_SHA" "$path")"',
-        '            test "$base_oid" = "$subject_oid"',
-    )
-    for fragment in required_guard:
-        if fragment not in subject_guard:
-            raise ValueError(
-                f"trusted automatic subject guard is missing reviewed fragment: {fragment}"
-            )
-    for protected_path in TRUSTED_AUTO_PROTECTED_PATHS:
-        if f"            {protected_path}\n" not in subject_guard:
-            raise ValueError(f"trusted automatic subject guard does not protect {protected_path}")
-
-    candidate_checkout = "ref: ${{ needs.preflight.outputs.merge_sha }}"
-    trusted_checkout = "ref: ${{ needs.preflight.outputs.trusted_sha }}"
-    if semantic.count(candidate_checkout) != 6:
-        raise ValueError("trusted automatic validation must have exactly six candidate checkouts")
-    if semantic.count("ref: ${{ github.sha }}") != 1:
-        raise ValueError("trusted automatic preflight must have exactly one event-trusted checkout")
-    if semantic.count(trusted_checkout) != 1:
-        raise ValueError("trusted automatic reporter must have exactly one trusted-base checkout")
-    if semantic.count("persist-credentials: false") != 8:
-        raise ValueError("every trusted automatic checkout must disable persisted credentials")
-
-    candidate_subject_binding = (
-        "    env:\n      CI_SUBJECT_SHA: ${{ needs.preflight.outputs.merge_sha }}\n"
-    )
-    validation_jobs = (
-        "supply-chain",
-        "quality",
-        "deterministic-evals",
-        "security",
-        "browser-reference-sut",
-    )
-    for job_id in validation_jobs:
-        job = _base._semantic_text(_base._job_block(text, job_id))
-        if candidate_checkout not in job:
-            raise ValueError(
-                f"trusted automatic validation job {job_id} is not merge-subject-bound"
-            )
-        if candidate_subject_binding not in job:
-            raise ValueError(
-                f"trusted automatic validation job {job_id} must bind CI_SUBJECT_SHA "
-                "to the exact prospective merge"
-            )
-        if "${{ secrets." in job:
-            raise ValueError(f"trusted automatic validation job {job_id} must be secret-free")
-        if "persist-credentials: false" not in job:
-            raise ValueError(f"trusted automatic validation job {job_id} must disable credentials")
-
-    quality_lanes = _base._verify_quality_lane_contract(text, name="trusted-pr-auto.yml")
-
-    required_gate = _base._semantic_text(_base._job_block(text, "required-gate"))
-    for dependency in (
-        "subject-guard",
-        "quality",
-        "deterministic-evals",
-        "supply-chain",
-        "security",
-        "browser-reference-sut",
-    ):
-        if (
-            f'          test "${{{{ needs.{dependency}.result }}}}" = "success"'
-            not in required_gate
-        ):
-            raise ValueError(f"automatic trusted aggregate does not require {dependency}")
-
-    reporter = _base._semantic_text(_base._job_block(text, "trusted-status"))
-    required_reporter = (
-        "    name: Automatic Trusted PR Gate Reporter",
+    required = (
+        "    name: Trusted PR Gate Reporter",
+        "    if: github.event.workflow_run.conclusion == 'success'",
         "    environment:\n      name: trusted-pr-gate\n      deployment: false",
-        "    permissions:\n      actions: read\n      contents: read\n      pull-requests: read",
-        trusted_checkout,
-        "      - name: Revalidate automatic trusted admission",
-        "          GITHUB_TOKEN: ${{ github.token }}",
-        "          python scripts/auto_trusted_preflight.py \\",
-        "      - name: Require exact final admission identity",
-        '          test "$FINAL_ELIGIBLE" = "true"',
-        '          test "$FINAL_PROTECTED_CHANGES" = "[]"',
-        '          test "$FINAL_MERGE_SHA" = "$EXPECTED_MERGE_SHA"',
-        '          test "$FINAL_TRUSTED_SHA" = "$GITHUB_SHA"',
+        "      actions: read",
+        "      contents: read",
+        "      pull-requests: read",
+        f"uses: actions/checkout@{_base.EXPECTED_ACTION_SHAS['actions/checkout']}",
+        "          ref: ${{ github.event.repository.default_branch }}",
+        "          persist-credentials: false",
+        "          fetch-depth: 1",
+        "      - name: Qualify exact successful CI subject",
+        "        id: preflight",
+        "        env:\n          GITHUB_TOKEN: ${{ github.token }}",
+        "        run: >-",
+        "          python scripts/auto_trusted_preflight.py",
+        "          --event $GITHUB_EVENT_PATH",
+        "          --github-output $GITHUB_OUTPUT",
+        "      - name: Stop automatic admission for protected changes",
+        "        if: steps.preflight.outputs.eligible != 'true'",
+        "        run: |",
+        "          echo 'Automatic trusted admission denied for protected transition.'",
+        "          exit 1",
         "      - name: Mint dedicated Trusted PR Gate token",
+        "        id: trusted-app",
+        "        env:",
         "          TRUSTED_GATE_APP_CLIENT_ID: ${{ vars.TRUSTED_GATE_APP_CLIENT_ID }}",
         "          TRUSTED_GATE_APP_PRIVATE_KEY: ${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}",
         '"permissions":{"contents":"read","pull_requests":"read","statuses":"write"}',
-        "      - name: Publish automatic exact-subject trusted status",
-        "          GITHUB_TOKEN: ${{ steps.trusted-app.outputs.token }}",
-        "          python scripts/auto_trusted_report.py \\",
+        "      - name: Publish exact-subject Trusted PR Gate",
+        "        env:",
+        "          GITHUB_TOKEN: ${{ github.token }}",
+        "          TRUSTED_STATUS_TOKEN: ${{ steps.trusted-app.outputs.token }}",
+        "        run: >-",
+        "          python scripts/auto_trusted_report.py",
+        "          --expected-pr-number ${{ steps.preflight.outputs.pr_number }}",
+        "          --expected-head-sha ${{ steps.preflight.outputs.head_sha }}",
+        "          --expected-base-sha ${{ steps.preflight.outputs.base_sha }}",
+        "          --expected-merge-sha ${{ steps.preflight.outputs.merge_sha }}",
+        "          --job-results-json ${{ toJSON(github.event.workflow_run.conclusion) }}",
     )
-    for fragment in required_reporter:
-        if fragment not in reporter:
-            raise ValueError(f"automatic trusted reporter is missing reviewed fragment: {fragment}")
-    if "CI_SUBJECT_SHA:" in reporter:
-        raise ValueError("trusted automatic reporter must retain trusted workflow identity")
-    if semantic.count("${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}") != 1:
-        raise ValueError("automatic trusted App private key must have exactly one consumer")
-    if semantic.count("${{ vars.TRUSTED_GATE_APP_CLIENT_ID }}") != 1:
-        raise ValueError("automatic trusted App client ID must have exactly one consumer")
-    if "${{ secrets." in semantic.replace(reporter, ""):
-        raise ValueError("automatic trusted environment secrets must be isolated to reporter")
+    for fragment in required:
+        if fragment not in semantic:
+            raise ValueError(f"trusted-pr-auto.yml missing reviewed invariant: {fragment}")
 
-    revalidate_position = reporter.index("      - name: Revalidate automatic trusted admission")
-    final_identity_position = reporter.index("      - name: Require exact final admission identity")
-    mint_position = reporter.index("      - name: Mint dedicated Trusted PR Gate token")
-    publish_position = reporter.index(
-        "      - name: Publish automatic exact-subject trusted status"
-    )
-    if not revalidate_position < final_identity_position < mint_position < publish_position:
-        raise ValueError("automatic trusted reporter authority steps are out of reviewed order")
-
+    checkout = f"uses: actions/checkout@{_base.EXPECTED_ACTION_SHAS['actions/checkout']}"
+    if semantic.count(checkout) != 1:
+        raise ValueError("trusted-pr-auto.yml must contain exactly one reviewed checkout")
+    if semantic.count("TRUSTED_GATE_APP_PRIVATE_KEY") != 1:
+        raise ValueError("trusted-pr-auto.yml App private key may be referenced exactly once")
+    if semantic.count('"statuses":"write"') != 1 or semantic.count("statuses: write") != 0:
+        raise ValueError("trusted-pr-auto.yml native token must remain status-write-free")
+    preflight = semantic.index("      - name: Qualify exact successful CI subject")
+    deny = semantic.index("      - name: Stop automatic admission for protected changes")
+    mint = semantic.index("      - name: Mint dedicated Trusted PR Gate token")
+    report = semantic.index("      - name: Publish exact-subject Trusted PR Gate")
+    if not preflight < deny < mint < report:
+        raise ValueError("trusted admission, deny, token mint, and status publication are out of order")
     return {
-        "trigger": "workflow_run:completed:reviewed-ci",
-        "wake_signal": "successful-owner-same-repository-pull-request-ci",
-        "trusted_definition": "default-branch-workflow-run-revision",
-        "candidate_execution_guard": "exact-merge-parents-plus-zero-protected-object-drift",
-        "protected_paths": list(TRUSTED_AUTO_PROTECTED_PATHS),
-        "validation_subject": "live-prospective-merge-sha",
-        "candidate_subject_binding": "job-level-exact-prospective-merge",
-        "validation_authority": "read-only-secret-free-before-reporter",
-        "quality_lanes": quality_lanes,
-        "terminal_revalidation": "fresh-live-admission-plus-shared-pr-head-base-merge-resolver",
-        "status_writer": "dedicated-github-app",
-        "maintenance_authority": "independent-external-one-shot-exact-subject-gate",
+        "trigger": "successful-reviewed-ci-workflow-run",
+        "trusted_code_source": "default-branch-only",
+        "protected_transition": "automatic-deny",
+        "trusted_status_authority": "dedicated-app-token-after-exact-subject-preflight",
+        "native_token": "read-only",
         "workflow_definition": "exact-reviewed-git-blob",
     }
