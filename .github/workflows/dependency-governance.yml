@@ -12,8 +12,6 @@ on:
       - '.github/scripts/dependency_recovery_selfcheck.py'
       - '.github/workflows/dependency-governance.yml'
       - '.github/workflows/codeql.yml'
-  pull_request_target:
-    types: [opened, reopened, synchronize, ready_for_review]
   workflow_run:
     workflows: ['CI — ƳƤ AI QA Automation Framework', CodeQL]
     types: [completed]
