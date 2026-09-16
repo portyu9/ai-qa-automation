@@ -414,6 +414,10 @@ def _publish_and_merge(api: GitHubApi, promotion: dict[str, Any], config: dict[s
     run_id = os.environ.get("GITHUB_RUN_ID", "")
     if not run_id.isdigit() or int(run_id) < 1:
         raise GovernanceError("GITHUB_RUN_ID is invalid")
+    fresh_before_status = api.get(f"/pulls/{promotion['number']}")
+    _, rebound_before_status = _validate_promotion(api, fresh_before_status, config)
+    if rebound_before_status != promotion:
+        raise PolicyBlock("promotion changed before trusted status publication")
     response = api.post(
         f"/statuses/{promotion['headSha']}",
         {
@@ -426,9 +430,9 @@ def _publish_and_merge(api: GitHubApi, promotion: dict[str, Any], config: dict[s
     )
     if not isinstance(response, dict) or response.get("state") != "success":
         raise GovernanceError("Trusted PR Gate publication for promotion was not acknowledged")
-    fresh = api.get(f"/pulls/{promotion['number']}")
-    _, rebound = _validate_promotion(api, fresh, config)
-    if rebound != promotion:
+    fresh_before_merge = api.get(f"/pulls/{promotion['number']}")
+    _, rebound_before_merge = _validate_promotion(api, fresh_before_merge, config)
+    if rebound_before_merge != promotion:
         raise PolicyBlock("promotion changed before guarded merge")
     result = api.put(
         f"/pulls/{promotion['number']}/merge",
@@ -533,48 +537,36 @@ dev = ["mypy>=2,<3", "playwright>=1.52,<2"]
     except PolicyBlock:
         pass
     else:
-        raise GovernanceError("dependency promotion self-test accepted an added dependency identity")
+        raise GovernanceError("promotion self-test accepted dependency identity addition")
 
-    semantic_drift = head_raw.replace(
-        b'name = "ai-qa-automation"',
-        b'name = "ai-qa-automation-renamed"',
+    semantic_change = head_raw.replace(
+        b'name = "ai-qa-automation"', b'name = "ai-qa-automation-renamed"'
     )
     try:
-        validate_pyproject_transition(base_raw, semantic_drift)
+        validate_pyproject_transition(base_raw, semantic_change)
     except PolicyBlock:
         pass
     else:
-        raise GovernanceError("dependency promotion self-test accepted non-version TOML drift")
+        raise GovernanceError("promotion self-test accepted unrelated pyproject mutation")
 
-    url_authority = head_raw.replace(
-        b'"httpx>=0.29,<1"',
-        b'"httpx @ https://example.invalid/httpx.whl"',
-    )
-    try:
-        validate_pyproject_transition(base_raw, url_authority)
-    except PolicyBlock:
-        pass
-    else:
-        raise GovernanceError("dependency promotion self-test accepted URL dependency authority")
-
-    conflicting_optional = head_raw.replace(
-        b'browser = ["playwright>=1.52,<2"]',
-        b'browser = ["playwright>=1.53,<2"]',
-    )
-    try:
-        validate_pyproject_transition(base_raw, conflicting_optional)
-    except PolicyBlock:
-        pass
-    else:
-        raise GovernanceError(
-            "dependency promotion self-test accepted conflicting duplicate optional specs"
-        )
+    for bad in (
+        b'httpx @ https://example.invalid/httpx.whl',
+        b'httpx>=0.29,<1; python_version > "3.11"',
+        b'httpx @ ../local-wheel.whl',
+    ):
+        candidate = head_raw.replace(b"httpx>=0.29,<1", bad)
+        try:
+            validate_pyproject_transition(base_raw, candidate)
+        except PolicyBlock:
+            pass
+        else:
+            raise GovernanceError(f"promotion self-test accepted external dependency authority: {bad!r}")
 
     print("dependency-promotion self-test: ok")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Exact-subject Dependabot Python dependency promotion")
+    parser = argparse.ArgumentParser(description="Deterministic Python dependency promotion")
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--reconcile", action="store_true")
     parser.add_argument("--allow-merge", action="store_true")
