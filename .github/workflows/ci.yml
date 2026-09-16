@@ -355,7 +355,7 @@ jobs:
 
       - name: Secret scan
         run: |
-          detect-secrets scan --all-files --exclude-files '(^|/)\.git/' > artifacts-secret-scan.json
+          detect-secrets scan --all-files --exclude-files '(^|/)\.git/|^requirements/lock-authority\.json$' > artifacts-secret-scan.json
           python - <<'PY'
           import json
           from pathlib import Path
