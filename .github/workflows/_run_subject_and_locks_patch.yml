@@ -1,4 +1,4 @@
-name: Temporary authority finalizer
+name: Temporary authority finalizer replay
 
 on:
   push:
