@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -36,6 +37,29 @@ SAFE_VERIFIER_LABELS = {
     "scripts/verify_ci_contract.py": "ci-contract",
     "scripts/verify_docs.py": "documentation-integrity",
     "scripts/verify_fork_cloud_authority.py": "fork-cloud-authority",
+}
+
+DETERMINISTIC_LOG_REPAIRS = {
+    "scripts/auto_trusted_report.py": (
+        '    print(json.dumps(result, indent=2, sort_keys=True))',
+        '    print(json.dumps({"result": result["result"], "reporter": "trusted-pr-gate"}, sort_keys=True))',
+    ),
+    "scripts/ci_contract_base.py": (
+        '    print(json.dumps(verify_ci_contract(root), indent=2, sort_keys=True))',
+        '    verify_ci_contract(root)\n    print(json.dumps({"schema_version": 1, "result": "PASS", "verifier": "ci-contract-base"}, sort_keys=True))',
+    ),
+    "scripts/verify_ci_contract.py": (
+        '    print(json.dumps(verify_ci_contract(root), indent=2, sort_keys=True))',
+        '    verify_ci_contract(root)\n    print(json.dumps({"schema_version": 1, "result": "PASS", "verifier": "ci-contract"}, sort_keys=True))',
+    ),
+    "scripts/verify_docs.py": (
+        '    print(json.dumps(verify_documentation(root), indent=2, sort_keys=True))',
+        '    verify_documentation(root)\n    print(json.dumps({"schema_version": 1, "result": "PASS", "verifier": "documentation-integrity"}, sort_keys=True))',
+    ),
+    "scripts/verify_fork_cloud_authority.py": (
+        '    print(json.dumps(verify_repository(args.root), sort_keys=True, separators=(",", ":")))',
+        '    verify_repository(args.root)\n    print(json.dumps({"schema_version": 1, "result": "PASS", "verifier": "fork-cloud-authority"}, separators=(",", ":"), sort_keys=True))',
+    ),
 }
 
 
@@ -378,22 +402,13 @@ def _deterministic_repair(subject: dict[str, Any]) -> str | None:
 
     if (
         subject["rule"] == "py/clear-text-logging-sensitive-data"
-        and subject["path"] in SAFE_VERIFIER_LABELS
+        and subject["path"] in DETERMINISTIC_LOG_REPAIRS
     ):
-        candidates = [index for index in window if "print(json.dumps(" in lines[index]]
-        if len(candidates) != 1:
+        old, new = DETERMINISTIC_LOG_REPAIRS[subject["path"]]
+        if text.count(old) != 1:
             return None
-        index = candidates[0]
-        stripped = lines[index].lstrip()
-        if not stripped.startswith("print(json.dumps(") or not stripped.rstrip().endswith(")"):
-            return None
-        indent = lines[index][: len(lines[index]) - len(stripped)]
-        label = SAFE_VERIFIER_LABELS[subject["path"]]
-        lines[index] = (
-            f'{indent}print(json.dumps({{"schema_version": 1, "result": "PASS", '
-            f'"verifier": "{label}"}}, sort_keys=True))\n'
-        )
-        return "".join(lines)
+        return text.replace(old, new, 1)
+
 
     return None
 
@@ -720,7 +735,19 @@ def _post_trusted_status(
         raise AutohealError("dedicated Trusted PR Gate status publication was not acknowledged")
 
 
-def _merge(api: GitHubApi, pr_number: int, live: dict[str, Any], config: dict[str, Any]) -> None:
+def _merge(
+    api: GitHubApi,
+    pr_number: int,
+    metadata: dict[str, Any],
+    live: dict[str, Any],
+    config: dict[str, Any],
+) -> None:
+    fresh = api.get(f"/pulls/{pr_number}")
+    rebound_metadata, rebound_live = _validate_generated_pr(api, fresh, config)
+    if rebound_metadata != metadata or rebound_live != live:
+        raise PolicyBlock("repair PR changed before guarded merge")
+    _require_green_checks(api, live["headSha"], config)
+    _verify_codeql_remediation(api, metadata, config)
     result = api.put(
         f"/pulls/{pr_number}/merge",
         {"sha": live["headSha"], "merge_method": config["mergeMethod"]},
@@ -738,7 +765,9 @@ def _generated_repairs(pulls: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         pr
         for pr in pulls
-        if isinstance(((pr.get("head") or {}).get("ref")), str)
+        if (pr.get("user") or {}).get("login") == GITHUB_ACTIONS_LOGIN
+        and (pr.get("user") or {}).get("id") == GITHUB_ACTIONS_USER_ID
+        and isinstance(((pr.get("head") or {}).get("ref")), str)
         and str((pr.get("head") or {}).get("ref")).startswith(BRANCH_PREFIX)
         and _parse_marker(pr.get("body")) is not None
     ]
@@ -748,6 +777,13 @@ def _attempt_count(api: GitHubApi, alert_number: int) -> int:
     rows = api.list_all("/pulls?state=closed&sort=updated&direction=desc", max_pages=2)
     count = 0
     for pr in rows:
+        if (pr.get("user") or {}).get("login") != GITHUB_ACTIONS_LOGIN:
+            continue
+        if (pr.get("user") or {}).get("id") != GITHUB_ACTIONS_USER_ID:
+            continue
+        branch = str((pr.get("head") or {}).get("ref") or "")
+        if not branch.startswith(BRANCH_PREFIX):
+            continue
         metadata = _parse_marker(pr.get("body"))
         if metadata is not None and metadata.get("alert") == alert_number:
             count += 1
@@ -838,7 +874,7 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
             _verify_codeql_remediation(api, validated_metadata, config)
             if allow_merge and config["automergeEnabled"]:
                 _post_trusted_status(api, number, validated_metadata, live, config)
-                _merge(api, number, live, config)
+                _merge(api, number, validated_metadata, live, config)
                 print(json.dumps({"pr": number, "decision": "repair-merged"}, sort_keys=True))
         except PolicyBlock as exc:
             print(
@@ -908,22 +944,44 @@ def selftest(config: dict[str, Any]) -> None:
     if parsed is None or parsed.get("alert") != 7:
         raise AutohealError("auto-heal marker round-trip failed")
 
-    permission_subject = {
-        "rule": "py/overly-permissive-file",
-        "path": "tests/example.py",
-        "line": 1,
-    }
-    sample_path = ROOT / "tests" / "example.py"
     original_root = globals()["ROOT"]
     try:
-        # Test the pure line transformation without touching the repository.
-        globals()["ROOT"] = Path("/")
-        if sample_path == Path("/definitely-not-used"):
-            raise AssertionError("unreachable")
+        with tempfile.TemporaryDirectory(prefix="security-autoheal-selftest-") as temporary:
+            root = Path(temporary)
+            globals()["ROOT"] = root
+
+            permission_path = root / "tests" / "example.py"
+            permission_path.parent.mkdir(parents=True)
+            permission_path.write_text(
+                "def wrapped_open(path: object, flags: int, mode: int = 0o777) -> int:\n"
+                "    return 1\n",
+                encoding="utf-8",
+            )
+            permission = _deterministic_repair(
+                {
+                    "rule": "py/overly-permissive-file",
+                    "path": "tests/example.py",
+                    "line": 1,
+                }
+            )
+            if permission is None or "0o600" not in permission or "0o777" in permission:
+                raise AutohealError("permission repair recipe self-test failed")
+
+            for relative, (old, new) in DETERMINISTIC_LOG_REPAIRS.items():
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(old + "\n", encoding="utf-8")
+                repaired = _deterministic_repair(
+                    {
+                        "rule": "py/clear-text-logging-sensitive-data",
+                        "path": relative,
+                        "line": 1,
+                    }
+                )
+                if repaired is None or old in repaired or new not in repaired:
+                    raise AutohealError(f"logging repair recipe self-test failed: {relative}")
     finally:
         globals()["ROOT"] = original_root
-    if permission_subject["rule"] not in SAFE_RULES:
-        raise AutohealError("code-owned permission rule disappeared from allowlist")
 
     if _model_path_allowed(".github/workflows/ci.yml", config):
         raise AutohealError("model autofix authority expanded into .github")
@@ -931,6 +989,13 @@ def selftest(config: dict[str, Any]) -> None:
         raise AutohealError("model autofix authority unexpectedly excludes tests")
     if not _is_deterministic_only("scripts/verify_ci_contract.py", config):
         raise AutohealError("CI verifier must remain deterministic-only repair authority")
+    spoofed = {
+        "user": {"login": "attacker", "id": 1},
+        "head": {"ref": BRANCH_PREFIX + "7-deadbeef"},
+        "body": marker,
+    }
+    if _generated_repairs([spoofed]):
+        raise AutohealError("non-Actions PR spoofed the generated-repair namespace")
     print("security-autoheal self-test: ok")
 
 
