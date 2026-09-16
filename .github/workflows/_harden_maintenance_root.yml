@@ -1,0 +1,48 @@
+name: Temporary maintenance root hardening
+
+on:
+  push:
+    branches:
+      - automation/trusted-maintenance-admission
+    paths:
+      - .github/workflows/_harden_maintenance_root.yml
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout bootstrap branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: automation/trusted-maintenance-admission
+          fetch-depth: 1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11.16'
+      - name: Apply maintenance trust-root hardening
+        run: python .github/scripts/_harden_maintenance_root.py
+      - name: Install hash-locked verification environment
+        run: |
+          python scripts/verify_build_authority.py > /dev/null
+          python -m pip install --require-hashes -r requirements/dev-py311.lock
+          python -m pip install --no-deps --no-build-isolation .
+          python -m pip check
+      - name: Format and test hardening
+        run: |
+          ruff format scripts/auto_trusted_preflight.py tests/unit/test_auto_trusted_preflight.py
+          ruff check scripts/auto_trusted_preflight.py tests/unit/test_auto_trusted_preflight.py
+          pytest -q tests/unit/test_auto_trusted_preflight.py
+      - name: Commit permanent trust-root hardening only
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts/auto_trusted_preflight.py tests/unit/test_auto_trusted_preflight.py
+          git diff --cached --check
+          git commit -m 'security: make maintenance trust root non-self-approvable'
+          git push origin HEAD:automation/trusted-maintenance-admission
