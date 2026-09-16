@@ -9,7 +9,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -268,7 +268,7 @@ def _parse_time(value: Any) -> datetime:
         raise PolicyBlock("pull request creation time is invalid") from exc
     if dt.tzinfo is None:
         raise PolicyBlock("pull request creation time lacks timezone")
-    return dt.astimezone(timezone.utc)
+    return dt.astimezone(UTC)
 
 
 def validate_pr_identity(
@@ -303,9 +303,7 @@ def validate_pr_identity(
         raise PolicyBlock("pull request base is stale; wait for Dependabot native rebase")
     if _labels(pr) & set(config["manualReviewLabels"]):
         raise PolicyBlock("pull request carries a manual-review blocker label")
-    age_days = (
-        datetime.now(timezone.utc) - _parse_time(pr.get("created_at"))
-    ).total_seconds() / 86400
+    age_days = (datetime.now(UTC) - _parse_time(pr.get("created_at"))).total_seconds() / 86400
     if age_days < 0 or age_days > config["maxPullRequestAgeDays"]:
         raise PolicyBlock("pull request is outside the bounded automatic-merge age")
     return head_sha, base_sha, number

@@ -14,7 +14,6 @@ from typing import Any
 
 from dependency_governance import (
     BOT_LOGIN,
-    BOT_USER_ID,
     GitHubApi,
     GovernanceError,
     PolicyBlock,
