@@ -38,7 +38,7 @@ EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
     "c5cf6a2615655c2d9381047e7474b760314b6fdc"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
-    "4a426cdf3d0e623009d146d6350af1a75a6be8b3"  # pragma: allowlist secret
+    "32d2538339b1a57112495b00d552e49b79594f0e"  # pragma: allowlist secret
 )
 EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "fbe47dcf9a201dfb9da390b01e68f5b662689538"  # pragma: allowlist secret
@@ -385,11 +385,14 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "  pull_request:",
         "  workflow_run:",
         "    workflows: ['CI — ƳƤ AI QA Automation Framework', CodeQL]",
+        "    types: [completed]",
         "  schedule:",
         "  workflow_dispatch:",
         "permissions:\n  contents: read",
         "    name: governance-self-test",
+        "    if: github.event_name == 'pull_request'",
         "    name: govern-dependabot",
+        "    if: github.event_name != 'pull_request'",
         "    environment:\n      name: trusted-pr-gate\n      deployment: false",
         "      actions: write",
         "      checks: read",
@@ -398,23 +401,27 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "      statuses: read",
         "          ref: ${{ github.event.repository.default_branch }}",
         "          persist-credentials: false",
-        "      - name: Set up Python 3.11",
-        "          python-version: '3.11.16'",
-        "      - name: Capture Python 3.11 resolver",
-        "printf 'PROMOTION_PYTHON311=%s\\n'",
-        "      - name: Set up Python 3.14",
-        "          python-version: '3.14.7'",
-        "      - name: Capture Python 3.14 resolver",
-        "printf 'PROMOTION_PYTHON314=%s\\n'",
+        "          fetch-depth: 1",
         "      - name: Attempt one bounded transient recovery",
         "        run: python .github/scripts/dependency_recovery.py --recover",
         "      - name: Mint dedicated Trusted PR Gate token",
+        "          TRUSTED_GATE_APP_CLIENT_ID: ${{ vars.TRUSTED_GATE_APP_CLIENT_ID }}",
         "          TRUSTED_GATE_APP_PRIVATE_KEY: ${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}",
         '"permissions":{"contents":"read","pull_requests":"read","statuses":"write"}',
-        "      - name: Reconcile exact-subject Python dependency promotion",
+        "      - name: Reconcile deterministic Python dependency promotions",
+        "          PROMOTION_PYTHON311: ${{ env.PROMOTION_PYTHON311 }}",
+        "          PROMOTION_PYTHON314: ${{ env.PROMOTION_PYTHON314 }}",
+        "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+        "          TRUSTED_STATUS_TOKEN: ${{ steps.trusted-app.outputs.token }}",
         "        run: python .github/scripts/dependency_promotion.py --reconcile --allow-merge",
-        "      - name: Reconcile Dependabot action merge authority",
+        "      - name: Reconcile Dependabot merge authority",
+        "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+        "          TRUSTED_STATUS_TOKEN: ${{ steps.trusted-app.outputs.token }}",
+        '          case "$GITHUB_EVENT_NAME" in',
+        "            workflow_run|schedule|workflow_dispatch) args+=(--allow-merge) ;;",
         '          python .github/scripts/dependency_governance.py "${args[@]}"',
+        "printf 'PROMOTION_PYTHON311=%s\\n'",
+        "printf 'PROMOTION_PYTHON314=%s\\n'",
     )
     for fragment in required:
         if fragment not in semantic:
@@ -432,23 +439,24 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
             raise ValueError(
                 f"dependency-governance.yml contains forbidden authority token: {forbidden}"
             )
+    # The only status-write authority is embedded in the dedicated App token request.
     if semantic.count('"statuses":"write"') != 1 or semantic.count("statuses: write") != 0:
         raise ValueError("native workflow authority must remain status-read-only")
     recovery = semantic.index("      - name: Attempt one bounded transient recovery")
     mint = semantic.index("      - name: Mint dedicated Trusted PR Gate token")
-    promotion = semantic.index("      - name: Reconcile exact-subject Python dependency promotion")
-    actions = semantic.index("      - name: Reconcile Dependabot action merge authority")
-    if not recovery < mint < promotion < actions:
+    promotion = semantic.index("      - name: Reconcile deterministic Python dependency promotions")
+    reconcile = semantic.index("      - name: Reconcile Dependabot merge authority")
+    if not recovery < mint < promotion < reconcile:
         raise ValueError(
-            "dependency recovery, trusted-token minting, Python promotion, and action reconciliation are out of order"
+            "dependency recovery, trusted-token minting, promotion, and action reconciliation are out of order"
         )
     return {
         "triggers": ["pull_request", "workflow_run", "schedule", "workflow_dispatch"],
         "trusted_code_source": "default-branch-only-for-authority-job",
         "recovery_authority": "one-rerun-no-branch-mutation-no-merge",
-        "python_merge_authority": "signed-dependabot-source-plus-deterministic-lock-promotion",
-        "action_merge_authority": "single-provenance-qualified-dependabot-controller",
-        "trusted_status_authority": "dedicated-app-token-after-exact-subject-proof",
+        "python_dependency_authority": "signed-dependabot-intent-to-deterministic-lock-promotion",
+        "merge_authority": "single-provenance-qualified-dependabot-controller",
+        "trusted_status_authority": "dedicated-app-token-after-governance-proof",
         "workflow_definition": "exact-reviewed-git-blob",
     }
 
