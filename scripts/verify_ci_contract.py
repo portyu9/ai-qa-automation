@@ -407,13 +407,11 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "          TRUSTED_GATE_APP_CLIENT_ID: ${{ vars.TRUSTED_GATE_APP_CLIENT_ID }}",
         "          TRUSTED_GATE_APP_PRIVATE_KEY: ${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}",
         '"permissions":{"contents":"read","pull_requests":"read","statuses":"write"}',
-        "      - name: Reconcile deterministic Python dependency promotions",
-        "          PROMOTION_PYTHON311: ${{ env.PROMOTION_PYTHON311 }}",
-        "          PROMOTION_PYTHON314: ${{ env.PROMOTION_PYTHON314 }}",
+        "      - name: Reconcile exact-subject Python dependency promotion",
         "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
         "          TRUSTED_STATUS_TOKEN: ${{ steps.trusted-app.outputs.token }}",
         "        run: python .github/scripts/dependency_promotion.py --reconcile --allow-merge",
-        "      - name: Reconcile Dependabot merge authority",
+        "      - name: Reconcile Dependabot action merge authority",
         "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
         "          TRUSTED_STATUS_TOKEN: ${{ steps.trusted-app.outputs.token }}",
         '          case "$GITHUB_EVENT_NAME" in',
@@ -442,8 +440,8 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         raise ValueError("native workflow authority must remain status-read-only")
     recovery = semantic.index("      - name: Attempt one bounded transient recovery")
     mint = semantic.index("      - name: Mint dedicated Trusted PR Gate token")
-    promotion = semantic.index("      - name: Reconcile deterministic Python dependency promotions")
-    reconcile = semantic.index("      - name: Reconcile Dependabot merge authority")
+    promotion = semantic.index("      - name: Reconcile exact-subject Python dependency promotion")
+    reconcile = semantic.index("      - name: Reconcile Dependabot action merge authority")
     if not recovery < mint < promotion < reconcile:
         raise ValueError(
             "dependency recovery, trusted-token minting, promotion, and action reconciliation are out of order"
