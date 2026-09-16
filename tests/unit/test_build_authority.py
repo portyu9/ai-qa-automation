@@ -38,7 +38,11 @@ def test_repository_build_authority_is_static() -> None:
     assert result["project_scripts"] == {"ai-qa": "ai_qa_automation.cli:app"}
     assert result["project_entry_points"] is False
     authority = json.loads((ROOT / build_authority.LOCK_AUTHORITY_PATH).read_text(encoding="utf-8"))
-    assert result["reviewed_lock_blobs"] == authority["lockBlobs"]
+    assert authority["schemaVersion"] == 2
+    assert result["reviewed_lock_blobs"] == {
+        name: "".join(parts) for name, parts in authority["lockBlobParts"].items()
+    }
+    assert "".join(authority["sourcePyprojectSha256Parts"]) == result["pyproject_sha256"]
     assert result["project_file_inputs"] == {
         "readme": "README.md",
         "license": {"file": "LICENSE"},

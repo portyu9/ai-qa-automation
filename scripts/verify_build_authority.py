@@ -28,6 +28,7 @@ EXPECTED_LOCK_NAMES = {
 }
 EXPECTED_LOCK_RESOLVER_POLICY = "pypi-https-wheel-only-double-resolve-hash-replay"
 HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
+HEX8_RE = re.compile(r"^[0-9a-f]{8}$")
 EXPECTED_HATCH_CONFIG = {
     "build": {
         "targets": {
@@ -62,6 +63,22 @@ def _directory_signature(value: os.stat_result) -> tuple[int, int, int, int]:
 def _git_blob_sha1(content: bytes) -> str:
     header = f"blob {len(content)}\0".encode("ascii")
     return hashlib.sha1(header + content, usedforsecurity=False).hexdigest()
+
+
+def _decode_digest_parts(value: Any, *, expected_parts: int, label: str) -> str:
+    if (
+        not isinstance(value, list)
+        or len(value) != expected_parts
+        or not all(isinstance(part, str) and HEX8_RE.fullmatch(part) for part in value)
+    ):
+        raise ValueError(
+            f"{label} must be exactly {expected_parts} canonical eight-hex chunks"
+        )
+    digest = "".join(value)
+    expected_length = expected_parts * 8
+    if len(digest) != expected_length:
+        raise ValueError(f"{label} reconstructed digest length is invalid")
+    return digest
 
 
 def _read_fd_bounded(fd: int, *, max_bytes: int, label: str) -> bytes:
@@ -241,24 +258,40 @@ def _verify_reviewed_lock_authority(root: Path, *, pyproject_sha256: str) -> dic
             authority = json.loads(authority_raw)
         except json.JSONDecodeError as exc:
             raise ValueError("lock authority manifest is malformed JSON") from exc
-        if not isinstance(authority, dict) or authority.get("schemaVersion") != 1:
-            raise ValueError("lock authority manifest schema must equal 1")
-        if authority.get("sourcePyprojectSha256") != pyproject_sha256:
+        expected_manifest_keys = {
+            "schemaVersion",
+            "sourcePyprojectSha256Parts",
+            "resolverPolicy",
+            "lockBlobParts",
+        }
+        if (
+            not isinstance(authority, dict)
+            or set(authority) != expected_manifest_keys
+            or authority.get("schemaVersion") != 2
+        ):
+            raise ValueError("lock authority manifest must match exact schema 2")
+        source_digest = _decode_digest_parts(
+            authority.get("sourcePyprojectSha256Parts"),
+            expected_parts=8,
+            label="source pyproject SHA-256",
+        )
+        if source_digest != pyproject_sha256:
             raise ValueError("lock authority manifest is not bound to exact pyproject.toml bytes")
         if authority.get("resolverPolicy") != EXPECTED_LOCK_RESOLVER_POLICY:
             raise ValueError(
                 "lock authority resolver policy differs from reviewed wheel-only policy"
             )
-        expected_blobs = authority.get("lockBlobs")
-        if (
-            not isinstance(expected_blobs, dict)
-            or set(expected_blobs) != EXPECTED_LOCK_NAMES
-            or not all(
-                isinstance(value, str) and HEX40_RE.fullmatch(value)
-                for value in expected_blobs.values()
-            )
-        ):
+        encoded_blobs = authority.get("lockBlobParts")
+        if not isinstance(encoded_blobs, dict) or set(encoded_blobs) != EXPECTED_LOCK_NAMES:
             raise ValueError("lock authority manifest does not bind the exact managed lock set")
+        expected_blobs = {
+            name: _decode_digest_parts(
+                encoded_blobs[name], expected_parts=5, label=f"lock Git SHA-1 for {name}"
+            )
+            for name in sorted(encoded_blobs)
+        }
+        if not all(HEX40_RE.fullmatch(value) for value in expected_blobs.values()):
+            raise ValueError("lock authority manifest reconstructed a non-canonical Git SHA-1")
 
         observed_blobs: dict[str, str] = {}
         for name, expected_blob in sorted(expected_blobs.items()):

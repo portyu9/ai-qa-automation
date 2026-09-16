@@ -18,6 +18,7 @@ MAX_REPORT_BYTES = 8 * 1024 * 1024
 MAX_PACKAGES = 512
 MAX_REQUIREMENTS = 256
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+DIGEST_PART = re.compile(r"^[0-9a-f]{8}$")
 REQUIREMENT_NAME = re.compile(
     r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[A-Za-z0-9_,.-]+\])?(?P<specifier>[^;@\s]*)$"
 )
@@ -36,6 +37,15 @@ def _canonical_name(value: str) -> str:
 def _git_blob_sha1(content: bytes) -> str:
     header = f"blob {len(content)}\0".encode("ascii")
     return hashlib.sha1(header + content, usedforsecurity=False).hexdigest()
+
+
+def _digest_parts(value: str, *, expected_length: int) -> list[str]:
+    if len(value) != expected_length or expected_length % 8 != 0:
+        raise LockCompileError("integrity digest has an unexpected length")
+    parts = [value[index : index + 8] for index in range(0, expected_length, 8)]
+    if not all(DIGEST_PART.fullmatch(part) for part in parts):
+        raise LockCompileError("integrity digest contains non-canonical hex")
+    return parts
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -320,11 +330,15 @@ def compile_locks(root: Path, python311: str, python314: str, output_dir: Path) 
         "base-image.lock": _git_blob_sha1(base_bytes),
         **{name: _git_blob_sha1((output_dir / name).read_bytes()) for name in sorted(generated)},
     }
+    source_digest = hashlib.sha256(raw).hexdigest()
     authority_payload = {
-        "schemaVersion": 1,
-        "sourcePyprojectSha256": hashlib.sha256(raw).hexdigest(),
+        "schemaVersion": 2,
+        "sourcePyprojectSha256Parts": _digest_parts(source_digest, expected_length=64),
         "resolverPolicy": "pypi-https-wheel-only-double-resolve-hash-replay",
-        "lockBlobs": dict(sorted(authority.items())),
+        "lockBlobParts": {
+            name: _digest_parts(value, expected_length=40)
+            for name, value in sorted(authority.items())
+        },
     }
     (output_dir / "lock-authority.json").write_text(
         json.dumps(authority_payload, indent=2, sort_keys=True) + "\n",
@@ -334,7 +348,7 @@ def compile_locks(root: Path, python311: str, python314: str, output_dir: Path) 
     return {
         "schemaVersion": 1,
         "project": "ai-qa-automation",
-        "pyprojectSha256": hashlib.sha256(raw).hexdigest(),
+        "pyprojectSha256": source_digest,
         "locks": {
             name: {
                 "sha256": hashlib.sha256((output_dir / name).read_bytes()).hexdigest(),

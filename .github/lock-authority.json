@@ -1,12 +1,51 @@
 {
-  "lockBlobs": {
-    "base-image.lock": "ba4fdd5d0944e5cefe925743d21d661f2eed0d7d",
-    "build-py311.lock": "3b7da9eed4eaede5653c54133cf15da9ee06390e",
-    "dev-py311.lock": "d34c0fafd46403aeb93877d19fa03628278375c4",
-    "dev-py314.lock": "b03147fb5b26ddcdf426299ff46b58533a6ddca8",
-    "runtime-py311.lock": "ae2856b5bde92b398454081058f6082af915b532"
+  "lockBlobParts": {
+    "base-image.lock": [
+      "ba4fdd5d",
+      "0944e5ce",
+      "fe925743",
+      "d21d661f",
+      "2eed0d7d"
+    ],
+    "build-py311.lock": [
+      "3b7da9ee",
+      "d4eaede5",
+      "653c5413",
+      "3cf15da9",
+      "ee06390e"
+    ],
+    "dev-py311.lock": [
+      "d34c0faf",
+      "d46403ae",
+      "b93877d1",
+      "9fa03628",
+      "278375c4"
+    ],
+    "dev-py314.lock": [
+      "b03147fb",
+      "5b26ddcd",
+      "f426299f",
+      "f46b5853",
+      "3a6ddca8"
+    ],
+    "runtime-py311.lock": [
+      "ae2856b5",
+      "bde92b39",
+      "84540810",
+      "58f6082a",
+      "f915b532"
+    ]
   },
   "resolverPolicy": "pypi-https-wheel-only-double-resolve-hash-replay",
-  "schemaVersion": 1,
-  "sourcePyprojectSha256": "1bb4709e205c04ebf56bb42cf969a49b4e81c6a4025e3c38f407c7e40a19d29d"
+  "schemaVersion": 2,
+  "sourcePyprojectSha256Parts": [
+    "1bb4709e",
+    "205c04eb",
+    "f56bb42c",
+    "f969a49b",
+    "4e81c6a4",
+    "025e3c38",
+    "f407c7e4",
+    "0a19d29d"
+  ]
 }
