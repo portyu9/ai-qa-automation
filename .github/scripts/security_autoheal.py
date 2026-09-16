@@ -583,10 +583,7 @@ def _create_pull_request(
 
 
 def _dispatch_qualification(api: GitHubApi, branch: str, head_sha: str) -> None:
-    api.post(
-        "/actions/workflows/ci.yml/dispatches",
-        {"ref": branch, "inputs": {"subject_sha": head_sha}},
-    )
+    api.post("/actions/workflows/ci.yml/dispatches", {"ref": branch})
     api.post("/actions/workflows/codeql.yml/dispatches", {"ref": branch})
 
 

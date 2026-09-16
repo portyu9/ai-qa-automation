@@ -38,7 +38,7 @@ EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
     "068537f4638fa1559c21e31cfdfd5aa99e135b2f"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
-    "3d0055ce94ba7aeb9a2a0101c69506054978bb2d"  # pragma: allowlist secret
+    "4a426cdf3d0e623009d146d6350af1a75a6be8b3"  # pragma: allowlist secret
 )
 EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "fbe47dcf9a201dfb9da390b01e68f5b662689538"  # pragma: allowlist secret
@@ -104,16 +104,11 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
             "    branches: [main]",
             "  merge_group:",
             "  workflow_dispatch:",
-            "    inputs:",
-            "      subject_sha:",
-            "        description: Exact repository commit SHA to validate",
-            "        required: true",
-            "        type: string",
         )
     )
     on_block = base._semantic_text(base._top_level_block(text, "on")).strip("\n")
     if on_block != expected_on:
-        raise ValueError("ci.yml: trigger set must be exactly pull_request/push/merge_group")
+        raise ValueError("ci.yml: trigger set must be exactly pull_request/push/merge_group/workflow_dispatch")
     if base._top_level_keys(base._top_level_block(text, "on")) != {
         "pull_request",
         "push",
@@ -138,7 +133,7 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
             '  PYTHONUNBUFFERED: "1"',
             '  PYTHONSAFEPATH: "1"',
             '  PIP_DISABLE_PIP_VERSION_CHECK: "1"',
-            "  CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_sha || github.sha }}",
+            "  CI_SUBJECT_SHA: ${{ github.sha }}",
         )
     )
     if env_block != expected_env:
@@ -246,7 +241,7 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
 
     return {
         "triggers": ["merge_group", "pull_request", "push", "workflow_dispatch"],
-        "subject": "github.sha-or-exact-workflow-dispatch-input",
+        "subject": "github.sha",
         "checkout_count": checkout_count,
         "required_gate": "Required PR Gate",
         "quality_lanes": quality_lanes,
