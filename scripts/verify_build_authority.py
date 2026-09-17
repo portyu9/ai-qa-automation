@@ -71,9 +71,7 @@ def _decode_digest_parts(value: Any, *, expected_parts: int, label: str) -> str:
         or len(value) != expected_parts
         or not all(isinstance(part, str) and HEX8_RE.fullmatch(part) for part in value)
     ):
-        raise ValueError(
-            f"{label} must be exactly {expected_parts} canonical eight-hex chunks"
-        )
+        raise ValueError(f"{label} must be exactly {expected_parts} canonical eight-hex chunks")
     digest = "".join(value)
     expected_length = expected_parts * 8
     if len(digest) != expected_length:
