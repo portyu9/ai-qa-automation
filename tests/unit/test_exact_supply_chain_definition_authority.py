@@ -50,12 +50,7 @@ def test_runtime_container_build_context_is_exact_validation_subject_archive() -
     assert (
         ci_text.count('git_view="$(mktemp -d "$RUNNER_TEMP/aiqa-container-git-view.XXXXXX")"') == 1
     )
-    assert (
-        ci_text.count(
-            'git_template="$(mktemp -d "$RUNNER_TEMP/aiqa-container-git-template.XXXXXX")"'
-        )
-        == 1
-    )
+    assert ci_text.count('git_template="$(mktemp -d "$RUNNER_TEMP/aiqa-git-template.XXXXXX")"') == 2
 
 
 def test_ci_contract_rejects_mutable_checkout_container_context(tmp_path: Path) -> None:

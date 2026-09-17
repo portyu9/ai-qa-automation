@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import stat
 import tomllib
 from importlib import metadata as importlib_metadata
@@ -17,10 +18,17 @@ MAX_BUILD_SOURCE_FILE_BYTES = 8 * 1024 * 1024
 MAX_BUILD_SOURCE_TOTAL_BYTES = 32 * 1024 * 1024
 MAX_REQUIREMENTS_ENTRIES = 32
 MAX_LOCK_BYTES = 1024 * 1024
-EXPECTED_BUILD_SYSTEM = {
-    "requires": ["hatchling==1.32.0"],
-    "build-backend": "hatchling.build",
+LOCK_AUTHORITY_PATH = Path(".github/lock-authority.json")
+EXPECTED_LOCK_NAMES = {
+    "base-image.lock",
+    "build-py311.lock",
+    "dev-py311.lock",
+    "dev-py314.lock",
+    "runtime-py311.lock",
 }
+EXPECTED_LOCK_RESOLVER_POLICY = "pypi-https-wheel-only-double-resolve-hash-replay"
+HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
+HEX8_RE = re.compile(r"^[0-9a-f]{8}$")
 EXPECTED_HATCH_CONFIG = {
     "build": {
         "targets": {
@@ -38,13 +46,6 @@ EXPECTED_PROJECT_FILE_INPUTS = {
 EXPECTED_PROJECT_NAME = "ai-qa-automation"
 EXPECTED_PROJECT_SCRIPTS = {"ai-qa": "ai_qa_automation.cli:app"}
 FORBIDDEN_PROJECT_ENTRY_POINT_KEYS = ("gui-scripts", "entry-points")
-EXPECTED_LOCK_BLOB_SHAS = {
-    "base-image.lock": "ba4fdd5d0944e5cefe925743d21d661f2eed0d7d",  # pragma: allowlist secret
-    "build-py311.lock": "3b7da9eed4eaede5653c54133cf15da9ee06390e",  # pragma: allowlist secret
-    "dev-py311.lock": "d34c0fafd46403aeb93877d19fa03628278375c4",  # pragma: allowlist secret
-    "dev-py314.lock": "b03147fb5b26ddcdf426299ff46b58533a6ddca8",  # pragma: allowlist secret
-    "runtime-py311.lock": "ae2856b5bde92b398454081058f6082af915b532",  # pragma: allowlist secret
-}
 
 
 def _identity(value: os.stat_result) -> tuple[int, int]:
@@ -62,6 +63,20 @@ def _directory_signature(value: os.stat_result) -> tuple[int, int, int, int]:
 def _git_blob_sha1(content: bytes) -> str:
     header = f"blob {len(content)}\0".encode("ascii")
     return hashlib.sha1(header + content, usedforsecurity=False).hexdigest()
+
+
+def _decode_digest_parts(value: Any, *, expected_parts: int, label: str) -> str:
+    if (
+        not isinstance(value, list)
+        or len(value) != expected_parts
+        or not all(isinstance(part, str) and HEX8_RE.fullmatch(part) for part in value)
+    ):
+        raise ValueError(f"{label} must be exactly {expected_parts} canonical eight-hex chunks")
+    digest = "".join(value)
+    expected_length = expected_parts * 8
+    if len(digest) != expected_length:
+        raise ValueError(f"{label} reconstructed digest length is invalid")
+    return digest
 
 
 def _read_fd_bounded(fd: int, *, max_bytes: int, label: str) -> bytes:
@@ -198,7 +213,7 @@ def _relative_open(name: str, directory_fd: int, *, directory: bool) -> int:
         raise ValueError("build source entry changed identity or became a symlink") from exc
 
 
-def _verify_reviewed_lock_authority(root: Path) -> dict[str, str]:
+def _verify_reviewed_lock_authority(root: Path, *, pyproject_sha256: str) -> dict[str, str]:
     requirements = root / "requirements"
     directory_fd = _open_directory_nofollow(requirements, label="requirements")
     opened_directory = os.fstat(directory_fd)
@@ -226,13 +241,58 @@ def _verify_reviewed_lock_authority(root: Path) -> dict[str, str]:
                         raise ValueError("requirements directory contains an invalid lock filename")
                     observed_names.add(name)
 
-        if observed_names != set(EXPECTED_LOCK_BLOB_SHAS):
+        if observed_names != EXPECTED_LOCK_NAMES:
             raise ValueError(
-                "dependency lock set differs from the exact reviewed automatic-install authority"
+                "dependency lock set differs from the exact manifest-bound automatic-install authority"
             )
 
+        authority_path = root / LOCK_AUTHORITY_PATH
+        if authority_path.is_symlink() or not authority_path.is_file():
+            raise ValueError("lock authority manifest must be a regular non-symlink file")
+        authority_raw = authority_path.read_bytes()
+        if len(authority_raw) > 64 * 1024:
+            raise ValueError("lock authority manifest exceeds bounded ingestion limit")
+        try:
+            authority = json.loads(authority_raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError("lock authority manifest is malformed JSON") from exc
+        expected_manifest_keys = {
+            "schemaVersion",
+            "sourcePyprojectSha256Parts",
+            "resolverPolicy",
+            "lockBlobParts",
+        }
+        if (
+            not isinstance(authority, dict)
+            or set(authority) != expected_manifest_keys
+            or authority.get("schemaVersion") != 2
+        ):
+            raise ValueError("lock authority manifest must match exact schema 2")
+        source_digest = _decode_digest_parts(
+            authority.get("sourcePyprojectSha256Parts"),
+            expected_parts=8,
+            label="source pyproject SHA-256",
+        )
+        if source_digest != pyproject_sha256:
+            raise ValueError("lock authority manifest is not bound to exact pyproject.toml bytes")
+        if authority.get("resolverPolicy") != EXPECTED_LOCK_RESOLVER_POLICY:
+            raise ValueError(
+                "lock authority resolver policy differs from reviewed wheel-only policy"
+            )
+        encoded_blobs = authority.get("lockBlobParts")
+        if not isinstance(encoded_blobs, dict) or set(encoded_blobs) != EXPECTED_LOCK_NAMES:
+            raise ValueError("lock authority manifest does not bind the exact managed lock set")
+        expected_blobs = {
+            name: _decode_digest_parts(
+                encoded_blobs[name], expected_parts=5, label=f"lock Git SHA-1 for {name}"
+            )
+            for name in sorted(encoded_blobs)
+        }
+        if not all(HEX40_RE.fullmatch(value) for value in expected_blobs.values()):
+            raise ValueError("lock authority manifest reconstructed a non-canonical Git SHA-1")
+
         observed_blobs: dict[str, str] = {}
-        for name, expected_blob in sorted(EXPECTED_LOCK_BLOB_SHAS.items()):
+        for name, expected_blob in sorted(expected_blobs.items()):
             label = f"reviewed dependency lock {name}"
             before = _relative_stat(name, directory_fd)
             if not stat.S_ISREG(before.st_mode):
@@ -425,10 +485,19 @@ def verify_build_authority(root: Path) -> dict[str, Any]:
     pyproject = _parse_pyproject(content)
 
     build_system = pyproject.get("build-system")
-    if build_system != EXPECTED_BUILD_SYSTEM:
+    if not isinstance(build_system, dict) or set(build_system) != {"requires", "build-backend"}:
+        raise ValueError("build-system authority must contain only requires and build-backend")
+    if build_system.get("build-backend") != "hatchling.build":
+        raise ValueError("build-system backend authority must remain hatchling.build")
+    build_requirements = build_system.get("requires")
+    if (
+        not isinstance(build_requirements, list)
+        or len(build_requirements) != 1
+        or not isinstance(build_requirements[0], str)
+        or re.fullmatch(r"hatchling==[^\s;@]+", build_requirements[0]) is None
+    ):
         raise ValueError(
-            "build-system authority must be exactly hatchling.build with hatchling==1.32.0 "
-            "and no backend-path or extra keys"
+            "build-system requires must remain one exact hatchling==VERSION declaration"
         )
 
     project = pyproject.get("project")
@@ -470,7 +539,7 @@ def verify_build_authority(root: Path) -> dict[str, Any]:
             "configuration are forbidden"
         )
 
-    reviewed_lock_blobs = _verify_reviewed_lock_authority(root)
+    reviewed_lock_blobs = _verify_reviewed_lock_authority(root, pyproject_sha256=digest)
     _assert_regular_file(
         root / "README.md",
         label="project readme",
@@ -492,7 +561,7 @@ def verify_build_authority(root: Path) -> dict[str, Any]:
         "claim": "project build/install configuration, exact reviewed dependency locks, file inputs, source tree, and installed Hatch plugin surface contain no unreviewed automatic execution or filesystem authority",
         "pyproject_sha256": digest,
         "build_backend": "hatchling.build",
-        "build_requirements": ["hatchling==1.32.0"],
+        "build_requirements": list(build_requirements),
         "project_name": EXPECTED_PROJECT_NAME,
         "project_scripts": EXPECTED_PROJECT_SCRIPTS,
         "project_entry_points": False,

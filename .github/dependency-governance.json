@@ -4,7 +4,7 @@
   "baseBranch": "main",
   "mergeMethod": "merge",
   "automergeEnabled": true,
-  "pipMode": "manual",
+  "pipMode": "promotion",
   "maxChangedFiles": 25,
   "maxPullRequestAgeDays": 14,
   "manualReviewLabels": [
@@ -18,8 +18,10 @@
   "allowedActionUpdateTypes": [
     "version-update:semver-patch",
     "version-update:semver-minor",
+    "version-update:semver-major",
     "security-update:semver-patch",
-    "security-update:semver-minor"
+    "security-update:semver-minor",
+    "security-update:semver-major"
   ],
   "publishTrustedStatus": true,
   "trustedStatusContext": "Trusted PR Gate",
@@ -29,13 +31,22 @@
     ".github/dependency-recovery.json",
     ".github/scripts/dependency_governance.py",
     ".github/scripts/dependency_governance_selfcheck.py",
+    ".github/scripts/dependency_lock_compiler.py",
+    ".github/scripts/dependency_promotion.py",
     ".github/scripts/dependency_recovery.py",
     ".github/scripts/dependency_recovery_selfcheck.py",
+    ".github/scripts/security_autoheal.py",
+    ".github/scripts/security_autoheal_selfcheck.py",
+    ".github/security-autoheal.json",
     ".github/workflows/dependency-governance.yml",
+    ".github/workflows/security-autoheal.yml",
     ".github/workflows/trusted-pr-auto.yml",
     "scripts/auto_trusted_preflight.py",
     "scripts/auto_trusted_report.py",
+    "scripts/ci_contract_base.py",
+    "scripts/ci_contract_trusted_auto.py",
     "scripts/trusted_pr_control.py",
+    "scripts/verify_build_authority.py",
     "scripts/verify_ci_contract.py",
     "scripts/verify_fork_cloud_authority.py"
   ]

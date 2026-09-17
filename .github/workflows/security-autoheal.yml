@@ -1,47 +1,42 @@
-name: dependency-governance
+name: Security Auto-Heal
 
 on:
   pull_request:
     paths:
-      - '.github/dependabot.yml'
-      - '.github/dependency-governance.json'
-      - '.github/dependency-recovery.json'
-      - '.github/scripts/dependency_governance.py'
-      - '.github/scripts/dependency_governance_selfcheck.py'
-      - '.github/scripts/dependency_lock_compiler.py'
-      - '.github/scripts/dependency_promotion.py'
-      - '.github/scripts/dependency_recovery.py'
-      - '.github/scripts/dependency_recovery_selfcheck.py'
-      - '.github/workflows/dependency-governance.yml'
-      - '.github/workflows/codeql.yml'
+      - '.github/security-autoheal.json'
+      - '.github/scripts/security_autoheal.py'
+      - '.github/scripts/security_autoheal_selfcheck.py'
+      - '.github/workflows/security-autoheal.yml'
+      - '.github/workflows/ci.yml'
   workflow_run:
-    workflows: ['CI — ƳƤ AI QA Automation Framework', CodeQL]
+    workflows:
+      - CodeQL
+      - 'CI — ƳƤ AI QA Automation Framework'
     types: [completed]
   schedule:
-    - cron: '29 */6 * * *'
+    - cron: '41 * * * *'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: dependency-governance-${{ github.event.pull_request.head.ref || github.event.workflow_run.head_branch || github.ref_name || github.run_id }}-${{ github.event_name == 'pull_request' && 'self-test' || 'reconcile' }}
+  group: security-autoheal-${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'reconcile' }}
   cancel-in-progress: false
 
 env:
-  GOVERNANCE_CONFIG: .github/dependency-governance.json
-  RECOVERY_CONFIG: .github/dependency-recovery.json
+  SECURITY_AUTOHEAL_CONFIG: .github/security-autoheal.json
 
 jobs:
   self-test:
-    name: governance-self-test
+    name: security-autoheal-self-test
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
     steps:
-      - name: Checkout proposed governance code without credentials
+      - name: Checkout proposed security control plane without credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -49,30 +44,22 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.11.16'
-      - name: Compile governance control plane
+      - name: Compile security control plane
         run: >-
           python -m compileall -q
-          .github/scripts/dependency_governance.py
-          .github/scripts/dependency_governance_selfcheck.py
+          .github/scripts/security_autoheal.py
+          .github/scripts/security_autoheal_selfcheck.py
           .github/scripts/dependency_lock_compiler.py
-          .github/scripts/dependency_promotion.py
-          .github/scripts/dependency_recovery.py
-          .github/scripts/dependency_recovery_selfcheck.py
-      - name: Validate governance and recovery configuration
-        run: |
-          python .github/scripts/dependency_governance.py --validate-config
-          python .github/scripts/dependency_recovery.py --validate-config
-      - name: Exercise fail-closed policy self-checks
-        run: |
-          python .github/scripts/dependency_governance_selfcheck.py
-          python .github/scripts/dependency_promotion.py --self-test
-          python .github/scripts/dependency_recovery_selfcheck.py
+      - name: Validate security auto-heal policy
+        run: python .github/scripts/security_autoheal.py --validate-config --self-test
+      - name: Exercise security auto-heal self-check
+        run: python .github/scripts/security_autoheal_selfcheck.py
 
-  govern:
-    name: govern-dependabot
+  reconcile:
+    name: reconcile-codeql-autoheal
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 10
     environment:
       name: trusted-pr-gate
       deployment: false
@@ -81,39 +68,23 @@ jobs:
       checks: read
       contents: write
       pull-requests: write
+      security-events: write
       statuses: read
     steps:
-      - name: Checkout trusted default-branch governance code only
+      - name: Checkout trusted default-branch security controller only
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
           fetch-depth: 1
-      - name: Set up Python 3.11
+      - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.11.16'
-      - name: Capture Python 3.11 resolver
-        run: printf 'PROMOTION_PYTHON311=%s\n' "$(command -v python)" >> "$GITHUB_ENV"
-      - name: Set up Python 3.14
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.14.7'
-      - name: Capture Python 3.14 resolver
-        run: printf 'PROMOTION_PYTHON314=%s\n' "$(command -v python)" >> "$GITHUB_ENV"
-      - name: Validate trusted governance and recovery policy
-        run: |
-          python .github/scripts/dependency_governance.py --validate-config --self-test
-          python .github/scripts/dependency_promotion.py --self-test
-          python .github/scripts/dependency_recovery.py --validate-config --self-test
-      - name: Attempt one bounded transient recovery
-        if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python .github/scripts/dependency_recovery.py --recover
+      - name: Validate trusted security auto-heal policy
+        run: python .github/scripts/security_autoheal.py --validate-config --self-test
       - name: Mint dedicated Trusted PR Gate token
         id: trusted-app
-        if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         env:
           TRUSTED_GATE_APP_CLIENT_ID: ${{ vars.TRUSTED_GATE_APP_CLIENT_ID }}
           TRUSTED_GATE_APP_PRIVATE_KEY: ${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}
@@ -139,7 +110,7 @@ jobs:
           installation_json="$(curl --fail-with-body --silent --show-error \
             -H "Authorization: Bearer $jwt" \
             -H 'Accept: application/vnd.github+json' \
-            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
             "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/installation")"
           installation_id="$(INSTALLATION_JSON="$installation_json" python -c 'import json, os; value=json.loads(os.environ["INSTALLATION_JSON"])["id"]; assert isinstance(value, int) and value > 0; print(value)')"
           repo_name="${GITHUB_REPOSITORY#*/}"
@@ -148,25 +119,15 @@ jobs:
             -X POST \
             -H "Authorization: Bearer $jwt" \
             -H 'Accept: application/vnd.github+json' \
-            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
             -H 'Content-Type: application/json' \
             --data "$request_json" \
             "$GITHUB_API_URL/app/installations/$installation_id/access_tokens")"
           token="$(TOKEN_JSON="$token_json" python -c 'import json, os; value=json.loads(os.environ["TOKEN_JSON"])["token"]; assert isinstance(value, str) and value; print(value)')"
           echo "::add-mask::$token"
           printf 'token=%s\n' "$token" >> "$GITHUB_OUTPUT"
-      - name: Reconcile exact-subject Python dependency promotion
+      - name: Reconcile exact-subject CodeQL remediations
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
           TRUSTED_STATUS_TOKEN: ${{ steps.trusted-app.outputs.token }}
-        run: python .github/scripts/dependency_promotion.py --reconcile --allow-merge
-      - name: Reconcile Dependabot action merge authority
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TRUSTED_STATUS_TOKEN: ${{ steps.trusted-app.outputs.token }}
-        run: |
-          args=(--reconcile)
-          case "$GITHUB_EVENT_NAME" in
-            workflow_run|schedule|workflow_dispatch) args+=(--allow-merge) ;;
-          esac
-          python .github/scripts/dependency_governance.py "${args[@]}"
+        run: python .github/scripts/security_autoheal.py --reconcile --allow-merge

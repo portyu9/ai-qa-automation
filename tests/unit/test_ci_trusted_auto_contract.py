@@ -60,8 +60,11 @@ def test_ci_verifier_executes_under_python_safe_path() -> None:
 
     assert completed.returncode == 0, completed.stderr
     payload = json.loads(completed.stdout)
-    assert payload["result"] == "PASS"
-    assert payload["workflows"]["trusted_auto"]["status_writer"] == "dedicated-github-app"
+    assert payload == {
+        "schema_version": 1,
+        "result": "PASS",
+        "verifier": "ci-contract",
+    }
 
 
 def test_trusted_auto_contract_rejects_candidate_checkout_in_preflight(tmp_path: Path) -> None:

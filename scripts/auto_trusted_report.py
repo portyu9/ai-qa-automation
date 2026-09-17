@@ -104,7 +104,7 @@ def main() -> None:
         job_results=parse_job_results(args.job_results_json),
         target_url=args.target_url,
     )
-    print(json.dumps(result, indent=2, sort_keys=True))
+    print(json.dumps({"result": result["result"], "reporter": "trusted-pr-gate"}, sort_keys=True))
     if result["result"] == "FAILURE":
         raise SystemExit(1)
 

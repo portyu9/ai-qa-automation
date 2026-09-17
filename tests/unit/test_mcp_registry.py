@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -106,19 +107,31 @@ def test_enabling_atlassian_adds_server_without_fabricating_available_status(
     assert statuses.get("atlassian") is not MCPStatus.AVAILABLE
 
 
-def test_provider_configuration_contains_no_unapproved_community_fallback(
+def test_provider_configuration_contains_only_reviewed_provider_endpoints(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("GITHUB_PERSONAL_ACCESS_TOKEN", "unit-test-token")
+    token = "unit-test-token"
+    monkeypatch.setenv("GITHUB_PERSONAL_ACCESS_TOKEN", token)
     settings = Settings(
         control_root=tmp_path,
         enable_github_mcp=True,
         enable_atlassian_mcp=True,
     )
     servers, _ = build_external_mcp(settings, make_policy(tmp_path))
-    rendered = repr(servers).lower()
 
-    assert "github/github-mcp-server" in rendered
-    assert "mcp.atlassian.com" in rendered
-    assert "community" not in rendered
-    assert "testrail" not in rendered
+    assert set(servers) == {"github", "atlassian"}
+    github = servers["github"]
+    assert github["type"] == "stdio"
+    assert github["command"] == "docker"
+    assert GITHUB_MCP_IMAGE in github["args"]
+    assert github["env"] == {"GITHUB_PERSONAL_ACCESS_TOKEN": token}
+
+    atlassian = servers["atlassian"]
+    assert atlassian == {"type": "http", "url": ATLASSIAN_ROVO_MCP_URL}
+    parsed = urlsplit(atlassian["url"])
+    assert parsed.scheme == "https"
+    assert parsed.hostname == "mcp.atlassian.com"
+    assert parsed.port is None
+    assert parsed.path == "/v1/mcp/authv2"
+    assert parsed.query == ""
+    assert parsed.fragment == ""

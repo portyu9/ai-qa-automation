@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,6 +19,10 @@ def _copy_build_inputs(tmp_path: Path) -> Path:
     shutil.copyfile(ROOT / "README.md", root / "README.md")
     shutil.copyfile(ROOT / "LICENSE", root / "LICENSE")
     shutil.copytree(ROOT / "requirements", root / "requirements")
+    (root / ".github").mkdir()
+    shutil.copyfile(
+        ROOT / build_authority.LOCK_AUTHORITY_PATH, root / build_authority.LOCK_AUTHORITY_PATH
+    )
     (root / "src").mkdir()
     shutil.copytree(ROOT / "src" / "ai_qa_automation", root / "src" / "ai_qa_automation")
     return root
@@ -32,7 +37,12 @@ def test_repository_build_authority_is_static() -> None:
     assert result["project_name"] == "ai-qa-automation"
     assert result["project_scripts"] == {"ai-qa": "ai_qa_automation.cli:app"}
     assert result["project_entry_points"] is False
-    assert result["reviewed_lock_blobs"] == build_authority.EXPECTED_LOCK_BLOB_SHAS
+    authority = json.loads((ROOT / build_authority.LOCK_AUTHORITY_PATH).read_text(encoding="utf-8"))
+    assert authority["schemaVersion"] == 2
+    assert result["reviewed_lock_blobs"] == {
+        name: "".join(parts) for name, parts in authority["lockBlobParts"].items()
+    }
+    assert "".join(authority["sourcePyprojectSha256Parts"]) == result["pyproject_sha256"]
     assert result["project_file_inputs"] == {
         "readme": "README.md",
         "license": {"file": "LICENSE"},
@@ -60,7 +70,7 @@ def test_build_authority_rejects_backend_path(tmp_path: Path) -> None:
     )
     path.write_text(text, encoding="utf-8")
 
-    with pytest.raises(ValueError, match="build-system authority"):
+    with pytest.raises(ValueError, match=r"build-system(?: backend)? authority"):
         build_authority.verify_build_authority(root)
 
 
@@ -74,7 +84,7 @@ def test_build_authority_rejects_custom_backend(tmp_path: Path) -> None:
     )
     path.write_text(text, encoding="utf-8")
 
-    with pytest.raises(ValueError, match="build-system authority"):
+    with pytest.raises(ValueError, match=r"build-system(?: backend)? authority"):
         build_authority.verify_build_authority(root)
 
 

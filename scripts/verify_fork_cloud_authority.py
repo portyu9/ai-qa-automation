@@ -17,6 +17,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "dependency-governance.yml",
     "manual-validation.yml",
     "release-candidate.yml",
+    "security-autoheal.yml",
     "trusted-pr-auto.yml",
 }
 MAX_WORKFLOW_BYTES = 256 * 1024
@@ -55,8 +56,9 @@ _FORBIDDEN_WORKFLOW_TOKENS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 _ALLOWED_SECRET_REFERENCE_COUNTS: dict[str, Counter[str]] = {
-    "dependency-governance.yml": Counter({"GITHUB_TOKEN": 2, "TRUSTED_GATE_APP_PRIVATE_KEY": 1}),
+    "dependency-governance.yml": Counter({"GITHUB_TOKEN": 3, "TRUSTED_GATE_APP_PRIVATE_KEY": 1}),
     "manual-validation.yml": Counter({"ANTHROPIC_API_KEY": 2}),
+    "security-autoheal.yml": Counter({"TRUSTED_GATE_APP_PRIVATE_KEY": 1}),
     "trusted-pr-auto.yml": Counter({"TRUSTED_GATE_APP_PRIVATE_KEY": 1}),
 }
 _SECRET_REFERENCE_RE = re.compile(r"\$\{\{\s*secrets\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
@@ -69,7 +71,15 @@ _MANUAL_SECRET_CONTEXT_FRAGMENTS = (
 _GOVERNANCE_SECRET_CONTEXT_FRAGMENTS = (
     "- name: Attempt one bounded transient recovery\n        if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
     "- name: Mint dedicated Trusted PR Gate token\n        id: trusted-app\n        if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'\n        env:\n          TRUSTED_GATE_APP_CLIENT_ID: ${{ vars.TRUSTED_GATE_APP_CLIENT_ID }}\n          TRUSTED_GATE_APP_PRIVATE_KEY: ${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}",
-    "- name: Reconcile Dependabot merge authority\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n          TRUSTED_STATUS_TOKEN: ${{ steps.trusted-app.outputs.token }}",
+    "- name: Reconcile exact-subject Python dependency promotion\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n          TRUSTED_STATUS_TOKEN: ${{ steps.trusted-app.outputs.token }}",
+    "- name: Reconcile Dependabot action merge authority\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n          TRUSTED_STATUS_TOKEN: ${{ steps.trusted-app.outputs.token }}",
+)
+_SECURITY_AUTOHEAL_SECRET_CONTEXT_FRAGMENTS = (
+    "environment:\n      name: trusted-pr-gate\n      deployment: false",
+    "TRUSTED_GATE_APP_PRIVATE_KEY: ${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}",
+    "GITHUB_TOKEN: ${{ github.token }}",
+    "TRUSTED_STATUS_TOKEN: ${{ steps.trusted-app.outputs.token }}",
+    "run: python .github/scripts/security_autoheal.py --reconcile --allow-merge",
 )
 
 _REQUIRED_PREFLIGHT_FRAGMENTS = (
@@ -159,6 +169,16 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
             raise ValueError(
                 "dependency-governance.yml: reviewed credential consumers moved or changed"
             )
+    if name == "security-autoheal.yml":
+        missing = [
+            fragment
+            for fragment in _SECURITY_AUTOHEAL_SECRET_CONTEXT_FRAGMENTS
+            if fragment not in text
+        ]
+        if missing:
+            raise ValueError(
+                "security-autoheal.yml: reviewed credential consumers moved or changed"
+            )
 
     return {
         "workflow": name,
@@ -236,7 +256,14 @@ def main() -> int:
     )
     parser.add_argument("--root", type=Path, default=Path.cwd())
     args = parser.parse_args()
-    print(json.dumps(verify_repository(args.root), sort_keys=True, separators=(",", ":")))
+    verify_repository(args.root)
+    print(
+        json.dumps(
+            {"schema_version": 1, "result": "PASS", "verifier": "fork-cloud-authority"},
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    )
     return 0
 
 

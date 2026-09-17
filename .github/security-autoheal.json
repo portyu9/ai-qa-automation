@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "repository": "portyu9/ai-qa-automation",
+  "baseBranch": "main",
+  "enabled": true,
+  "automergeEnabled": true,
+  "mergeMethod": "merge",
+  "minimumSecuritySeverity": 7.0,
+  "maxChangedFiles": 5,
+  "maxOpenRepairs": 4,
+  "maxAttemptsPerAlert": 2,
+  "requiredChecks": [
+    "Required PR Gate",
+    "CodeQL"
+  ],
+  "trustedStatusContext": "Trusted PR Gate",
+  "allowedRules": [
+    "py/reflective-xss",
+    "py/incomplete-url-substring-sanitization",
+    "py/clear-text-logging-sensitive-data",
+    "py/overly-permissive-file"
+  ],
+  "modelAutofixPathPrefixes": [
+    "src/",
+    "examples/",
+    "tests/"
+  ],
+  "deterministicOnlyPaths": [
+    "scripts/auto_trusted_report.py",
+    "scripts/ci_contract_base.py",
+    "scripts/verify_ci_contract.py",
+    "scripts/verify_docs.py",
+    "scripts/verify_fork_cloud_authority.py"
+  ],
+  "neverModifyPaths": [
+    ".github/",
+    "scripts/auto_trusted_preflight.py",
+    "scripts/trusted_pr_control.py"
+  ]
+}

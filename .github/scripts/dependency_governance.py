@@ -73,8 +73,8 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         errors.append("mergeMethod must equal merge")
     if config.get("automergeEnabled") is not True:
         errors.append("automergeEnabled must be true")
-    if config.get("pipMode") != "manual":
-        errors.append("pipMode must equal manual")
+    if config.get("pipMode") != "promotion":
+        errors.append("pipMode must equal promotion")
     for key, maximum in (("maxChangedFiles", 100), ("maxPullRequestAgeDays", 90)):
         value = config.get(key)
         if not isinstance(value, int) or isinstance(value, bool) or not (1 <= value <= maximum):
@@ -98,13 +98,22 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         ".github/dependabot.yml",
         ".github/dependency-governance.json",
         ".github/dependency-recovery.json",
+        ".github/security-autoheal.json",
         ".github/scripts/dependency_governance.py",
+        ".github/scripts/dependency_lock_compiler.py",
+        ".github/scripts/dependency_promotion.py",
         ".github/scripts/dependency_governance_selfcheck.py",
         ".github/scripts/dependency_recovery.py",
         ".github/scripts/dependency_recovery_selfcheck.py",
+        ".github/scripts/security_autoheal.py",
+        ".github/scripts/security_autoheal_selfcheck.py",
         ".github/workflows/dependency-governance.yml",
+        ".github/workflows/security-autoheal.yml",
         ".github/workflows/trusted-pr-auto.yml",
         "scripts/auto_trusted_preflight.py",
+        "scripts/ci_contract_base.py",
+        "scripts/ci_contract_trusted_auto.py",
+        "scripts/verify_build_authority.py",
         "scripts/auto_trusted_report.py",
         "scripts/trusted_pr_control.py",
         "scripts/verify_ci_contract.py",
@@ -126,12 +135,14 @@ def validate_config(config: dict[str, Any]) -> list[str]:
     expected_allowed = {
         "version-update:semver-patch",
         "version-update:semver-minor",
+        "version-update:semver-major",
         "security-update:semver-patch",
         "security-update:semver-minor",
+        "security-update:semver-major",
     }
     if not isinstance(allowed, list) or set(allowed) != expected_allowed:
         errors.append(
-            "allowedActionUpdateTypes must be exactly patch/minor version and security updates"
+            "allowedActionUpdateTypes must be exactly patch/minor/major version and security updates"
         )
     publish = config.get("publishTrustedStatus")
     if not isinstance(publish, bool):
@@ -418,8 +429,8 @@ def validate_action_semantics(files: list[dict[str, Any]]) -> None:
                 )
             old_v = next(iter(old_versions))
             new_v = next(iter(new_versions))
-            if old_v[0] != new_v[0]:
-                raise PolicyBlock(f"major action update requires manual review: {action}")
+            if new_v <= old_v:
+                raise PolicyBlock(f"action version must advance monotonically: {action}")
             if next(iter(old_shas)) == next(iter(new_shas)):
                 raise PolicyBlock(f"action SHA did not change: {action}")
 
@@ -604,6 +615,16 @@ def selftest(config: dict[str, Any]) -> None:
         pass
     else:
         raise GovernanceError("semantic validator accepted non-action workflow mutation")
+    validate_action_semantics(
+        [
+            {
+                "filename": ".github/workflows/ci.yml",
+                "status": "modified",
+                "patch": "@@ -1 +1 @@\n-      - uses: actions/checkout@" + "a" * 40 + " # v7.0.1\n"
+                "+      - uses: actions/checkout@" + "b" * 40 + " # v8.0.0\n",
+            }
+        ]
+    )
     try:
         validate_action_semantics(
             [
@@ -612,15 +633,15 @@ def selftest(config: dict[str, Any]) -> None:
                     "status": "modified",
                     "patch": "@@ -1 +1 @@\n-      - uses: actions/checkout@"
                     + "a" * 40
-                    + " # v7.0.1\n"
-                    "+      - uses: actions/checkout@" + "b" * 40 + " # v8.0.0\n",
+                    + " # v8.0.0\n"
+                    "+      - uses: actions/checkout@" + "b" * 40 + " # v7.0.1\n",
                 }
             ]
         )
     except PolicyBlock:
         pass
     else:
-        raise GovernanceError("semantic validator accepted action major update")
+        raise GovernanceError("semantic validator accepted action version downgrade")
     print("dependency-governance self-test: ok")
 
 

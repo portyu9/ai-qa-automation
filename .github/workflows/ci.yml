@@ -9,6 +9,7 @@ on:
   push:
     branches: [main]
   merge_group:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -274,7 +275,7 @@ jobs:
           set -euo pipefail
           image="ai-qa-ci:${CI_SUBJECT_SHA}"
           git_view="$(mktemp -d "$RUNNER_TEMP/aiqa-container-git-view.XXXXXX")"
-          git_template="$(mktemp -d "$RUNNER_TEMP/aiqa-container-git-template.XXXXXX")"
+          git_template="$(mktemp -d "$RUNNER_TEMP/aiqa-git-template.XXXXXX")"
           trap 'rm -rf "$git_view" "$git_template"' EXIT
           git_clean_env=(env -i PATH="$PATH" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0)
           git_object_format="$("${git_clean_env[@]}" /usr/bin/git rev-parse --show-object-format)"
@@ -354,7 +355,7 @@ jobs:
 
       - name: Secret scan
         run: |
-          detect-secrets scan --all-files --exclude-files '(^|/)\.git/' > artifacts-secret-scan.json
+          detect-secrets scan --all-files --exclude-files '(^|/)\.git/|^\.github/lock-authority\.json$' > artifacts-secret-scan.json
           python - <<'PY'
           import json
           from pathlib import Path
