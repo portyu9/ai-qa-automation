@@ -19,6 +19,12 @@ DEFAULT_CONFIG = ROOT / ".github" / "security-autoheal.json"
 API_ROOT = "https://api.github.com"
 API_VERSION = "2026-03-10"
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+POST_MERGE_CI_WORKFLOW = "ci.yml"
+POST_MERGE_CI_PATH = ".github/workflows/ci.yml"
+POST_MERGE_CI_NAME = "CI — ƳƤ AI QA Automation Framework"
+POST_MERGE_CI_EVENTS = {"push", "workflow_dispatch"}
+POST_MERGE_CI_REGISTRATION_ATTEMPTS = 15
+POST_MERGE_CI_REGISTRATION_DELAY_SECONDS = 2
 GITHUB_ACTIONS_LOGIN = "github-actions[bot]"
 GITHUB_ACTIONS_USER_ID = 41898282
 MARKER_PREFIX = "<!-- aiqa-codeql-autoheal:"
@@ -884,13 +890,135 @@ def _post_trusted_status(
         raise AutohealError("dedicated Trusted PR Gate status publication was not acknowledged")
 
 
+def _post_merge_ci_candidates(
+    rows: list[dict[str, Any]], subject_sha: str
+) -> list[dict[str, Any]]:
+    subject_sha = _require_sha(subject_sha, "post-merge CI subject SHA")
+    candidates: list[dict[str, Any]] = []
+    for row in rows:
+        if (
+            row.get("name") != POST_MERGE_CI_NAME
+            or row.get("path") != POST_MERGE_CI_PATH
+            or row.get("head_branch") != "main"
+            or row.get("head_sha") != subject_sha
+            or row.get("event") not in POST_MERGE_CI_EVENTS
+        ):
+            continue
+        attempt = row.get("run_attempt")
+        if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
+            raise AutohealError("exact-subject CI run has invalid run_attempt")
+        run_id = row.get("id")
+        if not isinstance(run_id, int) or isinstance(run_id, bool) or run_id < 1:
+            raise AutohealError("exact-subject CI run has invalid run id")
+        status = row.get("status")
+        conclusion = row.get("conclusion")
+        if status not in {"queued", "in_progress", "completed"}:
+            raise AutohealError(f"exact-subject CI run has invalid status: {status}")
+        if status == "completed" and conclusion != "success":
+            raise AutohealError(
+                f"exact-subject CI run completed non-successfully: {conclusion}"
+            )
+        candidates.append(row)
+    return candidates
+
+
+def _select_post_merge_ci_run(
+    rows: list[dict[str, Any]], subject_sha: str
+) -> dict[str, Any] | None:
+    candidates = _post_merge_ci_candidates(rows, subject_sha)
+    if len(candidates) > 1:
+        run_ids = sorted(int(row["id"]) for row in candidates)
+        raise AutohealError(
+            f"ambiguous exact-subject CI evidence for {subject_sha}: run ids {run_ids}"
+        )
+    return candidates[0] if candidates else None
+
+
+def _post_merge_ci_runs(api: GitHubApi, subject_sha: str) -> list[dict[str, Any]]:
+    encoded_sha = urllib.parse.quote(
+        _require_sha(subject_sha, "post-merge CI subject SHA"), safe=""
+    )
+    return api.list_all(f"/actions/runs?head_sha={encoded_sha}", max_pages=2)
+
+
+def _verify_actual_merge_commit(
+    api: GitHubApi,
+    result: dict[str, Any],
+    live: dict[str, Any],
+    config: dict[str, Any],
+) -> str:
+    merge_sha = _require_sha(result.get("sha"), "actual security auto-heal merge SHA")
+    commit = api.get(f"/git/commits/{merge_sha}")
+    parents = (commit or {}).get("parents")
+    if not isinstance(parents, list) or len(parents) != 2:
+        raise AutohealError("actual security auto-heal merge commit must have exactly two parents")
+    observed = [
+        _require_sha((parent or {}).get("sha"), "actual security auto-heal merge parent SHA")
+        for parent in parents
+    ]
+    expected = [live["baseSha"], live["headSha"]]
+    if observed != expected:
+        raise AutohealError(
+            f"actual security auto-heal merge parents changed: expected {expected}, got {observed}"
+        )
+    current_main = _current_main(api, config)
+    if current_main != merge_sha:
+        raise AutohealError(
+            f"main advanced before exact-subject CI dispatch: expected {merge_sha}, got {current_main}"
+        )
+    return merge_sha
+
+
+def _finalize_post_merge_evidence(
+    api: GitHubApi,
+    result: dict[str, Any],
+    live: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    merge_sha = _verify_actual_merge_commit(api, result, live, config)
+    existing = _select_post_merge_ci_run(_post_merge_ci_runs(api, merge_sha), merge_sha)
+    if existing is None:
+        api.post(
+            f"/actions/workflows/{POST_MERGE_CI_WORKFLOW}/dispatches",
+            {
+                "ref": "main",
+                "inputs": {"subject_sha": merge_sha, "subject_ref": "main"},
+            },
+        )
+        for attempt in range(POST_MERGE_CI_REGISTRATION_ATTEMPTS):
+            existing = _select_post_merge_ci_run(
+                _post_merge_ci_runs(api, merge_sha), merge_sha
+            )
+            if existing is not None:
+                if existing.get("event") != "workflow_dispatch":
+                    raise AutohealError(
+                        "post-merge CI appeared through an unexpected event after explicit dispatch"
+                    )
+                break
+            if attempt + 1 < POST_MERGE_CI_REGISTRATION_ATTEMPTS:
+                time.sleep(POST_MERGE_CI_REGISTRATION_DELAY_SECONDS)
+        else:
+            raise AutohealError(
+                f"explicit CI dispatch did not register for exact current main {merge_sha}"
+            )
+    if _current_main(api, config) != merge_sha:
+        raise AutohealError("post-merge CI evidence subject is no longer current main")
+    return {
+        "mergeSha": merge_sha,
+        "ciRunId": int(existing["id"]),
+        "ciRunAttempt": int(existing["run_attempt"]),
+        "ciEvent": str(existing["event"]),
+        "ciStatus": str(existing["status"]),
+    }
+
+
 def _merge(
     api: GitHubApi,
     pr_number: int,
     metadata: dict[str, Any],
     live: dict[str, Any],
     config: dict[str, Any],
-) -> None:
+) -> dict[str, Any]:
     fresh = api.get(f"/pulls/{pr_number}")
     rebound_metadata, rebound_live = _validate_generated_pr(api, fresh, config)
     if rebound_metadata != metadata or rebound_live != live:
@@ -904,6 +1032,7 @@ def _merge(
     if not isinstance(result, dict) or result.get("merged") is not True:
         message = result.get("message") if isinstance(result, dict) else result
         raise AutohealError(f"GitHub declined security auto-heal merge: {message}")
+    return _finalize_post_merge_evidence(api, result, live, config)
 
 
 def _open_pulls(api: GitHubApi) -> list[dict[str, Any]]:
@@ -1081,8 +1210,18 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
             _verify_codeql_remediation(api, validated_metadata, config)
             if allow_merge and config["automergeEnabled"]:
                 _post_trusted_status(api, number, validated_metadata, live, config)
-                _merge(api, number, validated_metadata, live, config)
-                print(json.dumps({"pr": number, "decision": "repair-merged"}, sort_keys=True))
+                merge_evidence = _merge(api, number, validated_metadata, live, config)
+                print(
+                    json.dumps(
+                        {
+                            "pr": number,
+                            "decision": "repair-merged",
+                            "headSha": live["headSha"],
+                            **merge_evidence,
+                        },
+                        sort_keys=True,
+                    )
+                )
         except PolicyBlock as exc:
             reason = str(exc)
             print(
@@ -1236,6 +1375,136 @@ def selftest(config: dict[str, Any]) -> None:
             pass
         else:
             raise AutohealError(f"unreviewed qualification ref was accepted: {bad_ref}")
+
+    merge_sha = "9" * 40
+    base_sha = "a" * 40
+    head_sha = "b" * 40
+    canonical_ci = {
+        "id": 901,
+        "run_attempt": 1,
+        "name": POST_MERGE_CI_NAME,
+        "path": POST_MERGE_CI_PATH,
+        "head_branch": "main",
+        "head_sha": merge_sha,
+        "event": "workflow_dispatch",
+        "status": "queued",
+        "conclusion": None,
+    }
+    selected = _select_post_merge_ci_run([canonical_ci], merge_sha)
+    if selected != canonical_ci:
+        raise AutohealError("canonical exact-main CI evidence was not selected")
+
+    for field, value in (
+        ("head_sha", "8" * 40),
+        ("path", ".github/workflows/codeql.yml"),
+        ("event", "pull_request"),
+    ):
+        drifted = {**canonical_ci, field: value}
+        if _select_post_merge_ci_run([drifted], merge_sha) is not None:
+            raise AutohealError(f"drifted post-merge CI {field} was accepted")
+
+    try:
+        _select_post_merge_ci_run([canonical_ci, {**canonical_ci, "id": 902}], merge_sha)
+    except AutohealError as exc:
+        if "ambiguous exact-subject CI evidence" not in str(exc):
+            raise AutohealError("duplicate exact-main CI evidence failed unexpectedly") from exc
+    else:
+        raise AutohealError("duplicate exact-main CI evidence was accepted")
+
+    for conclusion in ("failure", "cancelled", "timed_out"):
+        failed = {
+            **canonical_ci,
+            "status": "completed",
+            "conclusion": conclusion,
+        }
+        try:
+            _select_post_merge_ci_run([failed], merge_sha)
+        except AutohealError as exc:
+            if f"non-successfully: {conclusion}" not in str(exc):
+                raise AutohealError(
+                    f"terminal {conclusion} CI evidence failed unexpectedly"
+                ) from exc
+        else:
+            raise AutohealError(f"terminal {conclusion} CI evidence was accepted")
+
+    class _PostMergeEvidenceApi(GitHubApi):
+        def __init__(self, *, move_main: bool = False) -> None:
+            self.dispatched = False
+            self.move_main = move_main
+            self.main_reads = 0
+            self.calls: list[tuple[str, dict[str, Any] | None]] = []
+
+        def get(self, path: str) -> Any:
+            if path == f"/git/commits/{merge_sha}":
+                return {"parents": [{"sha": base_sha}, {"sha": head_sha}]}
+            if path == "/branches/main":
+                self.main_reads += 1
+                observed = (
+                    "7" * 40
+                    if self.move_main and self.main_reads >= 2
+                    else merge_sha
+                )
+                return {"commit": {"sha": observed}}
+            raise AutohealError(f"unexpected post-merge self-test GET path: {path}")
+
+        def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+            expected = f"/actions/runs?head_sha={merge_sha}"
+            if path != expected or max_pages != 2:
+                raise AutohealError(f"unexpected post-merge self-test list path: {path}")
+            return [canonical_ci] if self.dispatched else []
+
+        def post(
+            self,
+            path: str,
+            payload: dict[str, Any] | None = None,
+            *,
+            token: str | None = None,
+        ) -> Any:
+            if token is not None:
+                raise AutohealError("post-merge self-test received unexpected alternate token")
+            self.calls.append((path, payload))
+            self.dispatched = True
+            return None
+
+    post_merge_api = _PostMergeEvidenceApi()
+    evidence = _finalize_post_merge_evidence(
+        post_merge_api,
+        {"sha": merge_sha},
+        {"baseSha": base_sha, "headSha": head_sha},
+        config,
+    )
+    expected_post_merge_dispatch = (
+        "/actions/workflows/ci.yml/dispatches",
+        {
+            "ref": "main",
+            "inputs": {"subject_sha": merge_sha, "subject_ref": "main"},
+        },
+    )
+    if post_merge_api.calls != [expected_post_merge_dispatch]:
+        raise AutohealError("post-merge exact-main CI dispatch payload drifted")
+    if evidence != {
+        "mergeSha": merge_sha,
+        "ciRunId": 901,
+        "ciRunAttempt": 1,
+        "ciEvent": "workflow_dispatch",
+        "ciStatus": "queued",
+    }:
+        raise AutohealError("post-merge exact-main CI evidence payload drifted")
+
+    moved_api = _PostMergeEvidenceApi(move_main=True)
+    moved_api.dispatched = True
+    try:
+        _finalize_post_merge_evidence(
+            moved_api,
+            {"sha": merge_sha},
+            {"baseSha": base_sha, "headSha": head_sha},
+            config,
+        )
+    except AutohealError as exc:
+        if str(exc) != "post-merge CI evidence subject is no longer current main":
+            raise AutohealError("moved-main post-merge guard changed semantics") from exc
+    else:
+        raise AutohealError("moved main was accepted as post-merge evidence authority")
 
     stale_lifecycle = {"state": "open", "draft": False, "mergeable": False}
     try:
