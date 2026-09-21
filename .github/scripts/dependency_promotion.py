@@ -586,8 +586,8 @@ def _validate_promotion(
         "id"
     ) != GITHUB_ACTIONS_USER_ID:
         raise PolicyBlock("promotion PR is not authored by canonical GitHub Actions")
-    if pr.get("state") != "open" or pr.get("draft") is not False or pr.get("mergeable") is not True:
-        raise PolicyBlock("promotion PR is not open, non-draft, and definitively mergeable")
+    if pr.get("state") != "open" or pr.get("draft") is not False:
+        raise PolicyBlock("promotion PR is not open and non-draft")
     head = pr.get("head") or {}
     base = pr.get("base") or {}
     if (head.get("repo") or {}).get("full_name") != config["repository"] or (
@@ -602,6 +602,8 @@ def _validate_promotion(
     live_sha = require_sha(((live or {}).get("commit") or {}).get("sha"), "live main SHA")
     if base_sha != live_sha or metadata.get("base") != live_sha:
         raise PolicyBlock("promotion is stale relative to current main")
+    if pr.get("mergeable") is not True:
+        raise PolicyBlock("promotion PR is not definitively mergeable")
     if metadata.get("head") != head_sha:
         raise PolicyBlock("promotion head changed after generation")
     source_number = metadata.get("sourcePr")
@@ -866,6 +868,56 @@ dev = ["mypy>=2,<3", "playwright>=1.52,<2"]
         pass
     else:
         raise GovernanceError("stale source with changed dependency authority did not fail closed")
+
+    class _StalePromotionApi(GitHubApi):
+        def __init__(self) -> None:
+            pass
+
+        def get(self, path: str) -> Any:
+            if path == "/branches/main":
+                return {"commit": {"sha": "c" * 40}}
+            raise GovernanceError(f"unexpected stale-promotion self-test path: {path}")
+
+    stale_api = _StalePromotionApi()
+    stale_pr = {
+        "body": _marker({"version": 1, "base": "a" * 40, "head": "b" * 40}),
+        "user": {"login": GITHUB_ACTIONS_LOGIN, "id": GITHUB_ACTIONS_USER_ID},
+        "state": "open",
+        "draft": False,
+        "mergeable": False,
+        "head": {
+            "repo": {"full_name": "portyu9/ai-qa-automation"},
+            "ref": "automation/dependency-promotion-171-abcdef123456",
+            "sha": "b" * 40,
+        },
+        "base": {
+            "repo": {"full_name": "portyu9/ai-qa-automation"},
+            "ref": "main",
+            "sha": "a" * 40,
+        },
+    }
+    lifecycle_config = {
+        "repository": "portyu9/ai-qa-automation",
+        "baseBranch": "main",
+    }
+    try:
+        _validate_promotion(stale_api, stale_pr, lifecycle_config)
+    except PolicyBlock as exc:
+        if str(exc) != "promotion is stale relative to current main":
+            raise GovernanceError("stale promotion was masked by mergeability state") from exc
+    else:
+        raise GovernanceError("stale non-mergeable promotion did not fail as stale")
+
+    current_pr = copy.deepcopy(stale_pr)
+    current_pr["body"] = _marker({"version": 1, "base": "c" * 40, "head": "b" * 40})
+    current_pr["base"]["sha"] = "c" * 40
+    try:
+        _validate_promotion(stale_api, current_pr, lifecycle_config)
+    except PolicyBlock as exc:
+        if str(exc) != "promotion PR is not definitively mergeable":
+            raise GovernanceError("current promotion mergeability guard changed semantics") from exc
+    else:
+        raise GovernanceError("current non-mergeable promotion did not fail closed")
 
     added_identity = head_raw.replace(
         b'dependencies = ["httpx>=0.29,<1"]',
