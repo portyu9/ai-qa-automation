@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import binascii
 import copy
 import hashlib
 import json
@@ -153,6 +154,14 @@ def validate_pyproject_transition(base_raw: bytes, head_raw: bytes) -> None:
         raise PolicyBlock("pip update does not change any reviewed dependency specifier")
 
 
+def _decode_contents_base64(content: str, path: str) -> bytes:
+    compact = "".join(content.split())
+    try:
+        return base64.b64decode(compact, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise PolicyBlock(f"repository content base64 is invalid: {path}") from exc
+
+
 def _contents_bytes(api: GitHubApi, path: str, ref: str) -> bytes:
     encoded_path = "/".join(urllib.parse.quote(part, safe="") for part in path.split("/"))
     payload = api.get(f"/contents/{encoded_path}?ref={urllib.parse.quote(ref, safe='')}")
@@ -162,10 +171,7 @@ def _contents_bytes(api: GitHubApi, path: str, ref: str) -> bytes:
     encoding = payload.get("encoding")
     if not isinstance(content, str) or encoding != "base64":
         raise PolicyBlock(f"repository content encoding is invalid: {path}")
-    try:
-        raw = base64.b64decode(content, validate=True)
-    except ValueError as exc:
-        raise PolicyBlock(f"repository content base64 is invalid: {path}") from exc
+    raw = _decode_contents_base64(content, path)
     if len(raw) > 2 * 1024 * 1024:
         raise PolicyBlock(f"repository content exceeds promotion ingestion bound: {path}")
     return raw
@@ -630,6 +636,17 @@ browser = ["playwright>=1.52,<2"]
 dev = ["mypy>=2,<3", "playwright>=1.52,<2"]
 """
     validate_pyproject_transition(base_raw, head_raw)
+
+    encoded_base = base64.b64encode(base_raw).decode("ascii")
+    wrapped_base = "\n".join(encoded_base[index : index + 60] for index in range(0, len(encoded_base), 60))
+    if _decode_contents_base64(wrapped_base, "pyproject.toml") != base_raw:
+        raise GovernanceError("wrapped GitHub Contents base64 did not round-trip")
+    try:
+        _decode_contents_base64(encoded_base + "%", "pyproject.toml")
+    except PolicyBlock:
+        pass
+    else:
+        raise GovernanceError("malformed GitHub Contents base64 did not fail closed")
 
     if _promotion_base("a" * 40, "b" * 40, base_raw, base_raw) != "b" * 40:
         raise GovernanceError(
