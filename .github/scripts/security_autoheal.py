@@ -1208,7 +1208,9 @@ def selftest(config: dict[str, Any]) -> None:
         _validate_generated_pr(stale_api, stale_pr, config)
     except PolicyBlock as exc:
         if str(exc) != "generated repair is stale relative to current main":
-            raise AutohealError("stale repair was masked by mergeability state") from exc
+            raise AutohealError(
+                "stale repair was masked by mergeability state"
+            ) from exc
     else:
         raise AutohealError("stale non-mergeable repair did not fail as stale")
 
@@ -1227,7 +1229,9 @@ def selftest(config: dict[str, Any]) -> None:
         _validate_generated_pr(stale_api, current_pr, config)
     except PolicyBlock as exc:
         if str(exc) != "generated repair PR is not definitively mergeable":
-            raise AutohealError("current repair mergeability guard changed semantics") from exc
+            raise AutohealError(
+                "current repair mergeability guard changed semantics"
+            ) from exc
     else:
         raise AutohealError("current non-mergeable repair did not fail closed")
 
