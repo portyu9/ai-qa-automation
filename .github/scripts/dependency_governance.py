@@ -797,9 +797,7 @@ def selftest(config: dict[str, Any]) -> None:
                 raise GovernanceError(f"unexpected self-test API path: {path}")
             return {"workflow_runs": []}
 
-    if _EmptyWorkflowRunsApi().list_all(
-        f"/actions/runs?head_sha={exact_sha}", max_pages=2
-    ) != []:
+    if _EmptyWorkflowRunsApi().list_all(f"/actions/runs?head_sha={exact_sha}", max_pages=2) != []:
         raise GovernanceError("pagination rejected canonical empty workflow_runs response")
 
     class _RecordingDispatchApi(GitHubApi):
