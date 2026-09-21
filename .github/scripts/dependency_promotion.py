@@ -27,6 +27,7 @@ from dependency_governance import (
     GitHubApi,
     GovernanceError,
     PolicyBlock,
+    finalize_post_merge_evidence,
     changed_files,
     latest_checks,
     load_config,
@@ -636,7 +637,9 @@ def _validate_promotion(
     return source, {"number": pr["number"], "headSha": head_sha, "baseSha": base_sha}
 
 
-def _publish_and_merge(api: GitHubApi, promotion: dict[str, Any], config: dict[str, Any]) -> None:
+def _publish_and_merge(
+    api: GitHubApi, promotion: dict[str, Any], config: dict[str, Any]
+) -> dict[str, Any]:
     token = os.environ.get("TRUSTED_STATUS_TOKEN", "")
     if not token:
         raise GovernanceError("TRUSTED_STATUS_TOKEN is required for dependency promotion")
@@ -671,6 +674,7 @@ def _publish_and_merge(api: GitHubApi, promotion: dict[str, Any], config: dict[s
         raise GovernanceError(
             f"GitHub declined dependency promotion merge: {(result or {}).get('message')}"
         )
+    return finalize_post_merge_evidence(api, result, promotion, config)
 
 
 def _close_stale(api: GitHubApi, number: int, branch: str) -> None:
@@ -703,8 +707,13 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
             _, promotion = _validate_promotion(api, api.get(f"/pulls/{number}"), config)
             print(json.dumps({"pr": number, "decision": "promotion-qualified"}, sort_keys=True))
             if allow_merge and config["automergeEnabled"]:
-                _publish_and_merge(api, promotion, config)
-                print(json.dumps({"pr": number, "decision": "promotion-merged"}, sort_keys=True))
+                merge_evidence = _publish_and_merge(api, promotion, config)
+                print(
+                    json.dumps(
+                        {"pr": number, "decision": "promotion-merged", **merge_evidence},
+                        sort_keys=True,
+                    )
+                )
         except PolicyBlock as exc:
             reason = str(exc)
             print(
