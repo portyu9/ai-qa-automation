@@ -24,6 +24,7 @@ GITHUB_ACTIONS_USER_ID = 41898282
 MARKER_PREFIX = "<!-- aiqa-codeql-autoheal:"
 MARKER_SUFFIX = " -->"
 BRANCH_PREFIX = "automation/codeql-autoheal-"
+AUTOHEAL_COMMIT_MESSAGE_RE = re.compile(r"^security: auto-heal CodeQL alert #[1-9][0-9]*$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 SAFE_RULES = {
     "py/reflective-xss",
@@ -845,6 +846,65 @@ def _open_pulls(api: GitHubApi) -> list[dict[str, Any]]:
     return api.list_all("/pulls?state=open&sort=created&direction=asc", max_pages=4)
 
 
+def _owned_generated_repair_commit(payload: Any, head_sha: str) -> bool:
+    if not isinstance(payload, dict) or payload.get("sha") != head_sha:
+        return False
+    author = payload.get("author") or {}
+    commit = payload.get("commit") or {}
+    message = commit.get("message")
+    if not isinstance(message, str) or not message:
+        return False
+    first_line = message.splitlines()[0]
+    return (
+        author.get("login") == GITHUB_ACTIONS_LOGIN
+        and author.get("id") == GITHUB_ACTIONS_USER_ID
+        and AUTOHEAL_COMMIT_MESSAGE_RE.fullmatch(first_line) is not None
+    )
+
+
+def _prune_orphan_repair_refs(api: GitHubApi, pulls: list[dict[str, Any]]) -> int:
+    open_heads = {
+        str((row.get("head") or {}).get("ref"))
+        for row in pulls
+        if isinstance((row.get("head") or {}).get("ref"), str)
+    }
+    prefix = f"refs/heads/{BRANCH_PREFIX}"
+    encoded_prefix = urllib.parse.quote(BRANCH_PREFIX, safe="")
+    refs = api.list_all(f"/git/matching-refs/heads/{encoded_prefix}", max_pages=4)
+    pruned = 0
+    for row in refs:
+        ref = row.get("ref")
+        if not isinstance(ref, str) or not ref.startswith(prefix):
+            raise AutohealError("GitHub returned a ref outside CodeQL auto-heal namespace")
+        branch = ref.removeprefix("refs/heads/")
+        if branch in open_heads:
+            continue
+        obj = row.get("object") or {}
+        if obj.get("type") != "commit":
+            raise PolicyBlock("orphan CodeQL auto-heal ref does not point to a commit")
+        head_sha = _require_sha(obj.get("sha"), "orphan CodeQL auto-heal SHA")
+        commit = api.get(f"/commits/{head_sha}")
+        if not _owned_generated_repair_commit(commit, head_sha):
+            raise PolicyBlock("orphan CodeQL auto-heal ref lacks exact GitHub Actions ownership")
+        encoded_branch = urllib.parse.quote(branch, safe="")
+        api.delete(f"/git/refs/heads/{encoded_branch}")
+        try:
+            api.get(f"/git/ref/heads/{encoded_branch}")
+        except AutohealError as exc:
+            if "HTTP 404" not in str(exc):
+                raise
+        else:
+            raise AutohealError("orphan CodeQL auto-heal ref still exists after deletion")
+        pruned += 1
+        print(
+            json.dumps(
+                {"branch": branch, "headSha": head_sha, "decision": "orphan-ref-pruned"},
+                sort_keys=True,
+            )
+        )
+    return pruned
+
+
 def _generated_repairs(pulls: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         pr
@@ -938,6 +998,7 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
 
     main_sha = _current_main(api, config)
     pulls = _open_pulls(api)
+    _prune_orphan_repair_refs(api, pulls)
     repairs = _generated_repairs(pulls)
     active_alerts: set[int] = set()
 
@@ -1009,6 +1070,26 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
 
 
 def selftest(config: dict[str, Any]) -> None:
+    owned_commit = {
+        "sha": "d" * 40,
+        "author": {"login": GITHUB_ACTIONS_LOGIN, "id": GITHUB_ACTIONS_USER_ID},
+        "commit": {
+            "message": (
+                "security: auto-heal CodeQL alert #7\n\n"
+                "Co-authored-by: Copilot Autofix powered by AI <bot@example.invalid>"
+            )
+        },
+    }
+    if not _owned_generated_repair_commit(owned_commit, "d" * 40):
+        raise AutohealError("canonical generated auto-heal commit ownership was rejected")
+    for drifted in (
+        {**owned_commit, "sha": "e" * 40},
+        {**owned_commit, "author": {"login": "portyu9", "id": 35150859}},
+        {**owned_commit, "commit": {"message": "security: unrelated maintenance"}},
+    ):
+        if _owned_generated_repair_commit(drifted, "d" * 40):
+            raise AutohealError("non-canonical generated auto-heal ownership was accepted")
+
     denied = AutohealError(
         "GitHub API POST /pulls failed HTTP 403: "
         '{"message":"GitHub Actions is not permitted to create or approve pull requests."}'
