@@ -24,9 +24,7 @@ GITHUB_ACTIONS_USER_ID = 41898282
 MARKER_PREFIX = "<!-- aiqa-codeql-autoheal:"
 MARKER_SUFFIX = " -->"
 BRANCH_PREFIX = "automation/codeql-autoheal-"
-AUTOHEAL_BRANCH_RE = re.compile(
-    r"^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{12}$"
-)
+AUTOHEAL_BRANCH_RE = re.compile(r"^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{12}$")
 AUTOHEAL_COMMIT_MESSAGE_RE = re.compile(r"^security: auto-heal CodeQL alert #[1-9][0-9]*$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 SAFE_RULES = {
