@@ -7,6 +7,7 @@ import json
 import os
 import re
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -269,16 +270,32 @@ def _current_main(api: GitHubApi, config: dict[str, Any]) -> str:
     return _require_sha(((branch or {}).get("commit") or {}).get("sha"), "live main SHA")
 
 
+SECURITY_SEVERITY_FLOORS = {
+    "critical": 9.0,
+    "high": 7.0,
+    "medium": 4.0,
+    "low": 0.1,
+}
+
+
 def _security_severity(alert: dict[str, Any]) -> float:
     rule = alert.get("rule") or {}
     value = rule.get("security_severity")
-    try:
-        severity = float(value)
-    except (TypeError, ValueError) as exc:
-        raise PolicyBlock("CodeQL alert lacks numeric security severity") from exc
-    if severity < 0 or severity > 10:
-        raise PolicyBlock("CodeQL security severity is outside 0..10")
-    return severity
+    if value is not None:
+        try:
+            severity = float(value)
+        except (TypeError, ValueError) as exc:
+            raise PolicyBlock("CodeQL alert has malformed numeric security severity") from exc
+        if severity < 0 or severity > 10:
+            raise PolicyBlock("CodeQL security severity is outside 0..10")
+        return severity
+
+    level = rule.get("security_severity_level")
+    if isinstance(level, str):
+        severity = SECURITY_SEVERITY_FLOORS.get(level.lower())
+        if severity is not None:
+            return severity
+    raise PolicyBlock("CodeQL alert lacks a supported security severity")
 
 
 def _alert_location(alert: dict[str, Any]) -> tuple[str, int]:
@@ -479,10 +496,27 @@ def _ensure_copilot_autofix(api: GitHubApi, alert_number: int) -> None:
     path = f"/code-scanning/alerts/{alert_number}/autofix"
     status, payload = api.request_status("POST", path)
     state = (payload or {}).get("status") if isinstance(payload, dict) else None
-    if status == 202 or state in {"pending", "in_progress", "queued"}:
-        raise RetryLater("GitHub CodeQL Autofix is still generating a proposal")
-    if status != 200 or state != "success":
+    if status == 200 and state == "success":
+        return
+    if status not in {200, 202}:
         raise PolicyBlock(f"GitHub CodeQL Autofix is unavailable: status={status} state={state}")
+    if status == 200 and state not in {"pending", "in_progress", "queued"}:
+        raise PolicyBlock(f"GitHub CodeQL Autofix is unavailable: status={status} state={state}")
+
+    for _ in range(10):
+        time.sleep(3)
+        poll_status, poll_payload = api.request_status("GET", path)
+        poll_state = (poll_payload or {}).get("status") if isinstance(poll_payload, dict) else None
+        if poll_status == 200 and poll_state == "success":
+            return
+        if poll_status == 404 or (
+            poll_status == 200 and poll_state in {"pending", "in_progress", "queued"}
+        ):
+            continue
+        raise PolicyBlock(
+            f"GitHub CodeQL Autofix status is unavailable: status={poll_status} state={poll_state}"
+        )
+    raise RetryLater("GitHub CodeQL Autofix is still generating a proposal")
 
 
 def _commit_copilot_autofix(api: GitHubApi, alert_number: int, branch: str, base_sha: str) -> str:
@@ -947,6 +981,17 @@ def selftest(config: dict[str, Any]) -> None:
     parsed = _parse_marker(marker)
     if parsed is None or parsed.get("alert") != 7:
         raise AutohealError("auto-heal marker round-trip failed")
+
+    if _security_severity({"rule": {"security_severity_level": "high"}}) != 7.0:
+        raise AutohealError("REST security severity level mapping self-test failed")
+    if _security_severity({"rule": {"security_severity": "7.8"}}) != 7.8:
+        raise AutohealError("numeric security severity compatibility self-test failed")
+    try:
+        _security_severity({"rule": {"security_severity_level": "warning"}})
+    except PolicyBlock:
+        pass
+    else:
+        raise AutohealError("unsupported security severity level did not fail closed")
 
     original_root = globals()["ROOT"]
     try:

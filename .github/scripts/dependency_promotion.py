@@ -202,8 +202,23 @@ def _validate_dependabot_provenance(api: GitHubApi, number: int) -> None:
         raise PolicyBlock("pip promotion Dependabot Signed-off-by provenance is missing")
 
 
+def _promotion_base(
+    source_base_sha: str,
+    live_main_sha: str,
+    source_base_raw: bytes,
+    live_main_raw: bytes,
+) -> str:
+    if source_base_sha != live_main_sha and source_base_raw != live_main_raw:
+        raise PolicyBlock(
+            "stale Dependabot source overlaps current pyproject.toml; wait for native rebase"
+        )
+    return live_main_sha
+
+
 def source_subject(api: GitHubApi, pr: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
-    head_sha, base_sha, number = validate_pr_identity(api, pr, config)
+    head_sha, source_base_sha, number = validate_pr_identity(
+        api, pr, config, require_current_base=False
+    )
     _validate_dependabot_provenance(api, number)
     files = changed_files(api, number, config)
     if (
@@ -212,15 +227,27 @@ def source_subject(api: GitHubApi, pr: dict[str, Any], config: dict[str, Any]) -
         or files[0].get("status") != "modified"
     ):
         raise PolicyBlock("pip promotion source must modify only existing pyproject.toml")
-    base_raw = _contents_bytes(api, "pyproject.toml", base_sha)
+    source_base_raw = _contents_bytes(api, "pyproject.toml", source_base_sha)
     head_raw = _contents_bytes(api, "pyproject.toml", head_sha)
-    validate_pyproject_transition(base_raw, head_raw)
+    validate_pyproject_transition(source_base_raw, head_raw)
+
+    live = api.get(f"/branches/{urllib.parse.quote(config['baseBranch'], safe='')}")
+    live_main_sha = require_sha(((live or {}).get("commit") or {}).get("sha"), "live main SHA")
+    live_main_raw = _contents_bytes(api, "pyproject.toml", live_main_sha)
+    promotion_base_sha = _promotion_base(
+        source_base_sha,
+        live_main_sha,
+        source_base_raw,
+        live_main_raw,
+    )
+
     fingerprint = hashlib.sha256(
         b"\0".join(
             (
                 str(number).encode(),
-                base_sha.encode(),
+                source_base_sha.encode(),
                 head_sha.encode(),
+                promotion_base_sha.encode(),
                 hashlib.sha256(head_raw).hexdigest().encode(),
             )
         )
@@ -228,7 +255,8 @@ def source_subject(api: GitHubApi, pr: dict[str, Any], config: dict[str, Any]) -
     return {
         "number": number,
         "headSha": head_sha,
-        "baseSha": base_sha,
+        "sourceBaseSha": source_base_sha,
+        "baseSha": promotion_base_sha,
         "pyproject": head_raw,
         "fingerprint": fingerprint,
     }
@@ -326,6 +354,7 @@ def _create_promotion_pr(api: GitHubApi, source: dict[str, Any], branch: str, he
         "version": 1,
         "sourcePr": source["number"],
         "sourceHead": source["headSha"],
+        "sourceBase": source["sourceBaseSha"],
         "base": source["baseSha"],
         "head": head_sha,
         "fingerprint": source["fingerprint"],
@@ -425,8 +454,10 @@ def _validate_promotion(
     if not isinstance(source_number, int) or source_number < 1:
         raise PolicyBlock("promotion source PR number is invalid")
     source = source_subject(api, api.get(f"/pulls/{source_number}"), config)
-    if source["headSha"] != metadata.get("sourceHead") or source["fingerprint"] != metadata.get(
-        "fingerprint"
+    if (
+        source["headSha"] != metadata.get("sourceHead")
+        or source["sourceBaseSha"] != metadata.get("sourceBase")
+        or source["fingerprint"] != metadata.get("fingerprint")
     ):
         raise PolicyBlock("source Dependabot PR changed after promotion generation")
     commit = api.get(f"/git/commits/{head_sha}")
@@ -599,6 +630,17 @@ browser = ["playwright>=1.52,<2"]
 dev = ["mypy>=2,<3", "playwright>=1.52,<2"]
 """
     validate_pyproject_transition(base_raw, head_raw)
+
+    if _promotion_base("a" * 40, "b" * 40, base_raw, base_raw) != "b" * 40:
+        raise GovernanceError(
+            "stale source with unchanged dependency authority was not rebased safely"
+        )
+    try:
+        _promotion_base("a" * 40, "b" * 40, base_raw, base_raw + b"\n# changed\n")
+    except PolicyBlock:
+        pass
+    else:
+        raise GovernanceError("stale source with changed dependency authority did not fail closed")
 
     added_identity = head_raw.replace(
         b'dependencies = ["httpx>=0.29,<1"]',
