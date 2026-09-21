@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Annotated, Literal
 
 from fastapi import FastAPI, HTTPException, Query
@@ -69,6 +70,7 @@ def checkout(mode: Annotated[Mode, Query()] = "pass") -> str:
         )
 
     quantity = "0" if mode == "invalid-data" else "1"
+    mode_js = json.dumps(mode)
 
     return f"""
 <!doctype html>
@@ -89,7 +91,7 @@ def checkout(mode: Annotated[Mode, Query()] = "pass") -> str:
       // data-testid-based test fails for the right reason.
       const button = document.querySelector('button[role="button"][aria-label="Place order"]');
       if (button) button.addEventListener('click', async () => {{
-        const response = await fetch('/api/orders?mode={mode}', {{
+        const response = await fetch('/api/orders?mode=' + encodeURIComponent({mode_js}), {{
           method: 'POST', headers: {{'content-type': 'application/json'}},
           body: JSON.stringify({{sku: document.querySelector('#sku').value, quantity: Number(document.querySelector('#qty').value)}})
         }});
