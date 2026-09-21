@@ -587,6 +587,26 @@ def _validate_candidate_diff(
         raise PolicyBlock("repair candidate does not modify the alert source file")
 
 
+def _github_actions_pr_creation_denied(exc: Exception) -> bool:
+    detail = str(exc)
+    return (
+        "HTTP 403" in detail
+        and "GitHub Actions is not permitted to create or approve pull requests" in detail
+    )
+
+
+def _delete_exact_generated_branch(api: GitHubApi, branch: str, head_sha: str) -> None:
+    encoded = urllib.parse.quote(branch, safe="")
+    ref = api.get(f"/git/ref/heads/{encoded}")
+    observed = _require_sha(
+        ((ref or {}).get("object") or {}).get("sha"),
+        "generated repair branch SHA before cleanup",
+    )
+    if observed != head_sha:
+        raise PolicyBlock("generated repair branch changed before denied-PR cleanup")
+    api.delete(f"/git/refs/heads/{encoded}")
+
+
 def _create_pull_request(
     api: GitHubApi,
     branch: str,
@@ -617,16 +637,25 @@ def _create_pull_request(
             "candidate-alert regression checks, and the App-owned Trusted PR Gate before merge.",
         )
     )
-    pr = api.post(
-        "/pulls",
-        {
-            "title": f"security: auto-heal CodeQL alert #{subject['number']}",
-            "head": branch,
-            "base": "main",
-            "body": body,
-            "draft": False,
-        },
-    )
+    try:
+        pr = api.post(
+            "/pulls",
+            {
+                "title": f"security: auto-heal CodeQL alert #{subject['number']}",
+                "head": branch,
+                "base": "main",
+                "body": body,
+                "draft": False,
+            },
+        )
+    except AutohealError as exc:
+        if not _github_actions_pr_creation_denied(exc):
+            raise
+        _delete_exact_generated_branch(api, branch, head_sha)
+        raise AutohealError(
+            "repository Actions policy blocks generated pull-request creation; "
+            "enable 'Allow GitHub Actions to create and approve pull requests'"
+        ) from exc
     number = (pr or {}).get("number")
     if not isinstance(number, int) or number < 1:
         raise AutohealError("GitHub did not acknowledge the generated repair pull request")
@@ -980,6 +1009,15 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
 
 
 def selftest(config: dict[str, Any]) -> None:
+    denied = AutohealError(
+        "GitHub API POST /pulls failed HTTP 403: "
+        '{"message":"GitHub Actions is not permitted to create or approve pull requests."}'
+    )
+    if not _github_actions_pr_creation_denied(denied):
+        raise AutohealError("GitHub Actions PR creation denial was not classified")
+    if _github_actions_pr_creation_denied(AutohealError("HTTP 403: unrelated policy")):
+        raise AutohealError("unrelated HTTP 403 was misclassified as PR creation denial")
+
     errors = validate_config(config)
     if errors:
         raise AutohealError("security auto-heal config self-test failed: " + "; ".join(errors))
