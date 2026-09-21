@@ -281,7 +281,7 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
         '[[ "$EXPECTED_SUBJECT_SHA" =~ ^[0-9a-f]{40}$ ]]',
         'repos/${GITHUB_REPOSITORY}/check-runs',
         '{name:"Required PR Gate",head_sha:$head,status:"completed",conclusion:"success"',
-        'test "$(jq -r '.head_sha' <<<"$response")" = "$EXPECTED_SUBJECT_SHA"',
+        "test \"$(jq -r '.head_sha' <<<\"$response\")\" = \"$EXPECTED_SUBJECT_SHA\"",
     ):
         if fragment not in publisher:
             raise ValueError(
@@ -437,7 +437,7 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
         "    permissions:\n      checks: write\n      contents: read",
         'repos/${GITHUB_REPOSITORY}/check-runs',
         '{name:"CodeQL",head_sha:$head,status:"completed",conclusion:"success"',
-        'test "$(jq -r '.head_sha' <<<"$response")" = "$EXPECTED_SUBJECT_SHA"',
+        "test \"$(jq -r '.head_sha' <<<\"$response\")\" = \"$EXPECTED_SUBJECT_SHA\"",
     )
     for fragment in publisher_required:
         if fragment not in publisher:
