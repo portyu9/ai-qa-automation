@@ -583,12 +583,12 @@ def _require_promotion_lifecycle(
     base_sha: str,
     live_sha: str,
 ) -> None:
-    _require_promotion_lifecycle(
-        pr,
-        metadata,
-        base_sha=base_sha,
-        live_sha=live_sha,
-    )
+    if pr.get("state") != "open" or pr.get("draft") is not False:
+        raise PolicyBlock("promotion PR is not open and non-draft")
+    if base_sha != live_sha or metadata.get("base") != live_sha:
+        raise PolicyBlock("promotion is stale relative to current main")
+    if pr.get("mergeable") is not True:
+        raise PolicyBlock("promotion PR is not definitively mergeable")
 
 
 def _validate_promotion(
@@ -601,8 +601,6 @@ def _validate_promotion(
         "id"
     ) != GITHUB_ACTIONS_USER_ID:
         raise PolicyBlock("promotion PR is not authored by canonical GitHub Actions")
-    if pr.get("state") != "open" or pr.get("draft") is not False:
-        raise PolicyBlock("promotion PR is not open and non-draft")
     head = pr.get("head") or {}
     base = pr.get("base") or {}
     if (head.get("repo") or {}).get("full_name") != config["repository"] or (
@@ -615,10 +613,12 @@ def _validate_promotion(
     base_sha = require_sha(base.get("sha"), "promotion base SHA")
     live = api.get(f"/branches/{urllib.parse.quote(config['baseBranch'], safe='')}")
     live_sha = require_sha(((live or {}).get("commit") or {}).get("sha"), "live main SHA")
-    if base_sha != live_sha or metadata.get("base") != live_sha:
-        raise PolicyBlock("promotion is stale relative to current main")
-    if pr.get("mergeable") is not True:
-        raise PolicyBlock("promotion PR is not definitively mergeable")
+    _require_promotion_lifecycle(
+        pr,
+        metadata,
+        base_sha=base_sha,
+        live_sha=live_sha,
+    )
     if metadata.get("head") != head_sha:
         raise PolicyBlock("promotion head changed after generation")
     source_number = metadata.get("sourcePr")
