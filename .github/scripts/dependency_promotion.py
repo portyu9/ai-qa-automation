@@ -39,9 +39,7 @@ from dependency_lock_compiler import compile_locks
 
 ROOT = Path(__file__).resolve().parents[2]
 BRANCH_PREFIX = "automation/dependency-promotion-"
-PROMOTION_BRANCH_RE = re.compile(
-    r"^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$"
-)
+PROMOTION_BRANCH_RE = re.compile(r"^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$")
 PROMOTION_COMMIT_MESSAGE_RE = re.compile(
     r"^deps: promote Dependabot PR #[1-9][0-9]* with synchronized locks$"
 )
