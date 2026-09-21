@@ -10,6 +10,11 @@ on:
     branches: [main]
   merge_group:
   workflow_dispatch:
+    inputs:
+      subject_sha:
+        description: Exact main commit the governed merge requires CI evidence for
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -166,6 +171,26 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
+      - name: Bind explicit dispatch to exact main subject
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          EXPECTED_SUBJECT_SHA: ${{ inputs.subject_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$EXPECTED_SUBJECT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::subject_sha must be a canonical 40-character lowercase SHA"
+            exit 1
+          fi
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::explicit CI dispatch is allowed only for refs/heads/main"
+            exit 1
+          fi
+          if [[ "$GITHUB_SHA" != "$EXPECTED_SUBJECT_SHA" ]]; then
+            echo "::error::dispatched CI subject does not match the exact requested main SHA"
+            exit 1
+          fi
+
       - name: Checkout exact validation subject
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
