@@ -7,6 +7,7 @@ import json
 import os
 import re
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -495,10 +496,30 @@ def _ensure_copilot_autofix(api: GitHubApi, alert_number: int) -> None:
     path = f"/code-scanning/alerts/{alert_number}/autofix"
     status, payload = api.request_status("POST", path)
     state = (payload or {}).get("status") if isinstance(payload, dict) else None
-    if status == 202 or state in {"pending", "in_progress", "queued"}:
-        raise RetryLater("GitHub CodeQL Autofix is still generating a proposal")
-    if status != 200 or state != "success":
+    if status == 200 and state == "success":
+        return
+    if status not in {200, 202}:
         raise PolicyBlock(f"GitHub CodeQL Autofix is unavailable: status={status} state={state}")
+    if status == 200 and state not in {"pending", "in_progress", "queued"}:
+        raise PolicyBlock(f"GitHub CodeQL Autofix is unavailable: status={status} state={state}")
+
+    for _ in range(10):
+        time.sleep(3)
+        poll_status, poll_payload = api.request_status("GET", path)
+        poll_state = (
+            (poll_payload or {}).get("status") if isinstance(poll_payload, dict) else None
+        )
+        if poll_status == 200 and poll_state == "success":
+            return
+        if poll_status == 404 or (
+            poll_status == 200 and poll_state in {"pending", "in_progress", "queued"}
+        ):
+            continue
+        raise PolicyBlock(
+            f"GitHub CodeQL Autofix status is unavailable: "
+            f"status={poll_status} state={poll_state}"
+        )
+    raise RetryLater("GitHub CodeQL Autofix is still generating a proposal")
 
 
 def _commit_copilot_autofix(api: GitHubApi, alert_number: int, branch: str, base_sha: str) -> str:
