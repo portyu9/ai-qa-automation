@@ -283,7 +283,11 @@ def _parse_time(value: Any) -> datetime:
 
 
 def validate_pr_identity(
-    api: GitHubApi, pr: dict[str, Any], config: dict[str, Any]
+    api: GitHubApi,
+    pr: dict[str, Any],
+    config: dict[str, Any],
+    *,
+    require_current_base: bool = True,
 ) -> tuple[str, str, int]:
     number = pr.get("number")
     if not isinstance(number, int) or number < 1:
@@ -310,7 +314,7 @@ def validate_pr_identity(
     base_sha = require_sha(base.get("sha"), "base SHA")
     live_branch = api.get(f"/branches/{urllib.parse.quote(config['baseBranch'], safe='')}")
     live_sha = require_sha(((live_branch or {}).get("commit") or {}).get("sha"), "live main SHA")
-    if base_sha != live_sha:
+    if require_current_base and base_sha != live_sha:
         raise PolicyBlock("pull request base is stale; wait for Dependabot native rebase")
     if _labels(pr) & set(config["manualReviewLabels"]):
         raise PolicyBlock("pull request carries a manual-review blocker label")
