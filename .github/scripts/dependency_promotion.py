@@ -638,7 +638,9 @@ dev = ["mypy>=2,<3", "playwright>=1.52,<2"]
     validate_pyproject_transition(base_raw, head_raw)
 
     encoded_base = base64.b64encode(base_raw).decode("ascii")
-    wrapped_base = "\n".join(encoded_base[index : index + 60] for index in range(0, len(encoded_base), 60))
+    wrapped_base = "\n".join(
+        encoded_base[index : index + 60] for index in range(0, len(encoded_base), 60)
+    )
     if _decode_contents_base64(wrapped_base, "pyproject.toml") != base_raw:
         raise GovernanceError("wrapped GitHub Contents base64 did not round-trip")
     try:
