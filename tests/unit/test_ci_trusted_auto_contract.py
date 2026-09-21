@@ -43,7 +43,8 @@ def test_trusted_auto_contract_is_frozen_and_read_only() -> None:
     assert auto["validation_authority"] == "read-only-secret-free-before-reporter"
     assert auto["status_writer"] == "dedicated-github-app"
     assert auto["maintenance_authority"] == ("independent-external-one-shot-exact-subject-gate")
-    assert {".github", "scripts", "tests"}.isdisjoint(auto["protected_paths"])
+    assert {".github", "scripts"} <= set(auto["protected_paths"])
+    assert "tests" not in auto["protected_paths"]
 
 
 def test_ci_verifier_executes_under_python_safe_path() -> None:
