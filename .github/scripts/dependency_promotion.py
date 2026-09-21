@@ -632,7 +632,9 @@ dev = ["mypy>=2,<3", "playwright>=1.52,<2"]
     validate_pyproject_transition(base_raw, head_raw)
 
     if _promotion_base("a" * 40, "b" * 40, base_raw, base_raw) != "b" * 40:
-        raise GovernanceError("stale source with unchanged dependency authority was not rebased safely")
+        raise GovernanceError(
+            "stale source with unchanged dependency authority was not rebased safely"
+        )
     try:
         _promotion_base("a" * 40, "b" * 40, base_raw, base_raw + b"\n# changed\n")
     except PolicyBlock:
