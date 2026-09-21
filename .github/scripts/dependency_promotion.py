@@ -37,6 +37,9 @@ from dependency_lock_compiler import compile_locks
 
 ROOT = Path(__file__).resolve().parents[2]
 BRANCH_PREFIX = "automation/dependency-promotion-"
+PROMOTION_COMMIT_MESSAGE_RE = re.compile(
+    r"^deps: promote Dependabot PR #[1-9][0-9]* with synchronized locks$"
+)
 MARKER_PREFIX = "<!-- aiqa-dependency-promotion:"
 MARKER_SUFFIX = " -->"
 GITHUB_ACTIONS_LOGIN = "github-actions[bot]"
@@ -270,6 +273,65 @@ def source_subject(api: GitHubApi, pr: dict[str, Any], config: dict[str, Any]) -
 
 def _branch_name(source: dict[str, Any]) -> str:
     return f"{BRANCH_PREFIX}{source['number']}-{source['fingerprint'][:12]}"
+
+
+def _owned_generated_promotion_commit(payload: Any, head_sha: str) -> bool:
+    if not isinstance(payload, dict) or payload.get("sha") != head_sha:
+        return False
+    author = payload.get("author") or {}
+    commit = payload.get("commit") or {}
+    message = commit.get("message")
+    return (
+        author.get("login") == GITHUB_ACTIONS_LOGIN
+        and author.get("id") == GITHUB_ACTIONS_USER_ID
+        and isinstance(message, str)
+        and PROMOTION_COMMIT_MESSAGE_RE.fullmatch(message) is not None
+    )
+
+
+def _prune_orphan_promotion_refs(api: GitHubApi) -> int:
+    open_heads = {
+        str((row.get("head") or {}).get("ref"))
+        for row in api.list_all("/pulls?state=open&sort=created&direction=asc", max_pages=4)
+        if isinstance((row.get("head") or {}).get("ref"), str)
+    }
+    prefix = f"refs/heads/{BRANCH_PREFIX}"
+    encoded_prefix = urllib.parse.quote(BRANCH_PREFIX, safe="")
+    refs = api.list_all(f"/git/matching-refs/heads/{encoded_prefix}", max_pages=4)
+    pruned = 0
+    for row in refs:
+        ref = row.get("ref")
+        if not isinstance(ref, str) or not ref.startswith(prefix):
+            raise GovernanceError("GitHub returned a ref outside dependency promotion namespace")
+        branch = ref.removeprefix("refs/heads/")
+        if branch in open_heads:
+            continue
+        obj = row.get("object") or {}
+        if obj.get("type") != "commit":
+            raise PolicyBlock("orphan dependency promotion ref does not point to a commit")
+        head_sha = require_sha(obj.get("sha"), "orphan dependency promotion SHA")
+        commit = api.get(f"/commits/{head_sha}")
+        if not _owned_generated_promotion_commit(commit, head_sha):
+            raise PolicyBlock(
+                "orphan dependency promotion ref lacks exact GitHub Actions ownership"
+            )
+        encoded_branch = urllib.parse.quote(branch, safe="")
+        api.request("DELETE", f"/git/refs/heads/{encoded_branch}")
+        try:
+            api.get(f"/git/ref/heads/{encoded_branch}")
+        except GovernanceError as exc:
+            if "HTTP 404" not in str(exc):
+                raise
+        else:
+            raise GovernanceError("orphan dependency promotion ref still exists after deletion")
+        pruned += 1
+        print(
+            json.dumps(
+                {"branch": branch, "headSha": head_sha, "decision": "orphan-ref-pruned"},
+                sort_keys=True,
+            )
+        )
+    return pruned
 
 
 def _marker(metadata: dict[str, Any]) -> str:
@@ -628,6 +690,7 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
     if repository != config["repository"]:
         raise GovernanceError("workflow repository does not match dependency promotion config")
     api = GitHubApi(os.environ.get("GITHUB_TOKEN", ""), repository)
+    _prune_orphan_promotion_refs(api)
 
     active_sources: set[int] = set()
     for summary in _promotion_pulls(api):
@@ -721,6 +784,21 @@ browser = ["playwright>=1.52,<2"]
 dev = ["mypy>=2,<3", "playwright>=1.52,<2"]
 """
     validate_pyproject_transition(base_raw, head_raw)
+
+    owned_commit = {
+        "sha": "d" * 40,
+        "author": {"login": GITHUB_ACTIONS_LOGIN, "id": GITHUB_ACTIONS_USER_ID},
+        "commit": {"message": "deps: promote Dependabot PR #170 with synchronized locks"},
+    }
+    if not _owned_generated_promotion_commit(owned_commit, "d" * 40):
+        raise GovernanceError("canonical generated promotion commit ownership was rejected")
+    for drifted in (
+        {**owned_commit, "sha": "e" * 40},
+        {**owned_commit, "author": {"login": "portyu9", "id": 35150859}},
+        {**owned_commit, "commit": {"message": "deps: unrelated maintenance"}},
+    ):
+        if _owned_generated_promotion_commit(drifted, "d" * 40):
+            raise GovernanceError("non-canonical generated promotion ownership was accepted")
 
     denied = GovernanceError(
         "GitHub API POST /pulls failed HTTP 403: "
