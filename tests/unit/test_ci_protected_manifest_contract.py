@@ -28,7 +28,7 @@ def test_automatic_and_external_protected_root_partitions_are_explicit() -> None
     external = tuple(external_gate.PROTECTED_PATHS)
 
     assert automatic == preflight
-    assert _AUTO_PROTECTED_CONTROL_ROOTS <= set(automatic)
+    assert set(automatic) >= _AUTO_PROTECTED_CONTROL_ROOTS
     assert _EXTERNAL_ADDITIONAL_ROOTS.isdisjoint(automatic)
     assert set(external) - set(automatic) == _EXTERNAL_ADDITIONAL_ROOTS
     assert set(automatic) < set(external)
