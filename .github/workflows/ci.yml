@@ -186,8 +186,10 @@ jobs:
             :
           elif [[ "$GITHUB_REF" =~ ^refs/heads/automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$ ]]; then
             :
+          elif [[ "$GITHUB_REF" =~ ^refs/heads/automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{12}$ ]]; then
+            :
           else
-            echo "::error::explicit CI dispatch is allowed only for main or exact generated dependency-promotion refs"
+            echo "::error::explicit CI dispatch is allowed only for main or exact generated maintenance refs"
             exit 1
           fi
           if [[ "$GITHUB_SHA" != "$EXPECTED_SUBJECT_SHA" ]]; then
