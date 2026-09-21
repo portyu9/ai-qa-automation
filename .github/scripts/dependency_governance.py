@@ -893,9 +893,7 @@ def selftest(config: dict[str, Any]) -> None:
             except GovernanceError:
                 pass
             else:
-                raise GovernanceError(
-                    f"unreviewed {label} dispatch ref was accepted: {bad_ref}"
-                )
+                raise GovernanceError(f"unreviewed {label} dispatch ref was accepted: {bad_ref}")
 
     canonical_run = {
         "id": 101,
