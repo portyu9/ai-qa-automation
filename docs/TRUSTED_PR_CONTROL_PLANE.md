@@ -16,7 +16,7 @@ The authority chain is:
 
 ## Two admission classes
 
-Routine changes and externally protected maintenance intentionally use different trust roots. Repository-maintenance changes under `.github`, `scripts`, and `tests` are part of the routine class for this single-contributor repository; they do not require activation of the external one-shot maintenance service. The strict App-bound branch rule remains unchanged for both classes.
+Routine changes and externally protected maintenance intentionally use different trust roots. The repository's `.github` and `scripts` trees are part of the admission control plane, so changes to either tree are protected maintenance and cannot receive routine automatic authorization. Test-only maintenance under `tests` remains routine-admissible. The strict App-bound branch rule remains unchanged for both classes.
 
 ### Routine automatic path
 
@@ -39,13 +39,7 @@ Any API failure, malformed or truncated response, PR-resolution saturation, ambi
 
 The automatic workflow is the only repository-hosted consumer of Environment `trusted-pr-gate` and its App credential. Candidate-executing validation jobs are read-only and secret-free. The App credential is exposed only after final live admission revalidation in the trusted default-branch reporter.
 
-The routine path deliberately admits changes under these repository-maintenance roots after all of the same exact-subject and CI requirements succeed:
-
-- `.github`
-- `scripts`
-- `tests`
-
-Those three roots are not part of the routine protected-object equality guard. This allows ordinary repository maintenance to proceed without an external one-shot AWS activation while preserving same-repository owner-only admission, exact current-main/head/prospective-merge binding, ordered merge parents, trusted default-branch validation, secret isolation, and the dedicated App-authored terminal status.
+The routine path deliberately leaves `tests` outside the protected-object equality guard, so test-only maintenance may proceed after all of the same exact-subject and CI requirements succeed. The `.github` and `scripts` trees are different: they define workflow, admission, verification, and maintenance-controller authority and therefore must remain byte-for-byte object-identical to trusted `main` for routine automatic admission. Any change to either tree requires the independently administered protected-maintenance path.
 
 ### Protected-maintenance external path
 
@@ -55,7 +49,7 @@ The protected-maintenance chain is:
 
 **ordinary PR CI completion → external App webhook ingress → exact live PR/head/base/merge resolution → independently administered protected-object policy → exact run/job/artifact verification → terminal live re-resolution → dedicated App status → strict protected-branch enforcement**
 
-The external service implementation lives under `scripts/trusted_gate_service/`. Repository presence does not create authority, and the fact that `scripts` is routine-admissible does not make candidate-controlled repository bytes an external trust root. External authority exists only when an independently administered deployment is pinned to reviewed bytes, holds its App credential outside candidate Actions, loads an independently administered one-shot policy, and is observed publishing through the App integration required by the live ruleset.
+The external service implementation lives under `scripts/trusted_gate_service/`. Repository presence does not create authority, and protecting the repository `scripts` tree from routine automatic drift does not turn candidate-controlled repository bytes into an external trust root. External authority exists only when an independently administered deployment is pinned to reviewed bytes, holds its App credential outside candidate Actions, loads an independently administered one-shot policy, and is observed publishing through the App integration required by the live ruleset.
 
 Repository `repository_dispatch` is not a protected-maintenance authority and no normal-use dispatch path remains in `ci.yml`.
 
@@ -63,6 +57,8 @@ Repository `repository_dispatch` is not a protected-maintenance authority and no
 
 The routine automatic guard protects these authority roots from candidate change:
 
+- `.github`
+- `scripts`
 - `.claude`
 - `.dockerignore`
 - `.gitattributes`
@@ -79,7 +75,7 @@ The routine automatic guard protects these authority roots from candidate change
 - `src/ai_qa_automation/tools/__init__.py`
 - `src/ai_qa_automation/tools/execution_env.py`
 
-The external protected-maintenance service deliberately retains a broader protected-root vocabulary. Its set is the routine set above plus `.github`, `scripts`, and `tests`. That superset lets the independently deployed service continue to reason about those transitions without making external activation mandatory for ordinary repository maintenance.
+The external protected-maintenance service deliberately retains a broader protected-root vocabulary. Its set is the routine set above plus `tests`. That superset lets the independently deployed service reason about test transitions whenever the external path is invoked, while test-only maintenance remains eligible for routine automatic admission.
 
 The external service derives the complete transition set itself from live base and prospective-merge Git trees. Missing paths use only the literal `MISSING` sentinel after a successful observation proves no object exists. Observation failure is not equivalent to absence.
 
@@ -311,7 +307,7 @@ Changes that remain ineligible for routine admission follow this protected-maint
 9. verify the resulting exact `main` SHA/tree and post-merge CI;
 10. confirm the external gate has returned to its fail-closed idle policy state.
 
-Routine `.github`, `scripts`, and `tests` maintenance does not execute this external activation sequence. Those changes still require exact ordinary CI, routine trusted admission, App-authored `Trusted PR Gate: success`, strict branch enforcement, exact-head merge, and post-merge verification.
+Routine test-only maintenance under `tests` does not execute this external activation sequence. Changes under `.github` or `scripts` do execute it because those trees are protected admission-control authority. Test-only changes still require exact ordinary CI, routine trusted admission, App-authored `Trusted PR Gate: success`, strict branch enforcement, exact-head merge, and post-merge verification.
 
 For AWS, deployment proof additionally includes exact deployment-ZIP and Lambda code-digest binding, runtime smoke verification, runtime-version control, least-privilege IAM read-back, DynamoDB configuration read-back, Function URL configuration read-back, log-retention read-back, and no-VPC verification before the App webhook is treated as live authority.
 
