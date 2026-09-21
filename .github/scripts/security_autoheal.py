@@ -506,9 +506,7 @@ def _ensure_copilot_autofix(api: GitHubApi, alert_number: int) -> None:
     for _ in range(10):
         time.sleep(3)
         poll_status, poll_payload = api.request_status("GET", path)
-        poll_state = (
-            (poll_payload or {}).get("status") if isinstance(poll_payload, dict) else None
-        )
+        poll_state = (poll_payload or {}).get("status") if isinstance(poll_payload, dict) else None
         if poll_status == 200 and poll_state == "success":
             return
         if poll_status == 404 or (
@@ -516,8 +514,7 @@ def _ensure_copilot_autofix(api: GitHubApi, alert_number: int) -> None:
         ):
             continue
         raise PolicyBlock(
-            f"GitHub CodeQL Autofix status is unavailable: "
-            f"status={poll_status} state={poll_state}"
+            f"GitHub CodeQL Autofix status is unavailable: status={poll_status} state={poll_state}"
         )
     raise RetryLater("GitHub CodeQL Autofix is still generating a proposal")
 
