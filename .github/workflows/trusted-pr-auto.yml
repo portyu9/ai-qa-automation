@@ -114,6 +114,8 @@ jobs:
           test "$head_sha" = "$EXPECTED_HEAD_SHA"
           test -z "$extra_parent"
           protected_paths=(
+            .github
+            scripts
             .claude
             .dockerignore
             .gitattributes
