@@ -39,6 +39,7 @@ from dependency_lock_compiler import compile_locks
 
 ROOT = Path(__file__).resolve().parents[2]
 BRANCH_PREFIX = "automation/dependency-promotion-"
+PROMOTION_BRANCH_RE = re.compile(r"^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$")
 PROMOTION_COMMIT_MESSAGE_RE = re.compile(
     r"^deps: promote Dependabot PR #[1-9][0-9]* with synchronized locks$"
 )
@@ -490,7 +491,7 @@ def _delete_exact_generated_branch(api: GitHubApi, branch: str, head_sha: str) -
         "generated promotion branch SHA before cleanup",
     )
     if observed != head_sha:
-        raise PolicyBlock("generated promotion branch changed before denied-PR cleanup")
+        raise PolicyBlock("generated promotion branch changed before exact cleanup")
     api.request("DELETE", f"/git/refs/heads/{encoded}")
 
 
@@ -576,6 +577,21 @@ def _validate_generated_bytes(api: GitHubApi, source: dict[str, Any], head_sha: 
             raise PolicyBlock(f"promotion path does not match deterministic regeneration: {path}")
 
 
+def _require_promotion_lifecycle(
+    pr: dict[str, Any],
+    metadata: dict[str, Any],
+    *,
+    base_sha: str,
+    live_sha: str,
+) -> None:
+    if pr.get("state") != "open" or pr.get("draft") is not False:
+        raise PolicyBlock("promotion PR is not open and non-draft")
+    if base_sha != live_sha or metadata.get("base") != live_sha:
+        raise PolicyBlock("promotion is stale relative to current main")
+    if pr.get("mergeable") is not True:
+        raise PolicyBlock("promotion PR is not definitively mergeable")
+
+
 def _validate_promotion(
     api: GitHubApi, pr: dict[str, Any], config: dict[str, Any]
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -586,8 +602,6 @@ def _validate_promotion(
         "id"
     ) != GITHUB_ACTIONS_USER_ID:
         raise PolicyBlock("promotion PR is not authored by canonical GitHub Actions")
-    if pr.get("state") != "open" or pr.get("draft") is not False or pr.get("mergeable") is not True:
-        raise PolicyBlock("promotion PR is not open, non-draft, and definitively mergeable")
     head = pr.get("head") or {}
     base = pr.get("base") or {}
     if (head.get("repo") or {}).get("full_name") != config["repository"] or (
@@ -600,8 +614,12 @@ def _validate_promotion(
     base_sha = require_sha(base.get("sha"), "promotion base SHA")
     live = api.get(f"/branches/{urllib.parse.quote(config['baseBranch'], safe='')}")
     live_sha = require_sha(((live or {}).get("commit") or {}).get("sha"), "live main SHA")
-    if base_sha != live_sha or metadata.get("base") != live_sha:
-        raise PolicyBlock("promotion is stale relative to current main")
+    _require_promotion_lifecycle(
+        pr,
+        metadata,
+        base_sha=base_sha,
+        live_sha=live_sha,
+    )
     if metadata.get("head") != head_sha:
         raise PolicyBlock("promotion head changed after generation")
     source_number = metadata.get("sourcePr")
@@ -678,13 +696,31 @@ def _publish_and_merge(
     return finalize_post_merge_evidence(api, result, promotion, config)
 
 
-def _close_stale(api: GitHubApi, number: int, branch: str) -> None:
-    api.request("PATCH", f"/pulls/{number}", {"state": "closed"})
-    try:
-        api.request("DELETE", f"/git/refs/heads/{urllib.parse.quote(branch, safe='')}")
-    except GovernanceError as exc:
-        if "HTTP 404" not in str(exc):
-            raise
+def _close_stale(api: GitHubApi, number: int, branch: str, head_sha: str) -> None:
+    if PROMOTION_BRANCH_RE.fullmatch(branch) is None:
+        raise PolicyBlock("stale promotion branch is outside reviewed authority")
+    fresh = api.get(f"/pulls/{number}")
+    fresh_head = (fresh or {}).get("head") or {}
+    metadata = _parse_marker((fresh or {}).get("body"))
+    if (
+        (fresh or {}).get("state") != "open"
+        or (fresh or {}).get("draft") is not False
+        or ((fresh or {}).get("user") or {}).get("login") != GITHUB_ACTIONS_LOGIN
+        or ((fresh or {}).get("user") or {}).get("id") != GITHUB_ACTIONS_USER_ID
+        or fresh_head.get("ref") != branch
+        or require_sha(fresh_head.get("sha"), "stale promotion live head SHA") != head_sha
+        or metadata is None
+        or metadata.get("version") != 1
+        or metadata.get("head") != head_sha
+    ):
+        raise PolicyBlock("stale promotion changed before exact cleanup")
+    commit = api.get(f"/commits/{head_sha}")
+    if not _owned_generated_promotion_commit(commit, head_sha):
+        raise PolicyBlock("stale promotion head lacks exact GitHub Actions ownership")
+    closed = api.request("PATCH", f"/pulls/{number}", {"state": "closed"})
+    if not isinstance(closed, dict) or closed.get("state") != "closed":
+        raise GovernanceError("GitHub did not acknowledge stale promotion closure")
+    _delete_exact_generated_branch(api, branch, head_sha)
 
 
 def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
@@ -727,7 +763,11 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
                 "stale relative to current main" in reason
                 or "source Dependabot PR changed" in reason
             ):
-                _close_stale(api, int(number), branch)
+                stale_head_sha = require_sha(
+                    metadata.get("head"),
+                    "stale promotion marker head SHA",
+                )
+                _close_stale(api, int(number), branch, stale_head_sha)
                 if isinstance(source_number, int):
                     active_sources.discard(source_number)
 
@@ -866,6 +906,33 @@ dev = ["mypy>=2,<3", "playwright>=1.52,<2"]
         pass
     else:
         raise GovernanceError("stale source with changed dependency authority did not fail closed")
+
+    stale_lifecycle = {"state": "open", "draft": False, "mergeable": False}
+    try:
+        _require_promotion_lifecycle(
+            stale_lifecycle,
+            {"base": "a" * 40},
+            base_sha="a" * 40,
+            live_sha="c" * 40,
+        )
+    except PolicyBlock as exc:
+        if str(exc) != "promotion is stale relative to current main":
+            raise GovernanceError("stale promotion lifecycle ordering changed") from exc
+    else:
+        raise GovernanceError("stale promotion did not fail as stale")
+
+    try:
+        _require_promotion_lifecycle(
+            stale_lifecycle,
+            {"base": "c" * 40},
+            base_sha="c" * 40,
+            live_sha="c" * 40,
+        )
+    except PolicyBlock as exc:
+        if str(exc) != "promotion PR is not definitively mergeable":
+            raise GovernanceError("promotion mergeability guard changed semantics") from exc
+    else:
+        raise GovernanceError("current non-mergeable promotion did not fail closed")
 
     added_identity = head_raw.replace(
         b'dependencies = ["httpx>=0.29,<1"]',
