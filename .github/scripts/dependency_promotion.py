@@ -321,9 +321,7 @@ def _git_blob_sha1(raw: bytes) -> str:
     return hashlib.sha1(f"blob {len(raw)}\0".encode() + raw, usedforsecurity=False).hexdigest()
 
 
-def _promotion_commit_matches(
-    payload: Any, *, tree_sha: str, base_sha: str, message: str
-) -> bool:
+def _promotion_commit_matches(payload: Any, *, tree_sha: str, base_sha: str, message: str) -> bool:
     if not isinstance(payload, dict):
         return False
     parents = payload.get("parents")
