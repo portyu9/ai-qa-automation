@@ -15,6 +15,10 @@ on:
         description: Exact commit the explicit CI dispatch requires evidence for
         required: true
         type: string
+      subject_ref:
+        description: Exact main or generated-maintenance branch containing subject_sha
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -27,7 +31,7 @@ env:
   PYTHONUNBUFFERED: "1"
   PYTHONSAFEPATH: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
-  CI_SUBJECT_SHA: ${{ github.sha }}
+  CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_sha || github.sha }}
 
 jobs:
   quality:
@@ -171,10 +175,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - name: Bind explicit dispatch to exact approved subject
+      - name: Bind trusted-main dispatch to exact approved subject
         if: github.event_name == 'workflow_dispatch'
         env:
           EXPECTED_SUBJECT_SHA: ${{ inputs.subject_sha }}
+          EXPECTED_SUBJECT_REF: ${{ inputs.subject_ref }}
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
@@ -182,18 +188,24 @@ jobs:
             echo "::error::subject_sha must be a canonical 40-character lowercase SHA"
             exit 1
           fi
-          if [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
-            :
-          elif [[ "$GITHUB_REF" =~ ^refs/heads/automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$ ]]; then
-            :
-          elif [[ "$GITHUB_REF" =~ ^refs/heads/automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{12}$ ]]; then
-            :
-          else
-            echo "::error::explicit CI dispatch is allowed only for main or exact generated maintenance refs"
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::explicit CI qualification must execute from trusted main"
             exit 1
           fi
-          if [[ "$GITHUB_SHA" != "$EXPECTED_SUBJECT_SHA" ]]; then
-            echo "::error::dispatched CI subject does not match the exact requested SHA"
+          if [[ "$EXPECTED_SUBJECT_REF" == "main" ]]; then
+            test "$GITHUB_SHA" = "$EXPECTED_SUBJECT_SHA" || {
+              echo "::error::main qualification SHA differs from trusted workflow subject"
+              exit 1
+            }
+          elif [[ "$EXPECTED_SUBJECT_REF" =~ ^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$ ]] || \
+               [[ "$EXPECTED_SUBJECT_REF" =~ ^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{12}$ ]]; then
+            live_subject_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${EXPECTED_SUBJECT_REF}" --jq .object.sha)"
+            test "$live_subject_sha" = "$EXPECTED_SUBJECT_SHA" || {
+              echo "::error::generated maintenance ref moved after qualification dispatch"
+              exit 1
+            }
+          else
+            echo "::error::subject_ref is outside reviewed exact-subject authority"
             exit 1
           fi
 
@@ -482,3 +494,42 @@ jobs:
           test "${{ needs.supply-chain.result }}" = "success"
           test "${{ needs.security.result }}" = "success"
           test "${{ needs.browser-reference-sut.result }}" = "success"
+
+  publish-qualified-subject:
+    name: Publish Exact-Subject Required PR Gate
+    needs: required-gate
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_ref != 'main' && needs.required-gate.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      checks: write
+      contents: read
+    steps:
+      - name: Revalidate and publish exact maintenance qualification
+        env:
+          EXPECTED_SUBJECT_SHA: ${{ inputs.subject_sha }}
+          EXPECTED_SUBJECT_REF: ${{ inputs.subject_ref }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SUBJECT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          if [[ "$EXPECTED_SUBJECT_REF" =~ ^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$ ]] || \
+             [[ "$EXPECTED_SUBJECT_REF" =~ ^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{12}$ ]]; then
+            :
+          else
+            echo "::error::candidate qualification ref is outside reviewed maintenance authority"
+            exit 1
+          fi
+          live_subject_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${EXPECTED_SUBJECT_REF}" --jq .object.sha)"
+          test "$live_subject_sha" = "$EXPECTED_SUBJECT_SHA"
+          details_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          payload="$(jq -nc \
+            --arg head "$EXPECTED_SUBJECT_SHA" \
+            --arg url "$details_url" \
+            '{name:"Required PR Gate",head_sha:$head,status:"completed",conclusion:"success",details_url:$url,output:{title:"Exact-subject CI qualification",summary:"Trusted-main validation completed successfully for the immutable generated maintenance subject."}}')"
+          response="$(gh api --method POST "repos/${GITHUB_REPOSITORY}/check-runs" --input - <<<"$payload")"
+          test "$(jq -r '.name' <<<"$response")" = "Required PR Gate"
+          test "$(jq -r '.head_sha' <<<"$response")" = "$EXPECTED_SUBJECT_SHA"
+          test "$(jq -r '.status' <<<"$response")" = "completed"
+          test "$(jq -r '.conclusion' <<<"$response")" = "success"
