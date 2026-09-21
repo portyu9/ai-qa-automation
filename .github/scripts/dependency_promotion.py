@@ -321,6 +321,54 @@ def _git_blob_sha1(raw: bytes) -> str:
     return hashlib.sha1(f"blob {len(raw)}\0".encode() + raw, usedforsecurity=False).hexdigest()
 
 
+def _promotion_commit_matches(
+    payload: Any, *, tree_sha: str, base_sha: str, message: str
+) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    parents = payload.get("parents")
+    return (
+        ((payload.get("tree") or {}).get("sha") == tree_sha)
+        and isinstance(parents, list)
+        and len(parents) == 1
+        and isinstance(parents[0], dict)
+        and parents[0].get("sha") == base_sha
+        and payload.get("message") == message
+    )
+
+
+def _existing_promotion_head(
+    api: GitHubApi,
+    branch: str,
+    *,
+    tree_sha: str,
+    base_sha: str,
+    message: str,
+) -> str | None:
+    encoded = urllib.parse.quote(branch, safe="")
+    try:
+        existing = api.get(f"/git/ref/heads/{encoded}")
+    except GovernanceError as exc:
+        if "HTTP 404" in str(exc):
+            return None
+        raise
+    head_sha = require_sha(
+        ((existing or {}).get("object") or {}).get("sha"),
+        "existing promotion branch SHA",
+    )
+    commit = api.get(f"/git/commits/{head_sha}")
+    if not _promotion_commit_matches(
+        commit,
+        tree_sha=tree_sha,
+        base_sha=base_sha,
+        message=message,
+    ):
+        raise PolicyBlock(
+            "existing dependency promotion branch does not match the exact generated subject"
+        )
+    return head_sha
+
+
 def _create_promotion_commit(
     api: GitHubApi, source: dict[str, Any], branch: str
 ) -> tuple[str, dict[str, bytes]]:
@@ -340,10 +388,20 @@ def _create_promotion_commit(
         tree_rows.append({"path": path, "mode": "100644", "type": "blob", "sha": blob_sha})
     tree = api.post("/git/trees", {"base_tree": base_tree, "tree": tree_rows})
     tree_sha = require_sha((tree or {}).get("sha"), "promotion tree SHA")
+    message = f"deps: promote Dependabot PR #{source['number']} with synchronized locks"
+    existing_head = _existing_promotion_head(
+        api,
+        branch,
+        tree_sha=tree_sha,
+        base_sha=source["baseSha"],
+        message=message,
+    )
+    if existing_head is not None:
+        return existing_head, generated
     commit = api.post(
         "/git/commits",
         {
-            "message": f"deps: promote Dependabot PR #{source['number']} with synchronized locks",
+            "message": message,
             "tree": tree_sha,
             "parents": [source["baseSha"]],
         },
@@ -636,6 +694,31 @@ browser = ["playwright>=1.52,<2"]
 dev = ["mypy>=2,<3", "playwright>=1.52,<2"]
 """
     validate_pyproject_transition(base_raw, head_raw)
+
+    exact_commit = {
+        "tree": {"sha": "c" * 40},
+        "parents": [{"sha": "b" * 40}],
+        "message": "deps: promote Dependabot PR #170 with synchronized locks",
+    }
+    if not _promotion_commit_matches(
+        exact_commit,
+        tree_sha="c" * 40,
+        base_sha="b" * 40,
+        message="deps: promote Dependabot PR #170 with synchronized locks",
+    ):
+        raise GovernanceError("exact reusable promotion commit did not match")
+    for drifted in (
+        {**exact_commit, "tree": {"sha": "d" * 40}},
+        {**exact_commit, "parents": [{"sha": "a" * 40}]},
+        {**exact_commit, "message": "unexpected promotion commit"},
+    ):
+        if _promotion_commit_matches(
+            drifted,
+            tree_sha="c" * 40,
+            base_sha="b" * 40,
+            message="deps: promote Dependabot PR #170 with synchronized locks",
+        ):
+            raise GovernanceError("drifted reusable promotion commit did not fail closed")
 
     encoded_base = base64.b64encode(base_raw).decode("ascii")
     wrapped_base = "\n".join(
