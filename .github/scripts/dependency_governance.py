@@ -37,6 +37,7 @@ UPDATE_TYPE = re.compile(
 SHA = re.compile(r"^[0-9a-f]{40}$")
 POST_MERGE_CI_WORKFLOW = "ci.yml"
 POST_MERGE_CI_PATH = ".github/workflows/ci.yml"
+CODEQL_WORKFLOW = "codeql.yml"
 POST_MERGE_CI_NAME = "CI — ƳƤ AI QA Automation Framework"
 POST_MERGE_CI_EVENTS = {"push", "workflow_dispatch"}
 CI_DISPATCH_PROMOTION_REF = re.compile(
@@ -605,13 +606,34 @@ def _post_merge_ci_runs(api: GitHubApi, subject_sha: str) -> list[dict[str, Any]
     return api.list_all(f"/actions/runs?head_sha={encoded_sha}", max_pages=2)
 
 
+def _validate_qualification_ref(ref: str) -> None:
+    if ref != "main" and CI_DISPATCH_PROMOTION_REF.fullmatch(ref) is None:
+        raise GovernanceError(
+            f"explicit maintenance qualification ref is outside reviewed authority: {ref!r}"
+        )
+
+
 def dispatch_exact_ci(api: GitHubApi, ref: str, subject_sha: str) -> None:
     subject_sha = require_sha(subject_sha, "explicit CI dispatch subject SHA")
-    if ref != "main" and CI_DISPATCH_PROMOTION_REF.fullmatch(ref) is None:
-        raise GovernanceError(f"explicit CI dispatch ref is outside reviewed authority: {ref!r}")
+    _validate_qualification_ref(ref)
     api.post(
         f"/actions/workflows/{POST_MERGE_CI_WORKFLOW}/dispatches",
-        {"ref": ref, "inputs": {"subject_sha": subject_sha}},
+        {
+            "ref": "main",
+            "inputs": {"subject_sha": subject_sha, "subject_ref": ref},
+        },
+    )
+
+
+def dispatch_exact_codeql(api: GitHubApi, ref: str, subject_sha: str) -> None:
+    subject_sha = require_sha(subject_sha, "explicit CodeQL dispatch subject SHA")
+    _validate_qualification_ref(ref)
+    api.post(
+        f"/actions/workflows/{CODEQL_WORKFLOW}/dispatches",
+        {
+            "ref": "main",
+            "inputs": {"subject_sha": subject_sha, "subject_ref": ref},
+        },
     )
 
 
@@ -825,27 +847,55 @@ def selftest(config: dict[str, Any]) -> None:
     )
     expected_dispatch = (
         "/actions/workflows/ci.yml/dispatches",
-        {"ref": "main", "inputs": {"subject_sha": exact_sha}},
+        {
+            "ref": "main",
+            "inputs": {"subject_sha": exact_sha, "subject_ref": "main"},
+        },
     )
     if dispatch_api.calls[0] != expected_dispatch:
         raise GovernanceError("main exact-subject CI dispatch payload drifted")
     if dispatch_api.calls[1][1] != {
-        "ref": "automation/dependency-promotion-170-abcdef123456",
-        "inputs": {"subject_sha": exact_sha},
+        "ref": "main",
+        "inputs": {
+            "subject_sha": exact_sha,
+            "subject_ref": "automation/dependency-promotion-170-abcdef123456",
+        },
     }:
         raise GovernanceError("promotion exact-subject CI dispatch payload drifted")
+    dispatch_exact_codeql(
+        dispatch_api,
+        "automation/dependency-promotion-170-abcdef123456",
+        exact_sha,
+    )
+    if dispatch_api.calls[2] != (
+        "/actions/workflows/codeql.yml/dispatches",
+        {
+            "ref": "main",
+            "inputs": {
+                "subject_sha": exact_sha,
+                "subject_ref": "automation/dependency-promotion-170-abcdef123456",
+            },
+        },
+    ):
+        raise GovernanceError("promotion exact-subject CodeQL dispatch payload drifted")
     for bad_ref in (
         "feature/unreviewed",
         "automation/dependency-promotion-0-abcdef123456",
         "automation/dependency-promotion-170-nothex123456",
         "automation/dependency-promotion-170-abcdef123456-extra",
     ):
-        try:
-            dispatch_exact_ci(dispatch_api, bad_ref, exact_sha)
-        except GovernanceError:
-            pass
-        else:
-            raise GovernanceError(f"unreviewed CI dispatch ref was accepted: {bad_ref}")
+        for dispatcher, label in (
+            (dispatch_exact_ci, "CI"),
+            (dispatch_exact_codeql, "CodeQL"),
+        ):
+            try:
+                dispatcher(dispatch_api, bad_ref, exact_sha)
+            except GovernanceError:
+                pass
+            else:
+                raise GovernanceError(
+                    f"unreviewed {label} dispatch ref was accepted: {bad_ref}"
+                )
 
     canonical_run = {
         "id": 101,
