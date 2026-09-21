@@ -38,7 +38,7 @@ EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
     "16636517d918534c9c312add36752b1e06a39392"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
-    "2bb0959c8be731b8fe5ec301e6dc4ed60c5aea84"  # pragma: allowlist secret
+    "7ffcd0d1bbdb2a88ba103c293628d5c321515a0c"  # pragma: allowlist secret
 )
 EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "fbe47dcf9a201dfb9da390b01e68f5b662689538"  # pragma: allowlist secret
@@ -190,7 +190,7 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
     supply_chain_raw = base._job_block(text, "supply-chain")
     supply_chain = base._semantic_text(supply_chain_raw)
     dispatch_binding = (
-        "      - name: Bind explicit dispatch to exact main subject\n"
+        "      - name: Bind explicit dispatch to exact approved subject\n"
         "        if: github.event_name == 'workflow_dispatch'\n"
         "        env:\n"
         "          EXPECTED_SUBJECT_SHA: ${{ inputs.subject_sha }}\n"
@@ -199,7 +199,8 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
         raise ValueError("ci.yml: exact-subject workflow_dispatch binding is missing")
     for required_dispatch_guard in (
         '[[ ! "$EXPECTED_SUBJECT_SHA" =~ ^[0-9a-f]{40}$ ]]',
-        '[[ "$GITHUB_REF" != "refs/heads/main" ]]',
+        'case "$GITHUB_REF" in',
+        'refs/heads/main|refs/heads/automation/dependency-promotion-*) ;;',
         '[[ "$GITHUB_SHA" != "$EXPECTED_SUBJECT_SHA" ]]',
     ):
         if required_dispatch_guard not in supply_chain:
@@ -265,7 +266,7 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
     return {
         "triggers": ["merge_group", "pull_request", "push", "workflow_dispatch"],
         "subject": "github.sha",
-        "workflow_dispatch_subject": "required-exact-main-sha",
+        "workflow_dispatch_subject": "required-exact-main-or-generated-promotion-sha",
         "checkout_count": checkout_count,
         "required_gate": "Required PR Gate",
         "quality_lanes": quality_lanes,
