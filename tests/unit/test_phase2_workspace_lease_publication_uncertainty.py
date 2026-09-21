@@ -293,3 +293,61 @@ def test_interrupted_clean_closure_publication_restores_previous_authority(
     )
     assert recovered["status"] == "BLOCKED"
     assert recovered["previous_run_id"] == "run-interrupted-close"
+
+def test_lease_namespace_substitution_cannot_preserve_failed_clean_closure_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifacts = tmp_path / "artifacts"
+    workspace = tmp_path / "workspace"
+    artifacts.mkdir()
+    workspace.mkdir()
+
+    lease, run_dir = _lease_with_run_root(artifacts, workspace, "run-substituted-close")
+    control, _journal = _runtime_control(run_dir, lease)
+    lease_root = lease.path.parent
+    displaced_root = artifacts / ".leases-displaced"
+    real_revalidate = workspace_lease_module.WorkspaceLease._revalidate_lease_root
+    closure_revalidations = 0
+    substituted = False
+
+    def substitute_namespace_after_clean_closure_publication(
+        self: WorkspaceLease,
+        directory_fd: int | None,
+    ) -> None:
+        nonlocal closure_revalidations, substituted
+        if self is lease and self._mutation_recovery_closed:
+            closure_revalidations += 1
+            if closure_revalidations == 2:
+                published = self.path.read_bytes()
+                lease_root.rename(displaced_root)
+                lease_root.mkdir()
+                (lease_root / self.path.name).write_bytes(published)
+                substituted = True
+        real_revalidate(self, directory_fd)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            workspace_lease_module.WorkspaceLease,
+            "_revalidate_lease_root",
+            substitute_namespace_after_clean_closure_publication,
+        )
+        with pytest.raises(OSError, match="mutation recovery closure"):
+            _release_guarded(lease, control)
+
+    assert substituted is True
+    previous_lease = _fresh_previous_lease(
+        artifacts,
+        workspace,
+        run_id="run-successor-after-substitution",
+    )
+    recovered = _recover_without_runtime(
+        artifacts=artifacts,
+        workspace=workspace,
+        run_dir=run_dir,
+        previous_lease=previous_lease,
+        recovering_run_id="run-after-substituted-close",
+    )
+    assert recovered["status"] == "BLOCKED"
+    assert recovered["previous_run_id"] == "run-substituted-close"
+
