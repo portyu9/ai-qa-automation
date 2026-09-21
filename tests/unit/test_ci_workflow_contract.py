@@ -32,8 +32,8 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     assert automatic["archive_attribute_authority"] == "versioned-tree-only"
     assert automatic["sbom_lineage"] == "parent-digest-bound-and-bracketed"
     assert automatic["supply_chain_evidence"] == "pinned-upload-action"
-    assert automatic["subject"] == "github.sha"
-    assert automatic["status_write_authority"] == "none"
+    assert automatic["subject"] == "event-sha-or-explicit-qualified-sha"
+    assert automatic["status_write_authority"] == "isolated-generated-maintenance-check-publication"
     assert automatic["protected_maintenance_authority"] == "external-trusted-gate-only"
     assert result["workflows"]["trusted_auto"]["maintenance_authority"] == (
         "independent-external-one-shot-exact-subject-gate"
@@ -111,7 +111,7 @@ def test_ci_contract_rejects_client_payload_subject_reintroduction(tmp_path: Pat
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "ci.yml"
     text = path.read_text(encoding="utf-8")
-    marker = "  CI_SUBJECT_SHA: ${{ github.sha }}\n"
+    marker = "  CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_sha || github.sha }}\n"
     replacement = (
         "  CI_SUBJECT_SHA: ${{ github.event_name == 'repository_dispatch' "
         "&& github.event.client_payload.expected_merge_sha || github.sha }}\n"
