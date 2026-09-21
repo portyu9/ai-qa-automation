@@ -304,6 +304,11 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
             "  schedule:",
             '    - cron: "17 7 * * 2"',
             "  workflow_dispatch:",
+            "    inputs:",
+            "      subject_sha:",
+            "        description: Exact main commit the governed merge requires CI evidence for",
+            "        required: true",
+            "        type: string",
         )
     )
     on_block = base._semantic_text(base._top_level_block(text, "on")).strip("\n")
