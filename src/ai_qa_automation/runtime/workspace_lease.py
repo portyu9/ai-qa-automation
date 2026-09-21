@@ -393,6 +393,8 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
     def _read_locked_lease_bytes(stream: Any) -> bytes:
         stream.seek(0)
         raw = stream.read(_MAX_LEASE_METADATA_BYTES + 1)
+        if not isinstance(raw, bytes):
+            raise OSError("workspace lease metadata read returned non-bytes content")
         if len(raw) > _MAX_LEASE_METADATA_BYTES:
             raise OSError("workspace lease metadata exceeds bounded ingestion limit")
         return raw
