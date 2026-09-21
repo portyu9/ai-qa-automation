@@ -591,9 +591,7 @@ def selftest(config: dict[str, Any]) -> None:
     if errors:
         raise GovernanceError("config self-test failed: " + "; ".join(errors))
     good = "      - uses: actions/checkout@" + "a" * 40 + " # v7.0.1"
-    named_step = (
-        "        uses: github/codeql-action/init@" + "b" * 40 + " # v4.38.1"
-    )
+    named_step = "        uses: github/codeql-action/init@" + "b" * 40 + " # v4.38.1"
     bad_tag = "      - uses: actions/checkout@v7 # v7.0.1"
     if parse_action_change(good) is None:
         raise GovernanceError("immutable action-line parser rejected canonical pinned action")
@@ -605,7 +603,9 @@ def selftest(config: dict[str, Any]) -> None:
         {
             "filename": ".github/workflows/ci.yml",
             "status": "modified",
-            "patch": "@@ -1 +1 @@\n-        uses: github/codeql-action/init@" + "a" * 40 + " # v4.38.0\n"
+            "patch": "@@ -1 +1 @@\n-        uses: github/codeql-action/init@"
+            + "a" * 40
+            + " # v4.38.0\n"
             "+        uses: github/codeql-action/init@" + "b" * 40 + " # v4.38.1\n",
         }
     ]
