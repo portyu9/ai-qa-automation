@@ -294,6 +294,7 @@ def test_interrupted_clean_closure_publication_restores_previous_authority(
     assert recovered["status"] == "BLOCKED"
     assert recovered["previous_run_id"] == "run-interrupted-close"
 
+
 def test_lease_namespace_substitution_cannot_preserve_failed_clean_closure_authority(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
