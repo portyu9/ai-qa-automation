@@ -157,6 +157,22 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
     return payload
 
 
+def _validate_api_path(path: str) -> None:
+    parsed = urllib.parse.urlsplit(path)
+    decoded_path = urllib.parse.unquote(parsed.path)
+    segments = decoded_path.split("/")
+    if (
+        not path.startswith("/")
+        or parsed.scheme
+        or parsed.netloc
+        or parsed.fragment
+        or "\\" in decoded_path
+        or "\x00" in decoded_path
+        or any(segment in {".", ".."} for segment in segments)
+    ):
+        raise AutohealError("GitHub API path must be absolute and repository-local")
+
+
 class GitHubApi:
     def __init__(self, token: str, repository: str) -> None:
         if not token:
@@ -176,8 +192,7 @@ class GitHubApi:
         token: str | None = None,
         max_bytes: int = MAX_RESPONSE_BYTES,
     ) -> tuple[int, Any]:
-        if not path.startswith("/") or ".." in path:
-            raise AutohealError("GitHub API path must be absolute and repository-local")
+        _validate_api_path(path)
         data = None if payload is None else json.dumps(payload, separators=(",", ":")).encode()
         request = urllib.request.Request(
             f"{self.root}{path}",
@@ -981,6 +996,21 @@ def selftest(config: dict[str, Any]) -> None:
     parsed = _parse_marker(marker)
     if parsed is None or parsed.get("alert") != 7:
         raise AutohealError("auto-heal marker round-trip failed")
+
+    _validate_api_path(f"/compare/{'a' * 40}...{'b' * 40}")
+    for unsafe_path in (
+        "../outside",
+        "/repos/../outside",
+        "/repos/%2e%2e/outside",
+        "//example.invalid/repos/portyu9/ai-qa-automation",
+        "/repos\\outside",
+    ):
+        try:
+            _validate_api_path(unsafe_path)
+        except AutohealError:
+            pass
+        else:
+            raise AutohealError(f"unsafe GitHub API path passed validation: {unsafe_path}")
 
     if _security_severity({"rule": {"security_severity_level": "high"}}) != 7.0:
         raise AutohealError("REST security severity level mapping self-test failed")
