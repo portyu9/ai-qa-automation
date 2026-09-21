@@ -243,9 +243,11 @@ class GitHubApi:
         for page in range(1, max_pages + 1):
             payload = self.get(f"{path}{separator}per_page=100&page={page}")
             if isinstance(payload, dict):
-                rows = (
-                    payload.get("check_runs") or payload.get("workflow_runs") or payload.get("jobs")
-                )
+                rows = None
+                for collection_key in ("check_runs", "workflow_runs", "jobs"):
+                    if collection_key in payload:
+                        rows = payload[collection_key]
+                        break
             else:
                 rows = payload
             if not isinstance(rows, list):
@@ -775,6 +777,21 @@ def selftest(config: dict[str, Any]) -> None:
     else:
         raise GovernanceError("semantic validator accepted action version downgrade")
     exact_sha = "1" * 40
+
+    class _EmptyWorkflowRunsApi(GitHubApi):
+        def __init__(self) -> None:
+            pass
+
+        def get(self, path: str) -> Any:
+            if not path.startswith("/actions/runs?"):
+                raise GovernanceError(f"unexpected self-test API path: {path}")
+            return {"workflow_runs": []}
+
+    if _EmptyWorkflowRunsApi().list_all(
+        f"/actions/runs?head_sha={exact_sha}", max_pages=2
+    ) != []:
+        raise GovernanceError("pagination rejected canonical empty workflow_runs response")
+
     canonical_run = {
         "id": 101,
         "name": POST_MERGE_CI_NAME,
