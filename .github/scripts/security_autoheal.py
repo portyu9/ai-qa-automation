@@ -763,8 +763,8 @@ def _validate_generated_pr(
         raise PolicyBlock("generated repair PR author is not GitHub Actions")
     if (pr.get("user") or {}).get("id") != GITHUB_ACTIONS_USER_ID:
         raise PolicyBlock("generated repair PR user id is not canonical GitHub Actions")
-    if pr.get("state") != "open" or pr.get("draft") is not False or pr.get("mergeable") is not True:
-        raise PolicyBlock("generated repair PR is not open, non-draft, and definitively mergeable")
+    if pr.get("state") != "open" or pr.get("draft") is not False:
+        raise PolicyBlock("generated repair PR is not open and non-draft")
     head = pr.get("head") or {}
     base = pr.get("base") or {}
     if (head.get("repo") or {}).get("full_name") != config["repository"]:
@@ -780,6 +780,8 @@ def _validate_generated_pr(
     base_sha = _require_sha(base.get("sha"), "repair PR base SHA")
     if base_sha != main_sha or metadata.get("base") != main_sha:
         raise PolicyBlock("generated repair is stale relative to current main")
+    if pr.get("mergeable") is not True:
+        raise PolicyBlock("generated repair PR is not definitively mergeable")
     head_sha = _require_sha(head.get("sha"), "repair PR head SHA")
     if metadata.get("head") != head_sha:
         raise PolicyBlock("generated repair head changed after qualification dispatch")
@@ -1166,6 +1168,68 @@ def selftest(config: dict[str, Any]) -> None:
             pass
         else:
             raise AutohealError(f"unreviewed qualification ref was accepted: {bad_ref}")
+
+    class _StaleRepairApi(GitHubApi):
+        def __init__(self) -> None:
+            pass
+
+        def get(self, path: str) -> Any:
+            if path == "/branches/main":
+                return {"commit": {"sha": "c" * 40}}
+            raise AutohealError(f"unexpected stale-repair self-test path: {path}")
+
+    stale_api = _StaleRepairApi()
+    stale_pr = {
+        "body": _marker(
+            {
+                "version": 1,
+                "alert": 7,
+                "base": "a" * 40,
+                "head": "b" * 40,
+                "fingerprint": "d" * 64,
+            }
+        ),
+        "user": {"login": GITHUB_ACTIONS_LOGIN, "id": GITHUB_ACTIONS_USER_ID},
+        "state": "open",
+        "draft": False,
+        "mergeable": False,
+        "head": {
+            "repo": {"full_name": config["repository"]},
+            "ref": "automation/codeql-autoheal-7-abcdef123456",
+            "sha": "b" * 40,
+        },
+        "base": {
+            "repo": {"full_name": config["repository"]},
+            "ref": "main",
+            "sha": "a" * 40,
+        },
+    }
+    try:
+        _validate_generated_pr(stale_api, stale_pr, config)
+    except PolicyBlock as exc:
+        if str(exc) != "generated repair is stale relative to current main":
+            raise AutohealError("stale repair was masked by mergeability state") from exc
+    else:
+        raise AutohealError("stale non-mergeable repair did not fail as stale")
+
+    current_pr = copy.deepcopy(stale_pr)
+    current_pr["body"] = _marker(
+        {
+            "version": 1,
+            "alert": 7,
+            "base": "c" * 40,
+            "head": "b" * 40,
+            "fingerprint": "d" * 64,
+        }
+    )
+    current_pr["base"]["sha"] = "c" * 40
+    try:
+        _validate_generated_pr(stale_api, current_pr, config)
+    except PolicyBlock as exc:
+        if str(exc) != "generated repair PR is not definitively mergeable":
+            raise AutohealError("current repair mergeability guard changed semantics") from exc
+    else:
+        raise AutohealError("current non-mergeable repair did not fail closed")
 
     errors = validate_config(config)
     if errors:
