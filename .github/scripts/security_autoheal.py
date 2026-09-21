@@ -269,16 +269,32 @@ def _current_main(api: GitHubApi, config: dict[str, Any]) -> str:
     return _require_sha(((branch or {}).get("commit") or {}).get("sha"), "live main SHA")
 
 
+SECURITY_SEVERITY_FLOORS = {
+    "critical": 9.0,
+    "high": 7.0,
+    "medium": 4.0,
+    "low": 0.1,
+}
+
+
 def _security_severity(alert: dict[str, Any]) -> float:
     rule = alert.get("rule") or {}
     value = rule.get("security_severity")
-    try:
-        severity = float(value)
-    except (TypeError, ValueError) as exc:
-        raise PolicyBlock("CodeQL alert lacks numeric security severity") from exc
-    if severity < 0 or severity > 10:
-        raise PolicyBlock("CodeQL security severity is outside 0..10")
-    return severity
+    if value is not None:
+        try:
+            severity = float(value)
+        except (TypeError, ValueError) as exc:
+            raise PolicyBlock("CodeQL alert has malformed numeric security severity") from exc
+        if severity < 0 or severity > 10:
+            raise PolicyBlock("CodeQL security severity is outside 0..10")
+        return severity
+
+    level = rule.get("security_severity_level")
+    if isinstance(level, str):
+        severity = SECURITY_SEVERITY_FLOORS.get(level.lower())
+        if severity is not None:
+            return severity
+    raise PolicyBlock("CodeQL alert lacks a supported security severity")
 
 
 def _alert_location(alert: dict[str, Any]) -> tuple[str, int]:
@@ -947,6 +963,17 @@ def selftest(config: dict[str, Any]) -> None:
     parsed = _parse_marker(marker)
     if parsed is None or parsed.get("alert") != 7:
         raise AutohealError("auto-heal marker round-trip failed")
+
+    if _security_severity({"rule": {"security_severity_level": "high"}}) != 7.0:
+        raise AutohealError("REST security severity level mapping self-test failed")
+    if _security_severity({"rule": {"security_severity": "7.8"}}) != 7.8:
+        raise AutohealError("numeric security severity compatibility self-test failed")
+    try:
+        _security_severity({"rule": {"security_severity_level": "warning"}})
+    except PolicyBlock:
+        pass
+    else:
+        raise AutohealError("unsupported security severity level did not fail closed")
 
     original_root = globals()["ROOT"]
     try:
