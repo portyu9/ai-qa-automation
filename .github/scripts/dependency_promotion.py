@@ -413,6 +413,26 @@ def _create_promotion_commit(
     return head_sha, generated
 
 
+def _github_actions_pr_creation_denied(exc: Exception) -> bool:
+    detail = str(exc)
+    return (
+        "HTTP 403" in detail
+        and "GitHub Actions is not permitted to create or approve pull requests" in detail
+    )
+
+
+def _delete_exact_generated_branch(api: GitHubApi, branch: str, head_sha: str) -> None:
+    encoded = urllib.parse.quote(branch, safe="")
+    ref = api.get(f"/git/ref/heads/{encoded}")
+    observed = require_sha(
+        ((ref or {}).get("object") or {}).get("sha"),
+        "generated promotion branch SHA before cleanup",
+    )
+    if observed != head_sha:
+        raise PolicyBlock("generated promotion branch changed before denied-PR cleanup")
+    api.request("DELETE", f"/git/refs/heads/{encoded}")
+
+
 def _create_promotion_pr(api: GitHubApi, source: dict[str, Any], branch: str, head_sha: str) -> int:
     metadata = {
         "version": 1,
@@ -433,16 +453,25 @@ def _create_promotion_pr(api: GitHubApi, source: dict[str, Any], branch: str, he
             "pass the full locked CI, CodeQL, regeneration proof, and Trusted PR Gate before merge.",
         )
     )
-    pr = api.post(
-        "/pulls",
-        {
-            "title": f"deps: promote Dependabot PR #{source['number']}",
-            "head": branch,
-            "base": "main",
-            "body": body,
-            "draft": False,
-        },
-    )
+    try:
+        pr = api.post(
+            "/pulls",
+            {
+                "title": f"deps: promote Dependabot PR #{source['number']}",
+                "head": branch,
+                "base": "main",
+                "body": body,
+                "draft": False,
+            },
+        )
+    except GovernanceError as exc:
+        if not _github_actions_pr_creation_denied(exc):
+            raise
+        _delete_exact_generated_branch(api, branch, head_sha)
+        raise GovernanceError(
+            "repository Actions policy blocks generated pull-request creation; "
+            "enable 'Allow GitHub Actions to create and approve pull requests'"
+        ) from exc
     number = (pr or {}).get("number")
     if not isinstance(number, int) or number < 1:
         raise GovernanceError("GitHub did not acknowledge dependency promotion PR creation")
@@ -694,6 +723,15 @@ browser = ["playwright>=1.52,<2"]
 dev = ["mypy>=2,<3", "playwright>=1.52,<2"]
 """
     validate_pyproject_transition(base_raw, head_raw)
+
+    denied = GovernanceError(
+        "GitHub API POST /pulls failed HTTP 403: "
+        '{"message":"GitHub Actions is not permitted to create or approve pull requests."}'
+    )
+    if not _github_actions_pr_creation_denied(denied):
+        raise GovernanceError("GitHub Actions PR creation denial was not classified")
+    if _github_actions_pr_creation_denied(GovernanceError("HTTP 403: unrelated policy")):
+        raise GovernanceError("unrelated HTTP 403 was misclassified as PR creation denial")
 
     exact_commit = {
         "tree": {"sha": "c" * 40},
