@@ -10,6 +10,11 @@ on:
     branches: [main]
   merge_group:
   workflow_dispatch:
+    inputs:
+      subject_sha:
+        description: Exact commit the explicit CI dispatch requires evidence for
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -166,6 +171,30 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
+      - name: Bind explicit dispatch to exact approved subject
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          EXPECTED_SUBJECT_SHA: ${{ inputs.subject_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$EXPECTED_SUBJECT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::subject_sha must be a canonical 40-character lowercase SHA"
+            exit 1
+          fi
+          if [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
+            :
+          elif [[ "$GITHUB_REF" =~ ^refs/heads/automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$ ]]; then
+            :
+          else
+            echo "::error::explicit CI dispatch is allowed only for main or exact generated dependency-promotion refs"
+            exit 1
+          fi
+          if [[ "$GITHUB_SHA" != "$EXPECTED_SUBJECT_SHA" ]]; then
+            echo "::error::dispatched CI subject does not match the exact requested SHA"
+            exit 1
+          fi
+
       - name: Checkout exact validation subject
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:

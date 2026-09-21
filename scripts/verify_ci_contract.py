@@ -38,13 +38,13 @@ EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
     "16636517d918534c9c312add36752b1e06a39392"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
-    "b2831934a610bd2141052410585e3474127bb525"  # pragma: allowlist secret
+    "18d4a72a986957126816cf2c17bbaf6ea2200831"  # pragma: allowlist secret
 )
 EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "fbe47dcf9a201dfb9da390b01e68f5b662689538"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
-    "9d09d68fe802e6e1c7a94933c14f7f9005e9a2a4"  # pragma: allowlist secret
+    "fe24b8435de315ce74c72f04f05b4dc141575abb"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
     "158a4d0444eb46ddbd438aa2c7466a8b0dddc26f"  # pragma: allowlist secret
@@ -103,6 +103,11 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
             "    branches: [main]",
             "  merge_group:",
             "  workflow_dispatch:",
+            "    inputs:",
+            "      subject_sha:",
+            "        description: Exact commit the explicit CI dispatch requires evidence for",
+            "        required: true",
+            "        type: string",
         )
     )
     on_block = base._semantic_text(base._top_level_block(text, "on")).strip("\n")
@@ -184,6 +189,24 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
 
     supply_chain_raw = base._job_block(text, "supply-chain")
     supply_chain = base._semantic_text(supply_chain_raw)
+    dispatch_binding = (
+        "      - name: Bind explicit dispatch to exact approved subject\n"
+        "        if: github.event_name == 'workflow_dispatch'\n"
+        "        env:\n"
+        "          EXPECTED_SUBJECT_SHA: ${{ inputs.subject_sha }}\n"
+    )
+    if dispatch_binding not in supply_chain:
+        raise ValueError("ci.yml: exact-subject workflow_dispatch binding is missing")
+    for required_dispatch_guard in (
+        '[[ ! "$EXPECTED_SUBJECT_SHA" =~ ^[0-9a-f]{40}$ ]]',
+        '[[ "$GITHUB_REF" == "refs/heads/main" ]]',
+        '[[ "$GITHUB_REF" =~ ^refs/heads/automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$ ]]',
+        '[[ "$GITHUB_SHA" != "$EXPECTED_SUBJECT_SHA" ]]',
+    ):
+        if required_dispatch_guard not in supply_chain:
+            raise ValueError(
+                "ci.yml: exact-subject workflow_dispatch guard differs from reviewed definition"
+            )
     base._require_exact_build_authority_step(supply_chain_raw)
     base._require_exact_verification_install_step(supply_chain_raw)
     base._require_exact_script_step(
@@ -243,6 +266,7 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
     return {
         "triggers": ["merge_group", "pull_request", "push", "workflow_dispatch"],
         "subject": "github.sha",
+        "workflow_dispatch_subject": "required-exact-main-or-generated-promotion-sha",
         "checkout_count": checkout_count,
         "required_gate": "Required PR Gate",
         "quality_lanes": quality_lanes,
