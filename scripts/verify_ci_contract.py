@@ -279,9 +279,9 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
         "inputs.subject_ref != 'main'",
         "    permissions:\n      checks: write\n      contents: read",
         '[[ "$EXPECTED_SUBJECT_SHA" =~ ^[0-9a-f]{40}$ ]]',
-        'repos/${GITHUB_REPOSITORY}/check-runs',
+        "repos/${GITHUB_REPOSITORY}/check-runs",
         '{name:"Required PR Gate",head_sha:$head,status:"completed",conclusion:"success"',
-        "test \"$(jq -r '.head_sha' <<<\"$response\")\" = \"$EXPECTED_SUBJECT_SHA\"",
+        'test "$(jq -r \'.head_sha\' <<<"$response")" = "$EXPECTED_SUBJECT_SHA"',
     ):
         if fragment not in publisher:
             raise ValueError(
@@ -386,7 +386,9 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
     publisher = base._semantic_text(publisher_raw)
 
     if semantic.count("checks: write") != 1 or "checks: write" not in publisher:
-        raise ValueError("codeql.yml must isolate one checks:write grant to qualification publication")
+        raise ValueError(
+            "codeql.yml must isolate one checks:write grant to qualification publication"
+        )
     if "checks: write" in ordinary or "checks: write" in qualified:
         raise ValueError("codeql analysis jobs must not receive check-publication authority")
 
@@ -435,15 +437,17 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
         "    needs: qualified-codeql",
         "inputs.subject_ref != 'main'",
         "    permissions:\n      checks: write\n      contents: read",
-        'repos/${GITHUB_REPOSITORY}/check-runs',
+        "repos/${GITHUB_REPOSITORY}/check-runs",
         '{name:"CodeQL",head_sha:$head,status:"completed",conclusion:"success"',
-        "test \"$(jq -r '.head_sha' <<<\"$response\")\" = \"$EXPECTED_SUBJECT_SHA\"",
+        'test "$(jq -r \'.head_sha\' <<<"$response")" = "$EXPECTED_SUBJECT_SHA"',
     )
     for fragment in publisher_required:
         if fragment not in publisher:
             raise ValueError(f"codeql.yml exact-subject publication invariant missing: {fragment}")
     if "actions/checkout@" in publisher or "${{ secrets." in publisher:
-        raise ValueError("codeql.yml publication must not execute candidate bytes or consume secrets")
+        raise ValueError(
+            "codeql.yml publication must not execute candidate bytes or consume secrets"
+        )
 
     uses = base.ACTION_RE.findall(text)
     if len(uses) != 6:
@@ -451,11 +455,9 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
             "codeql.yml must contain two checkout, two CodeQL init, and two CodeQL analyze uses"
         )
     checkout = [item for item in uses if item[0] == "actions/checkout"]
-    if (
-        len(checkout) != 2
-        or {item[1].lower() for item in checkout}
-        != {base.EXPECTED_ACTION_SHAS["actions/checkout"]}
-    ):
+    if len(checkout) != 2 or {item[1].lower() for item in checkout} != {
+        base.EXPECTED_ACTION_SHAS["actions/checkout"]
+    }:
         raise ValueError("codeql.yml checkout actions must use the reviewed immutable revision")
     codeql = CODEQL_ACTION_RE.findall(text)
     if len(codeql) != 4 or {item[0] for item in codeql} != {
@@ -488,6 +490,7 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
         "status_write_authority": "none",
         "workflow_definition": "semantic-reviewed-v4-codeql-contract",
     }
+
 
 def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
     base = _trusted_auto._base
