@@ -11,7 +11,7 @@ def test_ci_contract_reports_independent_status_publisher_boundary() -> None:
     trusted_auto = result["workflows"]["trusted_auto"]
     limitations = "\n".join(result["limitations"])
 
-    assert ordinary["status_write_authority"] == "none"
+    assert ordinary["status_write_authority"] == "isolated-generated-maintenance-check-publication"
     assert ordinary["protected_maintenance_authority"] == "external-trusted-gate-only"
     assert trusted_auto["status_writer"] == "dedicated-github-app"
     assert trusted_auto["maintenance_authority"] == (
