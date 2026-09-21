@@ -869,8 +869,7 @@ def _prune_orphan_repair_refs(api: GitHubApi, pulls: list[dict[str, Any]]) -> in
         if isinstance((row.get("head") or {}).get("ref"), str)
     }
     prefix = f"refs/heads/{BRANCH_PREFIX}"
-    encoded_prefix = urllib.parse.quote(BRANCH_PREFIX, safe="")
-    refs = api.list_all(f"/git/matching-refs/heads/{encoded_prefix}", max_pages=4)
+    refs = api.list_all(f"/git/matching-refs/heads/{BRANCH_PREFIX}", max_pages=4)
     pruned = 0
     for row in refs:
         ref = row.get("ref")
