@@ -8,7 +8,7 @@ from scripts.trusted_gate_service import core as external_gate
 
 ROOT = Path(__file__).resolve().parents[2]
 _AUTO_PROTECTED_CONTROL_ROOTS = frozenset({".github", "scripts"})
-_EXTERNAL_ONLY_PROTECTED_ROOTS = frozenset({"tests"})
+_EXTERNAL_ADDITIONAL_ROOTS = frozenset({"tests"})
 
 
 def test_ordinary_ci_contains_no_retired_protected_manifest_authority() -> None:
@@ -29,8 +29,8 @@ def test_automatic_and_external_protected_root_partitions_are_explicit() -> None
 
     assert automatic == preflight
     assert _AUTO_PROTECTED_CONTROL_ROOTS <= set(automatic)
-    assert _EXTERNAL_ONLY_PROTECTED_ROOTS.isdisjoint(automatic)
-    assert set(external) - set(automatic) == _EXTERNAL_ONLY_PROTECTED_ROOTS
+    assert _EXTERNAL_ADDITIONAL_ROOTS.isdisjoint(automatic)
+    assert set(external) - set(automatic) == _EXTERNAL_ADDITIONAL_ROOTS
     assert set(automatic) < set(external)
     assert ".gitattributes" in automatic
 
@@ -42,7 +42,7 @@ def test_automatic_subject_guard_checks_every_automatic_protected_root() -> None
     for path in auto_trusted_preflight.PROTECTED_PATHS:
         assert f"            {path}\n" in subject_guard
 
-    for path in _EXTERNAL_ONLY_PROTECTED_ROOTS:
+    for path in _EXTERNAL_ADDITIONAL_ROOTS:
         assert f"            {path}\n" not in subject_guard
 
     assert 'test "$base_oid" = "$subject_oid"' in subject_guard
