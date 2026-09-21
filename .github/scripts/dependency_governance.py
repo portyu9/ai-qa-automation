@@ -26,7 +26,7 @@ TRUSTED_COMMITTER_NAME = "GitHub"
 TRUSTED_COMMITTER_EMAIL = "noreply@github.com"
 SIGNED_OFF_BY = "Signed-off-by: dependabot[bot] <support@github.com>"
 ACTION_LINE = re.compile(
-    r"^\s*-\s+uses:\s+(?P<action>[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)"
+    r"^\s*(?:-\s+)?uses:\s+(?P<action>[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)"
     r"@(?P<sha>[0-9a-f]{40})\s+#\s+v(?P<version>\d+(?:\.\d+){0,2})\s*$"
 )
 UPDATE_TYPE = re.compile(
@@ -591,9 +591,12 @@ def selftest(config: dict[str, Any]) -> None:
     if errors:
         raise GovernanceError("config self-test failed: " + "; ".join(errors))
     good = "      - uses: actions/checkout@" + "a" * 40 + " # v7.0.1"
+    named_step = "        uses: github/codeql-action/init@" + "b" * 40 + " # v4.38.1"
     bad_tag = "      - uses: actions/checkout@v7 # v7.0.1"
     if parse_action_change(good) is None:
         raise GovernanceError("immutable action-line parser rejected canonical pinned action")
+    if parse_action_change(named_step) is None:
+        raise GovernanceError("immutable action-line parser rejected named-step action pin")
     if parse_action_change(bad_tag) is not None:
         raise GovernanceError("immutable action-line parser accepted mutable tag")
     synthetic = [
