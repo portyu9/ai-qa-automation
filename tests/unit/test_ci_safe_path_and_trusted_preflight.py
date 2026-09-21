@@ -50,7 +50,10 @@ def test_ordinary_ci_has_no_repository_dispatch_authority() -> None:
     assert "Trusted PR Gate Reporter" not in text
     assert "TRUSTED_GATE_APP_CLIENT_ID" not in text
     assert "TRUSTED_GATE_APP_PRIVATE_KEY" not in text
-    assert "  CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_sha || github.sha }}" in text
+    assert (
+        "  CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_sha || github.sha }}"
+        in text
+    )
 
 
 def test_supply_chain_binds_event_subject_before_python() -> None:
