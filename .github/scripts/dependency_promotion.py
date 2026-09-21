@@ -39,6 +39,9 @@ from dependency_lock_compiler import compile_locks
 
 ROOT = Path(__file__).resolve().parents[2]
 BRANCH_PREFIX = "automation/dependency-promotion-"
+PROMOTION_BRANCH_RE = re.compile(
+    r"^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$"
+)
 PROMOTION_COMMIT_MESSAGE_RE = re.compile(
     r"^deps: promote Dependabot PR #[1-9][0-9]* with synchronized locks$"
 )
@@ -490,7 +493,7 @@ def _delete_exact_generated_branch(api: GitHubApi, branch: str, head_sha: str) -
         "generated promotion branch SHA before cleanup",
     )
     if observed != head_sha:
-        raise PolicyBlock("generated promotion branch changed before denied-PR cleanup")
+        raise PolicyBlock("generated promotion branch changed before exact cleanup")
     api.request("DELETE", f"/git/refs/heads/{encoded}")
 
 
@@ -695,13 +698,31 @@ def _publish_and_merge(
     return finalize_post_merge_evidence(api, result, promotion, config)
 
 
-def _close_stale(api: GitHubApi, number: int, branch: str) -> None:
-    api.request("PATCH", f"/pulls/{number}", {"state": "closed"})
-    try:
-        api.request("DELETE", f"/git/refs/heads/{urllib.parse.quote(branch, safe='')}")
-    except GovernanceError as exc:
-        if "HTTP 404" not in str(exc):
-            raise
+def _close_stale(api: GitHubApi, number: int, branch: str, head_sha: str) -> None:
+    if PROMOTION_BRANCH_RE.fullmatch(branch) is None:
+        raise PolicyBlock("stale promotion branch is outside reviewed authority")
+    fresh = api.get(f"/pulls/{number}")
+    fresh_head = (fresh or {}).get("head") or {}
+    metadata = _parse_marker((fresh or {}).get("body"))
+    if (
+        (fresh or {}).get("state") != "open"
+        or (fresh or {}).get("draft") is not False
+        or ((fresh or {}).get("user") or {}).get("login") != GITHUB_ACTIONS_LOGIN
+        or ((fresh or {}).get("user") or {}).get("id") != GITHUB_ACTIONS_USER_ID
+        or fresh_head.get("ref") != branch
+        or require_sha(fresh_head.get("sha"), "stale promotion live head SHA") != head_sha
+        or metadata is None
+        or metadata.get("version") != 1
+        or metadata.get("head") != head_sha
+    ):
+        raise PolicyBlock("stale promotion changed before exact cleanup")
+    commit = api.get(f"/commits/{head_sha}")
+    if not _owned_generated_promotion_commit(commit, head_sha):
+        raise PolicyBlock("stale promotion head lacks exact GitHub Actions ownership")
+    closed = api.request("PATCH", f"/pulls/{number}", {"state": "closed"})
+    if not isinstance(closed, dict) or closed.get("state") != "closed":
+        raise GovernanceError("GitHub did not acknowledge stale promotion closure")
+    _delete_exact_generated_branch(api, branch, head_sha)
 
 
 def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
@@ -744,7 +765,11 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
                 "stale relative to current main" in reason
                 or "source Dependabot PR changed" in reason
             ):
-                _close_stale(api, int(number), branch)
+                stale_head_sha = require_sha(
+                    metadata.get("head"),
+                    "stale promotion marker head SHA",
+                )
+                _close_stale(api, int(number), branch, stale_head_sha)
                 if isinstance(source_number, int):
                     active_sources.discard(source_number)
 
