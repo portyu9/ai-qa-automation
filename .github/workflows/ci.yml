@@ -171,7 +171,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - name: Bind explicit dispatch to exact main subject
+      - name: Bind explicit dispatch to exact approved subject
         if: github.event_name == 'workflow_dispatch'
         env:
           EXPECTED_SUBJECT_SHA: ${{ inputs.subject_sha }}
@@ -182,12 +182,15 @@ jobs:
             echo "::error::subject_sha must be a canonical 40-character lowercase SHA"
             exit 1
           fi
-          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
-            echo "::error::explicit CI dispatch is allowed only for refs/heads/main"
-            exit 1
-          fi
+          case "$GITHUB_REF" in
+            refs/heads/main|refs/heads/automation/dependency-promotion-*) ;;
+            *)
+              echo "::error::explicit CI dispatch is allowed only for main or generated dependency-promotion refs"
+              exit 1
+              ;;
+          esac
           if [[ "$GITHUB_SHA" != "$EXPECTED_SUBJECT_SHA" ]]; then
-            echo "::error::dispatched CI subject does not match the exact requested main SHA"
+            echo "::error::dispatched CI subject does not match the exact requested SHA"
             exit 1
           fi
 
