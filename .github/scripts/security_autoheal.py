@@ -24,6 +24,7 @@ GITHUB_ACTIONS_USER_ID = 41898282
 MARKER_PREFIX = "<!-- aiqa-codeql-autoheal:"
 MARKER_SUFFIX = " -->"
 BRANCH_PREFIX = "automation/codeql-autoheal-"
+AUTOHEAL_BRANCH_RE = re.compile(r"^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{12}$")
 AUTOHEAL_COMMIT_MESSAGE_RE = re.compile(r"^security: auto-heal CodeQL alert #[1-9][0-9]*$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 SAFE_RULES = {
@@ -264,7 +265,11 @@ class GitHubApi:
         for page in range(1, max_pages + 1):
             payload = self.get(f"{path}{separator}per_page=100&page={page}")
             if isinstance(payload, dict):
-                items = payload.get("check_runs") or payload.get("workflow_runs")
+                items = None
+                for collection_key in ("check_runs", "workflow_runs"):
+                    if collection_key in payload:
+                        items = payload[collection_key]
+                        break
             else:
                 items = payload
             if not isinstance(items, list):
@@ -667,7 +672,13 @@ def _create_pull_request(
 
 
 def _dispatch_qualification(api: GitHubApi, branch: str, head_sha: str) -> None:
-    api.post("/actions/workflows/ci.yml/dispatches", {"ref": branch})
+    subject_sha = _require_sha(head_sha, "generated repair qualification SHA")
+    if AUTOHEAL_BRANCH_RE.fullmatch(branch) is None:
+        raise PolicyBlock("generated repair qualification ref is outside reviewed authority")
+    api.post(
+        "/actions/workflows/ci.yml/dispatches",
+        {"ref": branch, "inputs": {"subject_sha": subject_sha}},
+    )
     api.post("/actions/workflows/codeql.yml/dispatches", {"ref": branch})
 
 
@@ -763,7 +774,7 @@ def _validate_generated_pr(
     ) != "main":
         raise PolicyBlock("generated repair no longer targets repository main")
     branch = head.get("ref")
-    if not isinstance(branch, str) or not branch.startswith(BRANCH_PREFIX):
+    if not isinstance(branch, str) or AUTOHEAL_BRANCH_RE.fullmatch(branch) is None:
         raise PolicyBlock("generated repair branch name is outside the code-owned namespace")
     main_sha = _current_main(api, config)
     base_sha = _require_sha(base.get("sha"), "repair PR base SHA")
@@ -1097,6 +1108,64 @@ def selftest(config: dict[str, Any]) -> None:
         raise AutohealError("GitHub Actions PR creation denial was not classified")
     if _github_actions_pr_creation_denied(AutohealError("HTTP 403: unrelated policy")):
         raise AutohealError("unrelated HTTP 403 was misclassified as PR creation denial")
+
+    class _EmptyPaginationApi(GitHubApi):
+        def __init__(self) -> None:
+            pass
+
+        def get(self, path: str) -> Any:
+            if "/check-runs" in path:
+                return {"check_runs": []}
+            if "/actions/runs" in path:
+                return {"workflow_runs": []}
+            raise AutohealError(f"unexpected self-test pagination path: {path}")
+
+    empty_api = _EmptyPaginationApi()
+    if empty_api.list_all("/commits/" + "f" * 40 + "/check-runs", max_pages=2) != []:
+        raise AutohealError("pagination rejected canonical empty check_runs response")
+    if empty_api.list_all("/actions/runs?head_sha=" + "f" * 40, max_pages=2) != []:
+        raise AutohealError("pagination rejected canonical empty workflow_runs response")
+
+    class _RecordingDispatchApi(GitHubApi):
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict[str, Any] | None]] = []
+
+        def post(
+            self,
+            path: str,
+            payload: dict[str, Any] | None = None,
+            *,
+            token: str | None = None,
+        ) -> Any:
+            if token is not None:
+                raise AutohealError("qualification self-test received unexpected alternate token")
+            self.calls.append((path, payload))
+            return None
+
+    dispatch_api = _RecordingDispatchApi()
+    exact_sha = "f" * 40
+    exact_branch = "automation/codeql-autoheal-7-abcdef123456"
+    _dispatch_qualification(dispatch_api, exact_branch, exact_sha)
+    if dispatch_api.calls != [
+        (
+            "/actions/workflows/ci.yml/dispatches",
+            {"ref": exact_branch, "inputs": {"subject_sha": exact_sha}},
+        ),
+        ("/actions/workflows/codeql.yml/dispatches", {"ref": exact_branch}),
+    ]:
+        raise AutohealError("exact-subject qualification dispatch payload drifted")
+    for bad_ref in (
+        "automation/codeql-autoheal-0-abcdef123456",
+        "automation/codeql-autoheal-7-nothex123456",
+        "automation/codeql-autoheal-7-abcdef123456-extra",
+        "feature/unreviewed",
+    ):
+        try:
+            _dispatch_qualification(dispatch_api, bad_ref, exact_sha)
+        except PolicyBlock:
+            pass
+        else:
+            raise AutohealError(f"unreviewed qualification ref was accepted: {bad_ref}")
 
     errors = validate_config(config)
     if errors:

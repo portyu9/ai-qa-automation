@@ -38,7 +38,7 @@ EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
     "16636517d918534c9c312add36752b1e06a39392"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
-    "18d4a72a986957126816cf2c17bbaf6ea2200831"  # pragma: allowlist secret
+    "b75df2229df72e11e87c7b360f51556f62821886"  # pragma: allowlist secret
 )
 EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "fbe47dcf9a201dfb9da390b01e68f5b662689538"  # pragma: allowlist secret
@@ -201,6 +201,7 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
         '[[ ! "$EXPECTED_SUBJECT_SHA" =~ ^[0-9a-f]{40}$ ]]',
         '[[ "$GITHUB_REF" == "refs/heads/main" ]]',
         '[[ "$GITHUB_REF" =~ ^refs/heads/automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$ ]]',
+        '[[ "$GITHUB_REF" =~ ^refs/heads/automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{12}$ ]]',
         '[[ "$GITHUB_SHA" != "$EXPECTED_SUBJECT_SHA" ]]',
     ):
         if required_dispatch_guard not in supply_chain:
@@ -266,7 +267,7 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
     return {
         "triggers": ["merge_group", "pull_request", "push", "workflow_dispatch"],
         "subject": "github.sha",
-        "workflow_dispatch_subject": "required-exact-main-or-generated-promotion-sha",
+        "workflow_dispatch_subject": "required-exact-main-or-generated-maintenance-sha",
         "checkout_count": checkout_count,
         "required_gate": "Required PR Gate",
         "quality_lanes": quality_lanes,
