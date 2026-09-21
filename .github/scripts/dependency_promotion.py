@@ -28,6 +28,7 @@ from dependency_governance import (
     GovernanceError,
     PolicyBlock,
     changed_files,
+    dispatch_exact_ci,
     finalize_post_merge_evidence,
     latest_checks,
     load_config,
@@ -537,10 +538,7 @@ def _create_promotion_pr(api: GitHubApi, source: dict[str, Any], branch: str, he
         raise GovernanceError("GitHub did not acknowledge dependency promotion PR creation")
     if require_sha(((pr or {}).get("head") or {}).get("sha"), "promotion PR head SHA") != head_sha:
         raise GovernanceError("promotion PR head differs from generated exact subject")
-    api.post(
-        "/actions/workflows/ci.yml/dispatches",
-        {"ref": branch, "inputs": {"subject_sha": head_sha}},
-    )
+    dispatch_exact_ci(api, branch, head_sha)
     api.post("/actions/workflows/codeql.yml/dispatches", {"ref": branch})
     return number
 
