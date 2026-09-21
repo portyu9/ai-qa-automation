@@ -760,12 +760,12 @@ def _require_repair_lifecycle(
     base_sha: str,
     main_sha: str,
 ) -> None:
-    _require_repair_lifecycle(
-        pr,
-        metadata,
-        base_sha=base_sha,
-        main_sha=main_sha,
-    )
+    if pr.get("state") != "open" or pr.get("draft") is not False:
+        raise PolicyBlock("generated repair PR is not open and non-draft")
+    if base_sha != main_sha or metadata.get("base") != main_sha:
+        raise PolicyBlock("generated repair is stale relative to current main")
+    if pr.get("mergeable") is not True:
+        raise PolicyBlock("generated repair PR is not definitively mergeable")
 
 
 def _validate_generated_pr(
@@ -778,8 +778,6 @@ def _validate_generated_pr(
         raise PolicyBlock("generated repair PR author is not GitHub Actions")
     if (pr.get("user") or {}).get("id") != GITHUB_ACTIONS_USER_ID:
         raise PolicyBlock("generated repair PR user id is not canonical GitHub Actions")
-    if pr.get("state") != "open" or pr.get("draft") is not False:
-        raise PolicyBlock("generated repair PR is not open and non-draft")
     head = pr.get("head") or {}
     base = pr.get("base") or {}
     if (head.get("repo") or {}).get("full_name") != config["repository"]:
@@ -793,10 +791,12 @@ def _validate_generated_pr(
         raise PolicyBlock("generated repair branch name is outside the code-owned namespace")
     main_sha = _current_main(api, config)
     base_sha = _require_sha(base.get("sha"), "repair PR base SHA")
-    if base_sha != main_sha or metadata.get("base") != main_sha:
-        raise PolicyBlock("generated repair is stale relative to current main")
-    if pr.get("mergeable") is not True:
-        raise PolicyBlock("generated repair PR is not definitively mergeable")
+    _require_repair_lifecycle(
+        pr,
+        metadata,
+        base_sha=base_sha,
+        main_sha=main_sha,
+    )
     head_sha = _require_sha(head.get("sha"), "repair PR head SHA")
     if metadata.get("head") != head_sha:
         raise PolicyBlock("generated repair head changed after qualification dispatch")
