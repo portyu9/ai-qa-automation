@@ -609,7 +609,7 @@ def _delete_exact_generated_branch(api: GitHubApi, branch: str, head_sha: str) -
         "generated repair branch SHA before cleanup",
     )
     if observed != head_sha:
-        raise PolicyBlock("generated repair branch changed before denied-PR cleanup")
+        raise PolicyBlock("generated repair branch changed before exact cleanup")
     api.delete(f"/git/refs/heads/{encoded}")
 
 
@@ -811,6 +811,38 @@ def _validate_generated_pr(
     }
     _validate_candidate_diff(files, subject, config, deterministic=deterministic)
     return metadata, {"headSha": head_sha, "baseSha": base_sha, "branch": branch}
+
+
+def _close_stale_repair(
+    api: GitHubApi,
+    number: int,
+    branch: str,
+    head_sha: str,
+) -> None:
+    if AUTOHEAL_BRANCH_RE.fullmatch(branch) is None:
+        raise PolicyBlock("stale repair branch is outside reviewed authority")
+    fresh = api.get(f"/pulls/{number}")
+    fresh_head = (fresh or {}).get("head") or {}
+    metadata = _parse_marker((fresh or {}).get("body"))
+    if (
+        (fresh or {}).get("state") != "open"
+        or (fresh or {}).get("draft") is not False
+        or ((fresh or {}).get("user") or {}).get("login") != GITHUB_ACTIONS_LOGIN
+        or ((fresh or {}).get("user") or {}).get("id") != GITHUB_ACTIONS_USER_ID
+        or fresh_head.get("ref") != branch
+        or _require_sha(fresh_head.get("sha"), "stale repair live head SHA") != head_sha
+        or metadata is None
+        or metadata.get("version") != 1
+        or metadata.get("head") != head_sha
+    ):
+        raise PolicyBlock("stale repair changed before exact cleanup")
+    commit = api.get(f"/commits/{head_sha}")
+    if not _owned_generated_repair_commit(commit, head_sha):
+        raise PolicyBlock("stale repair head lacks exact GitHub Actions ownership")
+    closed = api.patch(f"/pulls/{number}", {"state": "closed"})
+    if not isinstance(closed, dict) or closed.get("state") != "closed":
+        raise AutohealError("GitHub did not acknowledge stale repair closure")
+    _delete_exact_generated_branch(api, branch, head_sha)
 
 
 def _post_trusted_status(
@@ -1028,6 +1060,7 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
     _prune_orphan_repair_refs(api, pulls)
     repairs = _generated_repairs(pulls)
     active_alerts: set[int] = set()
+    closed_stale = 0
 
     for summary in repairs:
         number = summary.get("number")
@@ -1047,16 +1080,28 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
                 _merge(api, number, validated_metadata, live, config)
                 print(json.dumps({"pr": number, "decision": "repair-merged"}, sort_keys=True))
         except PolicyBlock as exc:
+            reason = str(exc)
             print(
                 json.dumps(
-                    {"pr": number, "decision": "repair-waiting", "reason": str(exc)},
+                    {"pr": number, "decision": "repair-waiting", "reason": reason},
                     sort_keys=True,
                 )
             )
+            if reason == "generated repair is stale relative to current main":
+                branch = str((summary.get("head") or {}).get("ref") or "")
+                stale_head_sha = _require_sha(
+                    ((summary.get("head") or {}).get("sha")),
+                    "stale repair summary head SHA",
+                )
+                _close_stale_repair(api, number, branch, stale_head_sha)
+                closed_stale += 1
+                if isinstance(alert_number, int):
+                    active_alerts.discard(alert_number)
 
-    capacity = max(0, int(config["maxOpenRepairs"]) - len(repairs))
+    remaining_repairs = len(repairs) - closed_stale
+    capacity = max(0, int(config["maxOpenRepairs"]) - remaining_repairs)
     if capacity == 0:
-        return len(repairs)
+        return remaining_repairs
 
     query = urllib.parse.urlencode(
         {"state": "open", "ref": "refs/heads/main", "tool_name": "CodeQL"},
@@ -1093,7 +1138,7 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
                     sort_keys=True,
                 )
             )
-    return len(repairs) + created
+    return remaining_repairs + created
 
 
 def selftest(config: dict[str, Any]) -> None:
