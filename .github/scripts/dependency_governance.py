@@ -39,6 +39,9 @@ POST_MERGE_CI_WORKFLOW = "ci.yml"
 POST_MERGE_CI_PATH = ".github/workflows/ci.yml"
 POST_MERGE_CI_NAME = "CI — ƳƤ AI QA Automation Framework"
 POST_MERGE_CI_EVENTS = {"push", "workflow_dispatch"}
+CI_DISPATCH_PROMOTION_REF = re.compile(
+    r"^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$"
+)
 POST_MERGE_CI_REGISTRATION_ATTEMPTS = 15
 POST_MERGE_CI_REGISTRATION_DELAY_SECONDS = 2
 
@@ -602,6 +605,16 @@ def _post_merge_ci_runs(api: GitHubApi, subject_sha: str) -> list[dict[str, Any]
     return api.list_all(f"/actions/runs?head_sha={encoded_sha}", max_pages=2)
 
 
+def dispatch_exact_ci(api: GitHubApi, ref: str, subject_sha: str) -> None:
+    subject_sha = require_sha(subject_sha, "explicit CI dispatch subject SHA")
+    if ref != "main" and CI_DISPATCH_PROMOTION_REF.fullmatch(ref) is None:
+        raise GovernanceError(f"explicit CI dispatch ref is outside reviewed authority: {ref!r}")
+    api.post(
+        f"/actions/workflows/{POST_MERGE_CI_WORKFLOW}/dispatches",
+        {"ref": ref, "inputs": {"subject_sha": subject_sha}},
+    )
+
+
 def _verify_actual_merge_commit(
     api: GitHubApi, result: dict[str, Any], subject: dict[str, Any], config: dict[str, Any]
 ) -> str:
@@ -632,10 +645,7 @@ def finalize_post_merge_evidence(
     merge_sha = _verify_actual_merge_commit(api, result, subject, config)
     existing = _select_post_merge_ci_run(_post_merge_ci_runs(api, merge_sha), merge_sha)
     if existing is None:
-        api.post(
-            f"/actions/workflows/{POST_MERGE_CI_WORKFLOW}/dispatches",
-            {"ref": config["baseBranch"], "inputs": {"subject_sha": merge_sha}},
-        )
+        dispatch_exact_ci(api, config["baseBranch"], merge_sha)
         for attempt in range(POST_MERGE_CI_REGISTRATION_ATTEMPTS):
             existing = _select_post_merge_ci_run(_post_merge_ci_runs(api, merge_sha), merge_sha)
             if existing is not None:
@@ -791,6 +801,53 @@ def selftest(config: dict[str, Any]) -> None:
         f"/actions/runs?head_sha={exact_sha}", max_pages=2
     ) != []:
         raise GovernanceError("pagination rejected canonical empty workflow_runs response")
+
+    class _RecordingDispatchApi(GitHubApi):
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict[str, Any] | None]] = []
+
+        def post(
+            self,
+            path: str,
+            payload: dict[str, Any] | None = None,
+            *,
+            token: str | None = None,
+        ) -> Any:
+            if token is not None:
+                raise GovernanceError("dispatch self-test received unexpected alternate token")
+            self.calls.append((path, payload))
+            return None
+
+    dispatch_api = _RecordingDispatchApi()
+    dispatch_exact_ci(dispatch_api, "main", exact_sha)
+    dispatch_exact_ci(
+        dispatch_api,
+        "automation/dependency-promotion-170-abcdef123456",
+        exact_sha,
+    )
+    expected_dispatch = (
+        "/actions/workflows/ci.yml/dispatches",
+        {"ref": "main", "inputs": {"subject_sha": exact_sha}},
+    )
+    if dispatch_api.calls[0] != expected_dispatch:
+        raise GovernanceError("main exact-subject CI dispatch payload drifted")
+    if dispatch_api.calls[1][1] != {
+        "ref": "automation/dependency-promotion-170-abcdef123456",
+        "inputs": {"subject_sha": exact_sha},
+    }:
+        raise GovernanceError("promotion exact-subject CI dispatch payload drifted")
+    for bad_ref in (
+        "feature/unreviewed",
+        "automation/dependency-promotion-0-abcdef123456",
+        "automation/dependency-promotion-170-nothex123456",
+        "automation/dependency-promotion-170-abcdef123456-extra",
+    ):
+        try:
+            dispatch_exact_ci(dispatch_api, bad_ref, exact_sha)
+        except GovernanceError:
+            pass
+        else:
+            raise GovernanceError(f"unreviewed CI dispatch ref was accepted: {bad_ref}")
 
     canonical_run = {
         "id": 101,
