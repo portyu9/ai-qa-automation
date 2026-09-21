@@ -38,7 +38,7 @@ EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
     "16636517d918534c9c312add36752b1e06a39392"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
-    "b75df2229df72e11e87c7b360f51556f62821886"  # pragma: allowlist secret
+    "12eea35eea079eaeb864507c27b9325a882295c0"  # pragma: allowlist secret
 )
 EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "fbe47dcf9a201dfb9da390b01e68f5b662689538"  # pragma: allowlist secret
@@ -108,6 +108,10 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
             "        description: Exact commit the explicit CI dispatch requires evidence for",
             "        required: true",
             "        type: string",
+            "      subject_ref:",
+            "        description: Exact main or generated-maintenance branch containing subject_sha",
+            "        required: true",
+            "        type: string",
         )
     )
     on_block = base._semantic_text(base._top_level_block(text, "on")).strip("\n")
@@ -139,7 +143,7 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
             '  PYTHONUNBUFFERED: "1"',
             '  PYTHONSAFEPATH: "1"',
             '  PIP_DISABLE_PIP_VERSION_CHECK: "1"',
-            "  CI_SUBJECT_SHA: ${{ github.sha }}",
+            "  CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_sha || github.sha }}",
         )
     )
     if env_block != expected_env:
@@ -165,8 +169,15 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
     ):
         if forbidden in semantic:
             raise ValueError(f"{name}: forbidden authority token: {forbidden}")
-    if base.WRITE_PERMISSION_RE.search(semantic):
-        raise ValueError(f"{name}: write permission is forbidden")
+    publisher_raw = base._job_block(text, "publish-qualified-subject")
+    publisher = base._semantic_text(publisher_raw)
+    semantic_without_publisher = semantic.replace(publisher, "")
+    if base.WRITE_PERMISSION_RE.search(semantic_without_publisher):
+        raise ValueError(f"{name}: write permission is forbidden outside exact-subject publication")
+    if semantic.count("checks: write") != 1 or "checks: write" not in publisher:
+        raise ValueError(
+            f"{name}: generated-maintenance publication must isolate exactly one checks:write grant"
+        )
     if base.CACHE_CONFIGURATION_RE.search(semantic):
         raise ValueError(f"{name}: dependency caching is forbidden before reviewed lock authority")
     if "ubuntu-latest" in semantic:
@@ -190,19 +201,23 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
     supply_chain_raw = base._job_block(text, "supply-chain")
     supply_chain = base._semantic_text(supply_chain_raw)
     dispatch_binding = (
-        "      - name: Bind explicit dispatch to exact approved subject\n"
+        "      - name: Bind trusted-main dispatch to exact approved subject\n"
         "        if: github.event_name == 'workflow_dispatch'\n"
         "        env:\n"
         "          EXPECTED_SUBJECT_SHA: ${{ inputs.subject_sha }}\n"
+        "          EXPECTED_SUBJECT_REF: ${{ inputs.subject_ref }}\n"
+        "          GH_TOKEN: ${{ github.token }}\n"
     )
     if dispatch_binding not in supply_chain:
         raise ValueError("ci.yml: exact-subject workflow_dispatch binding is missing")
     for required_dispatch_guard in (
         '[[ ! "$EXPECTED_SUBJECT_SHA" =~ ^[0-9a-f]{40}$ ]]',
-        '[[ "$GITHUB_REF" == "refs/heads/main" ]]',
-        '[[ "$GITHUB_REF" =~ ^refs/heads/automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$ ]]',
-        '[[ "$GITHUB_REF" =~ ^refs/heads/automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{12}$ ]]',
-        '[[ "$GITHUB_SHA" != "$EXPECTED_SUBJECT_SHA" ]]',
+        '[[ "$GITHUB_REF" != "refs/heads/main" ]]',
+        '[[ "$EXPECTED_SUBJECT_REF" == "main" ]]',
+        '[[ "$EXPECTED_SUBJECT_REF" =~ ^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$ ]]',
+        '[[ "$EXPECTED_SUBJECT_REF" =~ ^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{12}$ ]]',
+        'live_subject_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${EXPECTED_SUBJECT_REF}" --jq .object.sha)"',
+        'test "$live_subject_sha" = "$EXPECTED_SUBJECT_SHA"',
     ):
         if required_dispatch_guard not in supply_chain:
             raise ValueError(
@@ -258,6 +273,25 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
         if f"      - {job}\n" not in required_gate:
             raise ValueError(f"ci.yml: Required PR Gate does not depend on {job}")
 
+    for fragment in (
+        "    name: Publish Exact-Subject Required PR Gate",
+        "    needs: required-gate",
+        "inputs.subject_ref != 'main'",
+        "    permissions:\n      checks: write\n      contents: read",
+        '[[ "$EXPECTED_SUBJECT_SHA" =~ ^[0-9a-f]{40}$ ]]',
+        'repos/${GITHUB_REPOSITORY}/check-runs',
+        '{name:"Required PR Gate",head_sha:$head,status:"completed",conclusion:"success"',
+        'test "$(jq -r '.head_sha' <<<"$response")" = "$EXPECTED_SUBJECT_SHA"',
+    ):
+        if fragment not in publisher:
+            raise ValueError(
+                f"ci.yml: exact-subject Required PR Gate publication contract is missing: {fragment}"
+            )
+    if "actions/checkout@" in publisher or "${{ secrets." in publisher:
+        raise ValueError(
+            "ci.yml: exact-subject publication must not execute candidate bytes or consume secrets"
+        )
+
     if base._git_blob_sha1(text) != EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA:
         raise ValueError(
             "ci.yml bytes differ from the exact reviewed ordinary CI definition; "
@@ -266,8 +300,8 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
 
     return {
         "triggers": ["merge_group", "pull_request", "push", "workflow_dispatch"],
-        "subject": "github.sha",
-        "workflow_dispatch_subject": "required-exact-main-or-generated-maintenance-sha",
+        "subject": "event-sha-or-explicit-qualified-sha",
+        "workflow_dispatch_subject": "trusted-main-plus-exact-main-or-generated-maintenance-ref-sha",
         "checkout_count": checkout_count,
         "required_gate": "Required PR Gate",
         "quality_lanes": quality_lanes,
@@ -288,7 +322,7 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
         "sbom_lineage": "parent-digest-bound-and-bracketed",
         "supply_chain_evidence": "pinned-upload-action",
         "permissions": "contents:read",
-        "status_write_authority": "none",
+        "status_write_authority": "isolated-generated-maintenance-check-publication",
         "protected_maintenance_authority": "external-trusted-gate-only",
     }
 
@@ -306,11 +340,20 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
             "  schedule:",
             '    - cron: "17 7 * * 2"',
             "  workflow_dispatch:",
+            "    inputs:",
+            "      subject_sha:",
+            "        description: Exact commit the trusted-main CodeQL dispatch analyzes",
+            "        required: true",
+            "        type: string",
+            "      subject_ref:",
+            "        description: Exact main or generated-maintenance branch containing subject_sha",
+            "        required: true",
+            "        type: string",
         )
     )
     on_block = base._semantic_text(base._top_level_block(text, "on")).strip("\n")
     if on_block != expected_on:
-        raise ValueError("codeql.yml trigger set differs from the reviewed definition")
+        raise ValueError("codeql.yml trigger/input set differs from the reviewed definition")
     if base._top_level_keys(base._top_level_block(text, "on")) != {
         "push",
         "pull_request",
@@ -334,10 +377,22 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
     ):
         if forbidden in semantic:
             raise ValueError(f"codeql.yml contains forbidden authority token: {forbidden}")
-    required = (
-        "name: CodeQL",
+
+    ordinary_raw = base._job_block(text, "codeql")
+    ordinary = base._semantic_text(ordinary_raw)
+    qualified_raw = base._job_block(text, "qualified-codeql")
+    qualified = base._semantic_text(qualified_raw)
+    publisher_raw = base._job_block(text, "publish-qualified-codeql")
+    publisher = base._semantic_text(publisher_raw)
+
+    if semantic.count("checks: write") != 1 or "checks: write" not in publisher:
+        raise ValueError("codeql.yml must isolate one checks:write grant to qualification publication")
+    if "checks: write" in ordinary or "checks: write" in qualified:
+        raise ValueError("codeql analysis jobs must not receive check-publication authority")
+
+    ordinary_required = (
         "    name: CodeQL",
-        "    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository",
+        "    if: github.event_name != 'workflow_dispatch' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)",
         "      actions: read",
         "      contents: read",
         "      security-events: write",
@@ -348,39 +403,76 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
         "          languages: python",
         "          queries: security-extended",
     )
-    for fragment in required:
-        if fragment not in semantic:
-            raise ValueError(f"codeql.yml missing reviewed invariant: {fragment}")
+    for fragment in ordinary_required:
+        if fragment not in ordinary:
+            raise ValueError(f"codeql.yml ordinary analysis invariant missing: {fragment}")
+
+    qualified_required = (
+        "    name: Exact-Subject CodeQL Analysis",
+        "    if: github.event_name == 'workflow_dispatch'",
+        "      actions: read",
+        "      contents: read",
+        "      security-events: write",
+        "      - name: Bind trusted-main dispatch to exact analysis subject",
+        "          EXPECTED_SUBJECT_SHA: ${{ inputs.subject_sha }}",
+        "          EXPECTED_SUBJECT_REF: ${{ inputs.subject_ref }}",
+        'test "$GITHUB_REF" = "refs/heads/main"',
+        '[[ "$EXPECTED_SUBJECT_REF" =~ ^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$ ]]',
+        '[[ "$EXPECTED_SUBJECT_REF" =~ ^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{12}$ ]]',
+        'live_subject_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${EXPECTED_SUBJECT_REF}" --jq .object.sha)"',
+        "          ref: ${{ inputs.subject_sha }}",
+        'run: test "$(git rev-parse HEAD)" = "$EXPECTED_SUBJECT_SHA"',
+        "      - name: Analyze exact generated subject",
+        "          ref: refs/heads/${{ inputs.subject_ref }}",
+        "          sha: ${{ inputs.subject_sha }}",
+    )
+    for fragment in qualified_required:
+        if fragment not in qualified:
+            raise ValueError(f"codeql.yml exact-subject analysis invariant missing: {fragment}")
+
+    publisher_required = (
+        "    name: Publish Exact-Subject CodeQL",
+        "    needs: qualified-codeql",
+        "inputs.subject_ref != 'main'",
+        "    permissions:\n      checks: write\n      contents: read",
+        'repos/${GITHUB_REPOSITORY}/check-runs',
+        '{name:"CodeQL",head_sha:$head,status:"completed",conclusion:"success"',
+        'test "$(jq -r '.head_sha' <<<"$response")" = "$EXPECTED_SUBJECT_SHA"',
+    )
+    for fragment in publisher_required:
+        if fragment not in publisher:
+            raise ValueError(f"codeql.yml exact-subject publication invariant missing: {fragment}")
+    if "actions/checkout@" in publisher or "${{ secrets." in publisher:
+        raise ValueError("codeql.yml publication must not execute candidate bytes or consume secrets")
+
     uses = base.ACTION_RE.findall(text)
-    if len(uses) != 3:
+    if len(uses) != 6:
         raise ValueError(
-            "codeql.yml must contain exactly checkout, CodeQL init, and CodeQL analyze"
+            "codeql.yml must contain two checkout, two CodeQL init, and two CodeQL analyze uses"
         )
     checkout = [item for item in uses if item[0] == "actions/checkout"]
     if (
-        len(checkout) != 1
-        or checkout[0][1].lower() != base.EXPECTED_ACTION_SHAS["actions/checkout"]
+        len(checkout) != 2
+        or {item[1].lower() for item in checkout}
+        != {base.EXPECTED_ACTION_SHAS["actions/checkout"]}
     ):
-        raise ValueError("codeql.yml checkout action must use the reviewed immutable revision")
+        raise ValueError("codeql.yml checkout actions must use the reviewed immutable revision")
     codeql = CODEQL_ACTION_RE.findall(text)
-    if len(codeql) != 2 or {item[0] for item in codeql} != {
+    if len(codeql) != 4 or {item[0] for item in codeql} != {
         "github/codeql-action/init",
         "github/codeql-action/analyze",
     }:
-        raise ValueError(
-            "codeql.yml must use exactly one CodeQL init and one CodeQL analyze action"
-        )
+        raise ValueError("codeql.yml must use two reviewed CodeQL init/analyze pairs")
     codeql_refs = {item[1].lower() for item in codeql}
     codeql_versions = {item[2] for item in codeql}
-    if len(codeql_refs) != 1:
-        raise ValueError("CodeQL init and analyze must use the same immutable revision")
-    if len(codeql_versions) != 1:
-        raise ValueError("CodeQL init and analyze must declare the same reviewed version")
+    if len(codeql_refs) != 1 or len(codeql_versions) != 1:
+        raise ValueError("CodeQL init/analyze pairs must share one immutable reviewed revision")
     version = next(iter(codeql_versions))
     if int(version.split(".", 1)[0]) != EXPECTED_CODEQL_MAJOR:
         raise ValueError("CodeQL action major version differs from the reviewed v4 authority")
-    if semantic.count("security-events: write") != 1:
-        raise ValueError("codeql.yml may write only one security-events permission")
+    if semantic.count("security-events: write") != 2:
+        raise ValueError("codeql.yml must isolate security-events write to its two analysis jobs")
+
     return {
         "triggers": ["pull_request", "push", "schedule", "workflow_dispatch"],
         "language": "python",
@@ -389,11 +481,13 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
         "codeql_major": EXPECTED_CODEQL_MAJOR,
         "checkout_authority": "exact-reviewed-immutable-sha",
         "security_events_write": True,
+        "workflow_dispatch_subject": "trusted-main-plus-explicit-ref-sha",
+        "candidate_sarif_binding": "explicit-ref-plus-sha",
+        "candidate_check_publication": "isolated-checks-write-after-exact-ref-revalidation",
         "merge_authority": "none",
         "status_write_authority": "none",
         "workflow_definition": "semantic-reviewed-v4-codeql-contract",
     }
-
 
 def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
     base = _trusted_auto._base
