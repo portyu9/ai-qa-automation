@@ -603,8 +603,8 @@ def selftest(config: dict[str, Any]) -> None:
         {
             "filename": ".github/workflows/ci.yml",
             "status": "modified",
-            "patch": "@@ -1 +1 @@\n-      - uses: actions/checkout@" + "a" * 40 + " # v7.0.0\n"
-            "+      - uses: actions/checkout@" + "b" * 40 + " # v7.0.1\n",
+            "patch": "@@ -1 +1 @@\n-        uses: github/codeql-action/init@" + "a" * 40 + " # v4.38.0\n"
+            "+        uses: github/codeql-action/init@" + "b" * 40 + " # v4.38.1\n",
         }
     ]
     validate_action_semantics(synthetic)
