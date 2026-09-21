@@ -1212,7 +1212,7 @@ def selftest(config: dict[str, Any]) -> None:
     else:
         raise AutohealError("stale non-mergeable repair did not fail as stale")
 
-    current_pr = copy.deepcopy(stale_pr)
+    current_pr = json.loads(json.dumps(stale_pr))
     current_pr["body"] = _marker(
         {
             "version": 1,
