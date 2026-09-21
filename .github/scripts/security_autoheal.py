@@ -675,11 +675,15 @@ def _dispatch_qualification(api: GitHubApi, branch: str, head_sha: str) -> None:
     subject_sha = _require_sha(head_sha, "generated repair qualification SHA")
     if AUTOHEAL_BRANCH_RE.fullmatch(branch) is None:
         raise PolicyBlock("generated repair qualification ref is outside reviewed authority")
+    inputs = {"subject_sha": subject_sha, "subject_ref": branch}
     api.post(
         "/actions/workflows/ci.yml/dispatches",
-        {"ref": branch, "inputs": {"subject_sha": subject_sha}},
+        {"ref": "main", "inputs": inputs},
     )
-    api.post("/actions/workflows/codeql.yml/dispatches", {"ref": branch})
+    api.post(
+        "/actions/workflows/codeql.yml/dispatches",
+        {"ref": "main", "inputs": inputs},
+    )
 
 
 def _latest_checks(api: GitHubApi, head_sha: str) -> dict[str, dict[str, Any]]:
@@ -1208,12 +1212,16 @@ def selftest(config: dict[str, Any]) -> None:
     exact_sha = "f" * 40
     exact_branch = "automation/codeql-autoheal-7-abcdef123456"
     _dispatch_qualification(dispatch_api, exact_branch, exact_sha)
+    expected_inputs = {"subject_sha": exact_sha, "subject_ref": exact_branch}
     if dispatch_api.calls != [
         (
             "/actions/workflows/ci.yml/dispatches",
-            {"ref": exact_branch, "inputs": {"subject_sha": exact_sha}},
+            {"ref": "main", "inputs": expected_inputs},
         ),
-        ("/actions/workflows/codeql.yml/dispatches", {"ref": exact_branch}),
+        (
+            "/actions/workflows/codeql.yml/dispatches",
+            {"ref": "main", "inputs": expected_inputs},
+        ),
     ]:
         raise AutohealError("exact-subject qualification dispatch payload drifted")
     for bad_ref in (
