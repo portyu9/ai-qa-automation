@@ -904,9 +904,7 @@ dev = ["mypy>=2,<3", "playwright>=1.52,<2"]
         _validate_promotion(stale_api, stale_pr, lifecycle_config)
     except PolicyBlock as exc:
         if str(exc) != "promotion is stale relative to current main":
-            raise GovernanceError(
-                "stale promotion was masked by mergeability state"
-            ) from exc
+            raise GovernanceError("stale promotion was masked by mergeability state") from exc
     else:
         raise GovernanceError("stale non-mergeable promotion did not fail as stale")
 
@@ -917,9 +915,7 @@ dev = ["mypy>=2,<3", "playwright>=1.52,<2"]
         _validate_promotion(stale_api, current_pr, lifecycle_config)
     except PolicyBlock as exc:
         if str(exc) != "promotion PR is not definitively mergeable":
-            raise GovernanceError(
-                "current promotion mergeability guard changed semantics"
-            ) from exc
+            raise GovernanceError("current promotion mergeability guard changed semantics") from exc
     else:
         raise GovernanceError("current non-mergeable promotion did not fail closed")
 
