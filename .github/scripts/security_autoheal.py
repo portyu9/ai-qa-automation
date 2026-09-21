@@ -890,9 +890,7 @@ def _post_trusted_status(
         raise AutohealError("dedicated Trusted PR Gate status publication was not acknowledged")
 
 
-def _post_merge_ci_candidates(
-    rows: list[dict[str, Any]], subject_sha: str
-) -> list[dict[str, Any]]:
+def _post_merge_ci_candidates(rows: list[dict[str, Any]], subject_sha: str) -> list[dict[str, Any]]:
     subject_sha = _require_sha(subject_sha, "post-merge CI subject SHA")
     candidates: list[dict[str, Any]] = []
     for row in rows:
@@ -915,9 +913,7 @@ def _post_merge_ci_candidates(
         if status not in {"queued", "in_progress", "completed"}:
             raise AutohealError(f"exact-subject CI run has invalid status: {status}")
         if status == "completed" and conclusion != "success":
-            raise AutohealError(
-                f"exact-subject CI run completed non-successfully: {conclusion}"
-            )
+            raise AutohealError(f"exact-subject CI run completed non-successfully: {conclusion}")
         candidates.append(row)
     return candidates
 
@@ -986,9 +982,7 @@ def _finalize_post_merge_evidence(
             },
         )
         for attempt in range(POST_MERGE_CI_REGISTRATION_ATTEMPTS):
-            existing = _select_post_merge_ci_run(
-                _post_merge_ci_runs(api, merge_sha), merge_sha
-            )
+            existing = _select_post_merge_ci_run(_post_merge_ci_runs(api, merge_sha), merge_sha)
             if existing is not None:
                 if existing.get("event") != "workflow_dispatch":
                     raise AutohealError(
@@ -1439,11 +1433,7 @@ def selftest(config: dict[str, Any]) -> None:
                 return {"parents": [{"sha": base_sha}, {"sha": head_sha}]}
             if path == "/branches/main":
                 self.main_reads += 1
-                observed = (
-                    "7" * 40
-                    if self.move_main and self.main_reads >= 2
-                    else merge_sha
-                )
+                observed = "7" * 40 if self.move_main and self.main_reads >= 2 else merge_sha
                 return {"commit": {"sha": observed}}
             raise AutohealError(f"unexpected post-merge self-test GET path: {path}")
 
