@@ -38,7 +38,7 @@ EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
     "16636517d918534c9c312add36752b1e06a39392"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
-    "7ffcd0d1bbdb2a88ba103c293628d5c321515a0c"  # pragma: allowlist secret
+    "18d4a72a986957126816cf2c17bbaf6ea2200831"  # pragma: allowlist secret
 )
 EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "fbe47dcf9a201dfb9da390b01e68f5b662689538"  # pragma: allowlist secret
@@ -105,7 +105,7 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
             "  workflow_dispatch:",
             "    inputs:",
             "      subject_sha:",
-            "        description: Exact main commit the governed merge requires CI evidence for",
+            "        description: Exact commit the explicit CI dispatch requires evidence for",
             "        required: true",
             "        type: string",
         )
@@ -199,8 +199,8 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
         raise ValueError("ci.yml: exact-subject workflow_dispatch binding is missing")
     for required_dispatch_guard in (
         '[[ ! "$EXPECTED_SUBJECT_SHA" =~ ^[0-9a-f]{40}$ ]]',
-        'case "$GITHUB_REF" in',
-        'refs/heads/main|refs/heads/automation/dependency-promotion-*) ;;',
+        '[[ "$GITHUB_REF" == "refs/heads/main" ]]',
+        '[[ "$GITHUB_REF" =~ ^refs/heads/automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$ ]]',
         '[[ "$GITHUB_SHA" != "$EXPECTED_SUBJECT_SHA" ]]',
     ):
         if required_dispatch_guard not in supply_chain:
