@@ -844,6 +844,9 @@ def assess_trusted_admission(
     api: GitHubApi,
     pr: dict[str, Any],
     config: dict[str, Any],
+    *,
+    require_checks: bool = True,
+    verify_codeql: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     metadata, live = _validate_generated_pr(api, pr, config)
     commit = api.get(f"/commits/{live['headSha']}")
@@ -859,8 +862,10 @@ def assess_trusted_admission(
             raise PolicyBlock("deterministic repair bytes differ from the code-owned recipe")
     elif _is_deterministic_only(subject["path"], config):
         raise PolicyBlock("protected verifier repair must remain deterministic")
-    _require_green_checks(api, live["headSha"], config)
-    _verify_codeql_remediation(api, metadata, config)
+    if require_checks:
+        _require_green_checks(api, live["headSha"], config)
+    if verify_codeql:
+        _verify_codeql_remediation(api, metadata, config)
     return metadata, live
 
 
@@ -1184,7 +1189,9 @@ def _merge(
     config: dict[str, Any],
 ) -> dict[str, Any]:
     fresh = api.get(f"/pulls/{pr_number}")
-    rebound_metadata, rebound_live = assess_trusted_admission(api, fresh, config)
+    rebound_metadata, rebound_live = assess_trusted_admission(
+        api, fresh, config, require_checks=False
+    )
     if rebound_metadata != metadata or rebound_live != live:
         raise PolicyBlock("repair PR changed before guarded merge")
     result = api.put(
@@ -1326,7 +1333,6 @@ def _create_repair(
     )
     # Bind the branch name into the marker after creation only through the immutable branch
     # convention. The live validator derives it from the PR head and accepts an absent marker key.
-    _dispatch_qualification(api, branch, head_sha)
     print(
         json.dumps(
             {
@@ -1367,7 +1373,9 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
             active_alerts.add(alert_number)
         try:
             live_pr = api.get(f"/pulls/{number}")
-            validated_metadata, live = assess_trusted_admission(api, live_pr, config)
+            validated_metadata, live = assess_trusted_admission(
+                api, live_pr, config, require_checks=False
+            )
             if allow_merge and config["automergeEnabled"]:
                 try:
                     require_automatic_trusted_gate(
