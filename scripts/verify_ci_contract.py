@@ -38,7 +38,7 @@ EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
     "e06de9a8523398a2609d356b85fd8ed9478af40f"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
-    "6f69b2729d7d8d609859c687f1fbb0187b7dce3f"  # pragma: allowlist secret
+    "7fdf0dc85375bc78561d531f95220cd877e30b3a"  # pragma: allowlist secret
 )
 EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
