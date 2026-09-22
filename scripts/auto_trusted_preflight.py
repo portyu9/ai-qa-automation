@@ -38,12 +38,8 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DEPENDABOT_ACTION_REF_RE = re.compile(
     r"^dependabot/github_actions/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$"
 )
-PROMOTION_REF_RE = re.compile(
-    r"^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$"
-)
-AUTOHEAL_REF_RE = re.compile(
-    r"^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{12}$"
-)
+PROMOTION_REF_RE = re.compile(r"^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$")
+AUTOHEAL_REF_RE = re.compile(r"^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{12}$")
 BOT_LANES = {"dependabot-actions", "dependency-promotion", "security-autoheal"}
 PROTECTED_PATHS = (
     ".github",
@@ -258,8 +254,7 @@ def _current_main(api: GitHubAPI) -> str:
     expected_ref = f"refs/heads/{EXPECTED_DEFAULT_BRANCH}"
     return _ref_commit_sha(
         api.get(
-            f"/repos/{EXPECTED_REPOSITORY}/git/ref/heads/"
-            f"{quote(EXPECTED_DEFAULT_BRANCH, safe='')}"
+            f"/repos/{EXPECTED_REPOSITORY}/git/ref/heads/{quote(EXPECTED_DEFAULT_BRANCH, safe='')}"
         ),
         expected_ref=expected_ref,
         label="main ref",
@@ -650,8 +645,7 @@ def evaluate_admission(api: GitHubAPI, *, event: dict[str, Any]) -> Admission | 
         required=("Required PR Gate", "CodeQL"),
     )
     ready = all(
-        state is not None and state.get("conclusion") == "success"
-        for state in states.values()
+        state is not None and state.get("conclusion") == "success" for state in states.values()
     )
     return _resolve_subject(
         api,
