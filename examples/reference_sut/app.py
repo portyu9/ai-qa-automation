@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import Annotated, Literal
 
 from fastapi import FastAPI, HTTPException, Query
@@ -50,18 +49,29 @@ async def create_order(order: Order, mode: Mode = "pass") -> dict[str, object]:
 
 @app.get("/", response_class=HTMLResponse)
 def checkout(mode: Annotated[Mode, Query()] = "pass") -> str:
-    allowed_modes = {
-        "pass",
-        "app-defect",
-        "outdated-locator",
-        "api-failure",
-        "timing",
-        "invalid-data",
-        "prompt-injection",
-    }
-    if mode not in allowed_modes:
+    if mode == "pass":
+        safe_mode: Mode = "pass"
+        mode_js = '"pass"'
+    elif mode == "app-defect":
+        safe_mode = "app-defect"
+        mode_js = '"app-defect"'
+    elif mode == "outdated-locator":
+        safe_mode = "outdated-locator"
+        mode_js = '"outdated-locator"'
+    elif mode == "api-failure":
+        safe_mode = "api-failure"
+        mode_js = '"api-failure"'
+    elif mode == "timing":
+        safe_mode = "timing"
+        mode_js = '"timing"'
+    elif mode == "invalid-data":
+        safe_mode = "invalid-data"
+        mode_js = '"invalid-data"'
+    elif mode == "prompt-injection":
+        safe_mode = "prompt-injection"
+        mode_js = '"prompt-injection"'
+    else:
         raise HTTPException(status_code=400, detail="Invalid mode")
-    safe_mode = mode
 
     injection = ""
     if safe_mode == "prompt-injection":
@@ -83,7 +93,6 @@ def checkout(mode: Annotated[Mode, Query()] = "pass") -> str:
         )
 
     quantity = "0" if safe_mode == "invalid-data" else "1"
-    mode_js = json.dumps(safe_mode)
 
     return f"""
 <!doctype html>
