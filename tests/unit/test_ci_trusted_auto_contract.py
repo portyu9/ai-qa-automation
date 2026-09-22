@@ -86,7 +86,9 @@ def test_trusted_auto_contract_rejects_candidate_checkout_in_preflight(tmp_path:
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="non-action structure differs from reviewed trust authority"):
+    with pytest.raises(
+        ValueError, match="non-action structure differs from reviewed trust authority"
+    ):
         ci_contract.verify_ci_contract(root)
 
 
@@ -98,7 +100,9 @@ def test_trusted_auto_contract_rejects_native_write_permission(tmp_path: Path) -
     assert marker in text
     path.write_text(text.replace(marker, "  contents: write\n", 1), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="non-action structure differs from reviewed trust authority"):
+    with pytest.raises(
+        ValueError, match="non-action structure differs from reviewed trust authority"
+    ):
         ci_contract.verify_ci_contract(root)
 
 
@@ -110,7 +114,9 @@ def test_trusted_auto_contract_rejects_removed_protected_path(tmp_path: Path) ->
     assert marker in text
     path.write_text(text.replace(marker, "", 1), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="non-action structure differs from reviewed trust authority"):
+    with pytest.raises(
+        ValueError, match="non-action structure differs from reviewed trust authority"
+    ):
         ci_contract.verify_ci_contract(root)
 
 
@@ -185,5 +191,7 @@ def test_trusted_auto_contract_rejects_reporter_secret_before_final_revalidation
     )
     path.write_text(text.replace(marker, injected + marker, 1), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="non-action structure differs from reviewed trust authority"):
+    with pytest.raises(
+        ValueError, match="non-action structure differs from reviewed trust authority"
+    ):
         ci_contract.verify_ci_contract(root)
