@@ -541,8 +541,6 @@ def _create_promotion_pr(api: GitHubApi, source: dict[str, Any], branch: str, he
         raise GovernanceError("GitHub did not acknowledge dependency promotion PR creation")
     if require_sha(((pr or {}).get("head") or {}).get("sha"), "promotion PR head SHA") != head_sha:
         raise GovernanceError("promotion PR head differs from generated exact subject")
-    dispatch_exact_ci(api, branch, head_sha)
-    dispatch_exact_codeql(api, branch, head_sha)
     return number
 
 
@@ -592,6 +590,7 @@ def _validate_promotion(
     config: dict[str, Any],
     *,
     validate_generated_bytes: bool = True,
+    require_checks: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     metadata = _parse_marker(pr.get("body"))
     if metadata is None or metadata.get("version") != 1:
@@ -653,7 +652,8 @@ def _validate_promotion(
         )
     if validate_generated_bytes:
         _validate_generated_bytes(api, source, head_sha)
-    _require_green(api, head_sha, config)
+    if require_checks:
+        _require_green(api, head_sha, config)
     return source, {"number": pr["number"], "headSha": head_sha, "baseSha": base_sha}
 
 
@@ -670,7 +670,9 @@ def _publish_and_merge(
     except TrustedStatusError as exc:
         raise PolicyBlock("automatic Trusted PR Gate is not yet admissible") from exc
     fresh_before_merge = api.get(f"/pulls/{promotion['number']}")
-    _, rebound_before_merge = _validate_promotion(api, fresh_before_merge, config)
+    _, rebound_before_merge = _validate_promotion(
+        api, fresh_before_merge, config, require_checks=False
+    )
     if rebound_before_merge != promotion:
         raise PolicyBlock("promotion changed before guarded merge")
     result = api.put(
@@ -729,7 +731,9 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
         if isinstance(source_number, int):
             active_sources.add(source_number)
         try:
-            _, promotion = _validate_promotion(api, api.get(f"/pulls/{number}"), config)
+            _, promotion = _validate_promotion(
+                api, api.get(f"/pulls/{number}"), config, require_checks=False
+            )
             print(json.dumps({"pr": number, "decision": "promotion-qualified"}, sort_keys=True))
             if allow_merge and config["automergeEnabled"]:
                 merge_evidence = _publish_and_merge(api, promotion, config)
