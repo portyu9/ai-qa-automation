@@ -735,9 +735,7 @@ def _require_green_checks(api: GitHubApi, head_sha: str, config: dict[str, Any])
 
 def _repository_text(api: GitHubApi, path: str, ref: str) -> str:
     encoded_path = "/".join(urllib.parse.quote(part, safe="") for part in path.split("/"))
-    payload = api.get(
-        f"/contents/{encoded_path}?ref={urllib.parse.quote(ref, safe='')}"
-    )
+    payload = api.get(f"/contents/{encoded_path}?ref={urllib.parse.quote(ref, safe='')}")
     if not isinstance(payload, dict) or payload.get("type") != "file":
         raise PolicyBlock(f"repair content is not one regular repository file: {path}")
     content = payload.get("content")
