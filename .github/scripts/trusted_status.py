@@ -75,9 +75,7 @@ def _require_exact_live_subject(
         or len(parents) != 2
     ):
         raise TrustedStatusError("Trusted PR Gate merge commit is malformed")
-    observed = [
-        _require_sha((parent or {}).get("sha"), "merge parent SHA") for parent in parents
-    ]
+    observed = [_require_sha((parent or {}).get("sha"), "merge parent SHA") for parent in parents]
     if observed != [base_sha, head_sha]:
         raise TrustedStatusError("Trusted PR Gate merge parents drifted")
 
