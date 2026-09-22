@@ -27,7 +27,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
-    "4c61f2e733ce2a4181c05232fe6713a5b21c04d2"  # pragma: allowlist secret
+    "17ecbb1dc96e318d0d5016ebf87b089b22641318"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
     "6c5dd5dda830a4d97c82068f360e99b8800a020e"  # pragma: allowlist secret
@@ -219,11 +219,31 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     if "needs.bot-authority.result" in bot_authority:
         raise ValueError("governed bot authority must not self-reference its own result")
 
+    cancellation_safe_jobs = (
+        "subject-guard",
+        "supply-chain",
+        "quality",
+        "deterministic-evals",
+        "security",
+        "browser-reference-sut",
+        "bot-codeql",
+        "required-gate",
+        "trusted-status",
+    )
+    for job_id in cancellation_safe_jobs:
+        job = _base._semantic_text(_base._job_block(text, job_id))
+        if "    if: ${{ !cancelled()" not in job:
+            raise ValueError(
+                f"trusted automatic job {job_id} must override skipped dependency propagation "
+                "without running after cancellation"
+            )
+
     subject_guard = _base._semantic_text(_base._job_block(text, "subject-guard"))
     required_guard = (
         "    name: Exact Subject + Protected Authority Guard",
         "    needs: [preflight, bot-authority]",
-        "always()",
+        "!cancelled()",
+        "needs.preflight.result == 'success'",
         "needs.preflight.outputs.lane == 'owner-routine' || needs.bot-authority.result == 'success'",
         "          ref: ${{ needs.preflight.outputs.merge_sha }}",
         "          persist-credentials: false",
@@ -272,8 +292,44 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "security",
         "browser-reference-sut",
     )
+    expected_validation_conditions = {
+        "supply-chain": (
+            "    if: ${{ !cancelled() && needs.preflight.result == 'success' && "
+            "needs.preflight.outputs.eligible == 'true' && "
+            "needs.subject-guard.result == 'success' }}"
+        ),
+        "quality": (
+            "    if: ${{ !cancelled() && needs.preflight.result == 'success' && "
+            "needs.preflight.outputs.eligible == 'true' && "
+            "needs.subject-guard.result == 'success' && "
+            "needs.supply-chain.result == 'success' }}"
+        ),
+        "deterministic-evals": (
+            "    if: ${{ !cancelled() && needs.preflight.result == 'success' && "
+            "needs.preflight.outputs.eligible == 'true' && "
+            "needs.subject-guard.result == 'success' && "
+            "needs.supply-chain.result == 'success' }}"
+        ),
+        "security": (
+            "    if: ${{ !cancelled() && needs.preflight.result == 'success' && "
+            "needs.preflight.outputs.eligible == 'true' && "
+            "needs.subject-guard.result == 'success' && "
+            "needs.supply-chain.result == 'success' }}"
+        ),
+        "browser-reference-sut": (
+            "    if: ${{ !cancelled() && needs.preflight.result == 'success' && "
+            "needs.preflight.outputs.eligible == 'true' && "
+            "needs.subject-guard.result == 'success' && "
+            "needs.supply-chain.result == 'success' }}"
+        ),
+    }
     for job_id in validation_jobs:
         job = _base._semantic_text(_base._job_block(text, job_id))
+        if expected_validation_conditions[job_id] not in job:
+            raise ValueError(
+                f"trusted automatic validation job {job_id} must be cancellation-safe and "
+                "explicitly direct-needs-bound"
+            )
         if candidate_checkout not in job:
             raise ValueError(
                 f"trusted automatic validation job {job_id} is not merge-subject-bound"
@@ -300,7 +356,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     required_bot_codeql = (
         "    name: Trusted Bot CodeQL",
         "    needs: [preflight, subject-guard]",
-        "needs.preflight.outputs.lane != 'owner-routine'",
+        "    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.eligible == 'true' && needs.preflight.outputs.lane != 'owner-routine' && needs.subject-guard.result == 'success' }}",
         bot_head_checkout,
         "          persist-credentials: false",
         "          EXPECTED_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}",
@@ -319,6 +375,12 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         raise ValueError("trusted bot CodeQL must remain secret-free")
 
     required_gate = _base._semantic_text(_base._job_block(text, "required-gate"))
+    required_gate_condition = (
+        "    if: ${{ !cancelled() && needs.preflight.result == 'success' && "
+        "needs.preflight.outputs.eligible == 'true' }}"
+    )
+    if required_gate_condition not in required_gate:
+        raise ValueError("automatic trusted aggregate cancellation/eligibility guard drifted")
     for dependency in (
         "subject-guard",
         "quality",
@@ -343,6 +405,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     reporter = _base._semantic_text(_base._job_block(text, "trusted-status"))
     required_reporter = (
         "    name: Automatic Trusted PR Gate Reporter",
+        "    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.eligible == 'true' }}",
         "    environment:\n      name: trusted-pr-gate\n      deployment: false",
         "      actions: read",
         "      checks: read",
@@ -415,6 +478,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "protected_paths": list(TRUSTED_AUTO_PROTECTED_PATHS),
         "validation_subject": "live-prospective-merge-sha",
         "candidate_subject_binding": "job-level-exact-prospective-merge",
+        "needs_skip_policy": "not-cancelled-plus-explicit-direct-needs-success",
         "validation_authority": (
             "secret-free;read-only-except-bot-codeql-security-events-write-before-reporter"
         ),
