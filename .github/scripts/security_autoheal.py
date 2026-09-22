@@ -241,11 +241,7 @@ class GitHubApi:
                 break
             except urllib.error.HTTPError as exc:
                 detail = exc.read(4096).decode("utf-8", errors="replace")
-                if (
-                    method == "GET"
-                    and exc.code in {502, 503, 504}
-                    and attempt + 1 < attempts
-                ):
+                if method == "GET" and exc.code in {502, 503, 504} and attempt + 1 < attempts:
                     time.sleep(TRANSIENT_GET_DELAY_SECONDS)
                     continue
                 raise AutohealError(
@@ -255,9 +251,7 @@ class GitHubApi:
                 if method == "GET" and attempt + 1 < attempts:
                     time.sleep(TRANSIENT_GET_DELAY_SECONDS)
                     continue
-                raise AutohealError(
-                    f"GitHub API {method} {path} transport failure: {exc}"
-                ) from exc
+                raise AutohealError(f"GitHub API {method} {path} transport failure: {exc}") from exc
         if len(raw) > max_bytes:
             raise AutohealError(f"GitHub API {method} {path} exceeded bounded response size")
         if not raw:
