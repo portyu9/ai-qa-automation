@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling==1.32.0"]
+requires = ["hatchling==1.32.3"]
 build-backend = "hatchling.build"
 
 [project]
@@ -32,7 +32,7 @@ classifiers = [
 ]
 dependencies = [
   "anyio>=4.8,<5",
-  "claude-agent-sdk==0.2.136",
+  "claude-agent-sdk==0.2.156",
   "httpx>=0.28,<0.29",
   "pydantic>=2.10,<3",
   "pydantic-settings>=2.7,<3",
@@ -66,7 +66,7 @@ dev = [
   "pytest>=9,<10",
   "pytest-asyncio>=1,<2",
   "pytest-cov>=6,<8",
-  "ruff==0.16.2",
+  "ruff==0.16.8",
 ]
 
 [project.scripts]
