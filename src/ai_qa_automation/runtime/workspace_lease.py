@@ -351,6 +351,17 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
                 inode = run_root_identity.get("inode")
                 if type(device) is not int or type(inode) is not int or device < 0 or inode < 0:
                     raise OSError("workspace lease run-root identity authority is invalid")
+        if "lease_root_identity" in previous:
+            lease_root_identity = previous["lease_root_identity"]
+            if not isinstance(lease_root_identity, dict) or set(lease_root_identity) != {
+                "device",
+                "inode",
+            }:
+                raise OSError("workspace lease lease-root identity authority is invalid")
+            device = lease_root_identity.get("device")
+            inode = lease_root_identity.get("inode")
+            if type(device) is not int or type(inode) is not int or device < 0 or inode < 0:
+                raise OSError("workspace lease lease-root identity authority is invalid")
         return previous
 
     def _current_metadata_bytes(self) -> bytes:
@@ -373,12 +384,17 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             if self._run_root_identity is not None
             else None
         )
+        lease_root_identity = {
+            "device": self._lease_root_identity[0],
+            "inode": self._lease_root_identity[1],
+        }
         metadata = {
             "lease_id": self.lease_id,
             "run_id": self.run_id,
             "workspace": str(self.workspace),
             "workspace_root_identity": workspace_root_identity,
             "run_root_identity": run_root_identity,
+            "lease_root_identity": lease_root_identity,
             "mutation_recovery_closed": self._mutation_recovery_closed,
             "pid": os.getpid(),
             "hostname": socket.gethostname(),
