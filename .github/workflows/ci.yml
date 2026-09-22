@@ -31,12 +31,14 @@ env:
   PYTHONUNBUFFERED: "1"
   PYTHONSAFEPATH: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
-  CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_sha || github.sha }}
+  CI_SUBJECT_SHA: ${{ github.sha }}
 
 jobs:
   quality:
     name: Quality / Python ${{ matrix.python-version }}
     needs: supply-chain
+    env:
+      CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_sha || github.sha }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -112,6 +114,8 @@ jobs:
   deterministic-evals:
     name: 34-Case Deterministic Control Evaluation
     needs: supply-chain
+    env:
+      CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_sha || github.sha }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -172,6 +176,8 @@ jobs:
 
   supply-chain:
     name: Supply Chain / Wheel + SBOM + Container
+    env:
+      CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_sha || github.sha }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -365,6 +371,8 @@ jobs:
   security:
     name: Security Gates
     needs: supply-chain
+    env:
+      CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_sha || github.sha }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -424,6 +432,8 @@ jobs:
   browser-reference-sut:
     name: Playwright Reference SUT
     needs: supply-chain
+    env:
+      CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_sha || github.sha }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
