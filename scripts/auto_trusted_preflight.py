@@ -136,15 +136,10 @@ class GitHubAPI:
                     payload = response.read(MAX_API_BYTES + 1)
                 break
             except urllib.error.HTTPError as exc:
-                if (
-                    exc.code in {502, 503, 504}
-                    and attempt + 1 < TRANSIENT_GET_ATTEMPTS
-                ):
+                if exc.code in {502, 503, 504} and attempt + 1 < TRANSIENT_GET_ATTEMPTS:
                     time.sleep(TRANSIENT_GET_DELAY_SECONDS)
                     continue
-                raise RuntimeError(
-                    f"GitHub API GET failed with HTTP {exc.code}: {path}"
-                ) from exc
+                raise RuntimeError(f"GitHub API GET failed with HTTP {exc.code}: {path}") from exc
             except urllib.error.URLError as exc:
                 if attempt + 1 < TRANSIENT_GET_ATTEMPTS:
                     time.sleep(TRANSIENT_GET_DELAY_SECONDS)
@@ -480,7 +475,9 @@ def _validate_pull_request(
     if pr.get("state") != "open" or pr.get("draft") is not False:
         raise ValueError("automatic trusted admission requires an open non-draft pull request")
     if pr.get("mergeable") is not True:
-        raise ValueError("automatic trusted admission requires a definitively mergeable pull request")
+        raise ValueError(
+            "automatic trusted admission requires a definitively mergeable pull request"
+        )
     head = _require_dict(pr.get("head"), label="live pull request head")
     base = _require_dict(pr.get("base"), label="live pull request base")
     head_repo = _require_dict(head.get("repo"), label="live pull request head repository")
@@ -812,7 +809,9 @@ def write_github_outputs(path: Path, admission: Admission | None) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--event", type=Path, required=True)
-    parser.add_argument("--event-name", choices=("workflow_run", "schedule"), default="workflow_run")
+    parser.add_argument(
+        "--event-name", choices=("workflow_run", "schedule"), default="workflow_run"
+    )
     parser.add_argument("--github-output", type=Path, required=True)
     args = parser.parse_args()
 
