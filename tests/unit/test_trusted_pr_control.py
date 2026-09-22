@@ -13,6 +13,7 @@ MERGE_SHA = "3" * 40
 OTHER_SHA = "4" * 40
 REPOSITORY = "portyu9/ai-qa-automation"
 RUN_URL = f"https://github.com/{REPOSITORY}/actions/runs/123"
+BOUND_RUN_URL = f"{RUN_URL}?pr=43&base={BASE_SHA}&head={HEAD_SHA}&merge={MERGE_SHA}"
 
 
 def _pull_request_payload(
@@ -240,9 +241,10 @@ def test_status_target_url_must_be_exact_repository_run_url(
         sha=HEAD_SHA,
         state="success",
         description="ok",
-        target_url=RUN_URL,
+        target_url=BOUND_RUN_URL,
     )
     for invalid in (
+        RUN_URL,
         "https://example.com/forged",
         f"{RUN_URL}/extra",
         f"https://github.com/{REPOSITORY}/actions/runs/0",

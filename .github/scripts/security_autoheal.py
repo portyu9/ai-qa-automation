@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import hashlib
 import json
 import os
@@ -14,16 +16,39 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from trusted_qualification import (
+    TrustedQualificationError,
+)
+from trusted_qualification import (
+    require_success as require_trusted_qualification_success,
+)
+from trusted_status import TrustedStatusError, require_automatic_trusted_gate
+
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = ROOT / ".github" / "security-autoheal.json"
 API_ROOT = "https://api.github.com"
 API_VERSION = "2026-03-10"
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+POST_MERGE_CI_WORKFLOW = "ci.yml"
+POST_MERGE_CI_PATH = ".github/workflows/ci.yml"
+POST_MERGE_CI_NAME = "CI — ƳƤ AI QA Automation Framework"
+POST_MERGE_CI_EVENTS = {"push", "workflow_dispatch"}
+POST_MERGE_CI_REGISTRATION_ATTEMPTS = 15
+POST_MERGE_CI_REGISTRATION_DELAY_SECONDS = 2
+MAIN_CODEQL_WORKFLOW = "codeql.yml"
+MAIN_CODEQL_PATH = ".github/workflows/codeql.yml"
+MAIN_CODEQL_NAME = "CodeQL"
+MAIN_CODEQL_EVENTS = {"push", "workflow_dispatch", "schedule"}
+MAIN_CODEQL_REGISTRATION_ATTEMPTS = 15
+MAIN_CODEQL_REGISTRATION_DELAY_SECONDS = 2
+TRANSIENT_GET_ATTEMPTS = 3
+TRANSIENT_GET_DELAY_SECONDS = 1
 GITHUB_ACTIONS_LOGIN = "github-actions[bot]"
 GITHUB_ACTIONS_USER_ID = 41898282
 MARKER_PREFIX = "<!-- aiqa-codeql-autoheal:"
 MARKER_SUFFIX = " -->"
 BRANCH_PREFIX = "automation/codeql-autoheal-"
+AUTOHEAL_BRANCH_RE = re.compile(r"^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{12}$")
 AUTOHEAL_COMMIT_MESSAGE_RE = re.compile(r"^security: auto-heal CodeQL alert #[1-9][0-9]*$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 SAFE_RULES = {
@@ -39,6 +64,10 @@ SAFE_VERIFIER_LABELS = {
     "scripts/verify_docs.py": "documentation-integrity",
     "scripts/verify_fork_cloud_authority.py": "fork-cloud-authority",
 }
+MODEL_AUTOFIX_STRATEGY = "github-codeql-autofix-v1"
+OVERLY_PERMISSIVE_TEST_STRATEGY = "deterministic-overly-permissive-test-file-v1"
+CLEAR_TEXT_LOG_STRATEGY = "deterministic-clear-text-log-v1"
+REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY = "deterministic-reference-sut-reflective-xss-v1"
 
 DETERMINISTIC_LOG_REPAIRS = {
     "scripts/auto_trusted_report.py": (
@@ -207,17 +236,26 @@ class GitHubApi:
                 **({"Content-Type": "application/json"} if data is not None else {}),
             },
         )
-        try:
-            with urllib.request.urlopen(request, timeout=30) as response:
-                status = int(response.status)
-                raw = response.read(max_bytes + 1)
-        except urllib.error.HTTPError as exc:
-            detail = exc.read(4096).decode("utf-8", errors="replace")
-            raise AutohealError(
-                f"GitHub API {method} {path} failed HTTP {exc.code}: {detail[:1000]}"
-            ) from exc
-        except urllib.error.URLError as exc:
-            raise AutohealError(f"GitHub API {method} {path} transport failure: {exc}") from exc
+        attempts = TRANSIENT_GET_ATTEMPTS if method == "GET" else 1
+        for attempt in range(attempts):
+            try:
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    status = int(response.status)
+                    raw = response.read(max_bytes + 1)
+                break
+            except urllib.error.HTTPError as exc:
+                detail = exc.read(4096).decode("utf-8", errors="replace")
+                if method == "GET" and exc.code in {502, 503, 504} and attempt + 1 < attempts:
+                    time.sleep(TRANSIENT_GET_DELAY_SECONDS)
+                    continue
+                raise AutohealError(
+                    f"GitHub API {method} {path} failed HTTP {exc.code}: {detail[:1000]}"
+                ) from exc
+            except urllib.error.URLError as exc:
+                if method == "GET" and attempt + 1 < attempts:
+                    time.sleep(TRANSIENT_GET_DELAY_SECONDS)
+                    continue
+                raise AutohealError(f"GitHub API {method} {path} transport failure: {exc}") from exc
         if len(raw) > max_bytes:
             raise AutohealError(f"GitHub API {method} {path} exceeded bounded response size")
         if not raw:
@@ -264,7 +302,11 @@ class GitHubApi:
         for page in range(1, max_pages + 1):
             payload = self.get(f"{path}{separator}per_page=100&page={page}")
             if isinstance(payload, dict):
-                items = payload.get("check_runs") or payload.get("workflow_runs")
+                items = None
+                for collection_key in ("check_runs", "workflow_runs"):
+                    if collection_key in payload:
+                        items = payload[collection_key]
+                        break
             else:
                 items = payload
             if not isinstance(items, list):
@@ -414,6 +456,47 @@ def _model_path_allowed(path: str, config: dict[str, Any]) -> bool:
     return any(path.startswith(prefix) for prefix in config["modelAutofixPathPrefixes"])
 
 
+def _deterministic_strategy(rule: Any, path: Any) -> str | None:
+    if rule == "py/overly-permissive-file" and isinstance(path, str) and path.startswith("tests/"):
+        return OVERLY_PERMISSIVE_TEST_STRATEGY
+    if rule == "py/clear-text-logging-sensitive-data" and path in DETERMINISTIC_LOG_REPAIRS:
+        return CLEAR_TEXT_LOG_STRATEGY
+    if rule == "py/reflective-xss" and path == "examples/reference_sut/app.py":
+        return REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY
+    return None
+
+
+def _repair_strategy(subject: dict[str, Any]) -> str:
+    return (
+        _deterministic_strategy(subject.get("rule"), subject.get("path")) or MODEL_AUTOFIX_STRATEGY
+    )
+
+
+def _marker_strategy(metadata: dict[str, Any]) -> str | None:
+    explicit = metadata.get("strategy")
+    if explicit is not None:
+        return explicit if isinstance(explicit, str) and explicit else None
+    generator = metadata.get("generator")
+    if generator == "github-codeql-autofix":
+        return MODEL_AUTOFIX_STRATEGY
+    if generator == "deterministic":
+        return _deterministic_strategy(metadata.get("rule"), metadata.get("path"))
+    return None
+
+
+def _require_strategy_binding(metadata: dict[str, Any], subject: dict[str, Any]) -> str:
+    expected = _repair_strategy(subject)
+    observed = _marker_strategy(metadata)
+    if observed != expected:
+        raise PolicyBlock("generated repair strategy drifted from the code-owned live strategy")
+    expected_generator = (
+        "github-codeql-autofix" if expected == MODEL_AUTOFIX_STRATEGY else "deterministic"
+    )
+    if metadata.get("generator") != expected_generator:
+        raise PolicyBlock("generated repair generator does not match the code-owned strategy")
+    return expected
+
+
 def _deterministic_repair(subject: dict[str, Any]) -> str | None:
     path = ROOT / subject["path"]
     try:
@@ -440,6 +523,61 @@ def _deterministic_repair(subject: dict[str, Any]) -> str | None:
         if text.count(old) != 1:
             return None
         return text.replace(old, new, 1)
+
+    if (
+        subject["rule"] == "py/reflective-xss"
+        and subject["path"] == "examples/reference_sut/app.py"
+    ):
+        json_import = "import json\n"
+        validation = """    allowed_modes = {
+        "pass",
+        "app-defect",
+        "outdated-locator",
+        "api-failure",
+        "timing",
+        "invalid-data",
+        "prompt-injection",
+    }
+    if mode not in allowed_modes:
+        raise HTTPException(status_code=400, detail="Invalid mode")
+    safe_mode = mode
+"""
+        literal_binding = """    if mode == "pass":
+        safe_mode: Mode = "pass"
+        mode_js = '"pass"'
+    elif mode == "app-defect":
+        safe_mode = "app-defect"
+        mode_js = '"app-defect"'
+    elif mode == "outdated-locator":
+        safe_mode = "outdated-locator"
+        mode_js = '"outdated-locator"'
+    elif mode == "api-failure":
+        safe_mode = "api-failure"
+        mode_js = '"api-failure"'
+    elif mode == "timing":
+        safe_mode = "timing"
+        mode_js = '"timing"'
+    elif mode == "invalid-data":
+        safe_mode = "invalid-data"
+        mode_js = '"invalid-data"'
+    elif mode == "prompt-injection":
+        safe_mode = "prompt-injection"
+        mode_js = '"prompt-injection"'
+    else:
+        raise HTTPException(status_code=400, detail="Invalid mode")
+"""
+        mode_dump = "    mode_js = json.dumps(safe_mode)\n"
+        if (
+            text.count(json_import) != 1
+            or text.count(validation) != 1
+            or text.count(mode_dump) != 1
+        ):
+            return None
+        return (
+            text.replace(json_import, "", 1)
+            .replace(validation, literal_binding, 1)
+            .replace(mode_dump, "", 1)
+        )
 
     return None
 
@@ -604,7 +742,7 @@ def _delete_exact_generated_branch(api: GitHubApi, branch: str, head_sha: str) -
         "generated repair branch SHA before cleanup",
     )
     if observed != head_sha:
-        raise PolicyBlock("generated repair branch changed before denied-PR cleanup")
+        raise PolicyBlock("generated repair branch changed before exact cleanup")
     api.delete(f"/git/refs/heads/{encoded}")
 
 
@@ -616,6 +754,7 @@ def _create_pull_request(
     attempt: int,
     *,
     deterministic: bool,
+    strategy: str,
 ) -> int:
     metadata = {
         "version": 1,
@@ -628,6 +767,7 @@ def _create_pull_request(
         "fingerprint": subject["fingerprint"],
         "attempt": attempt,
         "generator": "deterministic" if deterministic else "github-codeql-autofix",
+        "strategy": strategy,
     }
     body = "\n".join(
         (
@@ -666,11 +806,6 @@ def _create_pull_request(
     return number
 
 
-def _dispatch_qualification(api: GitHubApi, branch: str, head_sha: str) -> None:
-    api.post("/actions/workflows/ci.yml/dispatches", {"ref": branch})
-    api.post("/actions/workflows/codeql.yml/dispatches", {"ref": branch})
-
-
 def _latest_checks(api: GitHubApi, head_sha: str) -> dict[str, dict[str, Any]]:
     rows = api.list_all(f"/commits/{head_sha}/check-runs?filter=latest", max_pages=4)
     latest: dict[str, dict[str, Any]] = {}
@@ -687,16 +822,35 @@ def _latest_checks(api: GitHubApi, head_sha: str) -> dict[str, dict[str, Any]]:
 
 
 def _require_green_checks(api: GitHubApi, head_sha: str, config: dict[str, Any]) -> None:
-    checks = _latest_checks(api, head_sha)
-    for name in config["requiredChecks"]:
-        row = checks.get(name)
-        if row is None:
-            raise PolicyBlock(f"repair required check has not registered: {name}")
-        if row.get("status") != "completed" or row.get("conclusion") != "success":
-            raise PolicyBlock(
-                f"repair required check is not green: {name} "
-                f"status={row.get('status')} conclusion={row.get('conclusion')}"
-            )
+    try:
+        require_trusted_qualification_success(
+            api,
+            head_sha,
+            _current_main(api, config),
+            required=tuple(config["requiredChecks"]),
+        )
+    except TrustedQualificationError as exc:
+        raise PolicyBlock("automatic Trusted PR Gate is not yet admissible") from exc
+
+
+def _repository_text(api: GitHubApi, path: str, ref: str) -> str:
+    encoded_path = "/".join(urllib.parse.quote(part, safe="") for part in path.split("/"))
+    payload = api.get(f"/contents/{encoded_path}?ref={urllib.parse.quote(ref, safe='')}")
+    if not isinstance(payload, dict) or payload.get("type") != "file":
+        raise PolicyBlock(f"repair content is not one regular repository file: {path}")
+    content = payload.get("content")
+    if not isinstance(content, str) or payload.get("encoding") != "base64":
+        raise PolicyBlock(f"repair content encoding is invalid: {path}")
+    try:
+        raw = base64.b64decode("".join(content.split()), validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise PolicyBlock(f"repair content base64 is invalid: {path}") from exc
+    if len(raw) > 2 * 1024 * 1024:
+        raise PolicyBlock(f"repair content exceeds bounded ingestion limit: {path}")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise PolicyBlock(f"repair content is not canonical UTF-8: {path}") from exc
 
 
 def _alert_shape(alert: dict[str, Any]) -> tuple[str, str, str]:
@@ -742,6 +896,93 @@ def _verify_codeql_remediation(
             )
 
 
+def _rebind_repair_alert(
+    api: GitHubApi,
+    metadata: dict[str, Any],
+    live: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    alert_number = metadata.get("alert")
+    if not isinstance(alert_number, int) or isinstance(alert_number, bool) or alert_number < 1:
+        raise PolicyBlock("generated repair marker alert number is invalid")
+    matches = [
+        alert
+        for alert in _branch_alerts(api, "refs/heads/main")
+        if alert.get("number") == alert_number
+    ]
+    if len(matches) != 1:
+        raise PolicyBlock("generated repair no longer maps to exactly one open main CodeQL alert")
+    subject = validate_alert(matches[0], live["baseSha"], config)
+    expected = {
+        "alert": subject["number"],
+        "rule": subject["rule"],
+        "severity": subject["severity"],
+        "path": subject["path"],
+        "base": subject["baseSha"],
+        "fingerprint": subject["fingerprint"],
+    }
+    observed = {key: metadata.get(key) for key in expected}
+    if observed != expected:
+        raise PolicyBlock("generated repair marker drifted from the exact live CodeQL alert")
+    attempt = metadata.get("attempt")
+    if (
+        not isinstance(attempt, int)
+        or isinstance(attempt, bool)
+        or attempt < 1
+        or attempt > int(config["maxAttemptsPerAlert"])
+    ):
+        raise PolicyBlock("generated repair marker attempt is outside reviewed bounds")
+    generator = metadata.get("generator")
+    if generator not in {"deterministic", "github-codeql-autofix"}:
+        raise PolicyBlock("generated repair marker generator is outside reviewed authority")
+    _require_strategy_binding(metadata, subject)
+    return subject
+
+
+def assess_trusted_admission(
+    api: GitHubApi,
+    pr: dict[str, Any],
+    config: dict[str, Any],
+    *,
+    require_checks: bool = True,
+    verify_codeql: bool = True,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    metadata, live = _validate_generated_pr(api, pr, config)
+    commit = api.get(f"/commits/{live['headSha']}")
+    if not _owned_generated_repair_commit(commit, live["headSha"]):
+        raise PolicyBlock("generated repair head lacks exact GitHub Actions ownership")
+    subject = _rebind_repair_alert(api, metadata, live, config)
+    if metadata.get("generator") == "deterministic":
+        expected_content = _deterministic_repair(subject)
+        if expected_content is None:
+            raise PolicyBlock("deterministic repair no longer matches a code-owned recipe")
+        observed_content = _repository_text(api, subject["path"], live["headSha"])
+        if observed_content != expected_content:
+            raise PolicyBlock("deterministic repair bytes differ from the code-owned recipe")
+    elif _is_deterministic_only(subject["path"], config):
+        raise PolicyBlock("protected verifier repair must remain deterministic")
+    if require_checks:
+        _require_green_checks(api, live["headSha"], config)
+    if verify_codeql:
+        _verify_codeql_remediation(api, metadata, config)
+    return metadata, live
+
+
+def _require_repair_lifecycle(
+    pr: dict[str, Any],
+    metadata: dict[str, Any],
+    *,
+    base_sha: str,
+    main_sha: str,
+) -> None:
+    if pr.get("state") != "open" or pr.get("draft") is not False:
+        raise PolicyBlock("generated repair PR is not open and non-draft")
+    if base_sha != main_sha or metadata.get("base") != main_sha:
+        raise PolicyBlock("generated repair is stale relative to current main")
+    if pr.get("mergeable") is not True:
+        raise PolicyBlock("generated repair PR is not definitively mergeable")
+
+
 def _validate_generated_pr(
     api: GitHubApi, pr: dict[str, Any], config: dict[str, Any]
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -752,8 +993,6 @@ def _validate_generated_pr(
         raise PolicyBlock("generated repair PR author is not GitHub Actions")
     if (pr.get("user") or {}).get("id") != GITHUB_ACTIONS_USER_ID:
         raise PolicyBlock("generated repair PR user id is not canonical GitHub Actions")
-    if pr.get("state") != "open" or pr.get("draft") is not False or pr.get("mergeable") is not True:
-        raise PolicyBlock("generated repair PR is not open, non-draft, and definitively mergeable")
     head = pr.get("head") or {}
     base = pr.get("base") or {}
     if (head.get("repo") or {}).get("full_name") != config["repository"]:
@@ -763,12 +1002,16 @@ def _validate_generated_pr(
     ) != "main":
         raise PolicyBlock("generated repair no longer targets repository main")
     branch = head.get("ref")
-    if not isinstance(branch, str) or not branch.startswith(BRANCH_PREFIX):
+    if not isinstance(branch, str) or AUTOHEAL_BRANCH_RE.fullmatch(branch) is None:
         raise PolicyBlock("generated repair branch name is outside the code-owned namespace")
     main_sha = _current_main(api, config)
     base_sha = _require_sha(base.get("sha"), "repair PR base SHA")
-    if base_sha != main_sha or metadata.get("base") != main_sha:
-        raise PolicyBlock("generated repair is stale relative to current main")
+    _require_repair_lifecycle(
+        pr,
+        metadata,
+        base_sha=base_sha,
+        main_sha=main_sha,
+    )
     head_sha = _require_sha(head.get("sha"), "repair PR head SHA")
     if metadata.get("head") != head_sha:
         raise PolicyBlock("generated repair head changed after qualification dispatch")
@@ -785,39 +1028,241 @@ def _validate_generated_pr(
     return metadata, {"headSha": head_sha, "baseSha": base_sha, "branch": branch}
 
 
-def _post_trusted_status(
+def _close_stale_repair(
     api: GitHubApi,
-    pr_number: int,
-    metadata: dict[str, Any],
+    number: int,
+    branch: str,
+    head_sha: str,
+) -> None:
+    if AUTOHEAL_BRANCH_RE.fullmatch(branch) is None:
+        raise PolicyBlock("stale repair branch is outside reviewed authority")
+    fresh = api.get(f"/pulls/{number}")
+    fresh_head = (fresh or {}).get("head") or {}
+    metadata = _parse_marker((fresh or {}).get("body"))
+    if (
+        (fresh or {}).get("state") != "open"
+        or (fresh or {}).get("draft") is not False
+        or ((fresh or {}).get("user") or {}).get("login") != GITHUB_ACTIONS_LOGIN
+        or ((fresh or {}).get("user") or {}).get("id") != GITHUB_ACTIONS_USER_ID
+        or fresh_head.get("ref") != branch
+        or _require_sha(fresh_head.get("sha"), "stale repair live head SHA") != head_sha
+        or metadata is None
+        or metadata.get("version") != 1
+        or metadata.get("head") != head_sha
+    ):
+        raise PolicyBlock("stale repair changed before exact cleanup")
+    commit = api.get(f"/commits/{head_sha}")
+    if not _owned_generated_repair_commit(commit, head_sha):
+        raise PolicyBlock("stale repair head lacks exact GitHub Actions ownership")
+    closed = api.patch(f"/pulls/{number}", {"state": "closed"})
+    if not isinstance(closed, dict) or closed.get("state") != "closed":
+        raise AutohealError("GitHub did not acknowledge stale repair closure")
+    _delete_exact_generated_branch(api, branch, head_sha)
+
+
+def _post_merge_ci_candidates(rows: list[dict[str, Any]], subject_sha: str) -> list[dict[str, Any]]:
+    subject_sha = _require_sha(subject_sha, "post-merge CI subject SHA")
+    candidates: list[dict[str, Any]] = []
+    for row in rows:
+        if (
+            row.get("name") != POST_MERGE_CI_NAME
+            or row.get("path") != POST_MERGE_CI_PATH
+            or row.get("head_branch") != "main"
+            or row.get("head_sha") != subject_sha
+            or row.get("event") not in POST_MERGE_CI_EVENTS
+        ):
+            continue
+        attempt = row.get("run_attempt")
+        if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
+            raise AutohealError("exact-subject CI run has invalid run_attempt")
+        run_id = row.get("id")
+        if not isinstance(run_id, int) or isinstance(run_id, bool) or run_id < 1:
+            raise AutohealError("exact-subject CI run has invalid run id")
+        status = row.get("status")
+        conclusion = row.get("conclusion")
+        if status not in {"queued", "in_progress", "completed"}:
+            raise AutohealError(f"exact-subject CI run has invalid status: {status}")
+        if status == "completed" and conclusion != "success":
+            raise AutohealError(f"exact-subject CI run completed non-successfully: {conclusion}")
+        candidates.append(row)
+    return candidates
+
+
+def _select_post_merge_ci_run(
+    rows: list[dict[str, Any]], subject_sha: str
+) -> dict[str, Any] | None:
+    candidates = _post_merge_ci_candidates(rows, subject_sha)
+    if len(candidates) > 1:
+        run_ids = sorted(int(row["id"]) for row in candidates)
+        raise AutohealError(
+            f"ambiguous exact-subject CI evidence for {subject_sha}: run ids {run_ids}"
+        )
+    return candidates[0] if candidates else None
+
+
+def _post_merge_ci_runs(api: GitHubApi, subject_sha: str) -> list[dict[str, Any]]:
+    encoded_sha = urllib.parse.quote(
+        _require_sha(subject_sha, "post-merge CI subject SHA"), safe=""
+    )
+    return api.list_all(f"/actions/runs?head_sha={encoded_sha}", max_pages=2)
+
+
+def _main_codeql_candidates(rows: list[dict[str, Any]], subject_sha: str) -> list[dict[str, Any]]:
+    subject_sha = _require_sha(subject_sha, "current-main CodeQL subject SHA")
+    candidates: list[dict[str, Any]] = []
+    for row in rows:
+        if (
+            row.get("name") != MAIN_CODEQL_NAME
+            or row.get("path") != MAIN_CODEQL_PATH
+            or row.get("head_branch") != "main"
+            or row.get("head_sha") != subject_sha
+            or row.get("event") not in MAIN_CODEQL_EVENTS
+        ):
+            continue
+        attempt = row.get("run_attempt")
+        if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
+            raise AutohealError("exact-main CodeQL run has invalid run_attempt")
+        run_id = row.get("id")
+        if not isinstance(run_id, int) or isinstance(run_id, bool) or run_id < 1:
+            raise AutohealError("exact-main CodeQL run has invalid run id")
+        status = row.get("status")
+        if status not in {"queued", "in_progress", "completed"}:
+            raise AutohealError(f"exact-main CodeQL run has invalid status: {status}")
+        if status == "completed" and row.get("conclusion") != "success":
+            continue
+        candidates.append(row)
+    return candidates
+
+
+def _select_main_codeql_run(rows: list[dict[str, Any]], subject_sha: str) -> dict[str, Any] | None:
+    candidates = _main_codeql_candidates(rows, subject_sha)
+    if not candidates:
+        return None
+    return max(candidates, key=lambda row: (int(row["id"]), int(row["run_attempt"])))
+
+
+def _main_codeql_runs(api: GitHubApi, subject_sha: str) -> list[dict[str, Any]]:
+    encoded_sha = urllib.parse.quote(
+        _require_sha(subject_sha, "current-main CodeQL subject SHA"), safe=""
+    )
+    return api.list_all(f"/actions/runs?head_sha={encoded_sha}", max_pages=2)
+
+
+def _ensure_current_main_codeql(
+    api: GitHubApi,
+    subject_sha: str,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    subject_sha = _require_sha(subject_sha, "current-main CodeQL subject SHA")
+    if _current_main(api, config) != subject_sha:
+        raise AutohealError("current main changed before CodeQL refresh admission")
+
+    rows = _main_codeql_runs(api, subject_sha)
+    existing = _select_main_codeql_run(rows, subject_sha)
+    if existing is not None:
+        return {
+            "codeqlRunId": int(existing["id"]),
+            "codeqlRunAttempt": int(existing["run_attempt"]),
+            "codeqlEvent": str(existing["event"]),
+            "codeqlStatus": str(existing["status"]),
+            "codeqlDispatched": False,
+        }
+
+    observed_ids = {
+        int(row["id"])
+        for row in rows
+        if isinstance(row.get("id"), int)
+        and not isinstance(row.get("id"), bool)
+        and int(row["id"]) > 0
+    }
+    api.post(
+        f"/actions/workflows/{MAIN_CODEQL_WORKFLOW}/dispatches",
+        {
+            "ref": "main",
+            "inputs": {"subject_sha": subject_sha, "subject_ref": "main"},
+        },
+    )
+
+    registered: dict[str, Any] | None = None
+    for attempt in range(MAIN_CODEQL_REGISTRATION_ATTEMPTS):
+        candidate = _select_main_codeql_run(_main_codeql_runs(api, subject_sha), subject_sha)
+        if candidate is not None and int(candidate["id"]) not in observed_ids:
+            if candidate.get("event") != "workflow_dispatch":
+                raise AutohealError(
+                    "current-main CodeQL refresh appeared through an unexpected event "
+                    "after explicit dispatch"
+                )
+            registered = candidate
+            break
+        if attempt + 1 < MAIN_CODEQL_REGISTRATION_ATTEMPTS:
+            time.sleep(MAIN_CODEQL_REGISTRATION_DELAY_SECONDS)
+    if registered is None:
+        raise AutohealError(
+            f"explicit CodeQL dispatch did not register for exact current main {subject_sha}"
+        )
+    if _current_main(api, config) != subject_sha:
+        raise AutohealError("current main changed after CodeQL refresh registration")
+    return {
+        "codeqlRunId": int(registered["id"]),
+        "codeqlRunAttempt": int(registered["run_attempt"]),
+        "codeqlEvent": str(registered["event"]),
+        "codeqlStatus": str(registered["status"]),
+        "codeqlDispatched": True,
+    }
+
+
+def _verify_actual_merge_commit(
+    api: GitHubApi,
+    result: dict[str, Any],
     live: dict[str, Any],
     config: dict[str, Any],
-) -> None:
-    token = os.environ.get("TRUSTED_STATUS_TOKEN", "")
-    if not token:
+) -> tuple[str, str]:
+    merge_sha = _require_sha(result.get("sha"), "actual security auto-heal merge SHA")
+    commit = api.get(f"/git/commits/{merge_sha}")
+    parents = (commit or {}).get("parents")
+    if not isinstance(parents, list) or len(parents) != 2:
+        raise AutohealError("actual security auto-heal merge commit must have exactly two parents")
+    observed = [
+        _require_sha((parent or {}).get("sha"), "actual security auto-heal merge parent SHA")
+        for parent in parents
+    ]
+    expected = [live["baseSha"], live["headSha"]]
+    if observed != expected:
         raise AutohealError(
-            "TRUSTED_STATUS_TOKEN is required for security auto-heal merge authority"
+            f"actual security auto-heal merge parents changed: expected {expected}, got {observed}"
         )
-    run_id = os.environ.get("GITHUB_RUN_ID", "")
-    if not run_id.isdigit() or int(run_id) < 1:
-        raise AutohealError("GITHUB_RUN_ID is invalid")
-    fresh = api.get(f"/pulls/{pr_number}")
-    rebound_metadata, rebound_live = _validate_generated_pr(api, fresh, config)
-    if rebound_metadata != metadata or rebound_live != live:
-        raise PolicyBlock("repair PR changed before trusted status publication")
-    _require_green_checks(api, live["headSha"], config)
-    _verify_codeql_remediation(api, metadata, config)
-    response = api.post(
-        f"/statuses/{live['headSha']}",
-        {
-            "state": "success",
-            "context": config["trustedStatusContext"],
-            "description": "CodeQL exact-subject remediation passed",
-            "target_url": f"https://github.com/{config['repository']}/actions/runs/{run_id}",
-        },
-        token=token,
+    merge_tree = _require_sha(
+        ((commit or {}).get("tree") or {}).get("sha"), "actual security auto-heal merge tree SHA"
     )
-    if not isinstance(response, dict) or response.get("state") != "success":
-        raise AutohealError("dedicated Trusted PR Gate status publication was not acknowledged")
+    head_commit = api.get(f"/git/commits/{live['headSha']}")
+    head_tree = _require_sha(
+        ((head_commit or {}).get("tree") or {}).get("sha"),
+        "validated security auto-heal head tree SHA",
+    )
+    if merge_tree != head_tree:
+        raise AutohealError(
+            "actual security auto-heal merge tree differs from the validated repair head tree"
+        )
+    current_main = _current_main(api, config)
+    if current_main != merge_sha:
+        raise AutohealError(
+            f"main advanced during guarded security merge: expected {merge_sha}, got {current_main}"
+        )
+    return merge_sha, merge_tree
+
+
+def _finalize_post_merge_evidence(
+    api: GitHubApi,
+    result: dict[str, Any],
+    live: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    merge_sha, merge_tree = _verify_actual_merge_commit(api, result, live, config)
+    return {
+        "mergeSha": merge_sha,
+        "sourceTreeSha": merge_tree,
+        "postMergeBinding": "exact-current-main-parents-and-validated-source-tree",
+    }
 
 
 def _merge(
@@ -826,13 +1271,13 @@ def _merge(
     metadata: dict[str, Any],
     live: dict[str, Any],
     config: dict[str, Any],
-) -> None:
+) -> dict[str, Any]:
     fresh = api.get(f"/pulls/{pr_number}")
-    rebound_metadata, rebound_live = _validate_generated_pr(api, fresh, config)
+    rebound_metadata, rebound_live = assess_trusted_admission(
+        api, fresh, config, require_checks=False
+    )
     if rebound_metadata != metadata or rebound_live != live:
         raise PolicyBlock("repair PR changed before guarded merge")
-    _require_green_checks(api, live["headSha"], config)
-    _verify_codeql_remediation(api, metadata, config)
     result = api.put(
         f"/pulls/{pr_number}/merge",
         {"sha": live["headSha"], "merge_method": config["mergeMethod"]},
@@ -840,6 +1285,7 @@ def _merge(
     if not isinstance(result, dict) or result.get("merged") is not True:
         message = result.get("message") if isinstance(result, dict) else result
         raise AutohealError(f"GitHub declined security auto-heal merge: {message}")
+    return _finalize_post_merge_evidence(api, result, live, config)
 
 
 def _open_pulls(api: GitHubApi) -> list[dict[str, Any]]:
@@ -916,8 +1362,8 @@ def _generated_repairs(pulls: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
-def _attempt_count(api: GitHubApi, alert_number: int) -> int:
-    rows = api.list_all("/pulls?state=closed&sort=updated&direction=desc", max_pages=2)
+def _attempt_count(api: GitHubApi, alert_number: int, strategy: str) -> int:
+    rows = api.list_all("/pulls?state=closed&sort=updated&direction=desc", max_pages=10)
     count = 0
     for pr in rows:
         if (pr.get("user") or {}).get("login") != GITHUB_ACTIONS_LOGIN:
@@ -928,19 +1374,33 @@ def _attempt_count(api: GitHubApi, alert_number: int) -> int:
         if not branch.startswith(BRANCH_PREFIX):
             continue
         metadata = _parse_marker(pr.get("body"))
-        if metadata is not None and metadata.get("alert") == alert_number:
+        if (
+            metadata is not None
+            and metadata.get("alert") == alert_number
+            and _marker_strategy(metadata) == strategy
+        ):
             count += 1
     return count
 
 
 def _create_repair(
-    api: GitHubApi, subject: dict[str, Any], config: dict[str, Any], *, attempt: int
+    api: GitHubApi,
+    subject: dict[str, Any],
+    config: dict[str, Any],
+    *,
+    attempt: int,
+    strategy: str,
 ) -> int:
     branch = _branch_name(subject)
-    deterministic_content = _deterministic_repair(subject)
+    expected_strategy = _repair_strategy(subject)
+    if strategy != expected_strategy:
+        raise PolicyBlock("repair creation strategy drifted from the code-owned live strategy")
+    deterministic = strategy != MODEL_AUTOFIX_STRATEGY
+    deterministic_content = _deterministic_repair(subject) if deterministic else None
     deterministic_only = _is_deterministic_only(subject["path"], config)
-    deterministic = deterministic_content is not None
-    if deterministic_only and deterministic_content is None:
+    if deterministic and deterministic_content is None:
+        raise PolicyBlock("code-owned deterministic repair strategy no longer reproduces")
+    if deterministic_only and not deterministic:
         raise PolicyBlock("protected verifier alert has no code-owned deterministic repair recipe")
 
     if deterministic:
@@ -968,10 +1428,10 @@ def _create_repair(
         subject,
         attempt,
         deterministic=deterministic,
+        strategy=strategy,
     )
     # Bind the branch name into the marker after creation only through the immutable branch
     # convention. The live validator derives it from the PR head and accepts an absent marker key.
-    _dispatch_qualification(api, branch, head_sha)
     print(
         json.dumps(
             {
@@ -1000,6 +1460,7 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
     _prune_orphan_repair_refs(api, pulls)
     repairs = _generated_repairs(pulls)
     active_alerts: set[int] = set()
+    closed_stale = 0
 
     for summary in repairs:
         number = summary.get("number")
@@ -1011,24 +1472,54 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
             active_alerts.add(alert_number)
         try:
             live_pr = api.get(f"/pulls/{number}")
-            validated_metadata, live = _validate_generated_pr(api, live_pr, config)
-            _require_green_checks(api, live["headSha"], config)
-            _verify_codeql_remediation(api, validated_metadata, config)
+            validated_metadata, live = assess_trusted_admission(
+                api, live_pr, config, require_checks=False
+            )
             if allow_merge and config["automergeEnabled"]:
-                _post_trusted_status(api, number, validated_metadata, live, config)
-                _merge(api, number, validated_metadata, live, config)
-                print(json.dumps({"pr": number, "decision": "repair-merged"}, sort_keys=True))
+                try:
+                    require_automatic_trusted_gate(
+                        api,
+                        number,
+                        live["headSha"],
+                        live["baseSha"],
+                    )
+                except TrustedStatusError as exc:
+                    raise PolicyBlock("automatic Trusted PR Gate is not yet admissible") from exc
+                merge_evidence = _merge(api, number, validated_metadata, live, config)
+                print(
+                    json.dumps(
+                        {
+                            "pr": number,
+                            "decision": "repair-merged",
+                            "headSha": live["headSha"],
+                            **merge_evidence,
+                        },
+                        sort_keys=True,
+                    )
+                )
         except PolicyBlock as exc:
+            reason = str(exc)
             print(
                 json.dumps(
-                    {"pr": number, "decision": "repair-waiting", "reason": str(exc)},
+                    {"pr": number, "decision": "repair-waiting", "reason": reason},
                     sort_keys=True,
                 )
             )
+            if reason == "generated repair is stale relative to current main":
+                branch = str((summary.get("head") or {}).get("ref") or "")
+                stale_head_sha = _require_sha(
+                    ((summary.get("head") or {}).get("sha")),
+                    "stale repair summary head SHA",
+                )
+                _close_stale_repair(api, number, branch, stale_head_sha)
+                closed_stale += 1
+                if isinstance(alert_number, int):
+                    active_alerts.discard(alert_number)
 
-    capacity = max(0, int(config["maxOpenRepairs"]) - len(repairs))
+    remaining_repairs = len(repairs) - closed_stale
+    capacity = max(0, int(config["maxOpenRepairs"]) - remaining_repairs)
     if capacity == 0:
-        return len(repairs)
+        return remaining_repairs
 
     query = urllib.parse.urlencode(
         {"state": "open", "ref": "refs/heads/main", "tool_name": "CodeQL"},
@@ -1040,13 +1531,44 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
         if created >= capacity:
             break
         try:
+            instance = alert.get("most_recent_instance") or {}
+            if instance.get("ref") == "refs/heads/main":
+                alert_instance_sha = _require_sha(instance.get("commit_sha"), "alert instance SHA")
+                if alert_instance_sha != main_sha:
+                    refresh = _ensure_current_main_codeql(api, main_sha, config)
+                    print(
+                        json.dumps(
+                            {
+                                "alert": alert.get("number"),
+                                "decision": (
+                                    "codeql-refresh-dispatched"
+                                    if refresh["codeqlDispatched"]
+                                    else "codeql-refresh-waiting"
+                                ),
+                                "staleSha": alert_instance_sha,
+                                "currentMain": main_sha,
+                                **refresh,
+                            },
+                            sort_keys=True,
+                        )
+                    )
+                    return remaining_repairs + created
             subject = validate_alert(alert, main_sha, config)
             if subject["number"] in active_alerts:
                 continue
-            prior = _attempt_count(api, subject["number"])
+            strategy = _repair_strategy(subject)
+            prior = _attempt_count(api, subject["number"], strategy)
             if prior >= config["maxAttemptsPerAlert"]:
-                raise PolicyBlock("alert exhausted bounded automatic remediation attempts")
-            _create_repair(api, subject, config, attempt=prior + 1)
+                raise PolicyBlock(
+                    "alert exhausted bounded automatic remediation attempts for current strategy"
+                )
+            _create_repair(
+                api,
+                subject,
+                config,
+                attempt=prior + 1,
+                strategy=strategy,
+            )
             created += 1
             active_alerts.add(subject["number"])
         except RetryLater as exc:
@@ -1065,7 +1587,7 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
                     sort_keys=True,
                 )
             )
-    return len(repairs) + created
+    return remaining_repairs + created
 
 
 def selftest(config: dict[str, Any]) -> None:
@@ -1097,6 +1619,273 @@ def selftest(config: dict[str, Any]) -> None:
         raise AutohealError("GitHub Actions PR creation denial was not classified")
     if _github_actions_pr_creation_denied(AutohealError("HTTP 403: unrelated policy")):
         raise AutohealError("unrelated HTTP 403 was misclassified as PR creation denial")
+
+    class _EmptyPaginationApi(GitHubApi):
+        def __init__(self) -> None:
+            pass
+
+        def get(self, path: str) -> Any:
+            if "/check-runs" in path:
+                return {"check_runs": []}
+            if "/actions/runs" in path:
+                return {"workflow_runs": []}
+            raise AutohealError(f"unexpected self-test pagination path: {path}")
+
+    empty_api = _EmptyPaginationApi()
+    if empty_api.list_all("/commits/" + "f" * 40 + "/check-runs", max_pages=2) != []:
+        raise AutohealError("pagination rejected canonical empty check_runs response")
+    if empty_api.list_all("/actions/runs?head_sha=" + "f" * 40, max_pages=2) != []:
+        raise AutohealError("pagination rejected canonical empty workflow_runs response")
+
+    current_main_sha = "6" * 40
+    canonical_codeql = {
+        "id": 801,
+        "run_attempt": 1,
+        "name": MAIN_CODEQL_NAME,
+        "path": MAIN_CODEQL_PATH,
+        "head_branch": "main",
+        "head_sha": current_main_sha,
+        "event": "workflow_dispatch",
+        "status": "queued",
+        "conclusion": None,
+    }
+    selected_codeql = _select_main_codeql_run([canonical_codeql], current_main_sha)
+    if selected_codeql != canonical_codeql:
+        raise AutohealError("canonical exact-main CodeQL refresh run was not selected")
+    for field, value in (
+        ("head_sha", "5" * 40),
+        ("path", ".github/workflows/ci.yml"),
+        ("event", "pull_request"),
+    ):
+        drifted = {**canonical_codeql, field: value}
+        if _select_main_codeql_run([drifted], current_main_sha) is not None:
+            raise AutohealError(f"drifted exact-main CodeQL {field} was accepted")
+    failed_codeql = {
+        **canonical_codeql,
+        "status": "completed",
+        "conclusion": "failure",
+    }
+    if _select_main_codeql_run([failed_codeql], current_main_sha) is not None:
+        raise AutohealError("failed exact-main CodeQL run was accepted as refresh evidence")
+
+    class _MainCodeqlRefreshApi(GitHubApi):
+        def __init__(self, *, move_main: bool = False, existing: bool = False) -> None:
+            self.dispatched = False
+            self.move_main = move_main
+            self.existing = existing
+            self.main_reads = 0
+            self.calls: list[tuple[str, dict[str, Any] | None]] = []
+
+        def get(self, path: str) -> Any:
+            if path == "/branches/main":
+                self.main_reads += 1
+                observed = "4" * 40 if self.move_main and self.main_reads >= 2 else current_main_sha
+                return {"commit": {"sha": observed}}
+            raise AutohealError(f"unexpected CodeQL refresh self-test GET path: {path}")
+
+        def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+            expected = f"/actions/runs?head_sha={current_main_sha}"
+            if path != expected or max_pages != 2:
+                raise AutohealError(f"unexpected CodeQL refresh self-test list path: {path}")
+            if self.existing or self.dispatched:
+                row = {
+                    **canonical_codeql,
+                    "status": "completed" if self.existing else "queued",
+                    "conclusion": "success" if self.existing else None,
+                }
+                return [row]
+            return []
+
+        def post(
+            self,
+            path: str,
+            payload: dict[str, Any] | None = None,
+            *,
+            token: str | None = None,
+        ) -> Any:
+            if token is not None:
+                raise AutohealError("CodeQL refresh self-test received unexpected alternate token")
+            self.calls.append((path, payload))
+            self.dispatched = True
+            return None
+
+    codeql_refresh_api = _MainCodeqlRefreshApi()
+    codeql_refresh = _ensure_current_main_codeql(codeql_refresh_api, current_main_sha, config)
+    expected_codeql_dispatch = (
+        "/actions/workflows/codeql.yml/dispatches",
+        {
+            "ref": "main",
+            "inputs": {"subject_sha": current_main_sha, "subject_ref": "main"},
+        },
+    )
+    if codeql_refresh_api.calls != [expected_codeql_dispatch]:
+        raise AutohealError("exact-main CodeQL refresh dispatch payload drifted")
+    if codeql_refresh != {
+        "codeqlRunId": 801,
+        "codeqlRunAttempt": 1,
+        "codeqlEvent": "workflow_dispatch",
+        "codeqlStatus": "queued",
+        "codeqlDispatched": True,
+    }:
+        raise AutohealError("exact-main CodeQL refresh evidence payload drifted")
+
+    existing_codeql_api = _MainCodeqlRefreshApi(existing=True)
+    existing_codeql = _ensure_current_main_codeql(existing_codeql_api, current_main_sha, config)
+    if existing_codeql_api.calls:
+        raise AutohealError("existing exact-main CodeQL success triggered a duplicate dispatch")
+    if existing_codeql["codeqlDispatched"] is not False:
+        raise AutohealError("existing exact-main CodeQL success was not reused")
+
+    moved_codeql_api = _MainCodeqlRefreshApi(move_main=True)
+    try:
+        _ensure_current_main_codeql(moved_codeql_api, current_main_sha, config)
+    except AutohealError as exc:
+        if str(exc) != "current main changed after CodeQL refresh registration":
+            raise AutohealError("moved-main CodeQL refresh guard changed semantics") from exc
+    else:
+        raise AutohealError("moved main was accepted after CodeQL refresh registration")
+
+    merge_sha = "9" * 40
+    base_sha = "a" * 40
+    head_sha = "b" * 40
+    canonical_ci = {
+        "id": 901,
+        "run_attempt": 1,
+        "name": POST_MERGE_CI_NAME,
+        "path": POST_MERGE_CI_PATH,
+        "head_branch": "main",
+        "head_sha": merge_sha,
+        "event": "workflow_dispatch",
+        "status": "queued",
+        "conclusion": None,
+    }
+    selected = _select_post_merge_ci_run([canonical_ci], merge_sha)
+    if selected != canonical_ci:
+        raise AutohealError("canonical exact-main CI evidence was not selected")
+
+    for field, value in (
+        ("head_sha", "8" * 40),
+        ("path", ".github/workflows/codeql.yml"),
+        ("event", "pull_request"),
+    ):
+        drifted = {**canonical_ci, field: value}
+        if _select_post_merge_ci_run([drifted], merge_sha) is not None:
+            raise AutohealError(f"drifted post-merge CI {field} was accepted")
+
+    try:
+        _select_post_merge_ci_run([canonical_ci, {**canonical_ci, "id": 902}], merge_sha)
+    except AutohealError as exc:
+        if "ambiguous exact-subject CI evidence" not in str(exc):
+            raise AutohealError("duplicate exact-main CI evidence failed unexpectedly") from exc
+    else:
+        raise AutohealError("duplicate exact-main CI evidence was accepted")
+
+    for conclusion in ("failure", "cancelled", "timed_out"):
+        failed = {
+            **canonical_ci,
+            "status": "completed",
+            "conclusion": conclusion,
+        }
+        try:
+            _select_post_merge_ci_run([failed], merge_sha)
+        except AutohealError as exc:
+            if f"non-successfully: {conclusion}" not in str(exc):
+                raise AutohealError(
+                    f"terminal {conclusion} CI evidence failed unexpectedly"
+                ) from exc
+        else:
+            raise AutohealError(f"terminal {conclusion} CI evidence was accepted")
+
+    source_tree = "6" * 40
+
+    class _PostMergeEvidenceApi(GitHubApi):
+        def __init__(self, *, move_main: bool = False, drift_tree: bool = False) -> None:
+            self.move_main = move_main
+            self.drift_tree = drift_tree
+
+        def get(self, path: str) -> Any:
+            if path == f"/git/commits/{merge_sha}":
+                return {
+                    "parents": [{"sha": base_sha}, {"sha": head_sha}],
+                    "tree": {"sha": "5" * 40 if self.drift_tree else source_tree},
+                }
+            if path == f"/git/commits/{head_sha}":
+                return {"tree": {"sha": source_tree}}
+            if path == "/branches/main":
+                return {"commit": {"sha": "7" * 40 if self.move_main else merge_sha}}
+            raise AutohealError(f"unexpected post-merge self-test GET path: {path}")
+
+    post_merge_api = _PostMergeEvidenceApi()
+    evidence = _finalize_post_merge_evidence(
+        post_merge_api,
+        {"sha": merge_sha},
+        {"baseSha": base_sha, "headSha": head_sha},
+        config,
+    )
+    if evidence != {
+        "mergeSha": merge_sha,
+        "sourceTreeSha": source_tree,
+        "postMergeBinding": "exact-current-main-parents-and-validated-source-tree",
+    }:
+        raise AutohealError("post-merge structural binding evidence payload drifted")
+
+    drift_tree_api = _PostMergeEvidenceApi(drift_tree=True)
+    try:
+        _finalize_post_merge_evidence(
+            drift_tree_api,
+            {"sha": merge_sha},
+            {"baseSha": base_sha, "headSha": head_sha},
+            config,
+        )
+    except AutohealError as exc:
+        if "merge tree differs from the validated repair head tree" not in str(exc):
+            raise AutohealError("post-merge tree-drift guard changed semantics") from exc
+    else:
+        raise AutohealError("drifted post-merge source tree was accepted")
+
+    moved_api = _PostMergeEvidenceApi(move_main=True)
+    try:
+        _finalize_post_merge_evidence(
+            moved_api,
+            {"sha": merge_sha},
+            {"baseSha": base_sha, "headSha": head_sha},
+            config,
+        )
+    except AutohealError as exc:
+        expected = (
+            f"main advanced during guarded security merge: expected {merge_sha}, got {'7' * 40}"
+        )
+        if str(exc) != expected:
+            raise AutohealError("moved-main post-merge guard changed semantics") from exc
+    else:
+        raise AutohealError("moved main was accepted as post-merge binding authority")
+
+    stale_lifecycle = {"state": "open", "draft": False, "mergeable": False}
+    try:
+        _require_repair_lifecycle(
+            stale_lifecycle,
+            {"base": "a" * 40},
+            base_sha="a" * 40,
+            main_sha="c" * 40,
+        )
+    except PolicyBlock as exc:
+        if str(exc) != "generated repair is stale relative to current main":
+            raise AutohealError("stale repair lifecycle ordering changed") from exc
+    else:
+        raise AutohealError("stale repair did not fail as stale")
+
+    try:
+        _require_repair_lifecycle(
+            stale_lifecycle,
+            {"base": "c" * 40},
+            base_sha="c" * 40,
+            main_sha="c" * 40,
+        )
+    except PolicyBlock as exc:
+        if str(exc) != "generated repair PR is not definitively mergeable":
+            raise AutohealError("repair mergeability guard changed semantics") from exc
+    else:
+        raise AutohealError("current non-mergeable repair did not fail closed")
 
     errors = validate_config(config)
     if errors:

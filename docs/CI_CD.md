@@ -1,7 +1,7 @@
 # CI/CD and Repository Governance
 
 > [!IMPORTANT]
-> **Workflow definition, workflow execution, validation subject, evidence admission, status identity, merge enforcement, and release preparation are separate authorities.** Ordinary pull-request CI is development evidence. Routine source-only admission and protected-maintenance admission use different trust roots, and neither may let candidate-controlled bytes certify their own protected authority. Release-candidate evidence is separately non-publishing and cannot become publisher identity by carrying hashes or version metadata.
+> **Workflow definition, workflow execution, validation subject, bot provenance, evidence admission, status identity, merge enforcement, and release preparation are separate authorities.** Ordinary pull-request CI is development evidence. Owner-routine admission, governed-bot admission, and external protected-maintenance admission use distinct deterministic policies, and none may let candidate-controlled bytes certify their own protected authority. Release-candidate evidence is separately non-publishing and cannot become publisher identity by carrying hashes or version metadata.
 
 **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
@@ -16,7 +16,7 @@ The repository and external control plane intentionally separate these surfaces:
 | Surface | Trigger / wake-up | Authority | Intended role |
 |---|---|---|---|
 | `.github/workflows/ci.yml` | `pull_request`, `push` to `main`, `merge_group` | read-only, secret-free validation jobs | ordinary deterministic development evidence and exact build/test artifacts |
-| `.github/workflows/trusted-pr-auto.yml` | reviewed CI completion through `workflow_run` | trusted default-branch admission, then Environment-held App credential only in the terminal reporter | routine source-only authorization when protected roots have zero drift |
+| `.github/workflows/trusted-pr-auto.yml` | reviewed CI/CodeQL completion through `workflow_run` for owner-routine wakes; serialized five-minute default-branch schedule for governed-bot reconciliation | trusted default-branch owner/bot admission; App credential only in the terminal reporter | owner-routine zero-drift authorization plus finite governed-bot exact-provenance authorization |
 | external `scripts/trusted_gate_service/` deployment | GitHub App `workflow_run` webhook | independently deployed code, independently administered one-shot policy, durable external state, dedicated App credential | protected-maintenance authorization for exact reviewed protected-root transitions |
 | `.github/workflows/release-candidate.yml` | explicit `workflow_dispatch` from `main` | read-only, secret-free, non-publishing package verification | exact-current-main/version/reproducible-wheel release-preparation evidence |
 | `.github/workflows/manual-validation.yml` | `workflow_dispatch` | `credentialed-validation` Environment for selected provider evidence | optional live/model evidence; never protected merge authority |
@@ -60,23 +60,35 @@ The automatic quality matrix has two exact, independently hash-locked lanes:
 
 Before hash-locked dependency installation, `scripts/verify_build_authority.py` verifies the reviewed lock set and build authority. `scripts/verify_ci_contract.py` freezes the exact lane structure, immutable action identities, subject binding, install ordering, aggregate behavior, absence of repository-dispatch authority, the separate automatic trusted-workflow contract, and the separate non-publishing release-candidate contract. Stale Python 3.13 lane authority is rejected.
 
-## Routine source-only trusted path
+## Automatic Trusted PR Gate paths
 
-For an eligible same-repository PR with no protected-root drift, a successful reviewed ordinary CI run may wake `.github/workflows/trusted-pr-auto.yml` through `workflow_run`.
+`.github/workflows/trusted-pr-auto.yml` is the repository-owned automatic status authority. For owner-routine changes, a reviewed `workflow_run` event is only a wake-up signal. Governed bots instead use a serialized five-minute default-branch schedule that discovers a bounded same-repository candidate and fresh-GETs its live state. In both cases trusted default-branch bytes independently re-fetch current `main`, the PR, candidate head, prospective merge, and ordered merge parents before any App credential is available.
 
-The wake-up payload is not authorization. Trusted default-branch admission independently re-fetches the triggering run, current `main`, the live PR, the live prospective merge, ordered merge parents, and protected Git objects. Automatic admission requires exact identity and **zero protected authority-root drift**.
+### Owner-routine path
 
-Before candidate scripts run, trusted workflow bytes independently verify the prospective-merge subject and protected-object guard. Validation remains read-only and secret-free. The terminal reporter re-runs admission before it may enter Environment `trusted-pr-gate`, obtain the dedicated App credential, and publish `Trusted PR Gate`.
+For an owner-triggered same-repository PR, automatic admission requires exact reviewed pull-request CI identity and **zero protected authority-root drift**. The prospective merge is then executed through the full trusted validation graph. Candidate-executing jobs are read-only and secret-free.
 
-The shared Environment/App credential remains live because this proven routine reporter still depends on it. It is not a legacy-only credential and must not be retired without an independently validated replacement for this path.
+### Governed-bot path
 
-Any API failure, ambiguity, fork, stale base, malformed/truncated response, parent mismatch, or protected-root change makes the routine path non-PASS.
+Three finite bot lanes are autonomous:
 
-## Protected-maintenance external path
+- canonical Dependabot GitHub Actions updates under the reviewed `dependabot/github_actions/...` namespace;
+- GitHub Actions dependency-promotion PRs under `automation/dependency-promotion-...`;
+- GitHub Actions CodeQL auto-heal PRs under `automation/codeql-autoheal-...`.
 
-A PR that changes a protected authority root is deliberately ineligible for routine source-only authorization. Protected maintenance uses the independently deployed external service described in [Trusted PR control plane](TRUSTED_PR_CONTROL_PLANE.md).
+A bot login is never sufficient. The trusted-main scheduled reconciler admits only canonical bot numeric identity, reviewed branch grammar, same-repository ownership, definitive mergeability on exact current `main`, exact source lineage/marker/fingerprint, lane-specific changed-path semantics, and an exact prospective merge. Dependency promotions are deterministically regenerated under trusted interpreters. Security repairs are rebound to the live CodeQL alert, code-owned remediation strategy, generator, and bounded per-strategy attempt epoch; deterministic repairs must reproduce the code-owned bytes exactly. The full trusted validation graph then executes against the prospective merge. A separate bot-only CodeQL job analyzes the exact governed head ref/SHA, and the subject guard requires the governed head tree and prospective-merge tree to be byte-identical before that CodeQL result can support merge-subject authority.
 
-The authority chain is:
+The trusted workflow then runs the full supply-chain, quality, deterministic-evaluation, security, and Playwright suite against the prospective merge. Immediately before publication it re-runs live admission and terminal bot-policy proof. Only then does the terminal reporter enter Environment `trusted-pr-gate`, mint the dedicated App token, and publish `Trusted PR Gate`.
+
+The App status target binds the exact PR number, base SHA, head SHA, and prospective merge SHA to the exact trusted-gate workflow run. Merge controllers have no App status-write credential: they independently re-read that App-authored binding, current PR/base/head/merge-ref/parents, and their lane policy before merging. After merge they require exact ordered `(base, head)` parents, a merge tree identical to the validated bot head tree, and the merge SHA to be current `main`; they do not manufacture post-merge green through nested workflow dispatch. Dependency governance and Security Auto-Heal also wake on completion of the Trusted PR Auto Gate so status publication has an event-driven convergence path.
+
+Any API failure, ambiguity, fork, stale base, non-definitive mergeability, malformed/truncated response, parent/tree mismatch, bot/source provenance mismatch, failed trusted validation/CodeQL, or terminal subject drift is non-PASS truth.
+
+## Unrecognized protected-maintenance external path
+
+Protected changes that do not match one of the finite governed-bot policies remain deliberately ineligible for repository-hosted automatic authorization. They use the independently deployed external service described in [Trusted PR control plane](TRUSTED_PR_CONTROL_PLANE.md).
+
+The break-glass authority chain is:
 
 **ordinary PR CI completion → external App webhook ingress → exact live PR/head/base/merge resolution → independently administered one-shot protected-object policy → exact job/artifact/build-manifest verification → terminal live re-resolution → dedicated App status → strict protected-branch enforcement**
 
@@ -86,7 +98,7 @@ Only after policy admission may ordinary CI be used as execution evidence. The s
 
 Immediately before publication it resolves the live subject again and re-runs the same policy. Publication intent is persisted before the irreversible status POST. Ambiguous publication outcomes are reconciled by read-back; the POST is not automatically replayed after durable publication intent.
 
-Live bootstrap evidence has proven this external path can publish the required App-authored status for an exact protected subject. That observation is historical evidence for the proven revision only; every newer protected subject still requires fresh exact policy, CI evidence, App status, and pre-merge revalidation.
+The external gate remains a separately administered break-glass trust root, not a normal dependency/security automation dependency.
 
 ## Repository-dispatch retirement
 
@@ -149,7 +161,7 @@ python scripts/verify_ci_contract.py
 python scripts/verify_docs.py
 ```
 
-The CI-contract verifier fails closed on drift in the reviewed repository workflow authority, including immutable Action SHAs, exact Python patch versions, quality-lane split, exact checkouts, absence of repository dispatch/client-payload authority, read-only validation permissions, build/install ordering, evidence uploads, deterministic aggregate structure, automatic zero-protected-drift admission, final App-credential isolation, and the release-candidate workflow's exact trigger/subject/build/reproducibility/live-main/no-write/no-secret boundaries.
+The CI-contract verifier fails closed on drift in the reviewed repository workflow authority, including immutable Action SHAs, exact Python patch versions, quality-lane split, exact checkouts, absence of repository dispatch/client-payload authority, secret-free validation permissions with only the reviewed bot-CodeQL `security-events: write` exception, build/install ordering, evidence uploads, deterministic aggregate structure, automatic owner zero-protected-drift admission, governed-bot scheduled reconciliation, final App-credential isolation, and the release-candidate workflow's exact trigger/subject/build/reproducibility/live-main/no-write/no-secret boundaries.
 
 The documentation verifier checks repository-owned structural and selected implementation-coupled claims. It does not turn external GitHub/AWS/provider facts into source-certified truth; those remain externally observed evidence.
 

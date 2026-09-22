@@ -8,18 +8,27 @@ on:
   schedule:
     - cron: "17 7 * * 2"
   workflow_dispatch:
+    inputs:
+      subject_sha:
+        description: Exact commit the trusted-main CodeQL dispatch analyzes
+        required: true
+        type: string
+      subject_ref:
+        description: Exact main, Dependabot Actions, or generated-maintenance branch containing subject_sha
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: codeql-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
+  group: codeql-${{ github.repository }}-${{ github.event.pull_request.number || inputs.subject_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
   codeql:
     name: CodeQL
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name != 'workflow_dispatch' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     permissions:
       actions: read
       contents: read
@@ -32,9 +41,126 @@ jobs:
         with:
           persist-credentials: false
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        uses: github/codeql-action/init@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
         with:
           languages: python
           queries: security-extended
       - name: Analyze
-        uses: github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
+
+  qualified-codeql:
+    name: Exact-Subject CodeQL Analysis
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Bind trusted-main dispatch to exact analysis subject
+        env:
+          EXPECTED_SUBJECT_SHA: ${{ inputs.subject_sha }}
+          EXPECTED_SUBJECT_REF: ${{ inputs.subject_ref }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SUBJECT_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "::error::subject_sha must be a canonical 40-character lowercase SHA"
+            exit 1
+          }
+          test "$GITHUB_REF" = "refs/heads/main" || {
+            echo "::error::exact-subject CodeQL qualification must execute from trusted main"
+            exit 1
+          }
+          if [ "$EXPECTED_SUBJECT_REF" = "main" ]; then
+            test "$GITHUB_SHA" = "$EXPECTED_SUBJECT_SHA" || {
+              echo "::error::main CodeQL qualification SHA differs from trusted workflow subject"
+              exit 1
+            }
+          elif [[ "$EXPECTED_SUBJECT_REF" =~ ^dependabot/github_actions/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ ]] || \
+               [[ "$EXPECTED_SUBJECT_REF" =~ ^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$ ]] || \
+               [[ "$EXPECTED_SUBJECT_REF" =~ ^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{12}$ ]]; then
+            live_subject_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${EXPECTED_SUBJECT_REF}" --jq .object.sha)"
+            test "$live_subject_sha" = "$EXPECTED_SUBJECT_SHA" || {
+              echo "::error::generated maintenance ref moved after CodeQL qualification dispatch"
+              exit 1
+            }
+          else
+            echo "::error::subject_ref is outside reviewed exact-subject CodeQL authority"
+            exit 1
+          fi
+
+      - name: Checkout exact analysis subject
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.subject_sha }}
+          persist-credentials: false
+
+      - name: Verify exact source revision
+        env:
+          EXPECTED_SUBJECT_SHA: ${{ inputs.subject_sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SUBJECT_SHA"
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
+        with:
+          languages: python
+          queries: security-extended
+
+      - name: Analyze exact generated subject
+        uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
+        with:
+          ref: refs/heads/${{ inputs.subject_ref }}
+          sha: ${{ inputs.subject_sha }}
+
+  publish-qualified-codeql:
+    name: Publish Exact-Subject CodeQL
+    needs: qualified-codeql
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.subject_ref != 'main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      checks: write
+      contents: read
+    steps:
+      - name: Revalidate and publish exact maintenance CodeQL qualification
+        env:
+          EXPECTED_SUBJECT_SHA: ${{ inputs.subject_sha }}
+          EXPECTED_SUBJECT_REF: ${{ inputs.subject_ref }}
+          ANALYSIS_RESULT: ${{ needs.qualified-codeql.result }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SUBJECT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          if [[ "$EXPECTED_SUBJECT_REF" =~ ^dependabot/github_actions/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ ]] || \
+             [[ "$EXPECTED_SUBJECT_REF" =~ ^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$ ]] || \
+             [[ "$EXPECTED_SUBJECT_REF" =~ ^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{12}$ ]]; then
+            :
+          else
+            echo "::error::candidate CodeQL qualification ref is outside reviewed maintenance authority"
+            exit 1
+          fi
+          live_subject_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${EXPECTED_SUBJECT_REF}" --jq .object.sha)"
+          test "$live_subject_sha" = "$EXPECTED_SUBJECT_SHA"
+          conclusion="failure"
+          if [ "$ANALYSIS_RESULT" = "success" ]; then
+            conclusion="success"
+          fi
+          details_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          external_id="aiqa-codeql-qualification:${EXPECTED_SUBJECT_SHA}:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}"
+          payload="$(jq -nc \
+            --arg head "$EXPECTED_SUBJECT_SHA" \
+            --arg url "$details_url" \
+            --arg external_id "$external_id" \
+            --arg conclusion "$conclusion" \
+            --arg analysis "$ANALYSIS_RESULT" \
+            '{name:"CodeQL",head_sha:$head,status:"completed",conclusion:$conclusion,details_url:$url,external_id:$external_id,output:{title:"Exact-subject CodeQL qualification",summary:("Trusted-main CodeQL analysis result: " + $analysis + ".")}}')"
+          response="$(gh api --method POST "repos/${GITHUB_REPOSITORY}/check-runs" --input - <<<"$payload")"
+          test "$(jq -r '.name' <<<"$response")" = "CodeQL"
+          test "$(jq -r '.head_sha' <<<"$response")" = "$EXPECTED_SUBJECT_SHA"
+          test "$(jq -r '.status' <<<"$response")" = "completed"
+          test "$(jq -r '.conclusion' <<<"$response")" = "$conclusion"
+          test "$(jq -r '.external_id' <<<"$response")" = "$external_id"

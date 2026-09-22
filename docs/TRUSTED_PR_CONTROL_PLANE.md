@@ -14,48 +14,51 @@ The authority chain is:
 
 **objective → advisory reasoning → deterministic policy → controlled tool → real execution/observation → persisted evidence → deterministic validation → structured terminal report**
 
-## Two admission classes
+## Three admission classes
 
-Routine changes and externally protected maintenance intentionally use different trust roots. The repository's `.github` and `scripts` trees are part of the admission control plane, so changes to either tree are protected maintenance and cannot receive routine automatic authorization. Test-only maintenance under `tests` remains routine-admissible. The strict App-bound branch rule remains unchanged for both classes.
+The control plane distinguishes owner-routine changes, finite governed-bot changes, and unrecognized protected maintenance. The strict App-bound branch rule is unchanged across all three classes.
 
-### Routine automatic path
+### Owner-routine automatic path
 
-The routine chain is:
+The owner-routine chain is:
 
-**ordinary PR CI completion → default-branch `workflow_run` wake-up → live deterministic admission → exact prospective merge + protected-object guard → deterministic validation → fresh admission revalidation → dedicated App token → live PR/merge-ref revalidation → App status → strict protected-branch enforcement**
+**ordinary PR CI completion → default-branch `workflow_run` wake-up → live deterministic admission → exact prospective merge + zero protected-object drift → deterministic validation → fresh admission revalidation → dedicated App token → exact subject-bound App status → strict protected-branch enforcement**
 
-Automatic admission requires all of the following:
+Owner-routine admission requires exact reviewed pull-request CI identity, expected repository-owner actor and triggering actor, one open same-repository PR targeting `main`, current-base equality, exact ordered prospective-merge parents `(base, head)`, and identical Git object IDs for every routine-protected authority root.
 
-1. exact reviewed ordinary CI workflow identity;
-2. completed successful `pull_request` event;
-3. expected repository and same-repository head;
-4. expected repository owner actor and triggering actor;
-5. exactly one open non-draft PR for the head SHA targeting `main`;
-6. PR base equals current `main`;
-7. prospective merge has exactly two ordered parents `(base, head)`;
-8. every routine-protected authority root has the same Git object ID at trusted base and prospective merge.
+### Governed-bot automatic path
 
-Any API failure, malformed or truncated response, PR-resolution saturation, ambiguity, fork head, stale base, identity drift, merge-parent mismatch, or routine-protected-root change fails closed.
+The repository automatically admits exactly three governed bot lanes:
 
-The automatic workflow is the only repository-hosted consumer of Environment `trusted-pr-gate` and its App credential. Candidate-executing validation jobs are read-only and secret-free. The App credential is exposed only after final live admission revalidation in the trusted default-branch reporter.
+1. canonical Dependabot GitHub Actions updates under the reviewed `dependabot/github_actions/...` namespace;
+2. GitHub Actions dependency promotions under `automation/dependency-promotion-...`;
+3. GitHub Actions CodeQL auto-heal repairs under `automation/codeql-autoheal-...`.
 
-The routine path deliberately leaves `tests` outside the protected-object equality guard, so test-only maintenance may proceed after all of the same exact-subject and CI requirements succeed. The `.github` and `scripts` trees are different: they define workflow, admission, verification, and maintenance-controller authority and therefore must remain byte-for-byte object-identical to trusted `main` for routine automatic admission. Any change to either tree requires the independently administered protected-maintenance path.
+Bot identity alone is not authority. A serialized five-minute schedule running trusted default-branch bytes discovers at most one bounded governed-bot candidate per reconciliation pass. Discovery is same-repository and exact-current-main scoped, prioritizes security auto-heal before Dependabot Actions and dependency promotions, and fresh-GETs each candidate before selection. A candidate must be open, non-draft, definitively mergeable, and match the canonical bot identity plus reviewed branch grammar before subject resolution proceeds.
 
-### Protected-maintenance external path
+The gate then runs lane-specific deterministic policy from trusted `main`: exact bot numeric identity, same-repository branch ownership, reviewed branch grammar, source PR or CodeQL-alert lineage, current-base binding, exact merge parents, and allowed change semantics. Dependency promotions are regenerated from the signed Dependabot intent under trusted Python interpreters. Security auto-heal rebinds the marker to the exact live CodeQL alert and to a code-owned remediation-strategy identity. Automatic attempts are bounded per strategy: exhausted Copilot or deterministic strategies stay exhausted, while a materially new reviewed strategy may start its own bounded epoch. Deterministic repairs must reproduce the code-owned transformation byte-for-byte; strategy or generator drift fails closed.
 
-A PR that changes any authority root that remains in the routine protected-object guard is deliberately not eligible for routine automatic authorization.
+After lane proof, the full trusted validation graph executes against the exact prospective merge. For governed bots, the subject guard additionally proves that the governed head tree is identical to the prospective-merge tree, then a bot-only CodeQL job analyzes the exact governed head ref/SHA with only `actions: read`, `contents: read`, and `security-events: write`. The aggregate requires that CodeQL job to succeed for bot lanes and to be skipped for owner-routine admission. Before App publication, the gate fresh-resolves admission and re-runs terminal bot policy, including live CodeQL remediation proof for security auto-heal. Candidate validation remains secret-free and read-only except for the narrowly scoped CodeQL result upload; only the terminal reporter can obtain the dedicated App credential.
 
-The protected-maintenance chain is:
+The resulting `Trusted PR Gate` status is not head-only evidence. Its target binds the exact PR number, base SHA, head SHA, prospective merge SHA, and trusted-gate workflow run. Merge controllers do not possess App status-write authority. They independently require that exact App-authored binding, re-fetch the live PR/merge ref/ordered parents, and re-run their lane policy before merge.
+
+Any API failure, malformed/truncated response, ambiguity, stale base, non-definitive mergeability, identity drift, branch/source mismatch, merge-parent/tree mismatch, failed trusted validation/CodeQL, or terminal subject drift fails closed.
+
+### Unrecognized protected-maintenance external path
+
+A protected change that does not match one of the finite governed-bot policies is not eligible for repository-hosted automatic authorization.
+
+Its chain is:
 
 **ordinary PR CI completion → external App webhook ingress → exact live PR/head/base/merge resolution → independently administered protected-object policy → exact run/job/artifact verification → terminal live re-resolution → dedicated App status → strict protected-branch enforcement**
 
-The external service implementation lives under `scripts/trusted_gate_service/`. Repository presence does not create authority, and protecting the repository `scripts` tree from routine automatic drift does not turn candidate-controlled repository bytes into an external trust root. External authority exists only when an independently administered deployment is pinned to reviewed bytes, holds its App credential outside candidate Actions, loads an independently administered one-shot policy, and is observed publishing through the App integration required by the live ruleset.
+The external service implementation lives under `scripts/trusted_gate_service/`. Repository presence does not create authority. External authority exists only when an independently administered deployment is pinned to reviewed bytes, holds its App credential outside candidate Actions, loads an independently administered one-shot policy, and is observed publishing through the App integration required by the live ruleset.
 
 Repository `repository_dispatch` is not a protected-maintenance authority and no normal-use dispatch path remains in `ci.yml`.
 
 ## Protected authority roots
 
-The routine automatic guard protects these authority roots from candidate change:
+The owner-routine automatic guard protects these authority roots from candidate change. Governed bot lanes may cross only the roots permitted by their lane-specific deterministic policy:
 
 - `.github`
 - `scripts`
@@ -75,7 +78,7 @@ The routine automatic guard protects these authority roots from candidate change
 - `src/ai_qa_automation/tools/__init__.py`
 - `src/ai_qa_automation/tools/execution_env.py`
 
-The external protected-maintenance service deliberately retains a broader protected-root vocabulary. Its set is the routine set above plus `tests`. That superset lets the independently deployed service reason about test transitions whenever the external path is invoked, while test-only maintenance remains eligible for routine automatic admission.
+The external protected-maintenance service deliberately retains a broader protected-root vocabulary. Its set is the owner-routine set above plus `tests`. That superset lets the independently deployed service reason about test transitions whenever break-glass admission is invoked, while test-only owner maintenance remains eligible for routine automatic admission.
 
 The external service derives the complete transition set itself from live base and prospective-merge Git trees. Missing paths use only the literal `MISSING` sentinel after a successful observation proves no object exists. Observation failure is not equivalent to absence.
 
@@ -294,7 +297,7 @@ The `trusted-pr-gate` Environment and its App credential are **not** retired by 
 
 ## Maintenance sequence
 
-Changes that remain ineligible for routine admission follow this protected-maintenance order:
+Changes that are neither owner-routine eligible nor recognized by a governed-bot policy follow this protected-maintenance order:
 
 1. keep the candidate exact and review its protected transition set;
 2. run ordinary exact-revision CI as development/execution evidence;
@@ -307,7 +310,7 @@ Changes that remain ineligible for routine admission follow this protected-maint
 9. verify the resulting exact `main` SHA/tree and post-merge CI;
 10. confirm the external gate has returned to its fail-closed idle policy state.
 
-Routine test-only maintenance under `tests` does not execute this external activation sequence. Changes under `.github` or `scripts` do execute it because those trees are protected admission-control authority. Test-only changes still require exact ordinary CI, routine trusted admission, App-authored `Trusted PR Gate: success`, strict branch enforcement, exact-head merge, and post-merge verification.
+Owner test-only maintenance under `tests` does not execute this external activation sequence. Recognized governed-bot changes under `.github`, `scripts`, dependency authority, or auto-heal-owned paths use the autonomous lane only when every lane-specific provenance, trusted validation, exact-head CodeQL, and terminal-reproof invariant succeeds. Other changes under protected admission-control roots, including owner-authored `.github` or `scripts` changes, execute the external activation sequence. All classes still require App-authored `Trusted PR Gate: success`, strict branch enforcement, exact-head merge, and post-merge verification.
 
 For AWS, deployment proof additionally includes exact deployment-ZIP and Lambda code-digest binding, runtime smoke verification, runtime-version control, least-privilege IAM read-back, DynamoDB configuration read-back, Function URL configuration read-back, log-retention read-back, and no-VPC verification before the App webhook is treated as live authority.
 

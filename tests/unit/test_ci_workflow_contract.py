@@ -32,11 +32,11 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     assert automatic["archive_attribute_authority"] == "versioned-tree-only"
     assert automatic["sbom_lineage"] == "parent-digest-bound-and-bracketed"
     assert automatic["supply_chain_evidence"] == "pinned-upload-action"
-    assert automatic["subject"] == "github.sha"
-    assert automatic["status_write_authority"] == "none"
-    assert automatic["protected_maintenance_authority"] == "external-trusted-gate-only"
+    assert automatic["subject"] == "event-sha-or-explicit-qualified-sha"
+    assert automatic["status_write_authority"] == "isolated-generated-maintenance-check-publication"
+    assert automatic["protected_maintenance_authority"] == "centralized-app-gate-for-governed-bots"
     assert result["workflows"]["trusted_auto"]["maintenance_authority"] == (
-        "independent-external-one-shot-exact-subject-gate"
+        "autonomous-governed-bots;external-one-shot-only-for-unrecognized-protected-change"
     )
     assert result["workflows"]["manual"]["credentialed_model"] == "manual-only"
 
@@ -499,7 +499,7 @@ def test_ci_contract_rejects_noop_supply_chain_evidence_upload(tmp_path: Path) -
         f"      - name: {ci_contract.SUPPLY_CHAIN_UPLOAD_STEP_NAME}\n"
         "        if: always()\n"
         "        uses: actions/upload-artifact@"
-        f"{ci_contract.EXPECTED_ACTION_SHAS['actions/upload-artifact']} # v7\n"
+        f"{ci_contract.EXPECTED_ACTION_SHAS['actions/upload-artifact']} # v7.0.1\n"
     )
     replacement = (
         f"      - name: {ci_contract.SUPPLY_CHAIN_UPLOAD_STEP_NAME}\n"

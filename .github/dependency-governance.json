@@ -23,7 +23,7 @@
     "security-update:semver-minor",
     "security-update:semver-major"
   ],
-  "publishTrustedStatus": true,
+  "publishTrustedStatus": false,
   "trustedStatusContext": "Trusted PR Gate",
   "manualReviewPaths": [
     ".github/dependabot.yml",
@@ -37,10 +37,13 @@
     ".github/scripts/dependency_recovery_selfcheck.py",
     ".github/scripts/security_autoheal.py",
     ".github/scripts/security_autoheal_selfcheck.py",
+    ".github/scripts/trusted_qualification.py",
+    ".github/scripts/trusted_status.py",
     ".github/security-autoheal.json",
     ".github/workflows/dependency-governance.yml",
     ".github/workflows/security-autoheal.yml",
     ".github/workflows/trusted-pr-auto.yml",
+    "scripts/auto_trusted_bot_admission.py",
     "scripts/auto_trusted_preflight.py",
     "scripts/auto_trusted_report.py",
     "scripts/ci_contract_base.py",

@@ -51,6 +51,11 @@ def test_ordinary_ci_has_no_repository_dispatch_authority() -> None:
     assert "TRUSTED_GATE_APP_CLIENT_ID" not in text
     assert "TRUSTED_GATE_APP_PRIVATE_KEY" not in text
     assert "  CI_SUBJECT_SHA: ${{ github.sha }}" in text
+    dispatch_override = (
+        "      CI_SUBJECT_SHA: "
+        "${{ github.event_name == 'workflow_dispatch' && inputs.subject_sha || github.sha }}"
+    )
+    assert text.count(dispatch_override) == 5
 
 
 def test_supply_chain_binds_event_subject_before_python() -> None:

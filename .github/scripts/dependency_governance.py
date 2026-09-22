@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -12,6 +13,12 @@ from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from trusted_qualification import TrustedQualificationError
+from trusted_qualification import (
+    require_success as require_trusted_qualification_success,
+)
+from trusted_status import TrustedStatusError, require_automatic_trusted_gate
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = ROOT / ".github" / "dependency-governance.json"
@@ -26,7 +33,7 @@ TRUSTED_COMMITTER_NAME = "GitHub"
 TRUSTED_COMMITTER_EMAIL = "noreply@github.com"
 SIGNED_OFF_BY = "Signed-off-by: dependabot[bot] <support@github.com>"
 ACTION_LINE = re.compile(
-    r"^\s*-\s+uses:\s+(?P<action>[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)"
+    r"^\s*(?:-\s+)?uses:\s+(?P<action>[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)"
     r"@(?P<sha>[0-9a-f]{40})\s+#\s+v(?P<version>\d+(?:\.\d+){0,2})\s*$"
 )
 UPDATE_TYPE = re.compile(
@@ -34,6 +41,21 @@ UPDATE_TYPE = re.compile(
     re.MULTILINE,
 )
 SHA = re.compile(r"^[0-9a-f]{40}$")
+POST_MERGE_CI_WORKFLOW = "ci.yml"
+POST_MERGE_CI_PATH = ".github/workflows/ci.yml"
+CODEQL_WORKFLOW = "codeql.yml"
+POST_MERGE_CI_NAME = "CI — ƳƤ AI QA Automation Framework"
+POST_MERGE_CI_EVENTS = {"push", "workflow_dispatch"}
+CI_DISPATCH_PROMOTION_REF = re.compile(
+    r"^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$"
+)
+DEPENDABOT_ACTION_REF = re.compile(
+    r"^dependabot/github_actions/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$"
+)
+POST_MERGE_CI_REGISTRATION_ATTEMPTS = 15
+POST_MERGE_CI_REGISTRATION_DELAY_SECONDS = 2
+TRANSIENT_GET_ATTEMPTS = 3
+TRANSIENT_GET_DELAY_SECONDS = 1
 
 
 class GovernanceError(RuntimeError):
@@ -107,6 +129,8 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         ".github/scripts/dependency_recovery_selfcheck.py",
         ".github/scripts/security_autoheal.py",
         ".github/scripts/security_autoheal_selfcheck.py",
+        ".github/scripts/trusted_qualification.py",
+        ".github/scripts/trusted_status.py",
         ".github/workflows/dependency-governance.yml",
         ".github/workflows/security-autoheal.yml",
         ".github/workflows/trusted-pr-auto.yml",
@@ -123,14 +147,8 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         if item not in paths:
             errors.append(f"{item} must require manual review")
     checks = config.get("requiredChecks")
-    if (
-        not isinstance(checks, list)
-        or not checks
-        or not all(isinstance(x, str) and x.strip() for x in checks)
-    ):
-        errors.append("requiredChecks must be a non-empty string list")
-    elif len(set(checks)) != len(checks):
-        errors.append("requiredChecks must not contain duplicates")
+    if checks != ["Required PR Gate", "CodeQL"]:
+        errors.append("requiredChecks must be exactly Required PR Gate and CodeQL")
     allowed = config.get("allowedActionUpdateTypes")
     expected_allowed = {
         "version-update:semver-patch",
@@ -144,11 +162,12 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         errors.append(
             "allowedActionUpdateTypes must be exactly patch/minor/major version and security updates"
         )
-    publish = config.get("publishTrustedStatus")
-    if not isinstance(publish, bool):
-        errors.append("publishTrustedStatus must be boolean")
-    if publish and config.get("trustedStatusContext") != "Trusted PR Gate":
-        errors.append("trustedStatusContext must equal Trusted PR Gate when publication is enabled")
+    if config.get("publishTrustedStatus") is not False:
+        errors.append(
+            "publishTrustedStatus must be false; only Trusted PR Auto Gate may publish authority"
+        )
+    if config.get("trustedStatusContext") != "Trusted PR Gate":
+        errors.append("trustedStatusContext must equal Trusted PR Gate")
     return unique(errors)
 
 
@@ -186,16 +205,27 @@ class GitHubApi:
                 **({"Content-Type": "application/json"} if data is not None else {}),
             },
         )
-        try:
-            with urllib.request.urlopen(request, timeout=30) as response:
-                raw = response.read(max_bytes + 1)
-        except urllib.error.HTTPError as exc:
-            detail = exc.read(4096).decode("utf-8", errors="replace")
-            raise GovernanceError(
-                f"GitHub API {method} {path} failed HTTP {exc.code}: {detail}"
-            ) from exc
-        except urllib.error.URLError as exc:
-            raise GovernanceError(f"GitHub API {method} {path} transport failure: {exc}") from exc
+        attempts = TRANSIENT_GET_ATTEMPTS if method == "GET" else 1
+        for attempt in range(attempts):
+            try:
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    raw = response.read(max_bytes + 1)
+                break
+            except urllib.error.HTTPError as exc:
+                detail = exc.read(4096).decode("utf-8", errors="replace")
+                if method == "GET" and exc.code in {502, 503, 504} and attempt + 1 < attempts:
+                    time.sleep(TRANSIENT_GET_DELAY_SECONDS)
+                    continue
+                raise GovernanceError(
+                    f"GitHub API {method} {path} failed HTTP {exc.code}: {detail}"
+                ) from exc
+            except urllib.error.URLError as exc:
+                if method == "GET" and attempt + 1 < attempts:
+                    time.sleep(TRANSIENT_GET_DELAY_SECONDS)
+                    continue
+                raise GovernanceError(
+                    f"GitHub API {method} {path} transport failure: {exc}"
+                ) from exc
         if len(raw) > max_bytes:
             raise GovernanceError(f"GitHub API {method} {path} exceeded bounded response size")
         return raw
@@ -236,9 +266,11 @@ class GitHubApi:
         for page in range(1, max_pages + 1):
             payload = self.get(f"{path}{separator}per_page=100&page={page}")
             if isinstance(payload, dict):
-                rows = (
-                    payload.get("check_runs") or payload.get("workflow_runs") or payload.get("jobs")
-                )
+                rows = None
+                for collection_key in ("check_runs", "workflow_runs", "jobs"):
+                    if collection_key in payload:
+                        rows = payload[collection_key]
+                        break
             else:
                 rows = payload
             if not isinstance(rows, list):
@@ -361,7 +393,13 @@ def validate_commits(api: GitHubApi, number: int, config: dict[str, Any]) -> Non
         raise PolicyBlock("update type requires manual review: " + ", ".join(unexpected))
 
 
-def changed_files(api: GitHubApi, number: int, config: dict[str, Any]) -> list[dict[str, Any]]:
+def changed_files(
+    api: GitHubApi,
+    number: int,
+    config: dict[str, Any],
+    *,
+    allow_reviewed_action_pins: bool = False,
+) -> list[dict[str, Any]]:
     files = api.list_all(f"/pulls/{number}/files", max_pages=2)
     if not files:
         raise PolicyBlock("pull request has no changed files")
@@ -373,6 +411,12 @@ def changed_files(api: GitHubApi, number: int, config: dict[str, Any]) -> list[d
             raise PolicyBlock("changed file path is invalid")
         for protected in config["manualReviewPaths"]:
             if path_matches(path, protected):
+                if (
+                    allow_reviewed_action_pins
+                    and path.startswith(".github/workflows/")
+                    and path.endswith((".yml", ".yaml"))
+                ):
+                    continue
                 raise PolicyBlock(f"control-plane path requires manual review: {path}")
     return files
 
@@ -475,15 +519,15 @@ def latest_checks(api: GitHubApi, head_sha: str) -> dict[str, dict[str, Any]]:
 
 
 def require_green_checks(api: GitHubApi, head_sha: str, config: dict[str, Any]) -> None:
-    checks = latest_checks(api, head_sha)
-    for name in config["requiredChecks"]:
-        row = checks.get(name)
-        if row is None:
-            raise PolicyBlock(f"required check has not registered: {name}")
-        if row.get("status") != "completed" or row.get("conclusion") != "success":
-            raise PolicyBlock(
-                f"required check is not green: {name} status={row.get('status')} conclusion={row.get('conclusion')}"
-            )
+    try:
+        require_trusted_qualification_success(
+            api,
+            head_sha,
+            _live_main_sha(api, config),
+            required=tuple(config["requiredChecks"]),
+        )
+    except TrustedQualificationError as exc:
+        raise PolicyBlock("trusted-main qualification is not yet admissible") from exc
 
 
 def assess(
@@ -491,7 +535,12 @@ def assess(
 ) -> dict[str, Any]:
     head_sha, base_sha, number = validate_pr_identity(api, pr, config)
     validate_commits(api, number, config)
-    files = changed_files(api, number, config)
+    files = changed_files(
+        api,
+        number,
+        config,
+        allow_reviewed_action_pins=True,
+    )
     validate_action_semantics(files)
     merge_sha = verify_merge_subject(api, pr, number, head_sha, base_sha)
     if require_checks:
@@ -515,36 +564,149 @@ def open_dependabot_prs(api: GitHubApi) -> list[dict[str, Any]]:
     ]
 
 
-def _post_trusted_status(api: GitHubApi, subject: dict[str, Any], config: dict[str, Any]) -> None:
-    if not config["publishTrustedStatus"]:
-        return
-    token = os.environ.get("TRUSTED_STATUS_TOKEN", "")
-    if not token:
-        raise GovernanceError("TRUSTED_STATUS_TOKEN is required for the dedicated Trusted PR Gate")
-    run_id = os.environ.get("GITHUB_RUN_ID", "")
-    if not run_id.isdigit() or int(run_id) < 1:
-        raise GovernanceError("GITHUB_RUN_ID is invalid")
-    fresh = api.get(f"/pulls/{subject['number']}")
-    rebound = assess(api, fresh, config, require_checks=True)
-    if rebound != subject:
-        raise PolicyBlock("pull request changed before trusted status publication")
-    response = api.post(
-        f"/statuses/{subject['headSha']}",
+def _ensure_action_qualification(
+    api: GitHubApi,
+    pr: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    subject = assess(api, pr, config, require_checks=False)
+    head_ref = (pr.get("head") or {}).get("ref")
+    if not isinstance(head_ref, str) or DEPENDABOT_ACTION_REF.fullmatch(head_ref) is None:
+        raise PolicyBlock("Dependabot pull request is not a reviewed GitHub Actions update")
+    return subject
+
+
+def _post_merge_ci_candidates(rows: list[dict[str, Any]], subject_sha: str) -> list[dict[str, Any]]:
+    subject_sha = require_sha(subject_sha, "post-merge CI subject SHA")
+    candidates: list[dict[str, Any]] = []
+    for row in rows:
+        if (
+            row.get("name") != POST_MERGE_CI_NAME
+            or row.get("path") != POST_MERGE_CI_PATH
+            or row.get("head_branch") != "main"
+            or row.get("head_sha") != subject_sha
+            or row.get("event") not in POST_MERGE_CI_EVENTS
+        ):
+            continue
+        attempt = row.get("run_attempt")
+        if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
+            raise GovernanceError("exact-subject CI run has invalid run_attempt")
+        run_id = row.get("id")
+        if not isinstance(run_id, int) or isinstance(run_id, bool) or run_id < 1:
+            raise GovernanceError("exact-subject CI run has invalid run id")
+        status = row.get("status")
+        conclusion = row.get("conclusion")
+        if status not in {"queued", "in_progress", "completed"}:
+            raise GovernanceError(f"exact-subject CI run has invalid status: {status}")
+        if status == "completed" and conclusion != "success":
+            raise GovernanceError(f"exact-subject CI run completed non-successfully: {conclusion}")
+        candidates.append(row)
+    return candidates
+
+
+def _select_post_merge_ci_run(
+    rows: list[dict[str, Any]], subject_sha: str
+) -> dict[str, Any] | None:
+    candidates = _post_merge_ci_candidates(rows, subject_sha)
+    if len(candidates) > 1:
+        run_ids = sorted(int(row["id"]) for row in candidates)
+        raise GovernanceError(
+            f"ambiguous exact-subject CI evidence for {subject_sha}: run ids {run_ids}"
+        )
+    return candidates[0] if candidates else None
+
+
+def _live_main_sha(api: GitHubApi, config: dict[str, Any]) -> str:
+    branch = urllib.parse.quote(config["baseBranch"], safe="")
+    payload = api.get(f"/branches/{branch}")
+    return require_sha(((payload or {}).get("commit") or {}).get("sha"), "live main SHA")
+
+
+def _post_merge_ci_runs(api: GitHubApi, subject_sha: str) -> list[dict[str, Any]]:
+    encoded_sha = urllib.parse.quote(require_sha(subject_sha, "post-merge CI subject SHA"), safe="")
+    return api.list_all(f"/actions/runs?head_sha={encoded_sha}", max_pages=2)
+
+
+def _validate_qualification_ref(ref: str) -> None:
+    if (
+        ref != "main"
+        and CI_DISPATCH_PROMOTION_REF.fullmatch(ref) is None
+        and DEPENDABOT_ACTION_REF.fullmatch(ref) is None
+    ):
+        raise GovernanceError(
+            f"explicit maintenance qualification ref is outside reviewed authority: {ref!r}"
+        )
+
+
+def dispatch_exact_ci(api: GitHubApi, ref: str, subject_sha: str) -> None:
+    subject_sha = require_sha(subject_sha, "explicit CI dispatch subject SHA")
+    _validate_qualification_ref(ref)
+    api.post(
+        f"/actions/workflows/{POST_MERGE_CI_WORKFLOW}/dispatches",
         {
-            "state": "success",
-            "context": config["trustedStatusContext"],
-            "description": "Dependabot exact-subject governance passed",
-            "target_url": f"https://github.com/{config['repository']}/actions/runs/{run_id}",
+            "ref": "main",
+            "inputs": {"subject_sha": subject_sha, "subject_ref": ref},
         },
-        token=token,
     )
-    if not isinstance(response, dict) or response.get("state") != "success":
-        raise GovernanceError("dedicated Trusted PR Gate status publication was not acknowledged")
 
 
-def _merge(api: GitHubApi, subject: dict[str, Any], config: dict[str, Any]) -> None:
+def dispatch_exact_codeql(api: GitHubApi, ref: str, subject_sha: str) -> None:
+    subject_sha = require_sha(subject_sha, "explicit CodeQL dispatch subject SHA")
+    _validate_qualification_ref(ref)
+    api.post(
+        f"/actions/workflows/{CODEQL_WORKFLOW}/dispatches",
+        {
+            "ref": "main",
+            "inputs": {"subject_sha": subject_sha, "subject_ref": ref},
+        },
+    )
+
+
+def _verify_actual_merge_commit(
+    api: GitHubApi, result: dict[str, Any], subject: dict[str, Any], config: dict[str, Any]
+) -> tuple[str, str]:
+    merge_sha = require_sha(result.get("sha"), "actual merge SHA")
+    commit = api.get(f"/git/commits/{merge_sha}")
+    parents = (commit or {}).get("parents")
+    if not isinstance(parents, list) or len(parents) != 2:
+        raise GovernanceError("actual governed merge commit must have exactly two parents")
+    observed = [
+        require_sha((parent or {}).get("sha"), "actual merge parent SHA") for parent in parents
+    ]
+    expected = [subject["baseSha"], subject["headSha"]]
+    if observed != expected:
+        raise GovernanceError(
+            f"actual governed merge parents changed: expected {expected}, got {observed}"
+        )
+    merge_tree = require_sha(((commit or {}).get("tree") or {}).get("sha"), "actual merge tree SHA")
+    head_commit = api.get(f"/git/commits/{subject['headSha']}")
+    head_tree = require_sha(
+        ((head_commit or {}).get("tree") or {}).get("sha"), "validated head tree SHA"
+    )
+    if merge_tree != head_tree:
+        raise GovernanceError("actual governed merge tree differs from the validated bot head tree")
+    live_sha = _live_main_sha(api, config)
+    if live_sha != merge_sha:
+        raise GovernanceError(
+            f"main advanced during guarded merge: expected {merge_sha}, got {live_sha}"
+        )
+    return merge_sha, merge_tree
+
+
+def finalize_post_merge_evidence(
+    api: GitHubApi, result: dict[str, Any], subject: dict[str, Any], config: dict[str, Any]
+) -> dict[str, Any]:
+    merge_sha, merge_tree = _verify_actual_merge_commit(api, result, subject, config)
+    return {
+        "mergeSha": merge_sha,
+        "sourceTreeSha": merge_tree,
+        "postMergeBinding": "exact-current-main-parents-and-validated-source-tree",
+    }
+
+
+def _merge(api: GitHubApi, subject: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     fresh = api.get(f"/pulls/{subject['number']}")
-    rebound = assess(api, fresh, config, require_checks=True)
+    rebound = assess(api, fresh, config, require_checks=False)
     if rebound != subject:
         raise PolicyBlock("pull request changed before merge")
     result = api.put(
@@ -554,6 +716,7 @@ def _merge(api: GitHubApi, subject: dict[str, Any], config: dict[str, Any]) -> N
     if not isinstance(result, dict) or result.get("merged") is not True:
         message = result.get("message") if isinstance(result, dict) else result
         raise GovernanceError(f"GitHub declined governed merge: {message}")
+    return finalize_post_merge_evidence(api, result, subject, config)
 
 
 def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
@@ -565,15 +728,33 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
     for summary in open_dependabot_prs(api):
         number = summary.get("number")
         try:
-            subject = assess(api, api.get(f"/pulls/{number}"), config, require_checks=True)
+            live_pr = api.get(f"/pulls/{number}")
+            head_ref = str(((live_pr or {}).get("head") or {}).get("ref") or "")
+            if DEPENDABOT_ACTION_REF.fullmatch(head_ref) is not None:
+                subject = _ensure_action_qualification(api, live_pr, config)
+            else:
+                subject = assess(api, live_pr, config, require_checks=True)
             eligible += 1
             print(json.dumps({"pr": number, "decision": "eligible", **subject}, sort_keys=True))
             if allow_merge and config["automergeEnabled"]:
-                _post_trusted_status(api, subject, config)
-                _merge(api, subject, config)
+                try:
+                    require_automatic_trusted_gate(
+                        api,
+                        subject["number"],
+                        subject["headSha"],
+                        subject["baseSha"],
+                    )
+                except TrustedStatusError as exc:
+                    raise PolicyBlock("automatic Trusted PR Gate is not yet admissible") from exc
+                merge_evidence = _merge(api, subject, config)
                 print(
                     json.dumps(
-                        {"pr": number, "decision": "merged", "headSha": subject["headSha"]},
+                        {
+                            "pr": number,
+                            "decision": "merged",
+                            "headSha": subject["headSha"],
+                            **merge_evidence,
+                        },
                         sort_keys=True,
                     )
                 )
@@ -591,17 +772,22 @@ def selftest(config: dict[str, Any]) -> None:
     if errors:
         raise GovernanceError("config self-test failed: " + "; ".join(errors))
     good = "      - uses: actions/checkout@" + "a" * 40 + " # v7.0.1"
+    named_step = "        uses: github/codeql-action/init@" + "b" * 40 + " # v4.38.1"
     bad_tag = "      - uses: actions/checkout@v7 # v7.0.1"
     if parse_action_change(good) is None:
         raise GovernanceError("immutable action-line parser rejected canonical pinned action")
+    if parse_action_change(named_step) is None:
+        raise GovernanceError("immutable action-line parser rejected named-step action pin")
     if parse_action_change(bad_tag) is not None:
         raise GovernanceError("immutable action-line parser accepted mutable tag")
     synthetic = [
         {
             "filename": ".github/workflows/ci.yml",
             "status": "modified",
-            "patch": "@@ -1 +1 @@\n-      - uses: actions/checkout@" + "a" * 40 + " # v7.0.0\n"
-            "+      - uses: actions/checkout@" + "b" * 40 + " # v7.0.1\n",
+            "patch": "@@ -1 +1 @@\n-        uses: github/codeql-action/init@"
+            + "a" * 40
+            + " # v4.38.0\n"
+            "+        uses: github/codeql-action/init@" + "b" * 40 + " # v4.38.1\n",
         }
     ]
     validate_action_semantics(synthetic)
@@ -646,6 +832,134 @@ def selftest(config: dict[str, Any]) -> None:
         pass
     else:
         raise GovernanceError("semantic validator accepted action version downgrade")
+    exact_sha = "1" * 40
+
+    class _EmptyWorkflowRunsApi(GitHubApi):
+        def __init__(self) -> None:
+            pass
+
+        def get(self, path: str) -> Any:
+            if not path.startswith("/actions/runs?"):
+                raise GovernanceError(f"unexpected self-test API path: {path}")
+            return {"workflow_runs": []}
+
+    if _EmptyWorkflowRunsApi().list_all(f"/actions/runs?head_sha={exact_sha}", max_pages=2) != []:
+        raise GovernanceError("pagination rejected canonical empty workflow_runs response")
+
+    class _RecordingDispatchApi(GitHubApi):
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict[str, Any] | None]] = []
+
+        def post(
+            self,
+            path: str,
+            payload: dict[str, Any] | None = None,
+            *,
+            token: str | None = None,
+        ) -> Any:
+            if token is not None:
+                raise GovernanceError("dispatch self-test received unexpected alternate token")
+            self.calls.append((path, payload))
+            return None
+
+    dispatch_api = _RecordingDispatchApi()
+    dispatch_exact_ci(dispatch_api, "main", exact_sha)
+    dispatch_exact_ci(
+        dispatch_api,
+        "automation/dependency-promotion-170-abcdef123456",
+        exact_sha,
+    )
+    expected_dispatch = (
+        "/actions/workflows/ci.yml/dispatches",
+        {
+            "ref": "main",
+            "inputs": {"subject_sha": exact_sha, "subject_ref": "main"},
+        },
+    )
+    if dispatch_api.calls[0] != expected_dispatch:
+        raise GovernanceError("main exact-subject CI dispatch payload drifted")
+    if dispatch_api.calls[1][1] != {
+        "ref": "main",
+        "inputs": {
+            "subject_sha": exact_sha,
+            "subject_ref": "automation/dependency-promotion-170-abcdef123456",
+        },
+    }:
+        raise GovernanceError("promotion exact-subject CI dispatch payload drifted")
+    dispatch_exact_codeql(
+        dispatch_api,
+        "automation/dependency-promotion-170-abcdef123456",
+        exact_sha,
+    )
+    if dispatch_api.calls[2] != (
+        "/actions/workflows/codeql.yml/dispatches",
+        {
+            "ref": "main",
+            "inputs": {
+                "subject_sha": exact_sha,
+                "subject_ref": "automation/dependency-promotion-170-abcdef123456",
+            },
+        },
+    ):
+        raise GovernanceError("promotion exact-subject CodeQL dispatch payload drifted")
+    for bad_ref in (
+        "feature/unreviewed",
+        "automation/dependency-promotion-0-abcdef123456",
+        "automation/dependency-promotion-170-nothex123456",
+        "automation/dependency-promotion-170-abcdef123456-extra",
+    ):
+        for dispatcher, label in (
+            (dispatch_exact_ci, "CI"),
+            (dispatch_exact_codeql, "CodeQL"),
+        ):
+            try:
+                dispatcher(dispatch_api, bad_ref, exact_sha)
+            except GovernanceError:
+                pass
+            else:
+                raise GovernanceError(f"unreviewed {label} dispatch ref was accepted: {bad_ref}")
+
+    canonical_run = {
+        "id": 101,
+        "name": POST_MERGE_CI_NAME,
+        "path": POST_MERGE_CI_PATH,
+        "head_branch": "main",
+        "head_sha": exact_sha,
+        "event": "workflow_dispatch",
+        "run_attempt": 1,
+        "status": "queued",
+        "conclusion": None,
+    }
+    if _select_post_merge_ci_run([canonical_run], exact_sha) != canonical_run:
+        raise GovernanceError("post-merge CI selector rejected canonical exact-subject dispatch")
+    wrong_sha = dict(canonical_run, head_sha="2" * 40)
+    wrong_workflow = dict(canonical_run, path=".github/workflows/not-ci.yml")
+    wrong_event = dict(canonical_run, event="schedule")
+    if any(
+        _select_post_merge_ci_run([row], exact_sha) is not None
+        for row in (wrong_sha, wrong_workflow, wrong_event)
+    ):
+        raise GovernanceError("post-merge CI selector accepted mismatched evidence")
+    for terminal in ("failure", "cancelled", "timed_out"):
+        try:
+            _select_post_merge_ci_run(
+                [dict(canonical_run, status="completed", conclusion=terminal)], exact_sha
+            )
+        except GovernanceError:
+            pass
+        else:
+            raise GovernanceError(
+                f"post-merge CI selector accepted terminal non-success: {terminal}"
+            )
+    try:
+        _select_post_merge_ci_run([canonical_run, dict(canonical_run, id=102)], exact_sha)
+    except GovernanceError:
+        pass
+    else:
+        raise GovernanceError("post-merge CI selector accepted ambiguous duplicate runs")
+    completed = dict(canonical_run, status="completed", conclusion="success")
+    if _select_post_merge_ci_run([completed], exact_sha) != completed:
+        raise GovernanceError("post-merge CI selector rejected successful exact-subject evidence")
     print("dependency-governance self-test: ok")
 
 

@@ -18,6 +18,10 @@ EXPECTED_ACTION_SHAS = {
     "actions/setup-python": "5fda3b95a4ea91299a34e894583c3862153e4b97",  # pragma: allowlist secret
     "actions/upload-artifact": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",  # pragma: allowlist secret
 }
+ADDITIONAL_ALLOWED_ACTION_IDENTITIES = {
+    "github/codeql-action/init",
+    "github/codeql-action/analyze",
+}
 AUTOMATIC_REQUIRED_JOBS = (
     "quality",
     "deterministic-evals",
@@ -29,7 +33,7 @@ EXPECTED_AUTOMATIC_PROJECT_INSTALL_COUNT = 5
 EXPECTED_AUTOMATIC_DEPENDENCY_INSTALL_COUNT = 5
 EXPECTED_AUTOMATIC_SUBJECT_CHECKOUT_COUNT = 5
 EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = (
-    "fc6e2a184459df7cb6e816a9a4880f06a3d9a7a8"  # pragma: allowlist secret
+    "6f69b2729d7d8d609859c687f1fbb0187b7dce3f"  # pragma: allowlist secret
 )
 AUTOMATIC_PROJECT_INSTALL_COMMAND = (
     "          python -m pip install --no-deps --no-build-isolation ."
@@ -80,7 +84,22 @@ SUPPLY_CHAIN_ARTIFACTS = (
     "artifacts/ci/wheel-a/*.whl",
     "artifacts/ci/container-image-id.txt",
 )
-ACTION_RE = re.compile(r"^\s*uses:\s*([^@\s]+)@([^\s#]+)", re.MULTILINE)
+ACTION_RE = re.compile(
+    r"^[ \t]*(?:-[ \t]+)?uses:[ \t]*([^@\s]+)@([^\s#]+)",
+    re.MULTILINE,
+)
+ACTION_PIN_RE = re.compile(
+    r"^[ \t]*(?:-[ \t]+)?uses:[ \t]*(?P<action>[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)"
+    r"@(?P<sha>[0-9a-f]{40})[ \t]+#[ \t]+v(?P<version>\d+(?:\.\d+){0,2})[ \t]*$",
+    re.MULTILINE,
+)
+ACTION_PIN_NORMALIZE_RE = re.compile(
+    r"^(?P<prefix>[ \t]*(?:-[ \t]+)?uses:[ \t]*"
+    r"[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)"
+    r"@[0-9a-f]{40}(?P<suffix>[ \t]+#[ \t]+v)"
+    r"\d+(?:\.\d+){0,2}[ \t]*$",
+    re.MULTILINE,
+)
 HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
 WRITE_PERMISSION_RE = re.compile(r"^\s+[A-Za-z0-9_-]+:\s*write\s*$", re.MULTILINE)
 CACHE_CONFIGURATION_RE = re.compile(r"^\s+cache(?:-dependency-path)?:", re.MULTILINE)
@@ -108,6 +127,19 @@ def _git_blob_sha1(text: str) -> str:
     content = text.encode("utf-8")
     header = f"blob {len(content)}\0".encode()
     return hashlib.sha1(header + content, usedforsecurity=False).hexdigest()
+
+
+def _action_pin_normalized_text(text: str) -> str:
+    return ACTION_PIN_NORMALIZE_RE.sub(
+        lambda match: (
+            f"{match.group('prefix')}@<PINNED_SHA>{match.group('suffix')}<PINNED_VERSION>"
+        ),
+        text,
+    )
+
+
+def _workflow_structure_sha1(text: str) -> str:
+    return _git_blob_sha1(_action_pin_normalized_text(text))
 
 
 def _read_fd_bounded(fd: int, *, label: str) -> bytes:
@@ -468,7 +500,7 @@ def _require_exact_supply_chain_upload_step(job: str) -> None:
             f"      - name: {SUPPLY_CHAIN_UPLOAD_STEP_NAME}",
             "        if: always()",
             "        uses: actions/upload-artifact@"
-            f"{EXPECTED_ACTION_SHAS['actions/upload-artifact']} # v7",
+            f"{EXPECTED_ACTION_SHAS['actions/upload-artifact']} # v7.0.1",
             "        with:",
             "          name: supply-chain-evidence",
             "          path: |",
@@ -504,19 +536,37 @@ def _require_exact_required_gate_step(job: str) -> None:
 
 def _verify_action_revisions(workflows: dict[str, str]) -> dict[str, str]:
     observed: dict[str, str] = {}
+    versions: dict[str, str] = {}
     for name, raw_text in workflows.items():
-        for action, revision in ACTION_RE.findall(_semantic_text(raw_text)):
-            if not HEX40_RE.fullmatch(revision):
-                raise ValueError(f"{name}: mutable GitHub Action reference: {action}@{revision}")
-            expected = EXPECTED_ACTION_SHAS.get(action)
-            if expected is None:
-                raise ValueError(f"{name}: unreviewed GitHub Action: {action}")
-            if revision != expected:
-                raise ValueError(f"{name}: unexpected immutable revision for {action}: {revision}")
+        semantic = _semantic_text(raw_text)
+        raw_references = ACTION_RE.findall(semantic)
+        pins = [
+            (match.group("action"), match.group("sha"), match.group("version"))
+            for match in ACTION_PIN_RE.finditer(semantic)
+        ]
+        if len(raw_references) != len(pins):
+            raise ValueError(
+                f"{name}: every GitHub Action must use a canonical immutable SHA plus # vVERSION"
+            )
+        for action, revision, version in pins:
+            if (
+                action not in EXPECTED_ACTION_SHAS
+                and action not in ADDITIONAL_ALLOWED_ACTION_IDENTITIES
+            ):
+                raise ValueError(f"{name}: unreviewed GitHub Action identity: {action}")
+            prior_revision = observed.get(action)
+            prior_version = versions.get(action)
+            if prior_revision is not None and (
+                prior_revision != revision or prior_version != version
+            ):
+                raise ValueError(
+                    f"{name}: GitHub Action {action} uses inconsistent pin/version authority"
+                )
             observed[action] = revision
-    if set(observed) != set(EXPECTED_ACTION_SHAS):
-        raise ValueError("workflow Action set differs from the reviewed immutable set")
-    return observed
+            versions[action] = version
+    if not set(EXPECTED_ACTION_SHAS) <= set(observed):
+        raise ValueError("workflow Action identity set omits a required reviewed action")
+    return {action: observed[action] for action in EXPECTED_ACTION_SHAS}
 
 
 def _verify_top_level_read_only_permissions(text: str, *, name: str) -> None:
@@ -769,7 +819,7 @@ def _verify_trusted_status_job(text: str) -> dict[str, Any]:
         "    environment:\n      name: trusted-pr-gate\n      deployment: false",
         "    permissions:\n      contents: read",
         "      - name: Checkout trusted workflow revision",
-        f"        uses: actions/checkout@{EXPECTED_ACTION_SHAS['actions/checkout']} # v7",
+        f"        uses: actions/checkout@{EXPECTED_ACTION_SHAS['actions/checkout']} # v7.0.1",
         "          ref: ${{ github.sha }}",
         "          persist-credentials: false",
         "      - name: Verify trusted workflow revision",
@@ -953,9 +1003,9 @@ def _verify_automatic_workflow(text: str) -> dict[str, Any]:
         if f"      - {job}\n" not in required_gate:
             raise ValueError(f"{name}: Required PR Gate does not depend on {job}")
 
-    if _git_blob_sha1(text) != EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA:
+    if _workflow_structure_sha1(text) != EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA:
         raise ValueError(
-            "ci.yml bytes differ from the exact reviewed automatic/trusted workflow definition"
+            "ci.yml non-action structure differs from the reviewed workflow definition"
         )
 
     return {
@@ -1036,6 +1086,7 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
     snapshots = _read_workflow_set(root / ".github" / "workflows")
     workflows = {name: snapshot.text for name, snapshot in snapshots.items()}
     actions = _verify_action_revisions(workflows)
+    EXPECTED_ACTION_SHAS.update(actions)
     automatic = _verify_automatic_workflow(workflows["ci.yml"])
     manual = _verify_manual_workflow(workflows["manual-validation.yml"])
     return {

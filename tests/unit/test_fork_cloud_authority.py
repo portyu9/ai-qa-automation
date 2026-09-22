@@ -35,20 +35,12 @@ def _reviewed_governance_secret_payload() -> str:
         if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Mint dedicated Trusted PR Gate token
-        id: trusted-app
-        if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-        env:
-          TRUSTED_GATE_APP_CLIENT_ID: ${{ vars.TRUSTED_GATE_APP_CLIENT_ID }}
-          TRUSTED_GATE_APP_PRIVATE_KEY: ${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}
       - name: Reconcile exact-subject Python dependency promotion
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TRUSTED_STATUS_TOKEN: ${{ steps.trusted-app.outputs.token }}
       - name: Reconcile Dependabot action merge authority
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TRUSTED_STATUS_TOKEN: ${{ steps.trusted-app.outputs.token }}
 """
 
 
@@ -130,16 +122,13 @@ def test_reviewed_governance_secret_consumers_do_not_create_aws_authority() -> N
     )
     assert result["aws_authentication"] == "forbidden"
     assert result["pull_request_target"] == "forbidden"
-    assert result["secrets"] == {
-        "GITHUB_TOKEN": 3,
-        "TRUSTED_GATE_APP_PRIVATE_KEY": 1,
-    }
+    assert result["secrets"] == {"GITHUB_TOKEN": 3}
 
 
 def test_reviewed_governance_secret_consumer_movement_fails_closed() -> None:
     payload = _reviewed_governance_secret_payload().replace(
-        "- name: Mint dedicated Trusted PR Gate token",
-        "- name: Export trusted app private key elsewhere",
+        "- name: Reconcile exact-subject Python dependency promotion",
+        "- name: Export governance token elsewhere",
         1,
     )
     with pytest.raises(ValueError, match="reviewed credential consumers moved or changed"):
@@ -160,8 +149,8 @@ def test_trusted_preflight_requires_canonical_repository_and_fork_rejection() ->
 def test_trusted_preflight_fails_if_fork_rejection_is_removed() -> None:
     preflight = (Path(__file__).parents[2] / "scripts" / "auto_trusted_preflight.py").read_text()
     mutated = preflight.replace(
-        'raise ValueError("fork/external-head workflow runs are not auto-authorized")',
-        'raise ValueError("external workflow")',
+        'head_repository.get("full_name") != EXPECTED_REPOSITORY',
+        'head_repository.get("full_name") != "attacker/fork"',
         1,
     )
     with pytest.raises(ValueError, match="lost canonical repository/fork isolation"):

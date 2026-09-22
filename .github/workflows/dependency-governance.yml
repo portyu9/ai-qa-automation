@@ -13,9 +13,10 @@ on:
       - '.github/scripts/dependency_recovery.py'
       - '.github/scripts/dependency_recovery_selfcheck.py'
       - '.github/workflows/dependency-governance.yml'
+      - '.github/workflows/ci.yml'
       - '.github/workflows/codeql.yml'
   workflow_run:
-    workflows: ['CI — ƳƤ AI QA Automation Framework', CodeQL]
+    workflows: ['CI — ƳƤ AI QA Automation Framework', CodeQL, 'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework']
     types: [completed]
   schedule:
     - cron: '29 */6 * * *'
@@ -58,6 +59,8 @@ jobs:
           .github/scripts/dependency_promotion.py
           .github/scripts/dependency_recovery.py
           .github/scripts/dependency_recovery_selfcheck.py
+          .github/scripts/trusted_qualification.py
+          .github/scripts/trusted_status.py
       - name: Validate governance and recovery configuration
         run: |
           python .github/scripts/dependency_governance.py --validate-config
@@ -73,9 +76,6 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    environment:
-      name: trusted-pr-gate
-      deployment: false
     permissions:
       actions: write
       checks: read
@@ -111,59 +111,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python .github/scripts/dependency_recovery.py --recover
-      - name: Mint dedicated Trusted PR Gate token
-        id: trusted-app
-        if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-        env:
-          TRUSTED_GATE_APP_CLIENT_ID: ${{ vars.TRUSTED_GATE_APP_CLIENT_ID }}
-          TRUSTED_GATE_APP_PRIVATE_KEY: ${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}
-        run: |
-          set -euo pipefail
-          test -n "$TRUSTED_GATE_APP_CLIENT_ID"
-          test -n "$TRUSTED_GATE_APP_PRIVATE_KEY"
-          b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
-          now="$(date +%s)"
-          issued_at="$((now - 60))"
-          expires_at="$((now + 540))"
-          header="$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)"
-          payload="$(printf '{"iat":%s,"exp":%s,"iss":"%s"}' "$issued_at" "$expires_at" "$TRUSTED_GATE_APP_CLIENT_ID" | b64url)"
-          unsigned="$header.$payload"
-          key_file="$RUNNER_TEMP/trusted-gate-app-key.pem"
-          umask 077
-          printf '%s' "$TRUSTED_GATE_APP_PRIVATE_KEY" > "$key_file"
-          trap 'rm -f "$key_file"' EXIT
-          signature="$(printf '%s' "$unsigned" | openssl dgst -sha256 -sign "$key_file" -binary | b64url)"
-          jwt="$unsigned.$signature"
-          rm -f "$key_file"
-          trap - EXIT
-          installation_json="$(curl --fail-with-body --silent --show-error \
-            -H "Authorization: Bearer $jwt" \
-            -H 'Accept: application/vnd.github+json' \
-            -H 'X-GitHub-Api-Version: 2022-11-28' \
-            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/installation")"
-          installation_id="$(INSTALLATION_JSON="$installation_json" python -c 'import json, os; value=json.loads(os.environ["INSTALLATION_JSON"])["id"]; assert isinstance(value, int) and value > 0; print(value)')"
-          repo_name="${GITHUB_REPOSITORY#*/}"
-          request_json="$(REPO_NAME="$repo_name" python -c 'import json, os; print(json.dumps({"repositories":[os.environ["REPO_NAME"]],"permissions":{"contents":"read","pull_requests":"read","statuses":"write"}}, separators=(",", ":"), sort_keys=True))')"
-          token_json="$(curl --fail-with-body --silent --show-error \
-            -X POST \
-            -H "Authorization: Bearer $jwt" \
-            -H 'Accept: application/vnd.github+json' \
-            -H 'X-GitHub-Api-Version: 2022-11-28' \
-            -H 'Content-Type: application/json' \
-            --data "$request_json" \
-            "$GITHUB_API_URL/app/installations/$installation_id/access_tokens")"
-          token="$(TOKEN_JSON="$token_json" python -c 'import json, os; value=json.loads(os.environ["TOKEN_JSON"])["token"]; assert isinstance(value, str) and value; print(value)')"
-          echo "::add-mask::$token"
-          printf 'token=%s\n' "$token" >> "$GITHUB_OUTPUT"
       - name: Reconcile exact-subject Python dependency promotion
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TRUSTED_STATUS_TOKEN: ${{ steps.trusted-app.outputs.token }}
         run: python .github/scripts/dependency_promotion.py --reconcile --allow-merge
       - name: Reconcile Dependabot action merge authority
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TRUSTED_STATUS_TOKEN: ${{ steps.trusted-app.outputs.token }}
         run: |
           args=(--reconcile)
           case "$GITHUB_EVENT_NAME" in
