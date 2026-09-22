@@ -94,7 +94,9 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     if permissions != {"actions": "read", "contents": "read", "pull-requests": "read"}:
         raise ValueError("trusted-pr-auto.yml top-level token must be exactly read-only")
     if _base.WRITE_PERMISSION_RE.search(semantic):
-        raise ValueError("trusted-pr-auto.yml native GitHub token must never request write authority")
+        raise ValueError(
+            "trusted-pr-auto.yml native GitHub token must never request write authority"
+        )
     for forbidden in (
         "pull_request_target:",
         "repository_dispatch:",
