@@ -307,10 +307,14 @@ def _load_metadata(
                 "previous_run_id": raw_previous_run_id,
                 "reason": "prior lease mutation recovery closure lease-root identity could not be revalidated",
             }
+        observed_lease_root_identity = (
+            observed_lease_root.st_dev,
+            observed_lease_root.st_ino,
+        )
+        expected_lease_root_identity = (lease_root_device, lease_root_inode)
         if (
             not stat.S_ISDIR(observed_lease_root.st_mode)
-            or (observed_lease_root.st_dev, observed_lease_root.st_ino)
-            != (lease_root_device, lease_root_inode)
+            or observed_lease_root_identity != expected_lease_root_identity
         ):
             return {
                 "status": "BLOCKED",
