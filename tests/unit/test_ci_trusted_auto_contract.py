@@ -166,6 +166,37 @@ def test_trusted_auto_contract_rejects_missing_candidate_subject_binding(
 
 
 @pytest.mark.parametrize(
+    "job_id",
+    (
+        "supply-chain",
+        "quality",
+        "deterministic-evals",
+        "security",
+        "browser-reference-sut",
+        "bot-codeql",
+    ),
+)
+def test_trusted_auto_contract_rejects_missing_skip_propagation_guard(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    job_id: str,
+) -> None:
+    root = _copy_contract_repo(tmp_path)
+    path = root / ".github" / "workflows" / "trusted-pr-auto.yml"
+    text = path.read_text(encoding="utf-8")
+    job = ci_contract._job_block(text, job_id)
+    marker = "    if: ${{ always() && "
+    assert marker in job
+    mutated_job = job.replace(marker, "    if: ${{ ", 1)
+    mutated = text.replace(job, mutated_job, 1)
+    path.write_text(mutated, encoding="utf-8")
+    _accept_mutated_workflow_hash(monkeypatch, mutated)
+
+    with pytest.raises(ValueError, match="must use explicit always"):
+        ci_contract.verify_ci_contract(root)
+
+
+@pytest.mark.parametrize(
     ("job_id", "message"),
     (
         ("preflight", "preflight must retain trusted workflow identity"),
