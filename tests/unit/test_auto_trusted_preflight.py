@@ -77,6 +77,7 @@ def _responses(*, changed_path: str | None = None) -> dict[str, Any]:
     pr = {
         **candidate,
         "draft": False,
+        "mergeable": True,
         "user": {"login": preflight.EXPECTED_OWNER, "id": preflight.EXPECTED_OWNER_ID},
         "base": {
             "ref": preflight.EXPECTED_DEFAULT_BRANCH,
@@ -206,6 +207,15 @@ def test_stale_base_relative_to_current_main_fails_closed() -> None:
     )
 
     with pytest.raises(ValueError, match="stale relative to current main"):
+        preflight.evaluate_admission(FakeAPI(responses), event=_event())
+
+
+@pytest.mark.parametrize("mergeable", [False, None])
+def test_indefinite_or_conflicting_mergeability_fails_closed(mergeable: bool | None) -> None:
+    responses = _responses()
+    responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]["mergeable"] = mergeable
+
+    with pytest.raises(ValueError, match="definitively mergeable"):
         preflight.evaluate_admission(FakeAPI(responses), event=_event())
 
 
