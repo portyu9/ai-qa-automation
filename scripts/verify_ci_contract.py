@@ -143,7 +143,7 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
             '  PYTHONUNBUFFERED: "1"',
             '  PYTHONSAFEPATH: "1"',
             '  PIP_DISABLE_PIP_VERSION_CHECK: "1"',
-            "  CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_sha || github.sha }}",
+            "  CI_SUBJECT_SHA: ${{ github.sha }}",
         )
     )
     if env_block != expected_env:
@@ -197,6 +197,23 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
     dependency_install_count = base._verify_dependency_install_authority(text, name=name)
     project_install_count = base._verify_project_install_authority(text, name=name)
     quality_lanes = base._verify_quality_lane_contract(text, name=name)
+
+    dispatch_subject_override = (
+        "    env:\n"
+        "      CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_sha || github.sha }}\n"
+    )
+    for job_id in (
+        "supply-chain",
+        "quality",
+        "deterministic-evals",
+        "security",
+        "browser-reference-sut",
+    ):
+        job = base._semantic_text(base._job_block(text, job_id))
+        if dispatch_subject_override not in job:
+            raise ValueError(
+                f"ci.yml: validation job {job_id} lacks exact trusted-dispatch subject override"
+            )
 
     supply_chain_raw = base._job_block(text, "supply-chain")
     supply_chain = base._semantic_text(supply_chain_raw)
