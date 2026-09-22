@@ -64,6 +64,10 @@ SAFE_VERIFIER_LABELS = {
     "scripts/verify_docs.py": "documentation-integrity",
     "scripts/verify_fork_cloud_authority.py": "fork-cloud-authority",
 }
+MODEL_AUTOFIX_STRATEGY = "github-codeql-autofix-v1"
+OVERLY_PERMISSIVE_TEST_STRATEGY = "deterministic-overly-permissive-test-file-v1"
+CLEAR_TEXT_LOG_STRATEGY = "deterministic-clear-text-log-v1"
+REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY = "deterministic-reference-sut-reflective-xss-v1"
 
 DETERMINISTIC_LOG_REPAIRS = {
     "scripts/auto_trusted_report.py": (
@@ -452,6 +456,47 @@ def _model_path_allowed(path: str, config: dict[str, Any]) -> bool:
     return any(path.startswith(prefix) for prefix in config["modelAutofixPathPrefixes"])
 
 
+def _deterministic_strategy(rule: Any, path: Any) -> str | None:
+    if rule == "py/overly-permissive-file" and isinstance(path, str) and path.startswith("tests/"):
+        return OVERLY_PERMISSIVE_TEST_STRATEGY
+    if rule == "py/clear-text-logging-sensitive-data" and path in DETERMINISTIC_LOG_REPAIRS:
+        return CLEAR_TEXT_LOG_STRATEGY
+    if rule == "py/reflective-xss" and path == "examples/reference_sut/app.py":
+        return REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY
+    return None
+
+
+def _repair_strategy(subject: dict[str, Any]) -> str:
+    return (
+        _deterministic_strategy(subject.get("rule"), subject.get("path")) or MODEL_AUTOFIX_STRATEGY
+    )
+
+
+def _marker_strategy(metadata: dict[str, Any]) -> str | None:
+    explicit = metadata.get("strategy")
+    if explicit is not None:
+        return explicit if isinstance(explicit, str) and explicit else None
+    generator = metadata.get("generator")
+    if generator == "github-codeql-autofix":
+        return MODEL_AUTOFIX_STRATEGY
+    if generator == "deterministic":
+        return _deterministic_strategy(metadata.get("rule"), metadata.get("path"))
+    return None
+
+
+def _require_strategy_binding(metadata: dict[str, Any], subject: dict[str, Any]) -> str:
+    expected = _repair_strategy(subject)
+    observed = _marker_strategy(metadata)
+    if observed != expected:
+        raise PolicyBlock("generated repair strategy drifted from the code-owned live strategy")
+    expected_generator = (
+        "github-codeql-autofix" if expected == MODEL_AUTOFIX_STRATEGY else "deterministic"
+    )
+    if metadata.get("generator") != expected_generator:
+        raise PolicyBlock("generated repair generator does not match the code-owned strategy")
+    return expected
+
+
 def _deterministic_repair(subject: dict[str, Any]) -> str | None:
     path = ROOT / subject["path"]
     try:
@@ -478,6 +523,61 @@ def _deterministic_repair(subject: dict[str, Any]) -> str | None:
         if text.count(old) != 1:
             return None
         return text.replace(old, new, 1)
+
+    if (
+        subject["rule"] == "py/reflective-xss"
+        and subject["path"] == "examples/reference_sut/app.py"
+    ):
+        json_import = "import json\n"
+        validation = """    allowed_modes = {
+        "pass",
+        "app-defect",
+        "outdated-locator",
+        "api-failure",
+        "timing",
+        "invalid-data",
+        "prompt-injection",
+    }
+    if mode not in allowed_modes:
+        raise HTTPException(status_code=400, detail="Invalid mode")
+    safe_mode = mode
+"""
+        literal_binding = """    if mode == "pass":
+        safe_mode: Mode = "pass"
+        mode_js = '"pass"'
+    elif mode == "app-defect":
+        safe_mode = "app-defect"
+        mode_js = '"app-defect"'
+    elif mode == "outdated-locator":
+        safe_mode = "outdated-locator"
+        mode_js = '"outdated-locator"'
+    elif mode == "api-failure":
+        safe_mode = "api-failure"
+        mode_js = '"api-failure"'
+    elif mode == "timing":
+        safe_mode = "timing"
+        mode_js = '"timing"'
+    elif mode == "invalid-data":
+        safe_mode = "invalid-data"
+        mode_js = '"invalid-data"'
+    elif mode == "prompt-injection":
+        safe_mode = "prompt-injection"
+        mode_js = '"prompt-injection"'
+    else:
+        raise HTTPException(status_code=400, detail="Invalid mode")
+"""
+        mode_dump = "    mode_js = json.dumps(safe_mode)\n"
+        if (
+            text.count(json_import) != 1
+            or text.count(validation) != 1
+            or text.count(mode_dump) != 1
+        ):
+            return None
+        return (
+            text.replace(json_import, "", 1)
+            .replace(validation, literal_binding, 1)
+            .replace(mode_dump, "", 1)
+        )
 
     return None
 
@@ -654,6 +754,7 @@ def _create_pull_request(
     attempt: int,
     *,
     deterministic: bool,
+    strategy: str,
 ) -> int:
     metadata = {
         "version": 1,
@@ -666,6 +767,7 @@ def _create_pull_request(
         "fingerprint": subject["fingerprint"],
         "attempt": attempt,
         "generator": "deterministic" if deterministic else "github-codeql-autofix",
+        "strategy": strategy,
     }
     body = "\n".join(
         (
@@ -702,21 +804,6 @@ def _create_pull_request(
     if observed_head != head_sha:
         raise AutohealError("generated repair PR head differs from the exact repair commit")
     return number
-
-
-def _dispatch_qualification(api: GitHubApi, branch: str, head_sha: str) -> None:
-    subject_sha = _require_sha(head_sha, "generated repair qualification SHA")
-    if AUTOHEAL_BRANCH_RE.fullmatch(branch) is None:
-        raise PolicyBlock("generated repair qualification ref is outside reviewed authority")
-    inputs = {"subject_sha": subject_sha, "subject_ref": branch}
-    api.post(
-        "/actions/workflows/ci.yml/dispatches",
-        {"ref": "main", "inputs": inputs},
-    )
-    api.post(
-        "/actions/workflows/codeql.yml/dispatches",
-        {"ref": "main", "inputs": inputs},
-    )
 
 
 def _latest_checks(api: GitHubApi, head_sha: str) -> dict[str, dict[str, Any]]:
@@ -848,6 +935,7 @@ def _rebind_repair_alert(
     generator = metadata.get("generator")
     if generator not in {"deterministic", "github-codeql-autofix"}:
         raise PolicyBlock("generated repair marker generator is outside reviewed authority")
+    _require_strategy_binding(metadata, subject)
     return subject
 
 
@@ -1274,8 +1362,8 @@ def _generated_repairs(pulls: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
-def _attempt_count(api: GitHubApi, alert_number: int) -> int:
-    rows = api.list_all("/pulls?state=closed&sort=updated&direction=desc", max_pages=2)
+def _attempt_count(api: GitHubApi, alert_number: int, strategy: str) -> int:
+    rows = api.list_all("/pulls?state=closed&sort=updated&direction=desc", max_pages=10)
     count = 0
     for pr in rows:
         if (pr.get("user") or {}).get("login") != GITHUB_ACTIONS_LOGIN:
@@ -1286,19 +1374,33 @@ def _attempt_count(api: GitHubApi, alert_number: int) -> int:
         if not branch.startswith(BRANCH_PREFIX):
             continue
         metadata = _parse_marker(pr.get("body"))
-        if metadata is not None and metadata.get("alert") == alert_number:
+        if (
+            metadata is not None
+            and metadata.get("alert") == alert_number
+            and _marker_strategy(metadata) == strategy
+        ):
             count += 1
     return count
 
 
 def _create_repair(
-    api: GitHubApi, subject: dict[str, Any], config: dict[str, Any], *, attempt: int
+    api: GitHubApi,
+    subject: dict[str, Any],
+    config: dict[str, Any],
+    *,
+    attempt: int,
+    strategy: str,
 ) -> int:
     branch = _branch_name(subject)
-    deterministic_content = _deterministic_repair(subject)
+    expected_strategy = _repair_strategy(subject)
+    if strategy != expected_strategy:
+        raise PolicyBlock("repair creation strategy drifted from the code-owned live strategy")
+    deterministic = strategy != MODEL_AUTOFIX_STRATEGY
+    deterministic_content = _deterministic_repair(subject) if deterministic else None
     deterministic_only = _is_deterministic_only(subject["path"], config)
-    deterministic = deterministic_content is not None
-    if deterministic_only and deterministic_content is None:
+    if deterministic and deterministic_content is None:
+        raise PolicyBlock("code-owned deterministic repair strategy no longer reproduces")
+    if deterministic_only and not deterministic:
         raise PolicyBlock("protected verifier alert has no code-owned deterministic repair recipe")
 
     if deterministic:
@@ -1326,6 +1428,7 @@ def _create_repair(
         subject,
         attempt,
         deterministic=deterministic,
+        strategy=strategy,
     )
     # Bind the branch name into the marker after creation only through the immutable branch
     # convention. The live validator derives it from the PR head and accepts an absent marker key.
@@ -1453,10 +1556,19 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
             subject = validate_alert(alert, main_sha, config)
             if subject["number"] in active_alerts:
                 continue
-            prior = _attempt_count(api, subject["number"])
+            strategy = _repair_strategy(subject)
+            prior = _attempt_count(api, subject["number"], strategy)
             if prior >= config["maxAttemptsPerAlert"]:
-                raise PolicyBlock("alert exhausted bounded automatic remediation attempts")
-            _create_repair(api, subject, config, attempt=prior + 1)
+                raise PolicyBlock(
+                    "alert exhausted bounded automatic remediation attempts for current strategy"
+                )
+            _create_repair(
+                api,
+                subject,
+                config,
+                attempt=prior + 1,
+                strategy=strategy,
+            )
             created += 1
             active_alerts.add(subject["number"])
         except RetryLater as exc:
@@ -1524,51 +1636,6 @@ def selftest(config: dict[str, Any]) -> None:
         raise AutohealError("pagination rejected canonical empty check_runs response")
     if empty_api.list_all("/actions/runs?head_sha=" + "f" * 40, max_pages=2) != []:
         raise AutohealError("pagination rejected canonical empty workflow_runs response")
-
-    class _RecordingDispatchApi(GitHubApi):
-        def __init__(self) -> None:
-            self.calls: list[tuple[str, dict[str, Any] | None]] = []
-
-        def post(
-            self,
-            path: str,
-            payload: dict[str, Any] | None = None,
-            *,
-            token: str | None = None,
-        ) -> Any:
-            if token is not None:
-                raise AutohealError("qualification self-test received unexpected alternate token")
-            self.calls.append((path, payload))
-            return None
-
-    dispatch_api = _RecordingDispatchApi()
-    exact_sha = "f" * 40
-    exact_branch = "automation/codeql-autoheal-7-abcdef123456"
-    _dispatch_qualification(dispatch_api, exact_branch, exact_sha)
-    expected_inputs = {"subject_sha": exact_sha, "subject_ref": exact_branch}
-    if dispatch_api.calls != [
-        (
-            "/actions/workflows/ci.yml/dispatches",
-            {"ref": "main", "inputs": expected_inputs},
-        ),
-        (
-            "/actions/workflows/codeql.yml/dispatches",
-            {"ref": "main", "inputs": expected_inputs},
-        ),
-    ]:
-        raise AutohealError("exact-subject qualification dispatch payload drifted")
-    for bad_ref in (
-        "automation/codeql-autoheal-0-abcdef123456",
-        "automation/codeql-autoheal-7-nothex123456",
-        "automation/codeql-autoheal-7-abcdef123456-extra",
-        "feature/unreviewed",
-    ):
-        try:
-            _dispatch_qualification(dispatch_api, bad_ref, exact_sha)
-        except PolicyBlock:
-            pass
-        else:
-            raise AutohealError(f"unreviewed qualification ref was accepted: {bad_ref}")
 
     current_main_sha = "6" * 40
     canonical_codeql = {
