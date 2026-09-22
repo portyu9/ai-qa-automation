@@ -119,11 +119,12 @@ class GitHubApi:
         if len(description) > 140:
             raise ValueError("commit-status description exceeds GitHub's 140-character limit")
         target_pattern = re.compile(
-            rf"^https://github\.com/{re.escape(self.repository)}/actions/runs/[1-9][0-9]*$"
+            rf"^https://github\\.com/{re.escape(self.repository)}/actions/runs/[1-9][0-9]*"
+            r"\\?pr=[1-9][0-9]*&base=[0-9a-f]{40}&head=[0-9a-f]{40}&merge=[0-9a-f]{40}$"
         )
         if target_pattern.fullmatch(target_url) is None:
             raise ValueError(
-                "commit-status target URL must identify one workflow run in this repository"
+                "commit-status target URL must bind one workflow run to an exact PR/base/head/merge subject"
             )
         self.post_json(
             f"/repos/{self.repository}/statuses/{sha}",
