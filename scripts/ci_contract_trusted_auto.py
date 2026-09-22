@@ -138,7 +138,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "          GITHUB_TOKEN: ${{ github.token }}",
         "          python scripts/auto_trusted_preflight.py \\",
         '            --event "$GITHUB_EVENT_PATH" \\',
-        '            --event-name "$GITHUB_EVENT_NAME" \\\\',
+        '            --event-name "$GITHUB_EVENT_NAME" \\',
         '            --github-output "$GITHUB_OUTPUT"',
         "            owner-routine)",
         "            dependabot-actions|dependency-promotion|security-autoheal)",
