@@ -113,9 +113,7 @@ def require_automatic_trusted_gate(
 
     latest = max(matches, key=lambda row: int(row["id"]))
     if latest.get("state") != "success":
-        raise TrustedStatusError(
-            f"automatic Trusted PR Gate is not green: {latest.get('state')}"
-        )
+        raise TrustedStatusError(f"automatic Trusted PR Gate is not green: {latest.get('state')}")
     if latest.get("description") != TRUSTED_STATUS_DESCRIPTION:
         raise TrustedStatusError(
             "automatic Trusted PR Gate description does not match reviewed authority"
@@ -126,9 +124,7 @@ def require_automatic_trusted_gate(
         raise TrustedStatusError("automatic Trusted PR Gate target URL is missing")
     match = TARGET_URL_RE.fullmatch(target_url)
     if match is None:
-        raise TrustedStatusError(
-            "automatic Trusted PR Gate target URL is not exact-subject-bound"
-        )
+        raise TrustedStatusError("automatic Trusted PR Gate target URL is not exact-subject-bound")
     if (
         int(match.group("pr")) != pr_number
         or match.group("base") != base_sha
