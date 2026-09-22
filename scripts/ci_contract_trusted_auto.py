@@ -60,6 +60,29 @@ TRUSTED_AUTO_PROTECTED_PATHS = (
 _base.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
 
 
+def _job_permissions(job: str) -> dict[str, str]:
+    semantic = _base._semantic_text(job)
+    lines = semantic.splitlines()
+    starts = [index for index, line in enumerate(lines) if line == "    permissions:"]
+    if len(starts) != 1:
+        raise ValueError("trusted automatic job must contain exactly one permissions block")
+    values: dict[str, str] = {}
+    for line in lines[starts[0] + 1 :]:
+        if line.startswith("    ") and not line.startswith("      "):
+            break
+        if not line.strip():
+            continue
+        if not line.startswith("      ") or ":" not in line.strip():
+            raise ValueError("trusted automatic job permissions block is malformed")
+        key, value = line.strip().split(":", 1)
+        if key in values:
+            raise ValueError("trusted automatic job permissions contain duplicate keys")
+        values[key] = value.strip()
+    if not values:
+        raise ValueError("trusted automatic job permissions block must not be empty")
+    return values
+
+
 def _verify_frozen_base() -> None:
     path = Path(_base.__file__)
     if path.is_symlink() or not path.is_file():
@@ -192,7 +215,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
             raise ValueError(f"governed bot authority is missing reviewed fragment: {fragment}")
     if (
         "${{ secrets." in bot_authority
-        or "write" in _base._permissions(_base._job_block(text, "bot-authority")).values()
+        or "write" in _job_permissions(bot_authority).values()
     ):
         raise ValueError("governed bot authority must remain secret-free and read-only")
 
@@ -270,7 +293,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
 
     quality_lanes = _base._verify_quality_lane_contract(text, name="trusted-pr-auto.yml")
 
-    bot_codeql_permissions = _base._permissions(_base._job_block(text, "bot-codeql"))
+    bot_codeql_permissions = _job_permissions(bot_codeql)
     if bot_codeql_permissions != {
         "actions": "read",
         "contents": "read",
