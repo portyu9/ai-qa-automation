@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import hashlib
 import json
 import os
@@ -13,6 +15,12 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
+
+from trusted_qualification import (
+    TrustedQualificationError,
+    require_success as require_trusted_qualification_success,
+)
+from trusted_status import TrustedStatusError, require_automatic_trusted_gate
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = ROOT / ".github" / "security-autoheal.json"
@@ -714,16 +722,37 @@ def _latest_checks(api: GitHubApi, head_sha: str) -> dict[str, dict[str, Any]]:
 
 
 def _require_green_checks(api: GitHubApi, head_sha: str, config: dict[str, Any]) -> None:
-    checks = _latest_checks(api, head_sha)
-    for name in config["requiredChecks"]:
-        row = checks.get(name)
-        if row is None:
-            raise PolicyBlock(f"repair required check has not registered: {name}")
-        if row.get("status") != "completed" or row.get("conclusion") != "success":
-            raise PolicyBlock(
-                f"repair required check is not green: {name} "
-                f"status={row.get('status')} conclusion={row.get('conclusion')}"
-            )
+    try:
+        require_trusted_qualification_success(
+            api,
+            head_sha,
+            _current_main(api, config),
+            required=tuple(config["requiredChecks"]),
+        )
+    except TrustedQualificationError as exc:
+        raise PolicyBlock(str(exc)) from exc
+
+
+def _repository_text(api: GitHubApi, path: str, ref: str) -> str:
+    encoded_path = "/".join(urllib.parse.quote(part, safe="") for part in path.split("/"))
+    payload = api.get(
+        f"/contents/{encoded_path}?ref={urllib.parse.quote(ref, safe='')}"
+    )
+    if not isinstance(payload, dict) or payload.get("type") != "file":
+        raise PolicyBlock(f"repair content is not one regular repository file: {path}")
+    content = payload.get("content")
+    if not isinstance(content, str) or payload.get("encoding") != "base64":
+        raise PolicyBlock(f"repair content encoding is invalid: {path}")
+    try:
+        raw = base64.b64decode("".join(content.split()), validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise PolicyBlock(f"repair content base64 is invalid: {path}") from exc
+    if len(raw) > 2 * 1024 * 1024:
+        raise PolicyBlock(f"repair content exceeds bounded ingestion limit: {path}")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise PolicyBlock(f"repair content is not canonical UTF-8: {path}") from exc
 
 
 def _alert_shape(alert: dict[str, Any]) -> tuple[str, str, str]:
@@ -767,6 +796,72 @@ def _verify_codeql_remediation(
             raise PolicyBlock(
                 "repair branch introduced a new CodeQL alert at equal/higher security severity"
             )
+
+
+def _rebind_repair_alert(
+    api: GitHubApi,
+    metadata: dict[str, Any],
+    live: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    alert_number = metadata.get("alert")
+    if not isinstance(alert_number, int) or isinstance(alert_number, bool) or alert_number < 1:
+        raise PolicyBlock("generated repair marker alert number is invalid")
+    matches = [
+        alert
+        for alert in _branch_alerts(api, "refs/heads/main")
+        if alert.get("number") == alert_number
+    ]
+    if len(matches) != 1:
+        raise PolicyBlock("generated repair no longer maps to exactly one open main CodeQL alert")
+    subject = validate_alert(matches[0], live["baseSha"], config)
+    expected = {
+        "alert": subject["number"],
+        "rule": subject["rule"],
+        "severity": subject["severity"],
+        "path": subject["path"],
+        "base": subject["baseSha"],
+        "fingerprint": subject["fingerprint"],
+    }
+    observed = {key: metadata.get(key) for key in expected}
+    if observed != expected:
+        raise PolicyBlock("generated repair marker drifted from the exact live CodeQL alert")
+    attempt = metadata.get("attempt")
+    if (
+        not isinstance(attempt, int)
+        or isinstance(attempt, bool)
+        or attempt < 1
+        or attempt > int(config["maxAttemptsPerAlert"])
+    ):
+        raise PolicyBlock("generated repair marker attempt is outside reviewed bounds")
+    generator = metadata.get("generator")
+    if generator not in {"deterministic", "github-codeql-autofix"}:
+        raise PolicyBlock("generated repair marker generator is outside reviewed authority")
+    return subject
+
+
+def assess_trusted_admission(
+    api: GitHubApi,
+    pr: dict[str, Any],
+    config: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    metadata, live = _validate_generated_pr(api, pr, config)
+    commit = api.get(f"/commits/{live['headSha']}")
+    if not _owned_generated_repair_commit(commit, live["headSha"]):
+        raise PolicyBlock("generated repair head lacks exact GitHub Actions ownership")
+    subject = _rebind_repair_alert(api, metadata, live, config)
+    if metadata.get("generator") == "deterministic":
+        expected_content = _deterministic_repair(subject)
+        if expected_content is None:
+            raise PolicyBlock("deterministic repair no longer matches a code-owned recipe")
+        observed_content = _repository_text(api, subject["path"], live["headSha"])
+        if observed_content != expected_content:
+            raise PolicyBlock("deterministic repair bytes differ from the code-owned recipe")
+    elif _is_deterministic_only(subject["path"], config):
+        raise PolicyBlock("protected verifier repair must remain deterministic")
+    _require_green_checks(api, live["headSha"], config)
+    _verify_codeql_remediation(api, metadata, config)
+    return metadata, live
 
 
 def _require_repair_lifecycle(
@@ -859,41 +954,6 @@ def _close_stale_repair(
     if not isinstance(closed, dict) or closed.get("state") != "closed":
         raise AutohealError("GitHub did not acknowledge stale repair closure")
     _delete_exact_generated_branch(api, branch, head_sha)
-
-
-def _post_trusted_status(
-    api: GitHubApi,
-    pr_number: int,
-    metadata: dict[str, Any],
-    live: dict[str, Any],
-    config: dict[str, Any],
-) -> None:
-    token = os.environ.get("TRUSTED_STATUS_TOKEN", "")
-    if not token:
-        raise AutohealError(
-            "TRUSTED_STATUS_TOKEN is required for security auto-heal merge authority"
-        )
-    run_id = os.environ.get("GITHUB_RUN_ID", "")
-    if not run_id.isdigit() or int(run_id) < 1:
-        raise AutohealError("GITHUB_RUN_ID is invalid")
-    fresh = api.get(f"/pulls/{pr_number}")
-    rebound_metadata, rebound_live = _validate_generated_pr(api, fresh, config)
-    if rebound_metadata != metadata or rebound_live != live:
-        raise PolicyBlock("repair PR changed before trusted status publication")
-    _require_green_checks(api, live["headSha"], config)
-    _verify_codeql_remediation(api, metadata, config)
-    response = api.post(
-        f"/statuses/{live['headSha']}",
-        {
-            "state": "success",
-            "context": config["trustedStatusContext"],
-            "description": "CodeQL exact-subject remediation passed",
-            "target_url": f"https://github.com/{config['repository']}/actions/runs/{run_id}",
-        },
-        token=token,
-    )
-    if not isinstance(response, dict) or response.get("state") != "success":
-        raise AutohealError("dedicated Trusted PR Gate status publication was not acknowledged")
 
 
 def _post_merge_ci_candidates(rows: list[dict[str, Any]], subject_sha: str) -> list[dict[str, Any]]:
@@ -1124,11 +1184,9 @@ def _merge(
     config: dict[str, Any],
 ) -> dict[str, Any]:
     fresh = api.get(f"/pulls/{pr_number}")
-    rebound_metadata, rebound_live = _validate_generated_pr(api, fresh, config)
+    rebound_metadata, rebound_live = assess_trusted_admission(api, fresh, config)
     if rebound_metadata != metadata or rebound_live != live:
         raise PolicyBlock("repair PR changed before guarded merge")
-    _require_green_checks(api, live["headSha"], config)
-    _verify_codeql_remediation(api, metadata, config)
     result = api.put(
         f"/pulls/{pr_number}/merge",
         {"sha": live["headSha"], "merge_method": config["mergeMethod"]},
@@ -1309,11 +1367,12 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
             active_alerts.add(alert_number)
         try:
             live_pr = api.get(f"/pulls/{number}")
-            validated_metadata, live = _validate_generated_pr(api, live_pr, config)
-            _require_green_checks(api, live["headSha"], config)
-            _verify_codeql_remediation(api, validated_metadata, config)
+            validated_metadata, live = assess_trusted_admission(api, live_pr, config)
             if allow_merge and config["automergeEnabled"]:
-                _post_trusted_status(api, number, validated_metadata, live, config)
+                try:
+                    require_automatic_trusted_gate(api, live["headSha"])
+                except TrustedStatusError as exc:
+                    raise PolicyBlock(str(exc)) from exc
                 merge_evidence = _merge(api, number, validated_metadata, live, config)
                 print(
                     json.dumps(
