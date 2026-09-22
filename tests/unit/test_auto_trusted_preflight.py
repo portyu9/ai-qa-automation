@@ -30,6 +30,25 @@ class FakeAPI:
             raise AssertionError(f"unexpected API path: {path}") from exc
 
 
+class ScheduledFakeAPI(FakeAPI):
+    def __init__(self, responses: dict[str, Any], pulls: list[dict[str, Any]]) -> None:
+        super().__init__(responses)
+        self.pulls = pulls
+        self.list_calls: list[tuple[str, int]] = []
+
+    def list_all(
+        self, path: str, *, max_pages: int = preflight.MAX_API_PAGES
+    ) -> list[dict[str, Any]]:
+        self.list_calls.append((path, max_pages))
+        expected = (
+            f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls"
+            f"?state=open&base={preflight.EXPECTED_DEFAULT_BRANCH}"
+        )
+        if path != expected or max_pages != 1:
+            raise AssertionError(f"unexpected scheduled list path: {path} max_pages={max_pages}")
+        return deepcopy(self.pulls)
+
+
 def _tree(*, changed_path: str | None = None) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for path in preflight.PROTECTED_PATHS:
@@ -77,6 +96,7 @@ def _responses(*, changed_path: str | None = None) -> dict[str, Any]:
     pr = {
         **candidate,
         "draft": False,
+        "mergeable": True,
         "user": {"login": preflight.EXPECTED_OWNER, "id": preflight.EXPECTED_OWNER_ID},
         "base": {
             "ref": preflight.EXPECTED_DEFAULT_BRANCH,
@@ -169,6 +189,60 @@ def test_protected_change_is_observed_but_not_auto_authorized(changed_path: str)
     )
 
 
+def test_scheduled_bot_reconciliation_selects_security_lane_from_fresh_pr() -> None:
+    responses = _responses()
+    live = responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]
+    live["user"] = {
+        "login": preflight.GITHUB_ACTIONS_LOGIN,
+        "id": preflight.GITHUB_ACTIONS_USER_ID,
+    }
+    live["head"]["ref"] = "automation/codeql-autoheal-7-abcdef123456"
+    summary = deepcopy(live)
+    api = ScheduledFakeAPI(responses, [summary])
+
+    admission = preflight.evaluate_admission(api, event={}, event_name="schedule")
+
+    assert admission is not None
+    assert admission.eligible is True
+    assert admission.lane == "security-autoheal"
+    assert admission.pr_number == 65
+    assert admission.head_ref == "automation/codeql-autoheal-7-abcdef123456"
+    assert api.calls.count(f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65") == 2
+
+
+def test_scheduled_bot_reconciliation_skips_nonmergeable_higher_priority_candidate() -> None:
+    responses = _responses()
+    security = responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]
+    security["number"] = 65
+    security["user"] = {
+        "login": preflight.GITHUB_ACTIONS_LOGIN,
+        "id": preflight.GITHUB_ACTIONS_USER_ID,
+    }
+    security["head"]["ref"] = "automation/codeql-autoheal-7-abcdef123456"
+    security["mergeable"] = False
+
+    action = deepcopy(security)
+    action["number"] = 66
+    action["user"] = {
+        "login": preflight.DEPENDABOT_LOGIN,
+        "id": preflight.DEPENDABOT_USER_ID,
+    }
+    action["head"]["ref"] = "dependabot/github_actions/actions/checkout-7"
+    action["mergeable"] = True
+    responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/66"] = action
+    responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/git/ref/pull/66/merge"] = {
+        "ref": "refs/pull/66/merge",
+        "object": {"sha": MERGE, "type": "commit"},
+    }
+
+    api = ScheduledFakeAPI(responses, [deepcopy(security), deepcopy(action)])
+    admission = preflight.evaluate_admission(api, event={}, event_name="schedule")
+
+    assert admission is not None
+    assert admission.lane == "dependabot-actions"
+    assert admission.pr_number == 66
+
+
 def test_fork_head_is_rejected_before_pr_admission() -> None:
     responses = _responses()
     responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]["head_repository"][
@@ -206,6 +280,15 @@ def test_stale_base_relative_to_current_main_fails_closed() -> None:
     )
 
     with pytest.raises(ValueError, match="stale relative to current main"):
+        preflight.evaluate_admission(FakeAPI(responses), event=_event())
+
+
+@pytest.mark.parametrize("mergeable", [False, None])
+def test_indefinite_or_conflicting_mergeability_fails_closed(mergeable: bool | None) -> None:
+    responses = _responses()
+    responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]["mergeable"] = mergeable
+
+    with pytest.raises(ValueError, match="definitively mergeable"):
         preflight.evaluate_admission(FakeAPI(responses), event=_event())
 
 

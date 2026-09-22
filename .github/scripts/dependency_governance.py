@@ -14,10 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from trusted_qualification import (
-    TrustedQualificationError,
-    qualification_states,
-)
+from trusted_qualification import TrustedQualificationError
 from trusted_qualification import (
     require_success as require_trusted_qualification_success,
 )
@@ -57,6 +54,8 @@ DEPENDABOT_ACTION_REF = re.compile(
 )
 POST_MERGE_CI_REGISTRATION_ATTEMPTS = 15
 POST_MERGE_CI_REGISTRATION_DELAY_SECONDS = 2
+TRANSIENT_GET_ATTEMPTS = 3
+TRANSIENT_GET_DELAY_SECONDS = 1
 
 
 class GovernanceError(RuntimeError):
@@ -206,16 +205,27 @@ class GitHubApi:
                 **({"Content-Type": "application/json"} if data is not None else {}),
             },
         )
-        try:
-            with urllib.request.urlopen(request, timeout=30) as response:
-                raw = response.read(max_bytes + 1)
-        except urllib.error.HTTPError as exc:
-            detail = exc.read(4096).decode("utf-8", errors="replace")
-            raise GovernanceError(
-                f"GitHub API {method} {path} failed HTTP {exc.code}: {detail}"
-            ) from exc
-        except urllib.error.URLError as exc:
-            raise GovernanceError(f"GitHub API {method} {path} transport failure: {exc}") from exc
+        attempts = TRANSIENT_GET_ATTEMPTS if method == "GET" else 1
+        for attempt in range(attempts):
+            try:
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    raw = response.read(max_bytes + 1)
+                break
+            except urllib.error.HTTPError as exc:
+                detail = exc.read(4096).decode("utf-8", errors="replace")
+                if method == "GET" and exc.code in {502, 503, 504} and attempt + 1 < attempts:
+                    time.sleep(TRANSIENT_GET_DELAY_SECONDS)
+                    continue
+                raise GovernanceError(
+                    f"GitHub API {method} {path} failed HTTP {exc.code}: {detail}"
+                ) from exc
+            except urllib.error.URLError as exc:
+                if method == "GET" and attempt + 1 < attempts:
+                    time.sleep(TRANSIENT_GET_DELAY_SECONDS)
+                    continue
+                raise GovernanceError(
+                    f"GitHub API {method} {path} transport failure: {exc}"
+                ) from exc
         if len(raw) > max_bytes:
             raise GovernanceError(f"GitHub API {method} {path} exceeded bounded response size")
         return raw
@@ -563,35 +573,7 @@ def _ensure_action_qualification(
     head_ref = (pr.get("head") or {}).get("ref")
     if not isinstance(head_ref, str) or DEPENDABOT_ACTION_REF.fullmatch(head_ref) is None:
         raise PolicyBlock("Dependabot pull request is not a reviewed GitHub Actions update")
-    states = qualification_states(
-        api,
-        subject["headSha"],
-        subject["baseSha"],
-        required=tuple(config["requiredChecks"]),
-    )
-    failed = [
-        name
-        for name, state in states.items()
-        if state is not None and state["conclusion"] != "success"
-    ]
-    if failed:
-        raise PolicyBlock(
-            "trusted-main qualification failed: "
-            + ", ".join(f"{name}={states[name]['conclusion']}" for name in failed)
-        )
-    missing = [name for name, state in states.items() if state is None]
-    for name in missing:
-        if name == "Required PR Gate":
-            dispatch_exact_ci(api, head_ref, subject["headSha"])
-        elif name == "CodeQL":
-            dispatch_exact_codeql(api, head_ref, subject["headSha"])
-        else:
-            raise GovernanceError(f"unsupported qualification check: {name}")
-    if missing:
-        raise PolicyBlock(
-            "trusted-main qualification dispatched; waiting for " + ", ".join(sorted(missing))
-        )
-    return assess(api, pr, config, require_checks=True)
+    return subject
 
 
 def _post_merge_ci_candidates(rows: list[dict[str, Any]], subject_sha: str) -> list[dict[str, Any]]:
@@ -682,7 +664,7 @@ def dispatch_exact_codeql(api: GitHubApi, ref: str, subject_sha: str) -> None:
 
 def _verify_actual_merge_commit(
     api: GitHubApi, result: dict[str, Any], subject: dict[str, Any], config: dict[str, Any]
-) -> str:
+) -> tuple[str, str]:
     merge_sha = require_sha(result.get("sha"), "actual merge SHA")
     commit = api.get(f"/git/commits/{merge_sha}")
     parents = (commit or {}).get("parents")
@@ -696,49 +678,35 @@ def _verify_actual_merge_commit(
         raise GovernanceError(
             f"actual governed merge parents changed: expected {expected}, got {observed}"
         )
+    merge_tree = require_sha(((commit or {}).get("tree") or {}).get("sha"), "actual merge tree SHA")
+    head_commit = api.get(f"/git/commits/{subject['headSha']}")
+    head_tree = require_sha(
+        ((head_commit or {}).get("tree") or {}).get("sha"), "validated head tree SHA"
+    )
+    if merge_tree != head_tree:
+        raise GovernanceError("actual governed merge tree differs from the validated bot head tree")
     live_sha = _live_main_sha(api, config)
     if live_sha != merge_sha:
         raise GovernanceError(
-            f"main advanced before exact-subject CI dispatch: expected {merge_sha}, got {live_sha}"
+            f"main advanced during guarded merge: expected {merge_sha}, got {live_sha}"
         )
-    return merge_sha
+    return merge_sha, merge_tree
 
 
 def finalize_post_merge_evidence(
     api: GitHubApi, result: dict[str, Any], subject: dict[str, Any], config: dict[str, Any]
 ) -> dict[str, Any]:
-    merge_sha = _verify_actual_merge_commit(api, result, subject, config)
-    existing = _select_post_merge_ci_run(_post_merge_ci_runs(api, merge_sha), merge_sha)
-    if existing is None:
-        dispatch_exact_ci(api, config["baseBranch"], merge_sha)
-        for attempt in range(POST_MERGE_CI_REGISTRATION_ATTEMPTS):
-            existing = _select_post_merge_ci_run(_post_merge_ci_runs(api, merge_sha), merge_sha)
-            if existing is not None:
-                if existing.get("event") != "workflow_dispatch":
-                    raise GovernanceError(
-                        "post-merge CI appeared through an unexpected event after explicit dispatch"
-                    )
-                break
-            if attempt + 1 < POST_MERGE_CI_REGISTRATION_ATTEMPTS:
-                time.sleep(POST_MERGE_CI_REGISTRATION_DELAY_SECONDS)
-        else:
-            raise GovernanceError(
-                f"explicit CI dispatch did not register for exact current main {merge_sha}"
-            )
-    if _live_main_sha(api, config) != merge_sha:
-        raise GovernanceError("post-merge CI evidence subject is no longer current main")
+    merge_sha, merge_tree = _verify_actual_merge_commit(api, result, subject, config)
     return {
         "mergeSha": merge_sha,
-        "ciRunId": int(existing["id"]),
-        "ciRunAttempt": int(existing["run_attempt"]),
-        "ciEvent": str(existing["event"]),
-        "ciStatus": str(existing["status"]),
+        "sourceTreeSha": merge_tree,
+        "postMergeBinding": "exact-current-main-parents-and-validated-source-tree",
     }
 
 
 def _merge(api: GitHubApi, subject: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     fresh = api.get(f"/pulls/{subject['number']}")
-    rebound = assess(api, fresh, config, require_checks=True)
+    rebound = assess(api, fresh, config, require_checks=False)
     if rebound != subject:
         raise PolicyBlock("pull request changed before merge")
     result = api.put(

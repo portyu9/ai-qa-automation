@@ -41,6 +41,8 @@ MAIN_CODEQL_NAME = "CodeQL"
 MAIN_CODEQL_EVENTS = {"push", "workflow_dispatch", "schedule"}
 MAIN_CODEQL_REGISTRATION_ATTEMPTS = 15
 MAIN_CODEQL_REGISTRATION_DELAY_SECONDS = 2
+TRANSIENT_GET_ATTEMPTS = 3
+TRANSIENT_GET_DELAY_SECONDS = 1
 GITHUB_ACTIONS_LOGIN = "github-actions[bot]"
 GITHUB_ACTIONS_USER_ID = 41898282
 MARKER_PREFIX = "<!-- aiqa-codeql-autoheal:"
@@ -230,17 +232,26 @@ class GitHubApi:
                 **({"Content-Type": "application/json"} if data is not None else {}),
             },
         )
-        try:
-            with urllib.request.urlopen(request, timeout=30) as response:
-                status = int(response.status)
-                raw = response.read(max_bytes + 1)
-        except urllib.error.HTTPError as exc:
-            detail = exc.read(4096).decode("utf-8", errors="replace")
-            raise AutohealError(
-                f"GitHub API {method} {path} failed HTTP {exc.code}: {detail[:1000]}"
-            ) from exc
-        except urllib.error.URLError as exc:
-            raise AutohealError(f"GitHub API {method} {path} transport failure: {exc}") from exc
+        attempts = TRANSIENT_GET_ATTEMPTS if method == "GET" else 1
+        for attempt in range(attempts):
+            try:
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    status = int(response.status)
+                    raw = response.read(max_bytes + 1)
+                break
+            except urllib.error.HTTPError as exc:
+                detail = exc.read(4096).decode("utf-8", errors="replace")
+                if method == "GET" and exc.code in {502, 503, 504} and attempt + 1 < attempts:
+                    time.sleep(TRANSIENT_GET_DELAY_SECONDS)
+                    continue
+                raise AutohealError(
+                    f"GitHub API {method} {path} failed HTTP {exc.code}: {detail[:1000]}"
+                ) from exc
+            except urllib.error.URLError as exc:
+                if method == "GET" and attempt + 1 < attempts:
+                    time.sleep(TRANSIENT_GET_DELAY_SECONDS)
+                    continue
+                raise AutohealError(f"GitHub API {method} {path} transport failure: {exc}") from exc
         if len(raw) > max_bytes:
             raise AutohealError(f"GitHub API {method} {path} exceeded bounded response size")
         if not raw:
@@ -844,6 +855,9 @@ def assess_trusted_admission(
     api: GitHubApi,
     pr: dict[str, Any],
     config: dict[str, Any],
+    *,
+    require_checks: bool = True,
+    verify_codeql: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     metadata, live = _validate_generated_pr(api, pr, config)
     commit = api.get(f"/commits/{live['headSha']}")
@@ -859,8 +873,10 @@ def assess_trusted_admission(
             raise PolicyBlock("deterministic repair bytes differ from the code-owned recipe")
     elif _is_deterministic_only(subject["path"], config):
         raise PolicyBlock("protected verifier repair must remain deterministic")
-    _require_green_checks(api, live["headSha"], config)
-    _verify_codeql_remediation(api, metadata, config)
+    if require_checks:
+        _require_green_checks(api, live["headSha"], config)
+    if verify_codeql:
+        _verify_codeql_remediation(api, metadata, config)
     return metadata, live
 
 
@@ -1112,7 +1128,7 @@ def _verify_actual_merge_commit(
     result: dict[str, Any],
     live: dict[str, Any],
     config: dict[str, Any],
-) -> str:
+) -> tuple[str, str]:
     merge_sha = _require_sha(result.get("sha"), "actual security auto-heal merge SHA")
     commit = api.get(f"/git/commits/{merge_sha}")
     parents = (commit or {}).get("parents")
@@ -1127,12 +1143,24 @@ def _verify_actual_merge_commit(
         raise AutohealError(
             f"actual security auto-heal merge parents changed: expected {expected}, got {observed}"
         )
+    merge_tree = _require_sha(
+        ((commit or {}).get("tree") or {}).get("sha"), "actual security auto-heal merge tree SHA"
+    )
+    head_commit = api.get(f"/git/commits/{live['headSha']}")
+    head_tree = _require_sha(
+        ((head_commit or {}).get("tree") or {}).get("sha"),
+        "validated security auto-heal head tree SHA",
+    )
+    if merge_tree != head_tree:
+        raise AutohealError(
+            "actual security auto-heal merge tree differs from the validated repair head tree"
+        )
     current_main = _current_main(api, config)
     if current_main != merge_sha:
         raise AutohealError(
-            f"main advanced before exact-subject CI dispatch: expected {merge_sha}, got {current_main}"
+            f"main advanced during guarded security merge: expected {merge_sha}, got {current_main}"
         )
-    return merge_sha
+    return merge_sha, merge_tree
 
 
 def _finalize_post_merge_evidence(
@@ -1141,38 +1169,11 @@ def _finalize_post_merge_evidence(
     live: dict[str, Any],
     config: dict[str, Any],
 ) -> dict[str, Any]:
-    merge_sha = _verify_actual_merge_commit(api, result, live, config)
-    existing = _select_post_merge_ci_run(_post_merge_ci_runs(api, merge_sha), merge_sha)
-    if existing is None:
-        api.post(
-            f"/actions/workflows/{POST_MERGE_CI_WORKFLOW}/dispatches",
-            {
-                "ref": "main",
-                "inputs": {"subject_sha": merge_sha, "subject_ref": "main"},
-            },
-        )
-        for attempt in range(POST_MERGE_CI_REGISTRATION_ATTEMPTS):
-            existing = _select_post_merge_ci_run(_post_merge_ci_runs(api, merge_sha), merge_sha)
-            if existing is not None:
-                if existing.get("event") != "workflow_dispatch":
-                    raise AutohealError(
-                        "post-merge CI appeared through an unexpected event after explicit dispatch"
-                    )
-                break
-            if attempt + 1 < POST_MERGE_CI_REGISTRATION_ATTEMPTS:
-                time.sleep(POST_MERGE_CI_REGISTRATION_DELAY_SECONDS)
-        else:
-            raise AutohealError(
-                f"explicit CI dispatch did not register for exact current main {merge_sha}"
-            )
-    if _current_main(api, config) != merge_sha:
-        raise AutohealError("post-merge CI evidence subject is no longer current main")
+    merge_sha, merge_tree = _verify_actual_merge_commit(api, result, live, config)
     return {
         "mergeSha": merge_sha,
-        "ciRunId": int(existing["id"]),
-        "ciRunAttempt": int(existing["run_attempt"]),
-        "ciEvent": str(existing["event"]),
-        "ciStatus": str(existing["status"]),
+        "sourceTreeSha": merge_tree,
+        "postMergeBinding": "exact-current-main-parents-and-validated-source-tree",
     }
 
 
@@ -1184,7 +1185,9 @@ def _merge(
     config: dict[str, Any],
 ) -> dict[str, Any]:
     fresh = api.get(f"/pulls/{pr_number}")
-    rebound_metadata, rebound_live = assess_trusted_admission(api, fresh, config)
+    rebound_metadata, rebound_live = assess_trusted_admission(
+        api, fresh, config, require_checks=False
+    )
     if rebound_metadata != metadata or rebound_live != live:
         raise PolicyBlock("repair PR changed before guarded merge")
     result = api.put(
@@ -1326,7 +1329,6 @@ def _create_repair(
     )
     # Bind the branch name into the marker after creation only through the immutable branch
     # convention. The live validator derives it from the PR head and accepts an absent marker key.
-    _dispatch_qualification(api, branch, head_sha)
     print(
         json.dumps(
             {
@@ -1367,7 +1369,9 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
             active_alerts.add(alert_number)
         try:
             live_pr = api.get(f"/pulls/{number}")
-            validated_metadata, live = assess_trusted_admission(api, live_pr, config)
+            validated_metadata, live = assess_trusted_admission(
+                api, live_pr, config, require_checks=False
+            )
             if allow_merge and config["automergeEnabled"]:
                 try:
                     require_automatic_trusted_gate(
@@ -1725,40 +1729,24 @@ def selftest(config: dict[str, Any]) -> None:
         else:
             raise AutohealError(f"terminal {conclusion} CI evidence was accepted")
 
+    source_tree = "6" * 40
+
     class _PostMergeEvidenceApi(GitHubApi):
-        def __init__(self, *, move_main: bool = False) -> None:
-            self.dispatched = False
+        def __init__(self, *, move_main: bool = False, drift_tree: bool = False) -> None:
             self.move_main = move_main
-            self.main_reads = 0
-            self.calls: list[tuple[str, dict[str, Any] | None]] = []
+            self.drift_tree = drift_tree
 
         def get(self, path: str) -> Any:
             if path == f"/git/commits/{merge_sha}":
-                return {"parents": [{"sha": base_sha}, {"sha": head_sha}]}
+                return {
+                    "parents": [{"sha": base_sha}, {"sha": head_sha}],
+                    "tree": {"sha": "5" * 40 if self.drift_tree else source_tree},
+                }
+            if path == f"/git/commits/{head_sha}":
+                return {"tree": {"sha": source_tree}}
             if path == "/branches/main":
-                self.main_reads += 1
-                observed = "7" * 40 if self.move_main and self.main_reads >= 2 else merge_sha
-                return {"commit": {"sha": observed}}
+                return {"commit": {"sha": "7" * 40 if self.move_main else merge_sha}}
             raise AutohealError(f"unexpected post-merge self-test GET path: {path}")
-
-        def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
-            expected = f"/actions/runs?head_sha={merge_sha}"
-            if path != expected or max_pages != 2:
-                raise AutohealError(f"unexpected post-merge self-test list path: {path}")
-            return [canonical_ci] if self.dispatched else []
-
-        def post(
-            self,
-            path: str,
-            payload: dict[str, Any] | None = None,
-            *,
-            token: str | None = None,
-        ) -> Any:
-            if token is not None:
-                raise AutohealError("post-merge self-test received unexpected alternate token")
-            self.calls.append((path, payload))
-            self.dispatched = True
-            return None
 
     post_merge_api = _PostMergeEvidenceApi()
     evidence = _finalize_post_merge_evidence(
@@ -1767,26 +1755,28 @@ def selftest(config: dict[str, Any]) -> None:
         {"baseSha": base_sha, "headSha": head_sha},
         config,
     )
-    expected_post_merge_dispatch = (
-        "/actions/workflows/ci.yml/dispatches",
-        {
-            "ref": "main",
-            "inputs": {"subject_sha": merge_sha, "subject_ref": "main"},
-        },
-    )
-    if post_merge_api.calls != [expected_post_merge_dispatch]:
-        raise AutohealError("post-merge exact-main CI dispatch payload drifted")
     if evidence != {
         "mergeSha": merge_sha,
-        "ciRunId": 901,
-        "ciRunAttempt": 1,
-        "ciEvent": "workflow_dispatch",
-        "ciStatus": "queued",
+        "sourceTreeSha": source_tree,
+        "postMergeBinding": "exact-current-main-parents-and-validated-source-tree",
     }:
-        raise AutohealError("post-merge exact-main CI evidence payload drifted")
+        raise AutohealError("post-merge structural binding evidence payload drifted")
+
+    drift_tree_api = _PostMergeEvidenceApi(drift_tree=True)
+    try:
+        _finalize_post_merge_evidence(
+            drift_tree_api,
+            {"sha": merge_sha},
+            {"baseSha": base_sha, "headSha": head_sha},
+            config,
+        )
+    except AutohealError as exc:
+        if "merge tree differs from the validated repair head tree" not in str(exc):
+            raise AutohealError("post-merge tree-drift guard changed semantics") from exc
+    else:
+        raise AutohealError("drifted post-merge source tree was accepted")
 
     moved_api = _PostMergeEvidenceApi(move_main=True)
-    moved_api.dispatched = True
     try:
         _finalize_post_merge_evidence(
             moved_api,
@@ -1795,10 +1785,13 @@ def selftest(config: dict[str, Any]) -> None:
             config,
         )
     except AutohealError as exc:
-        if str(exc) != "post-merge CI evidence subject is no longer current main":
+        expected = (
+            f"main advanced during guarded security merge: expected {merge_sha}, got {'7' * 40}"
+        )
+        if str(exc) != expected:
             raise AutohealError("moved-main post-merge guard changed semantics") from exc
     else:
-        raise AutohealError("moved main was accepted as post-merge evidence authority")
+        raise AutohealError("moved main was accepted as post-merge binding authority")
 
     stale_lifecycle = {"state": "open", "draft": False, "mergeable": False}
     try:

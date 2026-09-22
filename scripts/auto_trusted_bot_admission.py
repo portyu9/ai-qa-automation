@@ -88,7 +88,7 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         api = governance.GitHubApi(token, repository)
         config = governance.load_config()
         pr = api.get(f"/pulls/{args.pr_number}")
-        subject = governance.assess(api, pr, config, require_checks=True)
+        subject = governance.assess(api, pr, config, require_checks=False)
         merge_sha = governance.verify_merge_subject(
             api,
             pr,
@@ -116,6 +116,7 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             pr,
             config,
             validate_generated_bytes=args.mode == "full",
+            require_checks=False,
         )
         merge_sha = governance.verify_merge_subject(
             api,
@@ -134,7 +135,13 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         api = autoheal.GitHubApi(token, repository)
         config = autoheal.load_config()
         pr = api.get(f"/pulls/{args.pr_number}")
-        _, live = autoheal.assess_trusted_admission(api, pr, config)
+        _, live = autoheal.assess_trusted_admission(
+            api,
+            pr,
+            config,
+            require_checks=False,
+            verify_codeql=args.mode == "terminal",
+        )
         merge_sha = governance.verify_merge_subject(
             api,
             pr,

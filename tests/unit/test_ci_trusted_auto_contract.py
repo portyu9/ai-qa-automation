@@ -30,17 +30,19 @@ def _accept_mutated_workflow_hash(monkeypatch: pytest.MonkeyPatch, text: str) ->
     )
 
 
-def test_trusted_auto_contract_is_frozen_and_read_only() -> None:
+def test_trusted_auto_contract_is_frozen_and_bounded() -> None:
     ci_contract._verify_frozen_base()
     result = ci_contract.verify_ci_contract(ROOT)
     auto = result["workflows"]["trusted_auto"]
 
-    assert auto["trigger"] == "workflow_run:completed:reviewed-ci-or-codeql"
+    assert auto["trigger"] == "workflow_run:completed:reviewed-ci-or-codeql+schedule:5m"
     assert auto["candidate_execution_guard"] == (
         "owner-zero-protected-drift-or-exact-governed-bot-provenance"
     )
     assert auto["candidate_subject_binding"] == "job-level-exact-prospective-merge"
-    assert auto["validation_authority"] == "read-only-secret-free-before-reporter"
+    assert auto["validation_authority"] == (
+        "secret-free;read-only-except-bot-codeql-security-events-write-before-reporter"
+    )
     assert auto["status_writer"] == "dedicated-github-app"
     assert auto["maintenance_authority"] == (
         "autonomous-governed-bots;external-one-shot-only-for-unrecognized-protected-change"
@@ -103,6 +105,25 @@ def test_trusted_auto_contract_rejects_native_write_permission(tmp_path: Path) -
     with pytest.raises(
         ValueError, match="non-action structure differs from reviewed trust authority"
     ):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_trusted_auto_contract_rejects_bot_codeql_permission_expansion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_contract_repo(tmp_path)
+    path = root / ".github" / "workflows" / "trusted-pr-auto.yml"
+    text = path.read_text(encoding="utf-8")
+    job = ci_contract._job_block(text, "bot-codeql")
+    marker = "      contents: read\n"
+    assert marker in job
+    mutated_job = job.replace(marker, "      contents: write\n", 1)
+    mutated = text.replace(job, mutated_job, 1)
+    path.write_text(mutated, encoding="utf-8")
+    _accept_mutated_workflow_hash(monkeypatch, mutated)
+
+    with pytest.raises(ValueError, match="permissions differ from the reviewed minimum"):
         ci_contract.verify_ci_contract(root)
 
 

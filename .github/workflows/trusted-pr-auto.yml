@@ -7,6 +7,8 @@ on:
   workflow_run:
     workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL"]
     types: [completed]
+  schedule:
+    - cron: "*/5 * * * *"
 
 permissions:
   actions: read
@@ -14,7 +16,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: trusted-pr-auto-${{ github.event.workflow_run.id }}
+  group: trusted-pr-auto-${{ github.event_name == 'schedule' && 'scheduled-bot-reconcile' || github.event.workflow_run.id }}
   cancel-in-progress: false
 
 env:
@@ -25,7 +27,7 @@ env:
 jobs:
   preflight:
     name: Automatic Trusted Admission
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event_name == 'schedule' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -37,6 +39,7 @@ jobs:
       eligible: ${{ steps.admission.outputs.eligible }}
       lane: ${{ steps.admission.outputs.lane }}
       pr_number: ${{ steps.admission.outputs.pr_number }}
+      head_ref: ${{ steps.admission.outputs.head_ref }}
       head_sha: ${{ steps.admission.outputs.head_sha }}
       base_sha: ${{ steps.admission.outputs.base_sha }}
       merge_sha: ${{ steps.admission.outputs.merge_sha }}
@@ -66,6 +69,7 @@ jobs:
           set -euo pipefail
           python scripts/auto_trusted_preflight.py \
             --event "$GITHUB_EVENT_PATH" \
+            --event-name "$GITHUB_EVENT_NAME" \
             --github-output "$GITHUB_OUTPUT"
 
       - name: Bind admission to this trusted workflow revision
@@ -247,6 +251,7 @@ jobs:
                 ;;
             esac
             test "$BOT_AUTHORITY_RESULT" = "success"
+            "${git_clean_env[@]}" /usr/bin/git diff --quiet "$EXPECTED_HEAD_SHA" "$EXPECTED_MERGE_SHA" --
           fi
 
   supply-chain:
@@ -685,6 +690,40 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  bot-codeql:
+    name: Trusted Bot CodeQL
+    needs: [preflight, subject-guard]
+    if: ${{ needs.preflight.outputs.eligible == 'true' && needs.preflight.outputs.lane != 'owner-routine' && needs.subject-guard.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout exact governed bot head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.preflight.outputs.head_sha }}
+          persist-credentials: false
+
+      - name: Verify exact governed bot head
+        env:
+          EXPECTED_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+
+      - name: Initialize governed bot CodeQL
+        uses: github/codeql-action/init@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
+        with:
+          languages: python
+          queries: security-extended
+
+      - name: Analyze exact governed bot branch
+        uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
+        with:
+          ref: refs/heads/${{ needs.preflight.outputs.head_ref }}
+          sha: ${{ needs.preflight.outputs.head_sha }}
+
   required-gate:
     name: Automatic Trusted Validation Aggregate
     if: ${{ always() && needs.preflight.result == 'success' && needs.preflight.outputs.eligible == 'true' }}
@@ -696,6 +735,7 @@ jobs:
       - supply-chain
       - security
       - browser-reference-sut
+      - bot-codeql
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -707,6 +747,11 @@ jobs:
           test "${{ needs.supply-chain.result }}" = "success"
           test "${{ needs.security.result }}" = "success"
           test "${{ needs.browser-reference-sut.result }}" = "success"
+          if test "${{ needs.preflight.outputs.lane }}" = "owner-routine"; then
+            test "${{ needs.bot-codeql.result }}" = "skipped"
+          else
+            test "${{ needs.bot-codeql.result }}" = "success"
+          fi
 
   trusted-status:
     name: Automatic Trusted PR Gate Reporter
@@ -750,6 +795,7 @@ jobs:
           set -euo pipefail
           python scripts/auto_trusted_preflight.py \
             --event "$GITHUB_EVENT_PATH" \
+            --event-name "$GITHUB_EVENT_NAME" \
             --github-output "$GITHUB_OUTPUT"
 
       - name: Require exact final admission identity
