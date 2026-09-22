@@ -125,12 +125,13 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     preflight = _base._semantic_text(_base._job_block(text, "preflight"))
     required_preflight = (
         "    name: Automatic Trusted Admission",
-        "    if: ${{ github.event.workflow_run.conclusion == 'success' }}",
+        "    if: ${{ github.event_name == 'schedule' || github.event.workflow_run.conclusion == 'success' }}",
         "      actions: read",
         "      checks: read",
         "      contents: read",
         "      pull-requests: read",
         "      lane: ${{ steps.admission.outputs.lane }}",
+        "      head_ref: ${{ steps.admission.outputs.head_ref }}",
         "          ref: ${{ github.sha }}",
         "          persist-credentials: false",
         '        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"',
@@ -203,6 +204,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         '          if test "$ADMISSION_LANE" = "owner-routine"; then',
         "              dependabot-actions|dependency-promotion|security-autoheal) ;;",
         '            test "$BOT_AUTHORITY_RESULT" = "success"',
+        '            "${git_clean_env[@]}" /usr/bin/git diff --quiet "$EXPECTED_HEAD_SHA" "$EXPECTED_MERGE_SHA" --',
     )
     for fragment in required_guard:
         if fragment not in subject_guard:
@@ -223,7 +225,10 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         raise ValueError(
             "trusted automatic bot policy and reporter must have exactly two trusted-base checkouts"
         )
-    if semantic.count("persist-credentials: false") != 9:
+    bot_head_checkout = "ref: ${{ needs.preflight.outputs.head_sha }}"
+    if semantic.count(bot_head_checkout) != 1:
+        raise ValueError("trusted automatic bot CodeQL must have exactly one bot-head checkout")
+    if semantic.count("persist-credentials: false") != 10:
         raise ValueError("every trusted automatic checkout must disable persisted credentials")
 
     candidate_subject_binding = (
@@ -253,6 +258,34 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
             raise ValueError(f"trusted automatic validation job {job_id} must disable credentials")
 
     quality_lanes = _base._verify_quality_lane_contract(text, name="trusted-pr-auto.yml")
+
+    bot_codeql_permissions = _base._permissions(_base._job_block(text, "bot-codeql"))
+    if bot_codeql_permissions != {
+        "actions": "read",
+        "contents": "read",
+        "security-events": "write",
+    }:
+        raise ValueError("trusted bot CodeQL permissions differ from the reviewed minimum")
+    required_bot_codeql = (
+        "    name: Trusted Bot CodeQL",
+        "    needs: [preflight, subject-guard]",
+        "needs.preflight.outputs.lane != 'owner-routine'",
+        bot_head_checkout,
+        "          persist-credentials: false",
+        "          EXPECTED_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}",
+        '        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"',
+        "      - name: Initialize governed bot CodeQL",
+        "          languages: python",
+        "          queries: security-extended",
+        "      - name: Analyze exact governed bot branch",
+        "          ref: refs/heads/${{ needs.preflight.outputs.head_ref }}",
+        "          sha: ${{ needs.preflight.outputs.head_sha }}",
+    )
+    for fragment in required_bot_codeql:
+        if fragment not in bot_codeql:
+            raise ValueError(f"trusted bot CodeQL is missing reviewed fragment: {fragment}")
+    if "${{ secrets." in bot_codeql:
+        raise ValueError("trusted bot CodeQL must remain secret-free")
 
     required_gate = _base._semantic_text(_base._job_block(text, "required-gate"))
     for dependency in (
@@ -330,9 +363,9 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         raise ValueError("automatic trusted reporter authority steps are out of reviewed order")
 
     return {
-        "trigger": "workflow_run:completed:reviewed-ci-or-codeql",
-        "wake_signal": "owner-pull-request-ci-or-trusted-main-bot-qualification",
-        "trusted_definition": "default-branch-workflow-run-revision",
+        "trigger": "workflow_run:completed:reviewed-ci-or-codeql+schedule:5m",
+        "wake_signal": "owner-pull-request-ci-or-trusted-main-scheduled-bot-reconciliation",
+        "trusted_definition": "default-branch-workflow-run-or-schedule-revision",
         "candidate_execution_guard": (
             "owner-zero-protected-drift-or-exact-governed-bot-provenance"
         ),
@@ -344,7 +377,9 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "protected_paths": list(TRUSTED_AUTO_PROTECTED_PATHS),
         "validation_subject": "live-prospective-merge-sha",
         "candidate_subject_binding": "job-level-exact-prospective-merge",
-        "validation_authority": "read-only-secret-free-before-reporter",
+        "validation_authority": (
+            "secret-free;read-only-except-bot-codeql-security-events-write-before-reporter"
+        ),
         "quality_lanes": quality_lanes,
         "terminal_revalidation": "fresh-live-admission-plus-terminal-bot-authority-reproof",
         "status_writer": "dedicated-github-app",
