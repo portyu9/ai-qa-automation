@@ -111,7 +111,7 @@ def test_ci_contract_rejects_client_payload_subject_reintroduction(tmp_path: Pat
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "ci.yml"
     text = path.read_text(encoding="utf-8")
-    marker = "  CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_sha || github.sha }}\n"
+    marker = "  CI_SUBJECT_SHA: ${{ github.sha }}\n"
     replacement = (
         "  CI_SUBJECT_SHA: ${{ github.event_name == 'repository_dispatch' "
         "&& github.event.client_payload.expected_merge_sha || github.sha }}\n"
@@ -119,7 +119,7 @@ def test_ci_contract_rejects_client_payload_subject_reintroduction(tmp_path: Pat
     assert marker in text
     path.write_text(text.replace(marker, replacement, 1), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="environment/subject binding differs"):
+    with pytest.raises(ValueError, match="forbidden authority token"):
         ci_contract.verify_ci_contract(root)
 
 
