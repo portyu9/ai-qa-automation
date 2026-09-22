@@ -60,9 +60,7 @@ def _check_candidate(
         external_id,
     )
     if match is None:
-        raise TrustedQualificationError(
-            f"{name} trusted qualification external_id is malformed"
-        )
+        raise TrustedQualificationError(f"{name} trusted qualification external_id is malformed")
     run_id = int(match.group("run_id"))
     attempt = int(match.group("attempt"))
     if row.get("name") != name or row.get("head_sha") != head_sha:
@@ -77,14 +75,10 @@ def _check_candidate(
             f"{name} trusted qualification writer is not GitHub Actions"
         )
     if row.get("status") != "completed":
-        raise TrustedQualificationError(
-            f"{name} trusted qualification is not terminal"
-        )
+        raise TrustedQualificationError(f"{name} trusted qualification is not terminal")
     conclusion = row.get("conclusion")
     if not isinstance(conclusion, str) or not conclusion:
-        raise TrustedQualificationError(
-            f"{name} trusted qualification conclusion is invalid"
-        )
+        raise TrustedQualificationError(f"{name} trusted qualification conclusion is invalid")
     details_url = row.get("details_url")
     expected_url = f"https://github.com/{EXPECTED_REPOSITORY}/actions/runs/{run_id}"
     if details_url != expected_url:
@@ -94,17 +88,13 @@ def _check_candidate(
 
     run = api.get(f"/actions/runs/{run_id}")
     if not isinstance(run, dict):
-        raise TrustedQualificationError(
-            f"{name} trusted qualification workflow run is malformed"
-        )
+        raise TrustedQualificationError(f"{name} trusted qualification workflow run is malformed")
     if _positive_int(run.get("id"), "workflow run id") != run_id:
         raise TrustedQualificationError(
             f"{name} trusted qualification workflow run identity drifted"
         )
     if _positive_int(run.get("run_attempt"), "workflow run attempt") != attempt:
-        raise TrustedQualificationError(
-            f"{name} trusted qualification workflow attempt drifted"
-        )
+        raise TrustedQualificationError(f"{name} trusted qualification workflow attempt drifted")
     if (
         _positive_int(run.get("workflow_id"), "workflow id") != spec["workflow_id"]
         or run.get("name") != spec["workflow_name"]
@@ -128,9 +118,7 @@ def _check_candidate(
         repository.get("full_name") != EXPECTED_REPOSITORY
         or head_repository.get("full_name") != EXPECTED_REPOSITORY
     ):
-        raise TrustedQualificationError(
-            f"{name} trusted qualification repository identity drifted"
-        )
+        raise TrustedQualificationError(f"{name} trusted qualification repository identity drifted")
     actor = run.get("actor") or {}
     triggering_actor = run.get("triggering_actor") or {}
     if (
@@ -149,9 +137,7 @@ def _check_candidate(
                 f"{name} check says success but its workflow did not succeed"
             )
     elif run_conclusion == "success":
-        raise TrustedQualificationError(
-            f"{name} check says non-success but its workflow succeeded"
-        )
+        raise TrustedQualificationError(f"{name} check says non-success but its workflow succeeded")
     return {
         "check_id": _positive_int(row.get("id"), f"{name} check id"),
         "run_id": run_id,
