@@ -82,15 +82,20 @@ SUPPLY_CHAIN_ARTIFACTS = (
     "artifacts/ci/wheel-a/*.whl",
     "artifacts/ci/container-image-id.txt",
 )
-ACTION_RE = re.compile(r"^\s*uses:\s*([^@\s]+)@([^\s#]+)", re.MULTILINE)
+ACTION_RE = re.compile(
+    r"^[ \t]*(?:-[ \t]+)?uses:[ \t]*([^@\s]+)@([^\s#]+)",
+    re.MULTILINE,
+)
 ACTION_PIN_RE = re.compile(
-    r"^\s*uses:\s*(?P<action>[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)"
-    r"@(?P<sha>[0-9a-f]{40})\s+#\s+v(?P<version>\d+(?:\.\d+){0,2})\s*$",
+    r"^[ \t]*(?:-[ \t]+)?uses:[ \t]*(?P<action>[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)"
+    r"@(?P<sha>[0-9a-f]{40})[ \t]+#[ \t]+v(?P<version>\d+(?:\.\d+){0,2})[ \t]*$",
     re.MULTILINE,
 )
 ACTION_PIN_NORMALIZE_RE = re.compile(
-    r"^(?P<prefix>\s*uses:\s*[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)"
-    r"@[0-9a-f]{40}(?P<suffix>\s+#\s+v)\d+(?:\.\d+){0,2}\s*$",
+    r"^(?P<prefix>[ \t]*(?:-[ \t]+)?uses:[ \t]*"
+    r"[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)"
+    r"@[0-9a-f]{40}(?P<suffix>[ \t]+#[ \t]+v)"
+    r"\d+(?:\.\d+){0,2}[ \t]*$",
     re.MULTILINE,
 )
 HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
