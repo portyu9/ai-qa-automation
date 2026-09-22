@@ -27,7 +27,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
-    "ae442a92d7a250c211a448ed92c87121c3a288cc"  # pragma: allowlist secret
+    "6c7d3f52c5d3743120011dad793ebf01d4752700"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
     "6c5dd5dda830a4d97c82068f360e99b8800a020e"  # pragma: allowlist secret
@@ -83,19 +83,25 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
             "  workflow_run:",
             '    workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL"]',
             "    types: [completed]",
+            "  schedule:",
+            '    - cron: "*/5 * * * *"',
         )
     )
     if on_block != expected_on:
         raise ValueError(
-            "trusted-pr-auto.yml must be triggered only by completed reviewed CI/CodeQL runs"
+            "trusted-pr-auto.yml must be triggered only by completed reviewed CI/CodeQL runs "
+            "or the reviewed five-minute schedule"
         )
 
+    bot_codeql = _base._semantic_text(_base._job_block(text, "bot-codeql"))
+    semantic_without_bot_codeql = semantic.replace(bot_codeql, "")
     permissions = _base._permissions(_base._top_level_block(text, "permissions"))
     if permissions != {"actions": "read", "contents": "read", "pull-requests": "read"}:
         raise ValueError("trusted-pr-auto.yml top-level token must be exactly read-only")
-    if _base.WRITE_PERMISSION_RE.search(semantic):
+    if _base.WRITE_PERMISSION_RE.search(semantic_without_bot_codeql):
         raise ValueError(
-            "trusted-pr-auto.yml native GitHub token must never request write authority"
+            "trusted-pr-auto.yml native GitHub token may write only security-events "
+            "inside the reviewed bot CodeQL job"
         )
     for forbidden in (
         "pull_request_target:",
