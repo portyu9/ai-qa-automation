@@ -238,13 +238,6 @@ def test_unreviewed_or_unsuccessful_workflow_wake_is_ignored(
 
 
 @pytest.mark.parametrize(
-    ("field", "value", "message"),
-    [
-        ("ref", "refs/heads/release", "identify exactly"),
-        ("type", "tag", "point to a commit"),
-    ],
-)
-@pytest.mark.parametrize(
     ("user", "branch", "expected_lane"),
     [
         (
@@ -281,6 +274,13 @@ def test_governed_bot_lane_rejects_lookalike_identity() -> None:
     assert preflight._bot_lane(pr) is None
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("ref", "refs/heads/release", "identify exactly"),
+        ("type", "tag", "point to a commit"),
+    ],
+)
 def test_main_ref_identity_and_type_fail_closed(field: str, value: str, message: str) -> None:
     responses = _responses()
     main_ref = responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/git/ref/heads/main"]
