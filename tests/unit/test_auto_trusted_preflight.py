@@ -36,7 +36,9 @@ class ScheduledFakeAPI(FakeAPI):
         self.pulls = pulls
         self.list_calls: list[tuple[str, int]] = []
 
-    def list_all(self, path: str, *, max_pages: int = preflight.MAX_API_PAGES) -> list[dict[str, Any]]:
+    def list_all(
+        self, path: str, *, max_pages: int = preflight.MAX_API_PAGES
+    ) -> list[dict[str, Any]]:
         self.list_calls.append((path, max_pages))
         expected = (
             f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls"
