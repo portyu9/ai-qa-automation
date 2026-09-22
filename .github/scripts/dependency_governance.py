@@ -381,7 +381,13 @@ def validate_commits(api: GitHubApi, number: int, config: dict[str, Any]) -> Non
         raise PolicyBlock("update type requires manual review: " + ", ".join(unexpected))
 
 
-def changed_files(api: GitHubApi, number: int, config: dict[str, Any]) -> list[dict[str, Any]]:
+def changed_files(
+    api: GitHubApi,
+    number: int,
+    config: dict[str, Any],
+    *,
+    allow_reviewed_action_pins: bool = False,
+) -> list[dict[str, Any]]:
     files = api.list_all(f"/pulls/{number}/files", max_pages=2)
     if not files:
         raise PolicyBlock("pull request has no changed files")
@@ -393,6 +399,12 @@ def changed_files(api: GitHubApi, number: int, config: dict[str, Any]) -> list[d
             raise PolicyBlock("changed file path is invalid")
         for protected in config["manualReviewPaths"]:
             if path_matches(path, protected):
+                if (
+                    allow_reviewed_action_pins
+                    and path.startswith(".github/workflows/")
+                    and path.endswith((".yml", ".yaml"))
+                ):
+                    continue
                 raise PolicyBlock(f"control-plane path requires manual review: {path}")
     return files
 
@@ -511,7 +523,12 @@ def assess(
 ) -> dict[str, Any]:
     head_sha, base_sha, number = validate_pr_identity(api, pr, config)
     validate_commits(api, number, config)
-    files = changed_files(api, number, config)
+    files = changed_files(
+        api,
+        number,
+        config,
+        allow_reviewed_action_pins=True,
+    )
     validate_action_semantics(files)
     merge_sha = verify_merge_subject(api, pr, number, head_sha, base_sha)
     if require_checks:
