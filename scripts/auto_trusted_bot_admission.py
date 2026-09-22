@@ -91,7 +91,6 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         subject = governance.assess(api, pr, config, require_checks=False)
         merge_sha = governance.verify_merge_subject(
             api,
-            pr,
             args.pr_number,
             subject["headSha"],
             subject["baseSha"],
@@ -120,7 +119,6 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         )
         merge_sha = governance.verify_merge_subject(
             api,
-            pr,
             args.pr_number,
             subject["headSha"],
             subject["baseSha"],
@@ -144,7 +142,6 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         )
         merge_sha = governance.verify_merge_subject(
             api,
-            pr,
             args.pr_number,
             live["headSha"],
             live["baseSha"],
