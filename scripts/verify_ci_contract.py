@@ -326,7 +326,7 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
         "supply_chain_evidence": "pinned-upload-action",
         "permissions": "contents:read",
         "status_write_authority": "isolated-generated-maintenance-check-publication",
-        "protected_maintenance_authority": "external-trusted-gate-only",
+        "protected_maintenance_authority": "centralized-app-gate-for-governed-bots",
     }
 
 
@@ -843,8 +843,9 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
                 "infrastructure failures; it cannot mutate branches, publish trusted status, or merge."
             ),
             (
-                "Dependency governance is the sole autonomous Dependabot merge authority and uses "
-                "the dedicated Trusted PR Gate credential only after exact bot/provenance/check proofs."
+                "Dependency governance is the sole autonomous Dependabot merge authority and consumes "
+                "the App-owned Trusted PR Gate only after exact bot/provenance/check proofs; it does not "
+                "hold App status-write credentials itself."
             ),
             (
                 "The release-candidate workflow is manual, read-only, and non-publishing; its "
@@ -852,27 +853,29 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
                 "deployment approval, or protected merge authority."
             ),
             (
-                "Automatic Trusted PR Gate admission intentionally refuses any PR that changes a "
-                "protected authority root; its candidate validation remains read-only and "
-                "secret-free until the final trusted reporter."
+                "Automatic Trusted PR Gate admission refuses protected changes for owner-routine PRs, "
+                "while the finite governed bot lanes may cross protected roots only after lane-specific "
+                "provenance proof; candidate validation remains read-only and secret-free until the reporter."
             ),
             (
-                "Protected maintenance is authorized only by the independently deployed external "
-                "Trusted PR Gate with exact subject/protected-transition policy; repository "
-                "repository_dispatch is not a maintenance authority."
+                "Recognized Dependabot Actions, deterministic dependency-promotion, and CodeQL auto-heal "
+                "subjects are autonomously admitted by the centralized App gate after exact qualification "
+                "and prospective-merge validation; unrecognized protected maintenance still requires the "
+                "independent external one-shot gate."
             ),
             (
                 "The trusted-pr-gate Environment/App credential remains required by the routine "
                 "automatic reporter and must not be retired while that live path depends on it."
             ),
             (
-                "Repository code cannot attest external deployment, one-shot policy, Environment "
+                "Repository code cannot attest external break-glass deployment state, Environment "
                 "protection, App installation, ruleset binding, or hosted infrastructure state; "
                 "those require live external evidence."
             ),
             (
-                "Trusted PR Gate is published on the PR head after exact head/base/merge "
-                "revalidation, so protected-branch enforcement must remain strict/up-to-date."
+                "Trusted PR Gate is published on the PR head with an exact PR/base/head/merge-bound "
+                "target and terminal live revalidation; protected-branch enforcement must still remain "
+                "strict/up-to-date as an independent defense in depth."
             ),
         ],
     }
