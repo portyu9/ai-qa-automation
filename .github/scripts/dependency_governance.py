@@ -57,6 +57,8 @@ DEPENDABOT_ACTION_REF = re.compile(
 )
 POST_MERGE_CI_REGISTRATION_ATTEMPTS = 15
 POST_MERGE_CI_REGISTRATION_DELAY_SECONDS = 2
+TRANSIENT_GET_ATTEMPTS = 3
+TRANSIENT_GET_DELAY_SECONDS = 1
 
 
 class GovernanceError(RuntimeError):
@@ -206,16 +208,31 @@ class GitHubApi:
                 **({"Content-Type": "application/json"} if data is not None else {}),
             },
         )
-        try:
-            with urllib.request.urlopen(request, timeout=30) as response:
-                raw = response.read(max_bytes + 1)
-        except urllib.error.HTTPError as exc:
-            detail = exc.read(4096).decode("utf-8", errors="replace")
-            raise GovernanceError(
-                f"GitHub API {method} {path} failed HTTP {exc.code}: {detail}"
-            ) from exc
-        except urllib.error.URLError as exc:
-            raise GovernanceError(f"GitHub API {method} {path} transport failure: {exc}") from exc
+        attempts = TRANSIENT_GET_ATTEMPTS if method == "GET" else 1
+        for attempt in range(attempts):
+            try:
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    raw = response.read(max_bytes + 1)
+                break
+            except urllib.error.HTTPError as exc:
+                detail = exc.read(4096).decode("utf-8", errors="replace")
+                if (
+                    method == "GET"
+                    and exc.code in {502, 503, 504}
+                    and attempt + 1 < attempts
+                ):
+                    time.sleep(TRANSIENT_GET_DELAY_SECONDS)
+                    continue
+                raise GovernanceError(
+                    f"GitHub API {method} {path} failed HTTP {exc.code}: {detail}"
+                ) from exc
+            except urllib.error.URLError as exc:
+                if method == "GET" and attempt + 1 < attempts:
+                    time.sleep(TRANSIENT_GET_DELAY_SECONDS)
+                    continue
+                raise GovernanceError(
+                    f"GitHub API {method} {path} transport failure: {exc}"
+                ) from exc
         if len(raw) > max_bytes:
             raise GovernanceError(f"GitHub API {method} {path} exceeded bounded response size")
         return raw
