@@ -19,6 +19,9 @@ MERGE_SHA = "3" * 40
 OTHER_SHA = "4" * 40
 REPOSITORY = "portyu9/ai-qa-automation"
 RUN_URL = f"https://github.com/{REPOSITORY}/actions/runs/123"
+BOUND_RUN_URL = (
+    f"{RUN_URL}?pr=43&base={BASE_SHA}&head={HEAD_SHA}&merge={MERGE_SHA}"
+)
 
 
 def _pull_request_payload(*, head_sha: str = HEAD_SHA) -> dict[str, Any]:
@@ -122,12 +125,13 @@ def test_automatic_report_uses_shared_exact_subject_resolver(
 
     assert result["result"] == "SUCCESS"
     assert result["authorization_mode"] == "automatic-default-branch"
+    assert result["status_target_url"] == BOUND_RUN_URL
     assert FakeApi.instances[0].statuses == [
         {
             "sha": HEAD_SHA,
             "state": "success",
             "description": "Automatic exact-subject trusted validation passed",
-            "target_url": RUN_URL,
+            "target_url": BOUND_RUN_URL,
         }
     ]
 
