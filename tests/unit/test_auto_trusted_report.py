@@ -19,9 +19,7 @@ MERGE_SHA = "3" * 40
 OTHER_SHA = "4" * 40
 REPOSITORY = "portyu9/ai-qa-automation"
 RUN_URL = f"https://github.com/{REPOSITORY}/actions/runs/123"
-BOUND_RUN_URL = (
-    f"{RUN_URL}?pr=43&base={BASE_SHA}&head={HEAD_SHA}&merge={MERGE_SHA}"
-)
+BOUND_RUN_URL = f"{RUN_URL}?pr=43&base={BASE_SHA}&head={HEAD_SHA}&merge={MERGE_SHA}"
 
 
 def _pull_request_payload(*, head_sha: str = HEAD_SHA) -> dict[str, Any]:
