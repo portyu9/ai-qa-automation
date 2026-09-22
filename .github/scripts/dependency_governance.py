@@ -14,6 +14,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from trusted_qualification import (
+    TrustedQualificationError,
+    qualification_states,
+    require_success as require_trusted_qualification_success,
+)
+from trusted_status import TrustedStatusError, require_automatic_trusted_gate
+
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = ROOT / ".github" / "dependency-governance.json"
 API_ROOT = "https://api.github.com"
@@ -42,6 +49,9 @@ POST_MERGE_CI_NAME = "CI — ƳƤ AI QA Automation Framework"
 POST_MERGE_CI_EVENTS = {"push", "workflow_dispatch"}
 CI_DISPATCH_PROMOTION_REF = re.compile(
     r"^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$"
+)
+DEPENDABOT_ACTION_REF = re.compile(
+    r"^dependabot/github_actions/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$"
 )
 POST_MERGE_CI_REGISTRATION_ATTEMPTS = 15
 POST_MERGE_CI_REGISTRATION_DELAY_SECONDS = 2
@@ -118,6 +128,8 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         ".github/scripts/dependency_recovery_selfcheck.py",
         ".github/scripts/security_autoheal.py",
         ".github/scripts/security_autoheal_selfcheck.py",
+        ".github/scripts/trusted_qualification.py",
+        ".github/scripts/trusted_status.py",
         ".github/workflows/dependency-governance.yml",
         ".github/workflows/security-autoheal.yml",
         ".github/workflows/trusted-pr-auto.yml",
@@ -134,14 +146,8 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         if item not in paths:
             errors.append(f"{item} must require manual review")
     checks = config.get("requiredChecks")
-    if (
-        not isinstance(checks, list)
-        or not checks
-        or not all(isinstance(x, str) and x.strip() for x in checks)
-    ):
-        errors.append("requiredChecks must be a non-empty string list")
-    elif len(set(checks)) != len(checks):
-        errors.append("requiredChecks must not contain duplicates")
+    if checks != ["Required PR Gate", "CodeQL"]:
+        errors.append("requiredChecks must be exactly Required PR Gate and CodeQL")
     allowed = config.get("allowedActionUpdateTypes")
     expected_allowed = {
         "version-update:semver-patch",
@@ -155,11 +161,12 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         errors.append(
             "allowedActionUpdateTypes must be exactly patch/minor/major version and security updates"
         )
-    publish = config.get("publishTrustedStatus")
-    if not isinstance(publish, bool):
-        errors.append("publishTrustedStatus must be boolean")
-    if publish and config.get("trustedStatusContext") != "Trusted PR Gate":
-        errors.append("trustedStatusContext must equal Trusted PR Gate when publication is enabled")
+    if config.get("publishTrustedStatus") is not False:
+        errors.append(
+            "publishTrustedStatus must be false; only Trusted PR Auto Gate may publish authority"
+        )
+    if config.get("trustedStatusContext") != "Trusted PR Gate":
+        errors.append("trustedStatusContext must equal Trusted PR Gate")
     return unique(errors)
 
 
@@ -488,15 +495,15 @@ def latest_checks(api: GitHubApi, head_sha: str) -> dict[str, dict[str, Any]]:
 
 
 def require_green_checks(api: GitHubApi, head_sha: str, config: dict[str, Any]) -> None:
-    checks = latest_checks(api, head_sha)
-    for name in config["requiredChecks"]:
-        row = checks.get(name)
-        if row is None:
-            raise PolicyBlock(f"required check has not registered: {name}")
-        if row.get("status") != "completed" or row.get("conclusion") != "success":
-            raise PolicyBlock(
-                f"required check is not green: {name} status={row.get('status')} conclusion={row.get('conclusion')}"
-            )
+    try:
+        require_trusted_qualification_success(
+            api,
+            head_sha,
+            _live_main_sha(api, config),
+            required=tuple(config["requiredChecks"]),
+        )
+    except TrustedQualificationError as exc:
+        raise PolicyBlock(str(exc)) from exc
 
 
 def assess(
@@ -528,32 +535,45 @@ def open_dependabot_prs(api: GitHubApi) -> list[dict[str, Any]]:
     ]
 
 
-def _post_trusted_status(api: GitHubApi, subject: dict[str, Any], config: dict[str, Any]) -> None:
-    if not config["publishTrustedStatus"]:
-        return
-    token = os.environ.get("TRUSTED_STATUS_TOKEN", "")
-    if not token:
-        raise GovernanceError("TRUSTED_STATUS_TOKEN is required for the dedicated Trusted PR Gate")
-    run_id = os.environ.get("GITHUB_RUN_ID", "")
-    if not run_id.isdigit() or int(run_id) < 1:
-        raise GovernanceError("GITHUB_RUN_ID is invalid")
-    fresh = api.get(f"/pulls/{subject['number']}")
-    rebound = assess(api, fresh, config, require_checks=True)
-    if rebound != subject:
-        raise PolicyBlock("pull request changed before trusted status publication")
-    response = api.post(
-        f"/statuses/{subject['headSha']}",
-        {
-            "state": "success",
-            "context": config["trustedStatusContext"],
-            "description": "Dependabot exact-subject governance passed",
-            "target_url": f"https://github.com/{config['repository']}/actions/runs/{run_id}",
-        },
-        token=token,
+def _ensure_action_qualification(
+    api: GitHubApi,
+    pr: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    subject = assess(api, pr, config, require_checks=False)
+    head_ref = ((pr.get("head") or {}).get("ref"))
+    if not isinstance(head_ref, str) or DEPENDABOT_ACTION_REF.fullmatch(head_ref) is None:
+        raise PolicyBlock("Dependabot pull request is not a reviewed GitHub Actions update")
+    states = qualification_states(
+        api,
+        subject["headSha"],
+        subject["baseSha"],
+        required=tuple(config["requiredChecks"]),
     )
-    if not isinstance(response, dict) or response.get("state") != "success":
-        raise GovernanceError("dedicated Trusted PR Gate status publication was not acknowledged")
-
+    failed = [
+        name
+        for name, state in states.items()
+        if state is not None and state["conclusion"] != "success"
+    ]
+    if failed:
+        raise PolicyBlock(
+            "trusted-main qualification failed: "
+            + ", ".join(f"{name}={states[name]['conclusion']}" for name in failed)
+        )
+    missing = [name for name, state in states.items() if state is None]
+    for name in missing:
+        if name == "Required PR Gate":
+            dispatch_exact_ci(api, head_ref, subject["headSha"])
+        elif name == "CodeQL":
+            dispatch_exact_codeql(api, head_ref, subject["headSha"])
+        else:
+            raise GovernanceError(f"unsupported qualification check: {name}")
+    if missing:
+        raise PolicyBlock(
+            "trusted-main qualification dispatched; waiting for "
+            + ", ".join(sorted(missing))
+        )
+    return assess(api, pr, config, require_checks=True)
 
 def _post_merge_ci_candidates(rows: list[dict[str, Any]], subject_sha: str) -> list[dict[str, Any]]:
     subject_sha = require_sha(subject_sha, "post-merge CI subject SHA")
@@ -607,7 +627,11 @@ def _post_merge_ci_runs(api: GitHubApi, subject_sha: str) -> list[dict[str, Any]
 
 
 def _validate_qualification_ref(ref: str) -> None:
-    if ref != "main" and CI_DISPATCH_PROMOTION_REF.fullmatch(ref) is None:
+    if (
+        ref != "main"
+        and CI_DISPATCH_PROMOTION_REF.fullmatch(ref) is None
+        and DEPENDABOT_ACTION_REF.fullmatch(ref) is None
+    ):
         raise GovernanceError(
             f"explicit maintenance qualification ref is outside reviewed authority: {ref!r}"
         )
@@ -717,11 +741,19 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
     for summary in open_dependabot_prs(api):
         number = summary.get("number")
         try:
-            subject = assess(api, api.get(f"/pulls/{number}"), config, require_checks=True)
+            live_pr = api.get(f"/pulls/{number}")
+            head_ref = str(((live_pr or {}).get("head") or {}).get("ref") or "")
+            if DEPENDABOT_ACTION_REF.fullmatch(head_ref) is not None:
+                subject = _ensure_action_qualification(api, live_pr, config)
+            else:
+                subject = assess(api, live_pr, config, require_checks=True)
             eligible += 1
             print(json.dumps({"pr": number, "decision": "eligible", **subject}, sort_keys=True))
             if allow_merge and config["automergeEnabled"]:
-                _post_trusted_status(api, subject, config)
+                try:
+                    require_automatic_trusted_gate(api, subject["headSha"])
+                except TrustedStatusError as exc:
+                    raise PolicyBlock(str(exc)) from exc
                 merge_evidence = _merge(api, subject, config)
                 print(
                     json.dumps(
