@@ -34,9 +34,9 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     assert automatic["supply_chain_evidence"] == "pinned-upload-action"
     assert automatic["subject"] == "event-sha-or-explicit-qualified-sha"
     assert automatic["status_write_authority"] == "isolated-generated-maintenance-check-publication"
-    assert automatic["protected_maintenance_authority"] == "external-trusted-gate-only"
+    assert automatic["protected_maintenance_authority"] == "centralized-app-gate-for-governed-bots"
     assert result["workflows"]["trusted_auto"]["maintenance_authority"] == (
-        "independent-external-one-shot-exact-subject-gate"
+        "autonomous-governed-bots;external-one-shot-only-for-unrecognized-protected-change"
     )
     assert result["workflows"]["manual"]["credentialed_model"] == "manual-only"
 
