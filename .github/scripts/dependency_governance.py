@@ -558,7 +558,7 @@ def _ensure_action_qualification(
     config: dict[str, Any],
 ) -> dict[str, Any]:
     subject = assess(api, pr, config, require_checks=False)
-    head_ref = ((pr.get("head") or {}).get("ref"))
+    head_ref = (pr.get("head") or {}).get("ref")
     if not isinstance(head_ref, str) or DEPENDABOT_ACTION_REF.fullmatch(head_ref) is None:
         raise PolicyBlock("Dependabot pull request is not a reviewed GitHub Actions update")
     states = qualification_states(
@@ -587,10 +587,10 @@ def _ensure_action_qualification(
             raise GovernanceError(f"unsupported qualification check: {name}")
     if missing:
         raise PolicyBlock(
-            "trusted-main qualification dispatched; waiting for "
-            + ", ".join(sorted(missing))
+            "trusted-main qualification dispatched; waiting for " + ", ".join(sorted(missing))
         )
     return assess(api, pr, config, require_checks=True)
+
 
 def _post_merge_ci_candidates(rows: list[dict[str, Any]], subject_sha: str) -> list[dict[str, Any]]:
     subject_sha = require_sha(subject_sha, "post-merge CI subject SHA")
