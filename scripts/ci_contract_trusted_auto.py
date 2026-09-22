@@ -213,10 +213,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     for fragment in required_bot:
         if fragment not in bot_authority:
             raise ValueError(f"governed bot authority is missing reviewed fragment: {fragment}")
-    if (
-        "${{ secrets." in bot_authority
-        or "write" in _job_permissions(bot_authority).values()
-    ):
+    if "${{ secrets." in bot_authority or "write" in _job_permissions(bot_authority).values():
         raise ValueError("governed bot authority must remain secret-free and read-only")
 
     if "needs.bot-authority.result" in bot_authority:
