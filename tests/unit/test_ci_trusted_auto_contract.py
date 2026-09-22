@@ -40,6 +40,7 @@ def test_trusted_auto_contract_is_frozen_and_bounded() -> None:
         "owner-zero-protected-drift-or-exact-governed-bot-provenance"
     )
     assert auto["candidate_subject_binding"] == "job-level-exact-prospective-merge"
+    assert auto["needs_skip_policy"] == "not-cancelled-plus-explicit-direct-needs-success"
     assert auto["validation_authority"] == (
         "secret-free;read-only-except-bot-codeql-security-events-write-before-reporter"
     )
@@ -137,6 +138,43 @@ def test_trusted_auto_contract_rejects_removed_protected_path(tmp_path: Path) ->
 
     with pytest.raises(
         ValueError, match="non-action structure differs from reviewed trust authority"
+    ):
+        ci_contract.verify_ci_contract(root)
+
+
+@pytest.mark.parametrize(
+    "job_id",
+    (
+        "subject-guard",
+        "supply-chain",
+        "quality",
+        "deterministic-evals",
+        "security",
+        "browser-reference-sut",
+        "bot-codeql",
+        "required-gate",
+        "trusted-status",
+    ),
+)
+def test_trusted_auto_contract_rejects_removed_cancel_safe_skip_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    job_id: str,
+) -> None:
+    root = _copy_contract_repo(tmp_path)
+    path = root / ".github" / "workflows" / "trusted-pr-auto.yml"
+    text = path.read_text(encoding="utf-8")
+    job = ci_contract._job_block(text, job_id)
+    marker = "!cancelled() && "
+    assert marker in job
+    mutated_job = job.replace(marker, "", 1)
+    mutated = text.replace(job, mutated_job, 1)
+    path.write_text(mutated, encoding="utf-8")
+    _accept_mutated_workflow_hash(monkeypatch, mutated)
+
+    with pytest.raises(
+        ValueError,
+        match=rf"trusted automatic job {job_id} must override skipped dependency propagation",
     ):
         ci_contract.verify_ci_contract(root)
 
