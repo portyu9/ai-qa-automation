@@ -17,6 +17,8 @@ from typing import Any
 from trusted_qualification import (
     TrustedQualificationError,
     qualification_states,
+)
+from trusted_qualification import (
     require_success as require_trusted_qualification_success,
 )
 from trusted_status import TrustedStatusError, require_automatic_trusted_gate
