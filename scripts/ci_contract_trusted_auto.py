@@ -143,6 +143,8 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
             )
     if "needs.preflight.outputs.merge_sha" in preflight:
         raise ValueError("trusted automatic preflight must not checkout or execute candidate bytes")
+    if "CI_SUBJECT_SHA" in preflight or "github.event.workflow_run.head_sha" in preflight:
+        raise ValueError("trusted automatic preflight must retain trusted workflow identity")
 
     bot_authority = _base._semantic_text(_base._job_block(text, "bot-authority"))
     required_bot = (
