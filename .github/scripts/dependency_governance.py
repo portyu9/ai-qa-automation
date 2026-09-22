@@ -14,10 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from trusted_qualification import (
-    TrustedQualificationError,
-    qualification_states,
-)
+from trusted_qualification import TrustedQualificationError
 from trusted_qualification import (
     require_success as require_trusted_qualification_success,
 )
