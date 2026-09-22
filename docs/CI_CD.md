@@ -161,7 +161,7 @@ python scripts/verify_ci_contract.py
 python scripts/verify_docs.py
 ```
 
-The CI-contract verifier fails closed on drift in the reviewed repository workflow authority, including immutable Action SHAs, exact Python patch versions, quality-lane split, exact checkouts, absence of repository dispatch/client-payload authority, read-only validation permissions, build/install ordering, evidence uploads, deterministic aggregate structure, automatic zero-protected-drift admission, final App-credential isolation, and the release-candidate workflow's exact trigger/subject/build/reproducibility/live-main/no-write/no-secret boundaries.
+The CI-contract verifier fails closed on drift in the reviewed repository workflow authority, including immutable Action SHAs, exact Python patch versions, quality-lane split, exact checkouts, absence of repository dispatch/client-payload authority, secret-free validation permissions with only the reviewed bot-CodeQL `security-events: write` exception, build/install ordering, evidence uploads, deterministic aggregate structure, automatic owner zero-protected-drift admission, governed-bot scheduled reconciliation, final App-credential isolation, and the release-candidate workflow's exact trigger/subject/build/reproducibility/live-main/no-write/no-secret boundaries.
 
 The documentation verifier checks repository-owned structural and selected implementation-coupled claims. It does not turn external GitHub/AWS/provider facts into source-certified truth; those remain externally observed evidence.
 
