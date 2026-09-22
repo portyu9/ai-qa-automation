@@ -14,7 +14,9 @@ SCRIPT_DIR = SECURITY_SCRIPT.parent
 
 
 def _load_security_autoheal() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("security_autoheal_strategy_test", SECURITY_SCRIPT)
+    spec = importlib.util.spec_from_file_location(
+        "security_autoheal_strategy_test", SECURITY_SCRIPT
+    )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.path.insert(0, str(SCRIPT_DIR))
@@ -57,7 +59,10 @@ def test_reflective_xss_uses_literal_only_deterministic_strategy() -> None:
         "line": 1,
     }
 
-    assert autoheal._repair_strategy(subject) == autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY
+    assert (
+        autoheal._repair_strategy(subject)
+        == autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY
+    )
     repaired = autoheal._deterministic_repair(subject)
 
     assert repaired is not None
@@ -84,7 +89,9 @@ def test_legacy_copilot_attempts_do_not_consume_new_deterministic_epoch() -> Non
         "path": "examples/reference_sut/app.py",
         "generator": "github-codeql-autofix",
     }
-    api = _ClosedRepairApi([_closed_repair(legacy), _closed_repair({**legacy, "attempt": 2})])
+    api = _ClosedRepairApi(
+        [_closed_repair(legacy), _closed_repair({**legacy, "attempt": 2})]
+    )
 
     assert autoheal._attempt_count(api, 7, autoheal.MODEL_AUTOFIX_STRATEGY) == 2
     assert (
