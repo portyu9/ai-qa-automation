@@ -172,7 +172,9 @@ def qualification_states(
             )
             if candidate is not None:
                 candidates.append(candidate)
-        states[name] = max(candidates, key=lambda item: int(item["check_id"])) if candidates else None
+        states[name] = (
+            max(candidates, key=lambda item: int(item["check_id"])) if candidates else None
+        )
     return states
 
 
