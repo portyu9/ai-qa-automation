@@ -124,8 +124,6 @@ jobs:
       - name: Verify trusted bot-policy revision
         env:
           EXPECTED_TRUSTED_SHA: ${{ needs.preflight.outputs.trusted_sha }}
-          ADMISSION_LANE: ${{ needs.preflight.outputs.lane }}
-          BOT_AUTHORITY_RESULT: ${{ needs.bot-authority.result }}
         run: |
           set -euo pipefail
           test "$EXPECTED_TRUSTED_SHA" = "$GITHUB_SHA"
@@ -185,6 +183,8 @@ jobs:
           EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
           EXPECTED_MERGE_SHA: ${{ needs.preflight.outputs.merge_sha }}
           EXPECTED_TRUSTED_SHA: ${{ needs.preflight.outputs.trusted_sha }}
+          ADMISSION_LANE: ${{ needs.preflight.outputs.lane }}
+          BOT_AUTHORITY_RESULT: ${{ needs.bot-authority.result }}
         run: |
           set -euo pipefail
           sha_re='^[0-9a-f]{40}$'
