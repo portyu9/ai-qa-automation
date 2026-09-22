@@ -457,11 +457,7 @@ def _model_path_allowed(path: str, config: dict[str, Any]) -> bool:
 
 
 def _deterministic_strategy(rule: Any, path: Any) -> str | None:
-    if (
-        rule == "py/overly-permissive-file"
-        and isinstance(path, str)
-        and path.startswith("tests/")
-    ):
+    if rule == "py/overly-permissive-file" and isinstance(path, str) and path.startswith("tests/"):
         return OVERLY_PERMISSIVE_TEST_STRATEGY
     if rule == "py/clear-text-logging-sensitive-data" and path in DETERMINISTIC_LOG_REPAIRS:
         return CLEAR_TEXT_LOG_STRATEGY
@@ -472,8 +468,7 @@ def _deterministic_strategy(rule: Any, path: Any) -> str | None:
 
 def _repair_strategy(subject: dict[str, Any]) -> str:
     return (
-        _deterministic_strategy(subject.get("rule"), subject.get("path"))
-        or MODEL_AUTOFIX_STRATEGY
+        _deterministic_strategy(subject.get("rule"), subject.get("path")) or MODEL_AUTOFIX_STRATEGY
     )
 
 
