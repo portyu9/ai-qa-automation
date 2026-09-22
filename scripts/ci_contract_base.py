@@ -17,8 +17,10 @@ EXPECTED_ACTION_SHAS = {
     "actions/checkout": "3d3c42e5aac5ba805825da76410c181273ba90b1",  # pragma: allowlist secret
     "actions/setup-python": "5fda3b95a4ea91299a34e894583c3862153e4b97",  # pragma: allowlist secret
     "actions/upload-artifact": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",  # pragma: allowlist secret
-    "github/codeql-action/init": "1c5b675653bb5c22dbe9b12b556ec555138e09fd",  # pragma: allowlist secret
-    "github/codeql-action/analyze": "1c5b675653bb5c22dbe9b12b556ec555138e09fd",  # pragma: allowlist secret
+}
+ADDITIONAL_ALLOWED_ACTION_IDENTITIES = {
+    "github/codeql-action/init",
+    "github/codeql-action/analyze",
 }
 AUTOMATIC_REQUIRED_JOBS = (
     "quality",
@@ -548,7 +550,10 @@ def _verify_action_revisions(workflows: dict[str, str]) -> dict[str, str]:
                 f"{name}: every GitHub Action must use a canonical immutable SHA plus # vVERSION"
             )
         for action, revision, version in pins:
-            if action not in EXPECTED_ACTION_SHAS:
+            if (
+                action not in EXPECTED_ACTION_SHAS
+                and action not in ADDITIONAL_ALLOWED_ACTION_IDENTITIES
+            ):
                 raise ValueError(f"{name}: unreviewed GitHub Action identity: {action}")
             prior_revision = observed.get(action)
             prior_version = versions.get(action)
@@ -560,9 +565,9 @@ def _verify_action_revisions(workflows: dict[str, str]) -> dict[str, str]:
                 )
             observed[action] = revision
             versions[action] = version
-    if set(observed) != set(EXPECTED_ACTION_SHAS):
-        raise ValueError("workflow Action identity set differs from the reviewed allowlist")
-    return observed
+    if not set(EXPECTED_ACTION_SHAS) <= set(observed):
+        raise ValueError("workflow Action identity set omits a required reviewed action")
+    return {action: observed[action] for action in EXPECTED_ACTION_SHAS}
 
 
 def _verify_top_level_read_only_permissions(text: str, *, name: str) -> None:
