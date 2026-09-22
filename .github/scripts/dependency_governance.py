@@ -768,7 +768,12 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
             print(json.dumps({"pr": number, "decision": "eligible", **subject}, sort_keys=True))
             if allow_merge and config["automergeEnabled"]:
                 try:
-                    require_automatic_trusted_gate(api, subject["headSha"])
+                    require_automatic_trusted_gate(
+                        api,
+                        subject["number"],
+                        subject["headSha"],
+                        subject["baseSha"],
+                    )
                 except TrustedStatusError as exc:
                     raise PolicyBlock("automatic Trusted PR Gate is not yet admissible") from exc
                 merge_evidence = _merge(api, subject, config)
