@@ -7,6 +7,7 @@ from types import ModuleType
 from typing import Any
 
 import pytest
+from fastapi import HTTPException
 
 ROOT = Path(__file__).resolve().parents[2]
 SECURITY_SCRIPT = ROOT / ".github" / "scripts" / "security_autoheal.py"
@@ -75,7 +76,24 @@ def test_reflective_xss_uses_literal_only_deterministic_strategy() -> None:
         "prompt-injection",
     ):
         assert f"mode_js = '\"{value}\"'" in repaired
-    compile(repaired, "examples/reference_sut/app.py", "exec")
+    compiled = compile(repaired, "examples/reference_sut/app.py", "exec")
+    namespace: dict[str, Any] = {}
+    exec(compiled, namespace)
+    checkout = namespace["checkout"]
+    for value in (
+        "pass",
+        "app-defect",
+        "outdated-locator",
+        "api-failure",
+        "timing",
+        "invalid-data",
+        "prompt-injection",
+    ):
+        html = checkout(value)
+        assert f'encodeURIComponent("{value}")' in html
+    with pytest.raises(HTTPException) as exc_info:
+        checkout('</script><script>alert("xss")</script>')
+    assert exc_info.value.status_code == 400
 
 
 def test_legacy_copilot_attempts_do_not_consume_new_deterministic_epoch() -> None:
