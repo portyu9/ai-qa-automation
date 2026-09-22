@@ -489,14 +489,19 @@ def verify_merge_subject(
     # The PR summary's merge_commit_sha is advisory and may transiently be null.
     # The live merge ref plus exact ordered parents is the authority-bearing subject.
     ref = api.get(f"/git/ref/pull/{number}/merge")
-    if (ref or {}).get("ref") != f"refs/pull/{number}/merge":
+    if not isinstance(ref, dict) or ref.get("ref") != f"refs/pull/{number}/merge":
         raise PolicyBlock("pull request merge ref identity is invalid")
-    merge_object = (ref or {}).get("object") or {}
-    if merge_object.get("type") != "commit":
+    merge_object = ref.get("object")
+    if not isinstance(merge_object, dict) or merge_object.get("type") != "commit":
         raise PolicyBlock("pull request merge ref does not resolve to a commit")
     merge_sha = require_sha(merge_object.get("sha"), "merge ref SHA")
     commit = api.get(f"/git/commits/{merge_sha}")
-    parents = (commit or {}).get("parents")
+    if not isinstance(commit, dict):
+        raise PolicyBlock("prospective merge commit response is malformed")
+    commit_sha = require_sha(commit.get("sha"), "prospective merge commit SHA")
+    if commit_sha != merge_sha:
+        raise PolicyBlock("prospective merge commit identity changed")
+    parents = commit.get("parents")
     if not isinstance(parents, list) or len(parents) != 2:
         raise PolicyBlock("prospective merge commit must have exactly two parents")
     parent_shas = [require_sha((parent or {}).get("sha"), "merge parent SHA") for parent in parents]
@@ -889,22 +894,33 @@ def selftest(config: dict[str, Any]) -> None:
             pass
         else:
             raise GovernanceError(f"merge-ref authority accepted {label}")
-    try:
-        verify_merge_subject(
-            _MergeRefApi(
-                commit_payload={
-                    "sha": merge_sha,
-                    "parents": [{"sha": merge_head_sha}, {"sha": merge_base_sha}],
-                }
-            ),
-            43,
-            merge_head_sha,
-            merge_base_sha,
-        )
-    except PolicyBlock:
-        pass
-    else:
-        raise GovernanceError("merge-ref authority accepted wrong prospective parent order")
+    for bad_commit, label in (
+        (
+            {
+                "sha": "5" * 40,
+                "parents": [{"sha": merge_base_sha}, {"sha": merge_head_sha}],
+            },
+            "wrong prospective merge commit identity",
+        ),
+        (
+            {
+                "sha": merge_sha,
+                "parents": [{"sha": merge_head_sha}, {"sha": merge_base_sha}],
+            },
+            "wrong prospective parent order",
+        ),
+    ):
+        try:
+            verify_merge_subject(
+                _MergeRefApi(commit_payload=bad_commit),
+                43,
+                merge_head_sha,
+                merge_base_sha,
+            )
+        except PolicyBlock:
+            pass
+        else:
+            raise GovernanceError(f"merge-ref authority accepted {label}")
 
     class _EmptyWorkflowRunsApi(GitHubApi):
         def __init__(self) -> None:
