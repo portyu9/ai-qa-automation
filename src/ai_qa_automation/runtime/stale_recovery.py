@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import stat
 from contextlib import suppress
 from copy import deepcopy
 from pathlib import Path
@@ -272,6 +273,49 @@ def _load_metadata(
                 "status": "BLOCKED",
                 "previous_run_id": raw_previous_run_id,
                 "reason": "prior lease mutation recovery closure lacks exact workspace-root identity authority",
+            }
+
+        raw_lease_root_identity = previous_lease.get("lease_root_identity")
+        if not isinstance(raw_lease_root_identity, dict) or set(raw_lease_root_identity) != {
+            "device",
+            "inode",
+        }:
+            return {
+                "status": "BLOCKED",
+                "previous_run_id": raw_previous_run_id,
+                "reason": "prior lease mutation recovery closure lacks exact lease-root identity authority",
+            }
+        lease_root_device = raw_lease_root_identity.get("device")
+        lease_root_inode = raw_lease_root_identity.get("inode")
+        if (
+            type(lease_root_device) is not int
+            or type(lease_root_inode) is not int
+            or lease_root_device < 0
+            or lease_root_inode < 0
+        ):
+            return {
+                "status": "BLOCKED",
+                "previous_run_id": raw_previous_run_id,
+                "reason": "prior lease mutation recovery closure lacks exact lease-root identity authority",
+            }
+        lease_root = artifact_root / ".leases"
+        try:
+            observed_lease_root = lease_root.stat(follow_symlinks=False)
+        except OSError:
+            return {
+                "status": "BLOCKED",
+                "previous_run_id": raw_previous_run_id,
+                "reason": "prior lease mutation recovery closure lease-root identity could not be revalidated",
+            }
+        if (
+            not stat.S_ISDIR(observed_lease_root.st_mode)
+            or (observed_lease_root.st_dev, observed_lease_root.st_ino)
+            != (lease_root_device, lease_root_inode)
+        ):
+            return {
+                "status": "BLOCKED",
+                "previous_run_id": raw_previous_run_id,
+                "reason": "prior lease mutation recovery closure lease-root identity changed",
             }
 
     try:
