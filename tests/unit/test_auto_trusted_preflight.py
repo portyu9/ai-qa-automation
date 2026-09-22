@@ -77,6 +77,7 @@ def _responses(*, changed_path: str | None = None) -> dict[str, Any]:
     pr = {
         **candidate,
         "draft": False,
+        "user": {"login": preflight.EXPECTED_OWNER, "id": preflight.EXPECTED_OWNER_ID},
         "base": {
             "ref": preflight.EXPECTED_DEFAULT_BRANCH,
             "sha": BASE,
