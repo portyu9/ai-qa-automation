@@ -59,10 +59,7 @@ def test_reflective_xss_uses_literal_only_deterministic_strategy() -> None:
         "line": 1,
     }
 
-    assert (
-        autoheal._repair_strategy(subject)
-        == autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY
-    )
+    assert autoheal._repair_strategy(subject) == autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY
     repaired = autoheal._deterministic_repair(subject)
 
     assert repaired is not None
@@ -89,15 +86,10 @@ def test_legacy_copilot_attempts_do_not_consume_new_deterministic_epoch() -> Non
         "path": "examples/reference_sut/app.py",
         "generator": "github-codeql-autofix",
     }
-    api = _ClosedRepairApi(
-        [_closed_repair(legacy), _closed_repair({**legacy, "attempt": 2})]
-    )
+    api = _ClosedRepairApi([_closed_repair(legacy), _closed_repair({**legacy, "attempt": 2})])
 
     assert autoheal._attempt_count(api, 7, autoheal.MODEL_AUTOFIX_STRATEGY) == 2
-    assert (
-        autoheal._attempt_count(api, 7, autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY)
-        == 0
-    )
+    assert autoheal._attempt_count(api, 7, autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY) == 0
     assert api.calls == [
         ("/pulls?state=closed&sort=updated&direction=desc", 10),
         ("/pulls?state=closed&sort=updated&direction=desc", 10),
@@ -115,10 +107,7 @@ def test_explicit_strategy_attempt_is_counted_only_in_its_epoch() -> None:
     }
     api = _ClosedRepairApi([_closed_repair(deterministic)])
 
-    assert (
-        autoheal._attempt_count(api, 7, autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY)
-        == 1
-    )
+    assert autoheal._attempt_count(api, 7, autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY) == 1
     assert autoheal._attempt_count(api, 7, autoheal.MODEL_AUTOFIX_STRATEGY) == 0
 
 
