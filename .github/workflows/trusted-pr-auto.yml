@@ -257,7 +257,7 @@ jobs:
   supply-chain:
     name: Trusted Supply Chain / Wheel + SBOM + Container
     needs: [preflight, subject-guard]
-    if: ${{ needs.preflight.outputs.eligible == 'true' && needs.subject-guard.result == 'success' }}
+    if: ${{ always() && needs.preflight.outputs.eligible == 'true' && needs.subject-guard.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -423,7 +423,7 @@ jobs:
   quality:
     name: Trusted Quality / Python ${{ matrix.python-version }}
     needs: [preflight, subject-guard, supply-chain]
-    if: ${{ needs.preflight.outputs.eligible == 'true' && needs.subject-guard.result == 'success' && needs.supply-chain.result == 'success' }}
+    if: ${{ always() && needs.preflight.outputs.eligible == 'true' && needs.subject-guard.result == 'success' && needs.supply-chain.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -503,7 +503,7 @@ jobs:
   deterministic-evals:
     name: Trusted 34-Case Deterministic Control Evaluation
     needs: [preflight, subject-guard, supply-chain]
-    if: ${{ needs.preflight.outputs.eligible == 'true' && needs.subject-guard.result == 'success' && needs.supply-chain.result == 'success' }}
+    if: ${{ always() && needs.preflight.outputs.eligible == 'true' && needs.subject-guard.result == 'success' && needs.supply-chain.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -569,7 +569,7 @@ jobs:
   security:
     name: Trusted Security Gates
     needs: [preflight, subject-guard, supply-chain]
-    if: ${{ needs.preflight.outputs.eligible == 'true' && needs.subject-guard.result == 'success' && needs.supply-chain.result == 'success' }}
+    if: ${{ always() && needs.preflight.outputs.eligible == 'true' && needs.subject-guard.result == 'success' && needs.supply-chain.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -633,7 +633,7 @@ jobs:
   browser-reference-sut:
     name: Trusted Playwright Reference SUT
     needs: [preflight, subject-guard, supply-chain]
-    if: ${{ needs.preflight.outputs.eligible == 'true' && needs.subject-guard.result == 'success' && needs.supply-chain.result == 'success' }}
+    if: ${{ always() && needs.preflight.outputs.eligible == 'true' && needs.subject-guard.result == 'success' && needs.supply-chain.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
@@ -693,7 +693,7 @@ jobs:
   bot-codeql:
     name: Trusted Bot CodeQL
     needs: [preflight, subject-guard]
-    if: ${{ needs.preflight.outputs.eligible == 'true' && needs.preflight.outputs.lane != 'owner-routine' && needs.subject-guard.result == 'success' }}
+    if: ${{ always() && needs.preflight.outputs.eligible == 'true' && needs.preflight.outputs.lane != 'owner-routine' && needs.subject-guard.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
