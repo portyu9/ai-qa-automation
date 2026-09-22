@@ -138,6 +138,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "          GITHUB_TOKEN: ${{ github.token }}",
         "          python scripts/auto_trusted_preflight.py \\",
         '            --event "$GITHUB_EVENT_PATH" \\',
+        '            --event-name "$GITHUB_EVENT_NAME" \\\\',
         '            --github-output "$GITHUB_OUTPUT"',
         "            owner-routine)",
         "            dependabot-actions|dependency-promotion|security-autoheal)",
@@ -301,6 +302,13 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
             not in required_gate
         ):
             raise ValueError(f"automatic trusted aggregate does not require {dependency}")
+    for fragment in (
+        '          if test "${{ needs.preflight.outputs.lane }}" = "owner-routine"; then',
+        '            test "${{ needs.bot-codeql.result }}" = "skipped"',
+        '            test "${{ needs.bot-codeql.result }}" = "success"',
+    ):
+        if fragment not in required_gate:
+            raise ValueError("automatic trusted aggregate bot CodeQL policy drifted")
 
     reporter = _base._semantic_text(_base._job_block(text, "trusted-status"))
     required_reporter = (
