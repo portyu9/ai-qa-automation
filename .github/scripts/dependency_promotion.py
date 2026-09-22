@@ -683,6 +683,7 @@ def _publish_and_merge(
         )
     return finalize_post_merge_evidence(api, result, promotion, config)
 
+
 def _close_stale(api: GitHubApi, number: int, branch: str, head_sha: str) -> None:
     if PROMOTION_BRANCH_RE.fullmatch(branch) is None:
         raise PolicyBlock("stale promotion branch is outside reviewed authority")
