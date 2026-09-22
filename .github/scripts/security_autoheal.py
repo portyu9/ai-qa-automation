@@ -457,7 +457,11 @@ def _model_path_allowed(path: str, config: dict[str, Any]) -> bool:
 
 
 def _deterministic_strategy(rule: Any, path: Any) -> str | None:
-    if rule == "py/overly-permissive-file" and isinstance(path, str) and path.startswith("tests/"):
+    if (
+        rule == "py/overly-permissive-file"
+        and isinstance(path, str)
+        and path.startswith("tests/")
+    ):
         return OVERLY_PERMISSIVE_TEST_STRATEGY
     if rule == "py/clear-text-logging-sensitive-data" and path in DETERMINISTIC_LOG_REPAIRS:
         return CLEAR_TEXT_LOG_STRATEGY
@@ -568,7 +572,11 @@ def _deterministic_repair(subject: dict[str, Any]) -> str | None:
         raise HTTPException(status_code=400, detail="Invalid mode")
 """
         mode_dump = "    mode_js = json.dumps(safe_mode)\n"
-        if text.count(json_import) != 1 or text.count(validation) != 1 or text.count(mode_dump) != 1:
+        if (
+            text.count(json_import) != 1
+            or text.count(validation) != 1
+            or text.count(mode_dump) != 1
+        ):
             return None
         return (
             text.replace(json_import, "", 1)
@@ -801,21 +809,6 @@ def _create_pull_request(
     if observed_head != head_sha:
         raise AutohealError("generated repair PR head differs from the exact repair commit")
     return number
-
-
-def _dispatch_qualification(api: GitHubApi, branch: str, head_sha: str) -> None:
-    subject_sha = _require_sha(head_sha, "generated repair qualification SHA")
-    if AUTOHEAL_BRANCH_RE.fullmatch(branch) is None:
-        raise PolicyBlock("generated repair qualification ref is outside reviewed authority")
-    inputs = {"subject_sha": subject_sha, "subject_ref": branch}
-    api.post(
-        "/actions/workflows/ci.yml/dispatches",
-        {"ref": "main", "inputs": inputs},
-    )
-    api.post(
-        "/actions/workflows/codeql.yml/dispatches",
-        {"ref": "main", "inputs": inputs},
-    )
 
 
 def _latest_checks(api: GitHubApi, head_sha: str) -> dict[str, dict[str, Any]]:
@@ -1648,51 +1641,6 @@ def selftest(config: dict[str, Any]) -> None:
         raise AutohealError("pagination rejected canonical empty check_runs response")
     if empty_api.list_all("/actions/runs?head_sha=" + "f" * 40, max_pages=2) != []:
         raise AutohealError("pagination rejected canonical empty workflow_runs response")
-
-    class _RecordingDispatchApi(GitHubApi):
-        def __init__(self) -> None:
-            self.calls: list[tuple[str, dict[str, Any] | None]] = []
-
-        def post(
-            self,
-            path: str,
-            payload: dict[str, Any] | None = None,
-            *,
-            token: str | None = None,
-        ) -> Any:
-            if token is not None:
-                raise AutohealError("qualification self-test received unexpected alternate token")
-            self.calls.append((path, payload))
-            return None
-
-    dispatch_api = _RecordingDispatchApi()
-    exact_sha = "f" * 40
-    exact_branch = "automation/codeql-autoheal-7-abcdef123456"
-    _dispatch_qualification(dispatch_api, exact_branch, exact_sha)
-    expected_inputs = {"subject_sha": exact_sha, "subject_ref": exact_branch}
-    if dispatch_api.calls != [
-        (
-            "/actions/workflows/ci.yml/dispatches",
-            {"ref": "main", "inputs": expected_inputs},
-        ),
-        (
-            "/actions/workflows/codeql.yml/dispatches",
-            {"ref": "main", "inputs": expected_inputs},
-        ),
-    ]:
-        raise AutohealError("exact-subject qualification dispatch payload drifted")
-    for bad_ref in (
-        "automation/codeql-autoheal-0-abcdef123456",
-        "automation/codeql-autoheal-7-nothex123456",
-        "automation/codeql-autoheal-7-abcdef123456-extra",
-        "feature/unreviewed",
-    ):
-        try:
-            _dispatch_qualification(dispatch_api, bad_ref, exact_sha)
-        except PolicyBlock:
-            pass
-        else:
-            raise AutohealError(f"unreviewed qualification ref was accepted: {bad_ref}")
 
     current_main_sha = "6" * 40
     canonical_codeql = {
