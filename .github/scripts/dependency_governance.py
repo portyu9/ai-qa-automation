@@ -484,15 +484,15 @@ def validate_action_semantics(files: list[dict[str, Any]]) -> None:
 
 
 def verify_merge_subject(
-    api: GitHubApi, pr: dict[str, Any], number: int, head_sha: str, base_sha: str
+    api: GitHubApi, number: int, head_sha: str, base_sha: str
 ) -> str:
-    merge_sha = require_sha(pr.get("merge_commit_sha"), "prospective merge SHA")
     ref = api.get(f"/git/ref/pull/{number}/merge")
     if (ref or {}).get("ref") != f"refs/pull/{number}/merge":
         raise PolicyBlock("pull request merge ref identity is invalid")
-    observed = require_sha(((ref or {}).get("object") or {}).get("sha"), "merge ref SHA")
-    if observed != merge_sha:
-        raise PolicyBlock("prospective merge ref changed")
+    merge_object = (ref or {}).get("object") or {}
+    if merge_object.get("type") != "commit":
+        raise PolicyBlock("pull request merge ref does not resolve to a commit")
+    merge_sha = require_sha(merge_object.get("sha"), "merge ref SHA")
     commit = api.get(f"/git/commits/{merge_sha}")
     parents = (commit or {}).get("parents")
     if not isinstance(parents, list) or len(parents) != 2:
@@ -542,7 +542,7 @@ def assess(
         allow_reviewed_action_pins=True,
     )
     validate_action_semantics(files)
-    merge_sha = verify_merge_subject(api, pr, number, head_sha, base_sha)
+    merge_sha = verify_merge_subject(api, number, head_sha, base_sha)
     if require_checks:
         require_green_checks(api, head_sha, config)
     return {
@@ -833,6 +833,76 @@ def selftest(config: dict[str, Any]) -> None:
     else:
         raise GovernanceError("semantic validator accepted action version downgrade")
     exact_sha = "1" * 40
+    merge_base_sha = "2" * 40
+    merge_head_sha = "3" * 40
+    merge_sha = "4" * 40
+
+    class _MergeRefApi(GitHubApi):
+        def __init__(
+            self,
+            *,
+            ref_payload: dict[str, Any] | None = None,
+            commit_payload: dict[str, Any] | None = None,
+        ) -> None:
+            self.ref_payload = ref_payload or {
+                "ref": "refs/pull/43/merge",
+                "object": {"type": "commit", "sha": merge_sha},
+            }
+            self.commit_payload = commit_payload or {
+                "sha": merge_sha,
+                "parents": [{"sha": merge_base_sha}, {"sha": merge_head_sha}],
+            }
+
+        def get(self, path: str) -> Any:
+            if path == "/git/ref/pull/43/merge":
+                return self.ref_payload
+            if path == f"/git/commits/{merge_sha}":
+                return self.commit_payload
+            raise GovernanceError(f"unexpected merge-ref self-test API path: {path}")
+
+    if verify_merge_subject(_MergeRefApi(), 43, merge_head_sha, merge_base_sha) != merge_sha:
+        raise GovernanceError("live merge ref authority rejected canonical exact subject")
+    for bad_ref, label in (
+        (
+            {"ref": "refs/pull/44/merge", "object": {"type": "commit", "sha": merge_sha}},
+            "wrong merge-ref identity",
+        ),
+        (
+            {"ref": "refs/pull/43/merge", "object": {"type": "tag", "sha": merge_sha}},
+            "non-commit merge-ref object",
+        ),
+        (
+            {"ref": "refs/pull/43/merge", "object": {"type": "commit", "sha": "not-a-sha"}},
+            "non-canonical merge-ref SHA",
+        ),
+    ):
+        try:
+            verify_merge_subject(
+                _MergeRefApi(ref_payload=bad_ref),
+                43,
+                merge_head_sha,
+                merge_base_sha,
+            )
+        except PolicyBlock:
+            pass
+        else:
+            raise GovernanceError(f"merge-ref authority accepted {label}")
+    try:
+        verify_merge_subject(
+            _MergeRefApi(
+                commit_payload={
+                    "sha": merge_sha,
+                    "parents": [{"sha": merge_head_sha}, {"sha": merge_base_sha}],
+                }
+            ),
+            43,
+            merge_head_sha,
+            merge_base_sha,
+        )
+    except PolicyBlock:
+        pass
+    else:
+        raise GovernanceError("merge-ref authority accepted wrong prospective parent order")
 
     class _EmptyWorkflowRunsApi(GitHubApi):
         def __init__(self) -> None:
