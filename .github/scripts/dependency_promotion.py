@@ -29,13 +29,15 @@ from dependency_governance import (
     PolicyBlock,
     changed_files,
     dispatch_exact_ci,
+    dispatch_exact_codeql,
     finalize_post_merge_evidence,
-    latest_checks,
     load_config,
+    require_green_checks,
     require_sha,
     validate_pr_identity,
 )
 from dependency_lock_compiler import compile_locks
+from trusted_status import TrustedStatusError, require_automatic_trusted_gate
 
 ROOT = Path(__file__).resolve().parents[2]
 BRANCH_PREFIX = "automation/dependency-promotion-"
@@ -540,7 +542,7 @@ def _create_promotion_pr(api: GitHubApi, source: dict[str, Any], branch: str, he
     if require_sha(((pr or {}).get("head") or {}).get("sha"), "promotion PR head SHA") != head_sha:
         raise GovernanceError("promotion PR head differs from generated exact subject")
     dispatch_exact_ci(api, branch, head_sha)
-    api.post("/actions/workflows/codeql.yml/dispatches", {"ref": branch})
+    dispatch_exact_codeql(api, branch, head_sha)
     return number
 
 
@@ -557,16 +559,8 @@ def _promotion_pulls(api: GitHubApi) -> list[dict[str, Any]]:
     ]
 
 
-def _require_green(api: GitHubApi, head_sha: str) -> None:
-    checks = latest_checks(api, head_sha)
-    for name in REQUIRED_CHECKS:
-        row = checks.get(name)
-        if row is None:
-            raise PolicyBlock(f"promotion required check has not registered: {name}")
-        if row.get("status") != "completed" or row.get("conclusion") != "success":
-            raise PolicyBlock(
-                f"promotion required check is not green: {name} status={row.get('status')} conclusion={row.get('conclusion')}"
-            )
+def _require_green(api: GitHubApi, head_sha: str, config: dict[str, Any]) -> None:
+    require_green_checks(api, head_sha, config)
 
 
 def _validate_generated_bytes(api: GitHubApi, source: dict[str, Any], head_sha: str) -> None:
@@ -593,7 +587,11 @@ def _require_promotion_lifecycle(
 
 
 def _validate_promotion(
-    api: GitHubApi, pr: dict[str, Any], config: dict[str, Any]
+    api: GitHubApi,
+    pr: dict[str, Any],
+    config: dict[str, Any],
+    *,
+    validate_generated_bytes: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     metadata = _parse_marker(pr.get("body"))
     if metadata is None or metadata.get("version") != 1:
@@ -632,7 +630,9 @@ def _validate_promotion(
         or source["fingerprint"] != metadata.get("fingerprint")
     ):
         raise PolicyBlock("source Dependabot PR changed after promotion generation")
-    commit = api.get(f"/git/commits/{head_sha}")
+    commit = api.get(f"/commits/{head_sha}")
+    if not _owned_generated_promotion_commit(commit, head_sha):
+        raise PolicyBlock("promotion head lacks exact GitHub Actions ownership")
     parents = (commit or {}).get("parents")
     if (
         not isinstance(parents, list)
@@ -651,36 +651,24 @@ def _validate_promotion(
         raise PolicyBlock(
             f"promotion changed-path set is outside generated authority: {sorted(paths)}"
         )
-    _validate_generated_bytes(api, source, head_sha)
-    _require_green(api, head_sha)
+    if validate_generated_bytes:
+        _validate_generated_bytes(api, source, head_sha)
+    _require_green(api, head_sha, config)
     return source, {"number": pr["number"], "headSha": head_sha, "baseSha": base_sha}
 
 
 def _publish_and_merge(
     api: GitHubApi, promotion: dict[str, Any], config: dict[str, Any]
 ) -> dict[str, Any]:
-    token = os.environ.get("TRUSTED_STATUS_TOKEN", "")
-    if not token:
-        raise GovernanceError("TRUSTED_STATUS_TOKEN is required for dependency promotion")
-    run_id = os.environ.get("GITHUB_RUN_ID", "")
-    if not run_id.isdigit() or int(run_id) < 1:
-        raise GovernanceError("GITHUB_RUN_ID is invalid")
-    fresh_before_status = api.get(f"/pulls/{promotion['number']}")
-    _, rebound_before_status = _validate_promotion(api, fresh_before_status, config)
-    if rebound_before_status != promotion:
-        raise PolicyBlock("promotion changed before trusted status publication")
-    response = api.post(
-        f"/statuses/{promotion['headSha']}",
-        {
-            "state": "success",
-            "context": config["trustedStatusContext"],
-            "description": "Dependabot graph promotion passed exact-subject governance",
-            "target_url": f"https://github.com/{config['repository']}/actions/runs/{run_id}",
-        },
-        token=token,
-    )
-    if not isinstance(response, dict) or response.get("state") != "success":
-        raise GovernanceError("Trusted PR Gate publication for promotion was not acknowledged")
+    try:
+        require_automatic_trusted_gate(
+            api,
+            promotion["number"],
+            promotion["headSha"],
+            promotion["baseSha"],
+        )
+    except TrustedStatusError as exc:
+        raise PolicyBlock("automatic Trusted PR Gate is not yet admissible") from exc
     fresh_before_merge = api.get(f"/pulls/{promotion['number']}")
     _, rebound_before_merge = _validate_promotion(api, fresh_before_merge, config)
     if rebound_before_merge != promotion:

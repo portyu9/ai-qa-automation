@@ -11,7 +11,7 @@ WORKFLOW = ROOT / ".github" / "workflows" / "release-candidate.yml"
 
 
 def _verify_mutation(monkeypatch: pytest.MonkeyPatch, text: str) -> None:
-    digest = ci_contract._trusted_auto._base._git_blob_sha1(text)
+    digest = ci_contract._trusted_auto._base._workflow_structure_sha1(text)
     monkeypatch.setattr(ci_contract, "EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA", digest)
     ci_contract._verify_release_candidate_workflow(text)
 

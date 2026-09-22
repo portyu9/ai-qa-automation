@@ -56,9 +56,9 @@ _FORBIDDEN_WORKFLOW_TOKENS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 _ALLOWED_SECRET_REFERENCE_COUNTS: dict[str, Counter[str]] = {
-    "dependency-governance.yml": Counter({"GITHUB_TOKEN": 3, "TRUSTED_GATE_APP_PRIVATE_KEY": 1}),
+    "dependency-governance.yml": Counter({"GITHUB_TOKEN": 3}),
     "manual-validation.yml": Counter({"ANTHROPIC_API_KEY": 2}),
-    "security-autoheal.yml": Counter({"TRUSTED_GATE_APP_PRIVATE_KEY": 1}),
+    "security-autoheal.yml": Counter(),
     "trusted-pr-auto.yml": Counter({"TRUSTED_GATE_APP_PRIVATE_KEY": 1}),
 }
 _SECRET_REFERENCE_RE = re.compile(r"\$\{\{\s*secrets\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
@@ -70,28 +70,25 @@ _MANUAL_SECRET_CONTEXT_FRAGMENTS = (
 )
 _GOVERNANCE_SECRET_CONTEXT_FRAGMENTS = (
     "- name: Attempt one bounded transient recovery\n        if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
-    "- name: Mint dedicated Trusted PR Gate token\n        id: trusted-app\n        if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'\n        env:\n          TRUSTED_GATE_APP_CLIENT_ID: ${{ vars.TRUSTED_GATE_APP_CLIENT_ID }}\n          TRUSTED_GATE_APP_PRIVATE_KEY: ${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}",
-    "- name: Reconcile exact-subject Python dependency promotion\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n          TRUSTED_STATUS_TOKEN: ${{ steps.trusted-app.outputs.token }}",
-    "- name: Reconcile Dependabot action merge authority\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n          TRUSTED_STATUS_TOKEN: ${{ steps.trusted-app.outputs.token }}",
+    "- name: Reconcile exact-subject Python dependency promotion\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+    "- name: Reconcile Dependabot action merge authority\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
 )
 _SECURITY_AUTOHEAL_SECRET_CONTEXT_FRAGMENTS = (
-    "environment:\n      name: trusted-pr-gate\n      deployment: false",
-    "TRUSTED_GATE_APP_PRIVATE_KEY: ${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}",
-    "GITHUB_TOKEN: ${{ github.token }}",
-    "TRUSTED_STATUS_TOKEN: ${{ steps.trusted-app.outputs.token }}",
-    "run: python .github/scripts/security_autoheal.py --reconcile --allow-merge",
+    "- name: Reconcile exact-subject CodeQL remediations\n        env:\n          GITHUB_TOKEN: ${{ github.token }}\n        run: python .github/scripts/security_autoheal.py --reconcile --allow-merge",
 )
 
 _REQUIRED_PREFLIGHT_FRAGMENTS = (
     f'EXPECTED_REPOSITORY = "{EXPECTED_REPOSITORY}"',
     f'EXPECTED_OWNER = "{EXPECTED_OWNER}"',
     "if repository != EXPECTED_REPOSITORY:",
-    'if repository.get("full_name") != EXPECTED_REPOSITORY:',
-    'if head_repository.get("full_name") != EXPECTED_REPOSITORY:',
-    'raise ValueError("fork/external-head workflow runs are not auto-authorized")',
-    'if actor.get("login") != EXPECTED_OWNER or triggering_actor.get("login") != EXPECTED_OWNER:',
-    'and head_repo.get("full_name") == EXPECTED_REPOSITORY',
-    'and base_repo.get("full_name") == EXPECTED_REPOSITORY',
+    'repository.get("full_name") != EXPECTED_REPOSITORY',
+    'head_repository.get("full_name") != EXPECTED_REPOSITORY',
+    'actor.get("login") != EXPECTED_OWNER',
+    'actor.get("id") != EXPECTED_OWNER_ID',
+    'triggering_actor.get("login") != EXPECTED_OWNER',
+    'triggering_actor.get("id") != EXPECTED_OWNER_ID',
+    'head_repo.get("full_name") == EXPECTED_REPOSITORY',
+    'base_repo.get("full_name") == EXPECTED_REPOSITORY',
 )
 
 

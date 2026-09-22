@@ -15,12 +15,16 @@ on:
         description: Exact commit the explicit CI dispatch requires evidence for
         required: true
         type: string
+      subject_ref:
+        description: Exact main, Dependabot Actions, or generated-maintenance branch containing subject_sha
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: ai-qa-ci-${{ github.event_name }}-${{ github.ref }}
+  group: ai-qa-ci-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.subject_ref || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -33,6 +37,8 @@ jobs:
   quality:
     name: Quality / Python ${{ matrix.python-version }}
     needs: supply-chain
+    env:
+      CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_sha || github.sha }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -47,7 +53,7 @@ jobs:
             evidence-suffix: py314
     steps:
       - name: Checkout exact validation subject
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.CI_SUBJECT_SHA }}
           persist-credentials: false
@@ -56,7 +62,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$CI_SUBJECT_SHA"
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -98,7 +104,7 @@ jobs:
 
       - name: Upload deterministic test evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: deterministic-tests-${{ matrix.evidence-suffix }}
           path: artifacts/ci/
@@ -108,11 +114,13 @@ jobs:
   deterministic-evals:
     name: 34-Case Deterministic Control Evaluation
     needs: supply-chain
+    env:
+      CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_sha || github.sha }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout exact validation subject
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.CI_SUBJECT_SHA }}
           persist-credentials: false
@@ -121,7 +129,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$CI_SUBJECT_SHA"
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11.16"
 
@@ -159,7 +167,7 @@ jobs:
 
       - name: Upload deterministic control evaluation evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: deterministic-control-evals
           path: artifacts/ci/deterministic-evals.json
@@ -168,13 +176,17 @@ jobs:
 
   supply-chain:
     name: Supply Chain / Wheel + SBOM + Container
+    env:
+      CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_sha || github.sha }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - name: Bind explicit dispatch to exact approved subject
+      - name: Bind trusted-main dispatch to exact approved subject
         if: github.event_name == 'workflow_dispatch'
         env:
           EXPECTED_SUBJECT_SHA: ${{ inputs.subject_sha }}
+          EXPECTED_SUBJECT_REF: ${{ inputs.subject_ref }}
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
@@ -182,23 +194,30 @@ jobs:
             echo "::error::subject_sha must be a canonical 40-character lowercase SHA"
             exit 1
           fi
-          if [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
-            :
-          elif [[ "$GITHUB_REF" =~ ^refs/heads/automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$ ]]; then
-            :
-          elif [[ "$GITHUB_REF" =~ ^refs/heads/automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{12}$ ]]; then
-            :
-          else
-            echo "::error::explicit CI dispatch is allowed only for main or exact generated maintenance refs"
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::explicit CI qualification must execute from trusted main"
             exit 1
           fi
-          if [[ "$GITHUB_SHA" != "$EXPECTED_SUBJECT_SHA" ]]; then
-            echo "::error::dispatched CI subject does not match the exact requested SHA"
+          if [[ "$EXPECTED_SUBJECT_REF" == "main" ]]; then
+            test "$GITHUB_SHA" = "$EXPECTED_SUBJECT_SHA" || {
+              echo "::error::main qualification SHA differs from trusted workflow subject"
+              exit 1
+            }
+          elif [[ "$EXPECTED_SUBJECT_REF" =~ ^dependabot/github_actions/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ ]] || \
+               [[ "$EXPECTED_SUBJECT_REF" =~ ^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$ ]] || \
+               [[ "$EXPECTED_SUBJECT_REF" =~ ^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{12}$ ]]; then
+            live_subject_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${EXPECTED_SUBJECT_REF}" --jq .object.sha)"
+            test "$live_subject_sha" = "$EXPECTED_SUBJECT_SHA" || {
+              echo "::error::generated maintenance ref moved after qualification dispatch"
+              exit 1
+            }
+          else
+            echo "::error::subject_ref is outside reviewed exact-subject authority"
             exit 1
           fi
 
       - name: Checkout exact validation subject
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.CI_SUBJECT_SHA }}
           persist-credentials: false
@@ -208,7 +227,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$CI_SUBJECT_SHA"
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11.16"
 
@@ -330,7 +349,7 @@ jobs:
 
       - name: Upload supply-chain evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: supply-chain-evidence
           path: |
@@ -352,11 +371,13 @@ jobs:
   security:
     name: Security Gates
     needs: supply-chain
+    env:
+      CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_sha || github.sha }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Checkout exact validation subject
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.CI_SUBJECT_SHA }}
           persist-credentials: false
@@ -366,7 +387,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$CI_SUBJECT_SHA"
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11.16"
 
@@ -401,7 +422,7 @@ jobs:
 
       - name: Upload security scan metadata
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: security-scan-metadata
           path: artifacts-secret-scan.json
@@ -411,11 +432,13 @@ jobs:
   browser-reference-sut:
     name: Playwright Reference SUT
     needs: supply-chain
+    env:
+      CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_sha || github.sha }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - name: Checkout exact validation subject
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.CI_SUBJECT_SHA }}
           persist-credentials: false
@@ -424,7 +447,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$CI_SUBJECT_SHA"
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11.16"
 
@@ -456,7 +479,7 @@ jobs:
 
       - name: Upload browser test metadata
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: browser-reference-sut
           path: artifacts-browser.xml
@@ -482,3 +505,53 @@ jobs:
           test "${{ needs.supply-chain.result }}" = "success"
           test "${{ needs.security.result }}" = "success"
           test "${{ needs.browser-reference-sut.result }}" = "success"
+
+  publish-qualified-subject:
+    name: Publish Exact-Subject Required PR Gate
+    needs: required-gate
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.subject_ref != 'main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      checks: write
+      contents: read
+    steps:
+      - name: Revalidate and publish exact maintenance qualification
+        env:
+          EXPECTED_SUBJECT_SHA: ${{ inputs.subject_sha }}
+          EXPECTED_SUBJECT_REF: ${{ inputs.subject_ref }}
+          VALIDATION_RESULT: ${{ needs.required-gate.result }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SUBJECT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          if [[ "$EXPECTED_SUBJECT_REF" =~ ^dependabot/github_actions/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ ]] || \
+             [[ "$EXPECTED_SUBJECT_REF" =~ ^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$ ]] || \
+             [[ "$EXPECTED_SUBJECT_REF" =~ ^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{12}$ ]]; then
+            :
+          else
+            echo "::error::candidate qualification ref is outside reviewed maintenance authority"
+            exit 1
+          fi
+          live_subject_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${EXPECTED_SUBJECT_REF}" --jq .object.sha)"
+          test "$live_subject_sha" = "$EXPECTED_SUBJECT_SHA"
+          conclusion="failure"
+          if [ "$VALIDATION_RESULT" = "success" ]; then
+            conclusion="success"
+          fi
+          details_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          external_id="aiqa-ci-qualification:${EXPECTED_SUBJECT_SHA}:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}"
+          payload="$(jq -nc \
+            --arg head "$EXPECTED_SUBJECT_SHA" \
+            --arg url "$details_url" \
+            --arg external_id "$external_id" \
+            --arg conclusion "$conclusion" \
+            --arg validation "$VALIDATION_RESULT" \
+            '{name:"Required PR Gate",head_sha:$head,status:"completed",conclusion:$conclusion,details_url:$url,external_id:$external_id,output:{title:"Exact-subject CI qualification",summary:("Trusted-main validation result: " + $validation + ".")}}')"
+          response="$(gh api --method POST "repos/${GITHUB_REPOSITORY}/check-runs" --input - <<<"$payload")"
+          test "$(jq -r '.name' <<<"$response")" = "Required PR Gate"
+          test "$(jq -r '.head_sha' <<<"$response")" = "$EXPECTED_SUBJECT_SHA"
+          test "$(jq -r '.status' <<<"$response")" = "completed"
+          test "$(jq -r '.conclusion' <<<"$response")" = "$conclusion"
+          test "$(jq -r '.external_id' <<<"$response")" = "$external_id"

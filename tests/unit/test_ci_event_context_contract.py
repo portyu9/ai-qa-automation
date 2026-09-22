@@ -8,7 +8,10 @@ import pytest
 import scripts.verify_ci_contract as ci_contract
 
 ROOT = Path(__file__).resolve().parents[2]
-SAFE_CONCURRENCY_GROUP = "  group: ai-qa-ci-${{ github.event_name }}-${{ github.ref }}"
+SAFE_CONCURRENCY_GROUP = (
+    "  group: ai-qa-ci-${{ github.event_name }}-"
+    "${{ github.event_name == 'workflow_dispatch' && inputs.subject_ref || github.ref }}"
+)
 OLD_EVENT_PAYLOAD_GROUP = (
     "  group: ai-qa-ci-${{ github.event.pull_request.number || "
     "github.event.client_payload.pr_number || github.ref }}"
@@ -45,7 +48,7 @@ def test_automatic_ci_concurrency_uses_event_and_ref_only() -> None:
         (OLD_EVENT_PAYLOAD_GROUP, "forbidden authority token: github.event.client_payload"),
         (
             UNIQUE_DISPATCH_GROUP,
-            "ci.yml bytes differ from the exact reviewed ordinary CI definition",
+            "ci.yml non-action structure differs from the reviewed ordinary CI definition",
         ),
     ],
 )

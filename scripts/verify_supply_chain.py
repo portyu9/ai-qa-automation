@@ -445,14 +445,14 @@ def _verify_workflow(root: Path) -> dict[str, str]:
     for action, revision in ACTION_RE.findall(workflow):
         if not HEX40_RE.fullmatch(revision):
             raise ValueError(f"mutable GitHub Action reference: {action}@{revision}")
-        expected = EXPECTED_ACTION_SHAS.get(action)
-        if expected is None:
-            raise ValueError(f"unreviewed GitHub Action in permanent CI: {action}")
-        if revision != expected:
-            raise ValueError(f"unexpected immutable revision for {action}: {revision}")
+        if action not in EXPECTED_ACTION_SHAS:
+            raise ValueError(f"unreviewed GitHub Action identity in permanent CI: {action}")
+        prior = observed.get(action)
+        if prior is not None and prior != revision:
+            raise ValueError(f"inconsistent immutable revision for {action}")
         observed[action] = revision
     if set(observed) != set(EXPECTED_ACTION_SHAS):
-        raise ValueError("permanent CI Action set differs from the reviewed immutable set")
+        raise ValueError("permanent CI Action identity set differs from the reviewed allowlist")
     return observed
 
 

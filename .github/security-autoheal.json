@@ -5,7 +5,7 @@
   "enabled": true,
   "automergeEnabled": true,
   "mergeMethod": "merge",
-  "minimumSecuritySeverity": 7.0,
+  "minimumSecuritySeverity": 7,
   "maxChangedFiles": 5,
   "maxOpenRepairs": 4,
   "maxAttemptsPerAlert": 2,
@@ -34,6 +34,9 @@
   ],
   "neverModifyPaths": [
     ".github/",
+    ".github/scripts/trusted_qualification.py",
+    ".github/scripts/trusted_status.py",
+    "scripts/auto_trusted_bot_admission.py",
     "scripts/auto_trusted_preflight.py",
     "scripts/trusted_pr_control.py"
   ]

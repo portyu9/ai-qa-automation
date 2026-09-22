@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import re
 import stat
+import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,14 +17,30 @@ from urllib.parse import quote
 
 EXPECTED_REPOSITORY = "portyu9/ai-qa-automation"
 EXPECTED_OWNER = "portyu9"
+EXPECTED_OWNER_ID = 35150859
 EXPECTED_DEFAULT_BRANCH = "main"
-EXPECTED_WORKFLOW_ID = 339754724
-EXPECTED_WORKFLOW_NAME = "CI — ƳƤ AI QA Automation Framework"
-EXPECTED_WORKFLOW_PATH = ".github/workflows/ci.yml"
+EXPECTED_CI_WORKFLOW_ID = 339754724
+EXPECTED_CI_WORKFLOW_NAME = "CI — ƳƤ AI QA Automation Framework"
+EXPECTED_CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
+EXPECTED_CODEQL_WORKFLOW_ID = 359681647
+EXPECTED_CODEQL_WORKFLOW_NAME = "CodeQL"
+EXPECTED_CODEQL_WORKFLOW_PATH = ".github/workflows/codeql.yml"
+GITHUB_ACTIONS_LOGIN = "github-actions[bot]"
+GITHUB_ACTIONS_USER_ID = 41898282
+DEPENDABOT_LOGIN = "dependabot[bot]"
+DEPENDABOT_USER_ID = 49699333
+GITHUB_ACTIONS_APP_ID = 15368
 MAX_EVENT_BYTES = 2 * 1024 * 1024
 MAX_API_BYTES = 8 * 1024 * 1024
 MAX_PULL_REQUEST_CANDIDATES = 100
+MAX_API_PAGES = 4
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+DEPENDABOT_ACTION_REF_RE = re.compile(
+    r"^dependabot/github_actions/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$"
+)
+PROMOTION_REF_RE = re.compile(r"^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$")
+AUTOHEAL_REF_RE = re.compile(r"^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{12}$")
+BOT_LANES = {"dependabot-actions", "dependency-promotion", "security-autoheal"}
 PROTECTED_PATHS = (
     ".github",
     "scripts",
@@ -41,20 +60,36 @@ PROTECTED_PATHS = (
     "src/ai_qa_automation/tools/__init__.py",
     "src/ai_qa_automation/tools/execution_env.py",
 )
+ROOT = Path(__file__).resolve().parents[1]
+QUALIFICATION_PATH = ROOT / ".github" / "scripts" / "trusted_qualification.py"
+
+
+@dataclass(frozen=True)
+class Wake:
+    run_id: int
+    run_attempt: int
+    kind: str
+    head_sha: str
 
 
 @dataclass(frozen=True)
 class Admission:
+    lane: str
     pr_number: int
     head_sha: str
     base_sha: str
     merge_sha: str
     trusted_sha: str
     protected_changes: tuple[dict[str, str], ...]
+    qualification_ready: bool
 
     @property
     def eligible(self) -> bool:
-        return not self.protected_changes
+        if self.lane == "owner-routine":
+            return self.qualification_ready and not self.protected_changes
+        if self.lane in BOT_LANES:
+            return self.qualification_ready
+        return False
 
 
 class GitHubAPI:
@@ -99,6 +134,45 @@ class GitHubAPI:
             return json.loads(payload)
         except json.JSONDecodeError as exc:
             raise ValueError("GitHub API returned malformed JSON") from exc
+
+    def list_all(self, path: str, *, max_pages: int = MAX_API_PAGES) -> list[dict[str, Any]]:
+        if max_pages < 1 or max_pages > MAX_API_PAGES:
+            raise ValueError("GitHub pagination bound is outside reviewed limits")
+        separator = "&" if "?" in path else "?"
+        rows: list[dict[str, Any]] = []
+        for page in range(1, max_pages + 1):
+            payload = self.get(f"{path}{separator}per_page=100&page={page}")
+            if isinstance(payload, list):
+                page_rows = payload
+            elif isinstance(payload, dict):
+                if isinstance(payload.get("check_runs"), list):
+                    page_rows = payload["check_runs"]
+                elif isinstance(payload.get("workflow_runs"), list):
+                    page_rows = payload["workflow_runs"]
+                else:
+                    raise ValueError("paginated GitHub response has unsupported object shape")
+            else:
+                raise ValueError("paginated GitHub response must be an array or supported object")
+            for row in page_rows:
+                if not isinstance(row, dict):
+                    raise ValueError("paginated GitHub response contains a non-object row")
+                rows.append(row)
+            if len(page_rows) < 100:
+                return rows
+        raise ValueError("GitHub pagination reached the fail-closed page bound")
+
+
+def _load_qualification_module() -> Any:
+    info = QUALIFICATION_PATH.stat(follow_symlinks=False)
+    if QUALIFICATION_PATH.is_symlink() or not stat.S_ISREG(info.st_mode):
+        raise RuntimeError("trusted qualification verifier must be a regular non-symlink file")
+    spec = importlib.util.spec_from_file_location("aiqa_trusted_qualification", QUALIFICATION_PATH)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("unable to load trusted qualification verifier")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def _require_dict(value: Any, *, label: str) -> dict[str, Any]:
@@ -154,21 +228,19 @@ def _read_json_file(path: Path, *, max_bytes: int, label: str) -> Any:
         if len(payload) > max_bytes:
             raise ValueError(f"{label} exceeds bounded ingestion limit")
         final = os.fstat(fd)
-        initial_signature = (
+        if (
             initial.st_dev,
             initial.st_ino,
             initial.st_size,
             initial.st_mtime_ns,
             initial.st_ctime_ns,
-        )
-        final_signature = (
+        ) != (
             final.st_dev,
             final.st_ino,
             final.st_size,
             final.st_mtime_ns,
             final.st_ctime_ns,
-        )
-        if final_signature != initial_signature:
+        ):
             raise ValueError(f"{label} changed during ingestion")
     finally:
         os.close(fd)
@@ -178,28 +250,91 @@ def _read_json_file(path: Path, *, max_bytes: int, label: str) -> Any:
         raise ValueError(f"{label} is malformed JSON") from exc
 
 
-def _validate_live_run(run: dict[str, Any], *, expected_run_id: int) -> str:
+def _current_main(api: GitHubAPI) -> str:
+    expected_ref = f"refs/heads/{EXPECTED_DEFAULT_BRANCH}"
+    return _ref_commit_sha(
+        api.get(
+            f"/repos/{EXPECTED_REPOSITORY}/git/ref/heads/{quote(EXPECTED_DEFAULT_BRANCH, safe='')}"
+        ),
+        expected_ref=expected_ref,
+        label="main ref",
+    )
+
+
+def _validate_wake(run: dict[str, Any], *, expected_run_id: int, trusted_sha: str) -> Wake | None:
     if _require_positive_int(run.get("id"), label="workflow run id") != expected_run_id:
         raise ValueError("workflow run identity drifted")
-    if _require_positive_int(run.get("workflow_id"), label="workflow id") != EXPECTED_WORKFLOW_ID:
-        raise ValueError("workflow run is not the reviewed CI workflow")
-    if run.get("name") != EXPECTED_WORKFLOW_NAME or run.get("path") != EXPECTED_WORKFLOW_PATH:
-        raise ValueError("workflow run name/path differs from the reviewed CI workflow")
-    if run.get("event") != "pull_request":
-        raise ValueError("automatic trusted admission only accepts pull_request CI")
+    attempt = _require_positive_int(run.get("run_attempt"), label="workflow run attempt")
     if run.get("status") != "completed" or run.get("conclusion") != "success":
-        raise ValueError("automatic trusted admission requires a completed successful CI run")
+        return None
     repository = _require_dict(run.get("repository"), label="workflow repository")
     head_repository = _require_dict(run.get("head_repository"), label="workflow head repository")
-    if repository.get("full_name") != EXPECTED_REPOSITORY:
+    if (
+        repository.get("full_name") != EXPECTED_REPOSITORY
+        or head_repository.get("full_name") != EXPECTED_REPOSITORY
+    ):
         raise ValueError("workflow run repository identity mismatch")
-    if head_repository.get("full_name") != EXPECTED_REPOSITORY:
-        raise ValueError("fork/external-head workflow runs are not auto-authorized")
+
+    workflow_id = _require_positive_int(run.get("workflow_id"), label="workflow id")
     actor = _require_dict(run.get("actor"), label="workflow actor")
     triggering_actor = _require_dict(run.get("triggering_actor"), label="workflow triggering actor")
-    if actor.get("login") != EXPECTED_OWNER or triggering_actor.get("login") != EXPECTED_OWNER:
-        raise ValueError("automatic trusted admission requires the repository owner workflow actor")
-    return _require_sha(run.get("head_sha"), label="workflow head SHA")
+
+    if (
+        workflow_id == EXPECTED_CI_WORKFLOW_ID
+        and run.get("name") == EXPECTED_CI_WORKFLOW_NAME
+        and run.get("path") == EXPECTED_CI_WORKFLOW_PATH
+        and run.get("event") == "pull_request"
+    ):
+        if (
+            actor.get("login") != EXPECTED_OWNER
+            or actor.get("id") != EXPECTED_OWNER_ID
+            or triggering_actor.get("login") != EXPECTED_OWNER
+            or triggering_actor.get("id") != EXPECTED_OWNER_ID
+        ):
+            return None
+        return Wake(
+            run_id=expected_run_id,
+            run_attempt=attempt,
+            kind="owner-ci",
+            head_sha=_require_sha(run.get("head_sha"), label="workflow head SHA"),
+        )
+
+    expected_dispatch = {
+        EXPECTED_CI_WORKFLOW_ID: (
+            EXPECTED_CI_WORKFLOW_NAME,
+            EXPECTED_CI_WORKFLOW_PATH,
+            "Required PR Gate",
+        ),
+        EXPECTED_CODEQL_WORKFLOW_ID: (
+            EXPECTED_CODEQL_WORKFLOW_NAME,
+            EXPECTED_CODEQL_WORKFLOW_PATH,
+            "CodeQL",
+        ),
+    }.get(workflow_id)
+    if expected_dispatch is None:
+        return None
+    workflow_name, workflow_path, check_name = expected_dispatch
+    if (
+        run.get("name") != workflow_name
+        or run.get("path") != workflow_path
+        or run.get("event") != "workflow_dispatch"
+        or run.get("head_branch") != EXPECTED_DEFAULT_BRANCH
+        or _require_sha(run.get("head_sha"), label="trusted dispatch head SHA") != trusted_sha
+    ):
+        return None
+    if (
+        actor.get("login") != GITHUB_ACTIONS_LOGIN
+        or actor.get("id") != GITHUB_ACTIONS_USER_ID
+        or triggering_actor.get("login") != GITHUB_ACTIONS_LOGIN
+        or triggering_actor.get("id") != GITHUB_ACTIONS_USER_ID
+    ):
+        return None
+    return Wake(
+        run_id=expected_run_id,
+        run_attempt=attempt,
+        kind=check_name,
+        head_sha=trusted_sha,
+    )
 
 
 def _select_pull_request(candidates: Any, *, head_sha: str) -> int:
@@ -226,6 +361,89 @@ def _select_pull_request(candidates: Any, *, head_sha: str) -> int:
             "workflow head must resolve to exactly one open same-repository pull request targeting main"
         )
     return matching[0]
+
+
+def _bot_lane(pr: dict[str, Any]) -> str | None:
+    user = _require_dict(pr.get("user"), label="bot pull request user")
+    head = _require_dict(pr.get("head"), label="bot pull request head")
+    branch = _require_str(head.get("ref"), label="bot pull request head ref")
+    if (
+        user.get("login") == DEPENDABOT_LOGIN
+        and user.get("id") == DEPENDABOT_USER_ID
+        and DEPENDABOT_ACTION_REF_RE.fullmatch(branch) is not None
+    ):
+        return "dependabot-actions"
+    if user.get("login") == GITHUB_ACTIONS_LOGIN and user.get("id") == GITHUB_ACTIONS_USER_ID:
+        if PROMOTION_REF_RE.fullmatch(branch) is not None:
+            return "dependency-promotion"
+        if AUTOHEAL_REF_RE.fullmatch(branch) is not None:
+            return "security-autoheal"
+    return None
+
+
+def _wake_external_id(wake: Wake, head_sha: str) -> str:
+    prefix = {
+        "Required PR Gate": "aiqa-ci-qualification",
+        "CodeQL": "aiqa-codeql-qualification",
+    }.get(wake.kind)
+    if prefix is None:
+        raise ValueError("bot wake does not identify a qualification check")
+    return f"{prefix}:{head_sha}:{wake.run_id}:{wake.run_attempt}"
+
+
+def _select_bot_pull_request(
+    api: GitHubAPI,
+    *,
+    wake: Wake,
+    trusted_sha: str,
+) -> tuple[dict[str, Any], str] | None:
+    rows = api.list_all(
+        f"/repos/{EXPECTED_REPOSITORY}/pulls?state=open&base={EXPECTED_DEFAULT_BRANCH}",
+        max_pages=1,
+    )
+    if len(rows) >= MAX_PULL_REQUEST_CANDIDATES:
+        raise ValueError("open pull-request discovery reached the bounded pagination limit")
+    matches: list[tuple[dict[str, Any], str]] = []
+    for pr in rows:
+        lane = _bot_lane(pr)
+        if lane is None or pr.get("draft") is not False:
+            continue
+        head = _require_dict(pr.get("head"), label="bot candidate head")
+        base = _require_dict(pr.get("base"), label="bot candidate base")
+        head_repo = _require_dict(head.get("repo"), label="bot candidate head repository")
+        base_repo = _require_dict(base.get("repo"), label="bot candidate base repository")
+        if (
+            head_repo.get("full_name") != EXPECTED_REPOSITORY
+            or base_repo.get("full_name") != EXPECTED_REPOSITORY
+            or base.get("ref") != EXPECTED_DEFAULT_BRANCH
+            or base.get("sha") != trusted_sha
+        ):
+            continue
+        head_sha = _require_sha(head.get("sha"), label="bot candidate head SHA")
+        expected_external_id = _wake_external_id(wake, head_sha)
+        checks = api.list_all(
+            f"/repos/{EXPECTED_REPOSITORY}/commits/{head_sha}/check-runs?filter=latest",
+            max_pages=2,
+        )
+        for check in checks:
+            app = check.get("app") or {}
+            if (
+                check.get("name") == wake.kind
+                and check.get("head_sha") == head_sha
+                and check.get("external_id") == expected_external_id
+                and check.get("status") == "completed"
+                and check.get("conclusion") == "success"
+                and app.get("id") == GITHUB_ACTIONS_APP_ID
+                and check.get("details_url")
+                == f"https://github.com/{EXPECTED_REPOSITORY}/actions/runs/{wake.run_id}"
+            ):
+                matches.append((pr, lane))
+                break
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise ValueError("trusted workflow wake maps to multiple governed bot pull requests")
+    return matches[0]
 
 
 def _validate_pull_request(
@@ -301,46 +519,22 @@ def _protected_changes(
     return tuple(rows)
 
 
-def evaluate_admission(api: GitHubAPI, *, event: dict[str, Any]) -> Admission:
-    if event.get("action") != "completed":
-        raise ValueError("workflow_run event action must be completed")
-    event_run = _require_dict(event.get("workflow_run"), label="workflow_run event")
-    run_id = _require_positive_int(event_run.get("id"), label="event workflow run id")
-
-    live_run = _require_dict(
-        api.get(f"/repos/{EXPECTED_REPOSITORY}/actions/runs/{run_id}"),
-        label="live workflow run",
-    )
-    head_sha = _validate_live_run(live_run, expected_run_id=run_id)
-    if event_run.get("head_sha") != head_sha:
-        raise ValueError("workflow_run event head SHA differs from live run")
-
-    pulls = api.get(
-        f"/repos/{EXPECTED_REPOSITORY}/commits/{head_sha}/pulls"
-        f"?per_page={MAX_PULL_REQUEST_CANDIDATES}"
-    )
-    pr_number = _select_pull_request(pulls, head_sha=head_sha)
-
-    expected_main_ref = f"refs/heads/{EXPECTED_DEFAULT_BRANCH}"
-    trusted_sha = _ref_commit_sha(
-        api.get(
-            f"/repos/{EXPECTED_REPOSITORY}/git/ref/heads/{quote(EXPECTED_DEFAULT_BRANCH, safe='')}"
-        ),
-        expected_ref=expected_main_ref,
-        label="main ref",
-    )
-
-    pr = _require_dict(
-        api.get(f"/repos/{EXPECTED_REPOSITORY}/pulls/{pr_number}"),
-        label="live pull request",
-    )
+def _resolve_subject(
+    api: GitHubAPI,
+    *,
+    lane: str,
+    pr: dict[str, Any],
+    head_sha: str,
+    trusted_sha: str,
+    qualification_ready: bool,
+) -> Admission:
+    pr_number = _require_positive_int(pr.get("number"), label="pull request number")
     base_sha = _validate_pull_request(
         pr,
         expected_number=pr_number,
         head_sha=head_sha,
         current_main_sha=trusted_sha,
     )
-
     expected_merge_ref = f"refs/pull/{pr_number}/merge"
     merge_sha = _ref_commit_sha(
         api.get(f"/repos/{EXPECTED_REPOSITORY}/git/ref/pull/{pr_number}/merge"),
@@ -356,7 +550,10 @@ def evaluate_admission(api: GitHubAPI, *, event: dict[str, Any]) -> Admission:
     if len(parents) != 2:
         raise ValueError("prospective merge commit must have exactly two parents")
     parent_shas = [
-        _require_sha(_require_dict(item, label="merge parent").get("sha"), label="merge parent SHA")
+        _require_sha(
+            _require_dict(item, label="merge parent").get("sha"),
+            label="merge parent SHA",
+        )
         for item in parents
     ]
     if parent_shas != [base_sha, head_sha]:
@@ -367,10 +564,14 @@ def evaluate_admission(api: GitHubAPI, *, event: dict[str, Any]) -> Admission:
         expected_sha=base_sha,
         label="base commit",
     )
-    base_tree_ref = _require_dict(base_commit.get("tree"), label="base commit tree")
-    merge_tree_ref = _require_dict(merge_commit.get("tree"), label="merge commit tree")
-    base_tree_sha = _require_sha(base_tree_ref.get("sha"), label="base tree SHA")
-    merge_tree_sha = _require_sha(merge_tree_ref.get("sha"), label="merge tree SHA")
+    base_tree_sha = _require_sha(
+        _require_dict(base_commit.get("tree"), label="base commit tree").get("sha"),
+        label="base tree SHA",
+    )
+    merge_tree_sha = _require_sha(
+        _require_dict(merge_commit.get("tree"), label="merge commit tree").get("sha"),
+        label="merge tree SHA",
+    )
     base_tree = _tree_index(
         api.get(f"/repos/{EXPECTED_REPOSITORY}/git/trees/{base_tree_sha}?recursive=1"),
         label="base recursive tree",
@@ -379,29 +580,108 @@ def evaluate_admission(api: GitHubAPI, *, event: dict[str, Any]) -> Admission:
         api.get(f"/repos/{EXPECTED_REPOSITORY}/git/trees/{merge_tree_sha}?recursive=1"),
         label="merge recursive tree",
     )
-
     return Admission(
+        lane=lane,
         pr_number=pr_number,
         head_sha=head_sha,
         base_sha=base_sha,
         merge_sha=merge_sha,
         trusted_sha=trusted_sha,
         protected_changes=_protected_changes(base_tree, merge_tree),
+        qualification_ready=qualification_ready,
     )
 
 
-def write_github_outputs(path: Path, admission: Admission) -> None:
-    values = {
-        "eligible": "true" if admission.eligible else "false",
-        "pr_number": str(admission.pr_number),
-        "head_sha": admission.head_sha,
-        "base_sha": admission.base_sha,
-        "merge_sha": admission.merge_sha,
-        "trusted_sha": admission.trusted_sha,
-        "protected_changes_json": json.dumps(
-            admission.protected_changes, separators=(",", ":"), sort_keys=True
-        ),
-    }
+def evaluate_admission(api: GitHubAPI, *, event: dict[str, Any]) -> Admission | None:
+    if event.get("action") != "completed":
+        raise ValueError("workflow_run event action must be completed")
+    event_run = _require_dict(event.get("workflow_run"), label="workflow_run event")
+    run_id = _require_positive_int(event_run.get("id"), label="event workflow run id")
+    trusted_sha = _current_main(api)
+    live_run = _require_dict(
+        api.get(f"/repos/{EXPECTED_REPOSITORY}/actions/runs/{run_id}"),
+        label="live workflow run",
+    )
+    wake = _validate_wake(live_run, expected_run_id=run_id, trusted_sha=trusted_sha)
+    if wake is None:
+        return None
+    if event_run.get("head_sha") != live_run.get("head_sha"):
+        raise ValueError("workflow_run event head SHA differs from live run")
+
+    if wake.kind == "owner-ci":
+        pulls = api.get(
+            f"/repos/{EXPECTED_REPOSITORY}/commits/{wake.head_sha}/pulls"
+            f"?per_page={MAX_PULL_REQUEST_CANDIDATES}"
+        )
+        pr_number = _select_pull_request(pulls, head_sha=wake.head_sha)
+        pr = _require_dict(
+            api.get(f"/repos/{EXPECTED_REPOSITORY}/pulls/{pr_number}"),
+            label="live pull request",
+        )
+        if _bot_lane(pr) is not None:
+            return None
+        return _resolve_subject(
+            api,
+            lane="owner-routine",
+            pr=pr,
+            head_sha=wake.head_sha,
+            trusted_sha=trusted_sha,
+            qualification_ready=True,
+        )
+
+    selected = _select_bot_pull_request(api, wake=wake, trusted_sha=trusted_sha)
+    if selected is None:
+        return None
+    pr, lane = selected
+    head_sha = _require_sha(
+        _require_dict(pr.get("head"), label="bot candidate head").get("sha"),
+        label="bot candidate head SHA",
+    )
+    qualification = _load_qualification_module()
+    states = qualification.qualification_states(
+        api,
+        head_sha,
+        trusted_sha,
+        required=("Required PR Gate", "CodeQL"),
+    )
+    ready = all(
+        state is not None and state.get("conclusion") == "success" for state in states.values()
+    )
+    return _resolve_subject(
+        api,
+        lane=lane,
+        pr=pr,
+        head_sha=head_sha,
+        trusted_sha=trusted_sha,
+        qualification_ready=ready,
+    )
+
+
+def write_github_outputs(path: Path, admission: Admission | None) -> None:
+    if admission is None:
+        values = {
+            "eligible": "false",
+            "lane": "none",
+            "pr_number": "",
+            "head_sha": "",
+            "base_sha": "",
+            "merge_sha": "",
+            "trusted_sha": "",
+            "protected_changes_json": "[]",
+        }
+    else:
+        values = {
+            "eligible": "true" if admission.eligible else "false",
+            "lane": admission.lane,
+            "pr_number": str(admission.pr_number),
+            "head_sha": admission.head_sha,
+            "base_sha": admission.base_sha,
+            "merge_sha": admission.merge_sha,
+            "trusted_sha": admission.trusted_sha,
+            "protected_changes_json": json.dumps(
+                admission.protected_changes, separators=(",", ":"), sort_keys=True
+            ),
+        }
     with path.open("a", encoding="utf-8", newline="\n") as handle:
         for key, value in values.items():
             if "\n" in value or "\r" in value:
@@ -427,15 +707,21 @@ def main() -> None:
         event=event,
     )
     write_github_outputs(args.github_output, admission)
-    summary = {
-        "eligible": admission.eligible,
-        "pr_number": admission.pr_number,
-        "head_sha": admission.head_sha,
-        "base_sha": admission.base_sha,
-        "merge_sha": admission.merge_sha,
-        "trusted_sha": admission.trusted_sha,
-        "protected_changes": admission.protected_changes,
+    summary: dict[str, Any] = {
+        "eligible": False if admission is None else admission.eligible,
+        "lane": "none" if admission is None else admission.lane,
     }
+    if admission is not None:
+        summary.update(
+            {
+                "pr_number": admission.pr_number,
+                "head_sha": admission.head_sha,
+                "base_sha": admission.base_sha,
+                "merge_sha": admission.merge_sha,
+                "trusted_sha": admission.trusted_sha,
+                "protected_changes": admission.protected_changes,
+            }
+        )
     print(json.dumps(summary, indent=2, sort_keys=True))
 
 
