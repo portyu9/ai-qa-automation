@@ -27,7 +27,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
-    "05840115b5b552694bd38c2f7b0492d682d39d59"  # pragma: allowlist secret
+    "ae442a92d7a250c211a448ed92c87121c3a288cc"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
     "86dd2e0a1b9bc152cda05a464876b4447d224a22"  # pragma: allowlist secret
@@ -173,6 +173,9 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     ).values():
         raise ValueError("governed bot authority must remain secret-free and read-only")
 
+    if "needs.bot-authority.result" in bot_authority:
+        raise ValueError("governed bot authority must not self-reference its own result")
+
     subject_guard = _base._semantic_text(_base._job_block(text, "subject-guard"))
     required_guard = (
         "    name: Exact Subject + Protected Authority Guard",
@@ -181,6 +184,8 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "needs.preflight.outputs.lane == 'owner-routine' || needs.bot-authority.result == 'success'",
         "          ref: ${{ needs.preflight.outputs.merge_sha }}",
         "          persist-credentials: false",
+        "          ADMISSION_LANE: ${{ needs.preflight.outputs.lane }}",
+        "          BOT_AUTHORITY_RESULT: ${{ needs.bot-authority.result }}",
         '          test "$EXPECTED_BASE_SHA" = "$EXPECTED_TRUSTED_SHA"',
         '          test "$(git rev-parse HEAD)" = "$EXPECTED_MERGE_SHA"',
         '          read -r merge_sha base_sha head_sha extra_parent < <("${git_clean_env[@]}" /usr/bin/git rev-list --parents -n 1 "$EXPECTED_MERGE_SHA")',
