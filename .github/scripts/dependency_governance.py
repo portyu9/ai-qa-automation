@@ -654,7 +654,7 @@ def dispatch_exact_codeql(api: GitHubApi, ref: str, subject_sha: str) -> None:
 
 def _verify_actual_merge_commit(
     api: GitHubApi, result: dict[str, Any], subject: dict[str, Any], config: dict[str, Any]
-) -> str:
+) -> tuple[str, str]:
     merge_sha = require_sha(result.get("sha"), "actual merge SHA")
     commit = api.get(f"/git/commits/{merge_sha}")
     parents = (commit or {}).get("parents")
@@ -668,43 +668,29 @@ def _verify_actual_merge_commit(
         raise GovernanceError(
             f"actual governed merge parents changed: expected {expected}, got {observed}"
         )
+    merge_tree = require_sha(((commit or {}).get("tree") or {}).get("sha"), "actual merge tree SHA")
+    head_commit = api.get(f"/git/commits/{subject['headSha']}")
+    head_tree = require_sha(
+        ((head_commit or {}).get("tree") or {}).get("sha"), "validated head tree SHA"
+    )
+    if merge_tree != head_tree:
+        raise GovernanceError("actual governed merge tree differs from the validated bot head tree")
     live_sha = _live_main_sha(api, config)
     if live_sha != merge_sha:
         raise GovernanceError(
-            f"main advanced before exact-subject CI dispatch: expected {merge_sha}, got {live_sha}"
+            f"main advanced during guarded merge: expected {merge_sha}, got {live_sha}"
         )
-    return merge_sha
+    return merge_sha, merge_tree
 
 
 def finalize_post_merge_evidence(
     api: GitHubApi, result: dict[str, Any], subject: dict[str, Any], config: dict[str, Any]
 ) -> dict[str, Any]:
-    merge_sha = _verify_actual_merge_commit(api, result, subject, config)
-    existing = _select_post_merge_ci_run(_post_merge_ci_runs(api, merge_sha), merge_sha)
-    if existing is None:
-        dispatch_exact_ci(api, config["baseBranch"], merge_sha)
-        for attempt in range(POST_MERGE_CI_REGISTRATION_ATTEMPTS):
-            existing = _select_post_merge_ci_run(_post_merge_ci_runs(api, merge_sha), merge_sha)
-            if existing is not None:
-                if existing.get("event") != "workflow_dispatch":
-                    raise GovernanceError(
-                        "post-merge CI appeared through an unexpected event after explicit dispatch"
-                    )
-                break
-            if attempt + 1 < POST_MERGE_CI_REGISTRATION_ATTEMPTS:
-                time.sleep(POST_MERGE_CI_REGISTRATION_DELAY_SECONDS)
-        else:
-            raise GovernanceError(
-                f"explicit CI dispatch did not register for exact current main {merge_sha}"
-            )
-    if _live_main_sha(api, config) != merge_sha:
-        raise GovernanceError("post-merge CI evidence subject is no longer current main")
+    merge_sha, merge_tree = _verify_actual_merge_commit(api, result, subject, config)
     return {
         "mergeSha": merge_sha,
-        "ciRunId": int(existing["id"]),
-        "ciRunAttempt": int(existing["run_attempt"]),
-        "ciEvent": str(existing["event"]),
-        "ciStatus": str(existing["status"]),
+        "sourceTreeSha": merge_tree,
+        "postMergeBinding": "exact-current-main-parents-and-validated-source-tree",
     }
 
 
