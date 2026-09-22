@@ -553,8 +553,21 @@ def _resolve_subject(
     qualification_ready: bool,
 ) -> Admission:
     pr_number = _require_positive_int(pr.get("number"), label="pull request number")
+    live_pr = _require_dict(
+        api.get(f"/repos/{EXPECTED_REPOSITORY}/pulls/{pr_number}"),
+        label="live pull request",
+    )
+    observed_lane = _bot_lane(live_pr)
+    if lane in BOT_LANES:
+        if observed_lane != lane:
+            raise ValueError("live governed bot lane drifted before subject resolution")
+    elif lane == "owner-routine":
+        if observed_lane is not None:
+            raise ValueError("owner-routine admission resolved to a governed bot pull request")
+    else:
+        raise ValueError("automatic trusted admission lane is not reviewed")
     base_sha = _validate_pull_request(
-        pr,
+        live_pr,
         expected_number=pr_number,
         head_sha=head_sha,
         current_main_sha=trusted_sha,
@@ -605,7 +618,7 @@ def _resolve_subject(
         label="merge recursive tree",
     )
     head_ref = _require_str(
-        _require_dict(pr.get("head"), label="live pull request head").get("ref"),
+        _require_dict(live_pr.get("head"), label="live pull request head").get("ref"),
         label="live pull request head ref",
     )
     return Admission(
