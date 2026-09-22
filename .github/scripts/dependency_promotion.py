@@ -28,8 +28,6 @@ from dependency_governance import (
     GovernanceError,
     PolicyBlock,
     changed_files,
-    dispatch_exact_ci,
-    dispatch_exact_codeql,
     finalize_post_merge_evidence,
     load_config,
     require_green_checks,
