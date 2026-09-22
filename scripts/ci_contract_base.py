@@ -132,8 +132,7 @@ def _git_blob_sha1(text: str) -> str:
 def _action_pin_normalized_text(text: str) -> str:
     return ACTION_PIN_NORMALIZE_RE.sub(
         lambda match: (
-            f"{match.group('prefix')}@<PINNED_SHA>"
-            f"{match.group('suffix')}<PINNED_VERSION>"
+            f"{match.group('prefix')}@<PINNED_SHA>{match.group('suffix')}<PINNED_VERSION>"
         ),
         text,
     )
