@@ -730,7 +730,7 @@ def _require_green_checks(api: GitHubApi, head_sha: str, config: dict[str, Any])
             required=tuple(config["requiredChecks"]),
         )
     except TrustedQualificationError as exc:
-        raise PolicyBlock(str(exc)) from exc
+        raise PolicyBlock("automatic Trusted PR Gate is not yet admissible") from exc
 
 
 def _repository_text(api: GitHubApi, path: str, ref: str) -> str:
