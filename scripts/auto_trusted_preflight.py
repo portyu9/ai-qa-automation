@@ -7,6 +7,7 @@ import os
 import re
 import stat
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -34,6 +35,8 @@ MAX_EVENT_BYTES = 2 * 1024 * 1024
 MAX_API_BYTES = 8 * 1024 * 1024
 MAX_PULL_REQUEST_CANDIDATES = 100
 MAX_API_PAGES = 4
+TRANSIENT_GET_ATTEMPTS = 3
+TRANSIENT_GET_DELAY_SECONDS = 1
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DEPENDABOT_ACTION_REF_RE = re.compile(
     r"^dependabot/github_actions/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$"
@@ -114,26 +117,39 @@ class GitHubAPI:
         if not path.startswith("/") or ".." in path:
             raise ValueError("GitHub API path must be an absolute fixed-repository path")
         url = f"{self._api_url}{path}"
-        request = urllib.request.Request(
-            url,
-            headers={
-                "Authorization": f"Bearer {self._token}",
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2022-11-28",
-                "User-Agent": "yp-ai-qa-trusted-admission",
-            },
-            method="GET",
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=20) as response:
-                content_length = response.headers.get("Content-Length")
-                if content_length is not None and int(content_length) > MAX_API_BYTES:
-                    raise ValueError("GitHub API response exceeds bounded ingestion limit")
-                payload = response.read(MAX_API_BYTES + 1)
-        except urllib.error.HTTPError as exc:
-            raise RuntimeError(f"GitHub API GET failed with HTTP {exc.code}: {path}") from exc
-        except urllib.error.URLError as exc:
-            raise RuntimeError(f"GitHub API GET failed: {path}") from exc
+        for attempt in range(TRANSIENT_GET_ATTEMPTS):
+            request = urllib.request.Request(
+                url,
+                headers={
+                    "Authorization": f"Bearer {self._token}",
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                    "User-Agent": "yp-ai-qa-trusted-admission",
+                },
+                method="GET",
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=20) as response:
+                    content_length = response.headers.get("Content-Length")
+                    if content_length is not None and int(content_length) > MAX_API_BYTES:
+                        raise ValueError("GitHub API response exceeds bounded ingestion limit")
+                    payload = response.read(MAX_API_BYTES + 1)
+                break
+            except urllib.error.HTTPError as exc:
+                if (
+                    exc.code in {502, 503, 504}
+                    and attempt + 1 < TRANSIENT_GET_ATTEMPTS
+                ):
+                    time.sleep(TRANSIENT_GET_DELAY_SECONDS)
+                    continue
+                raise RuntimeError(
+                    f"GitHub API GET failed with HTTP {exc.code}: {path}"
+                ) from exc
+            except urllib.error.URLError as exc:
+                if attempt + 1 < TRANSIENT_GET_ATTEMPTS:
+                    time.sleep(TRANSIENT_GET_DELAY_SECONDS)
+                    continue
+                raise RuntimeError(f"GitHub API GET failed: {path}") from exc
         if len(payload) > MAX_API_BYTES:
             raise ValueError("GitHub API response exceeds bounded ingestion limit")
         try:
@@ -463,6 +479,8 @@ def _validate_pull_request(
         raise ValueError("live pull request number drifted")
     if pr.get("state") != "open" or pr.get("draft") is not False:
         raise ValueError("automatic trusted admission requires an open non-draft pull request")
+    if pr.get("mergeable") is not True:
+        raise ValueError("automatic trusted admission requires a definitively mergeable pull request")
     head = _require_dict(pr.get("head"), label="live pull request head")
     base = _require_dict(pr.get("base"), label="live pull request base")
     head_repo = _require_dict(head.get("repo"), label="live pull request head repository")
@@ -612,11 +630,11 @@ def _select_scheduled_bot_pull_request(
     )
     if len(rows) >= MAX_PULL_REQUEST_CANDIDATES:
         raise ValueError("scheduled bot discovery reached the bounded pagination limit")
-    candidates: list[tuple[int, int, dict[str, Any], str]] = []
+    candidates: list[tuple[int, int, str]] = []
     for raw in rows:
         pr = _require_dict(raw, label="scheduled bot pull request")
         lane = _bot_lane(pr)
-        if lane is None or pr.get("draft") is not False or pr.get("mergeable") is not True:
+        if lane is None or pr.get("draft") is not False:
             continue
         head = _require_dict(pr.get("head"), label="scheduled bot head")
         base = _require_dict(pr.get("base"), label="scheduled bot base")
@@ -631,11 +649,31 @@ def _select_scheduled_bot_pull_request(
             continue
         number = _require_positive_int(pr.get("number"), label="scheduled bot PR number")
         _require_sha(head.get("sha"), label="scheduled bot head SHA")
-        candidates.append((BOT_LANE_ORDER[lane], number, pr, lane))
-    if not candidates:
-        return None
-    _, _, pr, lane = min(candidates, key=lambda row: (row[0], row[1]))
-    return pr, lane
+        candidates.append((BOT_LANE_ORDER[lane], number, lane))
+    for _, number, lane in sorted(candidates):
+        live = _require_dict(
+            api.get(f"/repos/{EXPECTED_REPOSITORY}/pulls/{number}"),
+            label="live scheduled bot pull request",
+        )
+        if _bot_lane(live) != lane:
+            continue
+        if live.get("state") != "open" or live.get("draft") is not False:
+            continue
+        head = _require_dict(live.get("head"), label="live scheduled bot head")
+        base = _require_dict(live.get("base"), label="live scheduled bot base")
+        head_repo = _require_dict(head.get("repo"), label="live scheduled bot head repository")
+        base_repo = _require_dict(base.get("repo"), label="live scheduled bot base repository")
+        if (
+            head_repo.get("full_name") != EXPECTED_REPOSITORY
+            or base_repo.get("full_name") != EXPECTED_REPOSITORY
+            or base.get("ref") != EXPECTED_DEFAULT_BRANCH
+            or base.get("sha") != trusted_sha
+            or live.get("mergeable") is not True
+        ):
+            continue
+        _require_sha(head.get("sha"), label="live scheduled bot head SHA")
+        return live, lane
+    return None
 
 
 def evaluate_admission(
