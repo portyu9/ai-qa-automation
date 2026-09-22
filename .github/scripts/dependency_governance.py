@@ -515,7 +515,7 @@ def require_green_checks(api: GitHubApi, head_sha: str, config: dict[str, Any]) 
             required=tuple(config["requiredChecks"]),
         )
     except TrustedQualificationError as exc:
-        raise PolicyBlock(str(exc)) from exc
+        raise PolicyBlock("trusted-main qualification is not yet admissible") from exc
 
 
 def assess(
@@ -770,7 +770,7 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
                 try:
                     require_automatic_trusted_gate(api, subject["headSha"])
                 except TrustedStatusError as exc:
-                    raise PolicyBlock(str(exc)) from exc
+                    raise PolicyBlock("automatic Trusted PR Gate is not yet admissible") from exc
                 merge_evidence = _merge(api, subject, config)
                 print(
                     json.dumps(

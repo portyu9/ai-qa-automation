@@ -663,7 +663,7 @@ def _publish_and_merge(
     try:
         require_automatic_trusted_gate(api, promotion["headSha"])
     except TrustedStatusError as exc:
-        raise PolicyBlock(str(exc)) from exc
+        raise PolicyBlock("automatic Trusted PR Gate is not yet admissible") from exc
     fresh_before_merge = api.get(f"/pulls/{promotion['number']}")
     _, rebound_before_merge = _validate_promotion(api, fresh_before_merge, config)
     if rebound_before_merge != promotion:

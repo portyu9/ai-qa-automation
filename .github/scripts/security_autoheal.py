@@ -1372,7 +1372,7 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
                 try:
                     require_automatic_trusted_gate(api, live["headSha"])
                 except TrustedStatusError as exc:
-                    raise PolicyBlock(str(exc)) from exc
+                    raise PolicyBlock("automatic Trusted PR Gate is not yet admissible") from exc
                 merge_evidence = _merge(api, number, validated_metadata, live, config)
                 print(
                     json.dumps(
