@@ -486,6 +486,8 @@ def validate_action_semantics(files: list[dict[str, Any]]) -> None:
 def verify_merge_subject(
     api: GitHubApi, number: int, head_sha: str, base_sha: str
 ) -> str:
+    # The PR summary's merge_commit_sha is advisory and may transiently be null.
+    # The live merge ref plus exact ordered parents is the authority-bearing subject.
     ref = api.get(f"/git/ref/pull/{number}/merge")
     if (ref or {}).get("ref") != f"refs/pull/{number}/merge":
         raise PolicyBlock("pull request merge ref identity is invalid")
