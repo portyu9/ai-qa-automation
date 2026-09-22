@@ -943,9 +943,7 @@ def _post_merge_ci_runs(api: GitHubApi, subject_sha: str) -> list[dict[str, Any]
     return api.list_all(f"/actions/runs?head_sha={encoded_sha}", max_pages=2)
 
 
-def _main_codeql_candidates(
-    rows: list[dict[str, Any]], subject_sha: str
-) -> list[dict[str, Any]]:
+def _main_codeql_candidates(rows: list[dict[str, Any]], subject_sha: str) -> list[dict[str, Any]]:
     subject_sha = _require_sha(subject_sha, "current-main CodeQL subject SHA")
     candidates: list[dict[str, Any]] = []
     for row in rows:
@@ -972,9 +970,7 @@ def _main_codeql_candidates(
     return candidates
 
 
-def _select_main_codeql_run(
-    rows: list[dict[str, Any]], subject_sha: str
-) -> dict[str, Any] | None:
+def _select_main_codeql_run(rows: list[dict[str, Any]], subject_sha: str) -> dict[str, Any] | None:
     candidates = _main_codeql_candidates(rows, subject_sha)
     if not candidates:
         return None
@@ -1366,9 +1362,7 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
         try:
             instance = alert.get("most_recent_instance") or {}
             if instance.get("ref") == "refs/heads/main":
-                alert_instance_sha = _require_sha(
-                    instance.get("commit_sha"), "alert instance SHA"
-                )
+                alert_instance_sha = _require_sha(instance.get("commit_sha"), "alert instance SHA")
                 if alert_instance_sha != main_sha:
                     refresh = _ensure_current_main_codeql(api, main_sha, config)
                     print(
@@ -1550,11 +1544,7 @@ def selftest(config: dict[str, Any]) -> None:
         def get(self, path: str) -> Any:
             if path == "/branches/main":
                 self.main_reads += 1
-                observed = (
-                    "4" * 40
-                    if self.move_main and self.main_reads >= 2
-                    else current_main_sha
-                )
+                observed = "4" * 40 if self.move_main and self.main_reads >= 2 else current_main_sha
                 return {"commit": {"sha": observed}}
             raise AutohealError(f"unexpected CodeQL refresh self-test GET path: {path}")
 
@@ -1585,9 +1575,7 @@ def selftest(config: dict[str, Any]) -> None:
             return None
 
     codeql_refresh_api = _MainCodeqlRefreshApi()
-    codeql_refresh = _ensure_current_main_codeql(
-        codeql_refresh_api, current_main_sha, config
-    )
+    codeql_refresh = _ensure_current_main_codeql(codeql_refresh_api, current_main_sha, config)
     expected_codeql_dispatch = (
         "/actions/workflows/codeql.yml/dispatches",
         {
@@ -1607,9 +1595,7 @@ def selftest(config: dict[str, Any]) -> None:
         raise AutohealError("exact-main CodeQL refresh evidence payload drifted")
 
     existing_codeql_api = _MainCodeqlRefreshApi(existing=True)
-    existing_codeql = _ensure_current_main_codeql(
-        existing_codeql_api, current_main_sha, config
-    )
+    existing_codeql = _ensure_current_main_codeql(existing_codeql_api, current_main_sha, config)
     if existing_codeql_api.calls:
         raise AutohealError("existing exact-main CodeQL success triggered a duplicate dispatch")
     if existing_codeql["codeqlDispatched"] is not False:
