@@ -661,7 +661,12 @@ def _publish_and_merge(
     api: GitHubApi, promotion: dict[str, Any], config: dict[str, Any]
 ) -> dict[str, Any]:
     try:
-        require_automatic_trusted_gate(api, promotion["headSha"])
+        require_automatic_trusted_gate(
+            api,
+            promotion["number"],
+            promotion["headSha"],
+            promotion["baseSha"],
+        )
     except TrustedStatusError as exc:
         raise PolicyBlock("automatic Trusted PR Gate is not yet admissible") from exc
     fresh_before_merge = api.get(f"/pulls/{promotion['number']}")
