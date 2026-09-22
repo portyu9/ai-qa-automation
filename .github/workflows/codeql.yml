@@ -14,7 +14,7 @@ on:
         required: true
         type: string
       subject_ref:
-        description: Exact main or generated-maintenance branch containing subject_sha
+        description: Exact main, Dependabot Actions, or generated-maintenance branch containing subject_sha
         required: true
         type: string
 
@@ -79,7 +79,8 @@ jobs:
               echo "::error::main CodeQL qualification SHA differs from trusted workflow subject"
               exit 1
             }
-          elif [[ "$EXPECTED_SUBJECT_REF" =~ ^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$ ]] || \
+          elif [[ "$EXPECTED_SUBJECT_REF" =~ ^dependabot/github_actions/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ ]] || \
+               [[ "$EXPECTED_SUBJECT_REF" =~ ^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$ ]] || \
                [[ "$EXPECTED_SUBJECT_REF" =~ ^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{12}$ ]]; then
             live_subject_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${EXPECTED_SUBJECT_REF}" --jq .object.sha)"
             test "$live_subject_sha" = "$EXPECTED_SUBJECT_SHA" || {
@@ -117,7 +118,7 @@ jobs:
   publish-qualified-codeql:
     name: Publish Exact-Subject CodeQL
     needs: qualified-codeql
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_ref != 'main' && needs.qualified-codeql.result == 'success' }}
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.subject_ref != 'main' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -128,12 +129,14 @@ jobs:
         env:
           EXPECTED_SUBJECT_SHA: ${{ inputs.subject_sha }}
           EXPECTED_SUBJECT_REF: ${{ inputs.subject_ref }}
+          ANALYSIS_RESULT: ${{ needs.qualified-codeql.result }}
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           [[ "$EXPECTED_SUBJECT_SHA" =~ ^[0-9a-f]{40}$ ]]
-          if [[ "$EXPECTED_SUBJECT_REF" =~ ^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$ ]] || \
+          if [[ "$EXPECTED_SUBJECT_REF" =~ ^dependabot/github_actions/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ ]] || \
+             [[ "$EXPECTED_SUBJECT_REF" =~ ^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$ ]] || \
              [[ "$EXPECTED_SUBJECT_REF" =~ ^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{12}$ ]]; then
             :
           else
@@ -142,13 +145,22 @@ jobs:
           fi
           live_subject_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${EXPECTED_SUBJECT_REF}" --jq .object.sha)"
           test "$live_subject_sha" = "$EXPECTED_SUBJECT_SHA"
+          conclusion="failure"
+          if [ "$ANALYSIS_RESULT" = "success" ]; then
+            conclusion="success"
+          fi
           details_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          external_id="aiqa-codeql-qualification:${EXPECTED_SUBJECT_SHA}:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}"
           payload="$(jq -nc \
             --arg head "$EXPECTED_SUBJECT_SHA" \
             --arg url "$details_url" \
-            '{name:"CodeQL",head_sha:$head,status:"completed",conclusion:"success",details_url:$url,output:{title:"Exact-subject CodeQL qualification",summary:"Trusted-main CodeQL analysis and branch-bound SARIF upload completed successfully for the immutable generated maintenance subject."}}')"
+            --arg external_id "$external_id" \
+            --arg conclusion "$conclusion" \
+            --arg analysis "$ANALYSIS_RESULT" \
+            '{name:"CodeQL",head_sha:$head,status:"completed",conclusion:$conclusion,details_url:$url,external_id:$external_id,output:{title:"Exact-subject CodeQL qualification",summary:("Trusted-main CodeQL analysis result: " + $analysis + ".")}}')"
           response="$(gh api --method POST "repos/${GITHUB_REPOSITORY}/check-runs" --input - <<<"$payload")"
           test "$(jq -r '.name' <<<"$response")" = "CodeQL"
           test "$(jq -r '.head_sha' <<<"$response")" = "$EXPECTED_SUBJECT_SHA"
           test "$(jq -r '.status' <<<"$response")" = "completed"
-          test "$(jq -r '.conclusion' <<<"$response")" = "success"
+          test "$(jq -r '.conclusion' <<<"$response")" = "$conclusion"
+          test "$(jq -r '.external_id' <<<"$response")" = "$external_id"
