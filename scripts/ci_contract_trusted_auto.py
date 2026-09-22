@@ -27,7 +27,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
-    "6c7d3f52c5d3743120011dad793ebf01d4752700"  # pragma: allowlist secret
+    "4c61f2e733ce2a4181c05232fe6713a5b21c04d2"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
     "6c5dd5dda830a4d97c82068f360e99b8800a020e"  # pragma: allowlist secret
@@ -92,6 +92,16 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
             "trusted-pr-auto.yml must be triggered only by completed reviewed CI/CodeQL runs "
             "or the reviewed five-minute schedule"
         )
+
+    concurrency = _base._semantic_text(_base._top_level_block(text, "concurrency"))
+    required_concurrency = (
+        "concurrency:",
+        "  group: trusted-pr-auto-${{ github.event_name == 'schedule' && 'scheduled-bot-reconcile' || github.event.workflow_run.id }}",
+        "  cancel-in-progress: false",
+    )
+    for fragment in required_concurrency:
+        if fragment not in concurrency:
+            raise ValueError("trusted automatic schedule concurrency contract drifted")
 
     bot_codeql = _base._semantic_text(_base._job_block(text, "bot-codeql"))
     semantic_without_bot_codeql = semantic.replace(bot_codeql, "")
