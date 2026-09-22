@@ -25,6 +25,12 @@ POST_MERGE_CI_NAME = "CI — ƳƤ AI QA Automation Framework"
 POST_MERGE_CI_EVENTS = {"push", "workflow_dispatch"}
 POST_MERGE_CI_REGISTRATION_ATTEMPTS = 15
 POST_MERGE_CI_REGISTRATION_DELAY_SECONDS = 2
+MAIN_CODEQL_WORKFLOW = "codeql.yml"
+MAIN_CODEQL_PATH = ".github/workflows/codeql.yml"
+MAIN_CODEQL_NAME = "CodeQL"
+MAIN_CODEQL_EVENTS = {"push", "workflow_dispatch", "schedule"}
+MAIN_CODEQL_REGISTRATION_ATTEMPTS = 15
+MAIN_CODEQL_REGISTRATION_DELAY_SECONDS = 2
 GITHUB_ACTIONS_LOGIN = "github-actions[bot]"
 GITHUB_ACTIONS_USER_ID = 41898282
 MARKER_PREFIX = "<!-- aiqa-codeql-autoheal:"
@@ -937,6 +943,114 @@ def _post_merge_ci_runs(api: GitHubApi, subject_sha: str) -> list[dict[str, Any]
     return api.list_all(f"/actions/runs?head_sha={encoded_sha}", max_pages=2)
 
 
+def _main_codeql_candidates(
+    rows: list[dict[str, Any]], subject_sha: str
+) -> list[dict[str, Any]]:
+    subject_sha = _require_sha(subject_sha, "current-main CodeQL subject SHA")
+    candidates: list[dict[str, Any]] = []
+    for row in rows:
+        if (
+            row.get("name") != MAIN_CODEQL_NAME
+            or row.get("path") != MAIN_CODEQL_PATH
+            or row.get("head_branch") != "main"
+            or row.get("head_sha") != subject_sha
+            or row.get("event") not in MAIN_CODEQL_EVENTS
+        ):
+            continue
+        attempt = row.get("run_attempt")
+        if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
+            raise AutohealError("exact-main CodeQL run has invalid run_attempt")
+        run_id = row.get("id")
+        if not isinstance(run_id, int) or isinstance(run_id, bool) or run_id < 1:
+            raise AutohealError("exact-main CodeQL run has invalid run id")
+        status = row.get("status")
+        if status not in {"queued", "in_progress", "completed"}:
+            raise AutohealError(f"exact-main CodeQL run has invalid status: {status}")
+        if status == "completed" and row.get("conclusion") != "success":
+            continue
+        candidates.append(row)
+    return candidates
+
+
+def _select_main_codeql_run(
+    rows: list[dict[str, Any]], subject_sha: str
+) -> dict[str, Any] | None:
+    candidates = _main_codeql_candidates(rows, subject_sha)
+    if not candidates:
+        return None
+    return max(candidates, key=lambda row: (int(row["id"]), int(row["run_attempt"])))
+
+
+def _main_codeql_runs(api: GitHubApi, subject_sha: str) -> list[dict[str, Any]]:
+    encoded_sha = urllib.parse.quote(
+        _require_sha(subject_sha, "current-main CodeQL subject SHA"), safe=""
+    )
+    return api.list_all(f"/actions/runs?head_sha={encoded_sha}", max_pages=2)
+
+
+def _ensure_current_main_codeql(
+    api: GitHubApi,
+    subject_sha: str,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    subject_sha = _require_sha(subject_sha, "current-main CodeQL subject SHA")
+    if _current_main(api, config) != subject_sha:
+        raise AutohealError("current main changed before CodeQL refresh admission")
+
+    rows = _main_codeql_runs(api, subject_sha)
+    existing = _select_main_codeql_run(rows, subject_sha)
+    if existing is not None:
+        return {
+            "codeqlRunId": int(existing["id"]),
+            "codeqlRunAttempt": int(existing["run_attempt"]),
+            "codeqlEvent": str(existing["event"]),
+            "codeqlStatus": str(existing["status"]),
+            "codeqlDispatched": False,
+        }
+
+    observed_ids = {
+        int(row["id"])
+        for row in rows
+        if isinstance(row.get("id"), int)
+        and not isinstance(row.get("id"), bool)
+        and int(row["id"]) > 0
+    }
+    api.post(
+        f"/actions/workflows/{MAIN_CODEQL_WORKFLOW}/dispatches",
+        {
+            "ref": "main",
+            "inputs": {"subject_sha": subject_sha, "subject_ref": "main"},
+        },
+    )
+
+    registered: dict[str, Any] | None = None
+    for attempt in range(MAIN_CODEQL_REGISTRATION_ATTEMPTS):
+        candidate = _select_main_codeql_run(_main_codeql_runs(api, subject_sha), subject_sha)
+        if candidate is not None and int(candidate["id"]) not in observed_ids:
+            if candidate.get("event") != "workflow_dispatch":
+                raise AutohealError(
+                    "current-main CodeQL refresh appeared through an unexpected event "
+                    "after explicit dispatch"
+                )
+            registered = candidate
+            break
+        if attempt + 1 < MAIN_CODEQL_REGISTRATION_ATTEMPTS:
+            time.sleep(MAIN_CODEQL_REGISTRATION_DELAY_SECONDS)
+    if registered is None:
+        raise AutohealError(
+            f"explicit CodeQL dispatch did not register for exact current main {subject_sha}"
+        )
+    if _current_main(api, config) != subject_sha:
+        raise AutohealError("current main changed after CodeQL refresh registration")
+    return {
+        "codeqlRunId": int(registered["id"]),
+        "codeqlRunAttempt": int(registered["run_attempt"]),
+        "codeqlEvent": str(registered["event"]),
+        "codeqlStatus": str(registered["status"]),
+        "codeqlDispatched": True,
+    }
+
+
 def _verify_actual_merge_commit(
     api: GitHubApi,
     result: dict[str, Any],
@@ -1250,6 +1364,30 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
         if created >= capacity:
             break
         try:
+            instance = alert.get("most_recent_instance") or {}
+            if instance.get("ref") == "refs/heads/main":
+                alert_instance_sha = _require_sha(
+                    instance.get("commit_sha"), "alert instance SHA"
+                )
+                if alert_instance_sha != main_sha:
+                    refresh = _ensure_current_main_codeql(api, main_sha, config)
+                    print(
+                        json.dumps(
+                            {
+                                "alert": alert.get("number"),
+                                "decision": (
+                                    "codeql-refresh-dispatched"
+                                    if refresh["codeqlDispatched"]
+                                    else "codeql-refresh-waiting"
+                                ),
+                                "staleSha": alert_instance_sha,
+                                "currentMain": main_sha,
+                                **refresh,
+                            },
+                            sort_keys=True,
+                        )
+                    )
+                    return remaining_repairs + created
             subject = validate_alert(alert, main_sha, config)
             if subject["number"] in active_alerts:
                 continue
@@ -1369,6 +1507,122 @@ def selftest(config: dict[str, Any]) -> None:
             pass
         else:
             raise AutohealError(f"unreviewed qualification ref was accepted: {bad_ref}")
+
+    current_main_sha = "6" * 40
+    canonical_codeql = {
+        "id": 801,
+        "run_attempt": 1,
+        "name": MAIN_CODEQL_NAME,
+        "path": MAIN_CODEQL_PATH,
+        "head_branch": "main",
+        "head_sha": current_main_sha,
+        "event": "workflow_dispatch",
+        "status": "queued",
+        "conclusion": None,
+    }
+    selected_codeql = _select_main_codeql_run([canonical_codeql], current_main_sha)
+    if selected_codeql != canonical_codeql:
+        raise AutohealError("canonical exact-main CodeQL refresh run was not selected")
+    for field, value in (
+        ("head_sha", "5" * 40),
+        ("path", ".github/workflows/ci.yml"),
+        ("event", "pull_request"),
+    ):
+        drifted = {**canonical_codeql, field: value}
+        if _select_main_codeql_run([drifted], current_main_sha) is not None:
+            raise AutohealError(f"drifted exact-main CodeQL {field} was accepted")
+    failed_codeql = {
+        **canonical_codeql,
+        "status": "completed",
+        "conclusion": "failure",
+    }
+    if _select_main_codeql_run([failed_codeql], current_main_sha) is not None:
+        raise AutohealError("failed exact-main CodeQL run was accepted as refresh evidence")
+
+    class _MainCodeqlRefreshApi(GitHubApi):
+        def __init__(self, *, move_main: bool = False, existing: bool = False) -> None:
+            self.dispatched = False
+            self.move_main = move_main
+            self.existing = existing
+            self.main_reads = 0
+            self.calls: list[tuple[str, dict[str, Any] | None]] = []
+
+        def get(self, path: str) -> Any:
+            if path == "/branches/main":
+                self.main_reads += 1
+                observed = (
+                    "4" * 40
+                    if self.move_main and self.main_reads >= 2
+                    else current_main_sha
+                )
+                return {"commit": {"sha": observed}}
+            raise AutohealError(f"unexpected CodeQL refresh self-test GET path: {path}")
+
+        def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+            expected = f"/actions/runs?head_sha={current_main_sha}"
+            if path != expected or max_pages != 2:
+                raise AutohealError(f"unexpected CodeQL refresh self-test list path: {path}")
+            if self.existing or self.dispatched:
+                row = {
+                    **canonical_codeql,
+                    "status": "completed" if self.existing else "queued",
+                    "conclusion": "success" if self.existing else None,
+                }
+                return [row]
+            return []
+
+        def post(
+            self,
+            path: str,
+            payload: dict[str, Any] | None = None,
+            *,
+            token: str | None = None,
+        ) -> Any:
+            if token is not None:
+                raise AutohealError("CodeQL refresh self-test received unexpected alternate token")
+            self.calls.append((path, payload))
+            self.dispatched = True
+            return None
+
+    codeql_refresh_api = _MainCodeqlRefreshApi()
+    codeql_refresh = _ensure_current_main_codeql(
+        codeql_refresh_api, current_main_sha, config
+    )
+    expected_codeql_dispatch = (
+        "/actions/workflows/codeql.yml/dispatches",
+        {
+            "ref": "main",
+            "inputs": {"subject_sha": current_main_sha, "subject_ref": "main"},
+        },
+    )
+    if codeql_refresh_api.calls != [expected_codeql_dispatch]:
+        raise AutohealError("exact-main CodeQL refresh dispatch payload drifted")
+    if codeql_refresh != {
+        "codeqlRunId": 801,
+        "codeqlRunAttempt": 1,
+        "codeqlEvent": "workflow_dispatch",
+        "codeqlStatus": "queued",
+        "codeqlDispatched": True,
+    }:
+        raise AutohealError("exact-main CodeQL refresh evidence payload drifted")
+
+    existing_codeql_api = _MainCodeqlRefreshApi(existing=True)
+    existing_codeql = _ensure_current_main_codeql(
+        existing_codeql_api, current_main_sha, config
+    )
+    if existing_codeql_api.calls:
+        raise AutohealError("existing exact-main CodeQL success triggered a duplicate dispatch")
+    if existing_codeql["codeqlDispatched"] is not False:
+        raise AutohealError("existing exact-main CodeQL success was not reused")
+
+    moved_codeql_api = _MainCodeqlRefreshApi(move_main=True)
+    try:
+        _ensure_current_main_codeql(moved_codeql_api, current_main_sha, config)
+    except AutohealError as exc:
+        if str(exc) != "current main changed after CodeQL refresh registration":
+            raise AutohealError("moved-main CodeQL refresh guard changed semantics") from exc
+    else:
+        raise AutohealError("moved main was accepted after CodeQL refresh registration")
 
     merge_sha = "9" * 40
     base_sha = "a" * 40
