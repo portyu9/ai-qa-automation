@@ -483,9 +483,7 @@ def validate_action_semantics(files: list[dict[str, Any]]) -> None:
                 raise PolicyBlock(f"action SHA did not change: {action}")
 
 
-def verify_merge_subject(
-    api: GitHubApi, number: int, head_sha: str, base_sha: str
-) -> str:
+def verify_merge_subject(api: GitHubApi, number: int, head_sha: str, base_sha: str) -> str:
     # The PR summary's merge_commit_sha is advisory and may transiently be null.
     # The live merge ref plus exact ordered parents is the authority-bearing subject.
     ref = api.get(f"/git/ref/pull/{number}/merge")
