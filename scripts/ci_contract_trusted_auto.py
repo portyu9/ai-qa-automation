@@ -156,8 +156,8 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "      security-events: read",
         "          ref: ${{ needs.preflight.outputs.trusted_sha }}",
         "          persist-credentials: false",
-        "          python-version: \"3.11.16\"",
-        "          python-version: \"3.14.7\"",
+        '          python-version: "3.11.16"',
+        '          python-version: "3.14.7"',
         "PROMOTION_PYTHON311",
         "PROMOTION_PYTHON314",
         "scripts/auto_trusted_bot_admission.py",
@@ -170,9 +170,10 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     for fragment in required_bot:
         if fragment not in bot_authority:
             raise ValueError(f"governed bot authority is missing reviewed fragment: {fragment}")
-    if "${{ secrets." in bot_authority or "write" in _base._permissions(
-        _base._job_block(text, "bot-authority")
-    ).values():
+    if (
+        "${{ secrets." in bot_authority
+        or "write" in _base._permissions(_base._job_block(text, "bot-authority")).values()
+    ):
         raise ValueError("governed bot authority must remain secret-free and read-only")
 
     if "needs.bot-authority.result" in bot_authority:
