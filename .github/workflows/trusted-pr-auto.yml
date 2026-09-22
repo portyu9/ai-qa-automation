@@ -44,7 +44,7 @@ jobs:
       protected_changes_json: ${{ steps.admission.outputs.protected_changes_json }}
     steps:
       - name: Checkout trusted default-branch control plane
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -54,7 +54,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11.16"
 
@@ -115,7 +115,7 @@ jobs:
       security-events: read
     steps:
       - name: Checkout trusted default-branch bot policy only
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.trusted_sha }}
           persist-credentials: false
@@ -130,7 +130,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_TRUSTED_SHA"
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11.16"
 
@@ -138,7 +138,7 @@ jobs:
         run: printf 'PROMOTION_PYTHON311=%s\n' "$(command -v python)" >> "$GITHUB_ENV"
 
       - name: Set up Python 3.14
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14.7"
 
@@ -171,7 +171,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout exact prospective merge subject
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.merge_sha }}
           persist-credentials: false
@@ -259,7 +259,7 @@ jobs:
       CI_SUBJECT_SHA: ${{ needs.preflight.outputs.merge_sha }}
     steps:
       - name: Checkout exact validation subject
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.merge_sha }}
           persist-credentials: false
@@ -271,7 +271,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_MERGE_SHA"
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11.16"
 
@@ -396,7 +396,7 @@ jobs:
 
       - name: Upload trusted supply-chain evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: trusted-supply-chain-evidence
           path: |
@@ -435,7 +435,7 @@ jobs:
             evidence-suffix: py314
     steps:
       - name: Checkout exact validation subject
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.merge_sha }}
           persist-credentials: false
@@ -446,7 +446,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_MERGE_SHA"
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -488,7 +488,7 @@ jobs:
 
       - name: Upload trusted deterministic test evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: trusted-deterministic-tests-${{ matrix.evidence-suffix }}
           path: artifacts/ci/
@@ -505,7 +505,7 @@ jobs:
       CI_SUBJECT_SHA: ${{ needs.preflight.outputs.merge_sha }}
     steps:
       - name: Checkout exact validation subject
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.merge_sha }}
           persist-credentials: false
@@ -516,7 +516,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_MERGE_SHA"
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11.16"
 
@@ -554,7 +554,7 @@ jobs:
 
       - name: Upload trusted deterministic control evaluation evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: trusted-deterministic-control-evals
           path: artifacts/ci/deterministic-evals.json
@@ -571,7 +571,7 @@ jobs:
       CI_SUBJECT_SHA: ${{ needs.preflight.outputs.merge_sha }}
     steps:
       - name: Checkout exact validation subject
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.merge_sha }}
           persist-credentials: false
@@ -583,7 +583,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_MERGE_SHA"
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11.16"
 
@@ -618,7 +618,7 @@ jobs:
 
       - name: Upload trusted security scan metadata
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: trusted-security-scan-metadata
           path: artifacts-secret-scan.json
@@ -635,7 +635,7 @@ jobs:
       CI_SUBJECT_SHA: ${{ needs.preflight.outputs.merge_sha }}
     steps:
       - name: Checkout exact validation subject
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.merge_sha }}
           persist-credentials: false
@@ -646,7 +646,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_MERGE_SHA"
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11.16"
 
@@ -678,7 +678,7 @@ jobs:
 
       - name: Upload trusted browser test metadata
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: trusted-browser-reference-sut
           path: artifacts-browser.xml
@@ -725,7 +725,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout trusted workflow revision
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.trusted_sha }}
           persist-credentials: false
@@ -738,7 +738,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_TRUSTED_SHA"
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11.16"
 
