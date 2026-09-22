@@ -45,22 +45,27 @@ def _responses(*, changed_path: str | None = None) -> dict[str, Any]:
     pr_number = 65
     live_run = {
         "id": run_id,
-        "workflow_id": preflight.EXPECTED_WORKFLOW_ID,
-        "name": preflight.EXPECTED_WORKFLOW_NAME,
-        "path": preflight.EXPECTED_WORKFLOW_PATH,
+        "run_attempt": 1,
+        "workflow_id": preflight.EXPECTED_CI_WORKFLOW_ID,
+        "name": preflight.EXPECTED_CI_WORKFLOW_NAME,
+        "path": preflight.EXPECTED_CI_WORKFLOW_PATH,
         "event": "pull_request",
         "status": "completed",
         "conclusion": "success",
         "head_sha": HEAD,
         "repository": {"full_name": preflight.EXPECTED_REPOSITORY},
         "head_repository": {"full_name": preflight.EXPECTED_REPOSITORY},
-        "actor": {"login": preflight.EXPECTED_OWNER},
-        "triggering_actor": {"login": preflight.EXPECTED_OWNER},
+        "actor": {"login": preflight.EXPECTED_OWNER, "id": preflight.EXPECTED_OWNER_ID},
+        "triggering_actor": {
+            "login": preflight.EXPECTED_OWNER,
+            "id": preflight.EXPECTED_OWNER_ID,
+        },
     }
     candidate = {
         "number": pr_number,
         "state": "open",
         "head": {
+            "ref": "fix/trusted-owner-routine",
             "sha": HEAD,
             "repo": {"full_name": preflight.EXPECTED_REPOSITORY},
         },
@@ -128,6 +133,8 @@ def test_exact_live_subject_without_protected_changes_is_auto_eligible() -> None
     admission = preflight.evaluate_admission(FakeAPI(_responses()), event=_event())
 
     assert admission.eligible is True
+    assert admission.lane == "owner-routine"
+    assert admission.qualification_ready is True
     assert admission.pr_number == 65
     assert admission.head_sha == HEAD
     assert admission.base_sha == BASE
@@ -167,7 +174,7 @@ def test_fork_head_is_rejected_before_pr_admission() -> None:
         "full_name"
     ] = "attacker/fork"
 
-    with pytest.raises(ValueError, match="fork/external-head"):
+    with pytest.raises(ValueError, match="repository identity mismatch"):
         preflight.evaluate_admission(FakeAPI(responses), event=_event())
 
 
@@ -212,24 +219,22 @@ def test_wrong_base_repository_fails_closed() -> None:
 
 
 @pytest.mark.parametrize(
-    ("field", "value", "message"),
+    ("field", "value"),
     [
-        ("workflow_id", 999, "reviewed CI workflow"),
-        ("path", ".github/workflows/rogue.yml", "name/path"),
-        ("event", "push", "only accepts pull_request"),
-        ("conclusion", "failure", "completed successful"),
+        ("workflow_id", 999),
+        ("path", ".github/workflows/rogue.yml"),
+        ("event", "push"),
+        ("conclusion", "failure"),
     ],
 )
-def test_wrong_workflow_identity_or_result_fails_closed(
+def test_unreviewed_or_unsuccessful_workflow_wake_is_ignored(
     field: str,
     value: object,
-    message: str,
 ) -> None:
     responses = _responses()
     responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"][field] = value
 
-    with pytest.raises(ValueError, match=message):
-        preflight.evaluate_admission(FakeAPI(responses), event=_event())
+    assert preflight.evaluate_admission(FakeAPI(responses), event=_event()) is None
 
 
 @pytest.mark.parametrize(
@@ -239,6 +244,43 @@ def test_wrong_workflow_identity_or_result_fails_closed(
         ("type", "tag", "point to a commit"),
     ],
 )
+@pytest.mark.parametrize(
+    ("user", "branch", "expected_lane"),
+    [
+        (
+            {"login": preflight.DEPENDABOT_LOGIN, "id": preflight.DEPENDABOT_USER_ID},
+            "dependabot/github_actions/actions/checkout-7",
+            "dependabot-actions",
+        ),
+        (
+            {"login": preflight.GITHUB_ACTIONS_LOGIN, "id": preflight.GITHUB_ACTIONS_USER_ID},
+            "automation/dependency-promotion-171-abcdef123456",
+            "dependency-promotion",
+        ),
+        (
+            {"login": preflight.GITHUB_ACTIONS_LOGIN, "id": preflight.GITHUB_ACTIONS_USER_ID},
+            "automation/codeql-autoheal-7-abcdef123456",
+            "security-autoheal",
+        ),
+    ],
+)
+def test_governed_bot_lane_requires_exact_identity_and_branch_grammar(
+    user: dict[str, object],
+    branch: str,
+    expected_lane: str,
+) -> None:
+    pr = {"user": user, "head": {"ref": branch}}
+    assert preflight._bot_lane(pr) == expected_lane
+
+
+def test_governed_bot_lane_rejects_lookalike_identity() -> None:
+    pr = {
+        "user": {"login": preflight.GITHUB_ACTIONS_LOGIN, "id": 1},
+        "head": {"ref": "automation/codeql-autoheal-7-abcdef123456"},
+    }
+    assert preflight._bot_lane(pr) is None
+
+
 def test_main_ref_identity_and_type_fail_closed(field: str, value: str, message: str) -> None:
     responses = _responses()
     main_ref = responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/git/ref/heads/main"]
