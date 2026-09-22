@@ -351,4 +351,3 @@ def test_lease_namespace_substitution_cannot_preserve_failed_clean_closure_autho
     )
     assert recovered["status"] == "BLOCKED"
     assert recovered["previous_run_id"] == "run-substituted-close"
-
