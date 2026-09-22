@@ -57,17 +57,22 @@ def report_automatic_result(
     else:
         state = "failure"
         description = f"Automatic trusted validation ended {validation_result}"
+    bound_target_url = (
+        f"{target_url}?pr={current.number}&base={current.base_sha}"
+        f"&head={current.head_sha}&merge={current.merge_sha}"
+    )
     api.post_status(
         sha=current.head_sha,
         state=state,
         description=description,
-        target_url=target_url,
+        target_url=bound_target_url,
     )
     return {
         "result": state.upper(),
         "status_posted": True,
         "status_context": TRUSTED_STATUS_CONTEXT,
         "status_subject": current.head_sha,
+        "status_target_url": bound_target_url,
         "validation_result": validation_result,
         "authorization_mode": "automatic-default-branch",
     }
