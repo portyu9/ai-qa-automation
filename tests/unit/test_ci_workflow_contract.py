@@ -119,7 +119,7 @@ def test_ci_contract_rejects_client_payload_subject_reintroduction(tmp_path: Pat
     assert marker in text
     path.write_text(text.replace(marker, replacement, 1), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="forbidden authority token"):
+    with pytest.raises(ValueError, match="environment/subject binding differs"):
         ci_contract.verify_ci_contract(root)
 
 
