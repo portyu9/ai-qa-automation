@@ -15,7 +15,10 @@ def test_reviewed_definition_blob_constants_match_repository_bytes() -> None:
     ci_text = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     docker_text = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 
-    assert ci_contract._workflow_structure_sha1(ci_text) == ci_contract.EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA
+    assert (
+        ci_contract._workflow_structure_sha1(ci_text)
+        == ci_contract.EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA
+    )
     assert supply_chain._git_blob_sha1(docker_text) == supply_chain.EXPECTED_DOCKERFILE_BLOB_SHA
 
 
