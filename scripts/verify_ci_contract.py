@@ -35,19 +35,19 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
-    "16636517d918534c9c312add36752b1e06a39392"  # pragma: allowlist secret
+    "10873277e1cb3e17b33ef755959437d72e519a98"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
-    "12eea35eea079eaeb864507c27b9325a882295c0"  # pragma: allowlist secret
+    "6f69b2729d7d8d609859c687f1fbb0187b7dce3f"  # pragma: allowlist secret
 )
 EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
-    "fbe47dcf9a201dfb9da390b01e68f5b662689538"  # pragma: allowlist secret
+    "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
-    "fe24b8435de315ce74c72f04f05b4dc141575abb"  # pragma: allowlist secret
+    "1906a7c724b6fda4219bcbe2e1b678549d177af6"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
-    "158a4d0444eb46ddbd438aa2c7466a8b0dddc26f"  # pragma: allowlist secret
+    "5b8dc48b32baf0e9b3102f4d95fb60d484233305"  # pragma: allowlist secret
 )
 EXPECTED_CODEQL_MAJOR = 4
 CODEQL_ACTION_RE = re.compile(
