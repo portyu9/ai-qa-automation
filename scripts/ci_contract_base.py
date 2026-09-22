@@ -501,7 +501,7 @@ def _require_exact_supply_chain_upload_step(job: str) -> None:
             f"      - name: {SUPPLY_CHAIN_UPLOAD_STEP_NAME}",
             "        if: always()",
             "        uses: actions/upload-artifact@"
-            f"{EXPECTED_ACTION_SHAS['actions/upload-artifact']} # v7",
+            f"{EXPECTED_ACTION_SHAS['actions/upload-artifact']} # v7.0.1",
             "        with:",
             "          name: supply-chain-evidence",
             "          path: |",
@@ -820,7 +820,7 @@ def _verify_trusted_status_job(text: str) -> dict[str, Any]:
         "    environment:\n      name: trusted-pr-gate\n      deployment: false",
         "    permissions:\n      contents: read",
         "      - name: Checkout trusted workflow revision",
-        f"        uses: actions/checkout@{EXPECTED_ACTION_SHAS['actions/checkout']} # v7",
+        f"        uses: actions/checkout@{EXPECTED_ACTION_SHAS['actions/checkout']} # v7.0.1",
         "          ref: ${{ github.sha }}",
         "          persist-credentials: false",
         "      - name: Verify trusted workflow revision",

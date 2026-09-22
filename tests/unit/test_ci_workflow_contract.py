@@ -499,7 +499,7 @@ def test_ci_contract_rejects_noop_supply_chain_evidence_upload(tmp_path: Path) -
         f"      - name: {ci_contract.SUPPLY_CHAIN_UPLOAD_STEP_NAME}\n"
         "        if: always()\n"
         "        uses: actions/upload-artifact@"
-        f"{ci_contract.EXPECTED_ACTION_SHAS['actions/upload-artifact']} # v7\n"
+        f"{ci_contract.EXPECTED_ACTION_SHAS['actions/upload-artifact']} # v7.0.1\n"
     )
     replacement = (
         f"      - name: {ci_contract.SUPPLY_CHAIN_UPLOAD_STEP_NAME}\n"
