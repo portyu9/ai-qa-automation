@@ -16,7 +16,7 @@ The repository and external control plane intentionally separate these surfaces:
 | Surface | Trigger / wake-up | Authority | Intended role |
 |---|---|---|---|
 | `.github/workflows/ci.yml` | `pull_request`, `push` to `main`, `merge_group` | read-only, secret-free validation jobs | ordinary deterministic development evidence and exact build/test artifacts |
-| `.github/workflows/trusted-pr-auto.yml` | reviewed CI or CodeQL completion through `workflow_run` | trusted default-branch owner/bot admission; App credential only in the terminal reporter | owner-routine zero-drift authorization plus finite governed-bot exact-provenance authorization |
+| `.github/workflows/trusted-pr-auto.yml` | reviewed CI/CodeQL completion through `workflow_run` for owner-routine wakes; serialized five-minute default-branch schedule for governed-bot reconciliation | trusted default-branch owner/bot admission; App credential only in the terminal reporter | owner-routine zero-drift authorization plus finite governed-bot exact-provenance authorization |
 | external `scripts/trusted_gate_service/` deployment | GitHub App `workflow_run` webhook | independently deployed code, independently administered one-shot policy, durable external state, dedicated App credential | protected-maintenance authorization for exact reviewed protected-root transitions |
 | `.github/workflows/release-candidate.yml` | explicit `workflow_dispatch` from `main` | read-only, secret-free, non-publishing package verification | exact-current-main/version/reproducible-wheel release-preparation evidence |
 | `.github/workflows/manual-validation.yml` | `workflow_dispatch` | `credentialed-validation` Environment for selected provider evidence | optional live/model evidence; never protected merge authority |
@@ -62,7 +62,7 @@ Before hash-locked dependency installation, `scripts/verify_build_authority.py` 
 
 ## Automatic Trusted PR Gate paths
 
-`.github/workflows/trusted-pr-auto.yml` is the repository-owned automatic status authority. A `workflow_run` event is only a wake-up signal; trusted default-branch bytes independently re-fetch the live run, current `main`, PR, candidate head, prospective merge, ordered merge parents, and qualification evidence before any App credential is available.
+`.github/workflows/trusted-pr-auto.yml` is the repository-owned automatic status authority. For owner-routine changes, a reviewed `workflow_run` event is only a wake-up signal. Governed bots instead use a serialized five-minute default-branch schedule that discovers a bounded same-repository candidate and fresh-GETs its live state. In both cases trusted default-branch bytes independently re-fetch current `main`, the PR, candidate head, prospective merge, and ordered merge parents before any App credential is available.
 
 ### Owner-routine path
 
@@ -76,13 +76,13 @@ Three finite bot lanes are autonomous:
 - GitHub Actions dependency-promotion PRs under `automation/dependency-promotion-...`;
 - GitHub Actions CodeQL auto-heal PRs under `automation/codeql-autoheal-...`.
 
-A bot login is never sufficient. Trusted-main qualification publishes candidate-bound `Required PR Gate` and `CodeQL` checks with exact workflow-run/attempt external IDs. Admission requires canonical bot numeric identity, exact branch grammar, same-repository ownership, current-base binding, exact source lineage/marker/fingerprint, lane-specific changed-path semantics, successful trusted-main CI and CodeQL qualification, and an exact prospective merge. Dependency promotions are deterministically regenerated under trusted interpreters; security repairs are rebound to the live CodeQL alert and deterministic-only verifier repairs must reproduce the code-owned bytes exactly.
+A bot login is never sufficient. The trusted-main scheduled reconciler admits only canonical bot numeric identity, reviewed branch grammar, same-repository ownership, definitive mergeability on exact current `main`, exact source lineage/marker/fingerprint, lane-specific changed-path semantics, and an exact prospective merge. Dependency promotions are deterministically regenerated under trusted interpreters; security repairs are rebound to the live CodeQL alert and deterministic-only verifier repairs must reproduce the code-owned bytes exactly. The full trusted validation graph then executes against the prospective merge. A separate bot-only CodeQL job analyzes the exact governed head ref/SHA, and the subject guard requires the governed head tree and prospective-merge tree to be byte-identical before that CodeQL result can support merge-subject authority.
 
 The trusted workflow then runs the full supply-chain, quality, deterministic-evaluation, security, and Playwright suite against the prospective merge. Immediately before publication it re-runs live admission and terminal bot-policy proof. Only then does the terminal reporter enter Environment `trusted-pr-gate`, mint the dedicated App token, and publish `Trusted PR Gate`.
 
-The App status target binds the exact PR number, base SHA, head SHA, and prospective merge SHA to the exact trusted-gate workflow run. Merge controllers have no App status-write credential: they independently re-read that App-authored binding, current PR/base/head/merge-ref/parents, qualification evidence, and their lane policy before merging. Dependency governance and Security Auto-Heal also wake on completion of the Trusted PR Auto Gate so status publication has an event-driven convergence path.
+The App status target binds the exact PR number, base SHA, head SHA, and prospective merge SHA to the exact trusted-gate workflow run. Merge controllers have no App status-write credential: they independently re-read that App-authored binding, current PR/base/head/merge-ref/parents, and their lane policy before merging. After merge they require exact ordered `(base, head)` parents, a merge tree identical to the validated bot head tree, and the merge SHA to be current `main`; they do not manufacture post-merge green through nested workflow dispatch. Dependency governance and Security Auto-Heal also wake on completion of the Trusted PR Auto Gate so status publication has an event-driven convergence path.
 
-Any API failure, ambiguity, fork, stale base, malformed/truncated response, parent mismatch, bot/source provenance mismatch, missing qualification, or terminal subject drift is non-PASS truth.
+Any API failure, ambiguity, fork, stale base, non-definitive mergeability, malformed/truncated response, parent/tree mismatch, bot/source provenance mismatch, failed trusted validation/CodeQL, or terminal subject drift is non-PASS truth.
 
 ## Unrecognized protected-maintenance external path
 
