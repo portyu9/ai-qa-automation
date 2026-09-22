@@ -41,6 +41,11 @@ DEPENDABOT_ACTION_REF_RE = re.compile(
 PROMOTION_REF_RE = re.compile(r"^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$")
 AUTOHEAL_REF_RE = re.compile(r"^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{12}$")
 BOT_LANES = {"dependabot-actions", "dependency-promotion", "security-autoheal"}
+BOT_LANE_ORDER = {
+    "security-autoheal": 0,
+    "dependabot-actions": 1,
+    "dependency-promotion": 2,
+}
 PROTECTED_PATHS = (
     ".github",
     "scripts",
@@ -76,6 +81,7 @@ class Wake:
 class Admission:
     lane: str
     pr_number: int
+    head_ref: str
     head_sha: str
     base_sha: str
     merge_sha: str
@@ -580,9 +586,14 @@ def _resolve_subject(
         api.get(f"/repos/{EXPECTED_REPOSITORY}/git/trees/{merge_tree_sha}?recursive=1"),
         label="merge recursive tree",
     )
+    head_ref = _require_str(
+        _require_dict(pr.get("head"), label="live pull request head").get("ref"),
+        label="live pull request head ref",
+    )
     return Admission(
         lane=lane,
         pr_number=pr_number,
+        head_ref=head_ref,
         head_sha=head_sha,
         base_sha=base_sha,
         merge_sha=merge_sha,
@@ -592,12 +603,68 @@ def _resolve_subject(
     )
 
 
-def evaluate_admission(api: GitHubAPI, *, event: dict[str, Any]) -> Admission | None:
+def _select_scheduled_bot_pull_request(
+    api: GitHubAPI, *, trusted_sha: str
+) -> tuple[dict[str, Any], str] | None:
+    rows = api.list_all(
+        f"/repos/{EXPECTED_REPOSITORY}/pulls?state=open&base={EXPECTED_DEFAULT_BRANCH}",
+        max_pages=1,
+    )
+    if len(rows) >= MAX_PULL_REQUEST_CANDIDATES:
+        raise ValueError("scheduled bot discovery reached the bounded pagination limit")
+    candidates: list[tuple[int, int, dict[str, Any], str]] = []
+    for raw in rows:
+        pr = _require_dict(raw, label="scheduled bot pull request")
+        lane = _bot_lane(pr)
+        if lane is None or pr.get("draft") is not False or pr.get("mergeable") is not True:
+            continue
+        head = _require_dict(pr.get("head"), label="scheduled bot head")
+        base = _require_dict(pr.get("base"), label="scheduled bot base")
+        head_repo = _require_dict(head.get("repo"), label="scheduled bot head repository")
+        base_repo = _require_dict(base.get("repo"), label="scheduled bot base repository")
+        if (
+            head_repo.get("full_name") != EXPECTED_REPOSITORY
+            or base_repo.get("full_name") != EXPECTED_REPOSITORY
+            or base.get("ref") != EXPECTED_DEFAULT_BRANCH
+            or base.get("sha") != trusted_sha
+        ):
+            continue
+        number = _require_positive_int(pr.get("number"), label="scheduled bot PR number")
+        _require_sha(head.get("sha"), label="scheduled bot head SHA")
+        candidates.append((BOT_LANE_ORDER[lane], number, pr, lane))
+    if not candidates:
+        return None
+    _, _, pr, lane = min(candidates, key=lambda row: (row[0], row[1]))
+    return pr, lane
+
+
+def evaluate_admission(
+    api: GitHubAPI, *, event: dict[str, Any], event_name: str = "workflow_run"
+) -> Admission | None:
+    trusted_sha = _current_main(api)
+    if event_name == "schedule":
+        selected = _select_scheduled_bot_pull_request(api, trusted_sha=trusted_sha)
+        if selected is None:
+            return None
+        pr, lane = selected
+        head_sha = _require_sha(
+            _require_dict(pr.get("head"), label="scheduled bot candidate head").get("sha"),
+            label="scheduled bot candidate head SHA",
+        )
+        return _resolve_subject(
+            api,
+            lane=lane,
+            pr=pr,
+            head_sha=head_sha,
+            trusted_sha=trusted_sha,
+            qualification_ready=True,
+        )
+    if event_name != "workflow_run":
+        raise ValueError("automatic trusted admission supports workflow_run or schedule only")
     if event.get("action") != "completed":
         raise ValueError("workflow_run event action must be completed")
     event_run = _require_dict(event.get("workflow_run"), label="workflow_run event")
     run_id = _require_positive_int(event_run.get("id"), label="event workflow run id")
-    trusted_sha = _current_main(api)
     live_run = _require_dict(
         api.get(f"/repos/{EXPECTED_REPOSITORY}/actions/runs/{run_id}"),
         label="live workflow run",
@@ -663,6 +730,7 @@ def write_github_outputs(path: Path, admission: Admission | None) -> None:
             "eligible": "false",
             "lane": "none",
             "pr_number": "",
+            "head_ref": "",
             "head_sha": "",
             "base_sha": "",
             "merge_sha": "",
@@ -674,6 +742,7 @@ def write_github_outputs(path: Path, admission: Admission | None) -> None:
             "eligible": "true" if admission.eligible else "false",
             "lane": admission.lane,
             "pr_number": str(admission.pr_number),
+            "head_ref": admission.head_ref,
             "head_sha": admission.head_sha,
             "base_sha": admission.base_sha,
             "merge_sha": admission.merge_sha,
@@ -692,6 +761,7 @@ def write_github_outputs(path: Path, admission: Admission | None) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--event", type=Path, required=True)
+    parser.add_argument("--event-name", choices=("workflow_run", "schedule"), default="workflow_run")
     parser.add_argument("--github-output", type=Path, required=True)
     args = parser.parse_args()
 
@@ -705,6 +775,7 @@ def main() -> None:
     admission = evaluate_admission(
         GitHubAPI(api_url=api_url, token=token, repository=repository),
         event=event,
+        event_name=args.event_name,
     )
     write_github_outputs(args.github_output, admission)
     summary: dict[str, Any] = {
@@ -715,6 +786,7 @@ def main() -> None:
         summary.update(
             {
                 "pr_number": admission.pr_number,
+                "head_ref": admission.head_ref,
                 "head_sha": admission.head_sha,
                 "base_sha": admission.base_sha,
                 "merge_sha": admission.merge_sha,
