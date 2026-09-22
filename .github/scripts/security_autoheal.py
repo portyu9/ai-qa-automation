@@ -41,6 +41,8 @@ MAIN_CODEQL_NAME = "CodeQL"
 MAIN_CODEQL_EVENTS = {"push", "workflow_dispatch", "schedule"}
 MAIN_CODEQL_REGISTRATION_ATTEMPTS = 15
 MAIN_CODEQL_REGISTRATION_DELAY_SECONDS = 2
+TRANSIENT_GET_ATTEMPTS = 3
+TRANSIENT_GET_DELAY_SECONDS = 1
 GITHUB_ACTIONS_LOGIN = "github-actions[bot]"
 GITHUB_ACTIONS_USER_ID = 41898282
 MARKER_PREFIX = "<!-- aiqa-codeql-autoheal:"
@@ -230,17 +232,32 @@ class GitHubApi:
                 **({"Content-Type": "application/json"} if data is not None else {}),
             },
         )
-        try:
-            with urllib.request.urlopen(request, timeout=30) as response:
-                status = int(response.status)
-                raw = response.read(max_bytes + 1)
-        except urllib.error.HTTPError as exc:
-            detail = exc.read(4096).decode("utf-8", errors="replace")
-            raise AutohealError(
-                f"GitHub API {method} {path} failed HTTP {exc.code}: {detail[:1000]}"
-            ) from exc
-        except urllib.error.URLError as exc:
-            raise AutohealError(f"GitHub API {method} {path} transport failure: {exc}") from exc
+        attempts = TRANSIENT_GET_ATTEMPTS if method == "GET" else 1
+        for attempt in range(attempts):
+            try:
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    status = int(response.status)
+                    raw = response.read(max_bytes + 1)
+                break
+            except urllib.error.HTTPError as exc:
+                detail = exc.read(4096).decode("utf-8", errors="replace")
+                if (
+                    method == "GET"
+                    and exc.code in {502, 503, 504}
+                    and attempt + 1 < attempts
+                ):
+                    time.sleep(TRANSIENT_GET_DELAY_SECONDS)
+                    continue
+                raise AutohealError(
+                    f"GitHub API {method} {path} failed HTTP {exc.code}: {detail[:1000]}"
+                ) from exc
+            except urllib.error.URLError as exc:
+                if method == "GET" and attempt + 1 < attempts:
+                    time.sleep(TRANSIENT_GET_DELAY_SECONDS)
+                    continue
+                raise AutohealError(
+                    f"GitHub API {method} {path} transport failure: {exc}"
+                ) from exc
         if len(raw) > max_bytes:
             raise AutohealError(f"GitHub API {method} {path} exceeded bounded response size")
         if not raw:
