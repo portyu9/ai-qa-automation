@@ -91,13 +91,14 @@ def _repair_pr() -> dict[str, Any]:
 def _ci_run(
     run_id: int = CI_RUN_ID,
     *,
+    run_attempt: int = 1,
     status: str = "completed",
     conclusion: str | None = "success",
 ) -> dict[str, Any]:
     return {
         "id": run_id,
         "workflow_id": autoheal.POST_MERGE_CI_WORKFLOW_ID,
-        "run_attempt": 1,
+        "run_attempt": run_attempt,
         "name": autoheal.POST_MERGE_CI_NAME,
         "path": autoheal.POST_MERGE_CI_PATH,
         "head_branch": "main",
@@ -111,13 +112,14 @@ def _ci_run(
 def _codeql_run(
     run_id: int = CODEQL_RUN_ID,
     *,
+    run_attempt: int = 1,
     status: str = "completed",
     conclusion: str | None = "success",
 ) -> dict[str, Any]:
     return {
         "id": run_id,
         "workflow_id": autoheal.MAIN_CODEQL_WORKFLOW_ID,
-        "run_attempt": 1,
+        "run_attempt": run_attempt,
         "name": autoheal.MAIN_CODEQL_NAME,
         "path": autoheal.MAIN_CODEQL_PATH,
         "head_branch": "main",
@@ -135,11 +137,17 @@ class _TerminalApi:
         ci_runs: list[dict[str, Any]] | None = None,
         codeql_runs: list[dict[str, Any]] | None = None,
         alert_state: str = "fixed",
+        autoheal_head_sha: str = MERGE,
+        autoheal_run_attempt: int = 1,
+        gate_run_attempt: int = 1,
     ) -> None:
         self.pr = _repair_pr()
         self.ci_runs = [_ci_run()] if ci_runs is None else list(ci_runs)
         self.codeql_runs = [_codeql_run()] if codeql_runs is None else list(codeql_runs)
         self.alert_state = alert_state
+        self.autoheal_head_sha = autoheal_head_sha
+        self.autoheal_run_attempt = autoheal_run_attempt
+        self.gate_run_attempt = gate_run_attempt
         self.comments: list[dict[str, Any]] = []
         self.dispatches: list[tuple[str, dict[str, Any] | None]] = []
 
@@ -187,9 +195,10 @@ class _TerminalApi:
                     "id": AUTOHEAL_RUN_ID,
                     "workflow_id": autoheal.SECURITY_AUTOHEAL_WORKFLOW_ID,
                     "path": autoheal.SECURITY_AUTOHEAL_WORKFLOW_PATH,
-                    "run_attempt": 1,
+                    "run_attempt": self.autoheal_run_attempt,
                     "event": "workflow_run",
                     "head_branch": "main",
+                    "head_sha": self.autoheal_head_sha,
                     "status": "in_progress",
                     "conclusion": None,
                 }
@@ -199,6 +208,7 @@ class _TerminalApi:
                     "name": autoheal.EXPECTED_GATE_WORKFLOW_NAME,
                     "path": autoheal.EXPECTED_GATE_WORKFLOW_PATH,
                     "event": "schedule",
+                    "run_attempt": self.gate_run_attempt,
                     "head_branch": "main",
                     "head_sha": BASE,
                     "status": "completed",
@@ -318,6 +328,7 @@ def test_terminal_closure_persists_exact_idempotent_certificate(
     assert certificate["workflowRunId"] == AUTOHEAL_RUN_ID
     assert certificate["trustedStatusId"] == TRUSTED_STATUS_ID
     assert certificate["trustedGateRunId"] == GATE_RUN_ID
+    assert certificate["trustedGateRunAttempt"] == 1
     assert certificate["trustedGateEvent"] == "schedule"
     assert certificate["trustedProspectiveMergeSha"] == PROSPECTIVE
 
@@ -357,14 +368,65 @@ def test_terminal_closure_rejects_failed_or_ambiguous_workflow_evidence(
     assert api.comments == []
 
 
-def test_terminal_closure_rejects_unresolved_alert_after_green_codeql(
+def test_terminal_closure_waits_for_unresolved_alert_after_green_codeql(
     config: dict[str, Any],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(autoheal.time, "sleep", lambda _seconds: None)
     api = _TerminalApi(alert_state="open")
 
-    with pytest.raises(autoheal.AutohealError, match="remains open"):
+    assert autoheal._reconcile_terminal_closure(api, MERGE, config) is True
+    assert api.comments == []
+
+
+@pytest.mark.parametrize(
+    ("ci_runs", "codeql_runs", "message"),
+    (
+        (
+            [_ci_run(run_attempt=2)],
+            [_codeql_run()],
+            "exact-subject CI run_attempt must equal 1",
+        ),
+        (
+            [_ci_run()],
+            [_codeql_run(run_attempt=2)],
+            "terminal exact-main CodeQL run_attempt must equal 1",
+        ),
+    ),
+)
+def test_terminal_closure_rejects_manual_rerun_evidence(
+    config: dict[str, Any],
+    ci_runs: list[dict[str, Any]],
+    codeql_runs: list[dict[str, Any]],
+    message: str,
+) -> None:
+    api = _TerminalApi(ci_runs=ci_runs, codeql_runs=codeql_runs)
+
+    with pytest.raises(autoheal.AutohealError, match=message):
+        autoheal._reconcile_terminal_closure(api, MERGE, config)
+    assert api.comments == []
+
+
+def test_terminal_closure_rejects_rerun_trusted_gate(
+    config: dict[str, Any],
+) -> None:
+    api = _TerminalApi(gate_run_attempt=2)
+
+    with pytest.raises(
+        autoheal.AutohealError,
+        match="terminal Trusted PR Gate target run is not exact-main evidence",
+    ):
+        autoheal._reconcile_terminal_closure(api, MERGE, config)
+    assert api.comments == []
+
+
+def test_terminal_closure_rejects_moved_autoheal_run_before_publication(
+    config: dict[str, Any],
+) -> None:
+    api = _TerminalApi(autoheal_head_sha="9" * 40)
+
+    with pytest.raises(
+        autoheal.PolicyBlock,
+        match="terminal closure evidence is not exact autonomous workflow evidence",
+    ):
         autoheal._reconcile_terminal_closure(api, MERGE, config)
     assert api.comments == []
 
