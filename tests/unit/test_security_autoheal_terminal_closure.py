@@ -455,15 +455,17 @@ def test_security_merge_gate_requires_schedule_event(
     config: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[tuple[int, str, str]] = []
+    calls: list[tuple[int, str, str, str]] = []
 
     def _generic_gate(
         api: Any,
         number: int,
         head_sha: str,
         base_sha: str,
+        *,
+        expected_event: str = "workflow_run",
     ) -> dict[str, Any]:
-        calls.append((number, head_sha, base_sha))
+        calls.append((number, head_sha, base_sha, expected_event))
         return {"id": TRUSTED_STATUS_ID}
 
     monkeypatch.setattr(autoheal, "require_automatic_trusted_gate", _generic_gate)
@@ -477,7 +479,7 @@ def test_security_merge_gate_requires_schedule_event(
         live,
     )
     assert status["id"] == TRUSTED_STATUS_ID
-    assert calls == [(PR_NUMBER, HEAD, BASE)]
+    assert calls == [(PR_NUMBER, HEAD, BASE, "schedule")]
 
     with pytest.raises(
         autoheal.TrustedStatusError,
