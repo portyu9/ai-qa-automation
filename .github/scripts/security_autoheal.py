@@ -681,16 +681,19 @@ def _ensure_stale_supersession_certificate(
     metadata: dict[str, Any],
     main_sha: str,
 ) -> dict[str, Any]:
+    main_sha = _require_sha(main_sha, "stale repair superseding main SHA")
     comments = api.list_all(f"/issues/{number}/comments", max_pages=2)
-    existing: list[tuple[dict[str, Any], str]] = []
+    matching: list[tuple[dict[str, Any], str]] = []
     for row in comments:
         parsed = _exact_unedited_autoheal_certificate(row, metadata, number)
-        if parsed is not None:
-            existing.append(parsed)
-    if len(existing) > 1:
-        raise PolicyBlock("stale repair has ambiguous GitHub Actions supersession certificates")
-    if existing:
-        return existing[0][0]
+        if parsed is not None and parsed[1] == main_sha:
+            matching.append(parsed)
+    if len(matching) > 1:
+        raise PolicyBlock(
+            "stale repair has ambiguous GitHub Actions supersession certificates for current main"
+        )
+    if matching:
+        return matching[0][0]
 
     certificate = _stale_supersession_certificate(
         metadata,
@@ -1737,7 +1740,7 @@ def _proven_stale_supersession(
                 parsed = _exact_unedited_autoheal_certificate(row, metadata, number)
             except PolicyBlock:
                 return False
-            if parsed is None:
+            if parsed is None or parsed[1] != superseded_by_sha:
                 continue
             created_at = row.get("created_at")
             if not isinstance(created_at, str):
