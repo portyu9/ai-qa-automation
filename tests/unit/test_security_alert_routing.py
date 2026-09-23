@@ -55,6 +55,7 @@ def _alert(
         "tool": {"name": "CodeQL"},
         "rule": {"id": rule, "security_severity": severity},
         "most_recent_instance": {
+            "state": state,
             "ref": ref,
             "commit_sha": sha,
             "location": {
@@ -181,6 +182,7 @@ def test_authority_bearing_deterministic_verifiers_route_to_independent_lane(pat
         "/absolute.py",
         "src\\windows.py",
         "src//double.py",
+        "src/log\ninjection.py",
     ),
 )
 def test_path_traversal_and_noncanonical_paths_fail_closed(path: str) -> None:
@@ -240,6 +242,10 @@ def test_alert_supplied_actor_spoofing_cannot_choose_authority() -> None:
         (
             lambda alert: alert["most_recent_instance"].update(ref="refs/heads/feature"),
             "alert-instance-is-not-exact-current-main",
+        ),
+        (
+            lambda alert: alert["most_recent_instance"].update(state="fixed"),
+            "alert-and-instance-state-disagree",
         ),
     ),
 )
@@ -538,6 +544,15 @@ def test_routing_authority_schema_rejects_ignored_or_duplicate_entries(
         routing.route_alert(_alert(), main_sha=MAIN, config=config)
 
 
+def test_batch_rejects_non_object_alert_entries() -> None:
+    with pytest.raises(routing.RoutingPolicyError, match="JSON objects"):
+        routing.route_alerts(
+            [_alert(), "not-an-alert"],  # type: ignore[list-item]
+            main_sha=MAIN,
+            config=_config(),
+        )
+
+
 def test_batch_rejects_evidence_for_unobserved_alerts() -> None:
     with pytest.raises(routing.RoutingPolicyError, match="unobserved alert"):
         routing.route_alerts(
@@ -568,6 +583,15 @@ def test_strict_json_ingestion_rejects_duplicate_keys_and_nonfinite_constants(
     nonfinite.write_text('{"severity":NaN}', encoding="utf-8")
     with pytest.raises(routing.RoutingPolicyError, match="non-finite JSON constant"):
         routing._read_json(nonfinite, max_bytes=1024, label="alert input")
+
+
+def test_boolean_security_severity_fails_closed() -> None:
+    with pytest.raises(routing.RoutingPolicyError, match="severity is malformed"):
+        routing.route_alert(
+            _alert(severity=True),  # type: ignore[arg-type]
+            main_sha=MAIN,
+            config=_config(),
+        )
 
 
 @pytest.mark.parametrize("severity", ("nan", "inf", "-inf"))
