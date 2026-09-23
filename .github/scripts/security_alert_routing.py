@@ -621,6 +621,52 @@ def canonical_record(record: Mapping[str, Any]) -> bytes:
     return payload
 
 
+def _require_owned_nonwritable(info: os.stat_result, *, label: str) -> None:
+    if info.st_uid != os.geteuid():
+        raise RoutingPolicyError(f"{label} is not owned by the routing process")
+    if info.st_mode & 0o022:
+        raise RoutingPolicyError(f"{label} is writable by group or other users")
+
+
+def _open_parent_directory(path: Path) -> int:
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    directory = getattr(os, "O_DIRECTORY", 0)
+    if not nofollow or not directory:
+        raise RoutingPolicyError("routing record persistence requires no-follow directory APIs")
+
+    parts = path.parts
+    if any(part == ".." for part in parts):
+        raise RoutingPolicyError("routing record parent contains parent traversal")
+    if path.is_absolute():
+        current_fd = os.open("/", os.O_RDONLY | directory)
+        components = parts[1:]
+    else:
+        current_fd = os.open(".", os.O_RDONLY | directory | nofollow)
+        components = tuple(part for part in parts if part not in {"", "."})
+    try:
+        for component in components:
+            try:
+                next_fd = os.open(
+                    component,
+                    os.O_RDONLY | directory | nofollow,
+                    dir_fd=current_fd,
+                )
+            except OSError as exc:
+                raise RoutingPolicyError(
+                    "routing record parent path contains an unavailable or symlink component"
+                ) from exc
+            os.close(current_fd)
+            current_fd = next_fd
+        info = os.fstat(current_fd)
+        if not stat.S_ISDIR(info.st_mode):
+            raise RoutingPolicyError("routing record parent is not a directory")
+        _require_owned_nonwritable(info, label="routing record parent")
+        return current_fd
+    except Exception:
+        os.close(current_fd)
+        raise
+
+
 def _read_record_at(parent_fd: int, name: str) -> bytes | None:
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     try:
@@ -633,6 +679,7 @@ def _read_record_at(parent_fd: int, name: str) -> bytes | None:
         initial = os.fstat(fd)
         if not stat.S_ISREG(initial.st_mode) or initial.st_size > MAX_ROUTE_RECORD_BYTES:
             raise RoutingPolicyError("existing routing record path is not a bounded regular file")
+        _require_owned_nonwritable(initial, label="existing routing record")
         payload = bytearray()
         while len(payload) <= MAX_ROUTE_RECORD_BYTES:
             chunk = os.read(
@@ -670,21 +717,11 @@ def persist_record(path: Path, record: Mapping[str, Any]) -> bool:
     if not name or name in {".", ".."}:
         raise RoutingPolicyError("routing record target name is invalid")
     nofollow = getattr(os, "O_NOFOLLOW", 0)
-    directory = getattr(os, "O_DIRECTORY", 0)
-    if not nofollow or not directory:
-        raise RoutingPolicyError("routing record persistence requires no-follow directory APIs")
-    try:
-        parent_fd = os.open(path.parent, os.O_RDONLY | directory | nofollow)
-    except OSError as exc:
-        raise RoutingPolicyError(
-            "routing record parent must be an available non-symlink directory"
-        ) from exc
+    if not nofollow:
+        raise RoutingPolicyError("routing record persistence requires no-follow file APIs")
+    parent_fd = _open_parent_directory(path.parent)
     temp_name: str | None = None
     try:
-        parent_info = os.fstat(parent_fd)
-        if not stat.S_ISDIR(parent_info.st_mode):
-            raise RoutingPolicyError("routing record parent is not a directory")
-
         existing = _read_record_at(parent_fd, name)
         if existing is not None:
             if existing == payload:
