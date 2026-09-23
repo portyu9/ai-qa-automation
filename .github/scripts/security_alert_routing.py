@@ -202,7 +202,7 @@ def _alert_subject(alert: Mapping[str, Any], main_sha: str) -> dict[str, Any]:
         raise RoutingPolicyError("alert message exceeds the bounded routing limit")
 
     fingerprint_material = "\0".join(
-        (str(number), rule_id, path, str(line), text, main_sha)
+        (str(number), rule_id, severity.hex(), path, str(line), text, main_sha)
     ).encode("utf-8")
     fingerprint = hashlib.sha256(fingerprint_material).hexdigest()
     return {
