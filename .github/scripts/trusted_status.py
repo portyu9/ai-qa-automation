@@ -6,6 +6,7 @@ from typing import Any
 EXPECTED_REPOSITORY = "portyu9/ai-qa-automation"
 EXPECTED_GATE_WORKFLOW_NAME = "Trusted PR Auto Gate — ƳƤ AI QA Automation Framework"
 EXPECTED_GATE_WORKFLOW_PATH = ".github/workflows/trusted-pr-auto.yml"
+EXPECTED_GATE_EVENTS = frozenset({"schedule", "workflow_run"})
 TRUSTED_STATUS_CONTEXT = "Trusted PR Gate"
 TRUSTED_STATUS_BOT_LOGIN = "trusted-pr-gate[bot]"
 TRUSTED_STATUS_BOT_ID = 322661847
@@ -148,7 +149,7 @@ def require_automatic_trusted_gate(
         or _require_positive_int(run.get("id"), "trusted gate run id") != run_id
         or run.get("name") != EXPECTED_GATE_WORKFLOW_NAME
         or run.get("path") != EXPECTED_GATE_WORKFLOW_PATH
-        or run.get("event") != "workflow_run"
+        or run.get("event") not in EXPECTED_GATE_EVENTS
         or run.get("head_branch") != "main"
         or _require_sha(run.get("head_sha"), "trusted gate run head SHA") != base_sha
         or run.get("status") != "completed"
