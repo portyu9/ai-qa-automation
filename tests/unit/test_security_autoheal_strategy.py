@@ -231,6 +231,20 @@ class _StaleCertificateApi:
         self.comments = comments
         self.events = events
 
+    def get(self, path: str) -> dict[str, Any]:
+        if path != "/actions/runs/9001":
+            raise AssertionError(f"unexpected GET path: {path}")
+        return {
+            "id": 9001,
+            "workflow_id": autoheal.SECURITY_AUTOHEAL_WORKFLOW_ID,
+            "path": autoheal.SECURITY_AUTOHEAL_WORKFLOW_PATH,
+            "run_attempt": 1,
+            "event": "schedule",
+            "head_branch": "main",
+            "status": "completed",
+            "conclusion": "success",
+        }
+
     def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
         if path == "/pulls?state=closed&sort=updated&direction=desc":
             assert max_pages == 10
@@ -252,7 +266,13 @@ def _stale_certificate_comment(
     created_at: str = "2026-09-23T00:19:59Z",
     updated_at: str = "2026-09-23T00:19:59Z",
 ) -> dict[str, Any]:
-    certificate = autoheal._stale_supersession_certificate(metadata, 101, "f" * 40)
+    certificate = autoheal._stale_supersession_certificate(
+        metadata,
+        101,
+        "f" * 40,
+        workflow_run_id=9001,
+        workflow_run_attempt=1,
+    )
     return {
         "body": autoheal._stale_supersession_comment(certificate),
         "user": {"login": login, "id": user_id},
@@ -347,6 +367,48 @@ def test_stale_supersession_certificate_cannot_replay_across_reopen() -> None:
             _bot_closed_event(),
         ],
     )
+    assert (
+        autoheal._attempt_count(
+            api,
+            7,
+            autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY,
+            "f" * 40,
+        )
+        == 1
+    )
+
+
+def test_stale_supersession_certificate_rejects_wrong_workflow_run() -> None:
+    metadata, row = _explicit_stale_attempt_fixture()
+    comment = _stale_certificate_comment(metadata)
+
+    class _WrongWorkflowApi(_StaleCertificateApi):
+        def get(self, path: str) -> dict[str, Any]:
+            run = super().get(path)
+            return {**run, "workflow_id": autoheal.SECURITY_AUTOHEAL_WORKFLOW_ID + 1}
+
+    api = _WrongWorkflowApi(row, [comment], [_bot_closed_event()])
+    assert (
+        autoheal._attempt_count(
+            api,
+            7,
+            autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY,
+            "f" * 40,
+        )
+        == 1
+    )
+
+
+def test_stale_supersession_certificate_rejects_failed_workflow_run() -> None:
+    metadata, row = _explicit_stale_attempt_fixture()
+    comment = _stale_certificate_comment(metadata)
+
+    class _FailedWorkflowApi(_StaleCertificateApi):
+        def get(self, path: str) -> dict[str, Any]:
+            run = super().get(path)
+            return {**run, "status": "completed", "conclusion": "failure"}
+
+    api = _FailedWorkflowApi(row, [comment], [_bot_closed_event()])
     assert (
         autoheal._attempt_count(
             api,
