@@ -395,21 +395,6 @@ def test_terminal_closure_waits_for_unresolved_alert_after_green_codeql(
     assert api.comments == []
 
 
-@pytest.mark.parametrize(
-    ("ci_runs", "codeql_runs", "message"),
-    (
-        (
-            [_ci_run(run_attempt=2)],
-            [_codeql_run()],
-            "exact-subject CI run_attempt must equal 1",
-        ),
-        (
-            [_ci_run()],
-            [_codeql_run(run_attempt=2)],
-            "terminal exact-main CodeQL run_attempt must equal 1",
-        ),
-    ),
-)
 @pytest.mark.parametrize("alert_path", (None, "examples/reference_sut/other.py"))
 def test_terminal_closure_rejects_missing_or_moved_alert_path(
     config: dict[str, Any],
@@ -425,6 +410,21 @@ def test_terminal_closure_rejects_missing_or_moved_alert_path(
     assert api.comments == []
 
 
+@pytest.mark.parametrize(
+    ("ci_runs", "codeql_runs", "message"),
+    (
+        (
+            [_ci_run(run_attempt=2)],
+            [_codeql_run()],
+            "exact-subject CI run_attempt must equal 1",
+        ),
+        (
+            [_ci_run()],
+            [_codeql_run(run_attempt=2)],
+            "terminal exact-main CodeQL run_attempt must equal 1",
+        ),
+    ),
+)
 def test_terminal_closure_rejects_manual_rerun_evidence(
     config: dict[str, Any],
     ci_runs: list[dict[str, Any]],
