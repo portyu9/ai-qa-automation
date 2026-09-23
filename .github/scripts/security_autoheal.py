@@ -1715,6 +1715,27 @@ def _terminal_trusted_gate_evidence(
     }
 
 
+def _require_scheduled_security_trusted_gate(
+    api: GitHubApi,
+    number: int,
+    metadata: dict[str, Any],
+    live: dict[str, Any],
+) -> dict[str, Any]:
+    status = require_automatic_trusted_gate(
+        api,
+        number,
+        live["headSha"],
+        live["baseSha"],
+    )
+    try:
+        _terminal_trusted_gate_evidence(api, number, metadata)
+    except (AutohealError, PolicyBlock) as exc:
+        raise TrustedStatusError(
+            "automatic Trusted PR Gate is not schedule-bound security evidence"
+        ) from exc
+    return status
+
+
 def _terminal_closure_certificate(
     metadata: dict[str, Any],
     number: int,
@@ -2706,11 +2727,11 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
             )
             if allow_merge and config["automergeEnabled"]:
                 try:
-                    require_automatic_trusted_gate(
+                    _require_scheduled_security_trusted_gate(
                         api,
                         number,
-                        live["headSha"],
-                        live["baseSha"],
+                        validated_metadata,
+                        live,
                     )
                 except TrustedStatusError as exc:
                     raise PolicyBlock("automatic Trusted PR Gate is not yet admissible") from exc
