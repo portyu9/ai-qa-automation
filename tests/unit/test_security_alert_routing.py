@@ -588,6 +588,53 @@ def test_routing_record_persistence_rejects_symlink_parent(tmp_path: Path) -> No
     assert list(actual_parent.iterdir()) == []
 
 
+def test_routing_record_persistence_rejects_intermediate_symlink_parent(
+    tmp_path: Path,
+) -> None:
+    record = routing.route_alert(_alert(), main_sha=MAIN, config=_config())
+    actual_parent = tmp_path / "actual"
+    nested = actual_parent / "nested"
+    nested.mkdir(parents=True)
+    alias = tmp_path / "alias"
+    alias.symlink_to(actual_parent, target_is_directory=True)
+
+    with pytest.raises(routing.RoutingPolicyError, match="symlink component"):
+        routing.persist_record(alias / "nested" / "route.json", record)
+    assert list(nested.iterdir()) == []
+
+
+def test_routing_record_persistence_rejects_writable_parent(tmp_path: Path) -> None:
+    record = routing.route_alert(_alert(), main_sha=MAIN, config=_config())
+    parent = tmp_path / "writable"
+    parent.mkdir()
+    parent.chmod(0o777)
+    try:
+        with pytest.raises(routing.RoutingPolicyError, match="writable by group or other"):
+            routing.persist_record(parent / "route.json", record)
+        assert list(parent.iterdir()) == []
+    finally:
+        parent.chmod(0o700)
+
+
+def test_routing_record_persistence_rejects_writable_existing_record(
+    tmp_path: Path,
+) -> None:
+    record = routing.route_alert(_alert(), main_sha=MAIN, config=_config())
+    target = tmp_path / "route.json"
+    target.write_bytes(routing.canonical_record(record))
+    target.chmod(0o666)
+
+    with pytest.raises(routing.RoutingPolicyError, match="writable by group or other"):
+        routing.persist_record(target, record)
+
+
+def test_routing_record_persistence_rejects_parent_traversal(tmp_path: Path) -> None:
+    record = routing.route_alert(_alert(), main_sha=MAIN, config=_config())
+
+    with pytest.raises(routing.RoutingPolicyError, match="parent traversal"):
+        routing.persist_record(tmp_path / "child" / ".." / "route.json", record)
+
+
 def test_routing_record_persistence_rejects_symlink_target(tmp_path: Path) -> None:
     record = routing.route_alert(_alert(), main_sha=MAIN, config=_config())
     actual = tmp_path / "actual.json"
