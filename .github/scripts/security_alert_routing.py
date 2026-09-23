@@ -1,0 +1,577 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import stat
+import tempfile
+from pathlib import Path
+from typing import Any, Mapping, Sequence
+
+ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_CONFIG = ROOT / ".github" / "security-autoheal.json"
+ROUTING_POLICY_VERSION = "security-routing-v1"
+MAX_ROUTE_RECORD_BYTES = 16 * 1024
+MAX_ALERT_MESSAGE_BYTES = 64 * 1024
+MAX_ALERT_BATCH = 100
+MAX_ATTEMPT_STRATEGIES = 16
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+STRATEGY_RE = re.compile(r"^[a-z0-9][a-z0-9._:-]{0,127}$")
+AUTOFIX_EVIDENCE = {"available", "unavailable", "unknown"}
+
+SECURITY_SEVERITY_FLOORS = {
+    "critical": 9.0,
+    "high": 7.0,
+    "medium": 4.0,
+    "low": 0.1,
+}
+
+ROUTING_DECISIONS = {
+    "ordinary-deterministic-autoheal",
+    "ordinary-bounded-autofix",
+    "protected-independent-remediation",
+    "unsupported-rule",
+    "unsupported-path",
+    "below-severity-floor",
+    "stale-alert",
+    "attempt-budget-exhausted",
+    "blocked-external-evidence",
+}
+
+
+class RoutingPolicyError(RuntimeError):
+    """Malformed or ambiguous routing authority input; fail closed."""
+
+
+def _require_sha(value: Any, label: str) -> str:
+    if not isinstance(value, str) or SHA_RE.fullmatch(value) is None:
+        raise RoutingPolicyError(f"{label} must be a canonical 40-character SHA")
+    return value
+
+
+def _require_positive_int(value: Any, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise RoutingPolicyError(f"{label} must be a positive integer")
+    return value
+
+
+def _safe_repository_path(value: Any) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > 512
+        or value.startswith("/")
+        or "\\" in value
+        or "\x00" in value
+    ):
+        raise RoutingPolicyError("alert path is not a safe repository-relative path")
+    segments = value.split("/")
+    if any(segment in {"", ".", ".."} for segment in segments):
+        raise RoutingPolicyError("alert path contains an unsafe path segment")
+    if not value.endswith(".py"):
+        raise RoutingPolicyError("alert path must identify a Python source file")
+    return value
+
+
+def _path_matches(path: str, policy_path: str) -> bool:
+    if policy_path.endswith("/"):
+        return path.startswith(policy_path)
+    return path == policy_path
+
+
+def _security_severity(alert: Mapping[str, Any]) -> float:
+    rule = alert.get("rule")
+    if not isinstance(rule, Mapping):
+        raise RoutingPolicyError("alert rule metadata is missing")
+    value = rule.get("security_severity")
+    if value is not None:
+        try:
+            severity = float(value)
+        except (TypeError, ValueError) as exc:
+            raise RoutingPolicyError("security severity is malformed") from exc
+        if severity < 0 or severity > 10:
+            raise RoutingPolicyError("security severity is outside 0..10")
+        return severity
+    level = rule.get("security_severity_level")
+    if isinstance(level, str) and level.lower() in SECURITY_SEVERITY_FLOORS:
+        return SECURITY_SEVERITY_FLOORS[level.lower()]
+    raise RoutingPolicyError("alert lacks a supported security severity")
+
+
+def _alert_subject(alert: Mapping[str, Any], main_sha: str) -> dict[str, Any]:
+    main_sha = _require_sha(main_sha, "current main SHA")
+    number = _require_positive_int(alert.get("number"), "alert number")
+    state = alert.get("state")
+    if state not in {"open", "fixed", "dismissed"}:
+        raise RoutingPolicyError("alert state is missing or unsupported")
+    tool = alert.get("tool")
+    if not isinstance(tool, Mapping) or tool.get("name") != "CodeQL":
+        raise RoutingPolicyError("routing accepts only exact CodeQL tool metadata")
+    rule = alert.get("rule")
+    if not isinstance(rule, Mapping):
+        raise RoutingPolicyError("alert rule metadata is missing")
+    rule_id = rule.get("id")
+    if not isinstance(rule_id, str) or not rule_id or len(rule_id) > 256:
+        raise RoutingPolicyError("alert rule id is missing or malformed")
+    severity = _security_severity(alert)
+
+    instance = alert.get("most_recent_instance")
+    if not isinstance(instance, Mapping):
+        raise RoutingPolicyError("alert most_recent_instance is missing")
+    ref = instance.get("ref")
+    if not isinstance(ref, str) or not ref:
+        raise RoutingPolicyError("alert instance ref is missing")
+    instance_sha = _require_sha(instance.get("commit_sha"), "alert instance SHA")
+    location = instance.get("location")
+    if not isinstance(location, Mapping):
+        raise RoutingPolicyError("alert location is missing")
+    path = _safe_repository_path(location.get("path"))
+    line = _require_positive_int(location.get("start_line"), "alert start line")
+    message = instance.get("message")
+    if not isinstance(message, Mapping):
+        raise RoutingPolicyError("alert message metadata is missing")
+    text = message.get("text")
+    if not isinstance(text, str):
+        raise RoutingPolicyError("alert message text is missing")
+    if len(text.encode("utf-8")) > MAX_ALERT_MESSAGE_BYTES:
+        raise RoutingPolicyError("alert message exceeds the bounded routing limit")
+
+    fingerprint_material = "\0".join(
+        (str(number), rule_id, path, str(line), text, main_sha)
+    ).encode("utf-8")
+    fingerprint = hashlib.sha256(fingerprint_material).hexdigest()
+    return {
+        "alertNumber": number,
+        "state": state,
+        "tool": "CodeQL",
+        "rule": rule_id,
+        "securitySeverity": severity,
+        "path": path,
+        "line": line,
+        "baseSha": main_sha,
+        "alertRef": ref,
+        "alertInstanceSha": instance_sha,
+        "fingerprint": fingerprint,
+    }
+
+
+def _routing_config(config: Mapping[str, Any]) -> dict[str, Any]:
+    policy = config.get("routingPolicy")
+    if not isinstance(policy, Mapping):
+        raise RoutingPolicyError("routingPolicy is missing")
+    if policy.get("schemaVersion") != 1 or policy.get("policyVersion") != ROUTING_POLICY_VERSION:
+        raise RoutingPolicyError("routingPolicy version is not code-owned")
+
+    allowed_rules = config.get("allowedRules")
+    if (
+        not isinstance(allowed_rules, list)
+        or not allowed_rules
+        or not all(isinstance(value, str) and value for value in allowed_rules)
+        or len(set(allowed_rules)) != len(allowed_rules)
+    ):
+        raise RoutingPolicyError("allowedRules is malformed")
+    minimum = config.get("minimumSecuritySeverity")
+    if not isinstance(minimum, (int, float)) or isinstance(minimum, bool):
+        raise RoutingPolicyError("minimumSecuritySeverity is malformed")
+    minimum = float(minimum)
+    if minimum < 0 or minimum > 10:
+        raise RoutingPolicyError("minimumSecuritySeverity is outside 0..10")
+    max_attempts = config.get("maxAttemptsPerAlert")
+    if isinstance(max_attempts, bool) or not isinstance(max_attempts, int) or not 1 <= max_attempts <= 10:
+        raise RoutingPolicyError("maxAttemptsPerAlert is outside the reviewed bound")
+
+    model_prefixes = config.get("modelAutofixPathPrefixes")
+    deterministic_only = config.get("deterministicOnlyPaths")
+    never_modify = config.get("neverModifyPaths")
+    for label, values in (
+        ("modelAutofixPathPrefixes", model_prefixes),
+        ("deterministicOnlyPaths", deterministic_only),
+        ("neverModifyPaths", never_modify),
+    ):
+        if (
+            not isinstance(values, list)
+            or not values
+            or not all(isinstance(value, str) and value for value in values)
+        ):
+            raise RoutingPolicyError(f"{label} is malformed")
+
+    protected_strategy = policy.get("protectedStrategy")
+    model_strategy = policy.get("modelStrategy")
+    no_strategy = policy.get("noReviewedStrategy")
+    for label, value in (
+        ("protectedStrategy", protected_strategy),
+        ("modelStrategy", model_strategy),
+        ("noReviewedStrategy", no_strategy),
+    ):
+        if not isinstance(value, str) or STRATEGY_RE.fullmatch(value) is None:
+            raise RoutingPolicyError(f"{label} is malformed")
+
+    raw_strategies = policy.get("deterministicStrategies")
+    if not isinstance(raw_strategies, list) or not 1 <= len(raw_strategies) <= 16:
+        raise RoutingPolicyError("deterministicStrategies is malformed")
+    strategies: list[dict[str, Any]] = []
+    seen_strategy_names: set[str] = set()
+    for raw in raw_strategies:
+        if not isinstance(raw, Mapping):
+            raise RoutingPolicyError("deterministic strategy entry is malformed")
+        rule = raw.get("rule")
+        strategy = raw.get("strategy")
+        paths = raw.get("paths")
+        prefixes = raw.get("pathPrefixes")
+        if (
+            not isinstance(rule, str)
+            or rule not in allowed_rules
+            or not isinstance(strategy, str)
+            or STRATEGY_RE.fullmatch(strategy) is None
+            or strategy in seen_strategy_names
+            or not isinstance(paths, list)
+            or not isinstance(prefixes, list)
+            or not all(isinstance(value, str) and value for value in paths + prefixes)
+            or (not paths and not prefixes)
+        ):
+            raise RoutingPolicyError("deterministic strategy entry is invalid")
+        seen_strategy_names.add(strategy)
+        strategies.append(
+            {
+                "rule": rule,
+                "strategy": strategy,
+                "paths": tuple(paths),
+                "pathPrefixes": tuple(prefixes),
+            }
+        )
+
+    return {
+        "allowedRules": frozenset(allowed_rules),
+        "minimumSecuritySeverity": minimum,
+        "maxAttemptsPerAlert": max_attempts,
+        "modelAutofixPathPrefixes": tuple(model_prefixes),
+        "deterministicOnlyPaths": tuple(deterministic_only),
+        "neverModifyPaths": tuple(never_modify),
+        "protectedStrategy": protected_strategy,
+        "modelStrategy": model_strategy,
+        "noReviewedStrategy": no_strategy,
+        "deterministicStrategies": tuple(strategies),
+    }
+
+
+def _deterministic_strategy(subject: Mapping[str, Any], policy: Mapping[str, Any]) -> str | None:
+    matches: list[str] = []
+    for entry in policy["deterministicStrategies"]:
+        if entry["rule"] != subject["rule"]:
+            continue
+        if subject["path"] in entry["paths"] or any(
+            subject["path"].startswith(prefix) for prefix in entry["pathPrefixes"]
+        ):
+            matches.append(entry["strategy"])
+    if len(matches) > 1:
+        raise RoutingPolicyError("alert matches multiple deterministic remediation strategies")
+    return matches[0] if matches else None
+
+
+def _attempt_count(attempts_by_strategy: Mapping[str, int] | None, strategy: str) -> int:
+    attempts = attempts_by_strategy or {}
+    if len(attempts) > MAX_ATTEMPT_STRATEGIES:
+        raise RoutingPolicyError("attempt accounting exceeds the bounded strategy limit")
+    for key, value in attempts.items():
+        if not isinstance(key, str) or STRATEGY_RE.fullmatch(key) is None:
+            raise RoutingPolicyError("attempt accounting contains an invalid strategy")
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 100:
+            raise RoutingPolicyError("attempt accounting contains an invalid count")
+    return int(attempts.get(strategy, 0))
+
+
+def _record(
+    subject: Mapping[str, Any],
+    *,
+    decision: str,
+    reason: str,
+    authority: str,
+    strategy: str,
+    strategy_attempt_count: int,
+    max_attempts: int,
+    protected: bool,
+    autofix_eligibility: str,
+) -> dict[str, Any]:
+    if decision not in ROUTING_DECISIONS:
+        raise RoutingPolicyError("unreviewed routing decision")
+    payload = {
+        "schemaVersion": 1,
+        "routingPolicyVersion": ROUTING_POLICY_VERSION,
+        "decision": decision,
+        "reason": reason,
+        "authority": authority,
+        "alertNumber": subject["alertNumber"],
+        "tool": subject["tool"],
+        "rule": subject["rule"],
+        "securitySeverity": subject["securitySeverity"],
+        "path": subject["path"],
+        "line": subject["line"],
+        "baseSha": subject["baseSha"],
+        "alertRef": subject["alertRef"],
+        "alertInstanceSha": subject["alertInstanceSha"],
+        "fingerprint": subject["fingerprint"],
+        "strategy": strategy,
+        "strategyAttemptCount": strategy_attempt_count,
+        "maxAttemptsPerStrategy": max_attempts,
+        "protected": protected,
+        "autofixEligibility": autofix_eligibility,
+    }
+    canonical = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    payload["recordDigest"] = hashlib.sha256(canonical).hexdigest()
+    canonical_with_digest = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    if len(canonical_with_digest) > MAX_ROUTE_RECORD_BYTES:
+        raise RoutingPolicyError("routing record exceeds the bounded persistence limit")
+    return payload
+
+
+def route_alert(
+    alert: Mapping[str, Any],
+    *,
+    main_sha: str,
+    config: Mapping[str, Any],
+    attempts_by_strategy: Mapping[str, int] | None = None,
+    autofix_eligibility: str = "unknown",
+    expected_fingerprint: str | None = None,
+    expected_strategy: str | None = None,
+) -> dict[str, Any]:
+    if autofix_eligibility not in AUTOFIX_EVIDENCE:
+        raise RoutingPolicyError("autofix eligibility is outside the reviewed evidence states")
+    subject = _alert_subject(alert, main_sha)
+    policy = _routing_config(config)
+    protected = any(
+        _path_matches(subject["path"], path) for path in policy["neverModifyPaths"]
+    )
+
+    deterministic = _deterministic_strategy(subject, policy)
+    if protected:
+        strategy = policy["protectedStrategy"]
+    elif deterministic is not None:
+        strategy = deterministic
+    elif any(subject["path"].startswith(prefix) for prefix in policy["modelAutofixPathPrefixes"]):
+        strategy = policy["modelStrategy"]
+    else:
+        strategy = policy["noReviewedStrategy"]
+
+    attempts = _attempt_count(attempts_by_strategy, strategy)
+    max_attempts = int(policy["maxAttemptsPerAlert"])
+
+    def make(decision: str, reason: str, authority: str = "none") -> dict[str, Any]:
+        return _record(
+            subject,
+            decision=decision,
+            reason=reason,
+            authority=authority,
+            strategy=strategy,
+            strategy_attempt_count=attempts,
+            max_attempts=max_attempts,
+            protected=protected,
+            autofix_eligibility=autofix_eligibility,
+        )
+
+    if subject["state"] != "open":
+        return make("stale-alert", "alert-is-not-open")
+    if subject["alertRef"] != "refs/heads/main" or subject["alertInstanceSha"] != subject["baseSha"]:
+        return make("stale-alert", "alert-instance-is-not-exact-current-main")
+    if expected_fingerprint is not None:
+        if not isinstance(expected_fingerprint, str) or re.fullmatch(r"[0-9a-f]{64}", expected_fingerprint) is None:
+            raise RoutingPolicyError("expected fingerprint is malformed")
+        if expected_fingerprint != subject["fingerprint"]:
+            return make("stale-alert", "alert-fingerprint-drift")
+    if expected_strategy is not None:
+        if not isinstance(expected_strategy, str) or STRATEGY_RE.fullmatch(expected_strategy) is None:
+            raise RoutingPolicyError("expected strategy is malformed")
+        if expected_strategy != strategy:
+            return make("stale-alert", "remediation-strategy-version-drift")
+    if subject["rule"] not in policy["allowedRules"]:
+        return make("unsupported-rule", "rule-is-outside-code-owned-allowlist")
+    if subject["securitySeverity"] < policy["minimumSecuritySeverity"]:
+        return make("below-severity-floor", "security-severity-is-below-policy-floor")
+    if protected:
+        if attempts >= max_attempts:
+            return make("attempt-budget-exhausted", "protected-strategy-attempt-budget-exhausted")
+        return make(
+            "protected-independent-remediation",
+            "protected-path-requires-independent-authority",
+            "protected-independent-remediation",
+        )
+    if deterministic is not None:
+        if attempts >= max_attempts:
+            return make("attempt-budget-exhausted", "deterministic-strategy-attempt-budget-exhausted")
+        return make(
+            "ordinary-deterministic-autoheal",
+            "exact-code-owned-deterministic-strategy",
+            "security-autoheal-deterministic",
+        )
+    if any(_path_matches(subject["path"], path) for path in policy["deterministicOnlyPaths"]):
+        return make("unsupported-path", "deterministic-only-path-has-no-matching-strategy")
+    if strategy == policy["noReviewedStrategy"]:
+        return make("unsupported-path", "path-is-outside-reviewed-remediation-surfaces")
+    if attempts >= max_attempts:
+        return make("attempt-budget-exhausted", "autofix-strategy-attempt-budget-exhausted")
+    if autofix_eligibility != "available":
+        return make(
+            "blocked-external-evidence",
+            "github-codeql-autofix-eligibility-is-not-available",
+        )
+    return make(
+        "ordinary-bounded-autofix",
+        "reviewed-model-path-with-live-autofix-evidence",
+        "security-autoheal-autofix",
+    )
+
+
+def route_alerts(
+    alerts: Sequence[Mapping[str, Any]],
+    *,
+    main_sha: str,
+    config: Mapping[str, Any],
+    attempts_by_alert: Mapping[int, Mapping[str, int]] | None = None,
+    autofix_by_alert: Mapping[int, str] | None = None,
+) -> list[dict[str, Any]]:
+    if len(alerts) > MAX_ALERT_BATCH:
+        raise RoutingPolicyError("alert batch exceeds the bounded routing limit")
+    attempts_by_alert = attempts_by_alert or {}
+    autofix_by_alert = autofix_by_alert or {}
+    seen: set[int] = set()
+    records: list[dict[str, Any]] = []
+    for alert in alerts:
+        number = _require_positive_int(alert.get("number"), "alert number")
+        if number in seen:
+            raise RoutingPolicyError("alert batch contains duplicate alert identity")
+        seen.add(number)
+        records.append(
+            route_alert(
+                alert,
+                main_sha=main_sha,
+                config=config,
+                attempts_by_strategy=attempts_by_alert.get(number),
+                autofix_eligibility=autofix_by_alert.get(number, "unknown"),
+            )
+        )
+    return sorted(records, key=lambda row: int(row["alertNumber"]))
+
+
+def canonical_record(record: Mapping[str, Any]) -> bytes:
+    raw = dict(record)
+    digest = raw.pop("recordDigest", None)
+    if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise RoutingPolicyError("routing record digest is missing or malformed")
+    expected = hashlib.sha256(
+        json.dumps(raw, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    if digest != expected:
+        raise RoutingPolicyError("routing record digest does not match its content")
+    raw["recordDigest"] = digest
+    payload = (json.dumps(raw, separators=(",", ":"), sort_keys=True) + "\n").encode("utf-8")
+    if len(payload) > MAX_ROUTE_RECORD_BYTES:
+        raise RoutingPolicyError("routing record exceeds the bounded persistence limit")
+    return payload
+
+
+def persist_record(path: Path, record: Mapping[str, Any]) -> bool:
+    payload = canonical_record(record)
+    parent = path.parent
+    try:
+        parent_info = parent.lstat()
+    except OSError as exc:
+        raise RoutingPolicyError("routing record parent directory is unavailable") from exc
+    if parent.is_symlink() or not stat.S_ISDIR(parent_info.st_mode):
+        raise RoutingPolicyError("routing record parent must be a non-symlink directory")
+
+    if path.exists() or path.is_symlink():
+        info = path.lstat()
+        if path.is_symlink() or not stat.S_ISREG(info.st_mode):
+            raise RoutingPolicyError("existing routing record path is not a regular file")
+        if path.read_bytes() == payload:
+            return False
+        raise RoutingPolicyError("routing record path already contains different evidence")
+
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=parent)
+    temp_path = Path(temporary)
+    try:
+        with os.fdopen(fd, "wb", closefd=True) as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temp_path, 0o600)
+        try:
+            os.link(temp_path, path)
+        except FileExistsError:
+            info = path.lstat()
+            if path.is_symlink() or not stat.S_ISREG(info.st_mode) or path.read_bytes() != payload:
+                raise RoutingPolicyError("concurrent routing record publication conflicted")
+            return False
+        dir_fd = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+        return True
+    finally:
+        try:
+            temp_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _read_json(path: Path, *, max_bytes: int, label: str) -> Any:
+    try:
+        info = path.lstat()
+    except OSError as exc:
+        raise RoutingPolicyError(f"{label} is unavailable") from exc
+    if path.is_symlink() or not stat.S_ISREG(info.st_mode) or info.st_size > max_bytes:
+        raise RoutingPolicyError(f"{label} must be a bounded regular non-symlink file")
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RoutingPolicyError(f"{label} is not canonical JSON") from exc
+
+
+def load_config(path: Path = DEFAULT_CONFIG) -> dict[str, Any]:
+    payload = _read_json(path, max_bytes=256 * 1024, label="routing config")
+    if not isinstance(payload, dict):
+        raise RoutingPolicyError("routing config must be a JSON object")
+    _routing_config(payload)
+    return payload
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--alert", type=Path, required=True)
+    parser.add_argument("--main-sha", required=True)
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    parser.add_argument(
+        "--autofix-eligibility",
+        choices=sorted(AUTOFIX_EVIDENCE),
+        default="unknown",
+    )
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+
+    alert = _read_json(args.alert, max_bytes=512 * 1024, label="alert input")
+    if not isinstance(alert, dict):
+        raise RoutingPolicyError("alert input must be a JSON object")
+    record = route_alert(
+        alert,
+        main_sha=args.main_sha,
+        config=load_config(args.config),
+        autofix_eligibility=args.autofix_eligibility,
+    )
+    persist_record(args.output, record)
+    print(
+        json.dumps(
+            {
+                "decision": record["decision"],
+                "recordDigest": record["recordDigest"],
+                "routingPolicyVersion": record["routingPolicyVersion"],
+            },
+            sort_keys=True,
+        )
+    )
+
+
+if __name__ == "__main__":
+    main()
