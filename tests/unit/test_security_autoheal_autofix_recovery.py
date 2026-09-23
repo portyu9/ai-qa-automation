@@ -197,10 +197,59 @@ def test_only_current_policy_eligible_model_subjects_preserve_recovery_branches(
         [model, blocked, stale],
         BASE,
         config,
+        [],
     )
 
     subject = autoheal.validate_alert(model, BASE, config)
     assert branches == {autoheal._branch_name(subject)}
+
+
+def test_closed_same_repository_attempt_is_not_recovery_authority() -> None:
+    config = autoheal.load_config()
+    model = _alert("src/ai_qa_automation/example.py")
+    subject = autoheal.validate_alert(model, BASE, config)
+    branch = autoheal._branch_name(subject)
+    closed = [
+        {
+            "head": {
+                "ref": branch,
+                "repo": {"full_name": config["repository"]},
+            }
+        }
+    ]
+
+    branches = autoheal._recoverable_model_autofix_branches(
+        [model],
+        BASE,
+        config,
+        closed,
+    )
+
+    assert branches == set()
+
+
+def test_fork_branch_name_collision_does_not_suppress_recovery() -> None:
+    config = autoheal.load_config()
+    model = _alert("src/ai_qa_automation/example.py")
+    subject = autoheal.validate_alert(model, BASE, config)
+    branch = autoheal._branch_name(subject)
+    closed = [
+        {
+            "head": {
+                "ref": branch,
+                "repo": {"full_name": "attacker/example"},
+            }
+        }
+    ]
+
+    branches = autoheal._recoverable_model_autofix_branches(
+        [model],
+        BASE,
+        config,
+        closed,
+    )
+
+    assert branches == {branch}
 
 
 class _ReconcileRecoveryApi(_AmbiguousCommitApi):
