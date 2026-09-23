@@ -142,6 +142,7 @@ class _TerminalApi:
         autoheal_run_attempt: int = 1,
         gate_run_attempt: int = 1,
         gate_workflow_id: int = autoheal.TRUSTED_PR_GATE_WORKFLOW_ID,
+        gate_event: str = "schedule",
     ) -> None:
         self.pr = _repair_pr()
         self.ci_runs = [_ci_run()] if ci_runs is None else list(ci_runs)
@@ -152,6 +153,7 @@ class _TerminalApi:
         self.autoheal_run_attempt = autoheal_run_attempt
         self.gate_run_attempt = gate_run_attempt
         self.gate_workflow_id = gate_workflow_id
+        self.gate_event = gate_event
         self.comments: list[dict[str, Any]] = []
         self.dispatches: list[tuple[str, dict[str, Any] | None]] = []
 
@@ -210,7 +212,7 @@ class _TerminalApi:
                     "workflow_id": self.gate_workflow_id,
                     "name": autoheal.EXPECTED_GATE_WORKFLOW_NAME,
                     "path": autoheal.EXPECTED_GATE_WORKFLOW_PATH,
-                    "event": "schedule",
+                    "event": self.gate_event,
                     "run_attempt": self.gate_run_attempt,
                     "head_branch": "main",
                     "head_sha": BASE,
@@ -447,6 +449,46 @@ def test_terminal_closure_rejects_rerun_trusted_gate(
     ):
         autoheal._reconcile_terminal_closure(api, MERGE, config)
     assert api.comments == []
+
+
+def test_security_merge_gate_requires_schedule_event(
+    config: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[int, str, str]] = []
+
+    def _generic_gate(
+        api: Any,
+        number: int,
+        head_sha: str,
+        base_sha: str,
+    ) -> dict[str, Any]:
+        calls.append((number, head_sha, base_sha))
+        return {"id": TRUSTED_STATUS_ID}
+
+    monkeypatch.setattr(autoheal, "require_automatic_trusted_gate", _generic_gate)
+    metadata = _metadata()
+    live = {"headSha": HEAD, "baseSha": BASE}
+
+    status = autoheal._require_scheduled_security_trusted_gate(
+        _TerminalApi(),
+        PR_NUMBER,
+        metadata,
+        live,
+    )
+    assert status["id"] == TRUSTED_STATUS_ID
+    assert calls == [(PR_NUMBER, HEAD, BASE)]
+
+    with pytest.raises(
+        autoheal.TrustedStatusError,
+        match="not schedule-bound security evidence",
+    ):
+        autoheal._require_scheduled_security_trusted_gate(
+            _TerminalApi(gate_event="workflow_run"),
+            PR_NUMBER,
+            metadata,
+            live,
+        )
 
 
 def test_terminal_closure_rejects_wrong_trusted_gate_workflow_identity(
