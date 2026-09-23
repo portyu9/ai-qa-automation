@@ -291,6 +291,35 @@ def _routing_config(config: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _routing_policy_digest(policy: Mapping[str, Any]) -> str:
+    deterministic = [
+        {
+            "rule": entry["rule"],
+            "strategy": entry["strategy"],
+            "paths": sorted(entry["paths"]),
+            "pathPrefixes": sorted(entry["pathPrefixes"]),
+        }
+        for entry in policy["deterministicStrategies"]
+    ]
+    deterministic.sort(key=lambda entry: (entry["rule"], entry["strategy"]))
+    material = {
+        "routingPolicyVersion": ROUTING_POLICY_VERSION,
+        "allowedRules": sorted(policy["allowedRules"]),
+        "minimumSecuritySeverity": policy["minimumSecuritySeverity"],
+        "maxAttemptsPerAlert": policy["maxAttemptsPerAlert"],
+        "modelAutofixPathPrefixes": list(policy["modelAutofixPathPrefixes"]),
+        "deterministicOnlyPaths": sorted(policy["deterministicOnlyPaths"]),
+        "neverModifyPaths": sorted(policy["neverModifyPaths"]),
+        "protectedStrategy": policy["protectedStrategy"],
+        "modelStrategy": policy["modelStrategy"],
+        "noReviewedStrategy": policy["noReviewedStrategy"],
+        "deterministicStrategies": deterministic,
+    }
+    return hashlib.sha256(
+        json.dumps(material, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
 def _deterministic_strategy(subject: Mapping[str, Any], policy: Mapping[str, Any]) -> str | None:
     matches: list[str] = []
     for entry in policy["deterministicStrategies"]:
@@ -326,6 +355,7 @@ def _record(
     strategy: str,
     strategy_attempt_count: int,
     max_attempts: int,
+    policy_digest: str,
     protected: bool,
     autofix_eligibility: str,
 ) -> dict[str, Any]:
@@ -334,10 +364,12 @@ def _record(
     payload = {
         "schemaVersion": 1,
         "routingPolicyVersion": ROUTING_POLICY_VERSION,
+        "routingPolicyDigest": policy_digest,
         "decision": decision,
         "reason": reason,
         "authority": authority,
         "alertNumber": subject["alertNumber"],
+        "alertState": subject["state"],
         "tool": subject["tool"],
         "rule": subject["rule"],
         "securitySeverity": subject["securitySeverity"],
@@ -391,6 +423,7 @@ def route_alert(
 
     attempts = _attempt_count(attempts_by_strategy, strategy)
     max_attempts = int(policy["maxAttemptsPerAlert"])
+    policy_digest = _routing_policy_digest(policy)
 
     def make(decision: str, reason: str, authority: str = "none") -> dict[str, Any]:
         return _record(
@@ -401,6 +434,7 @@ def route_alert(
             strategy=strategy,
             strategy_attempt_count=attempts,
             max_attempts=max_attempts,
+            policy_digest=policy_digest,
             protected=protected,
             autofix_eligibility=autofix_eligibility,
         )
