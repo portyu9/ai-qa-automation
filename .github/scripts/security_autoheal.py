@@ -39,14 +39,11 @@ DEFAULT_CONFIG = ROOT / ".github" / "security-autoheal.json"
 API_ROOT = "https://api.github.com"
 API_VERSION = "2026-03-10"
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
-POST_MERGE_CI_WORKFLOW = "ci.yml"
 POST_MERGE_CI_WORKFLOW_ID = 339754724
 TRUSTED_PR_GATE_WORKFLOW_ID = 346203190
 POST_MERGE_CI_PATH = ".github/workflows/ci.yml"
 POST_MERGE_CI_NAME = "CI — ƳƤ AI QA Automation Framework"
 POST_MERGE_CI_EVENTS = {"push", "workflow_dispatch"}
-POST_MERGE_CI_REGISTRATION_ATTEMPTS = 15
-POST_MERGE_CI_REGISTRATION_DELAY_SECONDS = 2
 MAIN_CODEQL_WORKFLOW = "codeql.yml"
 MAIN_CODEQL_WORKFLOW_ID = 359681647
 MAIN_CODEQL_PATH = ".github/workflows/codeql.yml"
@@ -2176,8 +2173,8 @@ def _terminal_alert_is_fixed(
     ) != metadata.get("rule"):
         raise AutohealError("terminal alert identity drifted from repair provenance")
     observed_path = ((alert.get("most_recent_instance") or {}).get("location") or {}).get("path")
-    if isinstance(observed_path, str) and observed_path and observed_path != metadata.get("path"):
-        raise AutohealError("terminal alert path drifted from repair provenance")
+    if observed_path != metadata.get("path"):
+        raise AutohealError("terminal alert path is missing or drifted from repair provenance")
     state = alert.get("state")
     if state == "fixed":
         return True
