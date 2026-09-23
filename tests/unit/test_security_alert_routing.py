@@ -523,6 +523,26 @@ def test_routing_record_persistence_is_atomic_idempotent_and_conflict_safe(
         routing.persist_record(target, tampered)
 
 
+def test_routing_record_rejects_digest_tampering(tmp_path: Path) -> None:
+    record = routing.route_alert(_alert(), main_sha=MAIN, config=_config())
+    record["reason"] = "tampered-without-redigest"
+
+    with pytest.raises(routing.RoutingPolicyError, match="digest does not match"):
+        routing.persist_record(tmp_path / "route.json", record)
+
+
+def test_routing_record_persistence_rejects_symlink_parent(tmp_path: Path) -> None:
+    record = routing.route_alert(_alert(), main_sha=MAIN, config=_config())
+    actual_parent = tmp_path / "actual"
+    actual_parent.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(actual_parent, target_is_directory=True)
+
+    with pytest.raises(routing.RoutingPolicyError, match="parent"):
+        routing.persist_record(alias / "route.json", record)
+    assert list(actual_parent.iterdir()) == []
+
+
 def test_routing_record_persistence_rejects_symlink_target(tmp_path: Path) -> None:
     record = routing.route_alert(_alert(), main_sha=MAIN, config=_config())
     actual = tmp_path / "actual.json"
