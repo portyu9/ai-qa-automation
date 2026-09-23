@@ -58,7 +58,7 @@ def require_schedule_trusted_gate(
         or run.get("name") != EXPECTED_GATE_WORKFLOW_NAME
         or run.get("path") != EXPECTED_GATE_WORKFLOW_PATH
         or run.get("event") != TRUSTED_PR_AUTO_EVENT
-        or run.get("run_attempt") != 1
+        or _require_positive_int(run.get("run_attempt"), "dependency gate run attempt") != 1
         or run.get("head_branch") != "main"
         or _require_sha(run.get("head_sha"), "dependency gate run head SHA") != base_sha
         or run.get("status") != "completed"
