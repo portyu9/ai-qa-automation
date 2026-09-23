@@ -90,6 +90,7 @@ TERMINAL_CLOSURE_COMMENT_PREFIX = "<!-- aiqa-codeql-autoheal-terminal:"
 TERMINAL_CLOSURE_COMMENT_SUFFIX = " -->"
 TERMINAL_TRUSTED_GATE_EVENTS = {"schedule"}
 TERMINAL_MAIN_EVENTS = {"push"}
+TERMINAL_AUTOHEAL_EVENTS = {"workflow_run", "schedule"}
 ALERT_FIXED_OBSERVATION_ATTEMPTS = 3
 ALERT_FIXED_OBSERVATION_DELAY_SECONDS = 1
 LEGACY_STALE_CLOSURE_CUTOFF = "2026-09-23T00:11:00Z"
@@ -1399,8 +1400,8 @@ def _post_merge_ci_candidates(rows: list[dict[str, Any]], subject_sha: str) -> l
         ):
             continue
         attempt = row.get("run_attempt")
-        if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
-            raise AutohealError("exact-subject CI run has invalid run_attempt")
+        if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt != 1:
+            raise AutohealError("exact-subject CI run_attempt must equal 1")
         run_id = row.get("id")
         if not isinstance(run_id, int) or isinstance(run_id, bool) or run_id < 1:
             raise AutohealError("exact-subject CI run has invalid run id")
@@ -1553,8 +1554,8 @@ def _terminal_main_codeql_candidates(
             continue
         attempt = row.get("run_attempt")
         run_id = row.get("id")
-        if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
-            raise AutohealError("terminal exact-main CodeQL run has invalid run_attempt")
+        if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt != 1:
+            raise AutohealError("terminal exact-main CodeQL run_attempt must equal 1")
         if not isinstance(run_id, int) or isinstance(run_id, bool) or run_id < 1:
             raise AutohealError("terminal exact-main CodeQL run has invalid run id")
         status = row.get("status")
@@ -1689,6 +1690,7 @@ def _terminal_trusted_gate_evidence(
         or run.get("name") != EXPECTED_GATE_WORKFLOW_NAME
         or run.get("path") != EXPECTED_GATE_WORKFLOW_PATH
         or run.get("event") not in TERMINAL_TRUSTED_GATE_EVENTS
+        or run.get("run_attempt") != 1
         or run.get("head_branch") != "main"
         or run.get("head_sha") != base_sha
         or run.get("status") != "completed"
@@ -1702,6 +1704,7 @@ def _terminal_trusted_gate_evidence(
     return {
         "trustedStatusId": int(latest["id"]),
         "trustedGateRunId": run_id,
+        "trustedGateRunAttempt": 1,
         "trustedGateEvent": str(run["event"]),
         "trustedProspectiveMergeSha": prospective_merge_sha,
     }
@@ -1750,6 +1753,7 @@ def _terminal_closure_certificate(
         (codeql_run.get("run_attempt"), "terminal CodeQL run attempt"),
         (trusted_gate.get("trustedStatusId"), "terminal trusted status id"),
         (trusted_gate.get("trustedGateRunId"), "terminal trusted gate run id"),
+        (trusted_gate.get("trustedGateRunAttempt"), "terminal trusted gate run attempt"),
     ):
         if not isinstance(value, int) or isinstance(value, bool) or value < 1:
             raise PolicyBlock(f"{label} is invalid")
@@ -1777,6 +1781,7 @@ def _terminal_closure_certificate(
         "codeqlEvent": str(codeql_run["event"]),
         "trustedStatusId": int(trusted_gate["trustedStatusId"]),
         "trustedGateRunId": int(trusted_gate["trustedGateRunId"]),
+        "trustedGateRunAttempt": int(trusted_gate["trustedGateRunAttempt"]),
         "trustedGateEvent": str(trusted_gate["trustedGateEvent"]),
         "trustedProspectiveMergeSha": _require_sha(
             trusted_gate.get("trustedProspectiveMergeSha"),
@@ -1815,13 +1820,10 @@ def _terminal_certificate_static_matches(
         return False
     positive_int_fields = (
         "ciRunId",
-        "ciRunAttempt",
         "codeqlRunId",
-        "codeqlRunAttempt",
         "trustedStatusId",
         "trustedGateRunId",
         "workflowRunId",
-        "workflowRunAttempt",
     )
     return (
         certificate.get("version") == 1
@@ -1842,6 +1844,10 @@ def _terminal_certificate_static_matches(
         and certificate.get("codeqlWorkflowId") == MAIN_CODEQL_WORKFLOW_ID
         and certificate.get("codeqlEvent") in TERMINAL_MAIN_EVENTS
         and certificate.get("trustedGateEvent") in TERMINAL_TRUSTED_GATE_EVENTS
+        and certificate.get("ciRunAttempt") == 1
+        and certificate.get("codeqlRunAttempt") == 1
+        and certificate.get("trustedGateRunAttempt") == 1
+        and certificate.get("workflowRunAttempt") == 1
         and isinstance(certificate.get("trustedProspectiveMergeSha"), str)
         and SHA.fullmatch(str(certificate.get("trustedProspectiveMergeSha"))) is not None
         and certificate.get("workflowId") == SECURITY_AUTOHEAL_WORKFLOW_ID
@@ -1872,12 +1878,60 @@ def _terminal_evidence_run_matches(
         and run.get("workflow_id") == workflow_id
         and run.get("path") == workflow_path
         and run.get("name") == workflow_name
-        and run.get("run_attempt") == run_attempt
+        and run_attempt == 1
+        and run.get("run_attempt") == 1
         and run.get("head_branch") == "main"
         and run.get("head_sha") == subject_sha
         and run.get("event") in allowed_events
         and run.get("status") == "completed"
         and run.get("conclusion") == "success"
+    )
+
+
+def _terminal_autoheal_workflow_run_matches(
+    api: GitHubApi,
+    certificate: dict[str, Any],
+) -> bool:
+    run_id = certificate.get("workflowRunId")
+    run_attempt = certificate.get("workflowRunAttempt")
+    if (
+        not isinstance(run_id, int)
+        or isinstance(run_id, bool)
+        or run_id < 1
+        or run_attempt != 1
+    ):
+        return False
+    try:
+        merge_sha = _require_sha(
+            certificate.get("mergeSha"),
+            "terminal certificate merge SHA",
+        )
+    except PolicyBlock:
+        return False
+    run = api.get(f"/actions/runs/{run_id}")
+    if not isinstance(run, dict):
+        return False
+    if (
+        run.get("id") != run_id
+        or run.get("workflow_id") != SECURITY_AUTOHEAL_WORKFLOW_ID
+        or run.get("path") != SECURITY_AUTOHEAL_WORKFLOW_PATH
+        or run.get("run_attempt") != 1
+        or run.get("event") not in TERMINAL_AUTOHEAL_EVENTS
+        or run.get("head_branch") != "main"
+        or run.get("head_sha") != merge_sha
+    ):
+        return False
+    if run.get("status") == "completed":
+        return run.get("conclusion") == "success"
+    try:
+        current_run_id = _current_positive_int_env("GITHUB_RUN_ID")
+        current_attempt = _current_positive_int_env("GITHUB_RUN_ATTEMPT")
+    except PolicyBlock:
+        return False
+    return (
+        run.get("status") in {"queued", "in_progress"}
+        and run_id == current_run_id
+        and current_attempt == 1
     )
 
 
@@ -1892,6 +1946,7 @@ def _terminal_certificate_evidence_matches(
     if (
         trusted_gate["trustedStatusId"] != certificate.get("trustedStatusId")
         or trusted_gate["trustedGateRunId"] != certificate.get("trustedGateRunId")
+        or trusted_gate["trustedGateRunAttempt"] != certificate.get("trustedGateRunAttempt")
         or trusted_gate["trustedGateEvent"] != certificate.get("trustedGateEvent")
         or trusted_gate["trustedProspectiveMergeSha"]
         != certificate.get("trustedProspectiveMergeSha")
@@ -1918,7 +1973,7 @@ def _terminal_certificate_evidence_matches(
             subject_sha=merge_sha,
             allowed_events=TERMINAL_MAIN_EVENTS,
         )
-        and _autoheal_workflow_run_matches(api, certificate)
+        and _terminal_autoheal_workflow_run_matches(api, certificate)
     )
 
 
@@ -1993,6 +2048,10 @@ def _ensure_terminal_closure_certificate(
         workflow_run_id=_current_positive_int_env("GITHUB_RUN_ID"),
         workflow_run_attempt=_current_positive_int_env("GITHUB_RUN_ATTEMPT"),
     )
+    if not _terminal_certificate_evidence_matches(api, certificate, metadata, number):
+        raise PolicyBlock(
+            "terminal closure evidence is not exact autonomous workflow evidence"
+        )
     body = _terminal_closure_comment(certificate)
     created = api.post(f"/issues/{number}/comments", {"body": body})
     if not isinstance(created, dict) or created.get("body") != body:
@@ -2108,41 +2167,35 @@ def _verify_merged_repair_subject(
     return number, metadata, merge_evidence
 
 
-def _require_fixed_terminal_alert(
+def _terminal_alert_is_fixed(
     api: GitHubApi,
     metadata: dict[str, Any],
-) -> None:
+) -> bool:
     alert_number = metadata.get("alert")
     if not isinstance(alert_number, int) or isinstance(alert_number, bool) or alert_number < 1:
         raise PolicyBlock("terminal repair alert number is invalid")
-    last_state: Any = None
-    for attempt in range(ALERT_FIXED_OBSERVATION_ATTEMPTS):
-        alert = api.get(f"/code-scanning/alerts/{alert_number}")
-        if not isinstance(alert, dict):
-            raise AutohealError("terminal CodeQL alert lookup returned malformed data")
-        state = alert.get("state")
-        last_state = state
-        if state == "fixed":
-            if (
-                (alert.get("tool") or {}).get("name") != "CodeQL"
-                or (alert.get("rule") or {}).get("id") != metadata.get("rule")
-                or ((alert.get("most_recent_instance") or {}).get("location") or {}).get("path")
-                != metadata.get("path")
-            ):
-                raise AutohealError("fixed terminal alert identity drifted from repair provenance")
-            return
-        if state != "open":
-            raise AutohealError(
-                f"terminal CodeQL alert has non-fixed terminal state: {state}"
-            )
-        if attempt + 1 < ALERT_FIXED_OBSERVATION_ATTEMPTS:
-            time.sleep(ALERT_FIXED_OBSERVATION_DELAY_SECONDS)
-    raise AutohealError(
-        f"post-merge CodeQL succeeded but alert #{alert_number} remains {last_state}"
+    alert = api.get(f"/code-scanning/alerts/{alert_number}")
+    if not isinstance(alert, dict):
+        raise AutohealError("terminal CodeQL alert lookup returned malformed data")
+    if (
+        (alert.get("tool") or {}).get("name") != "CodeQL"
+        or (alert.get("rule") or {}).get("id") != metadata.get("rule")
+    ):
+        raise AutohealError("terminal alert identity drifted from repair provenance")
+    observed_path = (
+        ((alert.get("most_recent_instance") or {}).get("location") or {}).get("path")
     )
+    if isinstance(observed_path, str) and observed_path and observed_path != metadata.get("path"):
+        raise AutohealError("terminal alert path drifted from repair provenance")
+    state = alert.get("state")
+    if state == "fixed":
+        return True
+    if state == "open":
+        return False
+    raise AutohealError(f"terminal CodeQL alert has non-fixed terminal state: {state}")
 
 
-def _reconcile_terminal_closure(
+def _reconcile_terminal_closure(def _reconcile_terminal_closure(
     api: GitHubApi,
     main_sha: str,
     config: dict[str, Any],
@@ -2215,7 +2268,17 @@ def _reconcile_terminal_closure(
 
     if _current_main(api, config) != main_sha:
         raise AutohealError("current main changed before terminal closure certification")
-    _require_fixed_terminal_alert(api, metadata)
+    if not _terminal_alert_is_fixed(api, metadata):
+        print(
+            json.dumps(
+                {
+                    "decision": "terminal-closure-waiting",
+                    "reason": "exact-main CodeQL succeeded but the alert is still open",
+                },
+                sort_keys=True,
+            )
+        )
+        return True
     certificate = _ensure_terminal_closure_certificate(
         api,
         number,
@@ -2230,15 +2293,7 @@ def _reconcile_terminal_closure(
     print(
         json.dumps(
             {
-                "pr": number,
-                "alert": metadata["alert"],
                 "decision": "repair-verified",
-                "mergeSha": merge_evidence["mergeSha"],
-                "sourceTreeSha": merge_evidence["sourceTreeSha"],
-                "ciRunId": certificate["ciRunId"],
-                "codeqlRunId": certificate["codeqlRunId"],
-                "trustedStatusId": certificate["trustedStatusId"],
-                "trustedGateRunId": certificate["trustedGateRunId"],
                 "terminalCertificate": "durable-unedited-github-actions-comment",
             },
             sort_keys=True,
@@ -2939,7 +2994,7 @@ def selftest(config: dict[str, Any]) -> None:
         "path": POST_MERGE_CI_PATH,
         "head_branch": "main",
         "head_sha": merge_sha,
-        "event": "workflow_dispatch",
+        "event": "push",
         "status": "queued",
         "conclusion": None,
     }
