@@ -501,3 +501,109 @@ def test_dependency_promotion_moved_subject_stops_before_gate(
     with pytest.raises(promotion.PolicyBlock, match="changed before guarded merge"):
         promotion._publish_and_merge(api, promoted, config)
     assert api.events == ["fresh-pr", "rebind"]
+
+
+def test_dependency_governance_reconcile_stops_after_successful_merge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_gets: list[str] = []
+
+    class _Api:
+        def get(self, path: str) -> dict[str, Any]:
+            observed_gets.append(path)
+            if path == "/pulls/601":
+                return {"number": 601, "head": {"ref": "feature/dependabot"}}
+            raise AssertionError(f"governance continued after merge: {path}")
+
+    api = _Api()
+    config = {
+        "repository": gate.EXPECTED_REPOSITORY,
+        "automergeEnabled": True,
+    }
+    monkeypatch.setenv("GITHUB_REPOSITORY", gate.EXPECTED_REPOSITORY)
+    monkeypatch.setattr(governance, "GitHubApi", lambda token, repository: api)
+    monkeypatch.setattr(
+        governance,
+        "open_dependabot_prs",
+        lambda api_arg: [{"number": 601}, {"number": 602}],
+    )
+
+    subject = {"number": 601, "headSha": HEAD, "baseSha": BASE}
+
+    def assess(
+        api_arg: object,
+        pr: dict[str, Any],
+        config_arg: dict[str, Any],
+        *,
+        require_checks: bool,
+    ) -> dict[str, Any]:
+        assert api_arg is api
+        assert pr["number"] == 601
+        assert config_arg is config
+        assert require_checks is True
+        return subject
+
+    monkeypatch.setattr(governance, "assess", assess)
+    monkeypatch.setattr(
+        governance,
+        "_merge",
+        lambda api_arg, subject_arg, config_arg: {"mergeSha": MERGE},
+    )
+
+    assert governance.reconcile(config, allow_merge=True) == 1
+    assert observed_gets == ["/pulls/601"]
+
+
+def test_dependency_promotion_reconcile_stops_after_successful_merge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_gets: list[str] = []
+
+    class _Api:
+        def get(self, path: str) -> dict[str, Any]:
+            observed_gets.append(path)
+            if path == "/pulls/701":
+                return {"number": 701}
+            raise AssertionError(f"promotion continued after merge: {path}")
+
+    api = _Api()
+    config = {
+        "repository": gate.EXPECTED_REPOSITORY,
+        "automergeEnabled": True,
+    }
+    monkeypatch.setenv("GITHUB_REPOSITORY", gate.EXPECTED_REPOSITORY)
+    monkeypatch.setattr(promotion, "GitHubApi", lambda token, repository: api)
+    monkeypatch.setattr(promotion, "_prune_orphan_promotion_refs", lambda api_arg: 0)
+    monkeypatch.setattr(
+        promotion,
+        "_promotion_pulls",
+        lambda api_arg: [
+            {"number": 701, "head": {"ref": "automation/dependency-promotion-1-aaaaaaaaaaaa"}},
+            {"number": 702, "head": {"ref": "automation/dependency-promotion-2-bbbbbbbbbbbb"}},
+        ],
+    )
+
+    promoted = {"number": 701, "headSha": HEAD, "baseSha": BASE}
+
+    def validate(
+        api_arg: object,
+        pr: dict[str, Any],
+        config_arg: dict[str, Any],
+        *,
+        require_checks: bool,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        assert api_arg is api
+        assert pr == {"number": 701}
+        assert config_arg is config
+        assert require_checks is False
+        return {"source": True}, promoted
+
+    monkeypatch.setattr(promotion, "_validate_promotion", validate)
+    monkeypatch.setattr(
+        promotion,
+        "_publish_and_merge",
+        lambda api_arg, promotion_arg, config_arg: {"mergeSha": MERGE},
+    )
+
+    assert promotion.reconcile(config, allow_merge=True) == 0
+    assert observed_gets == ["/pulls/701"]
