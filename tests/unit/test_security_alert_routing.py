@@ -503,6 +503,28 @@ def test_json_ingestion_rejects_symlink_input(tmp_path: Path) -> None:
         routing._read_json(link, max_bytes=1024, label="alert input")
 
 
+def test_json_ingestion_rejects_symlink_parent(tmp_path: Path) -> None:
+    actual_parent = tmp_path / "actual"
+    actual_parent.mkdir()
+    (actual_parent / "alert.json").write_text("{}", encoding="utf-8")
+    alias = tmp_path / "alias"
+    alias.symlink_to(actual_parent, target_is_directory=True)
+
+    with pytest.raises(routing.RoutingPolicyError, match="symlink component"):
+        routing._read_json(alias / "alert.json", max_bytes=1024, label="alert input")
+
+
+def test_json_ingestion_rejects_group_or_world_writable_input(tmp_path: Path) -> None:
+    alert = tmp_path / "alert.json"
+    alert.write_text("{}", encoding="utf-8")
+    alert.chmod(0o666)
+    try:
+        with pytest.raises(routing.RoutingPolicyError, match="writable by group or other"):
+            routing._read_json(alert, max_bytes=1024, label="alert input")
+    finally:
+        alert.chmod(0o600)
+
+
 def test_routing_policy_is_bound_to_current_autoheal_strategy_constants() -> None:
     config = _config()
     policy = config["routingPolicy"]
