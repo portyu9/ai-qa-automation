@@ -611,6 +611,72 @@ def test_guarded_merge_revalidates_scheduled_gate_after_fresh_subject_rebind(
     assert events == ["fresh-pr", "rebind", "gate", "merge", "finalize"]
 
 
+def test_reconcile_stops_immediately_after_successful_merge(
+    config: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = {
+        "number": 501,
+        "head": {"ref": "automation/codeql-autoheal-7-aaaaaaaaaaaa", "sha": HEAD},
+        "body": autoheal._marker(_metadata()),
+    }
+    second = {
+        "number": 502,
+        "head": {"ref": "automation/codeql-autoheal-8-bbbbbbbbbbbb", "sha": "8" * 40},
+        "body": autoheal._marker({**_metadata(), "alert": 8, "head": "8" * 40}),
+    }
+    observed_gets: list[str] = []
+
+    class _AfterMergeApi:
+        def get(self, path: str) -> dict[str, Any]:
+            observed_gets.append(path)
+            if path == "/pulls/501":
+                return {"number": 501}
+            raise AssertionError(f"reconcile continued after merge: {path}")
+
+        def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+            raise AssertionError(f"reconcile performed post-merge pagination: {path}")
+
+    api = _AfterMergeApi()
+    monkeypatch.setenv("GITHUB_REPOSITORY", config["repository"])
+    monkeypatch.setattr(autoheal, "GitHubApi", lambda token, repository: api)
+    monkeypatch.setattr(autoheal, "_current_main", lambda api_arg, config_arg: BASE)
+    monkeypatch.setattr(autoheal, "_reconcile_terminal_closure", lambda *args: False)
+    monkeypatch.setattr(autoheal, "_open_pulls", lambda api_arg: [first, second])
+    monkeypatch.setattr(autoheal, "_prune_orphan_repair_refs", lambda api_arg, pulls: 0)
+    monkeypatch.setattr(autoheal, "_generated_repairs", lambda pulls: list(pulls))
+
+    metadata = _metadata()
+    live = {"headSha": HEAD, "baseSha": BASE}
+
+    def assess(
+        api_arg: object,
+        pr: dict[str, Any],
+        config_arg: dict[str, Any],
+        *,
+        require_checks: bool,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        assert pr == {"number": 501}
+        assert config_arg is config
+        assert require_checks is False
+        return metadata, live
+
+    monkeypatch.setattr(autoheal, "assess_trusted_admission", assess)
+    monkeypatch.setattr(
+        autoheal,
+        "_require_scheduled_security_trusted_gate",
+        lambda *args: {"id": TRUSTED_STATUS_ID},
+    )
+    monkeypatch.setattr(
+        autoheal,
+        "_merge",
+        lambda *args: {"mergeSha": MERGE, "sourceTreeSha": TREE},
+    )
+
+    assert autoheal.reconcile(config, allow_merge=True) == 1
+    assert observed_gets == ["/pulls/501"]
+
+
 def test_terminal_closure_rejects_wrong_trusted_gate_workflow_identity(
     config: dict[str, Any],
 ) -> None:
