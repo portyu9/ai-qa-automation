@@ -69,6 +69,8 @@ OVERLY_PERMISSIVE_TEST_STRATEGY = "deterministic-overly-permissive-test-file-v1"
 CLEAR_TEXT_LOG_STRATEGY = "deterministic-clear-text-log-v1"
 REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY = "deterministic-reference-sut-reflective-xss-v1"
 STALE_SUPERSESSION_REASON = "main-advanced"
+STALE_SUPERSESSION_COMMENT_PREFIX = "<!-- aiqa-codeql-autoheal-supersession:"
+STALE_SUPERSESSION_COMMENT_SUFFIX = " -->"
 LEGACY_STALE_CLOSURE_CUTOFF = "2026-09-23T00:11:00Z"
 
 DETERMINISTIC_LOG_REPAIRS = {
@@ -467,6 +469,151 @@ def _with_stale_supersession_marker(
     updated["supersessionReason"] = STALE_SUPERSESSION_REASON
     updated["supersededByMain"] = main_sha
     return body.replace(canonical, _marker(updated), 1)
+
+
+def _stale_supersession_certificate(
+    metadata: dict[str, Any],
+    number: int,
+    main_sha: str,
+) -> dict[str, Any]:
+    if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+        raise PolicyBlock("stale repair PR number is invalid")
+    alert = metadata.get("alert")
+    if not isinstance(alert, int) or isinstance(alert, bool) or alert < 1:
+        raise PolicyBlock("stale repair marker alert number is invalid")
+    fingerprint = metadata.get("fingerprint")
+    if not isinstance(fingerprint, str) or re.fullmatch(r"[0-9a-f]{64}", fingerprint) is None:
+        raise PolicyBlock("stale repair marker fingerprint is invalid")
+    strategy = _marker_strategy(metadata)
+    if not isinstance(strategy, str) or not strategy:
+        raise PolicyBlock("stale repair marker strategy is invalid")
+    base_sha = _require_sha(metadata.get("base"), "stale repair marker base SHA")
+    head_sha = _require_sha(metadata.get("head"), "stale repair marker head SHA")
+    main_sha = _require_sha(main_sha, "stale repair superseding main SHA")
+    if main_sha == base_sha:
+        raise PolicyBlock("stale repair supersession main must differ from marker base")
+    return {
+        "version": 1,
+        "pr": number,
+        "alert": alert,
+        "base": base_sha,
+        "head": head_sha,
+        "fingerprint": fingerprint,
+        "strategy": strategy,
+        "supersessionReason": STALE_SUPERSESSION_REASON,
+        "supersededByMain": main_sha,
+    }
+
+
+def _stale_supersession_comment(certificate: dict[str, Any]) -> str:
+    return (
+        STALE_SUPERSESSION_COMMENT_PREFIX
+        + json.dumps(certificate, separators=(",", ":"), sort_keys=True)
+        + STALE_SUPERSESSION_COMMENT_SUFFIX
+    )
+
+
+def _parse_stale_supersession_comment(body: Any) -> dict[str, Any] | None:
+    if (
+        not isinstance(body, str)
+        or not body.startswith(STALE_SUPERSESSION_COMMENT_PREFIX)
+        or not body.endswith(STALE_SUPERSESSION_COMMENT_SUFFIX)
+    ):
+        return None
+    raw = body[
+        len(STALE_SUPERSESSION_COMMENT_PREFIX) : -len(STALE_SUPERSESSION_COMMENT_SUFFIX)
+    ]
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _certificate_superseding_main(
+    certificate: dict[str, Any],
+    metadata: dict[str, Any],
+    number: int,
+) -> str | None:
+    try:
+        expected_base = _require_sha(metadata.get("base"), "certificate marker base SHA")
+        expected_head = _require_sha(metadata.get("head"), "certificate marker head SHA")
+        certificate_base = _require_sha(certificate.get("base"), "certificate base SHA")
+        certificate_head = _require_sha(certificate.get("head"), "certificate head SHA")
+        superseding_main = _require_sha(
+            certificate.get("supersededByMain"),
+            "certificate superseding main SHA",
+        )
+    except PolicyBlock:
+        return None
+    if (
+        certificate.get("version") != 1
+        or certificate.get("pr") != number
+        or certificate.get("alert") != metadata.get("alert")
+        or certificate.get("fingerprint") != metadata.get("fingerprint")
+        or certificate.get("strategy") != _marker_strategy(metadata)
+        or certificate.get("supersessionReason") != STALE_SUPERSESSION_REASON
+        or certificate_base != expected_base
+        or certificate_head != expected_head
+        or superseding_main == expected_base
+    ):
+        return None
+    return superseding_main
+
+
+def _exact_unedited_autoheal_certificate(
+    row: dict[str, Any],
+    metadata: dict[str, Any],
+    number: int,
+) -> tuple[dict[str, Any], str] | None:
+    certificate = _parse_stale_supersession_comment(row.get("body"))
+    if certificate is None:
+        return None
+    actor = row.get("user") or {}
+    if (
+        actor.get("login") != GITHUB_ACTIONS_LOGIN
+        or actor.get("id") != GITHUB_ACTIONS_USER_ID
+    ):
+        return None
+    superseding_main = _certificate_superseding_main(certificate, metadata, number)
+    if superseding_main is None:
+        raise PolicyBlock("GitHub Actions stale-supersession certificate is malformed or drifted")
+    created_at = row.get("created_at")
+    if (
+        not isinstance(created_at, str)
+        or row.get("updated_at") != created_at
+        or not _github_timestamp_at_or_before(created_at, created_at)
+    ):
+        raise PolicyBlock("GitHub Actions stale-supersession certificate is edited or malformed")
+    return certificate, superseding_main
+
+
+def _ensure_stale_supersession_certificate(
+    api: GitHubApi,
+    number: int,
+    metadata: dict[str, Any],
+    main_sha: str,
+) -> dict[str, Any]:
+    comments = api.list_all(f"/issues/{number}/comments", max_pages=2)
+    existing: list[tuple[dict[str, Any], str]] = []
+    for row in comments:
+        parsed = _exact_unedited_autoheal_certificate(row, metadata, number)
+        if parsed is not None:
+            existing.append(parsed)
+    if len(existing) > 1:
+        raise PolicyBlock("stale repair has ambiguous GitHub Actions supersession certificates")
+    if existing:
+        return existing[0][0]
+
+    certificate = _stale_supersession_certificate(metadata, number, main_sha)
+    body = _stale_supersession_comment(certificate)
+    created = api.post(f"/issues/{number}/comments", {"body": body})
+    if not isinstance(created, dict) or created.get("body") != body:
+        raise AutohealError("GitHub did not acknowledge exact stale-supersession certificate")
+    parsed = _exact_unedited_autoheal_certificate(created, metadata, number)
+    if parsed is None or parsed[0] != certificate:
+        raise AutohealError("GitHub returned invalid stale-supersession certificate authority")
+    return certificate
 
 
 def _branch_name(subject: dict[str, Any]) -> str:
@@ -1080,6 +1227,7 @@ def _close_stale_repair(
     commit = api.get(f"/commits/{head_sha}")
     if not _owned_generated_repair_commit(commit, head_sha):
         raise PolicyBlock("stale repair head lacks exact GitHub Actions ownership")
+    _ensure_stale_supersession_certificate(api, number, metadata, main_sha)
     closed_body = _with_stale_supersession_marker(fresh.get("body"), metadata, main_sha)
     closed = api.patch(f"/pulls/{number}", {"state": "closed", "body": closed_body})
     closed_metadata = _parse_marker((closed or {}).get("body"))
@@ -1407,21 +1555,26 @@ def _github_timestamp_at_or_before(value: Any, cutoff: str) -> bool:
     return observed <= boundary
 
 
-def _closed_by_autoheal_bot(api: GitHubApi, number: int) -> bool:
+def _closure_transitions(api: GitHubApi, number: int) -> list[dict[str, Any]]:
     events = api.list_all(f"/issues/{number}/events", max_pages=2)
     transitions = [
         event
         for event in events
         if isinstance(event, dict) and event.get("event") in {"closed", "reopened"}
     ]
-    if not transitions:
-        return False
     transitions.sort(
         key=lambda event: (
             str(event.get("created_at") or ""),
             int(event.get("id")) if isinstance(event.get("id"), int) else 0,
         )
     )
+    return transitions
+
+
+def _closed_by_autoheal_bot(api: GitHubApi, number: int) -> bool:
+    transitions = _closure_transitions(api, number)
+    if not transitions:
+        return False
     final = transitions[-1]
     actor = final.get("actor") or {}
     return (
@@ -1455,7 +1608,18 @@ def _proven_stale_supersession(
         or marker_base != live_base
         or marker_head != live_head
         or marker_base == current_main_sha
-        or not _closed_by_autoheal_bot(api, number)
+    ):
+        return False
+
+    transitions = _closure_transitions(api, number)
+    if not transitions:
+        return False
+    final = transitions[-1]
+    actor = final.get("actor") or {}
+    if (
+        final.get("event") != "closed"
+        or actor.get("login") != GITHUB_ACTIONS_LOGIN
+        or actor.get("id") != GITHUB_ACTIONS_USER_ID
     ):
         return False
 
@@ -1471,7 +1635,34 @@ def _proven_stale_supersession(
             )
         except PolicyBlock:
             return False
-        return superseded_by_sha != marker_base
+        if superseded_by_sha == marker_base:
+            return False
+        comments = api.list_all(f"/issues/{number}/comments", max_pages=2)
+        certificates: list[tuple[dict[str, Any], str, str]] = []
+        for row in comments:
+            try:
+                parsed = _exact_unedited_autoheal_certificate(row, metadata, number)
+            except PolicyBlock:
+                return False
+            if parsed is None:
+                continue
+            created_at = row.get("created_at")
+            if not isinstance(created_at, str):
+                return False
+            certificates.append((parsed[0], parsed[1], created_at))
+        if len(certificates) != 1:
+            return False
+        _, certificate_main, certificate_created_at = certificates[0]
+        if certificate_main != superseded_by_sha:
+            return False
+        final_created_at = final.get("created_at")
+        if not _github_timestamp_at_or_before(certificate_created_at, final_created_at):
+            return False
+        if len(transitions) > 1:
+            previous_created_at = transitions[-2].get("created_at")
+            if _github_timestamp_at_or_before(certificate_created_at, previous_created_at):
+                return False
+        return True
 
     return _github_timestamp_at_or_before(
         pr.get("closed_at"),
