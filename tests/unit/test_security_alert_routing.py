@@ -333,6 +333,76 @@ def test_unreviewed_path_has_explicit_nonmutation_route() -> None:
     assert record["authority"] == "none"
 
 
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    (
+        (
+            lambda config: config.update(
+                allowedRules=[*config["allowedRules"], "py/unreviewed-rule"]
+            ),
+            "code-owned rule set",
+        ),
+        (
+            lambda config: config.update(
+                modelAutofixPathPrefixes=["src/", "examples/", "tests/", ".github/"]
+            ),
+            "code-owned prefixes",
+        ),
+        (
+            lambda config: config.update(
+                neverModifyPaths=[
+                    path for path in config["neverModifyPaths"] if path != ".github/"
+                ]
+            ),
+            "code-owned protected roots",
+        ),
+        (
+            lambda config: config["routingPolicy"].update(
+                modelStrategy="github-codeql-autofix-v2"
+            ),
+            "code-owned strategy",
+        ),
+    ),
+)
+def test_routing_authority_surfaces_cannot_expand_by_config_only(
+    mutate: Any,
+    message: str,
+) -> None:
+    config = _config()
+    mutate(config)
+
+    with pytest.raises(routing.RoutingPolicyError, match=message):
+        routing.route_alert(_alert(), main_sha=MAIN, config=config)
+
+
+def test_batch_rejects_evidence_for_unobserved_alerts() -> None:
+    with pytest.raises(routing.RoutingPolicyError, match="unobserved alert"):
+        routing.route_alerts(
+            [_alert(number=7)],
+            main_sha=MAIN,
+            config=_config(),
+            attempts_by_alert={17: {}},
+        )
+
+    with pytest.raises(routing.RoutingPolicyError, match="unobserved alert"):
+        routing.route_alerts(
+            [_alert(number=7)],
+            main_sha=MAIN,
+            config=_config(),
+            autofix_by_alert={17: "available"},
+        )
+
+
+def test_json_ingestion_rejects_symlink_input(tmp_path: Path) -> None:
+    actual = tmp_path / "alert.json"
+    actual.write_text("{}", encoding="utf-8")
+    link = tmp_path / "link.json"
+    link.symlink_to(actual)
+
+    with pytest.raises(routing.RoutingPolicyError, match="cannot be opened"):
+        routing._read_json(link, max_bytes=1024, label="alert input")
+
+
 def test_routing_policy_is_bound_to_current_autoheal_strategy_constants() -> None:
     config = _config()
     policy = config["routingPolicy"]
