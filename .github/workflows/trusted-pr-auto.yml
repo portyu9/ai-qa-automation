@@ -712,9 +712,73 @@ jobs:
           EXPECTED_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
 
+      - name: Acquire verified CodeQL 2.27.0 bundle
+        id: codeql-tools
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release_api='https://api.github.com/repos/github/codeql-action/releases/tags/codeql-bundle-v2.27.0'
+          asset_url='https://github.com/github/codeql-action/releases/download/codeql-bundle-v2.27.0/codeql-bundle-linux64.tar.zst'
+          metadata="$RUNNER_TEMP/codeql-bundle-v2.27.0.release.json"
+          archive="$RUNNER_TEMP/codeql-bundle-linux64.tar.zst"
+          rm -f -- "$metadata" "$archive" "$archive.part"
+          curl --proto '=https' --tlsv1.2 --fail-with-body --location --silent --show-error \
+            --retry 2 --retry-all-errors --connect-timeout 20 --max-time 60 \
+            --max-filesize 1048576 \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "$release_api" -o "$metadata"
+          read -r expected_sha expected_size observed_url < <(
+            /usr/bin/python3 - "$metadata" <<'PY'
+          import json
+          import re
+          import sys
+          from pathlib import Path
+
+          payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          if payload.get("tag_name") != "codeql-bundle-v2.27.0":
+              raise SystemExit("CodeQL release tag identity drifted")
+          if payload.get("draft") is not False or payload.get("prerelease") is not False:
+              raise SystemExit("CodeQL release is not a stable published release")
+          matches = [
+              asset
+              for asset in payload.get("assets", [])
+              if isinstance(asset, dict)
+              and asset.get("name") == "codeql-bundle-linux64.tar.zst"
+          ]
+          if len(matches) != 1:
+              raise SystemExit("CodeQL release asset identity is missing or ambiguous")
+          asset = matches[0]
+          digest = asset.get("digest")
+          size = asset.get("size")
+          url = asset.get("browser_download_url")
+          if not isinstance(digest, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
+              raise SystemExit("CodeQL release asset lacks a canonical SHA-256 digest")
+          if not isinstance(size, int) or isinstance(size, bool) or size < 1:
+              raise SystemExit("CodeQL release asset size is invalid")
+          if not isinstance(url, str):
+              raise SystemExit("CodeQL release asset URL is invalid")
+          print(digest.removeprefix("sha256:"), size, url)
+          PY
+          )
+          test "$observed_url" = "$asset_url"
+          test "$expected_size" -le 1073741824
+          curl --proto '=https' --tlsv1.2 --fail-with-body --location --silent --show-error \
+            --retry 2 --retry-all-errors --connect-timeout 20 --max-time 300 \
+            --max-filesize 1073741824 \
+            "$asset_url" -o "$archive.part"
+          test "$(stat -c '%s' "$archive.part")" = "$expected_size"
+          read -r observed_sha _ < <(/usr/bin/sha256sum "$archive.part")
+          test "$observed_sha" = "$expected_sha"
+          mv -- "$archive.part" "$archive"
+          printf 'path=%s\n' "$archive" >> "$GITHUB_OUTPUT"
+
       - name: Initialize governed bot CodeQL
         uses: github/codeql-action/init@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
         with:
+          tools: ${{ steps.codeql-tools.outputs.path }}
           languages: python
           queries: security-extended
 
