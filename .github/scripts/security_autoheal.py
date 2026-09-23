@@ -684,10 +684,19 @@ def _ensure_stale_supersession_certificate(
     main_sha = _require_sha(main_sha, "stale repair superseding main SHA")
     comments = api.list_all(f"/issues/{number}/comments", max_pages=2)
     matching: list[tuple[dict[str, Any], str]] = []
+    invalid_matching = 0
     for row in comments:
         parsed = _exact_unedited_autoheal_certificate(row, metadata, number)
-        if parsed is not None and parsed[1] == main_sha:
+        if parsed is None or parsed[1] != main_sha:
+            continue
+        if _autoheal_workflow_run_matches(api, parsed[0]):
             matching.append(parsed)
+        else:
+            invalid_matching += 1
+    if invalid_matching:
+        raise PolicyBlock(
+            "stale repair has current-main supersession certificate without exact workflow authority"
+        )
     if len(matching) > 1:
         raise PolicyBlock(
             "stale repair has ambiguous GitHub Actions supersession certificates for current main"
@@ -707,7 +716,11 @@ def _ensure_stale_supersession_certificate(
     if not isinstance(created, dict) or created.get("body") != body:
         raise AutohealError("GitHub did not acknowledge exact stale-supersession certificate")
     parsed = _exact_unedited_autoheal_certificate(created, metadata, number)
-    if parsed is None or parsed[0] != certificate:
+    if (
+        parsed is None
+        or parsed[0] != certificate
+        or not _autoheal_workflow_run_matches(api, certificate)
+    ):
         raise AutohealError("GitHub returned invalid stale-supersession certificate authority")
     return certificate
 
