@@ -26,7 +26,7 @@ _require_sha = _control._require_sha
 parse_job_results = _control.parse_job_results
 resolve_current_subject = _control.resolve_current_subject
 
-EXPECTED_WORKFLOW_EVENT = "workflow_run"
+EXPECTED_WORKFLOW_EVENTS = frozenset({"schedule", "workflow_run"})
 
 
 def report_automatic_result(
@@ -39,8 +39,10 @@ def report_automatic_result(
     job_results: Mapping[str, str],
     target_url: str,
 ) -> dict[str, Any]:
-    if workflow_event != EXPECTED_WORKFLOW_EVENT:
-        raise PermissionError("automatic trusted status publication requires workflow_run")
+    if workflow_event not in EXPECTED_WORKFLOW_EVENTS:
+        raise PermissionError(
+            "automatic trusted status publication requires workflow_run or schedule"
+        )
     if workflow_ref != EXPECTED_WORKFLOW_REF:
         raise PermissionError("automatic trusted status publication requires refs/heads/main")
     if set(job_results) != {"validation"}:
