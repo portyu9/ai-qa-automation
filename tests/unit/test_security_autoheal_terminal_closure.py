@@ -493,6 +493,86 @@ def test_security_merge_gate_requires_schedule_event(
         )
 
 
+def test_guarded_merge_revalidates_scheduled_gate_after_fresh_subject_rebind(
+    config: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = _metadata()
+    live = {"headSha": HEAD, "baseSha": BASE}
+    events: list[str] = []
+
+    class _MergeApi:
+        def get(self, path: str) -> Any:
+            assert path == f"/pulls/{PR_NUMBER}"
+            events.append("fresh-pr")
+            return {"number": PR_NUMBER}
+
+        def put(
+            self,
+            path: str,
+            payload: dict[str, Any] | None = None,
+            *,
+            token: str | None = None,
+        ) -> dict[str, Any]:
+            assert path == f"/pulls/{PR_NUMBER}/merge"
+            assert payload == {"sha": HEAD, "merge_method": config["mergeMethod"]}
+            assert token is None
+            events.append("merge")
+            return {"merged": True, "sha": MERGE}
+
+    def _assess(
+        api: Any,
+        pr: dict[str, Any],
+        config_arg: dict[str, Any],
+        *,
+        require_checks: bool,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        assert pr == {"number": PR_NUMBER}
+        assert config_arg is config
+        assert require_checks is False
+        events.append("rebind")
+        return metadata, live
+
+    def _gate(
+        api: Any,
+        number: int,
+        metadata_arg: dict[str, Any],
+        live_arg: dict[str, Any],
+    ) -> dict[str, Any]:
+        assert number == PR_NUMBER
+        assert metadata_arg is metadata
+        assert live_arg is live
+        events.append("gate")
+        return {"id": TRUSTED_STATUS_ID}
+
+    def _finalize(
+        api: Any,
+        result: dict[str, Any],
+        live_arg: dict[str, Any],
+        config_arg: dict[str, Any],
+    ) -> dict[str, Any]:
+        assert result == {"merged": True, "sha": MERGE}
+        assert live_arg is live
+        assert config_arg is config
+        events.append("finalize")
+        return {"mergeSha": MERGE, "sourceTreeSha": TREE}
+
+    monkeypatch.setattr(autoheal, "assess_trusted_admission", _assess)
+    monkeypatch.setattr(autoheal, "_require_scheduled_security_trusted_gate", _gate)
+    monkeypatch.setattr(autoheal, "_finalize_post_merge_evidence", _finalize)
+
+    evidence = autoheal._merge(
+        _MergeApi(),
+        PR_NUMBER,
+        metadata,
+        live,
+        config,
+    )
+
+    assert evidence == {"mergeSha": MERGE, "sourceTreeSha": TREE}
+    assert events == ["fresh-pr", "rebind", "gate", "merge", "finalize"]
+
+
 def test_terminal_closure_rejects_wrong_trusted_gate_workflow_identity(
     config: dict[str, Any],
 ) -> None:
