@@ -88,7 +88,8 @@ STALE_SUPERSESSION_COMMENT_PREFIX = "<!-- aiqa-codeql-autoheal-supersession:"
 STALE_SUPERSESSION_COMMENT_SUFFIX = " -->"
 TERMINAL_CLOSURE_COMMENT_PREFIX = "<!-- aiqa-codeql-autoheal-terminal:"
 TERMINAL_CLOSURE_COMMENT_SUFFIX = " -->"
-TERMINAL_TRUSTED_GATE_EVENTS = {"schedule", "workflow_run"}
+TERMINAL_TRUSTED_GATE_EVENTS = {"schedule"}
+TERMINAL_MAIN_EVENTS = {"push"}
 ALERT_FIXED_OBSERVATION_ATTEMPTS = 3
 ALERT_FIXED_OBSERVATION_DELAY_SECONDS = 1
 LEGACY_STALE_CLOSURE_CUTOFF = "2026-09-23T00:11:00Z"
@@ -1394,7 +1395,7 @@ def _post_merge_ci_candidates(rows: list[dict[str, Any]], subject_sha: str) -> l
             or row.get("path") != POST_MERGE_CI_PATH
             or row.get("head_branch") != "main"
             or row.get("head_sha") != subject_sha
-            or row.get("event") not in POST_MERGE_CI_EVENTS
+            or row.get("event") not in TERMINAL_MAIN_EVENTS
         ):
             continue
         attempt = row.get("run_attempt")
@@ -1547,7 +1548,7 @@ def _terminal_main_codeql_candidates(
             or row.get("path") != MAIN_CODEQL_PATH
             or row.get("head_branch") != "main"
             or row.get("head_sha") != subject_sha
-            or row.get("event") not in MAIN_CODEQL_EVENTS
+            or row.get("event") not in TERMINAL_MAIN_EVENTS
         ):
             continue
         attempt = row.get("run_attempt")
@@ -1837,9 +1838,9 @@ def _terminal_certificate_static_matches(
         and observed_merge == expected_merge
         and observed_tree == expected_tree
         and certificate.get("ciWorkflowId") == POST_MERGE_CI_WORKFLOW_ID
-        and certificate.get("ciEvent") in POST_MERGE_CI_EVENTS
+        and certificate.get("ciEvent") in TERMINAL_MAIN_EVENTS
         and certificate.get("codeqlWorkflowId") == MAIN_CODEQL_WORKFLOW_ID
-        and certificate.get("codeqlEvent") in MAIN_CODEQL_EVENTS
+        and certificate.get("codeqlEvent") in TERMINAL_MAIN_EVENTS
         and certificate.get("trustedGateEvent") in TERMINAL_TRUSTED_GATE_EVENTS
         and isinstance(certificate.get("trustedProspectiveMergeSha"), str)
         and SHA.fullmatch(str(certificate.get("trustedProspectiveMergeSha"))) is not None
@@ -1905,7 +1906,7 @@ def _terminal_certificate_evidence_matches(
             workflow_path=POST_MERGE_CI_PATH,
             workflow_name=POST_MERGE_CI_NAME,
             subject_sha=merge_sha,
-            allowed_events=POST_MERGE_CI_EVENTS,
+            allowed_events=TERMINAL_MAIN_EVENTS,
         )
         and _terminal_evidence_run_matches(
             api,
@@ -1915,7 +1916,7 @@ def _terminal_certificate_evidence_matches(
             workflow_path=MAIN_CODEQL_PATH,
             workflow_name=MAIN_CODEQL_NAME,
             subject_sha=merge_sha,
-            allowed_events=MAIN_CODEQL_EVENTS,
+            allowed_events=TERMINAL_MAIN_EVENTS,
         )
         and _autoheal_workflow_run_matches(api, certificate)
     )
