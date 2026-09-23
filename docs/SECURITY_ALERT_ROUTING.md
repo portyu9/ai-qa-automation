@@ -31,7 +31,7 @@ A route is bound to:
 - strategy-version-scoped attempt count;
 - bounded CodeQL Autofix availability evidence when the model/autofix lane is considered.
 
-Malformed or ambiguous identity, unsafe paths, invalid SHAs, oversized alert messages, ambiguous deterministic strategies, and malformed attempt accounting fail closed without manufacturing a routing record.
+Malformed or ambiguous identity, unsafe paths, invalid SHAs, oversized alert messages, ambiguous deterministic strategies, and malformed attempt accounting fail closed without manufacturing a routing record. File-backed alert/config ingestion also resolves every parent component with no-follow directory semantics and requires the final input file to be process-owned and not writable by group or other users before its bytes can influence routing.
 
 ## Decision matrix
 
