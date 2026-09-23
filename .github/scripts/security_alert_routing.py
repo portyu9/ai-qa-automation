@@ -349,6 +349,9 @@ def _routing_config(config: Mapping[str, Any]) -> dict[str, Any]:
         "modelAutofixPathPrefixes": tuple(model_prefixes),
         "deterministicOnlyPaths": tuple(deterministic_only),
         "neverModifyPaths": tuple(never_modify),
+        "protectedControlPlanePaths": tuple(
+            sorted(NEVER_MODIFY_PATHS | DETERMINISTIC_ONLY_PATHS)
+        ),
         "protectedStrategy": protected_strategy,
         "modelStrategy": model_strategy,
         "noReviewedStrategy": no_strategy,
@@ -377,6 +380,7 @@ def _routing_policy_digest(policy: Mapping[str, Any]) -> str:
         "modelAutofixPathPrefixes": list(policy["modelAutofixPathPrefixes"]),
         "deterministicOnlyPaths": sorted(policy["deterministicOnlyPaths"]),
         "neverModifyPaths": sorted(policy["neverModifyPaths"]),
+        "protectedControlPlanePaths": sorted(policy["protectedControlPlanePaths"]),
         "protectedStrategy": policy["protectedStrategy"],
         "modelStrategy": policy["modelStrategy"],
         "noReviewedStrategy": policy["noReviewedStrategy"],
@@ -478,7 +482,9 @@ def route_alert(
         raise RoutingPolicyError("autofix eligibility is outside the reviewed evidence states")
     subject = _alert_subject(alert, main_sha)
     policy = _routing_config(config)
-    protected = any(_path_matches(subject["path"], path) for path in policy["neverModifyPaths"])
+    protected = any(
+        _path_matches(subject["path"], path) for path in policy["protectedControlPlanePaths"]
+    )
 
     deterministic = _deterministic_strategy(subject, policy)
     if protected:
