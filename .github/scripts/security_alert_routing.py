@@ -7,8 +7,8 @@ import json
 import math
 import os
 import re
+import secrets
 import stat
-import tempfile
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -517,50 +517,133 @@ def canonical_record(record: Mapping[str, Any]) -> bytes:
     return payload
 
 
+def _read_record_at(parent_fd: int, name: str) -> bytes | None:
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(name, os.O_RDONLY | nofollow, dir_fd=parent_fd)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise RoutingPolicyError("existing routing record path is not a regular file") from exc
+    try:
+        initial = os.fstat(fd)
+        if not stat.S_ISREG(initial.st_mode) or initial.st_size > MAX_ROUTE_RECORD_BYTES:
+            raise RoutingPolicyError("existing routing record path is not a bounded regular file")
+        payload = bytearray()
+        while len(payload) <= MAX_ROUTE_RECORD_BYTES:
+            chunk = os.read(
+                fd,
+                min(64 * 1024, MAX_ROUTE_RECORD_BYTES + 1 - len(payload)),
+            )
+            if not chunk:
+                break
+            payload.extend(chunk)
+        if len(payload) > MAX_ROUTE_RECORD_BYTES:
+            raise RoutingPolicyError("existing routing record exceeds the persistence limit")
+        final = os.fstat(fd)
+        if (
+            initial.st_dev,
+            initial.st_ino,
+            initial.st_size,
+            initial.st_mtime_ns,
+            initial.st_ctime_ns,
+        ) != (
+            final.st_dev,
+            final.st_ino,
+            final.st_size,
+            final.st_mtime_ns,
+            final.st_ctime_ns,
+        ):
+            raise RoutingPolicyError("existing routing record changed during verification")
+        return bytes(payload)
+    finally:
+        os.close(fd)
+
+
 def persist_record(path: Path, record: Mapping[str, Any]) -> bool:
     payload = canonical_record(record)
-    parent = path.parent
+    name = path.name
+    if not name or name in {".", ".."}:
+        raise RoutingPolicyError("routing record target name is invalid")
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    directory = getattr(os, "O_DIRECTORY", 0)
+    if not nofollow or not directory:
+        raise RoutingPolicyError("routing record persistence requires no-follow directory APIs")
     try:
-        parent_info = parent.lstat()
+        parent_fd = os.open(path.parent, os.O_RDONLY | directory | nofollow)
     except OSError as exc:
-        raise RoutingPolicyError("routing record parent directory is unavailable") from exc
-    if parent.is_symlink() or not stat.S_ISDIR(parent_info.st_mode):
-        raise RoutingPolicyError("routing record parent must be a non-symlink directory")
-
-    if path.exists() or path.is_symlink():
-        info = path.lstat()
-        if path.is_symlink() or not stat.S_ISREG(info.st_mode):
-            raise RoutingPolicyError("existing routing record path is not a regular file")
-        if path.read_bytes() == payload:
-            return False
-        raise RoutingPolicyError("routing record path already contains different evidence")
-
-    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=parent)
-    temp_path = Path(temporary)
+        raise RoutingPolicyError(
+            "routing record parent must be an available non-symlink directory"
+        ) from exc
+    temp_name: str | None = None
     try:
-        with os.fdopen(fd, "wb", closefd=True) as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(temp_path, 0o600)
+        parent_info = os.fstat(parent_fd)
+        if not stat.S_ISDIR(parent_info.st_mode):
+            raise RoutingPolicyError("routing record parent is not a directory")
+
+        existing = _read_record_at(parent_fd, name)
+        if existing is not None:
+            if existing == payload:
+                return False
+            raise RoutingPolicyError("routing record path already contains different evidence")
+
+        for _ in range(8):
+            candidate = f".{name}.{secrets.token_hex(8)}.tmp"
+            try:
+                temp_fd = os.open(
+                    candidate,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow,
+                    0o600,
+                    dir_fd=parent_fd,
+                )
+            except FileExistsError:
+                continue
+            except OSError as exc:
+                raise RoutingPolicyError("routing record temporary publication failed") from exc
+            temp_name = candidate
+            break
+        else:
+            raise RoutingPolicyError("unable to allocate bounded routing record temporary file")
+
         try:
-            os.link(temp_path, path)
+            view = memoryview(payload)
+            while view:
+                written = os.write(temp_fd, view)
+                if written <= 0:
+                    raise RoutingPolicyError("routing record write made no forward progress")
+                view = view[written:]
+            os.fsync(temp_fd)
+        finally:
+            os.close(temp_fd)
+
+        try:
+            os.link(
+                temp_name,
+                name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
         except FileExistsError:
-            info = path.lstat()
-            if path.is_symlink() or not stat.S_ISREG(info.st_mode) or path.read_bytes() != payload:
+            existing = _read_record_at(parent_fd, name)
+            if existing != payload:
                 raise RoutingPolicyError("concurrent routing record publication conflicted")
             return False
-        dir_fd = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)
+        except OSError as exc:
+            raise RoutingPolicyError("routing record atomic publication failed") from exc
+
+        os.fsync(parent_fd)
+        published = _read_record_at(parent_fd, name)
+        if published != payload:
+            raise RoutingPolicyError("routing record publication read-back mismatch")
         return True
     finally:
-        try:
-            temp_path.unlink()
-        except FileNotFoundError:
-            pass
+        if temp_name is not None:
+            try:
+                os.unlink(temp_name, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
+        os.close(parent_fd)
 
 
 def _strict_json_loads(payload: bytes, *, label: str) -> Any:
