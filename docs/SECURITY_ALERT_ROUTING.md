@@ -25,7 +25,9 @@ A route is bound to:
 - exact current-main SHA;
 - deterministic alert fingerprint;
 - versioned routing policy;
+- the existing automatic security-severity floor, which may not be configured below 7;
 - exact remediation strategy/version;
+- the existing per-strategy attempt ceiling, which remains within the reviewed 1..3 bound;
 - strategy-version-scoped attempt count;
 - bounded CodeQL Autofix availability evidence when the model/autofix lane is considered.
 
