@@ -30,12 +30,14 @@ API_ROOT = "https://api.github.com"
 API_VERSION = "2026-03-10"
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 POST_MERGE_CI_WORKFLOW = "ci.yml"
+POST_MERGE_CI_WORKFLOW_ID = 339754724
 POST_MERGE_CI_PATH = ".github/workflows/ci.yml"
 POST_MERGE_CI_NAME = "CI — ƳƤ AI QA Automation Framework"
 POST_MERGE_CI_EVENTS = {"push", "workflow_dispatch"}
 POST_MERGE_CI_REGISTRATION_ATTEMPTS = 15
 POST_MERGE_CI_REGISTRATION_DELAY_SECONDS = 2
 MAIN_CODEQL_WORKFLOW = "codeql.yml"
+MAIN_CODEQL_WORKFLOW_ID = 359681647
 MAIN_CODEQL_PATH = ".github/workflows/codeql.yml"
 MAIN_CODEQL_NAME = "CodeQL"
 MAIN_CODEQL_EVENTS = {"push", "workflow_dispatch", "schedule"}
@@ -74,6 +76,10 @@ REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY = "deterministic-reference-sut-reflective-
 STALE_SUPERSESSION_REASON = "main-advanced"
 STALE_SUPERSESSION_COMMENT_PREFIX = "<!-- aiqa-codeql-autoheal-supersession:"
 STALE_SUPERSESSION_COMMENT_SUFFIX = " -->"
+TERMINAL_CLOSURE_COMMENT_PREFIX = "<!-- aiqa-codeql-autoheal-terminal:"
+TERMINAL_CLOSURE_COMMENT_SUFFIX = " -->"
+ALERT_FIXED_OBSERVATION_ATTEMPTS = 3
+ALERT_FIXED_OBSERVATION_DELAY_SECONDS = 1
 LEGACY_STALE_CLOSURE_CUTOFF = "2026-09-23T00:11:00Z"
 LEGACY_STALE_SUPERSESSIONS = {
     207: {
@@ -1415,6 +1421,69 @@ def _post_merge_ci_runs(api: GitHubApi, subject_sha: str) -> list[dict[str, Any]
     return api.list_all(f"/actions/runs?head_sha={encoded_sha}", max_pages=2)
 
 
+def _ensure_post_merge_ci(
+    api: GitHubApi,
+    subject_sha: str,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    subject_sha = _require_sha(subject_sha, "post-merge CI subject SHA")
+    if _current_main(api, config) != subject_sha:
+        raise AutohealError("current main changed before post-merge CI admission")
+
+    rows = _post_merge_ci_runs(api, subject_sha)
+    existing = _select_post_merge_ci_run(rows, subject_sha)
+    if existing is not None:
+        return {
+            "ciRunId": int(existing["id"]),
+            "ciRunAttempt": int(existing["run_attempt"]),
+            "ciEvent": str(existing["event"]),
+            "ciStatus": str(existing["status"]),
+            "ciDispatched": False,
+        }
+
+    observed_ids = {
+        int(row["id"])
+        for row in rows
+        if isinstance(row.get("id"), int)
+        and not isinstance(row.get("id"), bool)
+        and int(row["id"]) > 0
+    }
+    api.post(
+        f"/actions/workflows/{POST_MERGE_CI_WORKFLOW}/dispatches",
+        {
+            "ref": "main",
+            "inputs": {"subject_sha": subject_sha, "subject_ref": "main"},
+        },
+    )
+
+    registered: dict[str, Any] | None = None
+    for attempt in range(POST_MERGE_CI_REGISTRATION_ATTEMPTS):
+        candidate = _select_post_merge_ci_run(_post_merge_ci_runs(api, subject_sha), subject_sha)
+        if candidate is not None and int(candidate["id"]) not in observed_ids:
+            if candidate.get("event") != "workflow_dispatch":
+                raise AutohealError(
+                    "post-merge CI refresh appeared through an unexpected event "
+                    "after explicit dispatch"
+                )
+            registered = candidate
+            break
+        if attempt + 1 < POST_MERGE_CI_REGISTRATION_ATTEMPTS:
+            time.sleep(POST_MERGE_CI_REGISTRATION_DELAY_SECONDS)
+    if registered is None:
+        raise AutohealError(
+            f"explicit CI dispatch did not register for exact current main {subject_sha}"
+        )
+    if _current_main(api, config) != subject_sha:
+        raise AutohealError("current main changed after post-merge CI registration")
+    return {
+        "ciRunId": int(registered["id"]),
+        "ciRunAttempt": int(registered["run_attempt"]),
+        "ciEvent": str(registered["event"]),
+        "ciStatus": str(registered["status"]),
+        "ciDispatched": True,
+    }
+
+
 def _main_codeql_candidates(rows: list[dict[str, Any]], subject_sha: str) -> list[dict[str, Any]]:
     subject_sha = _require_sha(subject_sha, "current-main CodeQL subject SHA")
     candidates: list[dict[str, Any]] = []
@@ -1517,6 +1586,587 @@ def _ensure_current_main_codeql(
         "codeqlStatus": str(registered["status"]),
         "codeqlDispatched": True,
     }
+
+
+def _terminal_main_codeql_candidates(
+    rows: list[dict[str, Any]], subject_sha: str
+) -> list[dict[str, Any]]:
+    subject_sha = _require_sha(subject_sha, "terminal CodeQL subject SHA")
+    candidates: list[dict[str, Any]] = []
+    for row in rows:
+        if (
+            row.get("name") != MAIN_CODEQL_NAME
+            or row.get("path") != MAIN_CODEQL_PATH
+            or row.get("head_branch") != "main"
+            or row.get("head_sha") != subject_sha
+            or row.get("event") not in MAIN_CODEQL_EVENTS
+        ):
+            continue
+        attempt = row.get("run_attempt")
+        run_id = row.get("id")
+        if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
+            raise AutohealError("terminal exact-main CodeQL run has invalid run_attempt")
+        if not isinstance(run_id, int) or isinstance(run_id, bool) or run_id < 1:
+            raise AutohealError("terminal exact-main CodeQL run has invalid run id")
+        status = row.get("status")
+        if status not in {"queued", "in_progress", "completed"}:
+            raise AutohealError(f"terminal exact-main CodeQL run has invalid status: {status}")
+        if status == "completed" and row.get("conclusion") != "success":
+            raise AutohealError(
+                "terminal exact-main CodeQL run completed non-successfully: "
+                f"{row.get('conclusion')}"
+            )
+        candidates.append(row)
+    return candidates
+
+
+def _select_terminal_main_codeql_run(
+    rows: list[dict[str, Any]], subject_sha: str
+) -> dict[str, Any] | None:
+    candidates = _terminal_main_codeql_candidates(rows, subject_sha)
+    if len(candidates) > 1:
+        run_ids = sorted(int(row["id"]) for row in candidates)
+        raise AutohealError(
+            f"ambiguous terminal exact-main CodeQL evidence for {subject_sha}: run ids {run_ids}"
+        )
+    return candidates[0] if candidates else None
+
+
+def _terminal_closure_comment(certificate: dict[str, Any]) -> str:
+    return (
+        TERMINAL_CLOSURE_COMMENT_PREFIX
+        + json.dumps(certificate, separators=(",", ":"), sort_keys=True)
+        + TERMINAL_CLOSURE_COMMENT_SUFFIX
+    )
+
+
+def _parse_terminal_closure_comment(body: Any) -> dict[str, Any] | None:
+    if (
+        not isinstance(body, str)
+        or not body.startswith(TERMINAL_CLOSURE_COMMENT_PREFIX)
+        or not body.endswith(TERMINAL_CLOSURE_COMMENT_SUFFIX)
+    ):
+        return None
+    raw = body[
+        len(TERMINAL_CLOSURE_COMMENT_PREFIX) : -len(TERMINAL_CLOSURE_COMMENT_SUFFIX)
+    ]
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _terminal_closure_certificate(
+    metadata: dict[str, Any],
+    number: int,
+    merge_evidence: dict[str, Any],
+    ci_run: dict[str, Any],
+    codeql_run: dict[str, Any],
+    *,
+    workflow_run_id: int,
+    workflow_run_attempt: int,
+) -> dict[str, Any]:
+    if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+        raise PolicyBlock("terminal repair PR number is invalid")
+    alert = metadata.get("alert")
+    if not isinstance(alert, int) or isinstance(alert, bool) or alert < 1:
+        raise PolicyBlock("terminal repair alert number is invalid")
+    fingerprint = metadata.get("fingerprint")
+    if not isinstance(fingerprint, str) or re.fullmatch(r"[0-9a-f]{64}", fingerprint) is None:
+        raise PolicyBlock("terminal repair fingerprint is invalid")
+    rule = metadata.get("rule")
+    path = metadata.get("path")
+    strategy = _marker_strategy(metadata)
+    if not isinstance(rule, str) or not rule:
+        raise PolicyBlock("terminal repair rule is invalid")
+    if not isinstance(path, str) or not path:
+        raise PolicyBlock("terminal repair path is invalid")
+    if not isinstance(strategy, str) or not strategy:
+        raise PolicyBlock("terminal repair strategy is invalid")
+    base_sha = _require_sha(metadata.get("base"), "terminal repair base SHA")
+    head_sha = _require_sha(metadata.get("head"), "terminal repair head SHA")
+    merge_sha = _require_sha(merge_evidence.get("mergeSha"), "terminal repair merge SHA")
+    source_tree = _require_sha(
+        merge_evidence.get("sourceTreeSha"), "terminal repair source tree SHA"
+    )
+    for value, label in (
+        (workflow_run_id, "terminal workflow run id"),
+        (workflow_run_attempt, "terminal workflow run attempt"),
+        (ci_run.get("id"), "terminal CI run id"),
+        (ci_run.get("run_attempt"), "terminal CI run attempt"),
+        (codeql_run.get("id"), "terminal CodeQL run id"),
+        (codeql_run.get("run_attempt"), "terminal CodeQL run attempt"),
+    ):
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            raise PolicyBlock(f"{label} is invalid")
+    return {
+        "version": 1,
+        "outcome": "resolved",
+        "pr": number,
+        "alert": alert,
+        "rule": rule,
+        "path": path,
+        "base": base_sha,
+        "head": head_sha,
+        "mergeSha": merge_sha,
+        "sourceTreeSha": source_tree,
+        "fingerprint": fingerprint,
+        "strategy": strategy,
+        "alertState": "fixed",
+        "ciWorkflowId": POST_MERGE_CI_WORKFLOW_ID,
+        "ciRunId": int(ci_run["id"]),
+        "ciRunAttempt": int(ci_run["run_attempt"]),
+        "ciEvent": str(ci_run["event"]),
+        "codeqlWorkflowId": MAIN_CODEQL_WORKFLOW_ID,
+        "codeqlRunId": int(codeql_run["id"]),
+        "codeqlRunAttempt": int(codeql_run["run_attempt"]),
+        "codeqlEvent": str(codeql_run["event"]),
+        "workflowId": SECURITY_AUTOHEAL_WORKFLOW_ID,
+        "workflowRunId": workflow_run_id,
+        "workflowRunAttempt": workflow_run_attempt,
+    }
+
+
+def _terminal_certificate_static_matches(
+    certificate: dict[str, Any],
+    metadata: dict[str, Any],
+    number: int,
+    merge_evidence: dict[str, Any],
+) -> bool:
+    try:
+        expected_base = _require_sha(metadata.get("base"), "terminal marker base SHA")
+        expected_head = _require_sha(metadata.get("head"), "terminal marker head SHA")
+        expected_merge = _require_sha(
+            merge_evidence.get("mergeSha"), "terminal expected merge SHA"
+        )
+        expected_tree = _require_sha(
+            merge_evidence.get("sourceTreeSha"), "terminal expected source tree SHA"
+        )
+        observed_base = _require_sha(certificate.get("base"), "terminal certificate base SHA")
+        observed_head = _require_sha(certificate.get("head"), "terminal certificate head SHA")
+        observed_merge = _require_sha(
+            certificate.get("mergeSha"), "terminal certificate merge SHA"
+        )
+        observed_tree = _require_sha(
+            certificate.get("sourceTreeSha"), "terminal certificate source tree SHA"
+        )
+    except PolicyBlock:
+        return False
+    positive_int_fields = (
+        "ciRunId",
+        "ciRunAttempt",
+        "codeqlRunId",
+        "codeqlRunAttempt",
+        "workflowRunId",
+        "workflowRunAttempt",
+    )
+    return (
+        certificate.get("version") == 1
+        and certificate.get("outcome") == "resolved"
+        and certificate.get("pr") == number
+        and certificate.get("alert") == metadata.get("alert")
+        and certificate.get("rule") == metadata.get("rule")
+        and certificate.get("path") == metadata.get("path")
+        and certificate.get("fingerprint") == metadata.get("fingerprint")
+        and certificate.get("strategy") == _marker_strategy(metadata)
+        and certificate.get("alertState") == "fixed"
+        and observed_base == expected_base
+        and observed_head == expected_head
+        and observed_merge == expected_merge
+        and observed_tree == expected_tree
+        and certificate.get("ciWorkflowId") == POST_MERGE_CI_WORKFLOW_ID
+        and certificate.get("ciEvent") in POST_MERGE_CI_EVENTS
+        and certificate.get("codeqlWorkflowId") == MAIN_CODEQL_WORKFLOW_ID
+        and certificate.get("codeqlEvent") in MAIN_CODEQL_EVENTS
+        and certificate.get("workflowId") == SECURITY_AUTOHEAL_WORKFLOW_ID
+        and all(
+            isinstance(certificate.get(field), int)
+            and not isinstance(certificate.get(field), bool)
+            and int(certificate[field]) > 0
+            for field in positive_int_fields
+        )
+    )
+
+
+def _terminal_evidence_run_matches(
+    api: GitHubApi,
+    *,
+    run_id: int,
+    run_attempt: int,
+    workflow_id: int,
+    workflow_path: str,
+    workflow_name: str,
+    subject_sha: str,
+    allowed_events: set[str],
+) -> bool:
+    run = api.get(f"/actions/runs/{run_id}")
+    return (
+        isinstance(run, dict)
+        and run.get("id") == run_id
+        and run.get("workflow_id") == workflow_id
+        and run.get("path") == workflow_path
+        and run.get("name") == workflow_name
+        and run.get("run_attempt") == run_attempt
+        and run.get("head_branch") == "main"
+        and run.get("head_sha") == subject_sha
+        and run.get("event") in allowed_events
+        and run.get("status") == "completed"
+        and run.get("conclusion") == "success"
+    )
+
+
+def _terminal_certificate_evidence_matches(
+    api: GitHubApi,
+    certificate: dict[str, Any],
+) -> bool:
+    merge_sha = _require_sha(certificate.get("mergeSha"), "terminal certificate merge SHA")
+    return (
+        _terminal_evidence_run_matches(
+            api,
+            run_id=int(certificate["ciRunId"]),
+            run_attempt=int(certificate["ciRunAttempt"]),
+            workflow_id=POST_MERGE_CI_WORKFLOW_ID,
+            workflow_path=POST_MERGE_CI_PATH,
+            workflow_name=POST_MERGE_CI_NAME,
+            subject_sha=merge_sha,
+            allowed_events=POST_MERGE_CI_EVENTS,
+        )
+        and _terminal_evidence_run_matches(
+            api,
+            run_id=int(certificate["codeqlRunId"]),
+            run_attempt=int(certificate["codeqlRunAttempt"]),
+            workflow_id=MAIN_CODEQL_WORKFLOW_ID,
+            workflow_path=MAIN_CODEQL_PATH,
+            workflow_name=MAIN_CODEQL_NAME,
+            subject_sha=merge_sha,
+            allowed_events=MAIN_CODEQL_EVENTS,
+        )
+        and _autoheal_workflow_run_matches(api, certificate)
+    )
+
+
+def _exact_unedited_terminal_certificate(
+    row: dict[str, Any],
+    metadata: dict[str, Any],
+    number: int,
+    merge_evidence: dict[str, Any],
+) -> dict[str, Any] | None:
+    body = row.get("body")
+    certificate = _parse_terminal_closure_comment(body)
+    if certificate is None:
+        return None
+    actor = row.get("user") or {}
+    if actor.get("login") != GITHUB_ACTIONS_LOGIN or actor.get("id") != GITHUB_ACTIONS_USER_ID:
+        return None
+    if not _terminal_certificate_static_matches(certificate, metadata, number, merge_evidence):
+        raise PolicyBlock("GitHub Actions terminal closure certificate is malformed or drifted")
+    created_at = row.get("created_at")
+    if (
+        not isinstance(created_at, str)
+        or row.get("updated_at") != created_at
+        or not _github_timestamp_at_or_before(created_at, created_at)
+    ):
+        raise PolicyBlock("GitHub Actions terminal closure certificate is edited or malformed")
+    return certificate
+
+
+def _ensure_terminal_closure_certificate(
+    api: GitHubApi,
+    number: int,
+    metadata: dict[str, Any],
+    merge_evidence: dict[str, Any],
+    ci_run: dict[str, Any],
+    codeql_run: dict[str, Any],
+) -> dict[str, Any]:
+    comments = api.list_all(f"/issues/{number}/comments", max_pages=2)
+    matching: list[dict[str, Any]] = []
+    for row in comments:
+        actor = row.get("user") or {}
+        body = row.get("body")
+        if (
+            actor.get("login") == GITHUB_ACTIONS_LOGIN
+            and actor.get("id") == GITHUB_ACTIONS_USER_ID
+            and isinstance(body, str)
+            and body.startswith(TERMINAL_CLOSURE_COMMENT_PREFIX)
+        ):
+            parsed = _exact_unedited_terminal_certificate(
+                row, metadata, number, merge_evidence
+            )
+            if parsed is None:
+                raise PolicyBlock("GitHub Actions terminal closure certificate is malformed")
+            matching.append(parsed)
+    if len(matching) > 1:
+        raise PolicyBlock("repair has ambiguous GitHub Actions terminal closure certificates")
+    if matching:
+        certificate = matching[0]
+        if not _terminal_certificate_evidence_matches(api, certificate):
+            raise PolicyBlock(
+                "terminal closure certificate no longer has exact successful workflow evidence"
+            )
+        return certificate
+
+    certificate = _terminal_closure_certificate(
+        metadata,
+        number,
+        merge_evidence,
+        ci_run,
+        codeql_run,
+        workflow_run_id=_current_positive_int_env("GITHUB_RUN_ID"),
+        workflow_run_attempt=_current_positive_int_env("GITHUB_RUN_ATTEMPT"),
+    )
+    body = _terminal_closure_comment(certificate)
+    created = api.post(f"/issues/{number}/comments", {"body": body})
+    if not isinstance(created, dict) or created.get("body") != body:
+        raise AutohealError("GitHub did not acknowledge exact terminal closure certificate")
+    parsed = _exact_unedited_terminal_certificate(created, metadata, number, merge_evidence)
+    if (
+        parsed != certificate
+        or not _terminal_certificate_evidence_matches(api, certificate)
+    ):
+        raise AutohealError("GitHub returned invalid terminal closure certificate authority")
+    return certificate
+
+
+def _current_main_merged_repair(
+    api: GitHubApi,
+    main_sha: str,
+) -> dict[str, Any] | None:
+    main_sha = _require_sha(main_sha, "terminal closure main SHA")
+    rows = api.list_all("/pulls?state=closed&sort=updated&direction=desc", max_pages=10)
+    matches: list[dict[str, Any]] = []
+    for pr in rows:
+        head = pr.get("head") or {}
+        if (
+            pr.get("state") == "closed"
+            and pr.get("merged_at") is not None
+            and pr.get("merge_commit_sha") == main_sha
+            and (pr.get("user") or {}).get("login") == GITHUB_ACTIONS_LOGIN
+            and (pr.get("user") or {}).get("id") == GITHUB_ACTIONS_USER_ID
+            and isinstance(head.get("ref"), str)
+            and str(head.get("ref")).startswith(BRANCH_PREFIX)
+            and _parse_marker(pr.get("body")) is not None
+        ):
+            matches.append(pr)
+    if len(matches) > 1:
+        numbers = sorted(
+            int(pr["number"])
+            for pr in matches
+            if isinstance(pr.get("number"), int) and not isinstance(pr.get("number"), bool)
+        )
+        raise AutohealError(
+            f"ambiguous merged auto-heal subjects for exact current main {main_sha}: {numbers}"
+        )
+    if not matches:
+        return None
+    number = matches[0].get("number")
+    if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+        raise AutohealError("merged auto-heal PR has invalid number")
+    live = api.get(f"/pulls/{number}")
+    if not isinstance(live, dict):
+        raise AutohealError("merged auto-heal PR lookup returned malformed data")
+    return live
+
+
+def _verify_merged_repair_subject(
+    api: GitHubApi,
+    pr: dict[str, Any],
+    main_sha: str,
+    config: dict[str, Any],
+) -> tuple[int, dict[str, Any], dict[str, Any]]:
+    number = pr.get("number")
+    if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+        raise PolicyBlock("merged repair PR number is invalid")
+    metadata = _parse_marker(pr.get("body"))
+    if metadata is None or metadata.get("version") != 1:
+        raise PolicyBlock("merged repair lacks the exact auto-heal marker")
+    if (
+        pr.get("state") != "closed"
+        or pr.get("merged_at") is None
+        or pr.get("draft") is not False
+    ):
+        raise PolicyBlock("terminal repair is not a merged non-draft pull request")
+    author = pr.get("user") or {}
+    merged_by = pr.get("merged_by") or {}
+    if (
+        author.get("login") != GITHUB_ACTIONS_LOGIN
+        or author.get("id") != GITHUB_ACTIONS_USER_ID
+        or merged_by.get("login") != GITHUB_ACTIONS_LOGIN
+        or merged_by.get("id") != GITHUB_ACTIONS_USER_ID
+    ):
+        raise PolicyBlock("terminal repair was not authored and merged by canonical GitHub Actions")
+    head = pr.get("head") or {}
+    base = pr.get("base") or {}
+    if (
+        (head.get("repo") or {}).get("full_name") != config["repository"]
+        or (base.get("repo") or {}).get("full_name") != config["repository"]
+        or base.get("ref") != "main"
+    ):
+        raise PolicyBlock("terminal repair repository/base identity drifted")
+    branch = head.get("ref")
+    if not isinstance(branch, str) or AUTOHEAL_BRANCH_RE.fullmatch(branch) is None:
+        raise PolicyBlock("terminal repair branch is outside the code-owned namespace")
+    base_sha = _require_sha(base.get("sha"), "terminal repair live base SHA")
+    head_sha = _require_sha(head.get("sha"), "terminal repair live head SHA")
+    merge_sha = _require_sha(pr.get("merge_commit_sha"), "terminal repair live merge SHA")
+    if (
+        metadata.get("base") != base_sha
+        or metadata.get("head") != head_sha
+        or metadata.get("supersessionReason") is not None
+        or metadata.get("supersededByMain") is not None
+    ):
+        raise PolicyBlock("terminal repair marker drifted from the merged subject")
+    if merge_sha != main_sha:
+        raise PolicyBlock("terminal repair merge is stale relative to exact current main")
+    commit = api.get(f"/commits/{head_sha}")
+    if not _owned_generated_repair_commit(commit, head_sha):
+        raise PolicyBlock("terminal repair head lacks exact GitHub Actions ownership")
+    merge_evidence = _finalize_post_merge_evidence(
+        api,
+        {"sha": merge_sha},
+        {"baseSha": base_sha, "headSha": head_sha},
+        config,
+    )
+    return number, metadata, merge_evidence
+
+
+def _require_fixed_terminal_alert(
+    api: GitHubApi,
+    metadata: dict[str, Any],
+) -> None:
+    alert_number = metadata.get("alert")
+    if not isinstance(alert_number, int) or isinstance(alert_number, bool) or alert_number < 1:
+        raise PolicyBlock("terminal repair alert number is invalid")
+    last_state: Any = None
+    for attempt in range(ALERT_FIXED_OBSERVATION_ATTEMPTS):
+        alert = api.get(f"/code-scanning/alerts/{alert_number}")
+        if not isinstance(alert, dict):
+            raise AutohealError("terminal CodeQL alert lookup returned malformed data")
+        state = alert.get("state")
+        last_state = state
+        if state == "fixed":
+            if (
+                (alert.get("tool") or {}).get("name") != "CodeQL"
+                or (alert.get("rule") or {}).get("id") != metadata.get("rule")
+                or ((alert.get("most_recent_instance") or {}).get("location") or {}).get("path")
+                != metadata.get("path")
+            ):
+                raise AutohealError("fixed terminal alert identity drifted from repair provenance")
+            return
+        if state != "open":
+            raise AutohealError(
+                f"terminal CodeQL alert has non-fixed terminal state: {state}"
+            )
+        if attempt + 1 < ALERT_FIXED_OBSERVATION_ATTEMPTS:
+            time.sleep(ALERT_FIXED_OBSERVATION_DELAY_SECONDS)
+    raise AutohealError(
+        f"post-merge CodeQL succeeded but alert #{alert_number} remains {last_state}"
+    )
+
+
+def _reconcile_terminal_closure(
+    api: GitHubApi,
+    main_sha: str,
+    config: dict[str, Any],
+) -> bool:
+    merged = _current_main_merged_repair(api, main_sha)
+    if merged is None:
+        return False
+    number, metadata, merge_evidence = _verify_merged_repair_subject(
+        api, merged, main_sha, config
+    )
+
+    ci = _select_post_merge_ci_run(_post_merge_ci_runs(api, main_sha), main_sha)
+    if ci is None:
+        refresh = _ensure_post_merge_ci(api, main_sha, config)
+        print(
+            json.dumps(
+                {
+                    "pr": number,
+                    "decision": "terminal-closure-waiting",
+                    "reason": "exact-main CI was missing and has been dispatched",
+                    **refresh,
+                },
+                sort_keys=True,
+            )
+        )
+        return True
+    if ci.get("status") != "completed":
+        print(
+            json.dumps(
+                {
+                    "pr": number,
+                    "decision": "terminal-closure-waiting",
+                    "reason": "exact-main CI is not completed",
+                    "ciRunId": int(ci["id"]),
+                    "ciRunAttempt": int(ci["run_attempt"]),
+                    "ciStatus": str(ci["status"]),
+                },
+                sort_keys=True,
+            )
+        )
+        return True
+
+    codeql = _select_terminal_main_codeql_run(_main_codeql_runs(api, main_sha), main_sha)
+    if codeql is None:
+        refresh = _ensure_current_main_codeql(api, main_sha, config)
+        print(
+            json.dumps(
+                {
+                    "pr": number,
+                    "decision": "terminal-closure-waiting",
+                    "reason": "exact-main CodeQL was missing and has been dispatched",
+                    **refresh,
+                },
+                sort_keys=True,
+            )
+        )
+        return True
+    if codeql.get("status") != "completed":
+        print(
+            json.dumps(
+                {
+                    "pr": number,
+                    "decision": "terminal-closure-waiting",
+                    "reason": "exact-main CodeQL is not completed",
+                    "codeqlRunId": int(codeql["id"]),
+                    "codeqlRunAttempt": int(codeql["run_attempt"]),
+                    "codeqlStatus": str(codeql["status"]),
+                },
+                sort_keys=True,
+            )
+        )
+        return True
+
+    if _current_main(api, config) != main_sha:
+        raise AutohealError("current main changed before terminal closure certification")
+    _require_fixed_terminal_alert(api, metadata)
+    certificate = _ensure_terminal_closure_certificate(
+        api,
+        number,
+        metadata,
+        merge_evidence,
+        ci,
+        codeql,
+    )
+    if _current_main(api, config) != main_sha:
+        raise AutohealError("current main changed after terminal closure certification")
+    print(
+        json.dumps(
+            {
+                "pr": number,
+                "alert": metadata["alert"],
+                "decision": "repair-verified",
+                "mergeSha": merge_evidence["mergeSha"],
+                "sourceTreeSha": merge_evidence["sourceTreeSha"],
+                "ciRunId": certificate["ciRunId"],
+                "codeqlRunId": certificate["codeqlRunId"],
+                "terminalCertificate": "durable-unedited-github-actions-comment",
+            },
+            sort_keys=True,
+        )
+    )
+    return False
 
 
 def _verify_actual_merge_commit(
@@ -1910,6 +2560,8 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
         return 0
 
     main_sha = _current_main(api, config)
+    if _reconcile_terminal_closure(api, main_sha, config):
+        return 0
     pulls = _open_pulls(api)
     _prune_orphan_repair_refs(api, pulls)
     repairs = _generated_repairs(pulls)
