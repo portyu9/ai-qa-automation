@@ -47,7 +47,7 @@ Malformed or ambiguous identity, unsafe paths, invalid SHAs, oversized alert mes
 | `attempt-budget-exhausted` | The exact strategy/version has consumed its bounded attempt budget. | none |
 | `blocked-external-evidence` | A model/autofix route lacks live affirmative Autofix availability. | none |
 
-Protected classification occurs before ordinary mutation admission. A protected finding cannot fall through to model/autofix authority even if its rule would otherwise be supported.
+Protected classification occurs before ordinary mutation admission. A protected finding cannot fall through to model/autofix authority even if its rule would otherwise be supported. For routing purposes, the protected set is deliberately stricter than the live controller's historical `neverModifyPaths`: it also includes the five authority-bearing verifier/status files currently listed under `deterministicOnlyPaths`. That keeps trusted status and validation code on #211's independent-authoring path when this router is later integrated, without changing the live controller in this policy-core PR.
 
 ## Current rule coverage
 
@@ -57,9 +57,9 @@ Current explicit classes include:
 
 - `py/reflective-xss` on `examples/reference_sut/app.py` → deterministic reference-SUT repair;
 - `py/overly-permissive-file` under `tests/` → deterministic permission repair;
-- `py/clear-text-logging-sensitive-data` on the reviewed deterministic verifier files → deterministic logging repair;
+- `py/clear-text-logging-sensitive-data` on the authority-bearing verifier/status files currently listed under `deterministicOnlyPaths` → independent protected remediation;
 - other reviewed rules under `src/`, `examples/`, or `tests/` → bounded Autofix only when live availability evidence exists;
-- any supported finding under `.github/` or another `neverModifyPaths` entry → independent protected remediation.
+- any supported finding under `.github/`, another `neverModifyPaths` entry, or one of those verifier/status paths → independent protected remediation.
 
 This explicitly represents the ordinary class demonstrated by alert #7 and the protected-control-plane class demonstrated by alert #17 without granting the normal auto-healer authority over `.github/`.
 
