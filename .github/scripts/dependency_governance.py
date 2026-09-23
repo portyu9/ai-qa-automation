@@ -765,6 +765,7 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
                         sort_keys=True,
                     )
                 )
+                return eligible
         except PolicyBlock as exc:
             print(
                 json.dumps(
