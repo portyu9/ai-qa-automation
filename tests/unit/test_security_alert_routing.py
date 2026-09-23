@@ -469,6 +469,42 @@ def test_routing_authority_surfaces_cannot_expand_by_config_only(
         routing.route_alert(_alert(), main_sha=MAIN, config=config)
 
 
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    (
+        (
+            lambda config: config["routingPolicy"].update(unreviewedAuthority=True),
+            "code-owned schema",
+        ),
+        (
+            lambda config: config["routingPolicy"]["deterministicStrategies"][0].update(
+                unreviewedAuthority=True
+            ),
+            "strategy keys",
+        ),
+        (
+            lambda config: config["deterministicOnlyPaths"].append(
+                config["deterministicOnlyPaths"][0]
+            ),
+            "deterministicOnlyPaths",
+        ),
+        (
+            lambda config: config["neverModifyPaths"].append(config["neverModifyPaths"][0]),
+            "neverModifyPaths",
+        ),
+    ),
+)
+def test_routing_authority_schema_rejects_ignored_or_duplicate_entries(
+    mutate: Any,
+    message: str,
+) -> None:
+    config = _config()
+    mutate(config)
+
+    with pytest.raises(routing.RoutingPolicyError, match=message):
+        routing.route_alert(_alert(), main_sha=MAIN, config=config)
+
+
 def test_batch_rejects_evidence_for_unobserved_alerts() -> None:
     with pytest.raises(routing.RoutingPolicyError, match="unobserved alert"):
         routing.route_alerts(
