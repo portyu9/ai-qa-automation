@@ -6,6 +6,7 @@ from typing import Any
 EXPECTED_REPOSITORY = "portyu9/ai-qa-automation"
 EXPECTED_GATE_WORKFLOW_NAME = "Trusted PR Auto Gate — ƳƤ AI QA Automation Framework"
 EXPECTED_GATE_WORKFLOW_PATH = ".github/workflows/trusted-pr-auto.yml"
+EXPECTED_GATE_EVENTS = frozenset({"schedule", "workflow_run"})
 TRUSTED_STATUS_CONTEXT = "Trusted PR Gate"
 TRUSTED_STATUS_BOT_LOGIN = "trusted-pr-gate[bot]"
 TRUSTED_STATUS_BOT_ID = 322661847
@@ -86,13 +87,15 @@ def require_automatic_trusted_gate(
     head_sha: str,
     base_sha: str,
     *,
-    expected_event: str = "workflow_run",
+    allowed_events: set[str] | frozenset[str] | None = None,
 ) -> dict[str, Any]:
     pr_number = _require_positive_int(pr_number, "pull request number")
     head_sha = _require_sha(head_sha, "head SHA")
     base_sha = _require_sha(base_sha, "base SHA")
-    if expected_event not in {"workflow_run", "schedule"}:
-        raise TrustedStatusError("Trusted PR Gate expected event is not code-owned")
+    if allowed_events is None:
+        allowed_events = EXPECTED_GATE_EVENTS
+    if not allowed_events or not allowed_events <= EXPECTED_GATE_EVENTS:
+        raise TrustedStatusError("Trusted PR Gate allowed events are not code-owned")
 
     rows = api.list_all(f"/commits/{head_sha}/statuses", max_pages=4)
     matches: list[dict[str, Any]] = []
@@ -152,7 +155,7 @@ def require_automatic_trusted_gate(
         or _require_positive_int(run.get("id"), "trusted gate run id") != run_id
         or run.get("name") != EXPECTED_GATE_WORKFLOW_NAME
         or run.get("path") != EXPECTED_GATE_WORKFLOW_PATH
-        or run.get("event") != expected_event
+        or run.get("event") not in allowed_events
         or run.get("head_branch") != "main"
         or _require_sha(run.get("head_sha"), "trusted gate run head SHA") != base_sha
         or run.get("status") != "completed"
