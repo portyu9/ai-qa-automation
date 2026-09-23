@@ -86,6 +86,18 @@ class _AmbiguousCommitApi:
         raise AssertionError(f"unexpected delete: {path}")
 
 
+def test_existing_base_only_attempt_branch_refuses_provider_replay() -> None:
+    api = _AmbiguousCommitApi()
+    api.branch_sha = BASE
+    api.fail_first_commit_response = False
+
+    with pytest.raises(autoheal.PolicyBlock, match="ambiguous provider-submission state"):
+        autoheal._commit_copilot_autofix(api, ALERT, BRANCH, BASE)
+
+    assert api.branch_sha == BASE
+    assert api.commit_posts == 0
+
+
 def test_ambiguous_autofix_commit_response_is_recovered_without_provider_replay() -> None:
     api = _AmbiguousCommitApi()
 
