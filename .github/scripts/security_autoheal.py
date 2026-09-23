@@ -753,6 +753,24 @@ def _branch_name(subject: dict[str, Any], attempt: int | None = None) -> str:
     return f"{branch}-a{attempt}"
 
 
+def _require_repair_branch_binding(
+    branch: str,
+    metadata: dict[str, Any],
+    subject: dict[str, Any],
+) -> None:
+    attempt = metadata.get("attempt")
+    if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
+        raise PolicyBlock("generated repair marker attempt is invalid for branch binding")
+    allowed = {
+        _branch_name(subject),
+        _branch_name(subject, attempt),
+    }
+    if branch not in allowed:
+        raise PolicyBlock(
+            "generated repair branch does not match the exact alert fingerprint and attempt"
+        )
+
+
 def _recoverable_model_autofix_branches(
     alerts: list[dict[str, Any]],
     main_sha: str,
@@ -1327,6 +1345,7 @@ def assess_trusted_admission(
     if not _owned_generated_repair_commit(commit, live["headSha"]):
         raise PolicyBlock("generated repair head lacks exact GitHub Actions ownership")
     subject = _rebind_repair_alert(api, metadata, live, config)
+    _require_repair_branch_binding(live["branch"], metadata, subject)
     if metadata.get("generator") == "deterministic":
         expected_content = _deterministic_repair(subject)
         if expected_content is None:
