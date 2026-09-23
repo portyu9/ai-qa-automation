@@ -482,6 +482,19 @@ def test_stale_certificate_recovery_posts_new_certificate_after_main_moves(
         def __init__(self) -> None:
             self.created: list[dict[str, Any]] = []
 
+        def get(self, path: str) -> dict[str, Any]:
+            assert path == "/actions/runs/9001"
+            return {
+                "id": 9001,
+                "workflow_id": autoheal.SECURITY_AUTOHEAL_WORKFLOW_ID,
+                "path": autoheal.SECURITY_AUTOHEAL_WORKFLOW_PATH,
+                "run_attempt": 1,
+                "event": "schedule",
+                "head_branch": "main",
+                "status": "in_progress",
+                "conclusion": None,
+            }
+
         def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
             assert path == "/issues/101/comments"
             assert max_pages == 2
@@ -513,3 +526,44 @@ def test_stale_certificate_recovery_posts_new_certificate_after_main_moves(
     assert certificate["supersededByMain"] == "f" * 40
     assert certificate["workflowRunId"] == 9001
     assert len(api.created) == 1
+
+
+def test_stale_certificate_recovery_rejects_invalid_matching_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata, _ = _explicit_stale_attempt_fixture()
+    metadata = {
+        key: value
+        for key, value in metadata.items()
+        if key not in {"supersessionReason", "supersededByMain"}
+    }
+    current = _stale_certificate_comment(metadata)
+
+    class _InvalidReuseApi:
+        def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+            assert path == "/issues/101/comments"
+            assert max_pages == 2
+            return [current]
+
+        def get(self, path: str) -> dict[str, Any]:
+            assert path == "/actions/runs/9001"
+            return {
+                "id": 9001,
+                "workflow_id": autoheal.SECURITY_AUTOHEAL_WORKFLOW_ID + 1,
+                "path": autoheal.SECURITY_AUTOHEAL_WORKFLOW_PATH,
+                "run_attempt": 1,
+                "event": "schedule",
+                "head_branch": "main",
+                "status": "completed",
+                "conclusion": "success",
+            }
+
+    monkeypatch.setenv("GITHUB_RUN_ID", "9001")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    with pytest.raises(autoheal.PolicyBlock, match="without exact workflow authority"):
+        autoheal._ensure_stale_supersession_certificate(
+            _InvalidReuseApi(),
+            101,
+            metadata,
+            "f" * 40,
+        )
