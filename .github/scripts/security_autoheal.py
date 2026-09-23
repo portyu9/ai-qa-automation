@@ -2754,6 +2754,7 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
                         sort_keys=True,
                     )
                 )
+                return max(0, len(repairs) - closed_stale - 1)
         except PolicyBlock as exc:
             reason = str(exc)
             print(
