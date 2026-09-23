@@ -1985,6 +1985,17 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
 
     main_sha = _current_main(api, config)
     pulls = _open_pulls(api)
+    query = urllib.parse.urlencode(
+        {"state": "open", "ref": "refs/heads/main", "tool_name": "CodeQL"},
+        quote_via=urllib.parse.quote,
+    )
+    alerts = api.list_all(f"/code-scanning/alerts?{query}", max_pages=10)
+    preserve_branches = _recoverable_model_autofix_branches(alerts, main_sha, config)
+    _prune_orphan_repair_refs(
+        api,
+        pulls,
+        preserve_branches=preserve_branches,
+    )
     repairs = _generated_repairs(pulls)
     active_alerts: set[int] = set()
     closed_stale = 0
@@ -2044,17 +2055,6 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
                     active_alerts.discard(alert_number)
 
     remaining_repairs = len(repairs) - closed_stale
-    query = urllib.parse.urlencode(
-        {"state": "open", "ref": "refs/heads/main", "tool_name": "CodeQL"},
-        quote_via=urllib.parse.quote,
-    )
-    alerts = api.list_all(f"/code-scanning/alerts?{query}", max_pages=10)
-    preserve_branches = _recoverable_model_autofix_branches(alerts, main_sha, config)
-    _prune_orphan_repair_refs(
-        api,
-        _open_pulls(api),
-        preserve_branches=preserve_branches,
-    )
     capacity = max(0, int(config["maxOpenRepairs"]) - remaining_repairs)
     if capacity == 0:
         return remaining_repairs
