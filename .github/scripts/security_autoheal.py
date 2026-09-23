@@ -2032,7 +2032,7 @@ def _ensure_terminal_closure_certificate(
     ci_run: dict[str, Any],
     codeql_run: dict[str, Any],
     trusted_gate: dict[str, Any],
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], bool]:
     comments = api.list_all(f"/issues/{number}/comments", max_pages=2)
     matching: list[dict[str, Any]] = []
     for row in comments:
@@ -2056,7 +2056,7 @@ def _ensure_terminal_closure_certificate(
             raise PolicyBlock(
                 "terminal closure certificate no longer has exact successful workflow evidence"
             )
-        return certificate
+        return certificate, False
 
     certificate = _terminal_closure_certificate(
         metadata,
@@ -2079,7 +2079,7 @@ def _ensure_terminal_closure_certificate(
         api, certificate, metadata, number
     ):
         raise AutohealError("GitHub returned invalid terminal closure certificate authority")
-    return certificate
+    return certificate, True
 
 
 def _current_main_merged_repair(
@@ -2291,7 +2291,7 @@ def _reconcile_terminal_closure(
             )
         )
         return True
-    _ensure_terminal_closure_certificate(
+    _, published = _ensure_terminal_closure_certificate(
         api,
         number,
         metadata,
@@ -2311,7 +2311,7 @@ def _reconcile_terminal_closure(
             sort_keys=True,
         )
     )
-    return False
+    return published
 
 
 def _verify_actual_merge_commit(
