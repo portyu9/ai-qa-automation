@@ -200,8 +200,9 @@ def _routing_config(config: Mapping[str, Any]) -> dict[str, Any]:
     allowed_rules = config.get("allowedRules")
     if (
         not isinstance(allowed_rules, list)
-        or set(allowed_rules) != SAFE_RULES
+        or not all(isinstance(value, str) for value in allowed_rules)
         or len(allowed_rules) != len(SAFE_RULES)
+        or set(allowed_rules) != SAFE_RULES
     ):
         raise RoutingPolicyError("allowedRules must equal the code-owned rule set")
     minimum = config.get("minimumSecuritySeverity")
@@ -219,9 +220,17 @@ def _routing_config(config: Mapping[str, Any]) -> dict[str, Any]:
     never_modify = config.get("neverModifyPaths")
     if model_prefixes != list(MODEL_AUTOFIX_PATH_PREFIXES):
         raise RoutingPolicyError("modelAutofixPathPrefixes must equal the code-owned prefixes")
-    if not isinstance(deterministic_only, list) or set(deterministic_only) != DETERMINISTIC_ONLY_PATHS:
+    if (
+        not isinstance(deterministic_only, list)
+        or not all(isinstance(value, str) for value in deterministic_only)
+        or set(deterministic_only) != DETERMINISTIC_ONLY_PATHS
+    ):
         raise RoutingPolicyError("deterministicOnlyPaths must equal the code-owned paths")
-    if not isinstance(never_modify, list) or set(never_modify) != NEVER_MODIFY_PATHS:
+    if (
+        not isinstance(never_modify, list)
+        or not all(isinstance(value, str) for value in never_modify)
+        or set(never_modify) != NEVER_MODIFY_PATHS
+    ):
         raise RoutingPolicyError("neverModifyPaths must equal the code-owned protected roots")
 
     protected_strategy = policy.get("protectedStrategy")
