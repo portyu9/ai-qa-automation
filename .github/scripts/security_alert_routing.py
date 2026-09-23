@@ -243,15 +243,15 @@ def _routing_config(config: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(minimum, (int, float)) or isinstance(minimum, bool):
         raise RoutingPolicyError("minimumSecuritySeverity is malformed")
     minimum = float(minimum)
-    if not math.isfinite(minimum) or minimum < 0 or minimum > 10:
-        raise RoutingPolicyError("minimumSecuritySeverity is outside finite 0..10")
+    if not math.isfinite(minimum) or minimum < 7.0 or minimum > 10:
+        raise RoutingPolicyError("minimumSecuritySeverity must remain within reviewed 7..10")
     max_attempts = config.get("maxAttemptsPerAlert")
     if (
         isinstance(max_attempts, bool)
         or not isinstance(max_attempts, int)
-        or not 1 <= max_attempts <= 10
+        or not 1 <= max_attempts <= 3
     ):
-        raise RoutingPolicyError("maxAttemptsPerAlert is outside the reviewed bound")
+        raise RoutingPolicyError("maxAttemptsPerAlert must remain within reviewed 1..3")
 
     model_prefixes = config.get("modelAutofixPathPrefixes")
     deterministic_only = config.get("deterministicOnlyPaths")
