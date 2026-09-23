@@ -45,6 +45,9 @@ TRANSIENT_GET_ATTEMPTS = 3
 TRANSIENT_GET_DELAY_SECONDS = 1
 GITHUB_ACTIONS_LOGIN = "github-actions[bot]"
 GITHUB_ACTIONS_USER_ID = 41898282
+SECURITY_AUTOHEAL_WORKFLOW_ID = 359898109
+SECURITY_AUTOHEAL_WORKFLOW_PATH = ".github/workflows/security-autoheal.yml"
+SECURITY_AUTOHEAL_RECONCILE_EVENTS = {"workflow_run", "schedule", "workflow_dispatch"}
 MARKER_PREFIX = "<!-- aiqa-codeql-autoheal:"
 MARKER_SUFFIX = " -->"
 BRANCH_PREFIX = "automation/codeql-autoheal-"
@@ -489,9 +492,18 @@ def _stale_supersession_certificate(
     metadata: dict[str, Any],
     number: int,
     main_sha: str,
+    *,
+    workflow_run_id: int,
+    workflow_run_attempt: int,
 ) -> dict[str, Any]:
     if not isinstance(number, int) or isinstance(number, bool) or number < 1:
         raise PolicyBlock("stale repair PR number is invalid")
+    for value, label in (
+        (workflow_run_id, "stale repair workflow run id"),
+        (workflow_run_attempt, "stale repair workflow run attempt"),
+    ):
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            raise PolicyBlock(f"{label} is invalid")
     alert = metadata.get("alert")
     if not isinstance(alert, int) or isinstance(alert, bool) or alert < 1:
         raise PolicyBlock("stale repair marker alert number is invalid")
@@ -516,6 +528,9 @@ def _stale_supersession_certificate(
         "strategy": strategy,
         "supersessionReason": STALE_SUPERSESSION_REASON,
         "supersededByMain": main_sha,
+        "workflowId": SECURITY_AUTOHEAL_WORKFLOW_ID,
+        "workflowRunId": workflow_run_id,
+        "workflowRunAttempt": workflow_run_attempt,
     }
 
 
@@ -567,12 +582,70 @@ def _certificate_superseding_main(
         or certificate.get("fingerprint") != metadata.get("fingerprint")
         or certificate.get("strategy") != _marker_strategy(metadata)
         or certificate.get("supersessionReason") != STALE_SUPERSESSION_REASON
+        or certificate.get("workflowId") != SECURITY_AUTOHEAL_WORKFLOW_ID
+        or not isinstance(certificate.get("workflowRunId"), int)
+        or isinstance(certificate.get("workflowRunId"), bool)
+        or certificate.get("workflowRunId") < 1
+        or not isinstance(certificate.get("workflowRunAttempt"), int)
+        or isinstance(certificate.get("workflowRunAttempt"), bool)
+        or certificate.get("workflowRunAttempt") < 1
         or certificate_base != expected_base
         or certificate_head != expected_head
         or superseding_main == expected_base
     ):
         return None
     return superseding_main
+
+
+def _current_positive_int_env(name: str) -> int:
+    raw = os.environ.get(name)
+    if not isinstance(raw, str) or not raw.isascii() or not raw.isdigit():
+        raise PolicyBlock(f"{name} is required as a positive integer")
+    value = int(raw)
+    if value < 1:
+        raise PolicyBlock(f"{name} is required as a positive integer")
+    return value
+
+
+def _autoheal_workflow_run_matches(
+    api: GitHubApi,
+    certificate: dict[str, Any],
+) -> bool:
+    run_id = certificate.get("workflowRunId")
+    run_attempt = certificate.get("workflowRunAttempt")
+    if (
+        not isinstance(run_id, int)
+        or isinstance(run_id, bool)
+        or run_id < 1
+        or not isinstance(run_attempt, int)
+        or isinstance(run_attempt, bool)
+        or run_attempt < 1
+    ):
+        return False
+    run = api.get(f"/actions/runs/{run_id}")
+    if not isinstance(run, dict):
+        return False
+    if (
+        run.get("id") != run_id
+        or run.get("workflow_id") != SECURITY_AUTOHEAL_WORKFLOW_ID
+        or run.get("path") != SECURITY_AUTOHEAL_WORKFLOW_PATH
+        or run.get("run_attempt") != run_attempt
+        or run.get("event") not in SECURITY_AUTOHEAL_RECONCILE_EVENTS
+        or run.get("head_branch") != "main"
+    ):
+        return False
+    if run.get("status") == "completed":
+        return run.get("conclusion") == "success"
+    try:
+        current_run_id = _current_positive_int_env("GITHUB_RUN_ID")
+        current_attempt = _current_positive_int_env("GITHUB_RUN_ATTEMPT")
+    except PolicyBlock:
+        return False
+    return (
+        run.get("status") in {"queued", "in_progress"}
+        and run_id == current_run_id
+        and run_attempt == current_attempt
+    )
 
 
 def _exact_unedited_autoheal_certificate(
@@ -619,7 +692,13 @@ def _ensure_stale_supersession_certificate(
     if existing:
         return existing[0][0]
 
-    certificate = _stale_supersession_certificate(metadata, number, main_sha)
+    certificate = _stale_supersession_certificate(
+        metadata,
+        number,
+        main_sha,
+        workflow_run_id=_current_positive_int_env("GITHUB_RUN_ID"),
+        workflow_run_attempt=_current_positive_int_env("GITHUB_RUN_ATTEMPT"),
+    )
     body = _stale_supersession_comment(certificate)
     created = api.post(f"/issues/{number}/comments", {"body": body})
     if not isinstance(created, dict) or created.get("body") != body:
@@ -1666,7 +1745,9 @@ def _proven_stale_supersession(
             certificates.append((parsed[0], parsed[1], created_at))
         if len(certificates) != 1:
             return False
-        _, certificate_main, certificate_created_at = certificates[0]
+        certificate, certificate_main, certificate_created_at = certificates[0]
+        if not _autoheal_workflow_run_matches(api, certificate):
+            return False
         if certificate_main != superseded_by_sha:
             return False
         final_created_at = final.get("created_at")
@@ -2345,7 +2426,13 @@ def selftest(config: dict[str, Any]) -> None:
             closed_at="2026-09-23T00:20:00Z",
         ),
     ]
-    explicit_certificate = _stale_supersession_certificate(explicit_metadata, 101, "f" * 40)
+    explicit_certificate = _stale_supersession_certificate(
+        explicit_metadata,
+        101,
+        "f" * 40,
+        workflow_run_id=9001,
+        workflow_run_attempt=1,
+    )
     explicit_comment = {
         "id": 9001,
         "body": _stale_supersession_comment(explicit_certificate),
@@ -2357,6 +2444,20 @@ def selftest(config: dict[str, Any]) -> None:
     class _AttemptAccountingApi(GitHubApi):
         def __init__(self) -> None:
             pass
+
+        def get(self, path: str) -> Any:
+            if path == "/actions/runs/9001":
+                return {
+                    "id": 9001,
+                    "workflow_id": SECURITY_AUTOHEAL_WORKFLOW_ID,
+                    "path": SECURITY_AUTOHEAL_WORKFLOW_PATH,
+                    "run_attempt": 1,
+                    "event": "schedule",
+                    "head_branch": "main",
+                    "status": "completed",
+                    "conclusion": "success",
+                }
+            raise AutohealError(f"unexpected attempt-accounting GET path: {path}")
 
         def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
             if path == "/pulls?state=closed&sort=updated&direction=desc":
