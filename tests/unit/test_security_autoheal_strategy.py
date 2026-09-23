@@ -265,11 +265,12 @@ def _stale_certificate_comment(
     user_id: int = autoheal.GITHUB_ACTIONS_USER_ID,
     created_at: str = "2026-09-23T00:19:59Z",
     updated_at: str = "2026-09-23T00:19:59Z",
+    main_sha: str = "f" * 40,
 ) -> dict[str, Any]:
     certificate = autoheal._stale_supersession_certificate(
         metadata,
         101,
-        "f" * 40,
+        main_sha,
         workflow_run_id=9001,
         workflow_run_attempt=1,
     )
@@ -418,3 +419,97 @@ def test_stale_supersession_certificate_rejects_failed_workflow_run() -> None:
         )
         == 1
     )
+
+
+def test_stale_supersession_ignores_prior_main_certificate_but_rejects_duplicate_match() -> None:
+    metadata, row = _explicit_stale_attempt_fixture()
+    prior = _stale_certificate_comment(
+        metadata,
+        main_sha="e" * 40,
+        created_at="2026-09-23T00:19:57Z",
+        updated_at="2026-09-23T00:19:57Z",
+    )
+    current = _stale_certificate_comment(metadata)
+    api = _StaleCertificateApi(row, [prior, current], [_bot_closed_event()])
+    assert (
+        autoheal._attempt_count(
+            api,
+            7,
+            autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY,
+            "f" * 40,
+        )
+        == 0
+    )
+
+    duplicate = _stale_certificate_comment(
+        metadata,
+        created_at="2026-09-23T00:19:58Z",
+        updated_at="2026-09-23T00:19:58Z",
+    )
+    ambiguous = _StaleCertificateApi(
+        row,
+        [prior, duplicate, current],
+        [_bot_closed_event()],
+    )
+    assert (
+        autoheal._attempt_count(
+            ambiguous,
+            7,
+            autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY,
+            "f" * 40,
+        )
+        == 1
+    )
+
+
+def test_stale_certificate_recovery_posts_new_certificate_after_main_moves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata, _ = _explicit_stale_attempt_fixture()
+    metadata = {
+        key: value
+        for key, value in metadata.items()
+        if key not in {"supersessionReason", "supersededByMain"}
+    }
+    prior = _stale_certificate_comment(
+        metadata,
+        main_sha="e" * 40,
+        created_at="2026-09-23T00:19:57Z",
+        updated_at="2026-09-23T00:19:57Z",
+    )
+
+    class _CertificateRecoveryApi:
+        def __init__(self) -> None:
+            self.created: list[dict[str, Any]] = []
+
+        def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+            assert path == "/issues/101/comments"
+            assert max_pages == 2
+            return [prior]
+
+        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            assert path == "/issues/101/comments"
+            created = {
+                "body": payload["body"],
+                "user": {
+                    "login": autoheal.GITHUB_ACTIONS_LOGIN,
+                    "id": autoheal.GITHUB_ACTIONS_USER_ID,
+                },
+                "created_at": "2026-09-23T00:20:00Z",
+                "updated_at": "2026-09-23T00:20:00Z",
+            }
+            self.created.append(created)
+            return created
+
+    monkeypatch.setenv("GITHUB_RUN_ID", "9001")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    api = _CertificateRecoveryApi()
+    certificate = autoheal._ensure_stale_supersession_certificate(
+        api,
+        101,
+        metadata,
+        "f" * 40,
+    )
+    assert certificate["supersededByMain"] == "f" * 40
+    assert certificate["workflowRunId"] == 9001
+    assert len(api.created) == 1
