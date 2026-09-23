@@ -33,7 +33,12 @@ ALERT = 42
 BRANCH = "automation/codeql-autoheal-42-abcdef123456"
 
 
-def _repo_commit(*, owner: str = autoheal.GITHUB_ACTIONS_LOGIN, owner_id: int = autoheal.GITHUB_ACTIONS_USER_ID, alert: int = ALERT) -> dict[str, Any]:
+def _repo_commit(
+    *,
+    owner: str = autoheal.GITHUB_ACTIONS_LOGIN,
+    owner_id: int = autoheal.GITHUB_ACTIONS_USER_ID,
+    alert: int = ALERT,
+) -> dict[str, Any]:
     return {
         "sha": HEAD,
         "author": {"login": owner, "id": owner_id},
@@ -146,11 +151,14 @@ class _PruneApi:
 
 def test_current_subject_orphan_branch_is_preserved_for_recovery() -> None:
     api = _PruneApi()
-    assert autoheal._prune_orphan_repair_refs(
-        api,
-        [],
-        preserve_branches={BRANCH},
-    ) == 0
+    assert (
+        autoheal._prune_orphan_repair_refs(
+            api,
+            [],
+            preserve_branches={BRANCH},
+        )
+        == 0
+    )
     assert api.deleted == []
 
 
