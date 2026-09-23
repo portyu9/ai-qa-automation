@@ -57,6 +57,10 @@ class _GateApi:
         status_creator_login: str = "trusted-pr-gate[bot]",
         status_creator_id: int = 322661847,
         run_id: int = RUN_ID,
+        target_base: str = BASE,
+        target_head: str = HEAD,
+        target_merge: str = MERGE,
+        merge_ref_sha: str = MERGE,
     ) -> None:
         self.event = event
         self.run_attempt = run_attempt
@@ -71,6 +75,10 @@ class _GateApi:
         self.status_creator_login = status_creator_login
         self.status_creator_id = status_creator_id
         self.run_id = run_id
+        self.target_base = target_base
+        self.target_head = target_head
+        self.target_merge = target_merge
+        self.merge_ref_sha = merge_ref_sha
 
     def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
         assert path == f"/commits/{HEAD}/statuses"
@@ -83,7 +91,8 @@ class _GateApi:
                 "description": "Automatic exact-subject trusted validation passed",
                 "target_url": (
                     "https://github.com/portyu9/ai-qa-automation/actions/runs/"
-                    f"{RUN_ID}?pr={PR_NUMBER}&base={BASE}&head={HEAD}&merge={MERGE}"
+                    f"{RUN_ID}?pr={PR_NUMBER}&base={self.target_base}"
+                    f"&head={self.target_head}&merge={self.target_merge}"
                 ),
                 "creator": {
                     "login": self.status_creator_login,
@@ -111,7 +120,7 @@ class _GateApi:
         if path == f"/git/ref/pull/{PR_NUMBER}/merge":
             return {
                 "ref": f"refs/pull/{PR_NUMBER}/merge",
-                "object": {"type": "commit", "sha": MERGE},
+                "object": {"type": "commit", "sha": self.merge_ref_sha},
             }
         if path == f"/git/commits/{MERGE}":
             return {
@@ -213,6 +222,38 @@ def test_dependency_gate_rejects_workflow_identity_drift(kwargs: dict[str, Any])
     with pytest.raises(gate.TrustedStatusError):
         gate.require_schedule_trusted_gate(
             _GateApi(**kwargs),
+            PR_NUMBER,
+            HEAD,
+            BASE,
+        )
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    (
+        {"target_base": "e" * 40},
+        {"target_head": "e" * 40},
+    ),
+)
+def test_dependency_gate_rejects_stale_status_subject_binding(
+    kwargs: dict[str, Any],
+) -> None:
+    with pytest.raises(
+        gate.TrustedStatusError,
+        match="status is bound to a stale subject",
+    ):
+        gate.require_schedule_trusted_gate(
+            _GateApi(**kwargs),
+            PR_NUMBER,
+            HEAD,
+            BASE,
+        )
+
+
+def test_dependency_gate_rejects_moved_merge_ref() -> None:
+    with pytest.raises(gate.TrustedStatusError, match="merge ref drifted"):
+        gate.require_schedule_trusted_gate(
+            _GateApi(merge_ref_sha="e" * 40),
             PR_NUMBER,
             HEAD,
             BASE,
