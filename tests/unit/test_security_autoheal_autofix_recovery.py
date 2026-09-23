@@ -47,7 +47,8 @@ def _repo_commit(
 
 
 class _AmbiguousCommitApi:
-    def __init__(self) -> None:
+    def __init__(self, *, branch: str = BRANCH) -> None:
+        self.branch = branch
         self.branch_sha: str | None = None
         self.commit_posts = 0
         self.fail_first_commit_response = True
@@ -55,7 +56,7 @@ class _AmbiguousCommitApi:
         self.parent = BASE
 
     def get(self, path: str) -> dict[str, Any]:
-        encoded = urllib.parse.quote(BRANCH, safe="")
+        encoded = urllib.parse.quote(self.branch, safe="")
         if path == f"/git/ref/heads/{encoded}":
             if self.branch_sha is None:
                 raise autoheal.AutohealError("GitHub API HTTP 404: missing ref")
@@ -68,12 +69,12 @@ class _AmbiguousCommitApi:
 
     def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         if path == "/git/refs":
-            assert payload == {"ref": f"refs/heads/{BRANCH}", "sha": BASE}
+            assert payload == {"ref": f"refs/heads/{self.branch}", "sha": BASE}
             self.branch_sha = BASE
-            return {"ref": f"refs/heads/{BRANCH}"}
+            return {"ref": f"refs/heads/{self.branch}"}
         if path == f"/code-scanning/alerts/{ALERT}/autofix/commits":
             self.commit_posts += 1
-            assert payload["target_ref"] == f"refs/heads/{BRANCH}"
+            assert payload["target_ref"] == f"refs/heads/{self.branch}"
             self.branch_sha = HEAD
             if self.fail_first_commit_response:
                 self.fail_first_commit_response = False
@@ -204,7 +205,13 @@ def test_only_current_policy_eligible_model_subjects_preserve_recovery_branches(
 
 class _ReconcileRecoveryApi(_AmbiguousCommitApi):
     def __init__(self) -> None:
-        super().__init__()
+        config = autoheal.load_config()
+        subject = autoheal.validate_alert(
+            _alert("src/ai_qa_automation/example.py"),
+            BASE,
+            config,
+        )
+        super().__init__(branch=autoheal._branch_name(subject))
         self.created_prs = 0
 
     def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
@@ -270,7 +277,7 @@ def test_reconcile_recovers_ambiguous_autofix_commit_without_second_submission(
         strategy: str,
     ) -> int:
         assert api_arg is api
-        assert branch == BRANCH
+        assert branch == api.branch
         assert head_sha == HEAD
         assert subject["number"] == ALERT
         assert attempt == 1
