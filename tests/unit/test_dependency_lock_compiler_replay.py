@@ -122,3 +122,44 @@ def test_frozen_replay_requires_hash_replay_after_exact_closure(
         frozen,
     )
     assert calls == [("/python", tmp_path, tmp_path / "dev.lock")]
+
+
+def test_frozen_report_uses_exact_constraints_for_every_locked_package(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    observed: dict[str, object] = {}
+
+    class Result:
+        returncode = 0
+        stdout = ""
+
+    def fake_run(command: list[str], **kwargs: object) -> Result:
+        observed["command"] = command
+        constraint_path = Path(command[command.index("-c") + 1])
+        observed["constraints"] = constraint_path.read_text()
+        report_path = Path(command[command.index("--report") + 1])
+        report_path.write_text('{"install": []}\n')
+        return Result()
+
+    monkeypatch.setattr(compiler.subprocess, "run", fake_run)
+    payload = compiler._run_frozen_report(
+        "/python",
+        root,
+        ["alpha>=1,<2"],
+        {
+            "alpha": ("1.0", "1" * 64),
+            "bravo": ("2.0", "2" * 64),
+        },
+    )
+
+    assert payload == {"install": []}
+    assert observed["constraints"] == "alpha==1.0\nbravo==2.0\n"
+    command = observed["command"]
+    assert isinstance(command, list)
+    assert "--dry-run" in command
+    assert "--ignore-installed" in command
+    assert "--only-binary=:all:" in command
+    assert "-r" in command
+    assert "-c" in command
