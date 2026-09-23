@@ -512,7 +512,7 @@ def _create_promotion_pr(api: GitHubApi, source: dict[str, Any], branch: str, he
             "",
             "The source Dependabot branch is never mutated by governance. This subject carries the",
             "exact signed Dependabot pyproject.toml plus deterministic wheel-only hash locks and must",
-            "pass the full locked CI, CodeQL, regeneration proof, and Trusted PR Gate before merge.",
+            "pass the full locked CI, CodeQL, frozen-lock replay proof, and Trusted PR Gate before merge.",
         )
     )
     try:
