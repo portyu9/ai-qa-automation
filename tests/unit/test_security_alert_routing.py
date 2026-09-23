@@ -247,6 +247,15 @@ def test_fingerprint_and_strategy_drift_fail_closed_as_stale() -> None:
     assert moved_record["decision"] == "stale-alert"
     assert moved_record["reason"] == "alert-fingerprint-drift"
 
+    severity_changed = routing.route_alert(
+        _alert(severity="9.1"),
+        main_sha=MAIN,
+        config=_config(),
+        expected_fingerprint=baseline["fingerprint"],
+    )
+    assert severity_changed["decision"] == "stale-alert"
+    assert severity_changed["reason"] == "alert-fingerprint-drift"
+
     strategy_record = routing.route_alert(
         _alert(),
         main_sha=MAIN,
