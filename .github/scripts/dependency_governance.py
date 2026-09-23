@@ -14,11 +14,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from dependency_trusted_gate import require_schedule_trusted_gate
 from trusted_qualification import TrustedQualificationError
 from trusted_qualification import (
     require_success as require_trusted_qualification_success,
 )
-from dependency_trusted_gate import require_schedule_trusted_gate
 from trusted_status import TrustedStatusError
 
 ROOT = Path(__file__).resolve().parents[2]
