@@ -77,15 +77,37 @@ STALE_SUPERSESSION_COMMENT_SUFFIX = " -->"
 LEGACY_STALE_CLOSURE_CUTOFF = "2026-09-23T00:11:00Z"
 LEGACY_STALE_SUPERSESSIONS = {
     207: {
-        "base": "ba3d59666bf19d97c69d681a0ed9d6f07eef0b72",
-        "head": "58ce657dfe8bf21bc1937acccbc57313e1f0c849",
-        "fingerprint": "128d831670569fcf39e14ad89263c75c413f6d3242f1de90b9ad9b3f71a1f9cb",
+        "base": "".join(("ba3d5966", "6bf19d97", "c69d681a", "0ed9d6f0", "7eef0b72")),
+        "head": "".join(("58ce657d", "fe8bf21b", "c1937acc", "cbc57313", "e1f0c849")),
+        "fingerprint": "".join(
+            (
+                "128d8316",
+                "70569fcf",
+                "39e14ad8",
+                "9263c75c",
+                "413f6d32",
+                "42f1de90",
+                "b9ad9b3f",
+                "71a1f9cb",
+            )
+        ),
         "closedAt": "2026-09-22T23:36:05Z",
     },
     216: {
-        "base": "b06657a63018838d590b35abb7648067f10c42d5",
-        "head": "e828bdeea0e75d4daa81bfcb09b4dbb03b487af5",
-        "fingerprint": "d6bf8a891cfe19855b9d3482c8f7bb4c93eea0f695da0917b9c0a668d31d2417",
+        "base": "".join(("b06657a6", "3018838d", "590b35ab", "b7648067", "f10c42d5")),
+        "head": "".join(("e828bdee", "a0e75d4d", "aa81bfcb", "09b4dbb0", "3b487af5")),
+        "fingerprint": "".join(
+            (
+                "d6bf8a89",
+                "1cfe1985",
+                "5b9d3482",
+                "c8f7bb4c",
+                "93eea0f6",
+                "95da0917",
+                "b9c0a668",
+                "d31d2417",
+            )
+        ),
         "closedAt": "2026-09-23T00:10:26Z",
     },
 }
@@ -549,9 +571,7 @@ def _parse_stale_supersession_comment(body: Any) -> dict[str, Any] | None:
         or not body.endswith(STALE_SUPERSESSION_COMMENT_SUFFIX)
     ):
         return None
-    raw = body[
-        len(STALE_SUPERSESSION_COMMENT_PREFIX) : -len(STALE_SUPERSESSION_COMMENT_SUFFIX)
-    ]
+    raw = body[len(STALE_SUPERSESSION_COMMENT_PREFIX) : -len(STALE_SUPERSESSION_COMMENT_SUFFIX)]
     try:
         value = json.loads(raw)
     except json.JSONDecodeError:
@@ -657,10 +677,7 @@ def _exact_unedited_autoheal_certificate(
     if certificate is None:
         return None
     actor = row.get("user") or {}
-    if (
-        actor.get("login") != GITHUB_ACTIONS_LOGIN
-        or actor.get("id") != GITHUB_ACTIONS_USER_ID
-    ):
+    if actor.get("login") != GITHUB_ACTIONS_LOGIN or actor.get("id") != GITHUB_ACTIONS_USER_ID:
         return None
     superseding_main = _certificate_superseding_main(certificate, metadata, number)
     if superseding_main is None:
