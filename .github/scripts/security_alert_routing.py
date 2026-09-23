@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import math
@@ -9,8 +10,9 @@ import os
 import re
 import secrets
 import stat
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = ROOT / ".github" / "security-autoheal.json"
@@ -673,10 +675,12 @@ def persist_record(path: Path, record: Mapping[str, Any]) -> bool:
                 dst_dir_fd=parent_fd,
                 follow_symlinks=False,
             )
-        except FileExistsError:
+        except FileExistsError as exc:
             existing = _read_record_at(parent_fd, name)
             if existing != payload:
-                raise RoutingPolicyError("concurrent routing record publication conflicted")
+                raise RoutingPolicyError(
+                    "concurrent routing record publication conflicted"
+                ) from exc
             return False
         except OSError as exc:
             raise RoutingPolicyError("routing record atomic publication failed") from exc
@@ -688,10 +692,8 @@ def persist_record(path: Path, record: Mapping[str, Any]) -> bool:
         return True
     finally:
         if temp_name is not None:
-            try:
+            with contextlib.suppress(FileNotFoundError):
                 os.unlink(temp_name, dir_fd=parent_fd)
-            except FileNotFoundError:
-                pass
         os.close(parent_fd)
 
 
