@@ -746,11 +746,32 @@ def _branch_name(subject: dict[str, Any]) -> str:
     return f"{BRANCH_PREFIX}{subject['number']}-{subject['fingerprint'][:12]}"
 
 
+def _closed_autoheal_branches(
+    pulls: list[dict[str, Any]],
+    repository: str,
+) -> set[str]:
+    branches: set[str] = set()
+    for row in pulls:
+        head = row.get("head") or {}
+        head_repo = head.get("repo") or {}
+        branch = head.get("ref")
+        if (
+            head_repo.get("full_name") != repository
+            or not isinstance(branch, str)
+            or AUTOHEAL_BRANCH_RE.fullmatch(branch) is None
+        ):
+            continue
+        branches.add(branch)
+    return branches
+
+
 def _recoverable_model_autofix_branches(
     alerts: list[dict[str, Any]],
     main_sha: str,
     config: dict[str, Any],
+    closed_pulls: list[dict[str, Any]],
 ) -> set[str]:
+    closed_branches = _closed_autoheal_branches(closed_pulls, config["repository"])
     branches: set[str] = set()
     for alert in alerts:
         try:
@@ -763,7 +784,10 @@ def _recoverable_model_autofix_branches(
             continue
         if not _model_path_allowed(subject["path"], config):
             continue
-        branches.add(_branch_name(subject))
+        branch = _branch_name(subject)
+        if branch in closed_branches:
+            continue
+        branches.add(branch)
     return branches
 
 
@@ -1887,9 +1911,15 @@ def _attempt_count(
     alert_number: int,
     strategy: str,
     current_main_sha: str,
+    *,
+    closed_pulls: list[dict[str, Any]] | None = None,
 ) -> int:
     current_main_sha = _require_sha(current_main_sha, "attempt-accounting main SHA")
-    rows = api.list_all("/pulls?state=closed&sort=updated&direction=desc", max_pages=10)
+    rows = (
+        closed_pulls
+        if closed_pulls is not None
+        else api.list_all("/pulls?state=closed&sort=updated&direction=desc", max_pages=10)
+    )
     count = 0
     for pr in rows:
         if (pr.get("user") or {}).get("login") != GITHUB_ACTIONS_LOGIN:
@@ -1990,7 +2020,13 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
         quote_via=urllib.parse.quote,
     )
     alerts = api.list_all(f"/code-scanning/alerts?{query}", max_pages=10)
-    preserve_branches = _recoverable_model_autofix_branches(alerts, main_sha, config)
+    closed_pulls = api.list_all("/pulls?state=closed&sort=updated&direction=desc", max_pages=10)
+    preserve_branches = _recoverable_model_autofix_branches(
+        alerts,
+        main_sha,
+        config,
+        closed_pulls,
+    )
     _prune_orphan_repair_refs(
         api,
         pulls,
@@ -2090,7 +2126,13 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
             if subject["number"] in active_alerts:
                 continue
             strategy = _repair_strategy(subject)
-            prior = _attempt_count(api, subject["number"], strategy, main_sha)
+            prior = _attempt_count(
+                api,
+                subject["number"],
+                strategy,
+                main_sha,
+                closed_pulls=closed_pulls,
+            )
             if prior >= config["maxAttemptsPerAlert"]:
                 raise PolicyBlock(
                     "alert exhausted bounded automatic remediation attempts for current strategy"
