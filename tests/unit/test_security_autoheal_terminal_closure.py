@@ -140,6 +140,7 @@ class _TerminalApi:
         autoheal_head_sha: str = MERGE,
         autoheal_run_attempt: int = 1,
         gate_run_attempt: int = 1,
+        gate_workflow_id: int = autoheal.TRUSTED_PR_GATE_WORKFLOW_ID,
     ) -> None:
         self.pr = _repair_pr()
         self.ci_runs = [_ci_run()] if ci_runs is None else list(ci_runs)
@@ -148,6 +149,7 @@ class _TerminalApi:
         self.autoheal_head_sha = autoheal_head_sha
         self.autoheal_run_attempt = autoheal_run_attempt
         self.gate_run_attempt = gate_run_attempt
+        self.gate_workflow_id = gate_workflow_id
         self.comments: list[dict[str, Any]] = []
         self.dispatches: list[tuple[str, dict[str, Any] | None]] = []
 
@@ -203,6 +205,7 @@ class _TerminalApi:
             if run_id == GATE_RUN_ID:
                 return {
                     "id": GATE_RUN_ID,
+                    "workflow_id": self.gate_workflow_id,
                     "name": autoheal.EXPECTED_GATE_WORKFLOW_NAME,
                     "path": autoheal.EXPECTED_GATE_WORKFLOW_PATH,
                     "event": "schedule",
@@ -325,6 +328,7 @@ def test_terminal_closure_persists_exact_idempotent_certificate(
     assert certificate["codeqlRunId"] == CODEQL_RUN_ID
     assert certificate["workflowRunId"] == AUTOHEAL_RUN_ID
     assert certificate["trustedStatusId"] == TRUSTED_STATUS_ID
+    assert certificate["trustedGateWorkflowId"] == autoheal.TRUSTED_PR_GATE_WORKFLOW_ID
     assert certificate["trustedGateRunId"] == GATE_RUN_ID
     assert certificate["trustedGateRunAttempt"] == 1
     assert certificate["trustedGateEvent"] == "schedule"
@@ -428,6 +432,32 @@ def test_terminal_closure_rejects_rerun_trusted_gate(
     assert api.comments == []
 
 
+def test_terminal_closure_rejects_wrong_trusted_gate_workflow_identity(
+    config: dict[str, Any],
+) -> None:
+    api = _TerminalApi(gate_workflow_id=autoheal.TRUSTED_PR_GATE_WORKFLOW_ID + 1)
+
+    with pytest.raises(
+        autoheal.AutohealError,
+        match="terminal Trusted PR Gate target run is not exact-main evidence",
+    ):
+        autoheal._reconcile_terminal_closure(api, MERGE, config)
+    assert api.comments == []
+
+
+def test_terminal_closure_rejects_rerun_autoheal_workflow_before_publication(
+    config: dict[str, Any],
+) -> None:
+    api = _TerminalApi(autoheal_run_attempt=2)
+
+    with pytest.raises(
+        autoheal.PolicyBlock,
+        match="terminal closure evidence is not exact autonomous workflow evidence",
+    ):
+        autoheal._reconcile_terminal_closure(api, MERGE, config)
+    assert api.comments == []
+
+
 def test_terminal_closure_rejects_moved_autoheal_run_before_publication(
     config: dict[str, Any],
 ) -> None:
@@ -439,6 +469,24 @@ def test_terminal_closure_rejects_moved_autoheal_run_before_publication(
     ):
         autoheal._reconcile_terminal_closure(api, MERGE, config)
     assert api.comments == []
+
+
+def test_terminal_closure_rejects_duplicate_certificates(
+    config: dict[str, Any],
+) -> None:
+    api = _TerminalApi()
+    assert autoheal._reconcile_terminal_closure(api, MERGE, config) is False
+    assert len(api.comments) == 1
+    duplicate = dict(api.comments[0])
+    duplicate["created_at"] = "2026-09-23T12:35:01Z"
+    duplicate["updated_at"] = "2026-09-23T12:35:01Z"
+    api.comments.append(duplicate)
+
+    with pytest.raises(
+        autoheal.PolicyBlock,
+        match="ambiguous GitHub Actions terminal closure certificates",
+    ):
+        autoheal._reconcile_terminal_closure(api, MERGE, config)
 
 
 def test_terminal_closure_rejects_edited_certificate(
