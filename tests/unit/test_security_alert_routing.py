@@ -57,7 +57,13 @@ def _alert(
         "most_recent_instance": {
             "ref": ref,
             "commit_sha": sha,
-            "location": {"path": path, "start_line": 12},
+            "location": {
+                "path": path,
+                "start_line": 12,
+                "end_line": 12,
+                "start_column": 4,
+                "end_column": 18,
+            },
             "message": {"text": message},
         },
     }
@@ -273,6 +279,17 @@ def test_fingerprint_and_strategy_drift_fail_closed_as_stale() -> None:
     assert severity_changed["decision"] == "stale-alert"
     assert severity_changed["reason"] == "alert-fingerprint-drift"
 
+    location_changed_alert = _alert()
+    location_changed_alert["most_recent_instance"]["location"]["start_column"] = 5
+    location_changed = routing.route_alert(
+        location_changed_alert,
+        main_sha=MAIN,
+        config=_config(),
+        expected_fingerprint=baseline["fingerprint"],
+    )
+    assert location_changed["decision"] == "stale-alert"
+    assert location_changed["reason"] == "alert-fingerprint-drift"
+
     strategy_record = routing.route_alert(
         _alert(),
         main_sha=MAIN,
@@ -281,6 +298,22 @@ def test_fingerprint_and_strategy_drift_fail_closed_as_stale() -> None:
     )
     assert strategy_record["decision"] == "stale-alert"
     assert strategy_record["reason"] == "remediation-strategy-version-drift"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("end_line", 11),
+        ("start_column", 19),
+        ("end_column", 3),
+    ),
+)
+def test_malformed_alert_location_ranges_fail_closed(field: str, value: int) -> None:
+    alert = _alert()
+    alert["most_recent_instance"]["location"][field] = value
+
+    with pytest.raises(routing.RoutingPolicyError, match="location range"):
+        routing.route_alert(alert, main_sha=MAIN, config=_config())
 
 
 def test_routing_record_binds_exact_normalized_policy_inputs() -> None:
