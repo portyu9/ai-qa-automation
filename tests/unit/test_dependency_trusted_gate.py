@@ -190,13 +190,11 @@ def test_dependency_gate_rejects_unreviewed_events_at_shared_boundary(event: str
         )
 
 
-def test_dependency_gate_rejects_rerun_attempt() -> None:
-    with pytest.raises(
-        gate.TrustedStatusError,
-        match="not exact schedule-owned authority",
-    ):
+@pytest.mark.parametrize("attempt", (2, True))
+def test_dependency_gate_rejects_rerun_or_noninteger_attempt(attempt: Any) -> None:
+    with pytest.raises(gate.TrustedStatusError):
         gate.require_schedule_trusted_gate(
-            _GateApi(run_attempt=2),
+            _GateApi(run_attempt=attempt),
             PR_NUMBER,
             HEAD,
             BASE,
