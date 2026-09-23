@@ -1051,7 +1051,11 @@ def _commit_copilot_autofix(api: GitHubApi, alert_number: int, branch: str, base
     existing_head = _branch_head(api, branch)
     if existing_head is None:
         _create_branch(api, branch, base_sha)
-    elif existing_head != base_sha:
+    elif existing_head == base_sha:
+        raise PolicyBlock(
+            "existing Copilot Autofix attempt branch has ambiguous provider-submission state"
+        )
+    else:
         recovered = _require_exact_copilot_autofix_commit(
             api,
             alert_number,
