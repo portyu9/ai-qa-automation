@@ -30,7 +30,7 @@ autoheal = _load()
 BASE = "a" * 40
 HEAD = "b" * 40
 ALERT = 42
-BRANCH = "automation/codeql-autoheal-42-abcdef123456-a1"
+BRANCH = "automation/codeql-autoheal-42-" + ("d" * 64) + "-a1"
 
 
 def _repo_commit(
@@ -232,6 +232,7 @@ def test_attempt_scoped_branch_names_are_distinct_and_legacy_compatible() -> Non
     assert len(branches) == len(set(branches))
     assert legacy not in branches
     assert all(autoheal.AUTOHEAL_BRANCH_RE.fullmatch(branch) is not None for branch in branches)
+    assert all(subject["fingerprint"] in branch for branch in branches)
 
 
 def test_branch_binding_accepts_legacy_or_exact_attempt_and_rejects_mismatch() -> None:
