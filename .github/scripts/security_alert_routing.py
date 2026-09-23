@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import stat
@@ -123,8 +124,8 @@ def _security_severity(alert: Mapping[str, Any]) -> float:
             severity = float(value)
         except (TypeError, ValueError) as exc:
             raise RoutingPolicyError("security severity is malformed") from exc
-        if severity < 0 or severity > 10:
-            raise RoutingPolicyError("security severity is outside 0..10")
+        if not math.isfinite(severity) or severity < 0 or severity > 10:
+            raise RoutingPolicyError("security severity is outside finite 0..10")
         return severity
     level = rule.get("security_severity_level")
     if isinstance(level, str) and level.lower() in SECURITY_SEVERITY_FLOORS:
@@ -207,8 +208,8 @@ def _routing_config(config: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(minimum, (int, float)) or isinstance(minimum, bool):
         raise RoutingPolicyError("minimumSecuritySeverity is malformed")
     minimum = float(minimum)
-    if minimum < 0 or minimum > 10:
-        raise RoutingPolicyError("minimumSecuritySeverity is outside 0..10")
+    if not math.isfinite(minimum) or minimum < 0 or minimum > 10:
+        raise RoutingPolicyError("minimumSecuritySeverity is outside finite 0..10")
     max_attempts = config.get("maxAttemptsPerAlert")
     if isinstance(max_attempts, bool) or not isinstance(max_attempts, int) or not 1 <= max_attempts <= 10:
         raise RoutingPolicyError("maxAttemptsPerAlert is outside the reviewed bound")
@@ -553,6 +554,29 @@ def persist_record(path: Path, record: Mapping[str, Any]) -> bool:
             pass
 
 
+def _strict_json_loads(payload: bytes, *, label: str) -> Any:
+    def reject_constant(value: str) -> Any:
+        raise RoutingPolicyError(f"{label} contains non-finite JSON constant: {value}")
+
+    def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise RoutingPolicyError(f"{label} contains duplicate object key: {key}")
+            result[key] = value
+        return result
+
+    try:
+        text = payload.decode("utf-8")
+        return json.loads(
+            text,
+            parse_constant=reject_constant,
+            object_pairs_hook=reject_duplicates,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RoutingPolicyError(f"{label} is not strict canonical JSON") from exc
+
+
 def _read_json(path: Path, *, max_bytes: int, label: str) -> Any:
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     if not nofollow:
@@ -591,10 +615,7 @@ def _read_json(path: Path, *, max_bytes: int, label: str) -> Any:
             raise RoutingPolicyError(f"{label} changed during ingestion")
     finally:
         os.close(fd)
-    try:
-        return json.loads(payload.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise RoutingPolicyError(f"{label} is not canonical JSON") from exc
+    return _strict_json_loads(bytes(payload), label=label)
 
 
 def load_config(path: Path = DEFAULT_CONFIG) -> dict[str, Any]:
