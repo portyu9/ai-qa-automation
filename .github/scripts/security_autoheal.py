@@ -792,10 +792,7 @@ def _recoverable_model_autofix_branches(
             continue
         if not _model_path_allowed(subject["path"], config):
             continue
-        branches.update(
-            _branch_name(subject, attempt)
-            for attempt in range(1, max_attempts + 1)
-        )
+        branches.update(_branch_name(subject, attempt) for attempt in range(1, max_attempts + 1))
     return branches
 
 
