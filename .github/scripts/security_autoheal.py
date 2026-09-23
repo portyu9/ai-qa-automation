@@ -52,7 +52,7 @@ MARKER_PREFIX = "<!-- aiqa-codeql-autoheal:"
 MARKER_SUFFIX = " -->"
 BRANCH_PREFIX = "automation/codeql-autoheal-"
 AUTOHEAL_BRANCH_RE = re.compile(
-    r"^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{12}(?:-a[1-9][0-9]*)?$"
+    r"^automation/codeql-autoheal-[1-9][0-9]*-(?:[0-9a-f]{12}|[0-9a-f]{64}-a[1-9][0-9]*)$"
 )
 AUTOHEAL_COMMIT_MESSAGE_RE = re.compile(r"^security: auto-heal CodeQL alert #[1-9][0-9]*$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -745,12 +745,15 @@ def _ensure_stale_supersession_certificate(
 
 
 def _branch_name(subject: dict[str, Any], attempt: int | None = None) -> str:
-    branch = f"{BRANCH_PREFIX}{subject['number']}-{subject['fingerprint'][:12]}"
+    legacy = f"{BRANCH_PREFIX}{subject['number']}-{subject['fingerprint'][:12]}"
     if attempt is None:
-        return branch
+        return legacy
     if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
         raise AutohealError("auto-heal attempt must be a positive integer")
-    return f"{branch}-a{attempt}"
+    fingerprint = subject.get("fingerprint")
+    if not isinstance(fingerprint, str) or re.fullmatch(r"[0-9a-f]{64}", fingerprint) is None:
+        raise AutohealError("auto-heal subject fingerprint is not canonical SHA-256")
+    return f"{BRANCH_PREFIX}{subject['number']}-{fingerprint}-a{attempt}"
 
 
 def _require_repair_branch_binding(
