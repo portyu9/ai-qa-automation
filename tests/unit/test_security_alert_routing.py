@@ -383,6 +383,35 @@ def test_unreviewed_path_has_explicit_nonmutation_route() -> None:
             lambda config: config["routingPolicy"].update(modelStrategy="github-codeql-autofix-v2"),
             "code-owned strategy",
         ),
+        (
+            lambda config: config["routingPolicy"]["deterministicStrategies"][0].update(
+                pathPrefixes=["tests/", "src/"]
+            ),
+            "code-owned strategy matrix",
+        ),
+        (
+            lambda config: config["routingPolicy"]["deterministicStrategies"][1]["paths"].append(
+                "scripts/unreviewed_logger.py"
+            ),
+            "code-owned strategy matrix",
+        ),
+        (
+            lambda config: config["routingPolicy"]["deterministicStrategies"][2].update(
+                strategy="deterministic-reference-sut-reflective-xss-v2"
+            ),
+            "code-owned strategy matrix",
+        ),
+        (
+            lambda config: config["routingPolicy"]["deterministicStrategies"].append(
+                {
+                    "rule": "py/reflective-xss",
+                    "strategy": "deterministic-extra-reflective-xss-v1",
+                    "paths": ["src/ai_qa_automation/extra.py"],
+                    "pathPrefixes": [],
+                }
+            ),
+            "code-owned strategy matrix",
+        ),
     ),
 )
 def test_routing_authority_surfaces_cannot_expand_by_config_only(
