@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import tempfile
 import tomllib
 import urllib.parse
@@ -543,6 +544,31 @@ def _create_promotion_pr(api: GitHubApi, source: dict[str, Any], branch: str, he
     return number
 
 
+def _publish_merge_signal(github_output: Path | None) -> None:
+    if github_output is None:
+        return
+    expected = os.environ.get("GITHUB_OUTPUT")
+    if os.environ.get("GITHUB_ACTIONS") != "true" or not expected or Path(expected) != github_output:
+        raise GovernanceError("merge signal output is not the exact GitHub Actions output file")
+    flags = os.O_WRONLY | os.O_APPEND
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(github_output, flags)
+    except OSError as exc:
+        raise GovernanceError(f"unable to open exact GitHub Actions merge output: {exc}") from exc
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
+            raise GovernanceError("GitHub Actions merge output is not an owned regular file")
+        payload = b"merged=true\n"
+        if os.write(descriptor, payload) != len(payload):
+            raise GovernanceError("GitHub Actions merge output write was incomplete")
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def _promotion_pulls(api: GitHubApi) -> list[dict[str, Any]]:
     rows = api.list_all("/pulls?state=open&sort=created&direction=asc", max_pages=4)
     return [
@@ -712,7 +738,12 @@ def _close_stale(api: GitHubApi, number: int, branch: str, head_sha: str) -> Non
     _delete_exact_generated_branch(api, branch, head_sha)
 
 
-def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
+def reconcile(
+    config: dict[str, Any],
+    *,
+    allow_merge: bool,
+    github_output: Path | None = None,
+) -> int:
     if config.get("pipMode") != "promotion":
         raise GovernanceError("dependency promotion requires pipMode=promotion")
     repository = os.environ.get("GITHUB_REPOSITORY", "")
@@ -742,6 +773,7 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
                         sort_keys=True,
                     )
                 )
+                _publish_merge_signal(github_output)
                 return 0
         except PolicyBlock as exc:
             reason = str(exc)
@@ -970,11 +1002,18 @@ def main() -> None:
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--reconcile", action="store_true")
     parser.add_argument("--allow-merge", action="store_true")
+    parser.add_argument("--github-output", type=Path)
     args = parser.parse_args()
+    if args.github_output is not None and (not args.reconcile or not args.allow_merge):
+        parser.error("--github-output requires --reconcile --allow-merge")
     if args.self_test:
         selftest()
     if args.reconcile:
-        reconcile(load_config(), allow_merge=args.allow_merge)
+        reconcile(
+            load_config(),
+            allow_merge=args.allow_merge,
+            github_output=args.github_output,
+        )
     if not args.self_test and not args.reconcile:
         parser.error("choose --self-test or --reconcile")
 
