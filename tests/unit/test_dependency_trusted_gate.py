@@ -163,14 +163,24 @@ def test_dependency_gate_accepts_exact_schedule_attempt_one() -> None:
     }
 
 
-@pytest.mark.parametrize(
-    "event",
-    ("workflow_run", "workflow_dispatch", "pull_request", "push"),
-)
-def test_dependency_gate_rejects_non_schedule_events(event: str) -> None:
+def test_dependency_gate_rejects_workflow_run_even_when_shared_gate_accepts_it() -> None:
     with pytest.raises(
         gate.TrustedStatusError,
         match="not exact schedule-owned authority",
+    ):
+        gate.require_schedule_trusted_gate(
+            _GateApi(event="workflow_run"),
+            PR_NUMBER,
+            HEAD,
+            BASE,
+        )
+
+
+@pytest.mark.parametrize("event", ("workflow_dispatch", "pull_request", "push"))
+def test_dependency_gate_rejects_unreviewed_events_at_shared_boundary(event: str) -> None:
+    with pytest.raises(
+        gate.TrustedStatusError,
+        match="target run is not exact-current-main gate evidence",
     ):
         gate.require_schedule_trusted_gate(
             _GateApi(event=event),
@@ -264,7 +274,10 @@ def test_dependency_gate_rejects_spoofed_non_app_status() -> None:
 
 
 def test_dependency_gate_rejects_status_target_run_mismatch() -> None:
-    with pytest.raises(gate.TrustedStatusError, match="run id"):
+    with pytest.raises(
+        gate.TrustedStatusError,
+        match="target run is not exact-current-main gate evidence",
+    ):
         gate.require_schedule_trusted_gate(
             _GateApi(run_id=RUN_ID + 1),
             PR_NUMBER,
