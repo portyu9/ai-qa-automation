@@ -183,3 +183,176 @@ def test_legacy_deterministic_marker_infers_code_owned_strategy() -> None:
     }
 
     assert autoheal._marker_strategy(metadata) == autoheal.OVERLY_PERMISSIVE_TEST_STRATEGY
+
+
+def _explicit_stale_attempt_fixture() -> tuple[dict[str, Any], dict[str, Any]]:
+    metadata = {
+        "version": 1,
+        "alert": 7,
+        "attempt": 1,
+        "base": "a" * 40,
+        "head": "b" * 40,
+        "fingerprint": "c" * 64,
+        "generator": "deterministic",
+        "path": "examples/reference_sut/app.py",
+        "rule": "py/reflective-xss",
+        "severity": 7.0,
+        "strategy": autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY,
+        "supersessionReason": autoheal.STALE_SUPERSESSION_REASON,
+        "supersededByMain": "f" * 40,
+    }
+    row = {
+        "number": 101,
+        "state": "closed",
+        "merged_at": None,
+        "closed_at": "2026-09-23T00:20:00Z",
+        "user": {
+            "login": autoheal.GITHUB_ACTIONS_LOGIN,
+            "id": autoheal.GITHUB_ACTIONS_USER_ID,
+        },
+        "head": {
+            "ref": "automation/codeql-autoheal-7-abcdef123456",
+            "sha": metadata["head"],
+        },
+        "base": {"sha": metadata["base"]},
+        "body": autoheal._marker(metadata),
+    }
+    return metadata, row
+
+
+class _StaleCertificateApi:
+    def __init__(
+        self,
+        row: dict[str, Any],
+        comments: list[dict[str, Any]],
+        events: list[dict[str, Any]],
+    ) -> None:
+        self.row = row
+        self.comments = comments
+        self.events = events
+
+    def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+        if path == "/pulls?state=closed&sort=updated&direction=desc":
+            assert max_pages == 10
+            return [self.row]
+        if path == "/issues/101/comments":
+            assert max_pages == 2
+            return self.comments
+        if path == "/issues/101/events":
+            assert max_pages == 2
+            return self.events
+        raise AssertionError(f"unexpected API path: {path}")
+
+
+def _stale_certificate_comment(
+    metadata: dict[str, Any],
+    *,
+    login: str = autoheal.GITHUB_ACTIONS_LOGIN,
+    user_id: int = autoheal.GITHUB_ACTIONS_USER_ID,
+    created_at: str = "2026-09-23T00:19:59Z",
+    updated_at: str = "2026-09-23T00:19:59Z",
+) -> dict[str, Any]:
+    certificate = autoheal._stale_supersession_certificate(metadata, 101, "f" * 40)
+    return {
+        "body": autoheal._stale_supersession_comment(certificate),
+        "user": {"login": login, "id": user_id},
+        "created_at": created_at,
+        "updated_at": updated_at,
+    }
+
+
+def _bot_closed_event(created_at: str = "2026-09-23T00:20:00Z") -> dict[str, Any]:
+    return {
+        "id": 500,
+        "event": "closed",
+        "created_at": created_at,
+        "actor": {
+            "login": autoheal.GITHUB_ACTIONS_LOGIN,
+            "id": autoheal.GITHUB_ACTIONS_USER_ID,
+        },
+    }
+
+
+def test_explicit_stale_supersession_requires_exact_unedited_bot_certificate() -> None:
+    metadata, row = _explicit_stale_attempt_fixture()
+    exact_api = _StaleCertificateApi(
+        row,
+        [_stale_certificate_comment(metadata)],
+        [_bot_closed_event()],
+    )
+    assert (
+        autoheal._attempt_count(
+            exact_api,
+            7,
+            autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY,
+            "f" * 40,
+        )
+        == 0
+    )
+
+    human_api = _StaleCertificateApi(
+        row,
+        [_stale_certificate_comment(metadata, login="portyu9", user_id=35150859)],
+        [_bot_closed_event()],
+    )
+    assert (
+        autoheal._attempt_count(
+            human_api,
+            7,
+            autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY,
+            "f" * 40,
+        )
+        == 1
+    )
+
+    edited_api = _StaleCertificateApi(
+        row,
+        [
+            _stale_certificate_comment(
+                metadata,
+                updated_at="2026-09-23T00:20:01Z",
+            )
+        ],
+        [_bot_closed_event()],
+    )
+    assert (
+        autoheal._attempt_count(
+            edited_api,
+            7,
+            autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY,
+            "f" * 40,
+        )
+        == 1
+    )
+
+
+def test_stale_supersession_certificate_cannot_replay_across_reopen() -> None:
+    metadata, row = _explicit_stale_attempt_fixture()
+    api = _StaleCertificateApi(
+        row,
+        [
+            _stale_certificate_comment(
+                metadata,
+                created_at="2026-09-23T00:19:00Z",
+                updated_at="2026-09-23T00:19:00Z",
+            )
+        ],
+        [
+            {
+                "id": 499,
+                "event": "reopened",
+                "created_at": "2026-09-23T00:19:30Z",
+                "actor": {"login": "portyu9", "id": 35150859},
+            },
+            _bot_closed_event(),
+        ],
+    )
+    assert (
+        autoheal._attempt_count(
+            api,
+            7,
+            autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY,
+            "f" * 40,
+        )
+        == 1
+    )
