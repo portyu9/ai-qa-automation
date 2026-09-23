@@ -91,8 +91,6 @@ TERMINAL_CLOSURE_COMMENT_SUFFIX = " -->"
 TERMINAL_TRUSTED_GATE_EVENTS = {"schedule"}
 TERMINAL_MAIN_EVENTS = {"push"}
 TERMINAL_AUTOHEAL_EVENTS = {"workflow_run", "schedule"}
-ALERT_FIXED_OBSERVATION_ATTEMPTS = 3
-ALERT_FIXED_OBSERVATION_DELAY_SECONDS = 1
 LEGACY_STALE_CLOSURE_CUTOFF = "2026-09-23T00:11:00Z"
 LEGACY_STALE_SUPERSESSIONS = {
     207: {
@@ -1609,9 +1607,7 @@ def _parse_terminal_closure_comment(body: Any) -> dict[str, Any] | None:
         or not body.endswith(TERMINAL_CLOSURE_COMMENT_SUFFIX)
     ):
         return None
-    raw = body[
-        len(TERMINAL_CLOSURE_COMMENT_PREFIX) : -len(TERMINAL_CLOSURE_COMMENT_SUFFIX)
-    ]
+    raw = body[len(TERMINAL_CLOSURE_COMMENT_PREFIX) : -len(TERMINAL_CLOSURE_COMMENT_SUFFIX)]
     try:
         value = json.loads(raw)
     except json.JSONDecodeError:
@@ -1645,10 +1641,7 @@ def _terminal_trusted_gate_evidence(
     if not matches:
         raise AutohealError("terminal Trusted PR Gate status is missing")
     latest = max(matches, key=lambda row: int(row["id"]))
-    if (
-        latest.get("state") != "success"
-        or latest.get("description") != TRUSTED_STATUS_DESCRIPTION
-    ):
+    if latest.get("state") != "success" or latest.get("description") != TRUSTED_STATUS_DESCRIPTION:
         raise AutohealError("terminal Trusted PR Gate status is not an exact reviewed success")
     target_url = latest.get("target_url")
     if not isinstance(target_url, str):
@@ -1814,17 +1807,13 @@ def _terminal_certificate_static_matches(
     try:
         expected_base = _require_sha(metadata.get("base"), "terminal marker base SHA")
         expected_head = _require_sha(metadata.get("head"), "terminal marker head SHA")
-        expected_merge = _require_sha(
-            merge_evidence.get("mergeSha"), "terminal expected merge SHA"
-        )
+        expected_merge = _require_sha(merge_evidence.get("mergeSha"), "terminal expected merge SHA")
         expected_tree = _require_sha(
             merge_evidence.get("sourceTreeSha"), "terminal expected source tree SHA"
         )
         observed_base = _require_sha(certificate.get("base"), "terminal certificate base SHA")
         observed_head = _require_sha(certificate.get("head"), "terminal certificate head SHA")
-        observed_merge = _require_sha(
-            certificate.get("mergeSha"), "terminal certificate merge SHA"
-        )
+        observed_merge = _require_sha(certificate.get("mergeSha"), "terminal certificate merge SHA")
         observed_tree = _require_sha(
             certificate.get("sourceTreeSha"), "terminal certificate source tree SHA"
         )
@@ -1906,12 +1895,7 @@ def _terminal_autoheal_workflow_run_matches(
 ) -> bool:
     run_id = certificate.get("workflowRunId")
     run_attempt = certificate.get("workflowRunAttempt")
-    if (
-        not isinstance(run_id, int)
-        or isinstance(run_id, bool)
-        or run_id < 1
-        or run_attempt != 1
-    ):
+    if not isinstance(run_id, int) or isinstance(run_id, bool) or run_id < 1 or run_attempt != 1:
         return False
     try:
         merge_sha = _require_sha(
@@ -2034,9 +2018,7 @@ def _ensure_terminal_closure_certificate(
             and isinstance(body, str)
             and body.startswith(TERMINAL_CLOSURE_COMMENT_PREFIX)
         ):
-            parsed = _exact_unedited_terminal_certificate(
-                row, metadata, number, merge_evidence
-            )
+            parsed = _exact_unedited_terminal_certificate(row, metadata, number, merge_evidence)
             if parsed is None:
                 raise PolicyBlock("GitHub Actions terminal closure certificate is malformed")
             matching.append(parsed)
@@ -2061,17 +2043,14 @@ def _ensure_terminal_closure_certificate(
         workflow_run_attempt=_current_positive_int_env("GITHUB_RUN_ATTEMPT"),
     )
     if not _terminal_certificate_evidence_matches(api, certificate, metadata, number):
-        raise PolicyBlock(
-            "terminal closure evidence is not exact autonomous workflow evidence"
-        )
+        raise PolicyBlock("terminal closure evidence is not exact autonomous workflow evidence")
     body = _terminal_closure_comment(certificate)
     created = api.post(f"/issues/{number}/comments", {"body": body})
     if not isinstance(created, dict) or created.get("body") != body:
         raise AutohealError("GitHub did not acknowledge exact terminal closure certificate")
     parsed = _exact_unedited_terminal_certificate(created, metadata, number, merge_evidence)
-    if (
-        parsed != certificate
-        or not _terminal_certificate_evidence_matches(api, certificate, metadata, number)
+    if parsed != certificate or not _terminal_certificate_evidence_matches(
+        api, certificate, metadata, number
     ):
         raise AutohealError("GitHub returned invalid terminal closure certificate authority")
     return certificate
@@ -2129,11 +2108,7 @@ def _verify_merged_repair_subject(
     metadata = _parse_marker(pr.get("body"))
     if metadata is None or metadata.get("version") != 1:
         raise PolicyBlock("merged repair lacks the exact auto-heal marker")
-    if (
-        pr.get("state") != "closed"
-        or pr.get("merged_at") is None
-        or pr.get("draft") is not False
-    ):
+    if pr.get("state") != "closed" or pr.get("merged_at") is None or pr.get("draft") is not False:
         raise PolicyBlock("terminal repair is not a merged non-draft pull request")
     author = pr.get("user") or {}
     merged_by = pr.get("merged_by") or {}
@@ -2189,14 +2164,11 @@ def _terminal_alert_is_fixed(
     alert = api.get(f"/code-scanning/alerts/{alert_number}")
     if not isinstance(alert, dict):
         raise AutohealError("terminal CodeQL alert lookup returned malformed data")
-    if (
-        (alert.get("tool") or {}).get("name") != "CodeQL"
-        or (alert.get("rule") or {}).get("id") != metadata.get("rule")
-    ):
+    if (alert.get("tool") or {}).get("name") != "CodeQL" or (alert.get("rule") or {}).get(
+        "id"
+    ) != metadata.get("rule"):
         raise AutohealError("terminal alert identity drifted from repair provenance")
-    observed_path = (
-        ((alert.get("most_recent_instance") or {}).get("location") or {}).get("path")
-    )
+    observed_path = ((alert.get("most_recent_instance") or {}).get("location") or {}).get("path")
     if isinstance(observed_path, str) and observed_path and observed_path != metadata.get("path"):
         raise AutohealError("terminal alert path drifted from repair provenance")
     state = alert.get("state")
@@ -2215,9 +2187,7 @@ def _reconcile_terminal_closure(
     merged = _current_main_merged_repair(api, main_sha)
     if merged is None:
         return False
-    number, metadata, merge_evidence = _verify_merged_repair_subject(
-        api, merged, main_sha, config
-    )
+    number, metadata, merge_evidence = _verify_merged_repair_subject(api, merged, main_sha, config)
     trusted_gate = _terminal_trusted_gate_evidence(api, number, metadata)
 
     ci = _select_post_merge_ci_run(
