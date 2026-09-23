@@ -47,6 +47,8 @@ def test_parse_frozen_lock_accepts_only_canonical_sorted_entries() -> None:
         _lock(("alpha", "1", "1" * 64), ("alpha", "1", "1" * 64)),
         b"alpha==1.0 \\\n    --hash=sha256:" + b"1" * 64 + b"\n# comment\n",
         b"Alpha==1.0 \\\n    --hash=sha256:" + b"1" * 64 + b"\n",
+        b"alpha==1.0;marker \\\n    --hash=sha256:" + b"1" * 64 + b"\n",
+        b"alpha==1.0@evil \\\n    --hash=sha256:" + b"1" * 64 + b"\n",
     ],
 )
 def test_parse_frozen_lock_rejects_noncanonical_bytes(raw: bytes) -> None:

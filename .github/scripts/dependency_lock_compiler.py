@@ -314,6 +314,7 @@ LOCK_ENTRY = re.compile(
     r"^(?P<name>[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)==(?P<version>[^\s\\]+) \\$"
 )
 LOCK_HASH = re.compile(r"^    --hash=sha256:(?P<digest>[0-9a-f]{64})$")
+LOCK_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.!+_-]*$")
 
 
 def _parse_frozen_lock(raw: bytes, *, name: str) -> dict[str, tuple[str, str]]:
@@ -337,11 +338,14 @@ def _parse_frozen_lock(raw: bytes, *, name: str) -> dict[str, tuple[str, str]]:
         if requirement is None or digest is None:
             raise LockCompileError(f"frozen lock {name} is not canonical at entry {index // 2 + 1}")
         package = requirement.group("name")
+        version = requirement.group("version")
+        if LOCK_VERSION.fullmatch(version) is None:
+            raise LockCompileError(f"frozen lock {name} contains unsafe package version")
         if package != _canonical_name(package):
             raise LockCompileError(f"frozen lock {name} contains non-canonical package name")
         if package in parsed:
             raise LockCompileError(f"frozen lock {name} contains duplicate package {package}")
-        parsed[package] = (requirement.group("version"), digest.group("digest"))
+        parsed[package] = (version, digest.group("digest"))
         order.append(package)
     if order != sorted(order):
         raise LockCompileError(f"frozen lock {name} is not canonically sorted")
