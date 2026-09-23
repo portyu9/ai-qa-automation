@@ -16,6 +16,7 @@ Model text, alert descriptions, review comments, SARIF content, or actor-like fi
 
 A route is bound to:
 
+- exact repository identity `portyu9/ai-qa-automation` and base branch `main`;
 - exact CodeQL tool identity;
 - alert number and state;
 - rule id and security severity;
@@ -66,7 +67,7 @@ Attempt accounting is keyed by the exact strategy string/version. Exhaustion of 
 
 ## Routing records
 
-Each successful classification emits a bounded canonical JSON record containing the exact subject and alert state, decision, reason, authority, strategy/version, attempt count, routing-policy version, a SHA-256 digest of the exact normalized routing-policy inputs, and a SHA-256 record digest. A threshold or attempt-policy change therefore changes the policy digest even when the schema/version label remains the same.
+Each successful classification emits a bounded canonical JSON record containing the exact repository/base-branch identity, subject and alert state, decision, reason, authority, strategy/version, attempt count, routing-policy version, a SHA-256 digest of the exact normalized routing-policy inputs, and a SHA-256 record digest. A threshold or attempt-policy change therefore changes the policy digest even when the schema/version label remains the same.
 
 `security_alert_routing.persist_record` publishes that evidence without overwrite:
 
