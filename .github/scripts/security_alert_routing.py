@@ -198,9 +198,7 @@ def _alert_subject(alert: Mapping[str, Any], main_sha: str) -> dict[str, Any]:
     path = _safe_repository_path(location.get("path"))
     line = _require_positive_int(location.get("start_line"), "alert start line")
     end_line = _require_positive_int(location.get("end_line"), "alert end line")
-    start_column = _require_positive_int(
-        location.get("start_column"), "alert start column"
-    )
+    start_column = _require_positive_int(location.get("start_column"), "alert start column")
     end_column = _require_positive_int(location.get("end_column"), "alert end column")
     if end_line < line or (end_line == line and end_column < start_column):
         raise RoutingPolicyError("alert location range is malformed")
@@ -331,7 +329,9 @@ def _routing_config(config: Mapping[str, Any]) -> dict[str, Any]:
         if not isinstance(raw, Mapping):
             raise RoutingPolicyError("deterministic strategy entry is malformed")
         if set(raw) != {"rule", "strategy", "paths", "pathPrefixes"}:
-            raise RoutingPolicyError("deterministic strategy keys are outside the code-owned schema")
+            raise RoutingPolicyError(
+                "deterministic strategy keys are outside the code-owned schema"
+            )
         rule = raw.get("rule")
         strategy = raw.get("strategy")
         paths = raw.get("paths")
@@ -392,9 +392,7 @@ def _routing_config(config: Mapping[str, Any]) -> dict[str, Any]:
         "modelAutofixPathPrefixes": tuple(model_prefixes),
         "deterministicOnlyPaths": tuple(deterministic_only),
         "neverModifyPaths": tuple(never_modify),
-        "protectedControlPlanePaths": tuple(
-            sorted(NEVER_MODIFY_PATHS | DETERMINISTIC_ONLY_PATHS)
-        ),
+        "protectedControlPlanePaths": tuple(sorted(NEVER_MODIFY_PATHS | DETERMINISTIC_ONLY_PATHS)),
         "protectedStrategy": protected_strategy,
         "modelStrategy": model_strategy,
         "noReviewedStrategy": no_strategy,
