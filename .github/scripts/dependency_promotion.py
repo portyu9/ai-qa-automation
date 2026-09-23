@@ -589,6 +589,7 @@ def _validate_generated_bytes(api: GitHubApi, source: dict[str, Any], head_sha: 
         except LockCompileError as exc:
             raise PolicyBlock(f"promotion frozen lock replay failed: {exc}") from exc
 
+
 def _require_promotion_lifecycle(
     pr: dict[str, Any],
     metadata: dict[str, Any],

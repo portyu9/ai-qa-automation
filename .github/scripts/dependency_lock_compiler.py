@@ -311,7 +311,7 @@ def _requirement_graphs(
 
 
 LOCK_ENTRY = re.compile(
-    r"^(?P<name>[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)==(?P<version>[^\\s\\\\]+) \\\\$"
+    r"^(?P<name>[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)==(?P<version>[^\s\\]+) \\$"
 )
 LOCK_HASH = re.compile(r"^    --hash=sha256:(?P<digest>[0-9a-f]{64})$")
 
@@ -462,6 +462,8 @@ def validate_frozen_locks(
     if not authority_path.is_file() or authority_path.is_symlink():
         raise LockCompileError("lock-authority.json must be a regular non-symlink file")
     observed_authority = authority_path.read_bytes()
+    if not observed_authority or len(observed_authority) > MAX_REPORT_BYTES:
+        raise LockCompileError("lock-authority.json exceeds bounded size")
     expected_authority = _authority_bytes(raw_pyproject, root, lock_bytes)
     if observed_authority != expected_authority:
         raise LockCompileError("frozen lock authority does not bind the exact promotion bytes")
@@ -499,40 +501,19 @@ def compile_locks(root: Path, python311: str, python314: str, output_dir: Path) 
         python = python314 if name == "dev-py314.lock" else python311
         _verify_hash_lock(python, root, path)
 
-    base_image = root / "requirements" / "base-image.lock"
-    if not base_image.is_file() or base_image.is_symlink():
-        raise LockCompileError("base-image.lock must be a regular non-symlink file")
-    base_bytes = base_image.read_bytes()
-    if len(base_bytes) > 4096:
-        raise LockCompileError("base-image.lock exceeds bounded size")
-
-    authority = {
-        "base-image.lock": _git_blob_sha1(base_bytes),
-        **{name: _git_blob_sha1((output_dir / name).read_bytes()) for name in sorted(generated)},
-    }
+    lock_bytes = {name: (output_dir / name).read_bytes() for name in sorted(generated)}
+    authority_bytes = _authority_bytes(raw, root, lock_bytes)
+    (output_dir / "lock-authority.json").write_bytes(authority_bytes)
+    authority_payload = json.loads(authority_bytes)
     source_digest = hashlib.sha256(raw).hexdigest()
-    authority_payload = {
-        "schemaVersion": 2,
-        "sourcePyprojectSha256Parts": _digest_parts(source_digest, expected_length=64),
-        "resolverPolicy": "pypi-https-wheel-only-double-resolve-hash-replay",
-        "lockBlobParts": {
-            name: _digest_parts(value, expected_length=40)
-            for name, value in sorted(authority.items())
-        },
-    }
-    (output_dir / "lock-authority.json").write_text(
-        json.dumps(authority_payload, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
     return {
         "schemaVersion": 1,
         "project": "ai-qa-automation",
         "pyprojectSha256": source_digest,
         "locks": {
             name: {
-                "sha256": hashlib.sha256((output_dir / name).read_bytes()).hexdigest(),
-                "gitBlobSha1": authority[name],
+                "sha256": hashlib.sha256(lock_bytes[name]).hexdigest(),
+                "gitBlobSha1": _git_blob_sha1(lock_bytes[name]),
             }
             for name in sorted(generated)
         },
