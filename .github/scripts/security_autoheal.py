@@ -1726,7 +1726,7 @@ def _require_scheduled_security_trusted_gate(
         number,
         live["headSha"],
         live["baseSha"],
-        expected_event="schedule",
+        allowed_events=TERMINAL_TRUSTED_GATE_EVENTS,
     )
     try:
         _terminal_trusted_gate_evidence(api, number, metadata)
