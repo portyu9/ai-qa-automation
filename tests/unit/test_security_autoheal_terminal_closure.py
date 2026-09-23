@@ -184,9 +184,7 @@ class _TerminalApi:
                 "state": self.alert_state,
                 "tool": {"name": "CodeQL"},
                 "rule": {"id": _metadata()["rule"]},
-                "most_recent_instance": {
-                    "location": {"path": _metadata()["path"]}
-                },
+                "most_recent_instance": {"location": {"path": _metadata()["path"]}},
             }
         if path.startswith("/actions/runs/"):
             run_id = int(path.rsplit("/", 1)[1])
@@ -350,9 +348,21 @@ def test_terminal_closure_dispatches_missing_exact_main_ci(
     ("ci_runs", "codeql_runs", "message"),
     (
         ([_ci_run(), _ci_run(7101)], [_codeql_run()], "ambiguous exact-subject CI evidence"),
-        ([_ci_run()], [_codeql_run(), _codeql_run(7102)], "ambiguous terminal exact-main CodeQL evidence"),
-        ([_ci_run(status="completed", conclusion="failure")], [_codeql_run()], "CI run completed non-successfully"),
-        ([_ci_run()], [_codeql_run(status="completed", conclusion="failure")], "CodeQL run completed non-successfully"),
+        (
+            [_ci_run()],
+            [_codeql_run(), _codeql_run(7102)],
+            "ambiguous terminal exact-main CodeQL evidence",
+        ),
+        (
+            [_ci_run(status="completed", conclusion="failure")],
+            [_codeql_run()],
+            "CI run completed non-successfully",
+        ),
+        (
+            [_ci_run()],
+            [_codeql_run(status="completed", conclusion="failure")],
+            "CodeQL run completed non-successfully",
+        ),
     ),
 )
 def test_terminal_closure_rejects_failed_or_ambiguous_workflow_evidence(
