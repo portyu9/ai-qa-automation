@@ -210,6 +210,22 @@ def test_scheduled_bot_reconciliation_selects_security_lane_from_fresh_pr() -> N
     assert api.calls.count(f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65") == 2
 
 
+def test_scheduled_reconciliation_ignores_advanced_security_reporting_actor() -> None:
+    responses = _responses()
+    summary = deepcopy(responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"])
+    summary["user"] = {
+        "login": "github-advanced-security[bot]",
+        "id": preflight.GITHUB_ACTIONS_USER_ID,
+    }
+    summary["head"]["ref"] = "automation/codeql-autoheal-7-abcdef123456"
+    api = ScheduledFakeAPI(responses, [summary])
+
+    admission = preflight.evaluate_admission(api, event={}, event_name="schedule")
+
+    assert admission is None
+    assert api.calls == [f"/repos/{preflight.EXPECTED_REPOSITORY}/git/ref/heads/main"]
+
+
 def test_scheduled_bot_reconciliation_skips_nonmergeable_higher_priority_candidate() -> None:
     responses = _responses()
     security = responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]
