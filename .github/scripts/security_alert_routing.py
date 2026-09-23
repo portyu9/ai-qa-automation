@@ -824,40 +824,50 @@ def _read_json(path: Path, *, max_bytes: int, label: str) -> Any:
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     if not nofollow:
         raise RoutingPolicyError(f"{label} requires no-follow file ingestion")
+    name = path.name
+    if not name or name in {".", ".."}:
+        raise RoutingPolicyError(f"{label} path has an invalid target name")
     flags = os.O_RDONLY | nofollow | getattr(os, "O_BINARY", 0)
+    parent_fd = _open_parent_directory(path.parent)
     try:
-        fd = os.open(path, flags)
-    except OSError as exc:
-        raise RoutingPolicyError(f"{label} cannot be opened as a regular non-symlink file") from exc
-    try:
-        initial = os.fstat(fd)
-        if not stat.S_ISREG(initial.st_mode) or initial.st_size > max_bytes:
-            raise RoutingPolicyError(f"{label} must be a bounded regular file")
-        payload = bytearray()
-        while len(payload) <= max_bytes:
-            chunk = os.read(fd, min(1024 * 1024, max_bytes + 1 - len(payload)))
-            if not chunk:
-                break
-            payload.extend(chunk)
-        if len(payload) > max_bytes:
-            raise RoutingPolicyError(f"{label} exceeds the bounded ingestion limit")
-        final = os.fstat(fd)
-        if (
-            initial.st_dev,
-            initial.st_ino,
-            initial.st_size,
-            initial.st_mtime_ns,
-            initial.st_ctime_ns,
-        ) != (
-            final.st_dev,
-            final.st_ino,
-            final.st_size,
-            final.st_mtime_ns,
-            final.st_ctime_ns,
-        ):
-            raise RoutingPolicyError(f"{label} changed during ingestion")
+        try:
+            fd = os.open(name, flags, dir_fd=parent_fd)
+        except OSError as exc:
+            raise RoutingPolicyError(
+                f"{label} cannot be opened as a regular non-symlink file"
+            ) from exc
+        try:
+            initial = os.fstat(fd)
+            if not stat.S_ISREG(initial.st_mode) or initial.st_size > max_bytes:
+                raise RoutingPolicyError(f"{label} must be a bounded regular file")
+            _require_owned_nonwritable(initial, label=label)
+            payload = bytearray()
+            while len(payload) <= max_bytes:
+                chunk = os.read(fd, min(1024 * 1024, max_bytes + 1 - len(payload)))
+                if not chunk:
+                    break
+                payload.extend(chunk)
+            if len(payload) > max_bytes:
+                raise RoutingPolicyError(f"{label} exceeds the bounded ingestion limit")
+            final = os.fstat(fd)
+            if (
+                initial.st_dev,
+                initial.st_ino,
+                initial.st_size,
+                initial.st_mtime_ns,
+                initial.st_ctime_ns,
+            ) != (
+                final.st_dev,
+                final.st_ino,
+                final.st_size,
+                final.st_mtime_ns,
+                final.st_ctime_ns,
+            ):
+                raise RoutingPolicyError(f"{label} changed during ingestion")
+        finally:
+            os.close(fd)
     finally:
-        os.close(fd)
+        os.close(parent_fd)
     return _strict_json_loads(bytes(payload), label=label)
 
 
