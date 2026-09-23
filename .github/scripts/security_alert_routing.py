@@ -21,6 +21,37 @@ MAX_ATTEMPT_STRATEGIES = 16
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 STRATEGY_RE = re.compile(r"^[a-z0-9][a-z0-9._:-]{0,127}$")
 AUTOFIX_EVIDENCE = {"available", "unavailable", "unknown"}
+SAFE_RULES = frozenset(
+    {
+        "py/reflective-xss",
+        "py/incomplete-url-substring-sanitization",
+        "py/clear-text-logging-sensitive-data",
+        "py/overly-permissive-file",
+    }
+)
+MODEL_AUTOFIX_PATH_PREFIXES = ("src/", "examples/", "tests/")
+DETERMINISTIC_ONLY_PATHS = frozenset(
+    {
+        "scripts/auto_trusted_report.py",
+        "scripts/ci_contract_base.py",
+        "scripts/verify_ci_contract.py",
+        "scripts/verify_docs.py",
+        "scripts/verify_fork_cloud_authority.py",
+    }
+)
+NEVER_MODIFY_PATHS = frozenset(
+    {
+        ".github/",
+        ".github/scripts/trusted_qualification.py",
+        ".github/scripts/trusted_status.py",
+        "scripts/auto_trusted_bot_admission.py",
+        "scripts/auto_trusted_preflight.py",
+        "scripts/trusted_pr_control.py",
+    }
+)
+MODEL_AUTOFIX_STRATEGY = "github-codeql-autofix-v1"
+PROTECTED_REMEDIATION_STRATEGY = "protected-independent-remediation-v1"
+NO_REVIEWED_STRATEGY = "no-reviewed-strategy-v1"
 
 SECURITY_SEVERITY_FLOORS = {
     "critical": 9.0,
@@ -168,11 +199,10 @@ def _routing_config(config: Mapping[str, Any]) -> dict[str, Any]:
     allowed_rules = config.get("allowedRules")
     if (
         not isinstance(allowed_rules, list)
-        or not allowed_rules
-        or not all(isinstance(value, str) and value for value in allowed_rules)
-        or len(set(allowed_rules)) != len(allowed_rules)
+        or set(allowed_rules) != SAFE_RULES
+        or len(allowed_rules) != len(SAFE_RULES)
     ):
-        raise RoutingPolicyError("allowedRules is malformed")
+        raise RoutingPolicyError("allowedRules must equal the code-owned rule set")
     minimum = config.get("minimumSecuritySeverity")
     if not isinstance(minimum, (int, float)) or isinstance(minimum, bool):
         raise RoutingPolicyError("minimumSecuritySeverity is malformed")
@@ -186,28 +216,22 @@ def _routing_config(config: Mapping[str, Any]) -> dict[str, Any]:
     model_prefixes = config.get("modelAutofixPathPrefixes")
     deterministic_only = config.get("deterministicOnlyPaths")
     never_modify = config.get("neverModifyPaths")
-    for label, values in (
-        ("modelAutofixPathPrefixes", model_prefixes),
-        ("deterministicOnlyPaths", deterministic_only),
-        ("neverModifyPaths", never_modify),
-    ):
-        if (
-            not isinstance(values, list)
-            or not values
-            or not all(isinstance(value, str) and value for value in values)
-        ):
-            raise RoutingPolicyError(f"{label} is malformed")
+    if model_prefixes != list(MODEL_AUTOFIX_PATH_PREFIXES):
+        raise RoutingPolicyError("modelAutofixPathPrefixes must equal the code-owned prefixes")
+    if not isinstance(deterministic_only, list) or set(deterministic_only) != DETERMINISTIC_ONLY_PATHS:
+        raise RoutingPolicyError("deterministicOnlyPaths must equal the code-owned paths")
+    if not isinstance(never_modify, list) or set(never_modify) != NEVER_MODIFY_PATHS:
+        raise RoutingPolicyError("neverModifyPaths must equal the code-owned protected roots")
 
     protected_strategy = policy.get("protectedStrategy")
     model_strategy = policy.get("modelStrategy")
     no_strategy = policy.get("noReviewedStrategy")
-    for label, value in (
-        ("protectedStrategy", protected_strategy),
-        ("modelStrategy", model_strategy),
-        ("noReviewedStrategy", no_strategy),
-    ):
-        if not isinstance(value, str) or STRATEGY_RE.fullmatch(value) is None:
-            raise RoutingPolicyError(f"{label} is malformed")
+    if protected_strategy != PROTECTED_REMEDIATION_STRATEGY:
+        raise RoutingPolicyError("protectedStrategy is not the code-owned strategy")
+    if model_strategy != MODEL_AUTOFIX_STRATEGY:
+        raise RoutingPolicyError("modelStrategy is not the code-owned strategy")
+    if no_strategy != NO_REVIEWED_STRATEGY:
+        raise RoutingPolicyError("noReviewedStrategy is not the code-owned strategy")
 
     raw_strategies = policy.get("deterministicStrategies")
     if not isinstance(raw_strategies, list) or not 1 <= len(raw_strategies) <= 16:
@@ -435,6 +459,14 @@ def route_alerts(
         raise RoutingPolicyError("alert batch exceeds the bounded routing limit")
     attempts_by_alert = attempts_by_alert or {}
     autofix_by_alert = autofix_by_alert or {}
+    if len(attempts_by_alert) > MAX_ALERT_BATCH or len(autofix_by_alert) > MAX_ALERT_BATCH:
+        raise RoutingPolicyError("per-alert routing evidence exceeds the bounded alert limit")
+    for number in attempts_by_alert:
+        _require_positive_int(number, "attempt evidence alert number")
+    for number, state in autofix_by_alert.items():
+        _require_positive_int(number, "autofix evidence alert number")
+        if state not in AUTOFIX_EVIDENCE:
+            raise RoutingPolicyError("per-alert autofix evidence contains an invalid state")
     seen: set[int] = set()
     records: list[dict[str, Any]] = []
     for alert in alerts:
@@ -451,6 +483,10 @@ def route_alerts(
                 autofix_eligibility=autofix_by_alert.get(number, "unknown"),
             )
         )
+    unknown_attempts = set(attempts_by_alert) - seen
+    unknown_autofix = set(autofix_by_alert) - seen
+    if unknown_attempts or unknown_autofix:
+        raise RoutingPolicyError("per-alert routing evidence references an unobserved alert")
     return sorted(records, key=lambda row: int(row["alertNumber"]))
 
 
@@ -518,15 +554,46 @@ def persist_record(path: Path, record: Mapping[str, Any]) -> bool:
 
 
 def _read_json(path: Path, *, max_bytes: int, label: str) -> Any:
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if not nofollow:
+        raise RoutingPolicyError(f"{label} requires no-follow file ingestion")
+    flags = os.O_RDONLY | nofollow | getattr(os, "O_BINARY", 0)
     try:
-        info = path.lstat()
+        fd = os.open(path, flags)
     except OSError as exc:
-        raise RoutingPolicyError(f"{label} is unavailable") from exc
-    if path.is_symlink() or not stat.S_ISREG(info.st_mode) or info.st_size > max_bytes:
-        raise RoutingPolicyError(f"{label} must be a bounded regular non-symlink file")
+        raise RoutingPolicyError(f"{label} cannot be opened as a regular non-symlink file") from exc
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        initial = os.fstat(fd)
+        if not stat.S_ISREG(initial.st_mode) or initial.st_size > max_bytes:
+            raise RoutingPolicyError(f"{label} must be a bounded regular file")
+        payload = bytearray()
+        while len(payload) <= max_bytes:
+            chunk = os.read(fd, min(1024 * 1024, max_bytes + 1 - len(payload)))
+            if not chunk:
+                break
+            payload.extend(chunk)
+        if len(payload) > max_bytes:
+            raise RoutingPolicyError(f"{label} exceeds the bounded ingestion limit")
+        final = os.fstat(fd)
+        if (
+            initial.st_dev,
+            initial.st_ino,
+            initial.st_size,
+            initial.st_mtime_ns,
+            initial.st_ctime_ns,
+        ) != (
+            final.st_dev,
+            final.st_ino,
+            final.st_size,
+            final.st_mtime_ns,
+            final.st_ctime_ns,
+        ):
+            raise RoutingPolicyError(f"{label} changed during ingestion")
+    finally:
+        os.close(fd)
+    try:
+        return json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise RoutingPolicyError(f"{label} is not canonical JSON") from exc
 
 
