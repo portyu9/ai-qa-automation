@@ -1544,13 +1544,13 @@ def _generated_repairs(pulls: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
-def _github_timestamp_at_or_before(value: Any, cutoff: str) -> bool:
-    if not isinstance(value, str):
+def _github_timestamp_at_or_before(value: Any, cutoff: Any) -> bool:
+    if not isinstance(value, str) or not isinstance(cutoff, str):
         return False
     try:
         observed = time.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
         boundary = time.strptime(cutoff, "%Y-%m-%dT%H:%M:%SZ")
-    except ValueError:
+    except (TypeError, ValueError):
         return False
     return observed <= boundary
 
@@ -2276,6 +2276,10 @@ def selftest(config: dict[str, Any]) -> None:
     future_metadata["head"] = "3" * 40
     human_metadata = dict(stale_marker_metadata)
     human_metadata["head"] = "4" * 40
+    forged_metadata = dict(stale_marker_metadata)
+    forged_metadata["head"] = "5" * 40
+    forged_metadata["supersessionReason"] = STALE_SUPERSESSION_REASON
+    forged_metadata["supersededByMain"] = "f" * 40
 
     attempt_rows = [
         _closed_repair_row(
@@ -2306,7 +2310,22 @@ def selftest(config: dict[str, Any]) -> None:
             body=_marker(human_metadata),
             closed_at="2026-09-23T00:10:00Z",
         ),
+        _closed_repair_row(
+            105,
+            head="5" * 40,
+            base="a" * 40,
+            body=_marker(forged_metadata),
+            closed_at="2026-09-23T00:20:00Z",
+        ),
     ]
+    explicit_certificate = _stale_supersession_certificate(explicit_metadata, 101, "f" * 40)
+    explicit_comment = {
+        "id": 9001,
+        "body": _stale_supersession_comment(explicit_certificate),
+        "user": {"login": GITHUB_ACTIONS_LOGIN, "id": GITHUB_ACTIONS_USER_ID},
+        "created_at": "2026-09-23T00:19:59Z",
+        "updated_at": "2026-09-23T00:19:59Z",
+    }
 
     class _AttemptAccountingApi(GitHubApi):
         def __init__(self) -> None:
@@ -2317,6 +2336,11 @@ def selftest(config: dict[str, Any]) -> None:
                 if max_pages != 10:
                     raise AutohealError("attempt-accounting pull pagination bound changed")
                 return attempt_rows
+            comment_match = re.fullmatch(r"/issues/([0-9]+)/comments", path)
+            if comment_match is not None:
+                if max_pages != 2:
+                    raise AutohealError("attempt-accounting comment pagination bound changed")
+                return [explicit_comment] if int(comment_match.group(1)) == 101 else []
             match = re.fullmatch(r"/issues/([0-9]+)/events", path)
             if match is None or max_pages != 2:
                 raise AutohealError(f"unexpected attempt-accounting API path: {path}")
@@ -2341,9 +2365,9 @@ def selftest(config: dict[str, Any]) -> None:
         REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY,
         "f" * 40,
     )
-    if counted != 2:
+    if counted != 3:
         raise AutohealError(
-            f"stale supersession attempt accounting changed: expected 2 counted attempts, got {counted}"
+            f"stale supersession attempt accounting changed: expected 3 counted attempts, got {counted}"
         )
 
     _validate_api_path(f"/compare/{'a' * 40}...{'b' * 40}")
