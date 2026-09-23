@@ -68,6 +68,8 @@ MODEL_AUTOFIX_STRATEGY = "github-codeql-autofix-v1"
 OVERLY_PERMISSIVE_TEST_STRATEGY = "deterministic-overly-permissive-test-file-v1"
 CLEAR_TEXT_LOG_STRATEGY = "deterministic-clear-text-log-v1"
 REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY = "deterministic-reference-sut-reflective-xss-v1"
+STALE_SUPERSESSION_REASON = "main-advanced"
+LEGACY_STALE_CLOSURE_CUTOFF = "2026-09-23T00:11:00Z"
 
 DETERMINISTIC_LOG_REPAIRS = {
     "scripts/auto_trusted_report.py": (
@@ -442,6 +444,29 @@ def _parse_marker(body: Any) -> dict[str, Any] | None:
                 return None
             return value if isinstance(value, dict) else None
     return None
+
+
+def _with_stale_supersession_marker(
+    body: Any,
+    metadata: dict[str, Any],
+    main_sha: str,
+) -> str:
+    base_sha = _require_sha(metadata.get("base"), "stale repair marker base SHA")
+    main_sha = _require_sha(main_sha, "stale repair superseding main SHA")
+    if base_sha == main_sha:
+        raise PolicyBlock("stale repair supersession main must differ from marker base")
+    if (
+        metadata.get("supersessionReason") is not None
+        or metadata.get("supersededByMain") is not None
+    ):
+        raise PolicyBlock("stale repair marker already carries supersession metadata")
+    canonical = _marker(metadata)
+    if not isinstance(body, str) or body.count(canonical) != 1:
+        raise PolicyBlock("stale repair body marker is not canonical and unique")
+    updated = dict(metadata)
+    updated["supersessionReason"] = STALE_SUPERSESSION_REASON
+    updated["supersededByMain"] = main_sha
+    return body.replace(canonical, _marker(updated), 1)
 
 
 def _branch_name(subject: dict[str, Any]) -> str:
@@ -1033,6 +1058,7 @@ def _close_stale_repair(
     number: int,
     branch: str,
     head_sha: str,
+    main_sha: str,
 ) -> None:
     if AUTOHEAL_BRANCH_RE.fullmatch(branch) is None:
         raise PolicyBlock("stale repair branch is outside reviewed authority")
@@ -1054,9 +1080,17 @@ def _close_stale_repair(
     commit = api.get(f"/commits/{head_sha}")
     if not _owned_generated_repair_commit(commit, head_sha):
         raise PolicyBlock("stale repair head lacks exact GitHub Actions ownership")
-    closed = api.patch(f"/pulls/{number}", {"state": "closed"})
-    if not isinstance(closed, dict) or closed.get("state") != "closed":
-        raise AutohealError("GitHub did not acknowledge stale repair closure")
+    closed_body = _with_stale_supersession_marker(fresh.get("body"), metadata, main_sha)
+    closed = api.patch(f"/pulls/{number}", {"state": "closed", "body": closed_body})
+    closed_metadata = _parse_marker((closed or {}).get("body"))
+    if (
+        not isinstance(closed, dict)
+        or closed.get("state") != "closed"
+        or closed_metadata is None
+        or closed_metadata.get("supersessionReason") != STALE_SUPERSESSION_REASON
+        or closed_metadata.get("supersededByMain") != main_sha
+    ):
+        raise AutohealError("GitHub did not acknowledge exact stale repair supersession")
     _delete_exact_generated_branch(api, branch, head_sha)
 
 
@@ -1362,7 +1396,96 @@ def _generated_repairs(pulls: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
-def _attempt_count(api: GitHubApi, alert_number: int, strategy: str) -> int:
+def _github_timestamp_at_or_before(value: Any, cutoff: str) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        observed = time.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+        boundary = time.strptime(cutoff, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return False
+    return observed <= boundary
+
+
+def _closed_by_autoheal_bot(api: GitHubApi, number: int) -> bool:
+    events = api.list_all(f"/issues/{number}/events", max_pages=2)
+    transitions = [
+        event
+        for event in events
+        if isinstance(event, dict) and event.get("event") in {"closed", "reopened"}
+    ]
+    if not transitions:
+        return False
+    transitions.sort(
+        key=lambda event: (
+            str(event.get("created_at") or ""),
+            int(event.get("id")) if isinstance(event.get("id"), int) else 0,
+        )
+    )
+    final = transitions[-1]
+    actor = final.get("actor") or {}
+    return (
+        final.get("event") == "closed"
+        and actor.get("login") == GITHUB_ACTIONS_LOGIN
+        and actor.get("id") == GITHUB_ACTIONS_USER_ID
+    )
+
+
+def _proven_stale_supersession(
+    api: GitHubApi,
+    pr: dict[str, Any],
+    metadata: dict[str, Any],
+    current_main_sha: str,
+) -> bool:
+    if pr.get("state") != "closed" or pr.get("merged_at") is not None:
+        return False
+    number = pr.get("number")
+    if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+        return False
+    try:
+        marker_base = _require_sha(metadata.get("base"), "closed repair marker base SHA")
+        marker_head = _require_sha(metadata.get("head"), "closed repair marker head SHA")
+        live_base = _require_sha((pr.get("base") or {}).get("sha"), "closed repair base SHA")
+        live_head = _require_sha((pr.get("head") or {}).get("sha"), "closed repair head SHA")
+        current_main_sha = _require_sha(current_main_sha, "attempt-accounting main SHA")
+    except PolicyBlock:
+        return False
+    if (
+        metadata.get("version") != 1
+        or marker_base != live_base
+        or marker_head != live_head
+        or marker_base == current_main_sha
+        or not _closed_by_autoheal_bot(api, number)
+    ):
+        return False
+
+    reason = metadata.get("supersessionReason")
+    superseded_by = metadata.get("supersededByMain")
+    if reason is not None or superseded_by is not None:
+        if reason != STALE_SUPERSESSION_REASON:
+            return False
+        try:
+            superseded_by_sha = _require_sha(
+                superseded_by,
+                "closed repair superseding main SHA",
+            )
+        except PolicyBlock:
+            return False
+        return superseded_by_sha != marker_base
+
+    return _github_timestamp_at_or_before(
+        pr.get("closed_at"),
+        LEGACY_STALE_CLOSURE_CUTOFF,
+    )
+
+
+def _attempt_count(
+    api: GitHubApi,
+    alert_number: int,
+    strategy: str,
+    current_main_sha: str,
+) -> int:
+    current_main_sha = _require_sha(current_main_sha, "attempt-accounting main SHA")
     rows = api.list_all("/pulls?state=closed&sort=updated&direction=desc", max_pages=10)
     count = 0
     for pr in rows:
@@ -1379,6 +1502,8 @@ def _attempt_count(api: GitHubApi, alert_number: int, strategy: str) -> int:
             and metadata.get("alert") == alert_number
             and _marker_strategy(metadata) == strategy
         ):
+            if _proven_stale_supersession(api, pr, metadata, current_main_sha):
+                continue
             count += 1
     return count
 
@@ -1511,7 +1636,7 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
                     ((summary.get("head") or {}).get("sha")),
                     "stale repair summary head SHA",
                 )
-                _close_stale_repair(api, number, branch, stale_head_sha)
+                _close_stale_repair(api, number, branch, stale_head_sha, main_sha)
                 closed_stale += 1
                 if isinstance(alert_number, int):
                     active_alerts.discard(alert_number)
@@ -1557,7 +1682,7 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
             if subject["number"] in active_alerts:
                 continue
             strategy = _repair_strategy(subject)
-            prior = _attempt_count(api, subject["number"], strategy)
+            prior = _attempt_count(api, subject["number"], strategy, main_sha)
             if prior >= config["maxAttemptsPerAlert"]:
                 raise PolicyBlock(
                     "alert exhausted bounded automatic remediation attempts for current strategy"
@@ -1903,6 +2028,132 @@ def selftest(config: dict[str, Any]) -> None:
     parsed = _parse_marker(marker)
     if parsed is None or parsed.get("alert") != 7:
         raise AutohealError("auto-heal marker round-trip failed")
+
+    stale_marker_metadata = {
+        "version": 1,
+        "alert": 7,
+        "attempt": 1,
+        "base": "a" * 40,
+        "head": "b" * 40,
+        "fingerprint": "c" * 64,
+        "generator": "deterministic",
+        "path": "examples/reference_sut/app.py",
+        "rule": "py/reflective-xss",
+        "severity": 7.0,
+        "strategy": REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY,
+    }
+    stale_body = _marker(stale_marker_metadata) + "\nGenerated repair."
+    superseded_body = _with_stale_supersession_marker(
+        stale_body,
+        stale_marker_metadata,
+        "d" * 40,
+    )
+    superseded_marker = _parse_marker(superseded_body)
+    if (
+        superseded_marker is None
+        or superseded_marker.get("supersessionReason") != STALE_SUPERSESSION_REASON
+        or superseded_marker.get("supersededByMain") != "d" * 40
+    ):
+        raise AutohealError("stale repair supersession marker binding failed")
+
+    def _closed_repair_row(
+        number: int,
+        *,
+        head: str,
+        base: str,
+        body: str,
+        closed_at: str,
+    ) -> dict[str, Any]:
+        return {
+            "number": number,
+            "state": "closed",
+            "merged_at": None,
+            "closed_at": closed_at,
+            "user": {"login": GITHUB_ACTIONS_LOGIN, "id": GITHUB_ACTIONS_USER_ID},
+            "head": {"ref": f"{BRANCH_PREFIX}7-{head[:12]}", "sha": head},
+            "base": {"sha": base},
+            "body": body,
+        }
+
+    explicit_metadata = dict(stale_marker_metadata)
+    explicit_metadata["head"] = "1" * 40
+    explicit_metadata["supersessionReason"] = STALE_SUPERSESSION_REASON
+    explicit_metadata["supersededByMain"] = "f" * 40
+    legacy_metadata = dict(stale_marker_metadata)
+    legacy_metadata["head"] = "2" * 40
+    future_metadata = dict(stale_marker_metadata)
+    future_metadata["head"] = "3" * 40
+    human_metadata = dict(stale_marker_metadata)
+    human_metadata["head"] = "4" * 40
+
+    attempt_rows = [
+        _closed_repair_row(
+            101,
+            head="1" * 40,
+            base="a" * 40,
+            body=_marker(explicit_metadata),
+            closed_at="2026-09-23T00:20:00Z",
+        ),
+        _closed_repair_row(
+            102,
+            head="2" * 40,
+            base="a" * 40,
+            body=_marker(legacy_metadata),
+            closed_at="2026-09-23T00:10:00Z",
+        ),
+        _closed_repair_row(
+            103,
+            head="3" * 40,
+            base="a" * 40,
+            body=_marker(future_metadata),
+            closed_at="2026-09-23T00:20:00Z",
+        ),
+        _closed_repair_row(
+            104,
+            head="4" * 40,
+            base="a" * 40,
+            body=_marker(human_metadata),
+            closed_at="2026-09-23T00:10:00Z",
+        ),
+    ]
+
+    class _AttemptAccountingApi(GitHubApi):
+        def __init__(self) -> None:
+            pass
+
+        def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+            if path == "/pulls?state=closed&sort=updated&direction=desc":
+                if max_pages != 10:
+                    raise AutohealError("attempt-accounting pull pagination bound changed")
+                return attempt_rows
+            match = re.fullmatch(r"/issues/([0-9]+)/events", path)
+            if match is None or max_pages != 2:
+                raise AutohealError(f"unexpected attempt-accounting API path: {path}")
+            number = int(match.group(1))
+            actor = (
+                {"login": "portyu9", "id": 35150859}
+                if number == 104
+                else {"login": GITHUB_ACTIONS_LOGIN, "id": GITHUB_ACTIONS_USER_ID}
+            )
+            return [
+                {
+                    "id": number,
+                    "event": "closed",
+                    "created_at": attempt_rows[number - 101]["closed_at"],
+                    "actor": actor,
+                }
+            ]
+
+    counted = _attempt_count(
+        _AttemptAccountingApi(),
+        7,
+        REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY,
+        "f" * 40,
+    )
+    if counted != 2:
+        raise AutohealError(
+            f"stale supersession attempt accounting changed: expected 2 counted attempts, got {counted}"
+        )
 
     _validate_api_path(f"/compare/{'a' * 40}...{'b' * 40}")
     for unsafe_path in (
