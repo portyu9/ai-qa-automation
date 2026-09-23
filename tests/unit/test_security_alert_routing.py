@@ -115,6 +115,8 @@ def test_every_current_allowed_rule_has_explicit_tested_route(
     assert record["baseSha"] == MAIN
     assert record["alertInstanceSha"] == MAIN
     assert record["routingPolicyVersion"] == routing.ROUTING_POLICY_VERSION
+    assert record["repository"] == routing.EXPECTED_REPOSITORY
+    assert record["baseBranch"] == routing.EXPECTED_BASE_BRANCH
     assert record["alertState"] == "open"
     assert routing.re.fullmatch(r"[0-9a-f]{64}", record["routingPolicyDigest"]) is not None
 
@@ -361,6 +363,14 @@ def test_unreviewed_path_has_explicit_nonmutation_route() -> None:
 @pytest.mark.parametrize(
     ("mutate", "message"),
     (
+        (
+            lambda config: config.update(repository="attacker/fork"),
+            "code-owned repository",
+        ),
+        (
+            lambda config: config.update(baseBranch="release"),
+            "code-owned branch",
+        ),
         (
             lambda config: config.update(
                 allowedRules=[*config["allowedRules"], "py/unreviewed-rule"]
