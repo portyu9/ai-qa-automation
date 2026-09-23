@@ -127,7 +127,7 @@ def _safe_repository_path(value: Any) -> str:
         or len(value) > 512
         or value.startswith("/")
         or "\\" in value
-        or "\x00" in value
+        or any(ord(char) < 32 or ord(char) == 127 for char in value)
     ):
         raise RoutingPolicyError("alert path is not a safe repository-relative path")
     segments = value.split("/")
@@ -150,6 +150,8 @@ def _security_severity(alert: Mapping[str, Any]) -> float:
         raise RoutingPolicyError("alert rule metadata is missing")
     value = rule.get("security_severity")
     if value is not None:
+        if isinstance(value, bool):
+            raise RoutingPolicyError("security severity is malformed")
         try:
             severity = float(value)
         except (TypeError, ValueError) as exc:
@@ -183,6 +185,9 @@ def _alert_subject(alert: Mapping[str, Any], main_sha: str) -> dict[str, Any]:
     instance = alert.get("most_recent_instance")
     if not isinstance(instance, Mapping):
         raise RoutingPolicyError("alert most_recent_instance is missing")
+    instance_state = instance.get("state")
+    if instance_state not in {"open", "fixed", "dismissed"}:
+        raise RoutingPolicyError("alert instance state is missing or unsupported")
     ref = instance.get("ref")
     if not isinstance(ref, str) or not ref:
         raise RoutingPolicyError("alert instance ref is missing")
@@ -213,6 +218,8 @@ def _alert_subject(alert: Mapping[str, Any], main_sha: str) -> dict[str, Any]:
             str(number),
             rule_id,
             severity.hex(),
+            state,
+            instance_state,
             path,
             str(line),
             str(end_line),
@@ -226,6 +233,7 @@ def _alert_subject(alert: Mapping[str, Any], main_sha: str) -> dict[str, Any]:
     return {
         "alertNumber": number,
         "state": state,
+        "instanceState": instance_state,
         "tool": "CodeQL",
         "rule": rule_id,
         "securitySeverity": severity,
@@ -478,6 +486,7 @@ def _record(
         "authority": authority,
         "alertNumber": subject["alertNumber"],
         "alertState": subject["state"],
+        "alertInstanceState": subject["instanceState"],
         "tool": subject["tool"],
         "rule": subject["rule"],
         "securitySeverity": subject["securitySeverity"],
@@ -552,6 +561,8 @@ def route_alert(
             autofix_eligibility=autofix_eligibility,
         )
 
+    if subject["state"] != subject["instanceState"]:
+        return make("stale-alert", "alert-and-instance-state-disagree")
     if subject["state"] != "open":
         return make("stale-alert", "alert-is-not-open")
     if (
@@ -638,6 +649,8 @@ def route_alerts(
     seen: set[int] = set()
     records: list[dict[str, Any]] = []
     for alert in alerts:
+        if not isinstance(alert, Mapping):
+            raise RoutingPolicyError("alert batch entries must be JSON objects")
         number = _require_positive_int(alert.get("number"), "alert number")
         if number in seen:
             raise RoutingPolicyError("alert batch contains duplicate alert identity")
