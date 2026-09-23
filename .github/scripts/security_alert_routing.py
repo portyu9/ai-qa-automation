@@ -212,7 +212,11 @@ def _routing_config(config: Mapping[str, Any]) -> dict[str, Any]:
     if not math.isfinite(minimum) or minimum < 0 or minimum > 10:
         raise RoutingPolicyError("minimumSecuritySeverity is outside finite 0..10")
     max_attempts = config.get("maxAttemptsPerAlert")
-    if isinstance(max_attempts, bool) or not isinstance(max_attempts, int) or not 1 <= max_attempts <= 10:
+    if (
+        isinstance(max_attempts, bool)
+        or not isinstance(max_attempts, int)
+        or not 1 <= max_attempts <= 10
+    ):
         raise RoutingPolicyError("maxAttemptsPerAlert is outside the reviewed bound")
 
     model_prefixes = config.get("modelAutofixPathPrefixes")
@@ -387,7 +391,9 @@ def _record(
     }
     canonical = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
     payload["recordDigest"] = hashlib.sha256(canonical).hexdigest()
-    canonical_with_digest = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    canonical_with_digest = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode(
+        "utf-8"
+    )
     if len(canonical_with_digest) > MAX_ROUTE_RECORD_BYTES:
         raise RoutingPolicyError("routing record exceeds the bounded persistence limit")
     return payload
@@ -407,9 +413,7 @@ def route_alert(
         raise RoutingPolicyError("autofix eligibility is outside the reviewed evidence states")
     subject = _alert_subject(alert, main_sha)
     policy = _routing_config(config)
-    protected = any(
-        _path_matches(subject["path"], path) for path in policy["neverModifyPaths"]
-    )
+    protected = any(_path_matches(subject["path"], path) for path in policy["neverModifyPaths"])
 
     deterministic = _deterministic_strategy(subject, policy)
     if protected:
@@ -441,15 +445,24 @@ def route_alert(
 
     if subject["state"] != "open":
         return make("stale-alert", "alert-is-not-open")
-    if subject["alertRef"] != "refs/heads/main" or subject["alertInstanceSha"] != subject["baseSha"]:
+    if (
+        subject["alertRef"] != "refs/heads/main"
+        or subject["alertInstanceSha"] != subject["baseSha"]
+    ):
         return make("stale-alert", "alert-instance-is-not-exact-current-main")
     if expected_fingerprint is not None:
-        if not isinstance(expected_fingerprint, str) or re.fullmatch(r"[0-9a-f]{64}", expected_fingerprint) is None:
+        if (
+            not isinstance(expected_fingerprint, str)
+            or re.fullmatch(r"[0-9a-f]{64}", expected_fingerprint) is None
+        ):
             raise RoutingPolicyError("expected fingerprint is malformed")
         if expected_fingerprint != subject["fingerprint"]:
             return make("stale-alert", "alert-fingerprint-drift")
     if expected_strategy is not None:
-        if not isinstance(expected_strategy, str) or STRATEGY_RE.fullmatch(expected_strategy) is None:
+        if (
+            not isinstance(expected_strategy, str)
+            or STRATEGY_RE.fullmatch(expected_strategy) is None
+        ):
             raise RoutingPolicyError("expected strategy is malformed")
         if expected_strategy != strategy:
             return make("stale-alert", "remediation-strategy-version-drift")
@@ -467,7 +480,9 @@ def route_alert(
         )
     if deterministic is not None:
         if attempts >= max_attempts:
-            return make("attempt-budget-exhausted", "deterministic-strategy-attempt-budget-exhausted")
+            return make(
+                "attempt-budget-exhausted", "deterministic-strategy-attempt-budget-exhausted"
+            )
         return make(
             "ordinary-deterministic-autoheal",
             "exact-code-owned-deterministic-strategy",
