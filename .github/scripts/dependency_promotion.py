@@ -35,7 +35,8 @@ from dependency_governance import (
     validate_pr_identity,
 )
 from dependency_lock_compiler import compile_locks
-from trusted_status import TrustedStatusError, require_automatic_trusted_gate
+from dependency_trusted_gate import require_schedule_trusted_gate
+from trusted_status import TrustedStatusError
 
 ROOT = Path(__file__).resolve().parents[2]
 BRANCH_PREFIX = "automation/dependency-promotion-"
@@ -658,21 +659,21 @@ def _validate_promotion(
 def _publish_and_merge(
     api: GitHubApi, promotion: dict[str, Any], config: dict[str, Any]
 ) -> dict[str, Any]:
-    try:
-        require_automatic_trusted_gate(
-            api,
-            promotion["number"],
-            promotion["headSha"],
-            promotion["baseSha"],
-        )
-    except TrustedStatusError as exc:
-        raise PolicyBlock("automatic Trusted PR Gate is not yet admissible") from exc
     fresh_before_merge = api.get(f"/pulls/{promotion['number']}")
     _, rebound_before_merge = _validate_promotion(
         api, fresh_before_merge, config, require_checks=False
     )
     if rebound_before_merge != promotion:
         raise PolicyBlock("promotion changed before guarded merge")
+    try:
+        require_schedule_trusted_gate(
+            api,
+            promotion["number"],
+            promotion["headSha"],
+            promotion["baseSha"],
+        )
+    except TrustedStatusError as exc:
+        raise PolicyBlock("automatic Trusted PR Gate is not yet schedule-admissible") from exc
     result = api.put(
         f"/pulls/{promotion['number']}/merge",
         {"sha": promotion["headSha"], "merge_method": config["mergeMethod"]},
