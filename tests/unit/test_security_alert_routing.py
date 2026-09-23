@@ -234,7 +234,13 @@ def test_alert_supplied_actor_spoofing_cannot_choose_authority() -> None:
 @pytest.mark.parametrize(
     ("mutator", "reason"),
     (
-        (lambda alert: alert.update(state="fixed"), "alert-is-not-open"),
+        (
+            lambda alert: (
+                alert.update(state="fixed"),
+                alert["most_recent_instance"].update(state="fixed"),
+            ),
+            "alert-is-not-open",
+        ),
         (
             lambda alert: alert["most_recent_instance"].update(commit_sha="b" * 40),
             "alert-instance-is-not-exact-current-main",
