@@ -2381,6 +2381,12 @@ def _merge(
     )
     if rebound_metadata != metadata or rebound_live != live:
         raise PolicyBlock("repair PR changed before guarded merge")
+    _require_scheduled_security_trusted_gate(
+        api,
+        pr_number,
+        rebound_metadata,
+        rebound_live,
+    )
     result = api.put(
         f"/pulls/{pr_number}/merge",
         {"sha": live["headSha"], "merge_method": config["mergeMethod"]},
