@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -13,6 +14,7 @@ SCRIPT_DIR = ROOT / ".github" / "scripts"
 GATE_SCRIPT = SCRIPT_DIR / "dependency_trusted_gate.py"
 GOVERNANCE_SCRIPT = SCRIPT_DIR / "dependency_governance.py"
 PROMOTION_SCRIPT = SCRIPT_DIR / "dependency_promotion.py"
+GOVERNANCE_WORKFLOW = ROOT / ".github" / "workflows" / "dependency-governance.yml"
 
 PR_NUMBER = 228
 BASE = "a" * 40
@@ -607,3 +609,29 @@ def test_dependency_promotion_reconcile_stops_after_successful_merge(
 
     assert promotion.reconcile(config, allow_merge=True) == 0
     assert observed_gets == ["/pulls/701"]
+
+
+def test_dependency_promotion_merge_signal_is_exact_owned_github_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "github-output"
+    output.write_bytes(b"")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+
+    promotion._publish_merge_signal(output)
+    assert output.read_bytes() == b"merged=true\n"
+
+    wrong = tmp_path / "wrong-output"
+    wrong.write_bytes(b"")
+    with pytest.raises(promotion.GovernanceError, match="exact GitHub Actions output"):
+        promotion._publish_merge_signal(wrong)
+    assert wrong.read_bytes() == b""
+
+
+def test_dependency_workflow_skips_action_governance_after_promotion_merge() -> None:
+    workflow = GOVERNANCE_WORKFLOW.read_text(encoding="utf-8")
+    assert "id: python_promotion" in workflow
+    assert '--github-output "$GITHUB_OUTPUT"' in workflow
+    assert "if: steps.python_promotion.outputs.merged != 'true'" in workflow
