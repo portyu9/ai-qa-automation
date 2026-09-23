@@ -1387,7 +1387,12 @@ def _close_stale_repair(
     _delete_exact_generated_branch(api, branch, head_sha)
 
 
-def _post_merge_ci_candidates(rows: list[dict[str, Any]], subject_sha: str) -> list[dict[str, Any]]:
+def _post_merge_ci_candidates(
+    rows: list[dict[str, Any]],
+    subject_sha: str,
+    *,
+    allowed_events: set[str] = POST_MERGE_CI_EVENTS,
+) -> list[dict[str, Any]]:
     subject_sha = _require_sha(subject_sha, "post-merge CI subject SHA")
     candidates: list[dict[str, Any]] = []
     for row in rows:
@@ -1396,7 +1401,7 @@ def _post_merge_ci_candidates(rows: list[dict[str, Any]], subject_sha: str) -> l
             or row.get("path") != POST_MERGE_CI_PATH
             or row.get("head_branch") != "main"
             or row.get("head_sha") != subject_sha
-            or row.get("event") not in TERMINAL_MAIN_EVENTS
+            or row.get("event") not in allowed_events
         ):
             continue
         attempt = row.get("run_attempt")
@@ -1416,9 +1421,16 @@ def _post_merge_ci_candidates(rows: list[dict[str, Any]], subject_sha: str) -> l
 
 
 def _select_post_merge_ci_run(
-    rows: list[dict[str, Any]], subject_sha: str
+    rows: list[dict[str, Any]],
+    subject_sha: str,
+    *,
+    allowed_events: set[str] = POST_MERGE_CI_EVENTS,
 ) -> dict[str, Any] | None:
-    candidates = _post_merge_ci_candidates(rows, subject_sha)
+    candidates = _post_merge_ci_candidates(
+        rows,
+        subject_sha,
+        allowed_events=allowed_events,
+    )
     if len(candidates) > 1:
         run_ids = sorted(int(row["id"]) for row in candidates)
         raise AutohealError(
@@ -2208,7 +2220,11 @@ def _reconcile_terminal_closure(def _reconcile_terminal_closure(
     )
     trusted_gate = _terminal_trusted_gate_evidence(api, number, metadata)
 
-    ci = _select_post_merge_ci_run(_post_merge_ci_runs(api, main_sha), main_sha)
+    ci = _select_post_merge_ci_run(
+        _post_merge_ci_runs(api, main_sha),
+        main_sha,
+        allowed_events=TERMINAL_MAIN_EVENTS,
+    )
     if ci is None:
         print(
             json.dumps(
