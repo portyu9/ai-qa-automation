@@ -41,6 +41,7 @@ API_VERSION = "2026-03-10"
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 POST_MERGE_CI_WORKFLOW = "ci.yml"
 POST_MERGE_CI_WORKFLOW_ID = 339754724
+TRUSTED_PR_GATE_WORKFLOW_ID = 346203190
 POST_MERGE_CI_PATH = ".github/workflows/ci.yml"
 POST_MERGE_CI_NAME = "CI — ƳƤ AI QA Automation Framework"
 POST_MERGE_CI_EVENTS = {"push", "workflow_dispatch"}
@@ -1692,6 +1693,7 @@ def _terminal_trusted_gate_evidence(
     if (
         not isinstance(run, dict)
         or run.get("id") != run_id
+        or run.get("workflow_id") != TRUSTED_PR_GATE_WORKFLOW_ID
         or run.get("name") != EXPECTED_GATE_WORKFLOW_NAME
         or run.get("path") != EXPECTED_GATE_WORKFLOW_PATH
         or run.get("event") not in TERMINAL_TRUSTED_GATE_EVENTS
@@ -1708,6 +1710,7 @@ def _terminal_trusted_gate_evidence(
         raise AutohealError("terminal Trusted PR Gate target run is not exact-main evidence")
     return {
         "trustedStatusId": int(latest["id"]),
+        "trustedGateWorkflowId": TRUSTED_PR_GATE_WORKFLOW_ID,
         "trustedGateRunId": run_id,
         "trustedGateRunAttempt": 1,
         "trustedGateEvent": str(run["event"]),
@@ -1757,6 +1760,7 @@ def _terminal_closure_certificate(
         (codeql_run.get("id"), "terminal CodeQL run id"),
         (codeql_run.get("run_attempt"), "terminal CodeQL run attempt"),
         (trusted_gate.get("trustedStatusId"), "terminal trusted status id"),
+        (trusted_gate.get("trustedGateWorkflowId"), "terminal trusted gate workflow id"),
         (trusted_gate.get("trustedGateRunId"), "terminal trusted gate run id"),
         (trusted_gate.get("trustedGateRunAttempt"), "terminal trusted gate run attempt"),
     ):
@@ -1785,6 +1789,7 @@ def _terminal_closure_certificate(
         "codeqlRunAttempt": int(codeql_run["run_attempt"]),
         "codeqlEvent": str(codeql_run["event"]),
         "trustedStatusId": int(trusted_gate["trustedStatusId"]),
+        "trustedGateWorkflowId": int(trusted_gate["trustedGateWorkflowId"]),
         "trustedGateRunId": int(trusted_gate["trustedGateRunId"]),
         "trustedGateRunAttempt": int(trusted_gate["trustedGateRunAttempt"]),
         "trustedGateEvent": str(trusted_gate["trustedGateEvent"]),
@@ -1844,6 +1849,7 @@ def _terminal_certificate_static_matches(
         and certificate.get("ciEvent") in TERMINAL_MAIN_EVENTS
         and certificate.get("codeqlWorkflowId") == MAIN_CODEQL_WORKFLOW_ID
         and certificate.get("codeqlEvent") in TERMINAL_MAIN_EVENTS
+        and certificate.get("trustedGateWorkflowId") == TRUSTED_PR_GATE_WORKFLOW_ID
         and certificate.get("trustedGateEvent") in TERMINAL_TRUSTED_GATE_EVENTS
         and certificate.get("ciRunAttempt") == 1
         and certificate.get("codeqlRunAttempt") == 1
@@ -1941,6 +1947,7 @@ def _terminal_certificate_evidence_matches(
     trusted_gate = _terminal_trusted_gate_evidence(api, number, metadata)
     if (
         trusted_gate["trustedStatusId"] != certificate.get("trustedStatusId")
+        or trusted_gate["trustedGateWorkflowId"] != certificate.get("trustedGateWorkflowId")
         or trusted_gate["trustedGateRunId"] != certificate.get("trustedGateRunId")
         or trusted_gate["trustedGateRunAttempt"] != certificate.get("trustedGateRunAttempt")
         or trusted_gate["trustedGateEvent"] != certificate.get("trustedGateEvent")
