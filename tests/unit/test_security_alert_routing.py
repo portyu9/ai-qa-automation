@@ -430,7 +430,7 @@ def test_strict_json_ingestion_rejects_duplicate_keys_and_nonfinite_constants(
 
 @pytest.mark.parametrize("severity", ("nan", "inf", "-inf"))
 def test_nonfinite_security_severity_fails_closed(severity: str) -> None:
-    with pytest.raises(routing.RoutingPolicyError, match="finite 0..10"):
+    with pytest.raises(routing.RoutingPolicyError, match=r"finite 0\.\.10"):
         routing.route_alert(
             _alert(severity=severity),
             main_sha=MAIN,
