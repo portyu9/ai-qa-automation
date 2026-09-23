@@ -30,7 +30,7 @@ autoheal = _load()
 BASE = "a" * 40
 HEAD = "b" * 40
 ALERT = 42
-BRANCH = "automation/codeql-autoheal-42-abcdef123456"
+BRANCH = "automation/codeql-autoheal-42-abcdef123456-a1"
 
 
 def _repo_commit(
@@ -197,59 +197,83 @@ def test_only_current_policy_eligible_model_subjects_preserve_recovery_branches(
         [model, blocked, stale],
         BASE,
         config,
-        [],
     )
 
     subject = autoheal.validate_alert(model, BASE, config)
-    assert branches == {autoheal._branch_name(subject)}
+    assert branches == {
+        autoheal._branch_name(subject, attempt)
+        for attempt in range(1, int(config["maxAttemptsPerAlert"]) + 1)
+    }
 
 
-def test_closed_same_repository_attempt_is_not_recovery_authority() -> None:
+def test_attempt_scoped_branch_names_are_distinct_and_legacy_compatible() -> None:
     config = autoheal.load_config()
     model = _alert("src/ai_qa_automation/example.py")
     subject = autoheal.validate_alert(model, BASE, config)
-    branch = autoheal._branch_name(subject)
-    closed = [
-        {
-            "head": {
-                "ref": branch,
-                "repo": {"full_name": config["repository"]},
-            }
-        }
+    legacy = autoheal._branch_name(subject)
+    branches = [
+        autoheal._branch_name(subject, attempt)
+        for attempt in range(1, int(config["maxAttemptsPerAlert"]) + 1)
     ]
 
-    branches = autoheal._recoverable_model_autofix_branches(
-        [model],
-        BASE,
-        config,
-        closed,
-    )
-
-    assert branches == set()
+    assert autoheal.AUTOHEAL_BRANCH_RE.fullmatch(legacy) is not None
+    assert len(branches) == len(set(branches))
+    assert legacy not in branches
+    assert all(autoheal.AUTOHEAL_BRANCH_RE.fullmatch(branch) is not None for branch in branches)
 
 
-def test_fork_branch_name_collision_does_not_suppress_recovery() -> None:
+def test_model_repair_uses_attempt_scoped_branch(monkeypatch: pytest.MonkeyPatch) -> None:
     config = autoheal.load_config()
-    model = _alert("src/ai_qa_automation/example.py")
-    subject = autoheal.validate_alert(model, BASE, config)
-    branch = autoheal._branch_name(subject)
-    closed = [
-        {
-            "head": {
-                "ref": branch,
-                "repo": {"full_name": "attacker/example"},
-            }
-        }
-    ]
+    subject = autoheal.validate_alert(_alert("src/ai_qa_automation/example.py"), BASE, config)
+    expected_branch = autoheal._branch_name(subject, 2)
+    observed: dict[str, Any] = {}
 
-    branches = autoheal._recoverable_model_autofix_branches(
-        [model],
-        BASE,
-        config,
-        closed,
+    monkeypatch.setattr(autoheal, "_ensure_copilot_autofix", lambda api, alert: None)
+
+    def commit_autofix(api: object, alert: int, branch: str, base: str) -> str:
+        observed["branch"] = branch
+        assert alert == ALERT
+        assert base == BASE
+        return HEAD
+
+    monkeypatch.setattr(autoheal, "_commit_copilot_autofix", commit_autofix)
+    monkeypatch.setattr(
+        autoheal,
+        "_changed_files",
+        lambda api, base, head: [{"filename": subject["path"]}],
     )
 
-    assert branches == {branch}
+    def create_pr(
+        api: object,
+        branch: str,
+        head_sha: str,
+        live_subject: dict[str, Any],
+        attempt: int,
+        *,
+        deterministic: bool,
+        strategy: str,
+    ) -> int:
+        assert branch == expected_branch
+        assert head_sha == HEAD
+        assert live_subject == subject
+        assert attempt == 2
+        assert deterministic is False
+        assert strategy == autoheal.MODEL_AUTOFIX_STRATEGY
+        return 999
+
+    monkeypatch.setattr(autoheal, "_create_pull_request", create_pr)
+
+    assert (
+        autoheal._create_repair(
+            object(),
+            subject,
+            config,
+            attempt=2,
+            strategy=autoheal.MODEL_AUTOFIX_STRATEGY,
+        )
+        == 999
+    )
+    assert observed["branch"] == expected_branch
 
 
 class _ReconcileRecoveryApi(_AmbiguousCommitApi):
@@ -260,7 +284,7 @@ class _ReconcileRecoveryApi(_AmbiguousCommitApi):
             BASE,
             config,
         )
-        super().__init__(branch=autoheal._branch_name(subject))
+        super().__init__(branch=autoheal._branch_name(subject, 1))
         self.created_prs = 0
 
     def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
