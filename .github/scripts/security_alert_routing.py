@@ -17,6 +17,8 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = ROOT / ".github" / "security-autoheal.json"
 ROUTING_POLICY_VERSION = "security-routing-v1"
+EXPECTED_REPOSITORY = "portyu9/ai-qa-automation"
+EXPECTED_BASE_BRANCH = "main"
 MAX_ROUTE_RECORD_BYTES = 16 * 1024
 MAX_ALERT_MESSAGE_BYTES = 64 * 1024
 MAX_ALERT_BATCH = 100
@@ -219,6 +221,10 @@ def _alert_subject(alert: Mapping[str, Any], main_sha: str) -> dict[str, Any]:
 
 
 def _routing_config(config: Mapping[str, Any]) -> dict[str, Any]:
+    if config.get("repository") != EXPECTED_REPOSITORY:
+        raise RoutingPolicyError("routing repository is not the code-owned repository")
+    if config.get("baseBranch") != EXPECTED_BASE_BRANCH:
+        raise RoutingPolicyError("routing base branch is not the code-owned branch")
     policy = config.get("routingPolicy")
     if not isinstance(policy, Mapping):
         raise RoutingPolicyError("routingPolicy is missing")
@@ -362,6 +368,8 @@ def _routing_policy_digest(policy: Mapping[str, Any]) -> str:
     ]
     deterministic.sort(key=lambda entry: (entry["rule"], entry["strategy"]))
     material = {
+        "repository": EXPECTED_REPOSITORY,
+        "baseBranch": EXPECTED_BASE_BRANCH,
         "routingPolicyVersion": ROUTING_POLICY_VERSION,
         "allowedRules": sorted(policy["allowedRules"]),
         "minimumSecuritySeverity": policy["minimumSecuritySeverity"],
@@ -424,6 +432,8 @@ def _record(
         "schemaVersion": 1,
         "routingPolicyVersion": ROUTING_POLICY_VERSION,
         "routingPolicyDigest": policy_digest,
+        "repository": EXPECTED_REPOSITORY,
+        "baseBranch": EXPECTED_BASE_BRANCH,
         "decision": decision,
         "reason": reason,
         "authority": authority,
