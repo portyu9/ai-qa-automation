@@ -247,7 +247,6 @@ def _verify_hash_lock(python: str, root: Path, lock: Path) -> None:
         )
 
 
-
 def _requirement_graphs(
     raw: bytes, python311: str, python314: str
 ) -> dict[str, tuple[str, list[str]]]:
@@ -310,9 +309,7 @@ def _requirement_graphs(
     }
 
 
-LOCK_ENTRY = re.compile(
-    r"^(?P<name>[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)==(?P<version>[^\s\\]+) \\$"
-)
+LOCK_ENTRY = re.compile(r"^(?P<name>[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)==(?P<version>[^\s\\]+) \\$")
 LOCK_HASH = re.compile(r"^    --hash=sha256:(?P<digest>[0-9a-f]{64})$")
 LOCK_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.!+_-]*$")
 

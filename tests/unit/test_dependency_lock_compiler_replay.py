@@ -23,8 +23,7 @@ compiler = _load()
 
 def _lock(*rows: tuple[str, str, str]) -> bytes:
     return "".join(
-        f"{name}=={version} \\\n    --hash=sha256:{digest}\n"
-        for name, version, digest in rows
+        f"{name}=={version} \\\n    --hash=sha256:{digest}\n" for name, version, digest in rows
     ).encode()
 
 

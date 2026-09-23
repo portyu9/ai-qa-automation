@@ -80,9 +80,7 @@ def test_generated_validation_replays_exact_observed_lock_without_recompiling(
     assert captured["python314"] == "/python314"
     assert captured["pyproject"] == pyproject
     assert captured["authority"] == observed[".github/lock-authority.json"]
-    assert captured["locks"] == {
-        name: observed[f"requirements/{name}"] for name in LOCK_NAMES
-    }
+    assert captured["locks"] == {name: observed[f"requirements/{name}"] for name in LOCK_NAMES}
 
 
 def test_generated_validation_rejects_pyproject_drift_before_replay(
