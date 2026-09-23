@@ -137,6 +137,7 @@ class _TerminalApi:
         ci_runs: list[dict[str, Any]] | None = None,
         codeql_runs: list[dict[str, Any]] | None = None,
         alert_state: str = "fixed",
+        alert_path: str | None = "examples/reference_sut/app.py",
         autoheal_head_sha: str = MERGE,
         autoheal_run_attempt: int = 1,
         gate_run_attempt: int = 1,
@@ -146,6 +147,7 @@ class _TerminalApi:
         self.ci_runs = [_ci_run()] if ci_runs is None else list(ci_runs)
         self.codeql_runs = [_codeql_run()] if codeql_runs is None else list(codeql_runs)
         self.alert_state = alert_state
+        self.alert_path = alert_path
         self.autoheal_head_sha = autoheal_head_sha
         self.autoheal_run_attempt = autoheal_run_attempt
         self.gate_run_attempt = gate_run_attempt
@@ -186,7 +188,7 @@ class _TerminalApi:
                 "state": self.alert_state,
                 "tool": {"name": "CodeQL"},
                 "rule": {"id": _metadata()["rule"]},
-                "most_recent_instance": {"location": {"path": _metadata()["path"]}},
+                "most_recent_instance": {"location": {"path": self.alert_path}},
             }
         if path.startswith("/actions/runs/"):
             run_id = int(path.rsplit("/", 1)[1])
@@ -406,6 +408,21 @@ def test_terminal_closure_waits_for_unresolved_alert_after_green_codeql(
         ),
     ),
 )
+@pytest.mark.parametrize("alert_path", (None, "examples/reference_sut/other.py"))
+def test_terminal_closure_rejects_missing_or_moved_alert_path(
+    config: dict[str, Any],
+    alert_path: str | None,
+) -> None:
+    api = _TerminalApi(alert_path=alert_path)
+
+    with pytest.raises(
+        autoheal.AutohealError,
+        match="terminal alert path is missing or drifted from repair provenance",
+    ):
+        autoheal._reconcile_terminal_closure(api, MERGE, config)
+    assert api.comments == []
+
+
 def test_terminal_closure_rejects_manual_rerun_evidence(
     config: dict[str, Any],
     ci_runs: list[dict[str, Any]],
