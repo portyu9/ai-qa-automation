@@ -348,6 +348,39 @@ def test_dependency_governance_revalidates_gate_after_fresh_rebind(
     assert api.events == ["fresh-pr", "rebind", "gate", "merge", "finalize"]
 
 
+def test_dependency_governance_moved_subject_stops_before_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = _MergeApi()
+    subject = {"number": PR_NUMBER, "headSha": HEAD, "baseSha": BASE}
+    moved = {"number": PR_NUMBER, "headSha": "e" * 40, "baseSha": BASE}
+    config = {"mergeMethod": "merge"}
+
+    def assess(
+        api_arg: Any,
+        pr: dict[str, Any],
+        config_arg: dict[str, Any],
+        *,
+        require_checks: bool,
+    ) -> dict[str, Any]:
+        assert api_arg is api
+        assert pr == {"number": PR_NUMBER}
+        assert config_arg is config
+        assert require_checks is False
+        api.events.append("rebind")
+        return moved
+
+    def forbidden_gate(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("gate must not be consulted for moved subject")
+
+    monkeypatch.setattr(governance, "assess", assess)
+    monkeypatch.setattr(governance, "require_schedule_trusted_gate", forbidden_gate)
+
+    with pytest.raises(governance.PolicyBlock, match="changed before merge"):
+        governance._merge(api, subject, config)
+    assert api.events == ["fresh-pr", "rebind"]
+
+
 def test_dependency_promotion_revalidates_gate_after_fresh_rebind(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -394,3 +427,36 @@ def test_dependency_promotion_revalidates_gate_after_fresh_rebind(
 
     assert promotion._publish_and_merge(api, promoted, config) == {"mergeSha": MERGE}
     assert api.events == ["fresh-pr", "rebind", "gate", "merge", "finalize"]
+
+
+def test_dependency_promotion_moved_subject_stops_before_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = _MergeApi()
+    promoted = {"number": PR_NUMBER, "headSha": HEAD, "baseSha": BASE}
+    moved = {"number": PR_NUMBER, "headSha": "e" * 40, "baseSha": BASE}
+    config = {"mergeMethod": "merge"}
+
+    def validate(
+        api_arg: Any,
+        pr: dict[str, Any],
+        config_arg: dict[str, Any],
+        *,
+        require_checks: bool,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        assert api_arg is api
+        assert pr == {"number": PR_NUMBER}
+        assert config_arg is config
+        assert require_checks is False
+        api.events.append("rebind")
+        return {"source": True}, moved
+
+    def forbidden_gate(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("gate must not be consulted for moved promotion")
+
+    monkeypatch.setattr(promotion, "_validate_promotion", validate)
+    monkeypatch.setattr(promotion, "require_schedule_trusted_gate", forbidden_gate)
+
+    with pytest.raises(promotion.PolicyBlock, match="changed before guarded merge"):
+        promotion._publish_and_merge(api, promoted, config)
+    assert api.events == ["fresh-pr", "rebind"]
