@@ -192,3 +192,94 @@ def test_only_current_policy_eligible_model_subjects_preserve_recovery_branches(
 
     subject = autoheal.validate_alert(model, BASE, config)
     assert branches == {autoheal._branch_name(subject)}
+
+
+class _ReconcileRecoveryApi(_AmbiguousCommitApi):
+    def __init__(self) -> None:
+        super().__init__()
+        self.created_prs = 0
+
+    def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+        if path == "/pulls?state=open&sort=created&direction=asc":
+            assert max_pages == 4
+            return []
+        if path.startswith("/code-scanning/alerts?"):
+            assert max_pages == 10
+            return [_alert("src/ai_qa_automation/example.py")]
+        if path == f"/git/matching-refs/heads/{autoheal.BRANCH_PREFIX}":
+            assert max_pages == 4
+            if self.branch_sha is None:
+                return []
+            return [
+                {
+                    "ref": f"refs/heads/{BRANCH}",
+                    "object": {"type": "commit", "sha": self.branch_sha},
+                }
+            ]
+        if path == "/pulls?state=closed&sort=updated&direction=desc":
+            assert max_pages == 10
+            return []
+        raise AssertionError(path)
+
+    def get(self, path: str) -> dict[str, Any]:
+        if path == "/branches/main":
+            return {"commit": {"sha": BASE}}
+        if path == f"/compare/{BASE}...{HEAD}":
+            return {"files": [{"filename": "src/ai_qa_automation/example.py"}]}
+        return super().get(path)
+
+    def request_status(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        token: str | None = None,
+    ) -> tuple[int, dict[str, Any]]:
+        assert method == "POST"
+        assert path == f"/code-scanning/alerts/{ALERT}/autofix"
+        assert payload is None
+        assert token is None
+        return 200, {"status": "success"}
+
+
+def test_reconcile_recovers_ambiguous_autofix_commit_without_second_submission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = _ReconcileRecoveryApi()
+    config = autoheal.load_config()
+    monkeypatch.setenv("GITHUB_REPOSITORY", config["repository"])
+    monkeypatch.setattr(autoheal, "GitHubApi", lambda token, repository: api)
+
+    def create_pull_request(
+        api_arg: object,
+        branch: str,
+        head_sha: str,
+        subject: dict[str, Any],
+        attempt: int,
+        *,
+        deterministic: bool,
+        strategy: str,
+    ) -> int:
+        assert api_arg is api
+        assert branch == BRANCH
+        assert head_sha == HEAD
+        assert subject["number"] == ALERT
+        assert attempt == 1
+        assert deterministic is False
+        assert strategy == autoheal.MODEL_AUTOFIX_STRATEGY
+        api.created_prs += 1
+        return 999
+
+    monkeypatch.setattr(autoheal, "_create_pull_request", create_pull_request)
+
+    with pytest.raises(autoheal.AutohealError, match="503 after provider side effect"):
+        autoheal.reconcile(config, allow_merge=False)
+
+    assert api.branch_sha == HEAD
+    assert api.commit_posts == 1
+    assert api.created_prs == 0
+
+    assert autoheal.reconcile(config, allow_merge=False) == 1
+    assert api.commit_posts == 1
+    assert api.created_prs == 1
