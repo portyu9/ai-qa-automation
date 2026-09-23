@@ -372,6 +372,14 @@ def test_unreviewed_path_has_explicit_nonmutation_route() -> None:
             "code-owned branch",
         ),
         (
+            lambda config: config.update(minimumSecuritySeverity=6.9),
+            "reviewed 7..10",
+        ),
+        (
+            lambda config: config.update(maxAttemptsPerAlert=4),
+            "reviewed 1..3",
+        ),
+        (
             lambda config: config.update(
                 allowedRules=[*config["allowedRules"], "py/unreviewed-rule"]
             ),
