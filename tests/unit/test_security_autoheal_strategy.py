@@ -30,6 +30,41 @@ def _load_security_autoheal() -> ModuleType:
 
 autoheal = _load_security_autoheal()
 
+VULNERABLE_REFERENCE_SUT = """from __future__ import annotations
+
+import json
+from typing import Literal
+
+from fastapi import HTTPException
+
+Mode = Literal[
+    "pass",
+    "app-defect",
+    "outdated-locator",
+    "api-failure",
+    "timing",
+    "invalid-data",
+    "prompt-injection",
+]
+
+
+def checkout(mode: Mode) -> str:
+    allowed_modes = {
+        "pass",
+        "app-defect",
+        "outdated-locator",
+        "api-failure",
+        "timing",
+        "invalid-data",
+        "prompt-injection",
+    }
+    if mode not in allowed_modes:
+        raise HTTPException(status_code=400, detail="Invalid mode")
+    safe_mode = mode
+    mode_js = json.dumps(safe_mode)
+    return f'encodeURIComponent({mode_js})'
+"""
+
 
 def _closed_repair(metadata: dict[str, Any]) -> dict[str, Any]:
     return {
@@ -52,13 +87,20 @@ class _ClosedRepairApi:
         return self.rows
 
 
-def test_reflective_xss_uses_literal_only_deterministic_strategy() -> None:
+def test_reflective_xss_uses_literal_only_deterministic_strategy(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     subject = {
         "number": 7,
         "rule": "py/reflective-xss",
         "path": "examples/reference_sut/app.py",
         "line": 1,
     }
+    target = tmp_path / subject["path"]
+    target.parent.mkdir(parents=True)
+    target.write_text(VULNERABLE_REFERENCE_SUT, encoding="utf-8")
+    monkeypatch.setattr(autoheal, "ROOT", tmp_path)
 
     assert autoheal._repair_strategy(subject) == autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY
     repaired = autoheal._deterministic_repair(subject)
@@ -94,6 +136,9 @@ def test_reflective_xss_uses_literal_only_deterministic_strategy() -> None:
     with pytest.raises(HTTPException) as exc_info:
         checkout('</script><script>alert("xss")</script>')
     assert exc_info.value.status_code == 400
+
+    target.write_text(repaired, encoding="utf-8")
+    assert autoheal._deterministic_repair(subject) is None
 
 
 def test_legacy_copilot_attempts_do_not_consume_new_deterministic_epoch() -> None:
