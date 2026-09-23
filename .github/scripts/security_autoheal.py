@@ -72,6 +72,20 @@ STALE_SUPERSESSION_REASON = "main-advanced"
 STALE_SUPERSESSION_COMMENT_PREFIX = "<!-- aiqa-codeql-autoheal-supersession:"
 STALE_SUPERSESSION_COMMENT_SUFFIX = " -->"
 LEGACY_STALE_CLOSURE_CUTOFF = "2026-09-23T00:11:00Z"
+LEGACY_STALE_SUPERSESSIONS = {
+    207: {
+        "base": "ba3d59666bf19d97c69d681a0ed9d6f07eef0b72",
+        "head": "58ce657dfe8bf21bc1937acccbc57313e1f0c849",
+        "fingerprint": "128d831670569fcf39e14ad89263c75c413f6d3242f1de90b9ad9b3f71a1f9cb",
+        "closedAt": "2026-09-22T23:36:05Z",
+    },
+    216: {
+        "base": "b06657a63018838d590b35abb7648067f10c42d5",
+        "head": "e828bdeea0e75d4daa81bfcb09b4dbb03b487af5",
+        "fingerprint": "d6bf8a891cfe19855b9d3482c8f7bb4c93eea0f695da0917b9c0a668d31d2417",
+        "closedAt": "2026-09-23T00:10:26Z",
+    },
+}
 
 DETERMINISTIC_LOG_REPAIRS = {
     "scripts/auto_trusted_report.py": (
@@ -1664,9 +1678,19 @@ def _proven_stale_supersession(
                 return False
         return True
 
-    return _github_timestamp_at_or_before(
-        pr.get("closed_at"),
-        LEGACY_STALE_CLOSURE_CUTOFF,
+    legacy = LEGACY_STALE_SUPERSESSIONS.get(number)
+    if legacy is None:
+        return False
+    closed_at = pr.get("closed_at")
+    return (
+        marker_base == legacy["base"]
+        and marker_head == legacy["head"]
+        and metadata.get("fingerprint") == legacy["fingerprint"]
+        and closed_at == legacy["closedAt"]
+        and _github_timestamp_at_or_before(
+            closed_at,
+            LEGACY_STALE_CLOSURE_CUTOFF,
+        )
     )
 
 
@@ -2270,8 +2294,11 @@ def selftest(config: dict[str, Any]) -> None:
     explicit_metadata["head"] = "1" * 40
     explicit_metadata["supersessionReason"] = STALE_SUPERSESSION_REASON
     explicit_metadata["supersededByMain"] = "f" * 40
+    legacy_record = LEGACY_STALE_SUPERSESSIONS[207]
     legacy_metadata = dict(stale_marker_metadata)
-    legacy_metadata["head"] = "2" * 40
+    legacy_metadata["base"] = legacy_record["base"]
+    legacy_metadata["head"] = legacy_record["head"]
+    legacy_metadata["fingerprint"] = legacy_record["fingerprint"]
     future_metadata = dict(stale_marker_metadata)
     future_metadata["head"] = "3" * 40
     human_metadata = dict(stale_marker_metadata)
@@ -2290,11 +2317,11 @@ def selftest(config: dict[str, Any]) -> None:
             closed_at="2026-09-23T00:20:00Z",
         ),
         _closed_repair_row(
-            102,
-            head="2" * 40,
-            base="a" * 40,
+            207,
+            head=legacy_record["head"],
+            base=legacy_record["base"],
             body=_marker(legacy_metadata),
-            closed_at="2026-09-23T00:10:00Z",
+            closed_at=legacy_record["closedAt"],
         ),
         _closed_repair_row(
             103,
@@ -2350,11 +2377,14 @@ def selftest(config: dict[str, Any]) -> None:
                 if number == 104
                 else {"login": GITHUB_ACTIONS_LOGIN, "id": GITHUB_ACTIONS_USER_ID}
             )
+            row = next((item for item in attempt_rows if item["number"] == number), None)
+            if row is None:
+                raise AutohealError(f"unexpected attempt-accounting issue number: {number}")
             return [
                 {
                     "id": number,
                     "event": "closed",
-                    "created_at": attempt_rows[number - 101]["closed_at"],
+                    "created_at": row["closed_at"],
                     "actor": actor,
                 }
             ]
