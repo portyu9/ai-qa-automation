@@ -140,6 +140,8 @@ class _TerminalApi:
         alert_path: str | None = "examples/reference_sut/app.py",
         autoheal_head_sha: str = MERGE,
         autoheal_run_attempt: int = 1,
+        autoheal_status: str = "in_progress",
+        autoheal_conclusion: str | None = None,
         gate_run_attempt: int = 1,
         gate_workflow_id: int = autoheal.TRUSTED_PR_GATE_WORKFLOW_ID,
         gate_event: str = "schedule",
@@ -151,6 +153,8 @@ class _TerminalApi:
         self.alert_path = alert_path
         self.autoheal_head_sha = autoheal_head_sha
         self.autoheal_run_attempt = autoheal_run_attempt
+        self.autoheal_status = autoheal_status
+        self.autoheal_conclusion = autoheal_conclusion
         self.gate_run_attempt = gate_run_attempt
         self.gate_workflow_id = gate_workflow_id
         self.gate_event = gate_event
@@ -203,8 +207,8 @@ class _TerminalApi:
                     "event": "workflow_run",
                     "head_branch": "main",
                     "head_sha": self.autoheal_head_sha,
-                    "status": "in_progress",
-                    "conclusion": None,
+                    "status": self.autoheal_status,
+                    "conclusion": self.autoheal_conclusion,
                 }
             if run_id == GATE_RUN_ID:
                 return {
@@ -337,6 +341,40 @@ def test_terminal_closure_persists_exact_idempotent_certificate(
     assert certificate["trustedGateRunAttempt"] == 1
     assert certificate["trustedGateEvent"] == "schedule"
     assert certificate["trustedProspectiveMergeSha"] == PROSPECTIVE
+
+    assert autoheal._reconcile_terminal_closure(api, MERGE, config) is False
+    assert len(api.comments) == 1
+
+
+@pytest.mark.parametrize("conclusion", ("failure", "cancelled"))
+def test_terminal_closure_rejects_certificate_if_certifying_run_later_fails(
+    config: dict[str, Any],
+    conclusion: str,
+) -> None:
+    api = _TerminalApi()
+    assert autoheal._reconcile_terminal_closure(api, MERGE, config) is True
+    assert len(api.comments) == 1
+
+    api.autoheal_status = "completed"
+    api.autoheal_conclusion = conclusion
+
+    with pytest.raises(
+        autoheal.PolicyBlock,
+        match="terminal closure certificate no longer has exact successful workflow evidence",
+    ):
+        autoheal._reconcile_terminal_closure(api, MERGE, config)
+    assert len(api.comments) == 1
+
+
+def test_terminal_closure_accepts_certificate_after_certifying_run_completes_successfully(
+    config: dict[str, Any],
+) -> None:
+    api = _TerminalApi()
+    assert autoheal._reconcile_terminal_closure(api, MERGE, config) is True
+    assert len(api.comments) == 1
+
+    api.autoheal_status = "completed"
+    api.autoheal_conclusion = "success"
 
     assert autoheal._reconcile_terminal_closure(api, MERGE, config) is False
     assert len(api.comments) == 1
