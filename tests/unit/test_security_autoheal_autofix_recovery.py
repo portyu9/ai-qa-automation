@@ -222,6 +222,29 @@ def test_attempt_scoped_branch_names_are_distinct_and_legacy_compatible() -> Non
     assert all(autoheal.AUTOHEAL_BRANCH_RE.fullmatch(branch) is not None for branch in branches)
 
 
+def test_branch_binding_accepts_legacy_or_exact_attempt_and_rejects_mismatch() -> None:
+    config = autoheal.load_config()
+    subject = autoheal.validate_alert(_alert("src/ai_qa_automation/example.py"), BASE, config)
+    metadata = {"attempt": 2}
+
+    autoheal._require_repair_branch_binding(
+        autoheal._branch_name(subject),
+        metadata,
+        subject,
+    )
+    autoheal._require_repair_branch_binding(
+        autoheal._branch_name(subject, 2),
+        metadata,
+        subject,
+    )
+    with pytest.raises(autoheal.PolicyBlock, match="fingerprint and attempt"):
+        autoheal._require_repair_branch_binding(
+            autoheal._branch_name(subject, 1),
+            metadata,
+            subject,
+        )
+
+
 def test_model_repair_uses_attempt_scoped_branch(monkeypatch: pytest.MonkeyPatch) -> None:
     config = autoheal.load_config()
     subject = autoheal.validate_alert(_alert("src/ai_qa_automation/example.py"), BASE, config)
@@ -300,7 +323,7 @@ class _ReconcileRecoveryApi(_AmbiguousCommitApi):
                 return []
             return [
                 {
-                    "ref": f"refs/heads/{BRANCH}",
+                    "ref": f"refs/heads/{self.branch}",
                     "object": {"type": "commit", "sha": self.branch_sha},
                 }
             ]
