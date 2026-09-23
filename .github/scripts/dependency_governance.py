@@ -123,6 +123,7 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         ".github/dependency-recovery.json",
         ".github/security-autoheal.json",
         ".github/scripts/dependency_governance.py",
+        ".github/scripts/dependency_trusted_gate.py",
         ".github/scripts/dependency_lock_compiler.py",
         ".github/scripts/dependency_promotion.py",
         ".github/scripts/dependency_governance_selfcheck.py",
