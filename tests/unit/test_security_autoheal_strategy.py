@@ -106,8 +106,17 @@ def test_legacy_copilot_attempts_do_not_consume_new_deterministic_epoch() -> Non
     }
     api = _ClosedRepairApi([_closed_repair(legacy), _closed_repair({**legacy, "attempt": 2})])
 
-    assert autoheal._attempt_count(api, 7, autoheal.MODEL_AUTOFIX_STRATEGY) == 2
-    assert autoheal._attempt_count(api, 7, autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY) == 0
+    current_main = "f" * 40
+    assert autoheal._attempt_count(api, 7, autoheal.MODEL_AUTOFIX_STRATEGY, current_main) == 2
+    assert (
+        autoheal._attempt_count(
+            api,
+            7,
+            autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY,
+            current_main,
+        )
+        == 0
+    )
     assert api.calls == [
         ("/pulls?state=closed&sort=updated&direction=desc", 10),
         ("/pulls?state=closed&sort=updated&direction=desc", 10),
@@ -125,8 +134,17 @@ def test_explicit_strategy_attempt_is_counted_only_in_its_epoch() -> None:
     }
     api = _ClosedRepairApi([_closed_repair(deterministic)])
 
-    assert autoheal._attempt_count(api, 7, autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY) == 1
-    assert autoheal._attempt_count(api, 7, autoheal.MODEL_AUTOFIX_STRATEGY) == 0
+    current_main = "f" * 40
+    assert (
+        autoheal._attempt_count(
+            api,
+            7,
+            autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY,
+            current_main,
+        )
+        == 1
+    )
+    assert autoheal._attempt_count(api, 7, autoheal.MODEL_AUTOFIX_STRATEGY, current_main) == 0
 
 
 def test_strategy_binding_rejects_legacy_model_strategy_after_deterministic_upgrade() -> None:
