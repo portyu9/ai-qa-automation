@@ -192,6 +192,13 @@ def _alert_subject(alert: Mapping[str, Any], main_sha: str) -> dict[str, Any]:
         raise RoutingPolicyError("alert location is missing")
     path = _safe_repository_path(location.get("path"))
     line = _require_positive_int(location.get("start_line"), "alert start line")
+    end_line = _require_positive_int(location.get("end_line"), "alert end line")
+    start_column = _require_positive_int(
+        location.get("start_column"), "alert start column"
+    )
+    end_column = _require_positive_int(location.get("end_column"), "alert end column")
+    if end_line < line or (end_line == line and end_column < start_column):
+        raise RoutingPolicyError("alert location range is malformed")
     message = instance.get("message")
     if not isinstance(message, Mapping):
         raise RoutingPolicyError("alert message metadata is missing")
@@ -202,7 +209,18 @@ def _alert_subject(alert: Mapping[str, Any], main_sha: str) -> dict[str, Any]:
         raise RoutingPolicyError("alert message exceeds the bounded routing limit")
 
     fingerprint_material = "\0".join(
-        (str(number), rule_id, severity.hex(), path, str(line), text, main_sha)
+        (
+            str(number),
+            rule_id,
+            severity.hex(),
+            path,
+            str(line),
+            str(end_line),
+            str(start_column),
+            str(end_column),
+            text,
+            main_sha,
+        )
     ).encode("utf-8")
     fingerprint = hashlib.sha256(fingerprint_material).hexdigest()
     return {
@@ -213,6 +231,9 @@ def _alert_subject(alert: Mapping[str, Any], main_sha: str) -> dict[str, Any]:
         "securitySeverity": severity,
         "path": path,
         "line": line,
+        "endLine": end_line,
+        "startColumn": start_column,
+        "endColumn": end_column,
         "baseSha": main_sha,
         "alertRef": ref,
         "alertInstanceSha": instance_sha,
@@ -462,6 +483,9 @@ def _record(
         "securitySeverity": subject["securitySeverity"],
         "path": subject["path"],
         "line": subject["line"],
+        "endLine": subject["endLine"],
+        "startColumn": subject["startColumn"],
+        "endColumn": subject["endColumn"],
         "baseSha": subject["baseSha"],
         "alertRef": subject["alertRef"],
         "alertInstanceSha": subject["alertInstanceSha"],
