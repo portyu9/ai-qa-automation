@@ -228,6 +228,16 @@ def _routing_config(config: Mapping[str, Any]) -> dict[str, Any]:
     policy = config.get("routingPolicy")
     if not isinstance(policy, Mapping):
         raise RoutingPolicyError("routingPolicy is missing")
+    expected_policy_keys = {
+        "schemaVersion",
+        "policyVersion",
+        "protectedStrategy",
+        "modelStrategy",
+        "noReviewedStrategy",
+        "deterministicStrategies",
+    }
+    if set(policy) != expected_policy_keys:
+        raise RoutingPolicyError("routingPolicy keys must equal the code-owned schema")
     if policy.get("schemaVersion") != 1 or policy.get("policyVersion") != ROUTING_POLICY_VERSION:
         raise RoutingPolicyError("routingPolicy version is not code-owned")
 
@@ -261,12 +271,14 @@ def _routing_config(config: Mapping[str, Any]) -> dict[str, Any]:
     if (
         not isinstance(deterministic_only, list)
         or not all(isinstance(value, str) for value in deterministic_only)
+        or len(deterministic_only) != len(DETERMINISTIC_ONLY_PATHS)
         or set(deterministic_only) != DETERMINISTIC_ONLY_PATHS
     ):
         raise RoutingPolicyError("deterministicOnlyPaths must equal the code-owned paths")
     if (
         not isinstance(never_modify, list)
         or not all(isinstance(value, str) for value in never_modify)
+        or len(never_modify) != len(NEVER_MODIFY_PATHS)
         or set(never_modify) != NEVER_MODIFY_PATHS
     ):
         raise RoutingPolicyError("neverModifyPaths must equal the code-owned protected roots")
@@ -289,6 +301,8 @@ def _routing_config(config: Mapping[str, Any]) -> dict[str, Any]:
     for raw in raw_strategies:
         if not isinstance(raw, Mapping):
             raise RoutingPolicyError("deterministic strategy entry is malformed")
+        if set(raw) != {"rule", "strategy", "paths", "pathPrefixes"}:
+            raise RoutingPolicyError("deterministic strategy keys are outside the code-owned schema")
         rule = raw.get("rule")
         strategy = raw.get("strategy")
         paths = raw.get("paths")
