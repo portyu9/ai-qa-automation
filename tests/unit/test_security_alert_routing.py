@@ -84,8 +84,8 @@ def _alert(
             "py/clear-text-logging-sensitive-data",
             "scripts/verify_docs.py",
             "unknown",
-            "ordinary-deterministic-autoheal",
-            autoheal.CLEAR_TEXT_LOG_STRATEGY,
+            "protected-independent-remediation",
+            routing.PROTECTED_REMEDIATION_STRATEGY,
         ),
         (
             "py/overly-permissive-file",
@@ -147,6 +147,23 @@ def test_alert_17_class_routes_to_independent_protected_authority() -> None:
     assert record["decision"] == "protected-independent-remediation"
     assert record["authority"] == "protected-independent-remediation"
     assert record["strategy"] == "protected-independent-remediation-v1"
+    assert record["protected"] is True
+
+
+@pytest.mark.parametrize("path", sorted(routing.DETERMINISTIC_ONLY_PATHS))
+def test_authority_bearing_deterministic_verifiers_route_to_independent_lane(path: str) -> None:
+    record = routing.route_alert(
+        _alert(
+            rule="py/clear-text-logging-sensitive-data",
+            path=path,
+        ),
+        main_sha=MAIN,
+        config=_config(),
+    )
+
+    assert record["decision"] == "protected-independent-remediation"
+    assert record["authority"] == "protected-independent-remediation"
+    assert record["strategy"] == routing.PROTECTED_REMEDIATION_STRATEGY
     assert record["protected"] is True
 
 
