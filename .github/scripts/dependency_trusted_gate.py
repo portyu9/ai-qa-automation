@@ -22,8 +22,10 @@ def _require_positive_int(value: Any, label: str) -> int:
 
 
 def _require_sha(value: Any, label: str) -> str:
-    if not isinstance(value, str) or len(value) != 40 or any(
-        char not in "0123456789abcdef" for char in value
+    if (
+        not isinstance(value, str)
+        or len(value) != 40
+        or any(char not in "0123456789abcdef" for char in value)
     ):
         raise TrustedStatusError(f"{label} must be a canonical full SHA")
     return value
@@ -73,10 +75,13 @@ def require_schedule_trusted_gate(
         )
 
     live_main = api.get("/branches/main")
-    if _require_sha(
-        ((live_main or {}).get("commit") or {}).get("sha"),
-        "dependency gate live main SHA",
-    ) != base_sha:
+    if (
+        _require_sha(
+            ((live_main or {}).get("commit") or {}).get("sha"),
+            "dependency gate live main SHA",
+        )
+        != base_sha
+    ):
         raise TrustedStatusError("dependency Trusted PR Gate base is not exact current main")
 
     merge_ref = api.get(f"/git/ref/pull/{pr_number}/merge")
@@ -96,8 +101,7 @@ def require_schedule_trusted_gate(
     parents = (merge_commit or {}).get("parents") if isinstance(merge_commit, dict) else None
     if (
         not isinstance(merge_commit, dict)
-        or _require_sha(merge_commit.get("sha"), "dependency gate merge commit SHA")
-        != merge_sha
+        or _require_sha(merge_commit.get("sha"), "dependency gate merge commit SHA") != merge_sha
         or not isinstance(parents, list)
         or len(parents) != 2
     ):
