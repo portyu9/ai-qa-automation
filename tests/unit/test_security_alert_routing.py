@@ -393,6 +393,38 @@ def test_batch_rejects_evidence_for_unobserved_alerts() -> None:
         )
 
 
+def test_strict_json_ingestion_rejects_duplicate_keys_and_nonfinite_constants(
+    tmp_path: Path,
+) -> None:
+    duplicate = tmp_path / "duplicate.json"
+    duplicate.write_text('{"number":7,"number":8}', encoding="utf-8")
+    with pytest.raises(routing.RoutingPolicyError, match="duplicate object key"):
+        routing._read_json(duplicate, max_bytes=1024, label="alert input")
+
+    nonfinite = tmp_path / "nonfinite.json"
+    nonfinite.write_text('{"severity":NaN}', encoding="utf-8")
+    with pytest.raises(routing.RoutingPolicyError, match="non-finite JSON constant"):
+        routing._read_json(nonfinite, max_bytes=1024, label="alert input")
+
+
+@pytest.mark.parametrize("severity", ("nan", "inf", "-inf"))
+def test_nonfinite_security_severity_fails_closed(severity: str) -> None:
+    with pytest.raises(routing.RoutingPolicyError, match="finite 0..10"):
+        routing.route_alert(
+            _alert(severity=severity),
+            main_sha=MAIN,
+            config=_config(),
+        )
+
+
+def test_malformed_authority_collections_fail_as_policy_errors() -> None:
+    config = _config()
+    config["allowedRules"] = [{"id": "py/reflective-xss"}]
+
+    with pytest.raises(routing.RoutingPolicyError):
+        routing.route_alert(_alert(), main_sha=MAIN, config=config)
+
+
 def test_json_ingestion_rejects_symlink_input(tmp_path: Path) -> None:
     actual = tmp_path / "alert.json"
     actual.write_text("{}", encoding="utf-8")
