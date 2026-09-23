@@ -66,7 +66,7 @@ Attempt accounting is keyed by the exact strategy string/version. Exhaustion of 
 
 ## Routing records
 
-Each successful classification emits a bounded canonical JSON record containing the exact subject, decision, reason, authority, strategy/version, attempt count, policy version, and a SHA-256 record digest.
+Each successful classification emits a bounded canonical JSON record containing the exact subject and alert state, decision, reason, authority, strategy/version, attempt count, routing-policy version, a SHA-256 digest of the exact normalized routing-policy inputs, and a SHA-256 record digest. A threshold or attempt-policy change therefore changes the policy digest even when the schema/version label remains the same.
 
 `security_alert_routing.persist_record` publishes that evidence without overwrite:
 
