@@ -115,6 +115,8 @@ def test_every_current_allowed_rule_has_explicit_tested_route(
     assert record["baseSha"] == MAIN
     assert record["alertInstanceSha"] == MAIN
     assert record["routingPolicyVersion"] == routing.ROUTING_POLICY_VERSION
+    assert record["alertState"] == "open"
+    assert routing.re.fullmatch(r"[0-9a-f]{64}", record["routingPolicyDigest"]) is not None
 
 
 def test_alert_7_routes_to_ordinary_deterministic_autoheal() -> None:
@@ -227,6 +229,7 @@ def test_stale_alert_instances_have_explicit_terminal_route(
 
     assert record["decision"] == "stale-alert"
     assert record["reason"] == reason
+    assert record["alertState"] == alert["state"]
 
 
 def test_fingerprint_and_strategy_drift_fail_closed_as_stale() -> None:
@@ -250,6 +253,28 @@ def test_fingerprint_and_strategy_drift_fail_closed_as_stale() -> None:
     )
     assert strategy_record["decision"] == "stale-alert"
     assert strategy_record["reason"] == "remediation-strategy-version-drift"
+
+
+def test_routing_record_binds_exact_normalized_policy_inputs() -> None:
+    baseline_config = _config()
+    baseline = routing.route_alert(
+        _alert(severity="8.8"),
+        main_sha=MAIN,
+        config=baseline_config,
+    )
+
+    tightened_config = _config()
+    tightened_config["minimumSecuritySeverity"] = 8.0
+    tightened = routing.route_alert(
+        _alert(severity="8.8"),
+        main_sha=MAIN,
+        config=tightened_config,
+    )
+
+    assert baseline["decision"] == tightened["decision"]
+    assert baseline["routingPolicyVersion"] == tightened["routingPolicyVersion"]
+    assert baseline["routingPolicyDigest"] != tightened["routingPolicyDigest"]
+    assert baseline["recordDigest"] != tightened["recordDigest"]
 
 
 def test_changed_rule_and_severity_change_the_routing_truth() -> None:
