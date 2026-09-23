@@ -70,11 +70,12 @@ Each successful classification emits a bounded canonical JSON record containing 
 
 `security_alert_routing.persist_record` publishes that evidence without overwrite:
 
-- parent must be a real non-symlink directory;
+- every parent path component is opened with no-follow directory semantics;
+- the final parent and any pre-existing record must be owned by the routing process and not writable by group/other users;
 - an existing different record is a conflict, not an overwrite;
-- an identical existing record is idempotent;
-- publication uses an fsynced temporary file and atomic hard-link creation;
-- symlink targets are rejected.
+- an identical existing record is idempotent only after ownership, mode, bounded-read, and digest checks succeed;
+- publication uses an owner-only fsynced temporary file and atomic hard-link creation;
+- symlink parents/targets, parent traversal, concurrent conflicting publication, and read-back drift are rejected.
 
 The record explains deterministic routing truth. It is **not** itself merge authority, validation proof, or a terminal remediation certificate.
 
