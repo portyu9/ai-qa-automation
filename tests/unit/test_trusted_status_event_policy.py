@@ -99,11 +99,10 @@ class _GateApi:
         raise AssertionError(f"unexpected path: {path}")
 
 
-def test_default_trusted_gate_event_policy_remains_workflow_run() -> None:
-    api = _GateApi("workflow_run")
-
+@pytest.mark.parametrize("event", ("workflow_run", "schedule"))
+def test_default_trusted_gate_event_policy_preserves_reviewed_events(event: str) -> None:
     status = trusted_status.require_automatic_trusted_gate(
-        api,
+        _GateApi(event),
         PR_NUMBER,
         HEAD,
         BASE,
@@ -112,28 +111,13 @@ def test_default_trusted_gate_event_policy_remains_workflow_run() -> None:
     assert status["id"] == STATUS_ID
 
 
-def test_default_trusted_gate_event_policy_rejects_schedule() -> None:
-    api = _GateApi("schedule")
-
-    with pytest.raises(
-        trusted_status.TrustedStatusError,
-        match="not exact-current-main gate evidence",
-    ):
-        trusted_status.require_automatic_trusted_gate(
-            api,
-            PR_NUMBER,
-            HEAD,
-            BASE,
-        )
-
-
 def test_explicit_schedule_policy_accepts_only_schedule() -> None:
     status = trusted_status.require_automatic_trusted_gate(
         _GateApi("schedule"),
         PR_NUMBER,
         HEAD,
         BASE,
-        expected_event="schedule",
+        allowed_events=frozenset({"schedule"}),
     )
     assert status["id"] == STATUS_ID
 
@@ -146,20 +130,20 @@ def test_explicit_schedule_policy_accepts_only_schedule() -> None:
             PR_NUMBER,
             HEAD,
             BASE,
-            expected_event="schedule",
+            allowed_events=frozenset({"schedule"}),
         )
 
 
 @pytest.mark.parametrize("event", ("workflow_dispatch", "pull_request", "push", ""))
-def test_unowned_expected_event_classes_are_rejected(event: str) -> None:
+def test_unowned_allowed_event_classes_are_rejected(event: str) -> None:
     with pytest.raises(
         trusted_status.TrustedStatusError,
-        match="expected event is not code-owned",
+        match="allowed events are not code-owned",
     ):
         trusted_status.require_automatic_trusted_gate(
             _GateApi(event),
             PR_NUMBER,
             HEAD,
             BASE,
-            expected_event=event,
+            allowed_events=frozenset({event}),
         )
