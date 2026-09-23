@@ -85,10 +85,14 @@ def require_automatic_trusted_gate(
     pr_number: int,
     head_sha: str,
     base_sha: str,
+    *,
+    expected_event: str = "workflow_run",
 ) -> dict[str, Any]:
     pr_number = _require_positive_int(pr_number, "pull request number")
     head_sha = _require_sha(head_sha, "head SHA")
     base_sha = _require_sha(base_sha, "base SHA")
+    if expected_event not in {"workflow_run", "schedule"}:
+        raise TrustedStatusError("Trusted PR Gate expected event is not code-owned")
 
     rows = api.list_all(f"/commits/{head_sha}/statuses", max_pages=4)
     matches: list[dict[str, Any]] = []
@@ -148,7 +152,7 @@ def require_automatic_trusted_gate(
         or _require_positive_int(run.get("id"), "trusted gate run id") != run_id
         or run.get("name") != EXPECTED_GATE_WORKFLOW_NAME
         or run.get("path") != EXPECTED_GATE_WORKFLOW_PATH
-        or run.get("event") != "workflow_run"
+        or run.get("event") != expected_event
         or run.get("head_branch") != "main"
         or _require_sha(run.get("head_sha"), "trusted gate run head SHA") != base_sha
         or run.get("status") != "completed"
