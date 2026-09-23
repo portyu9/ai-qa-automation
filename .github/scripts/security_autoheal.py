@@ -2290,7 +2290,7 @@ def _reconcile_terminal_closure(
             )
         )
         return True
-    certificate = _ensure_terminal_closure_certificate(
+    _ensure_terminal_closure_certificate(
         api,
         number,
         metadata,
