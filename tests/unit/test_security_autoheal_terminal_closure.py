@@ -34,10 +34,13 @@ HEAD = "b" * 40
 MERGE = "c" * 40
 TREE = "d" * 40
 FINGERPRINT = "e" * 64
+PROSPECTIVE = "f" * 40
 PR_NUMBER = 321
 CI_RUN_ID = 7001
 CODEQL_RUN_ID = 7002
 AUTOHEAL_RUN_ID = 7003
+GATE_RUN_ID = 7004
+TRUSTED_STATUS_ID = 7005
 
 
 def _metadata() -> dict[str, Any]:
@@ -159,6 +162,12 @@ class _TerminalApi:
                 "parents": [{"sha": BASE}, {"sha": HEAD}],
                 "tree": {"sha": TREE},
             }
+        if path == f"/git/commits/{PROSPECTIVE}":
+            return {
+                "sha": PROSPECTIVE,
+                "parents": [{"sha": BASE}, {"sha": HEAD}],
+                "tree": {"sha": TREE},
+            }
         if path == f"/git/commits/{HEAD}":
             return {"tree": {"sha": TREE}}
         if path == f"/code-scanning/alerts/{_metadata()['alert']}":
@@ -184,6 +193,19 @@ class _TerminalApi:
                     "status": "in_progress",
                     "conclusion": None,
                 }
+            if run_id == GATE_RUN_ID:
+                return {
+                    "id": GATE_RUN_ID,
+                    "name": autoheal.EXPECTED_GATE_WORKFLOW_NAME,
+                    "path": autoheal.EXPECTED_GATE_WORKFLOW_PATH,
+                    "event": "schedule",
+                    "head_branch": "main",
+                    "head_sha": BASE,
+                    "status": "completed",
+                    "conclusion": "success",
+                    "repository": {"full_name": "portyu9/ai-qa-automation"},
+                    "head_repository": {"full_name": "portyu9/ai-qa-automation"},
+                }
             for run in [*self.ci_runs, *self.codeql_runs]:
                 if run["id"] == run_id:
                     return run
@@ -200,6 +222,26 @@ class _TerminalApi:
         if path == f"/issues/{PR_NUMBER}/comments":
             assert max_pages == 2
             return self.comments
+        if path == f"/commits/{HEAD}/statuses":
+            assert max_pages == 4
+            return [
+                {
+                    "id": TRUSTED_STATUS_ID,
+                    "context": autoheal.TRUSTED_STATUS_CONTEXT,
+                    "state": "success",
+                    "description": autoheal.TRUSTED_STATUS_DESCRIPTION,
+                    "target_url": (
+                        "https://github.com/portyu9/ai-qa-automation/actions/runs/"
+                        f"{GATE_RUN_ID}?pr={PR_NUMBER}&base={BASE}&head={HEAD}"
+                        f"&merge={PROSPECTIVE}"
+                    ),
+                    "creator": {
+                        "login": autoheal.TRUSTED_STATUS_BOT_LOGIN,
+                        "id": autoheal.TRUSTED_STATUS_BOT_ID,
+                        "type": "Bot",
+                    },
+                }
+            ]
         raise AssertionError(f"unexpected list path: {path}")
 
     def post(
@@ -274,6 +316,10 @@ def test_terminal_closure_persists_exact_idempotent_certificate(
     assert certificate["ciRunId"] == CI_RUN_ID
     assert certificate["codeqlRunId"] == CODEQL_RUN_ID
     assert certificate["workflowRunId"] == AUTOHEAL_RUN_ID
+    assert certificate["trustedStatusId"] == TRUSTED_STATUS_ID
+    assert certificate["trustedGateRunId"] == GATE_RUN_ID
+    assert certificate["trustedGateEvent"] == "schedule"
+    assert certificate["trustedProspectiveMergeSha"] == PROSPECTIVE
 
     assert autoheal._reconcile_terminal_closure(api, MERGE, config) is False
     assert len(api.comments) == 1
@@ -285,15 +331,7 @@ def test_terminal_closure_dispatches_missing_exact_main_ci(
     api = _TerminalApi(ci_runs=[])
 
     assert autoheal._reconcile_terminal_closure(api, MERGE, config) is True
-    assert api.dispatches == [
-        (
-            f"/actions/workflows/{autoheal.POST_MERGE_CI_WORKFLOW}/dispatches",
-            {
-                "ref": "main",
-                "inputs": {"subject_sha": MERGE, "subject_ref": "main"},
-            },
-        )
-    ]
+    assert api.dispatches == []
     assert api.comments == []
 
 
