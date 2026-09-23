@@ -2207,7 +2207,7 @@ def _terminal_alert_is_fixed(
     raise AutohealError(f"terminal CodeQL alert has non-fixed terminal state: {state}")
 
 
-def _reconcile_terminal_closure(def _reconcile_terminal_closure(
+def _reconcile_terminal_closure(
     api: GitHubApi,
     main_sha: str,
     config: dict[str, Any],
