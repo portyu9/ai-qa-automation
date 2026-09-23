@@ -18,7 +18,8 @@ from trusted_qualification import TrustedQualificationError
 from trusted_qualification import (
     require_success as require_trusted_qualification_success,
 )
-from trusted_status import TrustedStatusError, require_automatic_trusted_gate
+from dependency_trusted_gate import require_schedule_trusted_gate
+from trusted_status import TrustedStatusError
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = ROOT / ".github" / "dependency-governance.json"
@@ -714,6 +715,15 @@ def _merge(api: GitHubApi, subject: dict[str, Any], config: dict[str, Any]) -> d
     rebound = assess(api, fresh, config, require_checks=False)
     if rebound != subject:
         raise PolicyBlock("pull request changed before merge")
+    try:
+        require_schedule_trusted_gate(
+            api,
+            subject["number"],
+            subject["headSha"],
+            subject["baseSha"],
+        )
+    except TrustedStatusError as exc:
+        raise PolicyBlock("automatic Trusted PR Gate is not yet schedule-admissible") from exc
     result = api.put(
         f"/pulls/{subject['number']}/merge",
         {"sha": subject["headSha"], "merge_method": config["mergeMethod"]},
@@ -742,15 +752,6 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
             eligible += 1
             print(json.dumps({"pr": number, "decision": "eligible", **subject}, sort_keys=True))
             if allow_merge and config["automergeEnabled"]:
-                try:
-                    require_automatic_trusted_gate(
-                        api,
-                        subject["number"],
-                        subject["headSha"],
-                        subject["baseSha"],
-                    )
-                except TrustedStatusError as exc:
-                    raise PolicyBlock("automatic Trusted PR Gate is not yet admissible") from exc
                 merge_evidence = _merge(api, subject, config)
                 print(
                     json.dumps(
