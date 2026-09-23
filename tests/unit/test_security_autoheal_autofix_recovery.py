@@ -354,6 +354,49 @@ class _ReconcileRecoveryApi(_AmbiguousCommitApi):
         return 200, {"status": "success"}
 
 
+class _StaleAlertRecoveryApi(_ReconcileRecoveryApi):
+    def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+        if path.startswith("/code-scanning/alerts?"):
+            assert max_pages == 10
+            return [_alert("src/ai_qa_automation/example.py", sha="c" * 40)]
+        return super().list_all(path, max_pages=max_pages)
+
+
+def test_stale_codeql_evidence_refreshes_before_orphan_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = _StaleAlertRecoveryApi()
+    api.branch_sha = HEAD
+    config = autoheal.load_config()
+    monkeypatch.setenv("GITHUB_REPOSITORY", config["repository"])
+    monkeypatch.setattr(autoheal, "GitHubApi", lambda token, repository: api)
+    refresh_calls: list[str] = []
+
+    def refresh(
+        api_arg: object,
+        main_sha: str,
+        config_arg: dict[str, Any],
+    ) -> dict[str, Any]:
+        assert api_arg is api
+        assert main_sha == BASE
+        assert config_arg is config
+        refresh_calls.append(main_sha)
+        return {
+            "codeqlRunId": 123,
+            "codeqlRunAttempt": 1,
+            "codeqlEvent": "workflow_dispatch",
+            "codeqlStatus": "queued",
+            "codeqlDispatched": True,
+        }
+
+    monkeypatch.setattr(autoheal, "_ensure_current_main_codeql", refresh)
+
+    assert autoheal.reconcile(config, allow_merge=False) == 0
+    assert refresh_calls == [BASE]
+    assert api.branch_sha == HEAD
+    assert api.commit_posts == 0
+
+
 def test_reconcile_recovers_ambiguous_autofix_commit_without_second_submission(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
