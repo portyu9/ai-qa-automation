@@ -34,7 +34,7 @@ from dependency_governance import (
     require_sha,
     validate_pr_identity,
 )
-from dependency_lock_compiler import compile_locks
+from dependency_lock_compiler import LockCompileError, compile_locks, validate_frozen_locks
 from trusted_status import TrustedStatusError, require_automatic_trusted_gate
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -560,12 +560,34 @@ def _require_green(api: GitHubApi, head_sha: str, config: dict[str, Any]) -> Non
 
 
 def _validate_generated_bytes(api: GitHubApi, source: dict[str, Any], head_sha: str) -> None:
-    expected = _compile(source)
-    for path, raw in expected.items():
-        observed = _contents_bytes(api, path, head_sha)
-        if observed != raw:
-            raise PolicyBlock(f"promotion path does not match deterministic regeneration: {path}")
-
+    python311 = os.environ.get("PROMOTION_PYTHON311", "")
+    python314 = os.environ.get("PROMOTION_PYTHON314", "")
+    if not python311 or not python314:
+        raise GovernanceError("PROMOTION_PYTHON311 and PROMOTION_PYTHON314 are required")
+    observed = {path: _contents_bytes(api, path, head_sha) for path in PROMOTION_PATHS}
+    if observed["pyproject.toml"] != source["pyproject"]:
+        raise PolicyBlock("promotion pyproject.toml differs from exact Dependabot source")
+    with tempfile.TemporaryDirectory(prefix="aiqa-promotion-replay-") as temporary:
+        root = Path(temporary) / "root"
+        bundle = Path(temporary) / "bundle"
+        (root / "requirements").mkdir(parents=True)
+        bundle.mkdir()
+        (root / "pyproject.toml").write_bytes(observed["pyproject.toml"])
+        shutil.copy2(
+            ROOT / "requirements" / "base-image.lock", root / "requirements" / "base-image.lock"
+        )
+        for name in (
+            "build-py311.lock",
+            "dev-py311.lock",
+            "dev-py314.lock",
+            "runtime-py311.lock",
+        ):
+            (bundle / name).write_bytes(observed[f"requirements/{name}"])
+        (bundle / "lock-authority.json").write_bytes(observed[".github/lock-authority.json"])
+        try:
+            validate_frozen_locks(root, python311, python314, bundle)
+        except LockCompileError as exc:
+            raise PolicyBlock(f"promotion frozen lock replay failed: {exc}") from exc
 
 def _require_promotion_lifecycle(
     pr: dict[str, Any],

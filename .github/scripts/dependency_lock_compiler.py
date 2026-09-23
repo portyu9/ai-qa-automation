@@ -247,9 +247,10 @@ def _verify_hash_lock(python: str, root: Path, lock: Path) -> None:
         )
 
 
-def compile_locks(root: Path, python311: str, python314: str, output_dir: Path) -> dict[str, Any]:
-    pyproject_path = root / "pyproject.toml"
-    raw = pyproject_path.read_bytes()
+
+def _requirement_graphs(
+    raw: bytes, python311: str, python314: str
+) -> dict[str, tuple[str, list[str]]]:
     if not raw or len(raw) > MAX_PYPROJECT_BYTES:
         raise LockCompileError(f"pyproject.toml must be 1..{MAX_PYPROJECT_BYTES} bytes")
     try:
@@ -301,14 +302,193 @@ def compile_locks(root: Path, python311: str, python314: str, output_dir: Path) 
             "optional requirements must not duplicate runtime dependency identities"
         )
     all_optional = [optional_requirements[name] for name in sorted(optional_requirements)]
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    graphs = {
+    return {
         "runtime-py311.lock": (python311, runtime),
         "dev-py311.lock": (python311, runtime + all_optional),
         "dev-py314.lock": (python314, runtime + all_optional),
         "build-py311.lock": (python311, [build_requires[0]]),
     }
+
+
+LOCK_ENTRY = re.compile(
+    r"^(?P<name>[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)==(?P<version>[^\\s\\\\]+) \\\\$"
+)
+LOCK_HASH = re.compile(r"^    --hash=sha256:(?P<digest>[0-9a-f]{64})$")
+
+
+def _parse_frozen_lock(raw: bytes, *, name: str) -> dict[str, tuple[str, str]]:
+    if not raw or len(raw) > MAX_REPORT_BYTES:
+        raise LockCompileError(f"frozen lock {name} exceeds bounded size")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise LockCompileError(f"frozen lock {name} is not UTF-8") from exc
+    if not text.endswith("\n"):
+        raise LockCompileError(f"frozen lock {name} lacks canonical trailing newline")
+    lines = text.splitlines()
+    if not lines or len(lines) % 2 or len(lines) > MAX_PACKAGES * 2:
+        raise LockCompileError(f"frozen lock {name} has invalid canonical entry count")
+
+    parsed: dict[str, tuple[str, str]] = {}
+    order: list[str] = []
+    for index in range(0, len(lines), 2):
+        requirement = LOCK_ENTRY.fullmatch(lines[index])
+        digest = LOCK_HASH.fullmatch(lines[index + 1])
+        if requirement is None or digest is None:
+            raise LockCompileError(f"frozen lock {name} is not canonical at entry {index // 2 + 1}")
+        package = requirement.group("name")
+        if package != _canonical_name(package):
+            raise LockCompileError(f"frozen lock {name} contains non-canonical package name")
+        if package in parsed:
+            raise LockCompileError(f"frozen lock {name} contains duplicate package {package}")
+        parsed[package] = (requirement.group("version"), digest.group("digest"))
+        order.append(package)
+    if order != sorted(order):
+        raise LockCompileError(f"frozen lock {name} is not canonically sorted")
+    return parsed
+
+
+def _authority_bytes(raw_pyproject: bytes, root: Path, locks: dict[str, bytes]) -> bytes:
+    base_image = root / "requirements" / "base-image.lock"
+    if not base_image.is_file() or base_image.is_symlink():
+        raise LockCompileError("base-image.lock must be a regular non-symlink file")
+    base_bytes = base_image.read_bytes()
+    if len(base_bytes) > 4096:
+        raise LockCompileError("base-image.lock exceeds bounded size")
+    authority = {
+        "base-image.lock": _git_blob_sha1(base_bytes),
+        **{name: _git_blob_sha1(raw) for name, raw in sorted(locks.items())},
+    }
+    source_digest = hashlib.sha256(raw_pyproject).hexdigest()
+    payload = {
+        "schemaVersion": 2,
+        "sourcePyprojectSha256Parts": _digest_parts(source_digest, expected_length=64),
+        "resolverPolicy": "pypi-https-wheel-only-double-resolve-hash-replay",
+        "lockBlobParts": {
+            name: _digest_parts(value, expected_length=40)
+            for name, value in sorted(authority.items())
+        },
+    }
+    return (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
+
+
+def _run_frozen_report(
+    python: str,
+    root: Path,
+    requirements: list[str],
+    frozen: dict[str, tuple[str, str]],
+) -> dict[str, Any]:
+    with tempfile.TemporaryDirectory(prefix="dependency-frozen-replay-") as temporary:
+        report = Path(temporary) / "report.json"
+        input_file = Path(temporary) / "requirements.in"
+        constraints = Path(temporary) / "constraints.txt"
+        _write_requirements(input_file, requirements)
+        constraints.write_text(
+            "".join(f"{name}=={version}\n" for name, (version, _) in sorted(frozen.items())),
+            encoding="utf-8",
+            newline="\n",
+        )
+        completed = subprocess.run(
+            [
+                python,
+                "-m",
+                "pip",
+                "install",
+                "--dry-run",
+                "--ignore-installed",
+                "--no-input",
+                "--only-binary=:all:",
+                "--report",
+                str(report),
+                "-r",
+                str(input_file),
+                "-c",
+                str(constraints),
+            ],
+            cwd=root,
+            env=_resolver_env(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise LockCompileError(
+                "frozen wheel-only dependency replay failed:\n" + completed.stdout[-6000:]
+            )
+        return _read_json(report)
+
+
+def _replay_frozen_graph(
+    python: str,
+    root: Path,
+    requirements: list[str],
+    lock_path: Path,
+    frozen: dict[str, tuple[str, str]],
+) -> None:
+    replay = _parse_frozen_lock(
+        _report_to_lock(_run_frozen_report(python, root, requirements, frozen)).encode(),
+        name=f"{lock_path.name} replay",
+    )
+    if replay != frozen:
+        raise LockCompileError(
+            f"frozen lock {lock_path.name} is not the exact dependency closure for declared roots"
+        )
+    _verify_hash_lock(python, root, lock_path)
+
+
+def validate_frozen_locks(
+    root: Path,
+    python311: str,
+    python314: str,
+    input_dir: Path,
+) -> dict[str, Any]:
+    pyproject_path = root / "pyproject.toml"
+    raw_pyproject = pyproject_path.read_bytes()
+    graphs = _requirement_graphs(raw_pyproject, python311, python314)
+
+    lock_bytes: dict[str, bytes] = {}
+    parsed: dict[str, dict[str, tuple[str, str]]] = {}
+    for name in sorted(graphs):
+        path = input_dir / name
+        if not path.is_file() or path.is_symlink():
+            raise LockCompileError(f"frozen lock {name} must be a regular non-symlink file")
+        raw = path.read_bytes()
+        lock_bytes[name] = raw
+        parsed[name] = _parse_frozen_lock(raw, name=name)
+
+    authority_path = input_dir / "lock-authority.json"
+    if not authority_path.is_file() or authority_path.is_symlink():
+        raise LockCompileError("lock-authority.json must be a regular non-symlink file")
+    observed_authority = authority_path.read_bytes()
+    expected_authority = _authority_bytes(raw_pyproject, root, lock_bytes)
+    if observed_authority != expected_authority:
+        raise LockCompileError("frozen lock authority does not bind the exact promotion bytes")
+
+    for name, (python, requirements) in graphs.items():
+        _replay_frozen_graph(python, root, requirements, input_dir / name, parsed[name])
+
+    return {
+        "schemaVersion": 1,
+        "project": "ai-qa-automation",
+        "pyprojectSha256": hashlib.sha256(raw_pyproject).hexdigest(),
+        "locks": {
+            name: {
+                "sha256": hashlib.sha256(lock_bytes[name]).hexdigest(),
+                "gitBlobSha1": _git_blob_sha1(lock_bytes[name]),
+            }
+            for name in sorted(lock_bytes)
+        },
+    }
+
+
+def compile_locks(root: Path, python311: str, python314: str, output_dir: Path) -> dict[str, Any]:
+    pyproject_path = root / "pyproject.toml"
+    raw = pyproject_path.read_bytes()
+    graphs = _requirement_graphs(raw, python311, python314)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
     generated: dict[str, str] = {}
     for name, (python, requirements) in graphs.items():
         generated[name] = _resolve_twice(python, root, requirements)
