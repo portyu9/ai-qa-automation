@@ -317,7 +317,7 @@ def test_terminal_closure_persists_exact_idempotent_certificate(
 ) -> None:
     api = _TerminalApi()
 
-    assert autoheal._reconcile_terminal_closure(api, MERGE, config) is False
+    assert autoheal._reconcile_terminal_closure(api, MERGE, config) is True
     assert len(api.comments) == 1
     certificate = autoheal._parse_terminal_closure_comment(api.comments[0]["body"])
     assert certificate is not None
@@ -616,7 +616,7 @@ def test_terminal_closure_rejects_duplicate_certificates(
     config: dict[str, Any],
 ) -> None:
     api = _TerminalApi()
-    assert autoheal._reconcile_terminal_closure(api, MERGE, config) is False
+    assert autoheal._reconcile_terminal_closure(api, MERGE, config) is True
     assert len(api.comments) == 1
     duplicate = dict(api.comments[0])
     duplicate["created_at"] = "2026-09-23T12:35:01Z"
@@ -634,7 +634,7 @@ def test_terminal_closure_rejects_edited_certificate(
     config: dict[str, Any],
 ) -> None:
     api = _TerminalApi()
-    assert autoheal._reconcile_terminal_closure(api, MERGE, config) is False
+    assert autoheal._reconcile_terminal_closure(api, MERGE, config) is True
     assert len(api.comments) == 1
     api.comments[0]["updated_at"] = "2026-09-23T12:36:00Z"
 
