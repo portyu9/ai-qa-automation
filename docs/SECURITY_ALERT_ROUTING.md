@@ -23,7 +23,7 @@ A route is bound to:
 - canonical repository-relative Python path and start line;
 - exact `refs/heads/main` instance SHA;
 - exact current-main SHA;
-- deterministic alert fingerprint;
+- deterministic alert fingerprint binding alert number, rule, normalized security severity, path, line, message text, and current-main SHA;
 - versioned routing policy;
 - the existing automatic security-severity floor, which may not be configured below 7;
 - exact remediation strategy/version;
