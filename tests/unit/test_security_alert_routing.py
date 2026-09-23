@@ -375,16 +375,12 @@ def test_unreviewed_path_has_explicit_nonmutation_route() -> None:
         ),
         (
             lambda config: config.update(
-                neverModifyPaths=[
-                    path for path in config["neverModifyPaths"] if path != ".github/"
-                ]
+                neverModifyPaths=[path for path in config["neverModifyPaths"] if path != ".github/"]
             ),
             "code-owned protected roots",
         ),
         (
-            lambda config: config["routingPolicy"].update(
-                modelStrategy="github-codeql-autofix-v2"
-            ),
+            lambda config: config["routingPolicy"].update(modelStrategy="github-codeql-autofix-v2"),
             "code-owned strategy",
         ),
     ),
@@ -466,9 +462,7 @@ def test_routing_policy_is_bound_to_current_autoheal_strategy_constants() -> Non
 
     assert set(config["allowedRules"]) == autoheal.SAFE_RULES
     assert policy["modelStrategy"] == autoheal.MODEL_AUTOFIX_STRATEGY
-    assert {
-        entry["strategy"] for entry in policy["deterministicStrategies"]
-    } == {
+    assert {entry["strategy"] for entry in policy["deterministicStrategies"]} == {
         autoheal.OVERLY_PERMISSIVE_TEST_STRATEGY,
         autoheal.CLEAR_TEXT_LOG_STRATEGY,
         autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY,
@@ -513,10 +507,7 @@ def test_concurrent_alert_batch_is_bounded_unique_and_deterministically_ordered(
 
 
 def test_attempt_accounting_has_resource_bounds() -> None:
-    attempts = {
-        f"strategy-{index}-v1": 0
-        for index in range(routing.MAX_ATTEMPT_STRATEGIES + 1)
-    }
+    attempts = {f"strategy-{index}-v1": 0 for index in range(routing.MAX_ATTEMPT_STRATEGIES + 1)}
     with pytest.raises(routing.RoutingPolicyError, match="bounded strategy"):
         routing.route_alert(
             _alert(),
