@@ -55,6 +55,32 @@ NEVER_MODIFY_PATHS = frozenset(
 MODEL_AUTOFIX_STRATEGY = "github-codeql-autofix-v1"
 PROTECTED_REMEDIATION_STRATEGY = "protected-independent-remediation-v1"
 NO_REVIEWED_STRATEGY = "no-reviewed-strategy-v1"
+CODE_OWNED_DETERMINISTIC_STRATEGIES = (
+    (
+        "py/overly-permissive-file",
+        "deterministic-overly-permissive-test-file-v1",
+        (),
+        ("tests/",),
+    ),
+    (
+        "py/clear-text-logging-sensitive-data",
+        "deterministic-clear-text-log-v1",
+        (
+            "scripts/auto_trusted_report.py",
+            "scripts/ci_contract_base.py",
+            "scripts/verify_ci_contract.py",
+            "scripts/verify_docs.py",
+            "scripts/verify_fork_cloud_authority.py",
+        ),
+        (),
+    ),
+    (
+        "py/reflective-xss",
+        "deterministic-reference-sut-reflective-xss-v1",
+        ("examples/reference_sut/app.py",),
+        (),
+    ),
+)
 
 SECURITY_SEVERITY_FLOORS = {
     "critical": 9.0,
@@ -281,6 +307,33 @@ def _routing_config(config: Mapping[str, Any]) -> dict[str, Any]:
                 "paths": tuple(paths),
                 "pathPrefixes": tuple(prefixes),
             }
+        )
+
+    normalized_strategies = tuple(
+        sorted(
+            (
+                entry["rule"],
+                entry["strategy"],
+                tuple(sorted(entry["paths"])),
+                tuple(sorted(entry["pathPrefixes"])),
+            )
+            for entry in strategies
+        )
+    )
+    expected_strategies = tuple(
+        sorted(
+            (
+                rule,
+                strategy,
+                tuple(sorted(paths)),
+                tuple(sorted(prefixes)),
+            )
+            for rule, strategy, paths, prefixes in CODE_OWNED_DETERMINISTIC_STRATEGIES
+        )
+    )
+    if normalized_strategies != expected_strategies:
+        raise RoutingPolicyError(
+            "deterministicStrategies must equal the code-owned strategy matrix"
         )
 
     return {
