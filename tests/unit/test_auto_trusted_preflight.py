@@ -350,6 +350,26 @@ def test_governed_bot_lane_requires_exact_identity_and_branch_grammar(
     assert preflight._bot_lane(pr) == expected_lane
 
 
+@pytest.mark.parametrize(
+    "branch",
+    [
+        "dependabot/github_actions/actions/checkout-7",
+        "automation/dependency-promotion-171-abcdef123456",
+        "automation/codeql-autoheal-7-abcdef123456",
+    ],
+)
+def test_advanced_security_reporting_actor_has_no_governed_lane(branch: str) -> None:
+    pr = {
+        "user": {
+            "login": "github-advanced-security[bot]",
+            "id": preflight.GITHUB_ACTIONS_USER_ID,
+        },
+        "head": {"ref": branch},
+    }
+
+    assert preflight._bot_lane(pr) is None
+
+
 def test_governed_bot_lane_rejects_lookalike_identity() -> None:
     pr = {
         "user": {"login": preflight.GITHUB_ACTIONS_LOGIN, "id": 1},
