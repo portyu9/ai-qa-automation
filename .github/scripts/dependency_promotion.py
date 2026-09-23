@@ -742,6 +742,7 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
                         sort_keys=True,
                     )
                 )
+                return 0
         except PolicyBlock as exc:
             reason = str(exc)
             print(
