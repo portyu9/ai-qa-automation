@@ -2236,6 +2236,30 @@ def _terminal_closure_certificate(
         raise PolicyBlock("terminal repair path is invalid")
     if not isinstance(strategy, str) or not strategy:
         raise PolicyBlock("terminal repair strategy is invalid")
+    route_record_digest = metadata.get("routeRecordDigest")
+    if (
+        not isinstance(route_record_digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", route_record_digest) is None
+    ):
+        raise PolicyBlock("terminal repair route record digest is invalid")
+    for key in ("routeDecision", "routeAuthority", "routingPolicyVersion"):
+        value = metadata.get(key)
+        if not isinstance(value, str) or not value:
+            raise PolicyBlock(f"terminal repair {key} is invalid")
+    if metadata.get("routeAutofixEligibility") not in {"available", "unavailable", "unknown"}:
+        raise PolicyBlock("terminal repair Autofix routing evidence is invalid")
+    route_evidence = {
+        key: metadata.get(key)
+        for key in (
+            "routePlanDigest",
+            "routePlanRunId",
+            "routePlanRunAttempt",
+            "routeArtifactId",
+            "routeArtifactName",
+            "routeArtifactDigest",
+        )
+    }
+    _validate_route_evidence_fields(route_evidence)
     base_sha = _require_sha(metadata.get("base"), "terminal repair base SHA")
     head_sha = _require_sha(metadata.get("head"), "terminal repair head SHA")
     merge_sha = _require_sha(merge_evidence.get("mergeSha"), "terminal repair merge SHA")
@@ -2257,7 +2281,7 @@ def _terminal_closure_certificate(
         if not isinstance(value, int) or isinstance(value, bool) or value < 1:
             raise PolicyBlock(f"{label} is invalid")
     return {
-        "version": 1,
+        "version": 2,
         "outcome": "resolved",
         "pr": number,
         "alert": alert,
@@ -2269,6 +2293,12 @@ def _terminal_closure_certificate(
         "sourceTreeSha": source_tree,
         "fingerprint": fingerprint,
         "strategy": strategy,
+        "routeDecision": metadata["routeDecision"],
+        "routeAuthority": metadata["routeAuthority"],
+        "routeRecordDigest": route_record_digest,
+        "routingPolicyVersion": metadata["routingPolicyVersion"],
+        "routeAutofixEligibility": metadata["routeAutofixEligibility"],
+        **route_evidence,
         "alertState": "fixed",
         "ciWorkflowId": POST_MERGE_CI_WORKFLOW_ID,
         "ciRunId": int(ci_run["id"]),
@@ -2315,6 +2345,9 @@ def _terminal_certificate_static_matches(
     except PolicyBlock:
         return False
     positive_int_fields = (
+        "routePlanRunId",
+        "routePlanRunAttempt",
+        "routeArtifactId",
         "ciRunId",
         "codeqlRunId",
         "trustedStatusId",
@@ -2322,7 +2355,7 @@ def _terminal_certificate_static_matches(
         "workflowRunId",
     )
     return (
-        certificate.get("version") == 1
+        certificate.get("version") == 2
         and certificate.get("outcome") == "resolved"
         and certificate.get("pr") == number
         and certificate.get("alert") == metadata.get("alert")
@@ -2330,6 +2363,30 @@ def _terminal_certificate_static_matches(
         and certificate.get("path") == metadata.get("path")
         and certificate.get("fingerprint") == metadata.get("fingerprint")
         and certificate.get("strategy") == _marker_strategy(metadata)
+        and certificate.get("routeDecision") == metadata.get("routeDecision")
+        and certificate.get("routeAuthority") == metadata.get("routeAuthority")
+        and certificate.get("routeRecordDigest") == metadata.get("routeRecordDigest")
+        and certificate.get("routingPolicyVersion") == metadata.get("routingPolicyVersion")
+        and certificate.get("routeAutofixEligibility")
+        == metadata.get("routeAutofixEligibility")
+        and certificate.get("routePlanDigest") == metadata.get("routePlanDigest")
+        and certificate.get("routePlanRunId") == metadata.get("routePlanRunId")
+        and certificate.get("routePlanRunAttempt") == metadata.get("routePlanRunAttempt")
+        and certificate.get("routeArtifactId") == metadata.get("routeArtifactId")
+        and certificate.get("routeArtifactName") == metadata.get("routeArtifactName")
+        and certificate.get("routeArtifactDigest") == metadata.get("routeArtifactDigest")
+        and isinstance(certificate.get("routeRecordDigest"), str)
+        and re.fullmatch(r"[0-9a-f]{64}", str(certificate["routeRecordDigest"])) is not None
+        and isinstance(certificate.get("routePlanDigest"), str)
+        and re.fullmatch(r"[0-9a-f]{64}", str(certificate["routePlanDigest"])) is not None
+        and isinstance(certificate.get("routeArtifactDigest"), str)
+        and ROUTE_ARTIFACT_DIGEST_RE.fullmatch(str(certificate["routeArtifactDigest"]))
+        is not None
+        and certificate.get("routeArtifactName")
+        == (
+            f"{ROUTE_PLAN_ARTIFACT_PREFIX}-{certificate.get('routePlanRunId')}-"
+            f"{certificate.get('routePlanRunAttempt')}"
+        )
         and certificate.get("alertState") == "fixed"
         and observed_base == expected_base
         and observed_head == expected_head
@@ -2642,6 +2699,20 @@ def _verify_merged_repair_subject(
     commit = api.get(f"/commits/{head_sha}")
     if not _owned_generated_repair_commit(commit, head_sha):
         raise PolicyBlock("terminal repair head lacks exact GitHub Actions ownership")
+    route_record_digest = metadata.get("routeRecordDigest")
+    route_plan_digest = metadata.get("routePlanDigest")
+    if (
+        not isinstance(route_record_digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", route_record_digest) is None
+        or not isinstance(route_plan_digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", route_plan_digest) is None
+        or _generated_commit_route_digest(commit) != route_record_digest
+        or _generated_commit_plan_digest(commit) != route_plan_digest
+    ):
+        raise PolicyBlock(
+            "terminal repair commit is not immutably bound to its persisted route evidence"
+        )
+    _require_marker_route_artifact(api, metadata, base_sha)
     merge_evidence = _finalize_post_merge_evidence(
         api,
         {"sha": merge_sha},
