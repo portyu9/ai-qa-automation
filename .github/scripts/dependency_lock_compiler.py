@@ -175,6 +175,10 @@ def _report_to_lock(payload: dict[str, Any]) -> str:
         if not isinstance(name, str) or not name or not isinstance(version, str) or not version:
             raise LockCompileError("pip report package identity/version is invalid")
         canonical = _canonical_name(name)
+        if re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", canonical) is None:
+            raise LockCompileError("pip report package name is not canonical lock syntax")
+        if LOCK_VERSION.fullmatch(version) is None:
+            raise LockCompileError("pip report package version is not canonical lock syntax")
         if row.get("is_yanked") is not False:
             raise LockCompileError(
                 f"resolved package {canonical} is yanked or lacks explicit non-yanked provenance"
