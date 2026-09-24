@@ -47,7 +47,7 @@ EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
     "d809771ced237ec2d02d52b0eb29432f14c6a90b"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
-    "c6b39330d614be31c36594b75f7f1615b6adb37b"  # pragma: allowlist secret
+    "ca817d361af38d47fb36fc0ce94190a5438546a6"  # pragma: allowlist secret
 )
 EXPECTED_CODEQL_MAJOR = 4
 CODEQL_ACTION_RE = re.compile(
@@ -669,6 +669,7 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         "          retention-days: 14",
         "      - name: Restore exact-run route plan from prior read-only job",
         "        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8",
+        "          artifact-ids: ${{ needs.route-plan.outputs.artifact-id }}",
         "      - name: Reconcile exact-subject CodeQL remediations from persisted routes",
         "          --reconcile",
         "          --allow-merge",
