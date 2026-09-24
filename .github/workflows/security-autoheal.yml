@@ -111,4 +111,4 @@ jobs:
           --route-plan artifacts/security-autoheal-route-plan/route-plan.json
           --route-artifact-id ${{ steps.route-plan-artifact.outputs.artifact-id }}
           --route-artifact-name security-autoheal-route-plan-${{ github.run_id }}-${{ github.run_attempt }}
-          --route-artifact-digest ${{ steps.route-plan-artifact.outputs.artifact-digest }}
+          --route-artifact-digest sha256:${{ steps.route-plan-artifact.outputs.artifact-digest }}
