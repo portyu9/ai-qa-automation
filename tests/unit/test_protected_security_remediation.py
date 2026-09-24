@@ -370,3 +370,134 @@ def test_generated_protected_pr_rejects_commit_provenance_tamper() -> None:
             expected_bot_id=BOT_ID,
             config=routing.load_config(),
         )
+
+
+def test_generated_protected_pr_rejects_replay_after_main_moves() -> None:
+    class MovedMainApi(_AdmissionApi):
+        def get(self, path: str) -> dict[str, Any]:
+            if path == "/branches/main":
+                return {"commit": {"sha": "c" * 40}}
+            return super().get(path)
+
+    api = MovedMainApi()
+    with pytest.raises(author.ProtectedRemediationError, match="stale relative to current main"):
+        author.validate_generated_pr(
+            api,
+            api.pr,
+            expected_bot_login=BOT_LOGIN,
+            expected_bot_id=BOT_ID,
+            config=routing.load_config(),
+        )
+
+
+def test_multiple_active_generated_repairs_fail_closed() -> None:
+    class MultipleRepairsApi:
+        def list_all(self, path: str, *, max_pages: int = 4) -> list[dict[str, Any]]:
+            assert path == "/pulls?state=open&sort=created&direction=asc"
+            assert max_pages == 1
+            return [
+                {
+                    "user": {"login": BOT_LOGIN, "id": BOT_ID, "type": "Bot"},
+                    "head": {
+                        "ref": "automation/protected-security-remediation-17-"
+                        + ("a" * 64)
+                        + "-a1"
+                    },
+                },
+                {
+                    "user": {"login": BOT_LOGIN, "id": BOT_ID, "type": "Bot"},
+                    "head": {
+                        "ref": "automation/protected-security-remediation-18-"
+                        + ("b" * 64)
+                        + "-a1"
+                    },
+                },
+            ]
+
+    with pytest.raises(author.ProtectedRemediationError, match="multiple active"):
+        author._open_generated_repairs(
+            MultipleRepairsApi(),
+            bot_login=BOT_LOGIN,
+            bot_id=BOT_ID,
+        )
+
+
+def test_guarded_merge_revalidates_and_rechecks_trusted_gate_immediately_before_merge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    merge_sha = "c" * 40
+    tree_sha = "d" * 40
+    events: list[str] = []
+    live = {
+        "number": 301,
+        "headSha": HEAD,
+        "baseSha": MAIN,
+        "alertNumber": 17,
+        "targetPath": ".github/scripts/security_autoheal.py",
+        "routeRecordDigest": "e" * 64,
+        "planDigest": "f" * 64,
+        "authorStrategy": "protected-security-autoheal-clear-text-log-v1",
+    }
+
+    class MergeApi:
+        merged = False
+
+        def get(self, path: str) -> dict[str, Any]:
+            if path == "/pulls/301":
+                return {"number": 301}
+            if path == "/branches/main":
+                assert self.merged
+                return {"commit": {"sha": merge_sha}}
+            if path == f"/git/commits/{merge_sha}":
+                return {
+                    "parents": [{"sha": MAIN}, {"sha": HEAD}],
+                    "tree": {"sha": tree_sha},
+                }
+            if path == f"/git/commits/{HEAD}":
+                return {"tree": {"sha": tree_sha}}
+            raise AssertionError(path)
+
+        def put(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            assert path == "/pulls/301/merge"
+            assert payload == {"sha": HEAD, "merge_method": "merge"}
+            events.append("merge")
+            self.merged = True
+            return {"merged": True, "sha": merge_sha}
+
+    def fake_validate(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        events.append("validate")
+        return dict(live)
+
+    def fake_gate(
+        api: Any,
+        pr_number: int,
+        head_sha: str,
+        base_sha: str,
+    ) -> dict[str, Any]:
+        assert pr_number == 301
+        assert head_sha == HEAD
+        assert base_sha == MAIN
+        events.append("gate")
+        return {"state": "success"}
+
+    monkeypatch.setattr(author, "validate_generated_pr", fake_validate)
+    monkeypatch.setattr(author, "require_automatic_trusted_gate", fake_gate)
+    api = MergeApi()
+
+    result = author._merge_repair(
+        api,
+        api,
+        {"number": 301},
+        bot_login=BOT_LOGIN,
+        bot_id=BOT_ID,
+    )
+
+    assert events == ["validate", "gate", "validate", "gate", "merge"]
+    assert result == {
+        "pr": 301,
+        "mergeSha": merge_sha,
+        "headSha": HEAD,
+        "baseSha": MAIN,
+        "alertNumber": 17,
+        "decision": "protected-repair-merged",
+    }
