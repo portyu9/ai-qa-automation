@@ -255,7 +255,6 @@ def revalidate_repair_plan(
     return repaired
 
 
-
 def _require_positive_int(value: Any, label: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise ProtectedRemediationError(f"{label} must be a positive integer")
@@ -263,12 +262,10 @@ def _require_positive_int(value: Any, label: str) -> int:
 
 
 def _require_author_identity(login: Any, user_id: Any) -> tuple[str, int]:
-    if (
-        not isinstance(login, str)
-        or not login.endswith("[bot]")
-        or login in DISALLOWED_AUTHOR_BOTS
-    ):
-        raise ProtectedRemediationError("protected author App login is not an independent bot identity")
+    if not isinstance(login, str) or not login.endswith("[bot]") or login in DISALLOWED_AUTHOR_BOTS:
+        raise ProtectedRemediationError(
+            "protected author App login is not an independent bot identity"
+        )
     return login, _require_positive_int(user_id, "protected author App user id")
 
 
@@ -301,7 +298,9 @@ def _commit_trailer(message: Any, prefix: str, label: str) -> str:
         raise ProtectedRemediationError("protected repair commit message is malformed")
     values = [line.removeprefix(prefix) for line in message.splitlines() if line.startswith(prefix)]
     if len(values) != 1:
-        raise ProtectedRemediationError(f"protected repair commit has invalid {label} trailer count")
+        raise ProtectedRemediationError(
+            f"protected repair commit has invalid {label} trailer count"
+        )
     return _require_digest(values[0], f"protected repair commit {label}")
 
 
@@ -316,7 +315,9 @@ def marker(record: Mapping[str, Any], plan: Mapping[str, Any], *, head_sha: str)
         "routeRecord": dict(record),
         "repairPlan": dict(plan),
     }
-    return MARKER_PREFIX + json.dumps(metadata, separators=(",", ":"), sort_keys=True) + MARKER_SUFFIX
+    return (
+        MARKER_PREFIX + json.dumps(metadata, separators=(",", ":"), sort_keys=True) + MARKER_SUFFIX
+    )
 
 
 def parse_marker(body: Any) -> dict[str, Any] | None:
@@ -394,9 +395,19 @@ def validate_generated_pr(
         raise ProtectedRemediationError("protected repair is stale relative to current main")
 
     metadata = parse_marker(pr.get("body"))
-    if metadata is None or set(metadata) != {"version", "base", "head", "routeRecord", "repairPlan"}:
+    if metadata is None or set(metadata) != {
+        "version",
+        "base",
+        "head",
+        "routeRecord",
+        "repairPlan",
+    }:
         raise ProtectedRemediationError("protected repair marker is missing or malformed")
-    if metadata.get("version") != 1 or metadata.get("base") != base_sha or metadata.get("head") != head_sha:
+    if (
+        metadata.get("version") != 1
+        or metadata.get("base") != base_sha
+        or metadata.get("head") != head_sha
+    ):
         raise ProtectedRemediationError("protected repair marker subject drifted")
     record = metadata.get("routeRecord")
     plan = metadata.get("repairPlan")
@@ -406,10 +417,15 @@ def validate_generated_pr(
     canonical_plan(plan)
     if plan.get("baseSha") != base_sha or plan.get("targetPath") != strategy.path:
         raise ProtectedRemediationError("protected repair plan subject drifted")
-    if plan.get("changedFiles") != [strategy.path] or plan.get("maxChangedFiles") != MAX_CHANGED_FILES:
+    if (
+        plan.get("changedFiles") != [strategy.path]
+        or plan.get("maxChangedFiles") != MAX_CHANGED_FILES
+    ):
         raise ProtectedRemediationError("protected repair changed-file authority drifted")
     if head.get("ref") != branch_name(record):
-        raise ProtectedRemediationError("protected repair branch does not match exact route subject")
+        raise ProtectedRemediationError(
+            "protected repair branch does not match exact route subject"
+        )
 
     alert_number = _require_positive_int(record.get("alertNumber"), "protected route alert number")
     alert = api.get(f"/code-scanning/alerts/{alert_number}")
@@ -430,12 +446,16 @@ def validate_generated_pr(
     except RoutingPolicyError as exc:
         raise ProtectedRemediationError(f"live protected route reproof failed: {exc}") from exc
     if rebound != record:
-        raise ProtectedRemediationError("live protected route drifted from persisted repair evidence")
+        raise ProtectedRemediationError(
+            "live protected route drifted from persisted repair evidence"
+        )
 
     base_source = _contents_bytes(api, strategy.path, base_sha)
     repaired = revalidate_repair_plan(plan, base_source, record, main_sha=base_sha)
     if _contents_bytes(api, strategy.path, head_sha) != repaired:
-        raise ProtectedRemediationError("protected repair head bytes do not equal deterministic output")
+        raise ProtectedRemediationError(
+            "protected repair head bytes do not equal deterministic output"
+        )
 
     files = api.list_all(f"/pulls/{number}/files", max_pages=2)
     if (
@@ -444,22 +464,32 @@ def validate_generated_pr(
         or files[0].get("filename") != strategy.path
         or files[0].get("status") != "modified"
     ):
-        raise ProtectedRemediationError("protected repair diff escaped the exact one-file authority")
+        raise ProtectedRemediationError(
+            "protected repair diff escaped the exact one-file authority"
+        )
 
     commit = api.get(f"/commits/{head_sha}")
     if not isinstance(commit, dict) or commit.get("sha") != head_sha:
         raise ProtectedRemediationError("protected repair head commit is missing")
     author = commit.get("author") or {}
     parents = commit.get("parents")
-    message = ((commit.get("commit") or {}).get("message"))
+    message = (commit.get("commit") or {}).get("message")
     if (
         author.get("login") != expected_bot_login
         or author.get("id") != expected_bot_id
         or author.get("type") != "Bot"
     ):
-        raise ProtectedRemediationError("protected repair commit author is not the exact author App")
-    if not isinstance(parents, list) or len(parents) != 1 or (parents[0] or {}).get("sha") != base_sha:
-        raise ProtectedRemediationError("protected repair commit is not directly parented to exact main")
+        raise ProtectedRemediationError(
+            "protected repair commit author is not the exact author App"
+        )
+    if (
+        not isinstance(parents, list)
+        or len(parents) != 1
+        or (parents[0] or {}).get("sha") != base_sha
+    ):
+        raise ProtectedRemediationError(
+            "protected repair commit is not directly parented to exact main"
+        )
     if _commit_trailer(message, ROUTE_TRAILER_PREFIX, "route digest") != record["recordDigest"]:
         raise ProtectedRemediationError("protected repair commit route digest drifted")
     if _commit_trailer(message, PLAN_TRAILER_PREFIX, "plan digest") != plan["planDigest"]:
@@ -482,7 +512,9 @@ def validate_generated_pr(
 class GitHubApi:
     def __init__(self, token: str, repository: str) -> None:
         if repository != EXPECTED_REPOSITORY:
-            raise ProtectedRemediationError("protected remediation is bound to the reviewed repository")
+            raise ProtectedRemediationError(
+                "protected remediation is bound to the reviewed repository"
+            )
         if not token:
             raise ProtectedRemediationError("protected remediation GitHub token is required")
         self.token = token
@@ -520,9 +552,7 @@ class GitHubApi:
             raw = exc.read(MAX_API_BYTES + 1)
             status = exc.code
         except urllib.error.URLError as exc:
-            raise ProtectedRemediationError(
-                f"GitHub API {method} transport failure"
-            ) from exc
+            raise ProtectedRemediationError(f"GitHub API {method} transport failure") from exc
         if len(raw) > MAX_API_BYTES:
             raise ProtectedRemediationError("GitHub API response exceeded bounded ingestion")
         if not raw:
@@ -619,11 +649,15 @@ def _attempt_count(
             continue
         metadata = parse_marker(pr.get("body"))
         if metadata is None:
-            raise ProtectedRemediationError("generated protected repair has malformed history marker")
+            raise ProtectedRemediationError(
+                "generated protected repair has malformed history marker"
+            )
         record = metadata.get("routeRecord")
         plan = metadata.get("repairPlan")
         if not isinstance(record, dict) or not isinstance(plan, dict):
-            raise ProtectedRemediationError("generated protected repair history evidence is malformed")
+            raise ProtectedRemediationError(
+                "generated protected repair history evidence is malformed"
+            )
         try:
             canonical_record(record)
             canonical_plan(plan)
@@ -820,14 +854,14 @@ def _create_repair_commit(
         ):
             raise ProtectedRemediationError("GitHub did not acknowledge exact protected repair ref")
     else:
-        raise ProtectedRemediationError(
-            f"protected repair ref lookup failed with status {status}"
-        )
+        raise ProtectedRemediationError(f"protected repair ref lookup failed with status {status}")
 
     commit = read_api.get(f"/commits/{commit_sha}")
     author = (commit or {}).get("author") if isinstance(commit, dict) else None
     parents = (commit or {}).get("parents") if isinstance(commit, dict) else None
-    message = ((commit or {}).get("commit") or {}).get("message") if isinstance(commit, dict) else None
+    message = (
+        ((commit or {}).get("commit") or {}).get("message") if isinstance(commit, dict) else None
+    )
     if (
         not isinstance(author, dict)
         or author.get("login") != bot_login
@@ -838,18 +872,20 @@ def _create_repair_commit(
         or (parents[0] or {}).get("sha") != record.get("baseSha")
         or message != repair_commit_message(record, plan)
     ):
-        raise ProtectedRemediationError("protected repair ref does not resolve to exact App-authored commit")
+        raise ProtectedRemediationError(
+            "protected repair ref does not resolve to exact App-authored commit"
+        )
     if _contents_bytes(read_api, str(plan["targetPath"]), commit_sha) != repaired:
-        raise ProtectedRemediationError("protected repair ref bytes differ from deterministic output")
+        raise ProtectedRemediationError(
+            "protected repair ref bytes differ from deterministic output"
+        )
     return commit_sha
 
 
 def _find_pull_for_branch(api: GitHubApi, branch: str) -> dict[str, Any] | None:
     pulls = api.list_all("/pulls?state=all&sort=created&direction=desc", max_pages=1)
     matches = [
-        pr
-        for pr in pulls
-        if isinstance(pr.get("head"), dict) and pr["head"].get("ref") == branch
+        pr for pr in pulls if isinstance(pr.get("head"), dict) and pr["head"].get("ref") == branch
     ]
     if len(matches) > 1:
         raise ProtectedRemediationError("protected repair branch maps to multiple pull requests")
@@ -879,8 +915,12 @@ def _ensure_repair_pr(
     existing = _find_pull_for_branch(read_api, branch)
     if existing is not None:
         if existing.get("state") != "open":
-            raise ProtectedRemediationError("protected repair branch is already bound to a closed PR")
-        pr = read_api.get(f"/pulls/{_require_positive_int(existing.get('number'), 'repair PR number')}")
+            raise ProtectedRemediationError(
+                "protected repair branch is already bound to a closed PR"
+            )
+        pr = read_api.get(
+            f"/pulls/{_require_positive_int(existing.get('number'), 'repair PR number')}"
+        )
     else:
         body = (
             "Automated independent protected-control-plane remediation. "
@@ -910,13 +950,9 @@ def _ensure_repair_pr(
     return dict(pr)
 
 
-def _open_generated_repairs(
-    api: GitHubApi, *, bot_login: str, bot_id: int
-) -> list[dict[str, Any]]:
+def _open_generated_repairs(api: GitHubApi, *, bot_login: str, bot_id: int) -> list[dict[str, Any]]:
     pulls = api.list_all("/pulls?state=open&sort=created&direction=asc", max_pages=1)
-    rows = [
-        pr for pr in pulls if _generated_bot_pull(pr, login=bot_login, user_id=bot_id)
-    ]
+    rows = [pr for pr in pulls if _generated_bot_pull(pr, login=bot_login, user_id=bot_id)]
     if len(rows) > 1:
         raise ProtectedRemediationError("multiple active protected repair PRs are not permitted")
     return rows
@@ -971,8 +1007,7 @@ def _merge_repair(
     head_commit = read_api.get(f"/git/commits/{live['headSha']}")
     if (
         not isinstance(parents, list)
-        or [((parent or {}).get("sha")) for parent in parents]
-        != [live["baseSha"], live["headSha"]]
+        or [((parent or {}).get("sha")) for parent in parents] != [live["baseSha"], live["headSha"]]
         or ((merge_commit or {}).get("tree") or {}).get("sha")
         != ((head_commit or {}).get("tree") or {}).get("sha")
     ):
@@ -1084,8 +1119,13 @@ def reconcile(*, allow_merge: bool) -> int:
         )
         return 0
 
-    print(json.dumps({"decision": "no-protected-repair-candidate", "mainSha": main_sha}, sort_keys=True))
+    print(
+        json.dumps(
+            {"decision": "no-protected-repair-candidate", "mainSha": main_sha}, sort_keys=True
+        )
+    )
     return 0
+
 
 def self_test() -> None:
     if not REPAIR_STRATEGIES:
