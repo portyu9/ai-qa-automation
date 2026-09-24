@@ -155,6 +155,8 @@ def _run_report(python: str, root: Path, requirements: list[str]) -> dict[str, A
 
 
 def _report_to_lock(payload: dict[str, Any]) -> str:
+    if payload.get("version") != "1":
+        raise LockCompileError("pip report version is missing or unsupported")
     installs = payload.get("install")
     if not isinstance(installs, list):
         raise LockCompileError("pip report install field must be a list")
@@ -176,6 +178,10 @@ def _report_to_lock(payload: dict[str, Any]) -> str:
         if row.get("is_yanked") is not False:
             raise LockCompileError(
                 f"resolved package {canonical} is yanked or lacks explicit non-yanked provenance"
+            )
+        if row.get("is_direct") is not False:
+            raise LockCompileError(
+                f"resolved package {canonical} uses direct or ambiguous artifact provenance"
             )
         download = row.get("download_info")
         if not isinstance(download, dict):
