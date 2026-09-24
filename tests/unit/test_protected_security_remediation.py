@@ -323,9 +323,7 @@ def test_protected_author_identity_cannot_collapse_into_existing_authorities(
 
 
 def test_generated_protected_pr_rejects_author_diff_and_live_alert_drift() -> None:
-    wrong_author = _AdmissionApi(
-        commit_author={"login": "portyu9", "id": 35150859, "type": "User"}
-    )
+    wrong_author = _AdmissionApi(commit_author={"login": "portyu9", "id": 35150859, "type": "User"})
     with pytest.raises(author.ProtectedRemediationError, match="commit author"):
         author.validate_generated_pr(
             wrong_author,
