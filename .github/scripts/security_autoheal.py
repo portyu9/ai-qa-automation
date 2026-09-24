@@ -828,7 +828,10 @@ def _recoverable_model_autofix_branches(
             subject = _subject_from_route(provisional)
         except (RoutingPolicyError, PolicyBlock):
             continue
-        if provisional.get("strategy") != MODEL_AUTOFIX_STRATEGY:
+        if (
+            provisional.get("strategy") != MODEL_AUTOFIX_STRATEGY
+            or provisional.get("decision") != "blocked-external-evidence"
+        ):
             continue
         if provisional.get("protected") is True:
             continue
@@ -1233,10 +1236,7 @@ def _validate_route_evidence_fields(route_evidence: dict[str, Any]) -> None:
         or route_evidence.get("routeArtifactName")
         != f"{ROUTE_PLAN_ARTIFACT_PREFIX}-{run_id}-{run_attempt}"
         or not isinstance(route_evidence.get("routeArtifactDigest"), str)
-        or ROUTE_ARTIFACT_DIGEST_RE.fullmatch(
-            str(route_evidence["routeArtifactDigest"])
-        )
-        is None
+        or ROUTE_ARTIFACT_DIGEST_RE.fullmatch(str(route_evidence["routeArtifactDigest"])) is None
     ):
         raise PolicyBlock("repair route artifact evidence is malformed")
 
@@ -1458,8 +1458,7 @@ def _require_marker_route_artifact(
         or isinstance(artifact_id, bool)
         or artifact_id < 1
         or not isinstance(artifact_name, str)
-        or artifact_name
-        != f"{ROUTE_PLAN_ARTIFACT_PREFIX}-{run_id}-{run_attempt}"
+        or artifact_name != f"{ROUTE_PLAN_ARTIFACT_PREFIX}-{run_id}-{run_attempt}"
         or not isinstance(artifact_digest, str)
         or ROUTE_ARTIFACT_DIGEST_RE.fullmatch(artifact_digest) is None
     ):
@@ -3086,9 +3085,12 @@ def _autofix_intent_identity(record: dict[str, Any]) -> tuple[str, str, int]:
         "strategy": MODEL_AUTOFIX_STRATEGY,
         "attempt": attempt,
     }
-    external_id = "aiqa-autofix-intent:" + hashlib.sha256(
-        json.dumps(material, separators=(",", ":"), sort_keys=True).encode("utf-8")
-    ).hexdigest()
+    external_id = (
+        "aiqa-autofix-intent:"
+        + hashlib.sha256(
+            json.dumps(material, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        ).hexdigest()
+    )
     return name, external_id, attempt
 
 
@@ -3789,9 +3791,7 @@ def reconcile(
 
             subject = _subject_from_route(record)
             if prior >= config["maxAttemptsPerAlert"]:
-                raise PolicyBlock(
-                    "persisted route exceeded bounded automatic remediation attempts"
-                )
+                raise PolicyBlock("persisted route exceeded bounded automatic remediation attempts")
             _create_repair(
                 api,
                 subject,
