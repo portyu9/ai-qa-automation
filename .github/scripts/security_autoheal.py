@@ -58,6 +58,11 @@ TRANSIENT_GET_ATTEMPTS = 3
 TRANSIENT_GET_DELAY_SECONDS = 1
 GITHUB_ACTIONS_LOGIN = "github-actions[bot]"
 GITHUB_ACTIONS_USER_ID = 41898282
+GITHUB_ACTIONS_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
+GITHUB_WEB_FLOW_LOGIN = "web-flow"
+GITHUB_WEB_FLOW_USER_ID = 19864447
+GITHUB_COMMITTER_NAME = "GitHub"
+GITHUB_COMMITTER_EMAIL = "noreply@github.com"
 SECURITY_AUTOHEAL_WORKFLOW_ID = 359898109
 SECURITY_AUTOHEAL_WORKFLOW_PATH = ".github/workflows/security-autoheal.yml"
 SECURITY_AUTOHEAL_RECONCILE_EVENTS = {"workflow_run", "schedule", "workflow_dispatch"}
@@ -1059,7 +1064,26 @@ def _require_exact_copilot_autofix_commit(
     repository_commit = api.get(f"/commits/{head_sha}")
     if not _owned_generated_repair_commit(repository_commit, head_sha):
         raise PolicyBlock("Copilot Autofix commit lacks exact GitHub Actions ownership")
-    message = str(((repository_commit or {}).get("commit") or {}).get("message") or "")
+    author = (repository_commit or {}).get("author") or {}
+    committer = (repository_commit or {}).get("committer") or {}
+    commit = (repository_commit or {}).get("commit") or {}
+    git_author = commit.get("author") or {}
+    git_committer = commit.get("committer") or {}
+    verification = commit.get("verification") or {}
+    if (
+        author.get("type") != "Bot"
+        or committer.get("login") != GITHUB_WEB_FLOW_LOGIN
+        or committer.get("id") != GITHUB_WEB_FLOW_USER_ID
+        or committer.get("type") != "User"
+        or git_author.get("name") != GITHUB_ACTIONS_LOGIN
+        or git_author.get("email") != GITHUB_ACTIONS_EMAIL
+        or git_committer.get("name") != GITHUB_COMMITTER_NAME
+        or git_committer.get("email") != GITHUB_COMMITTER_EMAIL
+        or verification.get("verified") is not True
+        or verification.get("reason") != "valid"
+    ):
+        raise PolicyBlock("Copilot Autofix commit lacks exact GitHub-signed provider provenance")
+    message = str(commit.get("message") or "")
     if message.splitlines()[0] != f"security: auto-heal CodeQL alert #{alert_number}":
         raise PolicyBlock("Copilot Autofix commit is bound to a different alert")
     return head_sha
