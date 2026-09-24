@@ -55,6 +55,31 @@ def test_parse_frozen_lock_rejects_noncanonical_bytes(raw: bytes) -> None:
         compiler._parse_frozen_lock(raw, name="dev.lock")
 
 
+def _pip_report_row(*, is_yanked: object = False) -> dict[str, object]:
+    return {
+        "is_yanked": is_yanked,
+        "metadata": {"name": "alpha", "version": "1.0"},
+        "download_info": {
+            "url": "https://files.pythonhosted.org/packages/alpha-1.0-py3-none-any.whl",
+            "archive_info": {"hashes": {"sha256": "1" * 64}},
+        },
+    }
+
+
+def test_report_to_lock_requires_explicit_non_yanked_artifact() -> None:
+    assert compiler._report_to_lock({"install": [_pip_report_row()]}) == _lock(
+        ("alpha", "1.0", "1" * 64)
+    ).decode()
+
+    with pytest.raises(compiler.LockCompileError, match="yanked"):
+        compiler._report_to_lock({"install": [_pip_report_row(is_yanked=True)]})
+
+    missing = _pip_report_row()
+    missing.pop("is_yanked")
+    with pytest.raises(compiler.LockCompileError, match="non-yanked provenance"):
+        compiler._report_to_lock({"install": [missing]})
+
+
 def test_authority_bytes_bind_pyproject_base_image_and_every_lock(tmp_path: Path) -> None:
     root = tmp_path / "root"
     (root / "requirements").mkdir(parents=True)
