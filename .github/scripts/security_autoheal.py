@@ -3701,7 +3701,6 @@ def _rebind_route_plan(
             alert,
             main_sha,
             config,
-            autofix_eligibility=str(expected.get("autofixEligibility") or ""),
         )
         try:
             if canonical_routing_record(live) != canonical_routing_record(expected):
@@ -3732,7 +3731,6 @@ def _revalidate_route_record_before_mutation(
         alert,
         main_sha,
         config,
-        autofix_eligibility=str(record.get("autofixEligibility") or ""),
     )
     try:
         if canonical_routing_record(live) != canonical_routing_record(record):
