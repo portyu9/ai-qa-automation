@@ -672,6 +672,7 @@ def test_generated_pr_marker_binds_route_and_artifact_provenance() -> None:
     marker = autoheal._parse_marker(api.body)
     assert marker is not None
     assert marker["routeRecordDigest"] == record["recordDigest"]
+    assert marker["routeRecord"] == record
     assert marker["routePlanDigest"] == plan["planDigest"]
     assert marker["routeArtifactId"] == ARTIFACT_ID
     assert marker["routeDecision"] == "ordinary-deterministic-autoheal"
