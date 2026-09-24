@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
 import re
@@ -13,6 +15,8 @@ from security_alert_routing import (
     PROTECTED_REMEDIATION_STRATEGY,
     RoutingPolicyError,
     canonical_record,
+    load_config,
+    route_alert,
 )
 
 SCHEMA_VERSION = 1
@@ -22,6 +26,17 @@ MAX_PLAN_BYTES = 32 * 1024
 MAX_CHANGED_FILES = 1
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+BRANCH_PREFIX = "automation/protected-security-remediation-"
+BRANCH_RE = re.compile(
+    r"^automation/protected-security-remediation-[1-9][0-9]*-[0-9a-f]{64}-a[1-9][0-9]*$"
+)
+MARKER_PREFIX = "<!-- aiqa-protected-security-remediation:"
+MARKER_SUFFIX = " -->"
+ROUTE_TRAILER_PREFIX = "Protected-Route-Record-Digest: "
+PLAN_TRAILER_PREFIX = "Protected-Repair-Plan-Digest: "
+DISALLOWED_AUTHOR_BOTS = frozenset(
+    {"github-actions[bot]", "trusted-pr-gate[bot]", "dependabot[bot]"}
+)
 
 
 class ProtectedRemediationError(RuntimeError):
@@ -202,6 +217,7 @@ def build_repair_plan(
         "routeRecordDigest": record.get("recordDigest"),
         "routeStrategy": record.get("strategy"),
         "authorStrategy": strategy.author_strategy,
+        "attempt": int(record["strategyAttemptCount"]) + 1,
         "targetPath": strategy.path,
         "changedFiles": [strategy.path],
         "maxChangedFiles": MAX_CHANGED_FILES,
@@ -228,6 +244,229 @@ def revalidate_repair_plan(
         raise ProtectedRemediationError("protected repair plan drifted from exact live evidence")
     return repaired
 
+
+
+def _require_positive_int(value: Any, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ProtectedRemediationError(f"{label} must be a positive integer")
+    return value
+
+
+def _require_author_identity(login: Any, user_id: Any) -> tuple[str, int]:
+    if (
+        not isinstance(login, str)
+        or not login.endswith("[bot]")
+        or login in DISALLOWED_AUTHOR_BOTS
+    ):
+        raise ProtectedRemediationError("protected author App login is not an independent bot identity")
+    return login, _require_positive_int(user_id, "protected author App user id")
+
+
+def branch_name(record: Mapping[str, Any]) -> str:
+    validate_route_record(record, main_sha=_require_sha(record.get("baseSha"), "route base SHA"))
+    alert = _require_positive_int(record.get("alertNumber"), "route alert number")
+    fingerprint = _require_digest(record.get("fingerprint"), "route fingerprint")
+    attempt = _require_positive_int(
+        int(record["strategyAttemptCount"]) + 1, "protected repair attempt"
+    )
+    branch = f"{BRANCH_PREFIX}{alert}-{fingerprint}-a{attempt}"
+    if BRANCH_RE.fullmatch(branch) is None:
+        raise ProtectedRemediationError("protected repair branch is outside reviewed grammar")
+    return branch
+
+
+def repair_commit_message(record: Mapping[str, Any], plan: Mapping[str, Any]) -> str:
+    route_digest = _require_digest(record.get("recordDigest"), "route record digest")
+    plan_digest = _require_digest(plan.get("planDigest"), "repair plan digest")
+    alert = _require_positive_int(record.get("alertNumber"), "route alert number")
+    return (
+        f"security: remediate protected CodeQL alert #{alert}\n\n"
+        f"{ROUTE_TRAILER_PREFIX}{route_digest}\n"
+        f"{PLAN_TRAILER_PREFIX}{plan_digest}"
+    )
+
+
+def _commit_trailer(message: Any, prefix: str, label: str) -> str:
+    if not isinstance(message, str):
+        raise ProtectedRemediationError("protected repair commit message is malformed")
+    values = [line.removeprefix(prefix) for line in message.splitlines() if line.startswith(prefix)]
+    if len(values) != 1:
+        raise ProtectedRemediationError(f"protected repair commit has invalid {label} trailer count")
+    return _require_digest(values[0], f"protected repair commit {label}")
+
+
+def marker(record: Mapping[str, Any], plan: Mapping[str, Any], *, head_sha: str) -> str:
+    canonical_record(record)
+    canonical_plan(plan)
+    head_sha = _require_sha(head_sha, "protected repair head SHA")
+    metadata = {
+        "version": 1,
+        "base": record.get("baseSha"),
+        "head": head_sha,
+        "routeRecord": dict(record),
+        "repairPlan": dict(plan),
+    }
+    return MARKER_PREFIX + json.dumps(metadata, separators=(",", ":"), sort_keys=True) + MARKER_SUFFIX
+
+
+def parse_marker(body: Any) -> dict[str, Any] | None:
+    if not isinstance(body, str):
+        return None
+    rows = [
+        line[len(MARKER_PREFIX) : -len(MARKER_SUFFIX)]
+        for line in body.splitlines()
+        if line.startswith(MARKER_PREFIX) and line.endswith(MARKER_SUFFIX)
+    ]
+    if len(rows) != 1:
+        return None
+    try:
+        value = json.loads(rows[0])
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _contents_bytes(api: Any, path: str, ref: str) -> bytes:
+    payload = api.get(f"/contents/{path}?ref={ref}")
+    if (
+        not isinstance(payload, dict)
+        or payload.get("type") != "file"
+        or payload.get("encoding") != "base64"
+        or not isinstance(payload.get("content"), str)
+    ):
+        raise ProtectedRemediationError(f"repository content is not one canonical file: {path}")
+    try:
+        raw = base64.b64decode(payload["content"], validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ProtectedRemediationError(f"repository content base64 is invalid: {path}") from exc
+    if not raw or len(raw) > MAX_SOURCE_BYTES:
+        raise ProtectedRemediationError(f"repository content is empty or oversized: {path}")
+    return raw
+
+
+def validate_generated_pr(
+    api: Any,
+    pr: Mapping[str, Any],
+    *,
+    expected_bot_login: str,
+    expected_bot_id: int,
+    config: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    expected_bot_login, expected_bot_id = _require_author_identity(
+        expected_bot_login, expected_bot_id
+    )
+    if not isinstance(pr, Mapping) or pr.get("state") != "open" or pr.get("draft") is not False:
+        raise ProtectedRemediationError("protected repair must be an open non-draft pull request")
+    number = _require_positive_int(pr.get("number"), "protected repair PR number")
+    user = pr.get("user") or {}
+    if (
+        user.get("login") != expected_bot_login
+        or user.get("id") != expected_bot_id
+        or user.get("type") != "Bot"
+    ):
+        raise ProtectedRemediationError("protected repair PR author is not the exact author App")
+
+    head = pr.get("head") or {}
+    base = pr.get("base") or {}
+    if (
+        (head.get("repo") or {}).get("full_name") != EXPECTED_REPOSITORY
+        or (base.get("repo") or {}).get("full_name") != EXPECTED_REPOSITORY
+        or base.get("ref") != EXPECTED_BASE_BRANCH
+    ):
+        raise ProtectedRemediationError("protected repair repository/base identity drifted")
+    head_sha = _require_sha(head.get("sha"), "protected repair head SHA")
+    base_sha = _require_sha(base.get("sha"), "protected repair base SHA")
+    live = api.get(f"/branches/{EXPECTED_BASE_BRANCH}")
+    live_main = _require_sha(
+        ((live or {}).get("commit") or {}).get("sha"), "live protected repair main SHA"
+    )
+    if base_sha != live_main:
+        raise ProtectedRemediationError("protected repair is stale relative to current main")
+
+    metadata = parse_marker(pr.get("body"))
+    if metadata is None or set(metadata) != {"version", "base", "head", "routeRecord", "repairPlan"}:
+        raise ProtectedRemediationError("protected repair marker is missing or malformed")
+    if metadata.get("version") != 1 or metadata.get("base") != base_sha or metadata.get("head") != head_sha:
+        raise ProtectedRemediationError("protected repair marker subject drifted")
+    record = metadata.get("routeRecord")
+    plan = metadata.get("repairPlan")
+    if not isinstance(record, dict) or not isinstance(plan, dict):
+        raise ProtectedRemediationError("protected repair marker evidence is malformed")
+    strategy = validate_route_record(record, main_sha=base_sha)
+    canonical_plan(plan)
+    if plan.get("baseSha") != base_sha or plan.get("targetPath") != strategy.path:
+        raise ProtectedRemediationError("protected repair plan subject drifted")
+    if plan.get("changedFiles") != [strategy.path] or plan.get("maxChangedFiles") != MAX_CHANGED_FILES:
+        raise ProtectedRemediationError("protected repair changed-file authority drifted")
+    if head.get("ref") != branch_name(record):
+        raise ProtectedRemediationError("protected repair branch does not match exact route subject")
+
+    alert_number = _require_positive_int(record.get("alertNumber"), "protected route alert number")
+    alert = api.get(f"/code-scanning/alerts/{alert_number}")
+    if not isinstance(alert, dict):
+        raise ProtectedRemediationError("live protected CodeQL alert is missing or malformed")
+    policy = load_config() if config is None else config
+    try:
+        rebound = route_alert(
+            alert,
+            main_sha=base_sha,
+            config=policy,
+            attempts_by_strategy={
+                PROTECTED_REMEDIATION_STRATEGY: int(record["strategyAttemptCount"])
+            },
+            expected_fingerprint=str(record["fingerprint"]),
+            expected_strategy=PROTECTED_REMEDIATION_STRATEGY,
+        )
+    except RoutingPolicyError as exc:
+        raise ProtectedRemediationError(f"live protected route reproof failed: {exc}") from exc
+    if rebound != record:
+        raise ProtectedRemediationError("live protected route drifted from persisted repair evidence")
+
+    base_source = _contents_bytes(api, strategy.path, base_sha)
+    repaired = revalidate_repair_plan(plan, base_source, record, main_sha=base_sha)
+    if _contents_bytes(api, strategy.path, head_sha) != repaired:
+        raise ProtectedRemediationError("protected repair head bytes do not equal deterministic output")
+
+    files = api.list_all(f"/pulls/{number}/files", max_pages=2)
+    if (
+        len(files) != 1
+        or not isinstance(files[0], dict)
+        or files[0].get("filename") != strategy.path
+        or files[0].get("status") != "modified"
+    ):
+        raise ProtectedRemediationError("protected repair diff escaped the exact one-file authority")
+
+    commit = api.get(f"/commits/{head_sha}")
+    if not isinstance(commit, dict) or commit.get("sha") != head_sha:
+        raise ProtectedRemediationError("protected repair head commit is missing")
+    author = commit.get("author") or {}
+    parents = commit.get("parents")
+    message = ((commit.get("commit") or {}).get("message"))
+    if (
+        author.get("login") != expected_bot_login
+        or author.get("id") != expected_bot_id
+        or author.get("type") != "Bot"
+    ):
+        raise ProtectedRemediationError("protected repair commit author is not the exact author App")
+    if not isinstance(parents, list) or len(parents) != 1 or (parents[0] or {}).get("sha") != base_sha:
+        raise ProtectedRemediationError("protected repair commit is not directly parented to exact main")
+    if _commit_trailer(message, ROUTE_TRAILER_PREFIX, "route digest") != record["recordDigest"]:
+        raise ProtectedRemediationError("protected repair commit route digest drifted")
+    if _commit_trailer(message, PLAN_TRAILER_PREFIX, "plan digest") != plan["planDigest"]:
+        raise ProtectedRemediationError("protected repair commit plan digest drifted")
+    if message != repair_commit_message(record, plan):
+        raise ProtectedRemediationError("protected repair commit message is not canonical")
+
+    return {
+        "number": number,
+        "headSha": head_sha,
+        "baseSha": base_sha,
+        "alertNumber": alert_number,
+        "targetPath": strategy.path,
+        "routeRecordDigest": record["recordDigest"],
+        "planDigest": plan["planDigest"],
+        "authorStrategy": plan["authorStrategy"],
+    }
 
 def self_test() -> None:
     if not REPAIR_STRATEGIES:
