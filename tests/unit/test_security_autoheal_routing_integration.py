@@ -337,7 +337,9 @@ def test_generated_pr_publication_rejects_main_drift() -> None:
             raise AssertionError("stale subject must not publish a pull request")
 
     api = _DriftApi()
-    with pytest.raises(autoheal.PolicyBlock, match="main advanced before route-authorized repair PR"):
+    with pytest.raises(
+        autoheal.PolicyBlock, match="main advanced before route-authorized repair PR"
+    ):
         autoheal._create_pull_request(
             api,
             "automation/codeql-autoheal-7-" + record["fingerprint"] + "-a1",
@@ -359,13 +361,14 @@ def test_workflow_persists_route_plan_before_live_reconcile() -> None:
 
     plan = workflow.index("Plan exact-main deterministic security routes")
     upload = workflow.index("Persist exact-run route plan before mutation")
-    reconcile = workflow.index(
-        "Reconcile exact-subject CodeQL remediations from persisted routes"
-    )
+    reconcile = workflow.index("Reconcile exact-subject CodeQL remediations from persisted routes")
 
     assert plan < upload < reconcile
     assert "--route-artifact-id ${{ steps.route-plan-artifact.outputs.artifact-id }}" in workflow
-    assert "--route-artifact-digest sha256:${{ steps.route-plan-artifact.outputs.artifact-digest }}" in workflow
+    assert (
+        "--route-artifact-digest sha256:${{ steps.route-plan-artifact.outputs.artifact-digest }}"
+        in workflow
+    )
     assert ".github/scripts/security_alert_routing.py" in workflow
 
 
@@ -398,8 +401,7 @@ class _IntentApi:
         name, _, _ = autoheal._autofix_intent_identity(self.record)
         encoded = autoheal.urllib.parse.quote(name, safe="")
         assert path == (
-            f"/commits/{self.record['baseSha']}/check-runs"
-            f"?filter=all&check_name={encoded}"
+            f"/commits/{self.record['baseSha']}/check-runs?filter=all&check_name={encoded}"
         )
         assert max_pages == 2
         return list(self.existing)
