@@ -840,9 +840,129 @@ def _reconcile_identical_record(
     *,
     parent_path: Path,
 ) -> None:
-    os.fsync(parent_fd)
-    if _read_record_at(parent_fd, name) != payload:
-        raise RoutingPolicyError("routing record changed during durability reconciliation")
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    nonblock = getattr(os, "O_NONBLOCK", 0)
+    if not nofollow or not nonblock:
+        raise RoutingPolicyError(
+            "routing record reconciliation requires no-follow non-blocking file APIs"
+        )
+    try:
+        fd = os.open(name, os.O_RDONLY | nofollow | nonblock, dir_fd=parent_fd)
+    except OSError as exc:
+        raise RoutingPolicyError(
+            "routing record changed during durability reconciliation"
+        ) from exc
+    try:
+        initial = os.fstat(fd)
+        if not stat.S_ISREG(initial.st_mode) or initial.st_size > MAX_ROUTE_RECORD_BYTES:
+            raise RoutingPolicyError(
+                "routing record changed during durability reconciliation"
+            )
+        _require_owned_nonwritable(initial, label="existing routing record")
+        observed = bytearray()
+        while len(observed) <= MAX_ROUTE_RECORD_BYTES:
+            chunk = os.read(
+                fd,
+                min(64 * 1024, MAX_ROUTE_RECORD_BYTES + 1 - len(observed)),
+            )
+            if not chunk:
+                break
+            observed.extend(chunk)
+        if bytes(observed) != payload:
+            raise RoutingPolicyError(
+                "routing record changed during durability reconciliation"
+            )
+        before_sync = os.fstat(fd)
+        if (
+            initial.st_dev,
+            initial.st_ino,
+            initial.st_mode,
+            initial.st_uid,
+            initial.st_gid,
+            initial.st_size,
+            initial.st_mtime_ns,
+            initial.st_ctime_ns,
+        ) != (
+            before_sync.st_dev,
+            before_sync.st_ino,
+            before_sync.st_mode,
+            before_sync.st_uid,
+            before_sync.st_gid,
+            before_sync.st_size,
+            before_sync.st_mtime_ns,
+            before_sync.st_ctime_ns,
+        ):
+            raise RoutingPolicyError(
+                "routing record changed during durability reconciliation"
+            )
+        _require_named_file_identity(
+            parent_fd,
+            name,
+            before_sync,
+            label="existing routing record",
+        )
+        os.fsync(fd)
+        after_file_sync = os.fstat(fd)
+        if (
+            before_sync.st_dev,
+            before_sync.st_ino,
+            before_sync.st_mode,
+            before_sync.st_uid,
+            before_sync.st_gid,
+            before_sync.st_size,
+            before_sync.st_mtime_ns,
+            before_sync.st_ctime_ns,
+        ) != (
+            after_file_sync.st_dev,
+            after_file_sync.st_ino,
+            after_file_sync.st_mode,
+            after_file_sync.st_uid,
+            after_file_sync.st_gid,
+            after_file_sync.st_size,
+            after_file_sync.st_mtime_ns,
+            after_file_sync.st_ctime_ns,
+        ):
+            raise RoutingPolicyError(
+                "routing record changed during durability reconciliation"
+            )
+        _require_named_file_identity(
+            parent_fd,
+            name,
+            after_file_sync,
+            label="existing routing record",
+        )
+        os.fsync(parent_fd)
+        after_parent_sync = os.fstat(fd)
+        if (
+            after_file_sync.st_dev,
+            after_file_sync.st_ino,
+            after_file_sync.st_mode,
+            after_file_sync.st_uid,
+            after_file_sync.st_gid,
+            after_file_sync.st_size,
+            after_file_sync.st_mtime_ns,
+            after_file_sync.st_ctime_ns,
+        ) != (
+            after_parent_sync.st_dev,
+            after_parent_sync.st_ino,
+            after_parent_sync.st_mode,
+            after_parent_sync.st_uid,
+            after_parent_sync.st_gid,
+            after_parent_sync.st_size,
+            after_parent_sync.st_mtime_ns,
+            after_parent_sync.st_ctime_ns,
+        ):
+            raise RoutingPolicyError(
+                "routing record changed during durability reconciliation"
+            )
+        _require_named_file_identity(
+            parent_fd,
+            name,
+            after_parent_sync,
+            label="existing routing record",
+        )
+    finally:
+        os.close(fd)
     _require_parent_path_identity(
         parent_path,
         parent_fd,
