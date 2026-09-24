@@ -3502,6 +3502,8 @@ def plan_routes(config: dict[str, Any], output: Path) -> dict[str, Any]:
 
 
 def _load_route_plan(path: Path, config: dict[str, Any]) -> dict[str, Any]:
+    if path != _route_plan_output_path():
+        raise AutohealError("route plan input must use the exact runner-owned temp path")
     try:
         plan = read_routing_json_evidence(
             path,
