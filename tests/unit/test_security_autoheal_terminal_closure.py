@@ -181,6 +181,8 @@ class _TerminalApi:
         self.gate_workflow_id = gate_workflow_id
         self.gate_event = gate_event
         self.main_sha = MERGE
+        self.route_artifact_available = True
+        self.route_artifact_reads = 0
         self.comments: list[dict[str, Any]] = []
         self.dispatches: list[tuple[str, dict[str, Any] | None]] = []
 
@@ -227,6 +229,9 @@ class _TerminalApi:
                 "most_recent_instance": {"location": {"path": self.alert_path}},
             }
         if path == f"/actions/artifacts/{ROUTE_ARTIFACT_ID}":
+            self.route_artifact_reads += 1
+            if not self.route_artifact_available:
+                raise autoheal.AutohealError("GitHub API HTTP 404: route artifact expired")
             return {
                 "id": ROUTE_ARTIFACT_ID,
                 "name": f"{autoheal.ROUTE_PLAN_ARTIFACT_PREFIX}-{ROUTE_PLAN_RUN_ID}-1",
@@ -405,6 +410,21 @@ def test_terminal_closure_persists_exact_idempotent_certificate(
 
     assert autoheal._reconcile_terminal_closure(api, MERGE, config) is False
     assert len(api.comments) == 1
+
+
+def test_terminal_closure_replay_survives_originating_artifact_expiry(
+    config: dict[str, Any],
+) -> None:
+    api = _TerminalApi()
+
+    assert autoheal._reconcile_terminal_closure(api, MERGE, config) is True
+    assert len(api.comments) == 1
+    assert api.route_artifact_reads == 1
+
+    api.route_artifact_available = False
+    assert autoheal._reconcile_terminal_closure(api, MERGE, config) is False
+    assert len(api.comments) == 1
+    assert api.route_artifact_reads == 1
 
 
 def test_terminal_closure_rejects_commit_or_artifact_route_provenance_drift() -> None:
