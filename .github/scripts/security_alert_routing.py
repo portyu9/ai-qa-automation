@@ -732,6 +732,52 @@ def _open_parent_directory(path: Path) -> int:
         raise
 
 
+def _require_named_file_identity(
+    parent_fd: int,
+    name: str,
+    expected: os.stat_result,
+    *,
+    label: str,
+) -> None:
+    try:
+        current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError as exc:
+        raise RoutingPolicyError(f"{label} path identity changed during verification") from exc
+    expected_identity = (
+        expected.st_dev,
+        expected.st_ino,
+        expected.st_mode,
+        expected.st_uid,
+        expected.st_gid,
+        expected.st_size,
+        expected.st_mtime_ns,
+        expected.st_ctime_ns,
+    )
+    current_identity = (
+        current.st_dev,
+        current.st_ino,
+        current.st_mode,
+        current.st_uid,
+        current.st_gid,
+        current.st_size,
+        current.st_mtime_ns,
+        current.st_ctime_ns,
+    )
+    if not stat.S_ISREG(current.st_mode) or current_identity != expected_identity:
+        raise RoutingPolicyError(f"{label} path identity changed during verification")
+
+
+def _require_parent_path_identity(path: Path, opened_fd: int, *, label: str) -> None:
+    fresh_fd = _open_parent_directory(path)
+    try:
+        opened = os.fstat(opened_fd)
+        fresh = os.fstat(fresh_fd)
+        if (opened.st_dev, opened.st_ino) != (fresh.st_dev, fresh.st_ino):
+            raise RoutingPolicyError(f"{label} parent path identity changed during verification")
+    finally:
+        os.close(fresh_fd)
+
+
 def _read_record_at(parent_fd: int, name: str) -> bytes | None:
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     nonblock = getattr(os, "O_NONBLOCK", 0)
@@ -776,6 +822,12 @@ def _read_record_at(parent_fd: int, name: str) -> bytes | None:
             final.st_ctime_ns,
         ):
             raise RoutingPolicyError("existing routing record changed during verification")
+        _require_named_file_identity(
+            parent_fd,
+            name,
+            final,
+            label="existing routing record",
+        )
         return bytes(payload)
     finally:
         os.close(fd)
@@ -798,6 +850,11 @@ def persist_record(path: Path, record: Mapping[str, Any]) -> bool:
         existing = _read_record_at(parent_fd, name)
         if existing is not None:
             if existing == payload:
+                _require_parent_path_identity(
+                    path.parent,
+                    parent_fd,
+                    label="routing record",
+                )
                 return False
             raise RoutingPolicyError("routing record path already contains different evidence")
 
@@ -844,6 +901,11 @@ def persist_record(path: Path, record: Mapping[str, Any]) -> bool:
                 raise RoutingPolicyError(
                     "concurrent routing record publication conflicted"
                 ) from exc
+            _require_parent_path_identity(
+                path.parent,
+                parent_fd,
+                label="routing record",
+            )
             return False
         except OSError as exc:
             raise RoutingPolicyError("routing record atomic publication failed") from exc
@@ -852,6 +914,11 @@ def persist_record(path: Path, record: Mapping[str, Any]) -> bool:
         published = _read_record_at(parent_fd, name)
         if published != payload:
             raise RoutingPolicyError("routing record publication read-back mismatch")
+        _require_parent_path_identity(
+            path.parent,
+            parent_fd,
+            label="routing record",
+        )
         return True
     finally:
         if temp_name is not None:
@@ -928,8 +995,19 @@ def _read_json(path: Path, *, max_bytes: int, label: str) -> Any:
                 final.st_ctime_ns,
             ):
                 raise RoutingPolicyError(f"{label} changed during ingestion")
+            _require_named_file_identity(
+                parent_fd,
+                name,
+                final,
+                label=label,
+            )
         finally:
             os.close(fd)
+        _require_parent_path_identity(
+            path.parent,
+            parent_fd,
+            label=label,
+        )
     finally:
         os.close(parent_fd)
     return _strict_json_loads(bytes(payload), label=label)
