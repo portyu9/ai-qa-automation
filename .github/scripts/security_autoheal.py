@@ -3042,7 +3042,11 @@ def _route_record_for_alert(
         if not isinstance(strategy, str) or not strategy:
             raise AutohealError("routing policy produced an invalid remediation strategy")
         evidence = autofix_eligibility or "unknown"
-        if autofix_eligibility is None and strategy == MODEL_AUTOFIX_STRATEGY:
+        if (
+            autofix_eligibility is None
+            and strategy == MODEL_AUTOFIX_STRATEGY
+            and provisional.get("decision") == "blocked-external-evidence"
+        ):
             evidence = _autofix_evidence(api, number)
         attempts = _attempt_count(api, number, strategy, main_sha)
         return route_security_alert(
@@ -3350,6 +3354,8 @@ def _create_repair(
     route_record: dict[str, Any] | None = None,
     route_evidence: dict[str, Any] | None = None,
 ) -> int:
+    if _current_main(api, config) != subject["baseSha"]:
+        raise PolicyBlock("main advanced before route-authorized repair mutation")
     branch = _branch_name(subject, attempt)
     expected_strategy = _repair_strategy(subject)
     deterministic = strategy != MODEL_AUTOFIX_STRATEGY
@@ -3609,8 +3615,14 @@ def reconcile(
             ):
                 raise PolicyBlock("persisted route record strategy accounting is malformed")
 
-            if decision == "blocked-external-evidence" and strategy == MODEL_AUTOFIX_STRATEGY:
+            if (
+                decision == "blocked-external-evidence"
+                and strategy == MODEL_AUTOFIX_STRATEGY
+                and record.get("autofixEligibility") == "unknown"
+            ):
                 subject = _subject_from_route(record)
+                if _current_main(api, config) != subject["baseSha"]:
+                    raise PolicyBlock("main advanced before Autofix evidence acquisition")
                 _ensure_copilot_autofix(api, subject["number"])
                 print(
                     json.dumps(
