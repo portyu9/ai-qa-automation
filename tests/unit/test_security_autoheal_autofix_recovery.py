@@ -31,6 +31,7 @@ BASE = "a" * 40
 HEAD = "b" * 40
 ALERT = 42
 ROUTE_DIGEST = "e" * 64
+PLAN_DIGEST = "f" * 64
 BRANCH = "automation/codeql-autoheal-42-" + ("d" * 64) + "-a1"
 
 
@@ -44,6 +45,7 @@ def _repo_commit(
     verification_reason: str = "valid",
     alert: int = ALERT,
     route_digest: str = ROUTE_DIGEST,
+    plan_digest: str = PLAN_DIGEST,
 ) -> dict[str, Any]:
     return {
         "sha": HEAD,
@@ -52,7 +54,8 @@ def _repo_commit(
         "commit": {
             "message": (
                 f"security: auto-heal CodeQL alert #{alert}\n\n"
-                f"{autoheal.ROUTE_RECORD_TRAILER_PREFIX}{route_digest}\n\nAutofix"
+                f"{autoheal.ROUTE_RECORD_TRAILER_PREFIX}{route_digest}\n"
+                f"{autoheal.ROUTE_PLAN_TRAILER_PREFIX}{plan_digest}\n\nAutofix"
             ),
             "author": {
                 "name": autoheal.GITHUB_ACTIONS_LOGIN,
@@ -99,6 +102,7 @@ class _AmbiguousCommitApi:
             assert payload["message"] == autoheal._route_bound_commit_message(
                 ALERT,
                 ROUTE_DIGEST,
+                PLAN_DIGEST,
             )
             self.branch_sha = HEAD
             if self.fail_first_commit_response:
@@ -117,7 +121,14 @@ def test_existing_base_only_attempt_branch_refuses_provider_replay() -> None:
     api.fail_first_commit_response = False
 
     with pytest.raises(autoheal.PolicyBlock, match="ambiguous provider-submission state"):
-        autoheal._commit_copilot_autofix(api, ALERT, BRANCH, BASE, ROUTE_DIGEST)
+        autoheal._commit_copilot_autofix(
+            api,
+            ALERT,
+            BRANCH,
+            BASE,
+            ROUTE_DIGEST,
+            PLAN_DIGEST,
+        )
 
     assert api.branch_sha == BASE
     assert api.commit_posts == 0
@@ -127,12 +138,26 @@ def test_ambiguous_autofix_commit_response_is_recovered_without_provider_replay(
     api = _AmbiguousCommitApi()
 
     with pytest.raises(autoheal.AutohealError, match="503 after provider side effect"):
-        autoheal._commit_copilot_autofix(api, ALERT, BRANCH, BASE, ROUTE_DIGEST)
+        autoheal._commit_copilot_autofix(
+            api,
+            ALERT,
+            BRANCH,
+            BASE,
+            ROUTE_DIGEST,
+            PLAN_DIGEST,
+        )
 
     assert api.branch_sha == HEAD
     assert api.commit_posts == 1
 
-    recovered = autoheal._commit_copilot_autofix(api, ALERT, BRANCH, BASE, ROUTE_DIGEST)
+    recovered = autoheal._commit_copilot_autofix(
+            api,
+            ALERT,
+            BRANCH,
+            BASE,
+            ROUTE_DIGEST,
+            PLAN_DIGEST,
+        )
     assert recovered == HEAD
     assert api.commit_posts == 1
 
@@ -153,7 +178,8 @@ def test_ambiguous_autofix_commit_response_is_recovered_without_provider_replay(
             "GitHub-signed provider provenance",
         ),
         (_repo_commit(alert=99), BASE, "different alert"),
-        (_repo_commit(route_digest="f" * 64), BASE, "route digest"),
+        (_repo_commit(route_digest="a" * 64), BASE, "route digest"),
+        (_repo_commit(plan_digest="a" * 64), BASE, "plan digest"),
     ),
 )
 def test_recovered_autofix_commit_fails_closed_on_provenance_drift(
@@ -168,7 +194,14 @@ def test_recovered_autofix_commit_fails_closed_on_provenance_drift(
     api.fail_first_commit_response = False
 
     with pytest.raises(autoheal.PolicyBlock, match=message):
-        autoheal._commit_copilot_autofix(api, ALERT, BRANCH, BASE, ROUTE_DIGEST)
+        autoheal._commit_copilot_autofix(
+            api,
+            ALERT,
+            BRANCH,
+            BASE,
+            ROUTE_DIGEST,
+            PLAN_DIGEST,
+        )
 
     assert api.commit_posts == 0
     assert api.branch_sha == HEAD
@@ -372,11 +405,13 @@ def test_model_repair_uses_attempt_scoped_branch(monkeypatch: pytest.MonkeyPatch
         branch: str,
         base: str,
         route_record_digest: str,
+        route_plan_digest: str,
     ) -> str:
         observed["branch"] = branch
         assert alert == ALERT
         assert base == BASE
         assert route_record_digest == route_record["recordDigest"]
+        assert route_plan_digest == "e" * 64
         return HEAD
 
     monkeypatch.setattr(autoheal, "_commit_copilot_autofix", commit_autofix)
