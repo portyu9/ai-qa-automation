@@ -406,7 +406,6 @@ def test_terminal_closure_persists_exact_idempotent_certificate(
     assert len(api.comments) == 1
 
 
-@pytest.mark.parametrize("conclusion", ("failure", "cancelled"))
 def test_terminal_closure_rejects_commit_or_artifact_route_provenance_drift() -> None:
     config = autoheal.load_config()
 
@@ -449,6 +448,7 @@ def test_terminal_closure_rejects_commit_or_artifact_route_provenance_drift() ->
         autoheal._reconcile_terminal_closure(artifact_drift, MERGE, config)
 
 
+@pytest.mark.parametrize("conclusion", ("failure", "cancelled"))
 def test_terminal_closure_rejects_certificate_if_certifying_run_later_fails(
     config: dict[str, Any],
     conclusion: str,
