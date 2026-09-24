@@ -41,6 +41,11 @@ CODEQL_RUN_ID = 7002
 AUTOHEAL_RUN_ID = 7003
 GATE_RUN_ID = 7004
 TRUSTED_STATUS_ID = 7005
+ROUTE_PLAN_RUN_ID = 7006
+ROUTE_ARTIFACT_ID = 7007
+ROUTE_RECORD_DIGEST = "1" * 64
+ROUTE_PLAN_DIGEST = "2" * 64
+ROUTE_ARTIFACT_DIGEST = "sha256:" + ("3" * 64)
 
 
 def _metadata() -> dict[str, Any]:
@@ -56,6 +61,17 @@ def _metadata() -> dict[str, Any]:
         "rule": "py/reflective-xss",
         "severity": 7.0,
         "strategy": autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY,
+        "routeDecision": "ordinary-deterministic-autoheal",
+        "routeAuthority": "security-autoheal-deterministic",
+        "routeRecordDigest": ROUTE_RECORD_DIGEST,
+        "routingPolicyVersion": "security-routing-v1",
+        "routeAutofixEligibility": "unknown",
+        "routePlanDigest": ROUTE_PLAN_DIGEST,
+        "routePlanRunId": ROUTE_PLAN_RUN_ID,
+        "routePlanRunAttempt": 1,
+        "routeArtifactId": ROUTE_ARTIFACT_ID,
+        "routeArtifactName": f"{autoheal.ROUTE_PLAN_ARTIFACT_PREFIX}-{ROUTE_PLAN_RUN_ID}-1",
+        "routeArtifactDigest": ROUTE_ARTIFACT_DIGEST,
     }
 
 
@@ -180,7 +196,13 @@ class _TerminalApi:
                     "login": autoheal.GITHUB_ACTIONS_LOGIN,
                     "id": autoheal.GITHUB_ACTIONS_USER_ID,
                 },
-                "commit": {"message": "security: auto-heal CodeQL alert #7"},
+                "commit": {
+                    "message": autoheal._route_bound_commit_message(
+                        7,
+                        ROUTE_RECORD_DIGEST,
+                        ROUTE_PLAN_DIGEST,
+                    )
+                },
             }
         if path == f"/git/commits/{MERGE}":
             return {
@@ -203,8 +225,32 @@ class _TerminalApi:
                 "rule": {"id": _metadata()["rule"]},
                 "most_recent_instance": {"location": {"path": self.alert_path}},
             }
+        if path == f"/actions/artifacts/{ROUTE_ARTIFACT_ID}":
+            return {
+                "id": ROUTE_ARTIFACT_ID,
+                "name": f"{autoheal.ROUTE_PLAN_ARTIFACT_PREFIX}-{ROUTE_PLAN_RUN_ID}-1",
+                "expired": False,
+                "digest": ROUTE_ARTIFACT_DIGEST,
+                "workflow_run": {
+                    "id": ROUTE_PLAN_RUN_ID,
+                    "head_sha": BASE,
+                    "head_branch": "main",
+                },
+            }
         if path.startswith("/actions/runs/"):
             run_id = int(path.rsplit("/", 1)[1])
+            if run_id == ROUTE_PLAN_RUN_ID:
+                return {
+                    "id": ROUTE_PLAN_RUN_ID,
+                    "workflow_id": autoheal.SECURITY_AUTOHEAL_WORKFLOW_ID,
+                    "path": autoheal.SECURITY_AUTOHEAL_WORKFLOW_PATH,
+                    "run_attempt": 1,
+                    "event": "schedule",
+                    "head_branch": "main",
+                    "head_sha": BASE,
+                    "status": "completed",
+                    "conclusion": "success",
+                }
             if run_id == AUTOHEAL_RUN_ID:
                 return {
                     "id": AUTOHEAL_RUN_ID,
@@ -333,6 +379,7 @@ def test_terminal_closure_persists_exact_idempotent_certificate(
     assert len(api.comments) == 1
     certificate = autoheal._parse_terminal_closure_comment(api.comments[0]["body"])
     assert certificate is not None
+    assert certificate["version"] == 2
     assert certificate["outcome"] == "resolved"
     assert certificate["pr"] == PR_NUMBER
     assert certificate["alert"] == 7
@@ -340,6 +387,11 @@ def test_terminal_closure_persists_exact_idempotent_certificate(
     assert certificate["head"] == HEAD
     assert certificate["mergeSha"] == MERGE
     assert certificate["sourceTreeSha"] == TREE
+    assert certificate["routeRecordDigest"] == ROUTE_RECORD_DIGEST
+    assert certificate["routePlanDigest"] == ROUTE_PLAN_DIGEST
+    assert certificate["routePlanRunId"] == ROUTE_PLAN_RUN_ID
+    assert certificate["routeArtifactId"] == ROUTE_ARTIFACT_ID
+    assert certificate["routeArtifactDigest"] == ROUTE_ARTIFACT_DIGEST
     assert certificate["ciRunId"] == CI_RUN_ID
     assert certificate["codeqlRunId"] == CODEQL_RUN_ID
     assert certificate["workflowRunId"] == AUTOHEAL_RUN_ID
@@ -355,6 +407,48 @@ def test_terminal_closure_persists_exact_idempotent_certificate(
 
 
 @pytest.mark.parametrize("conclusion", ("failure", "cancelled"))
+def test_terminal_closure_rejects_commit_or_artifact_route_provenance_drift() -> None:
+    config = autoheal.load_config()
+
+    commit_drift = _TerminalApi()
+    commit_drift.pr["body"] = autoheal._marker(_metadata())
+    original_get = commit_drift.get
+
+    def drifted_commit(path: str) -> Any:
+        if path == f"/commits/{HEAD}":
+            payload = original_get(path)
+            payload["commit"]["message"] = autoheal._route_bound_commit_message(
+                7,
+                "4" * 64,
+                ROUTE_PLAN_DIGEST,
+            )
+            return payload
+        return original_get(path)
+
+    commit_drift.get = drifted_commit  # type: ignore[method-assign]
+    with pytest.raises(
+        autoheal.PolicyBlock,
+        match="not immutably bound to its persisted route evidence",
+    ):
+        autoheal._reconcile_terminal_closure(commit_drift, MERGE, config)
+
+    artifact_drift = _TerminalApi()
+    original_artifact_get = artifact_drift.get
+
+    def drifted_artifact(path: str) -> Any:
+        payload = original_artifact_get(path)
+        if path == f"/actions/artifacts/{ROUTE_ARTIFACT_ID}":
+            payload["digest"] = "sha256:" + ("5" * 64)
+        return payload
+
+    artifact_drift.get = drifted_artifact  # type: ignore[method-assign]
+    with pytest.raises(
+        autoheal.PolicyBlock,
+        match="route artifact drifted from its marker",
+    ):
+        autoheal._reconcile_terminal_closure(artifact_drift, MERGE, config)
+
+
 def test_terminal_closure_rejects_certificate_if_certifying_run_later_fails(
     config: dict[str, Any],
     conclusion: str,
