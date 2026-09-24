@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import tempfile
 import time
 import urllib.error
@@ -16,6 +17,18 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from security_alert_routing import (
+    RoutingPolicyError,
+)
+from security_alert_routing import (
+    canonical_record as canonical_routing_record,
+)
+from security_alert_routing import (
+    read_json_evidence as read_routing_json_evidence,
+)
+from security_alert_routing import (
+    route_alert as route_security_alert,
+)
 from trusted_qualification import (
     TrustedQualificationError,
 )
@@ -59,6 +72,9 @@ TRANSIENT_GET_DELAY_SECONDS = 1
 GITHUB_ACTIONS_LOGIN = "github-actions[bot]"
 GITHUB_ACTIONS_USER_ID = 41898282
 GITHUB_ACTIONS_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
+GITHUB_ACTIONS_APP_ID = 15368
+GITHUB_ACTIONS_APP_SLUG = "github-actions"
+AUTOFIX_INTENT_CHECK_PREFIX = "Security Auto-Heal Autofix Intent"
 GITHUB_WEB_FLOW_LOGIN = "web-flow"
 GITHUB_WEB_FLOW_USER_ID = 19864447
 GITHUB_COMMITTER_NAME = "GitHub"
@@ -66,6 +82,11 @@ GITHUB_COMMITTER_EMAIL = "noreply@github.com"
 SECURITY_AUTOHEAL_WORKFLOW_ID = 359898109
 SECURITY_AUTOHEAL_WORKFLOW_PATH = ".github/workflows/security-autoheal.yml"
 SECURITY_AUTOHEAL_RECONCILE_EVENTS = {"workflow_run", "schedule", "workflow_dispatch"}
+ROUTE_PLAN_SCHEMA_VERSION = 1
+ROUTE_PLAN_MAX_BYTES = 2 * 1024 * 1024
+ROUTE_PLAN_ARTIFACT_PREFIX = "security-autoheal-route-plan"
+ROUTE_PLAN_FILENAME = "route-plan.json"
+ROUTE_ARTIFACT_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 MARKER_PREFIX = "<!-- aiqa-codeql-autoheal:"
 MARKER_SUFFIX = " -->"
 BRANCH_PREFIX = "automation/codeql-autoheal-"
@@ -73,6 +94,9 @@ AUTOHEAL_BRANCH_RE = re.compile(
     r"^automation/codeql-autoheal-[1-9][0-9]*-(?:[0-9a-f]{12}|[0-9a-f]{64}-a[1-9][0-9]*)$"
 )
 AUTOHEAL_COMMIT_MESSAGE_RE = re.compile(r"^security: auto-heal CodeQL alert #[1-9][0-9]*$")
+ROUTE_RECORD_TRAILER_PREFIX = "Route-Record-Digest: "
+ROUTE_PLAN_TRAILER_PREFIX = "Route-Plan-Digest: "
+ROUTE_ARTIFACT_TRAILER_PREFIX = "Route-Artifact-Digest: "
 SHA = re.compile(r"^[0-9a-f]{40}$")
 SAFE_RULES = {
     "py/reflective-xss",
@@ -364,11 +388,26 @@ class GitHubApi:
     def delete(self, path: str) -> Any:
         return self.request("DELETE", path)
 
-    def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+    def list_all(
+        self,
+        path: str,
+        *,
+        max_pages: int = 10,
+        max_items: int | None = None,
+    ) -> list[dict[str, Any]]:
+        if max_items is not None and (
+            not isinstance(max_items, int) or isinstance(max_items, bool) or max_items < 1
+        ):
+            raise AutohealError("pagination max_items must be a positive integer")
+        if not isinstance(max_pages, int) or isinstance(max_pages, bool) or max_pages < 1:
+            raise AutohealError("pagination max_pages must be a positive integer")
+        page_size = 100
+        if max_items is not None:
+            page_size = min(100, (max_items + max_pages - 1) // max_pages)
         rows: list[dict[str, Any]] = []
         separator = "&" if "?" in path else "?"
         for page in range(1, max_pages + 1):
-            payload = self.get(f"{path}{separator}per_page=100&page={page}")
+            payload = self.get(f"{path}{separator}per_page={page_size}&page={page}")
             if isinstance(payload, dict):
                 items = None
                 for collection_key in ("check_runs", "workflow_runs"):
@@ -379,8 +418,12 @@ class GitHubApi:
                 items = payload
             if not isinstance(items, list):
                 raise AutohealError(f"unexpected paginated response for {path}")
-            rows.extend(item for item in items if isinstance(item, dict))
-            if len(items) < 100:
+            if any(not isinstance(item, dict) for item in items):
+                raise AutohealError(f"paginated response for {path} contains a non-object item")
+            rows.extend(items)
+            if max_items is not None and len(rows) >= max_items:
+                return rows[:max_items]
+            if len(items) < page_size:
                 return rows
         raise AutohealError(f"pagination limit reached for {path}")
 
@@ -806,12 +849,21 @@ def _recoverable_model_autofix_branches(
     max_attempts = int(config["maxAttemptsPerAlert"])
     for alert in alerts:
         try:
-            subject = validate_alert(alert, main_sha, config)
-        except PolicyBlock:
+            provisional = route_security_alert(
+                alert,
+                main_sha=main_sha,
+                config=config,
+                autofix_eligibility="unknown",
+            )
+            subject = _subject_from_route(provisional)
+        except (RoutingPolicyError, PolicyBlock):
             continue
-        if _repair_strategy(subject) != MODEL_AUTOFIX_STRATEGY:
+        if (
+            provisional.get("strategy") != MODEL_AUTOFIX_STRATEGY
+            or provisional.get("decision") != "blocked-external-evidence"
+        ):
             continue
-        if _is_deterministic_only(subject["path"], config):
+        if provisional.get("protected") is True:
             continue
         if not _model_path_allowed(subject["path"], config):
             continue
@@ -990,6 +1042,9 @@ def _commit_deterministic_repair(
     path: str,
     content: str,
     alert_number: int,
+    route_record_digest: str,
+    route_plan_digest: str,
+    route_artifact_digest: str,
 ) -> str:
     base_commit = _git_commit(api, base_sha)
     tree = base_commit.get("tree") or {}
@@ -1005,7 +1060,12 @@ def _commit_deterministic_repair(
     commit = api.post(
         "/git/commits",
         {
-            "message": f"security: auto-heal CodeQL alert #{alert_number}",
+            "message": _route_bound_commit_message(
+                alert_number,
+                route_record_digest,
+                route_plan_digest,
+                route_artifact_digest,
+            ),
             "tree": tree_sha,
             "parents": [base_sha],
         },
@@ -1053,6 +1113,9 @@ def _require_exact_copilot_autofix_commit(
     alert_number: int,
     head_sha: str,
     base_sha: str,
+    route_record_digest: str,
+    route_plan_digest: str,
+    route_artifact_digest: str,
 ) -> str:
     head_sha = _require_sha(head_sha, "Copilot Autofix commit SHA")
     commit = _git_commit(api, head_sha)
@@ -1086,10 +1149,24 @@ def _require_exact_copilot_autofix_commit(
     message = str(commit.get("message") or "")
     if message.splitlines()[0] != f"security: auto-heal CodeQL alert #{alert_number}":
         raise PolicyBlock("Copilot Autofix commit is bound to a different alert")
+    if _generated_commit_route_digest(repository_commit) != route_record_digest:
+        raise PolicyBlock("Copilot Autofix commit route digest drifted from persisted authority")
+    if _generated_commit_plan_digest(repository_commit) != route_plan_digest:
+        raise PolicyBlock("Copilot Autofix commit plan digest drifted from persisted authority")
+    if _generated_commit_artifact_digest(repository_commit) != route_artifact_digest:
+        raise PolicyBlock("Copilot Autofix commit artifact digest drifted from persisted authority")
     return head_sha
 
 
-def _commit_copilot_autofix(api: GitHubApi, alert_number: int, branch: str, base_sha: str) -> str:
+def _commit_copilot_autofix(
+    api: GitHubApi,
+    alert_number: int,
+    branch: str,
+    base_sha: str,
+    route_record_digest: str,
+    route_plan_digest: str,
+    route_artifact_digest: str,
+) -> str:
     existing_head = _branch_head(api, branch)
     if existing_head is None:
         _create_branch(api, branch, base_sha)
@@ -1103,6 +1180,9 @@ def _commit_copilot_autofix(api: GitHubApi, alert_number: int, branch: str, base
             alert_number,
             existing_head,
             base_sha,
+            route_record_digest,
+            route_plan_digest,
+            route_artifact_digest,
         )
         print(
             json.dumps(
@@ -1121,14 +1201,27 @@ def _commit_copilot_autofix(api: GitHubApi, alert_number: int, branch: str, base
         f"/code-scanning/alerts/{alert_number}/autofix/commits",
         {
             "target_ref": f"refs/heads/{branch}",
-            "message": f"security: auto-heal CodeQL alert #{alert_number}",
+            "message": _route_bound_commit_message(
+                alert_number,
+                route_record_digest,
+                route_plan_digest,
+                route_artifact_digest,
+            ),
         },
     )
     head_sha = _require_sha((payload or {}).get("sha"), "Copilot Autofix commit SHA")
     observed_head = _branch_head(api, branch)
     if observed_head != head_sha:
         raise AutohealError("Copilot Autofix branch did not advance to the returned commit")
-    return _require_exact_copilot_autofix_commit(api, alert_number, head_sha, base_sha)
+    return _require_exact_copilot_autofix_commit(
+        api,
+        alert_number,
+        head_sha,
+        base_sha,
+        route_record_digest,
+        route_plan_digest,
+        route_artifact_digest,
+    )
 
 
 def _changed_files(api: GitHubApi, base_sha: str, head_sha: str) -> list[dict[str, Any]]:
@@ -1185,6 +1278,79 @@ def _delete_exact_generated_branch(api: GitHubApi, branch: str, head_sha: str) -
     api.delete(f"/git/refs/heads/{encoded}")
 
 
+def _validate_route_evidence_fields(route_evidence: dict[str, Any]) -> None:
+    expected = {
+        "routePlanDigest",
+        "routePlanRunId",
+        "routePlanRunAttempt",
+        "routeArtifactId",
+        "routeArtifactName",
+        "routeArtifactDigest",
+    }
+    if set(route_evidence) != expected:
+        raise PolicyBlock("repair route artifact evidence keys are outside the reviewed schema")
+    run_id = route_evidence.get("routePlanRunId")
+    run_attempt = route_evidence.get("routePlanRunAttempt")
+    artifact_id = route_evidence.get("routeArtifactId")
+    if (
+        not isinstance(route_evidence.get("routePlanDigest"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", str(route_evidence["routePlanDigest"])) is None
+        or not isinstance(run_id, int)
+        or isinstance(run_id, bool)
+        or run_id < 1
+        or not isinstance(run_attempt, int)
+        or isinstance(run_attempt, bool)
+        or run_attempt < 1
+        or not isinstance(artifact_id, int)
+        or isinstance(artifact_id, bool)
+        or artifact_id < 1
+        or route_evidence.get("routeArtifactName")
+        != f"{ROUTE_PLAN_ARTIFACT_PREFIX}-{run_id}-{run_attempt}"
+        or not isinstance(route_evidence.get("routeArtifactDigest"), str)
+        or ROUTE_ARTIFACT_DIGEST_RE.fullmatch(str(route_evidence["routeArtifactDigest"])) is None
+    ):
+        raise PolicyBlock("repair route artifact evidence is malformed")
+
+
+def _require_marker_route_record(metadata: dict[str, Any]) -> dict[str, Any]:
+    route_record = metadata.get("routeRecord")
+    if not isinstance(route_record, dict):
+        raise PolicyBlock("generated repair marker lacks the canonical persisted route record")
+    try:
+        canonical_routing_record(route_record)
+    except RoutingPolicyError as exc:
+        raise PolicyBlock(f"generated repair marker route record is invalid: {exc}") from exc
+
+    expected = {
+        "alert": route_record.get("alertNumber"),
+        "rule": route_record.get("rule"),
+        "severity": route_record.get("securitySeverity"),
+        "path": route_record.get("path"),
+        "base": route_record.get("baseSha"),
+        "fingerprint": route_record.get("fingerprint"),
+        "strategy": route_record.get("strategy"),
+        "routeDecision": route_record.get("decision"),
+        "routeAuthority": route_record.get("authority"),
+        "routeRecordDigest": route_record.get("recordDigest"),
+        "routingPolicyVersion": route_record.get("routingPolicyVersion"),
+        "routeAutofixEligibility": route_record.get("autofixEligibility"),
+    }
+    observed = {key: metadata.get(key) for key in expected}
+    attempt = metadata.get("attempt")
+    prior = route_record.get("strategyAttemptCount")
+    if observed != expected:
+        raise PolicyBlock("generated repair marker fields drifted from its canonical route record")
+    if (
+        not isinstance(attempt, int)
+        or isinstance(attempt, bool)
+        or not isinstance(prior, int)
+        or isinstance(prior, bool)
+        or attempt != prior + 1
+    ):
+        raise PolicyBlock("generated repair marker attempt drifted from its canonical route record")
+    return route_record
+
+
 def _create_pull_request(
     api: GitHubApi,
     branch: str,
@@ -1194,7 +1360,21 @@ def _create_pull_request(
     *,
     deterministic: bool,
     strategy: str,
+    route_record: dict[str, Any],
+    route_evidence: dict[str, Any],
 ) -> int:
+    try:
+        canonical_routing_record(route_record)
+    except RoutingPolicyError as exc:
+        raise PolicyBlock(f"repair route record is invalid: {exc}") from exc
+    if route_record.get("strategy") != strategy:
+        raise PolicyBlock("repair route record strategy drifted before PR creation")
+    expected_decision = (
+        "ordinary-deterministic-autoheal" if deterministic else "ordinary-bounded-autofix"
+    )
+    if route_record.get("decision") != expected_decision:
+        raise PolicyBlock("repair route record does not authorize this mutation lane")
+    _validate_route_evidence_fields(route_evidence)
     metadata = {
         "version": 1,
         "alert": subject["number"],
@@ -1208,6 +1388,17 @@ def _create_pull_request(
         "generator": "deterministic" if deterministic else "github-codeql-autofix",
         "strategy": strategy,
     }
+    metadata.update(
+        {
+            "routeDecision": route_record["decision"],
+            "routeAuthority": route_record["authority"],
+            "routeRecordDigest": route_record["recordDigest"],
+            "routingPolicyVersion": route_record["routingPolicyVersion"],
+            "routeAutofixEligibility": route_record["autofixEligibility"],
+            "routeRecord": dict(route_record),
+            **route_evidence,
+        }
+    )
     body = "\n".join(
         (
             _marker(metadata),
@@ -1217,6 +1408,12 @@ def _create_pull_request(
             "candidate-alert regression checks, and the App-owned Trusted PR Gate before merge.",
         )
     )
+    live_main = _require_sha(
+        ((api.get("/branches/main") or {}).get("commit") or {}).get("sha"),
+        "pre-publication current main SHA",
+    )
+    if live_main != subject["baseSha"]:
+        raise PolicyBlock("main advanced before route-authorized repair PR publication")
     try:
         pr = api.post(
             "/pulls",
@@ -1335,6 +1532,77 @@ def _verify_codeql_remediation(
             )
 
 
+def _require_marker_route_artifact(
+    api: GitHubApi,
+    metadata: dict[str, Any],
+    base_sha: str,
+) -> None:
+    required = {
+        "routePlanDigest",
+        "routePlanRunId",
+        "routePlanRunAttempt",
+        "routeArtifactId",
+        "routeArtifactName",
+        "routeArtifactDigest",
+    }
+    present = {key for key in required if metadata.get(key) is not None}
+    if not present:
+        return
+    if present != required:
+        raise PolicyBlock("generated repair marker has incomplete route artifact provenance")
+    plan_digest = metadata.get("routePlanDigest")
+    run_id = metadata.get("routePlanRunId")
+    run_attempt = metadata.get("routePlanRunAttempt")
+    artifact_id = metadata.get("routeArtifactId")
+    artifact_name = metadata.get("routeArtifactName")
+    artifact_digest = metadata.get("routeArtifactDigest")
+    if (
+        not isinstance(plan_digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", plan_digest) is None
+        or not isinstance(run_id, int)
+        or isinstance(run_id, bool)
+        or run_id < 1
+        or not isinstance(run_attempt, int)
+        or isinstance(run_attempt, bool)
+        or run_attempt < 1
+        or not isinstance(artifact_id, int)
+        or isinstance(artifact_id, bool)
+        or artifact_id < 1
+        or not isinstance(artifact_name, str)
+        or artifact_name != f"{ROUTE_PLAN_ARTIFACT_PREFIX}-{run_id}-{run_attempt}"
+        or not isinstance(artifact_digest, str)
+        or ROUTE_ARTIFACT_DIGEST_RE.fullmatch(artifact_digest) is None
+    ):
+        raise PolicyBlock("generated repair marker route artifact provenance is malformed")
+    artifact = api.get(f"/actions/artifacts/{artifact_id}")
+    workflow_run = (artifact or {}).get("workflow_run") or {}
+    if (
+        not isinstance(artifact, dict)
+        or artifact.get("id") != artifact_id
+        or artifact.get("name") != artifact_name
+        or artifact.get("expired") is not False
+        or artifact.get("digest") != artifact_digest
+        or workflow_run.get("id") != run_id
+        or workflow_run.get("head_sha") != base_sha
+        or workflow_run.get("head_branch") != "main"
+    ):
+        raise PolicyBlock("generated repair route artifact drifted from its marker")
+    run = api.get(f"/actions/runs/{run_id}")
+    if (
+        not isinstance(run, dict)
+        or run.get("id") != run_id
+        or run.get("workflow_id") != SECURITY_AUTOHEAL_WORKFLOW_ID
+        or run.get("path") != SECURITY_AUTOHEAL_WORKFLOW_PATH
+        or run.get("run_attempt") != run_attempt
+        or run.get("event") not in SECURITY_AUTOHEAL_RECONCILE_EVENTS
+        or run.get("head_branch") != "main"
+        or run.get("head_sha") != base_sha
+        or run.get("status") != "completed"
+        or run.get("conclusion") != "success"
+    ):
+        raise PolicyBlock("generated repair route plan lacks successful controller-run authority")
+
+
 def _rebind_repair_alert(
     api: GitHubApi,
     metadata: dict[str, Any],
@@ -1351,18 +1619,6 @@ def _rebind_repair_alert(
     ]
     if len(matches) != 1:
         raise PolicyBlock("generated repair no longer maps to exactly one open main CodeQL alert")
-    subject = validate_alert(matches[0], live["baseSha"], config)
-    expected = {
-        "alert": subject["number"],
-        "rule": subject["rule"],
-        "severity": subject["severity"],
-        "path": subject["path"],
-        "base": subject["baseSha"],
-        "fingerprint": subject["fingerprint"],
-    }
-    observed = {key: metadata.get(key) for key in expected}
-    if observed != expected:
-        raise PolicyBlock("generated repair marker drifted from the exact live CodeQL alert")
     attempt = metadata.get("attempt")
     if (
         not isinstance(attempt, int)
@@ -1374,6 +1630,61 @@ def _rebind_repair_alert(
     generator = metadata.get("generator")
     if generator not in {"deterministic", "github-codeql-autofix"}:
         raise PolicyBlock("generated repair marker generator is outside reviewed authority")
+    persisted_route_record = _require_marker_route_record(metadata)
+
+    route_digest = metadata.get("routeRecordDigest")
+    if route_digest is None:
+        raise PolicyBlock("generated repair marker lacks persisted route provenance")
+    strategy = metadata.get("strategy")
+    eligibility = metadata.get("routeAutofixEligibility")
+    if (
+        not isinstance(route_digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", route_digest) is None
+        or not isinstance(strategy, str)
+        or not strategy
+        or eligibility not in {"available", "unavailable", "unknown"}
+    ):
+        raise PolicyBlock("generated repair marker routing provenance is malformed")
+    try:
+        route_record = route_security_alert(
+            matches[0],
+            main_sha=live["baseSha"],
+            config=config,
+            attempts_by_strategy={strategy: attempt - 1},
+            autofix_eligibility=eligibility,
+        )
+        canonical_routing_record(route_record)
+    except RoutingPolicyError as exc:
+        raise PolicyBlock(f"generated repair route cannot be revalidated: {exc}") from exc
+    expected_decision = (
+        "ordinary-deterministic-autoheal"
+        if generator == "deterministic"
+        else "ordinary-bounded-autofix"
+    )
+    if (
+        route_record != persisted_route_record
+        or route_record.get("recordDigest") != route_digest
+        or route_record.get("decision") != expected_decision
+        or metadata.get("routeDecision") != expected_decision
+        or metadata.get("routeAuthority") != route_record.get("authority")
+        or metadata.get("routingPolicyVersion") != route_record.get("routingPolicyVersion")
+        or route_record.get("strategy") != strategy
+    ):
+        raise PolicyBlock("generated repair marker drifted from deterministic routing truth")
+    _require_marker_route_artifact(api, metadata, live["baseSha"])
+    subject = _subject_from_route(route_record)
+
+    expected = {
+        "alert": subject["number"],
+        "rule": subject["rule"],
+        "severity": subject["severity"],
+        "path": subject["path"],
+        "base": subject["baseSha"],
+        "fingerprint": subject["fingerprint"],
+    }
+    observed = {key: metadata.get(key) for key in expected}
+    if observed != expected:
+        raise PolicyBlock("generated repair marker drifted from the exact live CodeQL alert")
     _require_strategy_binding(metadata, subject)
     return subject
 
@@ -1391,6 +1702,16 @@ def assess_trusted_admission(
     if not _owned_generated_repair_commit(commit, live["headSha"]):
         raise PolicyBlock("generated repair head lacks exact GitHub Actions ownership")
     subject = _rebind_repair_alert(api, metadata, live, config)
+    route_digest = metadata.get("routeRecordDigest")
+    plan_digest = metadata.get("routePlanDigest")
+    if (
+        not isinstance(route_digest, str)
+        or not isinstance(plan_digest, str)
+        or _generated_commit_route_digest(commit) != route_digest
+        or _generated_commit_plan_digest(commit) != plan_digest
+        or _generated_commit_artifact_digest(commit) != metadata.get("routeArtifactDigest")
+    ):
+        raise PolicyBlock("generated repair commit is not immutably bound to its route evidence")
     _require_repair_branch_binding(live["branch"], metadata, subject)
     if metadata.get("generator") == "deterministic":
         expected_content = _deterministic_repair(subject)
@@ -1968,6 +2289,25 @@ def _terminal_closure_certificate(
         raise PolicyBlock("terminal repair path is invalid")
     if not isinstance(strategy, str) or not strategy:
         raise PolicyBlock("terminal repair strategy is invalid")
+    route_record = _require_marker_route_record(metadata)
+    route_record_digest = route_record.get("recordDigest")
+    if (
+        not isinstance(route_record_digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", route_record_digest) is None
+    ):
+        raise PolicyBlock("terminal repair route record digest is invalid")
+    route_evidence = {
+        key: metadata.get(key)
+        for key in (
+            "routePlanDigest",
+            "routePlanRunId",
+            "routePlanRunAttempt",
+            "routeArtifactId",
+            "routeArtifactName",
+            "routeArtifactDigest",
+        )
+    }
+    _validate_route_evidence_fields(route_evidence)
     base_sha = _require_sha(metadata.get("base"), "terminal repair base SHA")
     head_sha = _require_sha(metadata.get("head"), "terminal repair head SHA")
     merge_sha = _require_sha(merge_evidence.get("mergeSha"), "terminal repair merge SHA")
@@ -1989,7 +2329,7 @@ def _terminal_closure_certificate(
         if not isinstance(value, int) or isinstance(value, bool) or value < 1:
             raise PolicyBlock(f"{label} is invalid")
     return {
-        "version": 1,
+        "version": 2,
         "outcome": "resolved",
         "pr": number,
         "alert": alert,
@@ -2001,6 +2341,13 @@ def _terminal_closure_certificate(
         "sourceTreeSha": source_tree,
         "fingerprint": fingerprint,
         "strategy": strategy,
+        "routeDecision": route_record["decision"],
+        "routeAuthority": route_record["authority"],
+        "routeRecordDigest": route_record_digest,
+        "routingPolicyVersion": route_record["routingPolicyVersion"],
+        "routeAutofixEligibility": route_record["autofixEligibility"],
+        "routeRecord": route_record,
+        **route_evidence,
         "alertState": "fixed",
         "ciWorkflowId": POST_MERGE_CI_WORKFLOW_ID,
         "ciRunId": int(ci_run["id"]),
@@ -2032,6 +2379,11 @@ def _terminal_certificate_static_matches(
     merge_evidence: dict[str, Any],
 ) -> bool:
     try:
+        marker_route_record = _require_marker_route_record(metadata)
+        certificate_route_record = certificate.get("routeRecord")
+        if not isinstance(certificate_route_record, dict):
+            return False
+        canonical_routing_record(certificate_route_record)
         expected_base = _require_sha(metadata.get("base"), "terminal marker base SHA")
         expected_head = _require_sha(metadata.get("head"), "terminal marker head SHA")
         expected_merge = _require_sha(merge_evidence.get("mergeSha"), "terminal expected merge SHA")
@@ -2046,7 +2398,29 @@ def _terminal_certificate_static_matches(
         )
     except PolicyBlock:
         return False
+    route_record_digest = certificate.get("routeRecordDigest")
+    route_plan_digest = certificate.get("routePlanDigest")
+    route_artifact_digest = certificate.get("routeArtifactDigest")
+    expected_route_artifact_name = (
+        f"{ROUTE_PLAN_ARTIFACT_PREFIX}-{certificate.get('routePlanRunId')}-"
+        f"{certificate.get('routePlanRunAttempt')}"
+    )
+    route_record_digest_valid = (
+        isinstance(route_record_digest, str)
+        and re.fullmatch(r"[0-9a-f]{64}", route_record_digest) is not None
+    )
+    route_plan_digest_valid = (
+        isinstance(route_plan_digest, str)
+        and re.fullmatch(r"[0-9a-f]{64}", route_plan_digest) is not None
+    )
+    route_artifact_digest_valid = (
+        isinstance(route_artifact_digest, str)
+        and ROUTE_ARTIFACT_DIGEST_RE.fullmatch(route_artifact_digest) is not None
+    )
     positive_int_fields = (
+        "routePlanRunId",
+        "routePlanRunAttempt",
+        "routeArtifactId",
         "ciRunId",
         "codeqlRunId",
         "trustedStatusId",
@@ -2054,7 +2428,7 @@ def _terminal_certificate_static_matches(
         "workflowRunId",
     )
     return (
-        certificate.get("version") == 1
+        certificate.get("version") == 2
         and certificate.get("outcome") == "resolved"
         and certificate.get("pr") == number
         and certificate.get("alert") == metadata.get("alert")
@@ -2062,6 +2436,24 @@ def _terminal_certificate_static_matches(
         and certificate.get("path") == metadata.get("path")
         and certificate.get("fingerprint") == metadata.get("fingerprint")
         and certificate.get("strategy") == _marker_strategy(metadata)
+        and certificate_route_record == marker_route_record
+        and certificate.get("routeDecision") == marker_route_record.get("decision")
+        and certificate.get("routeAuthority") == marker_route_record.get("authority")
+        and certificate.get("routeRecordDigest") == marker_route_record.get("recordDigest")
+        and certificate.get("routingPolicyVersion")
+        == marker_route_record.get("routingPolicyVersion")
+        and certificate.get("routeAutofixEligibility")
+        == marker_route_record.get("autofixEligibility")
+        and certificate.get("routePlanDigest") == metadata.get("routePlanDigest")
+        and certificate.get("routePlanRunId") == metadata.get("routePlanRunId")
+        and certificate.get("routePlanRunAttempt") == metadata.get("routePlanRunAttempt")
+        and certificate.get("routeArtifactId") == metadata.get("routeArtifactId")
+        and certificate.get("routeArtifactName") == metadata.get("routeArtifactName")
+        and certificate.get("routeArtifactDigest") == metadata.get("routeArtifactDigest")
+        and route_record_digest_valid
+        and route_plan_digest_valid
+        and route_artifact_digest_valid
+        and certificate.get("routeArtifactName") == expected_route_artifact_name
         and certificate.get("alertState") == "fixed"
         and observed_base == expected_base
         and observed_head == expected_head
@@ -2374,6 +2766,21 @@ def _verify_merged_repair_subject(
     commit = api.get(f"/commits/{head_sha}")
     if not _owned_generated_repair_commit(commit, head_sha):
         raise PolicyBlock("terminal repair head lacks exact GitHub Actions ownership")
+    route_record = _require_marker_route_record(metadata)
+    route_record_digest = route_record.get("recordDigest")
+    route_plan_digest = metadata.get("routePlanDigest")
+    if (
+        not isinstance(route_record_digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", route_record_digest) is None
+        or not isinstance(route_plan_digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", route_plan_digest) is None
+        or _generated_commit_route_digest(commit) != route_record_digest
+        or _generated_commit_plan_digest(commit) != route_plan_digest
+        or _generated_commit_artifact_digest(commit) != metadata.get("routeArtifactDigest")
+    ):
+        raise PolicyBlock(
+            "terminal repair commit is not immutably bound to its persisted route evidence"
+        )
     merge_evidence = _finalize_post_merge_evidence(
         api,
         {"sha": merge_sha},
@@ -2416,7 +2823,40 @@ def _reconcile_terminal_closure(
     merged = _current_main_merged_repair(api, main_sha)
     if merged is None:
         return False
-    number, metadata, merge_evidence = _verify_merged_repair_subject(api, merged, main_sha, config)
+    number, metadata, merge_evidence = _verify_merged_repair_subject(
+        api,
+        merged,
+        main_sha,
+        config,
+    )
+    terminal_comments = api.list_all(f"/issues/{number}/comments", max_pages=2)
+    existing_terminal_certificates: list[dict[str, Any]] = []
+    for row in terminal_comments:
+        actor = row.get("user") or {}
+        body = row.get("body")
+        if (
+            actor.get("login") == GITHUB_ACTIONS_LOGIN
+            and actor.get("id") == GITHUB_ACTIONS_USER_ID
+            and isinstance(body, str)
+            and body.startswith(TERMINAL_CLOSURE_COMMENT_PREFIX)
+        ):
+            parsed = _exact_unedited_terminal_certificate(
+                row,
+                metadata,
+                number,
+                merge_evidence,
+            )
+            if parsed is None:
+                raise PolicyBlock("GitHub Actions terminal closure certificate is malformed")
+            existing_terminal_certificates.append(parsed)
+    if len(existing_terminal_certificates) > 1:
+        raise PolicyBlock("repair has ambiguous GitHub Actions terminal closure certificates")
+    if not existing_terminal_certificates:
+        _require_marker_route_artifact(
+            api,
+            metadata,
+            _require_sha(metadata.get("base"), "terminal repair base SHA"),
+        )
     trusted_gate = _terminal_trusted_gate_evidence(api, number, metadata)
 
     ci = _select_post_merge_ci_run(
@@ -2608,6 +3048,83 @@ def _open_pulls(api: GitHubApi) -> list[dict[str, Any]]:
     return api.list_all("/pulls?state=open&sort=created&direction=asc", max_pages=4)
 
 
+def _route_bound_commit_message(
+    alert_number: int,
+    route_record_digest: str,
+    route_plan_digest: str,
+    route_artifact_digest: str,
+) -> str:
+    if (
+        not isinstance(alert_number, int)
+        or isinstance(alert_number, bool)
+        or alert_number < 1
+        or not isinstance(route_record_digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", route_record_digest) is None
+        or not isinstance(route_plan_digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", route_plan_digest) is None
+        or not isinstance(route_artifact_digest, str)
+        or ROUTE_ARTIFACT_DIGEST_RE.fullmatch(route_artifact_digest) is None
+    ):
+        raise PolicyBlock("generated repair commit route binding is malformed")
+    return (
+        f"security: auto-heal CodeQL alert #{alert_number}\n\n"
+        f"{ROUTE_RECORD_TRAILER_PREFIX}{route_record_digest}\n"
+        f"{ROUTE_PLAN_TRAILER_PREFIX}{route_plan_digest}\n"
+        f"{ROUTE_ARTIFACT_TRAILER_PREFIX}{route_artifact_digest}"
+    )
+
+
+def _generated_commit_route_digest(payload: Any) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    commit = payload.get("commit") or {}
+    message = commit.get("message")
+    if not isinstance(message, str):
+        return None
+    matches = [
+        line.removeprefix(ROUTE_RECORD_TRAILER_PREFIX)
+        for line in message.splitlines()
+        if line.startswith(ROUTE_RECORD_TRAILER_PREFIX)
+    ]
+    if len(matches) != 1 or re.fullmatch(r"[0-9a-f]{64}", matches[0]) is None:
+        return None
+    return matches[0]
+
+
+def _generated_commit_plan_digest(payload: Any) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    commit = payload.get("commit") or {}
+    message = commit.get("message")
+    if not isinstance(message, str):
+        return None
+    matches = [
+        line.removeprefix(ROUTE_PLAN_TRAILER_PREFIX)
+        for line in message.splitlines()
+        if line.startswith(ROUTE_PLAN_TRAILER_PREFIX)
+    ]
+    if len(matches) != 1 or re.fullmatch(r"[0-9a-f]{64}", matches[0]) is None:
+        return None
+    return matches[0]
+
+
+def _generated_commit_artifact_digest(payload: Any) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    commit = payload.get("commit") or {}
+    message = commit.get("message")
+    if not isinstance(message, str):
+        return None
+    matches = [
+        line.removeprefix(ROUTE_ARTIFACT_TRAILER_PREFIX)
+        for line in message.splitlines()
+        if line.startswith(ROUTE_ARTIFACT_TRAILER_PREFIX)
+    ]
+    if len(matches) != 1 or ROUTE_ARTIFACT_DIGEST_RE.fullmatch(matches[0]) is None:
+        return None
+    return matches[0]
+
+
 def _owned_generated_repair_commit(payload: Any, head_sha: str) -> bool:
     if not isinstance(payload, dict) or payload.get("sha") != head_sha:
         return False
@@ -2675,15 +3192,23 @@ def _prune_orphan_repair_refs(
 
 
 def _generated_repairs(pulls: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [
-        pr
-        for pr in pulls
-        if (pr.get("user") or {}).get("login") == GITHUB_ACTIONS_LOGIN
-        and (pr.get("user") or {}).get("id") == GITHUB_ACTIONS_USER_ID
-        and isinstance(((pr.get("head") or {}).get("ref")), str)
-        and str((pr.get("head") or {}).get("ref")).startswith(BRANCH_PREFIX)
-        and _parse_marker(pr.get("body")) is not None
-    ]
+    repairs: list[dict[str, Any]] = []
+    for pr in pulls:
+        actor = pr.get("user") or {}
+        branch = (pr.get("head") or {}).get("ref")
+        if (
+            actor.get("login") != GITHUB_ACTIONS_LOGIN
+            or actor.get("id") != GITHUB_ACTIONS_USER_ID
+            or not isinstance(branch, str)
+            or not branch.startswith(BRANCH_PREFIX)
+        ):
+            continue
+        if _parse_marker(pr.get("body")) is None:
+            raise PolicyBlock(
+                "GitHub Actions auto-heal namespace PR has missing or malformed provenance marker"
+            )
+        repairs.append(pr)
+    return repairs
 
 
 def _github_timestamp_at_or_before(value: Any, cutoff: Any) -> bool:
@@ -2853,6 +3378,577 @@ def _attempt_count(
     return count
 
 
+def _autofix_intent_identity(record: dict[str, Any]) -> tuple[str, str, int]:
+    number = record.get("alertNumber")
+    fingerprint = record.get("fingerprint")
+    prior = record.get("strategyAttemptCount")
+    base_sha = record.get("baseSha")
+    digest = record.get("recordDigest")
+    if (
+        not isinstance(number, int)
+        or isinstance(number, bool)
+        or number < 1
+        or not isinstance(fingerprint, str)
+        or re.fullmatch(r"[0-9a-f]{64}", fingerprint) is None
+        or not isinstance(prior, int)
+        or isinstance(prior, bool)
+        or prior < 0
+        or not isinstance(base_sha, str)
+        or SHA.fullmatch(base_sha) is None
+        or not isinstance(digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+    ):
+        raise PolicyBlock("Autofix intent route identity is malformed")
+    attempt = prior + 1
+    name = f"{AUTOFIX_INTENT_CHECK_PREFIX} #{number} {fingerprint[:12]} a{attempt}"
+    material = {
+        "version": 1,
+        "repository": "portyu9/ai-qa-automation",
+        "alert": number,
+        "fingerprint": fingerprint,
+        "baseSha": base_sha,
+        "routeRecordDigest": digest,
+        "strategy": MODEL_AUTOFIX_STRATEGY,
+        "attempt": attempt,
+    }
+    external_id = (
+        "aiqa-autofix-intent:"
+        + hashlib.sha256(
+            json.dumps(material, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        ).hexdigest()
+    )
+    return name, external_id, attempt
+
+
+def _exact_autofix_intent_check(
+    row: Any,
+    *,
+    name: str,
+    external_id: str,
+    main_sha: str,
+) -> bool:
+    if not isinstance(row, dict):
+        return False
+    app = row.get("app") or {}
+    return (
+        row.get("name") == name
+        and row.get("external_id") == external_id
+        and row.get("head_sha") == main_sha
+        and row.get("status") == "completed"
+        and row.get("conclusion") == "neutral"
+        and app.get("id") == GITHUB_ACTIONS_APP_ID
+        and app.get("slug") == GITHUB_ACTIONS_APP_SLUG
+    )
+
+
+def _ensure_autofix_submission_intent(
+    api: GitHubApi,
+    record: dict[str, Any],
+    config: dict[str, Any],
+) -> bool:
+    """Persist provider-submission intent. True means this run may submit exactly once."""
+    name, external_id, attempt = _autofix_intent_identity(record)
+    main_sha = _require_sha(record.get("baseSha"), "Autofix intent main SHA")
+    if _current_main(api, config) != main_sha:
+        raise PolicyBlock("main advanced before Autofix submission intent")
+    encoded_name = urllib.parse.quote(name, safe="")
+    rows = api.list_all(
+        f"/commits/{main_sha}/check-runs?filter=all&check_name={encoded_name}",
+        max_pages=2,
+    )
+    matches = [
+        row
+        for row in rows
+        if _exact_autofix_intent_check(
+            row,
+            name=name,
+            external_id=external_id,
+            main_sha=main_sha,
+        )
+    ]
+    if len(matches) > 2:
+        raise PolicyBlock("Autofix submission intent has excessive duplicate evidence")
+    if matches:
+        return False
+
+    payload = {
+        "name": name,
+        "head_sha": main_sha,
+        "status": "completed",
+        "conclusion": "neutral",
+        "external_id": external_id,
+        "output": {
+            "title": "Autofix provider submission intent persisted",
+            "summary": (
+                f"Alert #{record['alertNumber']} exact-main Autofix attempt {attempt}; "
+                "non-authoritative replay-suppression evidence only."
+            ),
+        },
+    }
+    created = api.post("/check-runs", payload)
+    if not _exact_autofix_intent_check(
+        created,
+        name=name,
+        external_id=external_id,
+        main_sha=main_sha,
+    ):
+        raise AutohealError("GitHub did not acknowledge exact Autofix submission intent")
+    if _current_main(api, config) != main_sha:
+        raise PolicyBlock("main advanced after Autofix submission intent")
+    return True
+
+
+def _autofix_evidence(api: GitHubApi, alert_number: int) -> str:
+    if not isinstance(alert_number, int) or isinstance(alert_number, bool) or alert_number < 1:
+        raise AutohealError("route planning received an invalid alert number")
+    status, payload = api.request_status("GET", f"/code-scanning/alerts/{alert_number}/autofix")
+    state = (payload or {}).get("status") if isinstance(payload, dict) else None
+    if status == 200:
+        if state == "success":
+            return "available"
+        if state in {"pending", "in_progress", "queued"}:
+            return "unknown"
+        if state in {"failure", "unavailable"}:
+            return "unavailable"
+        raise AutohealError(
+            f"GitHub CodeQL Autofix returned an unsupported evidence state: {state}"
+        )
+    if status == 404:
+        return "unknown"
+    raise AutohealError(
+        f"GitHub CodeQL Autofix evidence request failed: status={status} state={state}"
+    )
+
+
+def _route_record_for_alert(
+    api: GitHubApi,
+    alert: dict[str, Any],
+    main_sha: str,
+    config: dict[str, Any],
+    *,
+    autofix_eligibility: str | None = None,
+) -> dict[str, Any]:
+    number = alert.get("number")
+    if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+        raise AutohealError("route planning received an invalid alert identity")
+    try:
+        provisional = route_security_alert(
+            alert,
+            main_sha=main_sha,
+            config=config,
+            autofix_eligibility=autofix_eligibility or "unknown",
+        )
+        strategy = provisional["strategy"]
+        if not isinstance(strategy, str) or not strategy:
+            raise AutohealError("routing policy produced an invalid remediation strategy")
+        evidence = autofix_eligibility or "unknown"
+        if (
+            autofix_eligibility is None
+            and strategy == MODEL_AUTOFIX_STRATEGY
+            and provisional.get("decision") == "blocked-external-evidence"
+        ):
+            evidence = _autofix_evidence(api, number)
+        attempts = _attempt_count(api, number, strategy, main_sha)
+        return route_security_alert(
+            alert,
+            main_sha=main_sha,
+            config=config,
+            attempts_by_strategy={strategy: attempts},
+            autofix_eligibility=evidence,
+        )
+    except RoutingPolicyError as exc:
+        raise AutohealError(f"deterministic security routing failed closed: {exc}") from exc
+
+
+def _subject_from_route(record: dict[str, Any]) -> dict[str, Any]:
+    required = {
+        "alertNumber": int,
+        "rule": str,
+        "securitySeverity": (int, float),
+        "path": str,
+        "line": int,
+        "baseSha": str,
+        "fingerprint": str,
+        "strategy": str,
+        "recordDigest": str,
+    }
+    for key, expected in required.items():
+        value = record.get(key)
+        if isinstance(value, bool) or not isinstance(value, expected):
+            raise PolicyBlock(f"routing record field is malformed: {key}")
+    return {
+        "number": record["alertNumber"],
+        "rule": record["rule"],
+        "severity": float(record["securitySeverity"]),
+        "path": record["path"],
+        "line": record["line"],
+        "baseSha": _require_sha(record["baseSha"], "routing record base SHA"),
+        "fingerprint": record["fingerprint"],
+    }
+
+
+def _canonical_route_plan(plan: dict[str, Any]) -> bytes:
+    raw = dict(plan)
+    digest = raw.pop("planDigest", None)
+    if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise AutohealError("route plan digest is missing or malformed")
+    records = raw.get("records")
+    if not isinstance(records, list) or len(records) > 100:
+        raise AutohealError("route plan records are malformed or exceed the bounded alert limit")
+    seen: set[int] = set()
+    for record in records:
+        if not isinstance(record, dict):
+            raise AutohealError("route plan contains a non-object routing record")
+        try:
+            canonical_routing_record(record)
+        except RoutingPolicyError as exc:
+            raise AutohealError(f"route plan contains invalid routing evidence: {exc}") from exc
+        number = record.get("alertNumber")
+        if not isinstance(number, int) or isinstance(number, bool) or number < 1 or number in seen:
+            raise AutohealError("route plan contains an invalid or duplicate alert identity")
+        seen.add(number)
+    canonical = json.dumps(raw, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    expected = hashlib.sha256(canonical).hexdigest()
+    if digest != expected:
+        raise AutohealError("route plan digest does not match its canonical content")
+    raw["planDigest"] = digest
+    payload = (json.dumps(raw, separators=(",", ":"), sort_keys=True) + "\n").encode("utf-8")
+    if len(payload) > ROUTE_PLAN_MAX_BYTES:
+        raise AutohealError("route plan exceeds the bounded persistence limit")
+    return payload
+
+
+def _validated_live_alert_numbers(alerts: list[dict[str, Any]]) -> set[int]:
+    numbers: set[int] = set()
+    for alert in alerts:
+        if not isinstance(alert, dict):
+            raise AutohealError("GitHub returned a non-object CodeQL alert")
+        number = alert.get("number")
+        if (
+            not isinstance(number, int)
+            or isinstance(number, bool)
+            or number < 1
+            or number in numbers
+        ):
+            raise AutohealError("GitHub returned an invalid or duplicate CodeQL alert identity")
+        numbers.add(number)
+    return numbers
+
+
+def _build_route_plan(
+    api: GitHubApi,
+    config: dict[str, Any],
+    main_sha: str,
+) -> dict[str, Any]:
+    query = urllib.parse.urlencode(
+        {"state": "open", "ref": "refs/heads/main", "tool_name": "CodeQL"},
+        quote_via=urllib.parse.quote,
+    )
+    alerts = api.list_all(
+        f"/code-scanning/alerts?{query}",
+        max_pages=2,
+        max_items=101,
+    )
+    if len(alerts) > 100:
+        raise AutohealError("live CodeQL alert set exceeds the bounded routing limit")
+    _validated_live_alert_numbers(alerts)
+    records = [_route_record_for_alert(api, alert, main_sha, config) for alert in alerts]
+    records.sort(key=lambda record: int(record["alertNumber"]))
+    if _current_main(api, config) != main_sha:
+        raise AutohealError("main advanced while deterministic route planning was in progress")
+    plan: dict[str, Any] = {
+        "schemaVersion": ROUTE_PLAN_SCHEMA_VERSION,
+        "repository": config["repository"],
+        "workflowId": SECURITY_AUTOHEAL_WORKFLOW_ID,
+        "workflowRunId": _current_positive_int_env("GITHUB_RUN_ID"),
+        "workflowRunAttempt": _current_positive_int_env("GITHUB_RUN_ATTEMPT"),
+        "mainSha": main_sha,
+        "records": records,
+    }
+    canonical = json.dumps(plan, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    plan["planDigest"] = hashlib.sha256(canonical).hexdigest()
+    _canonical_route_plan(plan)
+    return plan
+
+
+def _route_plan_output_path() -> Path:
+    runner_temp = os.environ.get("RUNNER_TEMP", "")
+    root = Path(runner_temp)
+    if not runner_temp or not root.is_absolute():
+        raise AutohealError("route plan persistence requires an absolute RUNNER_TEMP")
+    return root / ROUTE_PLAN_ARTIFACT_PREFIX / ROUTE_PLAN_FILENAME
+
+
+def _require_private_directory(info: os.stat_result, *, label: str) -> None:
+    if not stat.S_ISDIR(info.st_mode):
+        raise AutohealError(f"{label} is not a directory")
+    if info.st_uid != os.geteuid():
+        raise AutohealError(f"{label} is not owned by the controller process")
+    if info.st_mode & 0o022:
+        raise AutohealError(f"{label} is writable by group or other users")
+
+
+def _write_route_plan(path: Path, plan: dict[str, Any]) -> None:
+    payload = _canonical_route_plan(plan)
+    expected = _route_plan_output_path()
+    if path != expected:
+        raise AutohealError("route plan output must use the exact runner-owned temp path")
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    directory = getattr(os, "O_DIRECTORY", 0)
+    if not nofollow or not directory:
+        raise AutohealError("route plan persistence requires no-follow directory APIs")
+
+    root = expected.parent.parent
+    try:
+        root_fd = os.open(root, os.O_RDONLY | directory | nofollow)
+    except OSError as exc:
+        raise AutohealError("RUNNER_TEMP is unavailable as a no-follow directory") from exc
+    try:
+        _require_private_directory(os.fstat(root_fd), label="RUNNER_TEMP")
+        try:
+            os.mkdir(ROUTE_PLAN_ARTIFACT_PREFIX, 0o700, dir_fd=root_fd)
+        except FileExistsError as exc:
+            raise AutohealError("route plan directory already exists before planning") from exc
+        except OSError as exc:
+            raise AutohealError("unable to create exclusive route plan directory") from exc
+        os.fsync(root_fd)
+
+        try:
+            parent_fd = os.open(
+                ROUTE_PLAN_ARTIFACT_PREFIX,
+                os.O_RDONLY | directory | nofollow,
+                dir_fd=root_fd,
+            )
+        except OSError as exc:
+            raise AutohealError("route plan directory is unavailable after creation") from exc
+        try:
+            _require_private_directory(
+                os.fstat(parent_fd),
+                label="route plan directory",
+            )
+            try:
+                fd = os.open(
+                    ROUTE_PLAN_FILENAME,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow,
+                    0o600,
+                    dir_fd=parent_fd,
+                )
+            except OSError as exc:
+                raise AutohealError("unable to create exclusive route plan evidence") from exc
+            try:
+                view = memoryview(payload)
+                while view:
+                    written = os.write(fd, view)
+                    if written <= 0:
+                        raise AutohealError("route plan persistence made no forward progress")
+                    view = view[written:]
+                info = os.fstat(fd)
+                if (
+                    not stat.S_ISREG(info.st_mode)
+                    or info.st_uid != os.geteuid()
+                    or info.st_mode & 0o077
+                    or info.st_size != len(payload)
+                ):
+                    raise AutohealError("route plan file lost its private regular-file invariant")
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            os.fsync(parent_fd)
+        finally:
+            os.close(parent_fd)
+    finally:
+        os.close(root_fd)
+
+
+def plan_routes(config: dict[str, Any], output: Path) -> dict[str, Any]:
+    repository = os.environ.get("GITHUB_REPOSITORY", "")
+    if repository != config["repository"]:
+        raise AutohealError("workflow repository does not match security auto-heal config")
+    api = GitHubApi(os.environ.get("GITHUB_TOKEN", ""), repository)
+    main_sha = _current_main(api, config)
+    plan = _build_route_plan(api, config, main_sha)
+    _write_route_plan(output, plan)
+    print(
+        json.dumps(
+            {
+                "decision": "route-plan-persisted",
+                "mainSha": main_sha,
+                "planDigest": plan["planDigest"],
+                "records": len(plan["records"]),
+                "workflowRunId": plan["workflowRunId"],
+                "workflowRunAttempt": plan["workflowRunAttempt"],
+            },
+            sort_keys=True,
+        )
+    )
+    return plan
+
+
+def _load_route_plan(path: Path, config: dict[str, Any]) -> dict[str, Any]:
+    if path != _route_plan_output_path():
+        raise AutohealError("route plan input must use the exact runner-owned temp path")
+    try:
+        plan = read_routing_json_evidence(
+            path,
+            max_bytes=ROUTE_PLAN_MAX_BYTES,
+            label="security auto-heal route plan",
+        )
+    except RoutingPolicyError as exc:
+        raise AutohealError(f"unable to read route plan evidence: {exc}") from exc
+    if not isinstance(plan, dict):
+        raise AutohealError("security auto-heal route plan must be a JSON object")
+    if set(plan) != {
+        "schemaVersion",
+        "repository",
+        "workflowId",
+        "workflowRunId",
+        "workflowRunAttempt",
+        "mainSha",
+        "records",
+        "planDigest",
+    }:
+        raise AutohealError("route plan keys must equal the reviewed schema")
+    if (
+        plan.get("schemaVersion") != ROUTE_PLAN_SCHEMA_VERSION
+        or plan.get("repository") != config["repository"]
+        or plan.get("workflowId") != SECURITY_AUTOHEAL_WORKFLOW_ID
+        or plan.get("workflowRunId") != _current_positive_int_env("GITHUB_RUN_ID")
+        or plan.get("workflowRunAttempt") != _current_positive_int_env("GITHUB_RUN_ATTEMPT")
+    ):
+        raise AutohealError("route plan is not bound to the exact controller run")
+    _require_sha(plan.get("mainSha"), "route plan main SHA")
+    _canonical_route_plan(plan)
+    return plan
+
+
+def _require_route_plan_artifact(
+    api: GitHubApi,
+    plan: dict[str, Any],
+    *,
+    artifact_id: int,
+    artifact_name: str,
+    artifact_digest: str,
+) -> dict[str, Any]:
+    if not isinstance(artifact_id, int) or isinstance(artifact_id, bool) or artifact_id < 1:
+        raise AutohealError("route plan artifact id is invalid")
+    expected_name = (
+        f"{ROUTE_PLAN_ARTIFACT_PREFIX}-{plan['workflowRunId']}-{plan['workflowRunAttempt']}"
+    )
+    if artifact_name != expected_name:
+        raise AutohealError("route plan artifact name is not bound to the exact controller run")
+    if ROUTE_ARTIFACT_DIGEST_RE.fullmatch(artifact_digest) is None:
+        raise AutohealError("route plan artifact digest is malformed")
+    artifact = api.get(f"/actions/artifacts/{artifact_id}")
+    workflow_run = (artifact or {}).get("workflow_run") or {}
+    if (
+        not isinstance(artifact, dict)
+        or artifact.get("id") != artifact_id
+        or artifact.get("name") != expected_name
+        or artifact.get("expired") is not False
+        or artifact.get("digest") != artifact_digest
+        or not isinstance(artifact.get("size_in_bytes"), int)
+        or artifact.get("size_in_bytes") <= 0
+        or artifact.get("size_in_bytes") > ROUTE_PLAN_MAX_BYTES
+        or workflow_run.get("id") != plan["workflowRunId"]
+        or workflow_run.get("head_sha") != plan["mainSha"]
+        or workflow_run.get("head_branch") != "main"
+    ):
+        raise AutohealError("route plan artifact metadata drifted from the exact controller run")
+    run = api.get(f"/actions/runs/{plan['workflowRunId']}")
+    if (
+        not isinstance(run, dict)
+        or run.get("id") != plan["workflowRunId"]
+        or run.get("workflow_id") != SECURITY_AUTOHEAL_WORKFLOW_ID
+        or run.get("path") != SECURITY_AUTOHEAL_WORKFLOW_PATH
+        or run.get("run_attempt") != plan["workflowRunAttempt"]
+        or run.get("event") not in SECURITY_AUTOHEAL_RECONCILE_EVENTS
+        or run.get("head_branch") != "main"
+        or run.get("head_sha") != plan["mainSha"]
+        or run.get("status") not in {"queued", "in_progress"}
+    ):
+        raise AutohealError("route plan artifact lacks exact in-progress controller authority")
+    return {
+        "routePlanDigest": plan["planDigest"],
+        "routePlanRunId": plan["workflowRunId"],
+        "routePlanRunAttempt": plan["workflowRunAttempt"],
+        "routeArtifactId": artifact_id,
+        "routeArtifactName": artifact_name,
+        "routeArtifactDigest": artifact_digest,
+    }
+
+
+def _rebind_route_plan(
+    api: GitHubApi,
+    plan: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[int, dict[str, Any]]:
+    main_sha = _current_main(api, config)
+    if main_sha != plan["mainSha"]:
+        raise AutohealError("route plan is stale relative to exact current main")
+    query = urllib.parse.urlencode(
+        {"state": "open", "ref": "refs/heads/main", "tool_name": "CodeQL"},
+        quote_via=urllib.parse.quote,
+    )
+    alerts = api.list_all(
+        f"/code-scanning/alerts?{query}",
+        max_pages=2,
+        max_items=101,
+    )
+    if len(alerts) > 100:
+        raise AutohealError("live CodeQL alert set exceeds the bounded routing limit")
+    planned = {int(record["alertNumber"]): record for record in plan["records"]}
+    if len(planned) != len(plan["records"]):
+        raise AutohealError("route plan contains duplicate alert identities")
+    live_numbers = _validated_live_alert_numbers(alerts)
+    if set(planned) != live_numbers:
+        raise AutohealError("persisted route evidence does not match the live open-alert set")
+    for alert in alerts:
+        number = int(alert["number"])
+        expected = planned[number]
+        live = _route_record_for_alert(
+            api,
+            alert,
+            main_sha,
+            config,
+        )
+        try:
+            if canonical_routing_record(live) != canonical_routing_record(expected):
+                raise AutohealError("live routing truth drifted from persisted route evidence")
+        except RoutingPolicyError as exc:
+            raise AutohealError(f"persisted route evidence is invalid: {exc}") from exc
+    if _current_main(api, config) != main_sha:
+        raise AutohealError("main advanced while route plan was being revalidated")
+    return planned
+
+
+def _revalidate_route_record_before_mutation(
+    api: GitHubApi,
+    record: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    subject = _subject_from_route(record)
+    main_sha = _current_main(api, config)
+    if main_sha != subject["baseSha"]:
+        raise AutohealError("main advanced before selected route mutation revalidation")
+    alert = api.get(f"/code-scanning/alerts/{subject['number']}")
+    if not isinstance(alert, dict):
+        raise AutohealError("selected CodeQL alert revalidation returned a non-object")
+    live = _route_record_for_alert(
+        api,
+        alert,
+        main_sha,
+        config,
+    )
+    try:
+        if canonical_routing_record(live) != canonical_routing_record(record):
+            raise AutohealError("selected CodeQL alert routing truth drifted before mutation")
+    except RoutingPolicyError as exc:
+        raise AutohealError(f"selected CodeQL alert route cannot be revalidated: {exc}") from exc
+    if _current_main(api, config) != main_sha:
+        raise AutohealError("main advanced during selected route mutation revalidation")
+    return live
+
+
 def _create_repair(
     api: GitHubApi,
     subject: dict[str, Any],
@@ -2860,12 +3956,24 @@ def _create_repair(
     *,
     attempt: int,
     strategy: str,
+    route_record: dict[str, Any],
+    route_evidence: dict[str, Any],
 ) -> int:
+    _validate_route_evidence_fields(route_evidence)
+    if _current_main(api, config) != subject["baseSha"]:
+        raise PolicyBlock("main advanced before route-authorized repair mutation")
+    route_plan_digest = str(route_evidence["routePlanDigest"])
+    route_artifact_digest = str(route_evidence["routeArtifactDigest"])
     branch = _branch_name(subject, attempt)
     expected_strategy = _repair_strategy(subject)
-    if strategy != expected_strategy:
-        raise PolicyBlock("repair creation strategy drifted from the code-owned live strategy")
     deterministic = strategy != MODEL_AUTOFIX_STRATEGY
+    if strategy != expected_strategy or route_record.get("strategy") != strategy:
+        raise PolicyBlock("repair creation strategy drifted from the persisted route")
+    expected_decision = (
+        "ordinary-deterministic-autoheal" if deterministic else "ordinary-bounded-autofix"
+    )
+    if route_record.get("decision") != expected_decision:
+        raise PolicyBlock("persisted route does not authorize repair creation")
     deterministic_content = _deterministic_repair(subject) if deterministic else None
     deterministic_only = _is_deterministic_only(subject["path"], config)
     if deterministic and deterministic_content is None:
@@ -2882,12 +3990,24 @@ def _create_repair(
             subject["path"],
             deterministic_content,
             subject["number"],
+            str(route_record["recordDigest"]),
+            route_plan_digest,
+            route_artifact_digest,
         )
     else:
         if not _model_path_allowed(subject["path"], config):
             raise PolicyBlock("alert path is outside model-autofix authority")
-        _ensure_copilot_autofix(api, subject["number"])
-        head_sha = _commit_copilot_autofix(api, subject["number"], branch, subject["baseSha"])
+        if route_record.get("autofixEligibility") != "available":
+            raise PolicyBlock("persisted route lacks affirmative Autofix availability")
+        head_sha = _commit_copilot_autofix(
+            api,
+            subject["number"],
+            branch,
+            subject["baseSha"],
+            str(route_record["recordDigest"]),
+            route_plan_digest,
+            route_artifact_digest,
+        )
 
     files = _changed_files(api, subject["baseSha"], head_sha)
     _validate_candidate_diff(files, subject, config, deterministic=deterministic)
@@ -2899,6 +4019,8 @@ def _create_repair(
         attempt,
         deterministic=deterministic,
         strategy=strategy,
+        route_record=route_record,
+        route_evidence=route_evidence,
     )
     # Bind the branch name into the marker after creation only through the immutable branch
     # convention. The live validator derives it from the PR head and accepts an absent marker key.
@@ -2916,7 +4038,15 @@ def _create_repair(
     return pr_number
 
 
-def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
+def reconcile(
+    config: dict[str, Any],
+    *,
+    allow_merge: bool,
+    route_plan_path: Path,
+    route_artifact_id: int,
+    route_artifact_name: str,
+    route_artifact_digest: str,
+) -> int:
     repository = os.environ.get("GITHUB_REPOSITORY", "")
     if repository != config["repository"]:
         raise AutohealError("workflow repository does not match security auto-heal config")
@@ -2926,6 +4056,17 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
         return 0
 
     main_sha = _current_main(api, config)
+    plan = _load_route_plan(route_plan_path, config)
+    if plan["mainSha"] != main_sha:
+        raise AutohealError("persisted route plan is stale relative to exact current main")
+    route_evidence = _require_route_plan_artifact(
+        api,
+        plan,
+        artifact_id=route_artifact_id,
+        artifact_name=route_artifact_name,
+        artifact_digest=route_artifact_digest,
+    )
+    route_records = _rebind_route_plan(api, plan, config)
     if _reconcile_terminal_closure(api, main_sha, config):
         return 0
     pulls = _open_pulls(api)
@@ -2994,7 +4135,11 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
         {"state": "open", "ref": "refs/heads/main", "tool_name": "CodeQL"},
         quote_via=urllib.parse.quote,
     )
-    alerts = api.list_all(f"/code-scanning/alerts?{query}", max_pages=10)
+    alerts = api.list_all(
+        f"/code-scanning/alerts?{query}",
+        max_pages=2,
+        max_items=101,
+    )
     for alert in alerts:
         instance = alert.get("most_recent_instance") or {}
         if instance.get("ref") != "refs/heads/main":
@@ -3037,24 +4182,89 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
         if created >= capacity:
             break
         try:
-            subject = validate_alert(alert, main_sha, config)
-            if subject["number"] in active_alerts:
+            number = alert.get("number")
+            if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+                raise PolicyBlock("live alert identity is invalid after route-plan revalidation")
+            record = route_records.get(number)
+            if record is None:
+                raise PolicyBlock("live alert lacks persisted route-plan evidence")
+            if number in active_alerts:
                 continue
-            strategy = _repair_strategy(subject)
-            prior = _attempt_count(api, subject["number"], strategy, main_sha)
-            if prior >= config["maxAttemptsPerAlert"]:
-                raise PolicyBlock(
-                    "alert exhausted bounded automatic remediation attempts for current strategy"
+            decision = record.get("decision")
+            strategy = record.get("strategy")
+            prior = record.get("strategyAttemptCount")
+            if (
+                not isinstance(strategy, str)
+                or not strategy
+                or not isinstance(prior, int)
+                or isinstance(prior, bool)
+                or prior < 0
+            ):
+                raise PolicyBlock("persisted route record strategy accounting is malformed")
+
+            if (
+                decision == "blocked-external-evidence"
+                and strategy == MODEL_AUTOFIX_STRATEGY
+                and record.get("autofixEligibility") == "unknown"
+            ):
+                record = _revalidate_route_record_before_mutation(api, record, config)
+                subject = _subject_from_route(record)
+                if _ensure_autofix_submission_intent(api, record, config):
+                    if _current_main(api, config) != subject["baseSha"]:
+                        raise PolicyBlock(
+                            "main advanced immediately before Autofix provider submission"
+                        )
+                    _ensure_copilot_autofix(api, subject["number"])
+                    intent_state = "provider-submission-attempted"
+                else:
+                    intent_state = "provider-submission-already-intended"
+                print(
+                    json.dumps(
+                        {
+                            "alert": subject["number"],
+                            "decision": "autofix-evidence-waiting",
+                            "intentState": intent_state,
+                            "routeRecordDigest": record["recordDigest"],
+                        },
+                        sort_keys=True,
+                    )
                 )
+                return remaining_repairs + created
+
+            if decision not in {
+                "ordinary-deterministic-autoheal",
+                "ordinary-bounded-autofix",
+            }:
+                print(
+                    json.dumps(
+                        {
+                            "alert": number,
+                            "decision": "route-blocked",
+                            "routeDecision": decision,
+                            "routeReason": record.get("reason"),
+                            "routeRecordDigest": record.get("recordDigest"),
+                        },
+                        sort_keys=True,
+                    )
+                )
+                continue
+
+            record = _revalidate_route_record_before_mutation(api, record, config)
+            subject = _subject_from_route(record)
+            if prior >= config["maxAttemptsPerAlert"]:
+                raise PolicyBlock("persisted route exceeded bounded automatic remediation attempts")
             _create_repair(
                 api,
                 subject,
                 config,
                 attempt=prior + 1,
                 strategy=strategy,
+                route_record=record,
+                route_evidence=route_evidence,
             )
             created += 1
             active_alerts.add(subject["number"])
+            return remaining_repairs + created
         except RetryLater as exc:
             number = alert.get("number")
             print(
@@ -3063,6 +4273,7 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
                     sort_keys=True,
                 )
             )
+            return remaining_repairs + created
         except PolicyBlock as exc:
             number = alert.get("number")
             print(
@@ -3167,7 +4378,13 @@ def selftest(config: dict[str, Any]) -> None:
                 return {"commit": {"sha": observed}}
             raise AutohealError(f"unexpected CodeQL refresh self-test GET path: {path}")
 
-        def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+        def list_all(
+            self,
+            path: str,
+            *,
+            max_pages: int = 10,
+            max_items: int | None = None,
+        ) -> list[dict[str, Any]]:
             expected = f"/actions/runs?head_sha={current_main_sha}"
             if path != expected or max_pages != 2:
                 raise AutohealError(f"unexpected CodeQL refresh self-test list path: {path}")
@@ -3305,7 +4522,13 @@ def selftest(config: dict[str, Any]) -> None:
                 return {"commit": {"sha": "7" * 40 if self.move_main else merge_sha}}
             raise AutohealError(f"unexpected post-merge self-test GET path: {path}")
 
-        def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+        def list_all(
+            self,
+            path: str,
+            *,
+            max_pages: int = 10,
+            max_items: int | None = None,
+        ) -> list[dict[str, Any]]:
             if path == f"/actions/runs?head_sha={merge_sha}":
                 if max_pages != 2:
                     raise AutohealError("post-merge CI pagination contract drifted")
@@ -3543,7 +4766,13 @@ def selftest(config: dict[str, Any]) -> None:
                 }
             raise AutohealError(f"unexpected attempt-accounting GET path: {path}")
 
-        def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+        def list_all(
+            self,
+            path: str,
+            *,
+            max_pages: int = 10,
+            max_items: int | None = None,
+        ) -> list[dict[str, Any]]:
             if path == "/pulls?state=closed&sort=updated&direction=desc":
                 if max_pages != 10:
                     raise AutohealError("attempt-accounting pull pagination bound changed")
@@ -3670,18 +4899,45 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Fail-closed exact-subject CodeQL auto-heal")
     parser.add_argument("--validate-config", action="store_true")
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--plan-routes", action="store_true")
+    parser.add_argument("--route-plan-output", type=Path)
     parser.add_argument("--reconcile", action="store_true")
     parser.add_argument("--allow-merge", action="store_true")
+    parser.add_argument("--route-plan", type=Path)
+    parser.add_argument("--route-artifact-id", type=int)
+    parser.add_argument("--route-artifact-name")
+    parser.add_argument("--route-artifact-digest")
     args = parser.parse_args()
     config = load_config()
     if args.validate_config:
         print("security-autoheal config: valid")
     if args.self_test:
         selftest(config)
+    if args.plan_routes:
+        if args.route_plan_output is None:
+            parser.error("--plan-routes requires --route-plan-output")
+        plan_routes(config, args.route_plan_output)
     if args.reconcile:
-        reconcile(config, allow_merge=args.allow_merge)
-    if not (args.validate_config or args.self_test or args.reconcile):
-        parser.error("choose --validate-config, --self-test, or --reconcile")
+        if (
+            args.route_plan is None
+            or args.route_artifact_id is None
+            or args.route_artifact_name is None
+            or args.route_artifact_digest is None
+        ):
+            parser.error(
+                "--reconcile requires --route-plan, --route-artifact-id, "
+                "--route-artifact-name, and --route-artifact-digest"
+            )
+        reconcile(
+            config,
+            allow_merge=args.allow_merge,
+            route_plan_path=args.route_plan,
+            route_artifact_id=args.route_artifact_id,
+            route_artifact_name=args.route_artifact_name,
+            route_artifact_digest=args.route_artifact_digest,
+        )
+    if not (args.validate_config or args.self_test or args.plan_routes or args.reconcile):
+        parser.error("choose --validate-config, --self-test, --plan-routes, or --reconcile")
 
 
 if __name__ == "__main__":

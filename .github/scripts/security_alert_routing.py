@@ -1140,6 +1140,11 @@ def _read_json(path: Path, *, max_bytes: int, label: str) -> Any:
     return _strict_json_loads(bytes(payload), label=label)
 
 
+def read_json_evidence(path: Path, *, max_bytes: int, label: str) -> Any:
+    """Read bounded process-owned JSON evidence with no-follow path binding."""
+    return _read_json(path, max_bytes=max_bytes, label=label)
+
+
 def load_config(path: Path = DEFAULT_CONFIG) -> dict[str, Any]:
     payload = _read_json(path, max_bytes=256 * 1024, label="routing config")
     if not isinstance(payload, dict):
