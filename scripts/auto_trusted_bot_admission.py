@@ -177,7 +177,7 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         raw_author_id = os.environ.get("PROTECTED_REMEDIATION_BOT_ID", "")
         if not raw_author_id.isdigit():
             raise RuntimeError("protected remediation author App user id is missing or malformed")
-        api = governance.GitHubApi(token, repository)
+        api = protected.GitHubApi(token, repository)
         pr = api.get(f"/pulls/{args.pr_number}")
         live = protected.validate_generated_pr(
             api,
