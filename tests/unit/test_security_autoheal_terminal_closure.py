@@ -201,6 +201,7 @@ class _TerminalApi:
                         7,
                         ROUTE_RECORD_DIGEST,
                         ROUTE_PLAN_DIGEST,
+                        ROUTE_ARTIFACT_DIGEST,
                     )
                 },
             }
@@ -420,6 +421,7 @@ def test_terminal_closure_rejects_commit_or_artifact_route_provenance_drift() ->
                 7,
                 "4" * 64,
                 ROUTE_PLAN_DIGEST,
+                ROUTE_ARTIFACT_DIGEST,
             )
             return payload
         return original_get(path)
