@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import tempfile
 import time
 import urllib.error
@@ -84,6 +85,7 @@ SECURITY_AUTOHEAL_RECONCILE_EVENTS = {"workflow_run", "schedule", "workflow_disp
 ROUTE_PLAN_SCHEMA_VERSION = 1
 ROUTE_PLAN_MAX_BYTES = 2 * 1024 * 1024
 ROUTE_PLAN_ARTIFACT_PREFIX = "security-autoheal-route-plan"
+ROUTE_PLAN_FILENAME = "route-plan.json"
 ROUTE_ARTIFACT_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 MARKER_PREFIX = "<!-- aiqa-codeql-autoheal:"
 MARKER_SUFFIX = " -->"
@@ -3330,34 +3332,93 @@ def _build_route_plan(
     return plan
 
 
+def _route_plan_output_path() -> Path:
+    runner_temp = os.environ.get("RUNNER_TEMP", "")
+    root = Path(runner_temp)
+    if not runner_temp or not root.is_absolute():
+        raise AutohealError("route plan persistence requires an absolute RUNNER_TEMP")
+    return root / ROUTE_PLAN_ARTIFACT_PREFIX / ROUTE_PLAN_FILENAME
+
+
+def _require_private_directory(info: os.stat_result, *, label: str) -> None:
+    if not stat.S_ISDIR(info.st_mode):
+        raise AutohealError(f"{label} is not a directory")
+    if info.st_uid != os.geteuid():
+        raise AutohealError(f"{label} is not owned by the controller process")
+    if info.st_mode & 0o022:
+        raise AutohealError(f"{label} is writable by group or other users")
+
+
 def _write_route_plan(path: Path, plan: dict[str, Any]) -> None:
     payload = _canonical_route_plan(plan)
-    parent = path.parent
-    parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    parent.chmod(0o700)
+    expected = _route_plan_output_path()
+    if path != expected:
+        raise AutohealError("route plan output must use the exact runner-owned temp path")
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     directory = getattr(os, "O_DIRECTORY", 0)
     if not nofollow or not directory:
         raise AutohealError("route plan persistence requires no-follow directory APIs")
+
+    root = expected.parent.parent
     try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow, 0o600)
+        root_fd = os.open(root, os.O_RDONLY | directory | nofollow)
     except OSError as exc:
-        raise AutohealError("unable to create exclusive route plan evidence") from exc
+        raise AutohealError("RUNNER_TEMP is unavailable as a no-follow directory") from exc
     try:
-        view = memoryview(payload)
-        while view:
-            written = os.write(fd, view)
-            if written <= 0:
-                raise AutohealError("route plan persistence made no forward progress")
-            view = view[written:]
-        os.fsync(fd)
+        _require_private_directory(os.fstat(root_fd), label="RUNNER_TEMP")
+        try:
+            os.mkdir(ROUTE_PLAN_ARTIFACT_PREFIX, 0o700, dir_fd=root_fd)
+        except FileExistsError as exc:
+            raise AutohealError("route plan directory already exists before planning") from exc
+        except OSError as exc:
+            raise AutohealError("unable to create exclusive route plan directory") from exc
+        os.fsync(root_fd)
+
+        try:
+            parent_fd = os.open(
+                ROUTE_PLAN_ARTIFACT_PREFIX,
+                os.O_RDONLY | directory | nofollow,
+                dir_fd=root_fd,
+            )
+        except OSError as exc:
+            raise AutohealError("route plan directory is unavailable after creation") from exc
+        try:
+            _require_private_directory(
+                os.fstat(parent_fd),
+                label="route plan directory",
+            )
+            try:
+                fd = os.open(
+                    ROUTE_PLAN_FILENAME,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow,
+                    0o600,
+                    dir_fd=parent_fd,
+                )
+            except OSError as exc:
+                raise AutohealError("unable to create exclusive route plan evidence") from exc
+            try:
+                view = memoryview(payload)
+                while view:
+                    written = os.write(fd, view)
+                    if written <= 0:
+                        raise AutohealError("route plan persistence made no forward progress")
+                    view = view[written:]
+                info = os.fstat(fd)
+                if (
+                    not stat.S_ISREG(info.st_mode)
+                    or info.st_uid != os.geteuid()
+                    or info.st_mode & 0o077
+                    or info.st_size != len(payload)
+                ):
+                    raise AutohealError("route plan file lost its private regular-file invariant")
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            os.fsync(parent_fd)
+        finally:
+            os.close(parent_fd)
     finally:
-        os.close(fd)
-    parent_fd = os.open(parent, os.O_RDONLY | directory | nofollow)
-    try:
-        os.fsync(parent_fd)
-    finally:
-        os.close(parent_fd)
+        os.close(root_fd)
 
 
 def plan_routes(config: dict[str, Any], output: Path) -> dict[str, Any]:
