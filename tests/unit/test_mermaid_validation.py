@@ -130,6 +130,8 @@ def test_renderer_uses_immutable_image_and_bounded_container_authority(
 
     def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
         calls.append((command, kwargs))
+        if command[1:3] == ["image", "inspect"]:
+            return subprocess.CompletedProcess(command, 0)
         if command[1] == "run":
             cidfile = Path(command[command.index("--cidfile") + 1])
             cidfile.write_text("a" * 64 + "\n", encoding="ascii")
@@ -151,13 +153,19 @@ def test_renderer_uses_immutable_image_and_bounded_container_authority(
     mermaid._run_mermaid(root, relative_path, output_root, 1)
 
     assert resolved_env["PATH"] == controller_executable_search_path()
-    command, kwargs = calls[0]
+    inspect_command, inspect_kwargs = calls[0]
+    assert inspect_command == ["/usr/bin/docker", "image", "inspect", mermaid.MERMAID_IMAGE]
+    assert inspect_kwargs["timeout"] == mermaid.DOCKER_IMAGE_INSPECT_TIMEOUT_SECONDS
+    assert inspect_kwargs["check"] is False
+
+    command, kwargs = calls[1]
     assert command[0] == "/usr/bin/docker"
     assert re.fullmatch(
         r"ghcr\.io/mermaid-js/mermaid-cli/mermaid-cli@sha256:[0-9a-f]{64}",
         mermaid.MERMAID_IMAGE,
     )
     assert "--rm" not in command
+    assert command[command.index("--pull") + 1] == "never"
     assert "--detach" in command
     assert "--name" in command
     assert "--cidfile" in command
@@ -182,7 +190,7 @@ def test_renderer_uses_immutable_image_and_bounded_container_authority(
     assert kwargs["timeout"] == mermaid.DOCKER_START_TIMEOUT_SECONDS
     assert kwargs["check"] is True
 
-    wait_command, wait_kwargs = calls[1]
+    wait_command, wait_kwargs = calls[2]
     assert wait_command == [
         "/usr/bin/docker",
         "exec",
@@ -193,13 +201,13 @@ def test_renderer_uses_immutable_image_and_bounded_container_authority(
     ]
     assert wait_kwargs["timeout"] == mermaid.RENDER_TIMEOUT_SECONDS
 
-    archive_command, archive_kwargs = calls[2]
+    archive_command, archive_kwargs = calls[3]
     assert archive_command[:5] == ["/usr/bin/docker", "exec", "a" * 64, "/bin/sh", "-c"]
     assert "/bin/busybox tar -C /out -cf - ." in archive_command[-1]
     assert f"head -c {mermaid.MAX_RENDER_ARCHIVE_BYTES + 1}" in archive_command[-1]
     assert archive_kwargs["timeout"] == mermaid.DOCKER_COPY_TIMEOUT_SECONDS
     assert archive_kwargs["stdout"] is subprocess.PIPE
-    assert calls[3][0] == ["/usr/bin/docker", "rm", "--force", "a" * 64]
+    assert calls[4][0] == ["/usr/bin/docker", "rm", "--force", "a" * 64]
 
     for _docker_command, docker_kwargs in calls:
         docker_env = docker_kwargs["env"]
@@ -211,3 +219,57 @@ def test_renderer_uses_immutable_image_and_bounded_container_authority(
 
     assert (output_root / "rendered.md").read_text(encoding="utf-8") == "# Rendered\n"
     assert (output_root / "rendered-1.svg").read_text(encoding="utf-8") == "<svg/>\n"
+
+
+def test_renderer_image_acquisition_retries_bounded_transient_pull_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+    inspect_results = iter((1, 0))
+    pull_attempts = 0
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        nonlocal pull_attempts
+        calls.append(command)
+        if command[1:3] == ["image", "inspect"]:
+            return subprocess.CompletedProcess(command, next(inspect_results))
+        assert command[1:3] == ["pull", "--quiet"]
+        pull_attempts += 1
+        if pull_attempts == 1:
+            raise subprocess.CalledProcessError(1, command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(mermaid.subprocess, "run", fake_run)
+
+    mermaid._ensure_renderer_image(
+        docker_executable="/usr/bin/docker",
+        docker_env={"PATH": controller_executable_search_path()},
+    )
+
+    pulls = [call for call in calls if call[1:3] == ["pull", "--quiet"]]
+    assert len(pulls) == 2
+    assert all(call[-1] == mermaid.MERMAID_IMAGE for call in pulls)
+
+
+def test_renderer_image_acquisition_fails_closed_after_bounded_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pulls = 0
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        nonlocal pulls
+        if command[1:3] == ["image", "inspect"]:
+            return subprocess.CompletedProcess(command, 1)
+        assert command[1:3] == ["pull", "--quiet"]
+        pulls += 1
+        raise subprocess.TimeoutExpired(command, mermaid.DOCKER_PULL_TIMEOUT_SECONDS)
+
+    monkeypatch.setattr(mermaid.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="bounded attempts"):
+        mermaid._ensure_renderer_image(
+            docker_executable="/usr/bin/docker",
+            docker_env={"PATH": controller_executable_search_path()},
+        )
+
+    assert pulls == mermaid.DOCKER_PULL_ATTEMPTS

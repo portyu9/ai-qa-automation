@@ -27,7 +27,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
-    "17ecbb1dc96e318d0d5016ebf87b089b22641318"  # pragma: allowlist secret
+    "828c513950fb17b76dfd66bb0f01e181187ff9ef"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
     "6c5dd5dda830a4d97c82068f360e99b8800a020e"  # pragma: allowlist secret
@@ -361,16 +361,32 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "          persist-credentials: false",
         "          EXPECTED_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}",
         '        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"',
+        "      - name: Acquire verified CodeQL 2.27.0 bundle",
+        "        id: codeql-tools",
+        "release_api='https://api.github.com/repos/github/codeql-action/releases/tags/codeql-bundle-v2.27.0'",
+        "asset_url='https://github.com/github/codeql-action/releases/download/codeql-bundle-v2.27.0/codeql-bundle-linux64.tar.zst'",
+        're.fullmatch(r"sha256:[0-9a-f]{64}", digest)',
+        'test "$observed_sha" = "$expected_sha"',
         "      - name: Initialize governed bot CodeQL",
+        "          tools: ${{ steps.codeql-tools.outputs.path }}",
         "          languages: python",
         "          queries: security-extended",
         "      - name: Analyze exact governed bot branch",
+        '        env:\n          PYTHONSAFEPATH: ""',
         "          ref: refs/heads/${{ needs.preflight.outputs.head_ref }}",
         "          sha: ${{ needs.preflight.outputs.head_sha }}",
     )
     for fragment in required_bot_codeql:
         if fragment not in bot_codeql:
             raise ValueError(f"trusted bot CodeQL is missing reviewed fragment: {fragment}")
+    if bot_codeql.count("      - name: Acquire verified CodeQL 2.27.0 bundle") != 1:
+        raise ValueError("trusted bot CodeQL must acquire exactly one verified local bundle")
+    if bot_codeql.count("          tools: ${{ steps.codeql-tools.outputs.path }}") != 1:
+        raise ValueError("trusted bot CodeQL must use exactly one verified local bundle path")
+    if semantic.count('          PYTHONSAFEPATH: ""') != 1:
+        raise ValueError(
+            "trusted bot CodeQL must disable Python safe-path only for extractor analysis"
+        )
     if "${{ secrets." in bot_codeql:
         raise ValueError("trusted bot CodeQL must remain secret-free")
 

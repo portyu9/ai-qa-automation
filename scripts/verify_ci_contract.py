@@ -35,7 +35,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
-    "da93d5c06c4f751fdb2ac5de05183da8797340cf"  # pragma: allowlist secret
+    "c61f1a635422f7e858808501f16e493d1a5280b3"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
     "7fdf0dc85375bc78561d531f95220cd877e30b3a"  # pragma: allowlist secret
@@ -422,6 +422,13 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
         "    timeout-minutes: 20",
         f"uses: actions/checkout@{base.EXPECTED_ACTION_SHAS['actions/checkout']}",
         "          persist-credentials: false",
+        "      - name: Acquire verified CodeQL 2.27.0 bundle",
+        "        id: codeql-tools",
+        "release_api='https://api.github.com/repos/github/codeql-action/releases/tags/codeql-bundle-v2.27.0'",
+        "asset_url='https://github.com/github/codeql-action/releases/download/codeql-bundle-v2.27.0/codeql-bundle-linux64.tar.zst'",
+        're.fullmatch(r"sha256:[0-9a-f]{64}", digest)',
+        'test "$observed_sha" = "$expected_sha"',
+        "          tools: ${{ steps.codeql-tools.outputs.path }}",
         "          languages: python",
         "          queries: security-extended",
     )
@@ -444,6 +451,13 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
         'live_subject_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${EXPECTED_SUBJECT_REF}" --jq .object.sha)"',
         "          ref: ${{ inputs.subject_sha }}",
         'run: test "$(git rev-parse HEAD)" = "$EXPECTED_SUBJECT_SHA"',
+        "      - name: Acquire verified CodeQL 2.27.0 bundle",
+        "        id: codeql-tools",
+        "release_api='https://api.github.com/repos/github/codeql-action/releases/tags/codeql-bundle-v2.27.0'",
+        "asset_url='https://github.com/github/codeql-action/releases/download/codeql-bundle-v2.27.0/codeql-bundle-linux64.tar.zst'",
+        're.fullmatch(r"sha256:[0-9a-f]{64}", digest)',
+        'test "$observed_sha" = "$expected_sha"',
+        "          tools: ${{ steps.codeql-tools.outputs.path }}",
         "      - name: Analyze exact generated subject",
         "          ref: refs/heads/${{ inputs.subject_ref }}",
         "          sha: ${{ inputs.subject_sha }}",
@@ -470,6 +484,11 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
         raise ValueError(
             "codeql.yml publication must not execute candidate bytes or consume secrets"
         )
+
+    if semantic.count("      - name: Acquire verified CodeQL 2.27.0 bundle") != 2:
+        raise ValueError("codeql.yml must acquire one verified local bundle per analysis job")
+    if semantic.count("          tools: ${{ steps.codeql-tools.outputs.path }}") != 2:
+        raise ValueError("codeql.yml must bind both analyses to verified local bundle paths")
 
     uses = base.ACTION_RE.findall(text)
     if len(uses) != 6:
@@ -503,6 +522,7 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
         "queries": "security-extended",
         "codeql_action_sha": next(iter(codeql_refs)),
         "codeql_major": EXPECTED_CODEQL_MAJOR,
+        "codeql_tools_authority": "release-asset-sha256-verified-local-archive",
         "checkout_authority": "exact-reviewed-immutable-sha",
         "security_events_write": True,
         "workflow_dispatch_subject": "trusted-main-plus-explicit-ref-sha",
