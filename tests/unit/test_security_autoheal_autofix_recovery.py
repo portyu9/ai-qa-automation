@@ -366,10 +366,17 @@ def test_model_repair_uses_attempt_scoped_branch(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(autoheal, "_current_main", lambda api, config: BASE)
 
-    def commit_autofix(api: object, alert: int, branch: str, base: str) -> str:
+    def commit_autofix(
+        api: object,
+        alert: int,
+        branch: str,
+        base: str,
+        route_record_digest: str,
+    ) -> str:
         observed["branch"] = branch
         assert alert == ALERT
         assert base == BASE
+        assert route_record_digest == route_record["recordDigest"]
         return HEAD
 
     monkeypatch.setattr(autoheal, "_commit_copilot_autofix", commit_autofix)
