@@ -832,3 +832,122 @@ def test_routing_record_persistence_rejects_fifo_without_blocking(tmp_path: Path
 
     with pytest.raises(routing.RoutingPolicyError, match="bounded regular file"):
         routing.persist_record(fifo, record)
+
+
+def test_json_ingestion_rejects_target_swap_during_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "alert.json"
+    replacement = tmp_path / "replacement.json"
+    target.write_text('{"number":7}', encoding="utf-8")
+    replacement.write_text('{"number":8}', encoding="utf-8")
+    displaced = tmp_path / "displaced.json"
+    real_read = routing.os.read
+    swapped = False
+
+    def swapping_read(fd: int, size: int) -> bytes:
+        nonlocal swapped
+        payload = real_read(fd, size)
+        if not swapped:
+            swapped = True
+            target.rename(displaced)
+            replacement.rename(target)
+        return payload
+
+    monkeypatch.setattr(routing.os, "read", swapping_read)
+
+    with pytest.raises(routing.RoutingPolicyError, match="path identity changed"):
+        routing._read_json(target, max_bytes=1024, label="alert input")
+
+
+def test_json_ingestion_rejects_parent_swap_during_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent = tmp_path / "input"
+    parent.mkdir()
+    target = parent / "alert.json"
+    target.write_text('{"number":7}', encoding="utf-8")
+    displaced = tmp_path / "displaced"
+    real_read = routing.os.read
+    swapped = False
+
+    def swapping_read(fd: int, size: int) -> bytes:
+        nonlocal swapped
+        payload = real_read(fd, size)
+        if not swapped:
+            swapped = True
+            parent.rename(displaced)
+            parent.mkdir()
+            (parent / "alert.json").write_text('{"number":8}', encoding="utf-8")
+        return payload
+
+    monkeypatch.setattr(routing.os, "read", swapping_read)
+
+    with pytest.raises(routing.RoutingPolicyError, match="parent path identity changed"):
+        routing._read_json(target, max_bytes=1024, label="alert input")
+
+
+def test_routing_record_idempotency_rejects_target_swap_during_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = routing.route_alert(_alert(), main_sha=MAIN, config=_config())
+    payload = routing.canonical_record(record)
+    target = tmp_path / "route.json"
+    replacement = tmp_path / "replacement.json"
+    target.write_bytes(payload)
+    replacement.write_bytes(payload)
+    target.chmod(0o600)
+    replacement.chmod(0o600)
+    displaced = tmp_path / "displaced.json"
+    real_read = routing.os.read
+    swapped = False
+
+    def swapping_read(fd: int, size: int) -> bytes:
+        nonlocal swapped
+        chunk = real_read(fd, size)
+        if not swapped:
+            swapped = True
+            target.rename(displaced)
+            replacement.rename(target)
+        return chunk
+
+    monkeypatch.setattr(routing.os, "read", swapping_read)
+
+    with pytest.raises(routing.RoutingPolicyError, match="path identity changed"):
+        routing.persist_record(target, record)
+
+
+def test_routing_record_idempotency_rejects_parent_swap_during_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = routing.route_alert(_alert(), main_sha=MAIN, config=_config())
+    payload = routing.canonical_record(record)
+    parent = tmp_path / "records"
+    parent.mkdir()
+    target = parent / "route.json"
+    target.write_bytes(payload)
+    target.chmod(0o600)
+    displaced = tmp_path / "displaced"
+    real_read = routing.os.read
+    swapped = False
+
+    def swapping_read(fd: int, size: int) -> bytes:
+        nonlocal swapped
+        chunk = real_read(fd, size)
+        if not swapped:
+            swapped = True
+            parent.rename(displaced)
+            parent.mkdir()
+            replacement = parent / "route.json"
+            replacement.write_bytes(payload)
+            replacement.chmod(0o600)
+        return chunk
+
+    monkeypatch.setattr(routing.os, "read", swapping_read)
+
+    with pytest.raises(routing.RoutingPolicyError, match="parent path identity changed"):
+        routing.persist_record(target, record)
