@@ -210,6 +210,22 @@ def test_scheduled_bot_reconciliation_selects_security_lane_from_fresh_pr() -> N
     assert api.calls.count(f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65") == 2
 
 
+def test_scheduled_reconciliation_ignores_advanced_security_reporting_actor() -> None:
+    responses = _responses()
+    summary = deepcopy(responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"])
+    summary["user"] = {
+        "login": "github-advanced-security[bot]",
+        "id": preflight.GITHUB_ACTIONS_USER_ID,
+    }
+    summary["head"]["ref"] = "automation/codeql-autoheal-7-abcdef123456"
+    api = ScheduledFakeAPI(responses, [summary])
+
+    admission = preflight.evaluate_admission(api, event={}, event_name="schedule")
+
+    assert admission is None
+    assert api.calls == [f"/repos/{preflight.EXPECTED_REPOSITORY}/git/ref/heads/main"]
+
+
 def test_scheduled_bot_reconciliation_skips_nonmergeable_higher_priority_candidate() -> None:
     responses = _responses()
     security = responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]
@@ -348,6 +364,26 @@ def test_governed_bot_lane_requires_exact_identity_and_branch_grammar(
 ) -> None:
     pr = {"user": user, "head": {"ref": branch}}
     assert preflight._bot_lane(pr) == expected_lane
+
+
+@pytest.mark.parametrize(
+    "branch",
+    [
+        "dependabot/github_actions/actions/checkout-7",
+        "automation/dependency-promotion-171-abcdef123456",
+        "automation/codeql-autoheal-7-abcdef123456",
+    ],
+)
+def test_advanced_security_reporting_actor_has_no_governed_lane(branch: str) -> None:
+    pr = {
+        "user": {
+            "login": "github-advanced-security[bot]",
+            "id": preflight.GITHUB_ACTIONS_USER_ID,
+        },
+        "head": {"ref": branch},
+    }
+
+    assert preflight._bot_lane(pr) is None
 
 
 def test_governed_bot_lane_rejects_lookalike_identity() -> None:
