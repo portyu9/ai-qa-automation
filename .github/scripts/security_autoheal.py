@@ -1204,7 +1204,20 @@ def _create_pull_request(
     *,
     deterministic: bool,
     strategy: str,
+    route_record: dict[str, Any],
+    route_evidence: dict[str, Any],
 ) -> int:
+    try:
+        canonical_routing_record(route_record)
+    except RoutingPolicyError as exc:
+        raise PolicyBlock(f"repair route record is invalid: {exc}") from exc
+    if route_record.get("strategy") != strategy:
+        raise PolicyBlock("repair route record strategy drifted before PR creation")
+    expected_decision = (
+        "ordinary-deterministic-autoheal" if deterministic else "ordinary-bounded-autofix"
+    )
+    if route_record.get("decision") != expected_decision:
+        raise PolicyBlock("repair route record does not authorize this mutation lane")
     metadata = {
         "version": 1,
         "alert": subject["number"],
@@ -1217,6 +1230,12 @@ def _create_pull_request(
         "attempt": attempt,
         "generator": "deterministic" if deterministic else "github-codeql-autofix",
         "strategy": strategy,
+        "routeDecision": route_record["decision"],
+        "routeAuthority": route_record["authority"],
+        "routeRecordDigest": route_record["recordDigest"],
+        "routingPolicyVersion": route_record["routingPolicyVersion"],
+        "routeAutofixEligibility": route_record["autofixEligibility"],
+        **route_evidence,
     }
     body = "\n".join(
         (
@@ -3204,12 +3223,19 @@ def _create_repair(
     *,
     attempt: int,
     strategy: str,
+    route_record: dict[str, Any],
+    route_evidence: dict[str, Any],
 ) -> int:
     branch = _branch_name(subject, attempt)
     expected_strategy = _repair_strategy(subject)
-    if strategy != expected_strategy:
-        raise PolicyBlock("repair creation strategy drifted from the code-owned live strategy")
+    if strategy != expected_strategy or route_record.get("strategy") != strategy:
+        raise PolicyBlock("repair creation strategy drifted from the persisted route")
     deterministic = strategy != MODEL_AUTOFIX_STRATEGY
+    expected_decision = (
+        "ordinary-deterministic-autoheal" if deterministic else "ordinary-bounded-autofix"
+    )
+    if route_record.get("decision") != expected_decision:
+        raise PolicyBlock("persisted route does not authorize repair creation")
     deterministic_content = _deterministic_repair(subject) if deterministic else None
     deterministic_only = _is_deterministic_only(subject["path"], config)
     if deterministic and deterministic_content is None:
@@ -3230,7 +3256,8 @@ def _create_repair(
     else:
         if not _model_path_allowed(subject["path"], config):
             raise PolicyBlock("alert path is outside model-autofix authority")
-        _ensure_copilot_autofix(api, subject["number"])
+        if route_record.get("autofixEligibility") != "available":
+            raise PolicyBlock("persisted route lacks affirmative Autofix availability")
         head_sha = _commit_copilot_autofix(api, subject["number"], branch, subject["baseSha"])
 
     files = _changed_files(api, subject["baseSha"], head_sha)
@@ -3243,6 +3270,8 @@ def _create_repair(
         attempt,
         deterministic=deterministic,
         strategy=strategy,
+        route_record=route_record,
+        route_evidence=route_evidence,
     )
     # Bind the branch name into the marker after creation only through the immutable branch
     # convention. The live validator derives it from the PR head and accepts an absent marker key.
