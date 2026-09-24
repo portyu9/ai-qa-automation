@@ -44,10 +44,10 @@ EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
-    "d809771ced237ec2d02d52b0eb29432f14c6a90b"  # pragma: allowlist secret
+    "1906a7c724b6fda4219bcbe2e1b678549d177af6"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
-    "5b8dc48b32baf0e9b3102f4d95fb60d484233305"  # pragma: allowlist secret
+    "caf43196e04c23191a3e34cf970864308bc4523b"  # pragma: allowlist secret
 )
 EXPECTED_CODEQL_MAJOR = 4
 CODEQL_ACTION_RE = re.compile(
@@ -557,7 +557,7 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "    name: govern-dependabot",
         "    if: github.event_name != 'pull_request'",
         "      actions: write",
-        "      checks: write",
+        "      checks: read",
         "      contents: write",
         "      pull-requests: write",
         "      statuses: read",
@@ -567,14 +567,9 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "      - name: Attempt one bounded transient recovery",
         "        run: python .github/scripts/dependency_recovery.py --recover",
         "      - name: Reconcile exact-subject Python dependency promotion",
-        "        id: python_promotion",
         "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
-        "          python .github/scripts/dependency_promotion.py",
-        "          --reconcile",
-        "          --allow-merge",
-        '          --github-output "$GITHUB_OUTPUT"',
+        "        run: python .github/scripts/dependency_promotion.py --reconcile --allow-merge",
         "      - name: Reconcile Dependabot action merge authority",
-        "        if: steps.python_promotion.outputs.merged != 'true'",
         "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
         '          case "$GITHUB_EVENT_NAME" in',
         "            workflow_run|schedule|workflow_dispatch) args+=(--allow-merge) ;;",
@@ -641,7 +636,7 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         "    name: security-autoheal-self-test",
         "    name: reconcile-codeql-autoheal",
         "      actions: write",
-        "      checks: read",
+        "      checks: write",
         "      contents: write",
         "      pull-requests: write",
         "      security-events: write",
