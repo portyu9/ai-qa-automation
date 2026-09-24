@@ -76,9 +76,10 @@ def _pip_report_row(
 
 
 def test_report_to_lock_requires_explicit_non_yanked_artifact() -> None:
-    assert compiler._report_to_lock({"version": "1", "install": [_pip_report_row()]}) == _lock(
-        ("alpha", "1.0", "1" * 64)
-    ).decode()
+    assert (
+        compiler._report_to_lock({"version": "1", "install": [_pip_report_row()]})
+        == _lock(("alpha", "1.0", "1" * 64)).decode()
+    )
 
     with pytest.raises(compiler.LockCompileError, match="yanked"):
         compiler._report_to_lock({"version": "1", "install": [_pip_report_row(is_yanked=True)]})
@@ -124,7 +125,7 @@ def test_hash_replay_revalidates_terminal_artifact_provenance(
                             is_yanked=is_yanked,
                             digest=digest,
                         )
-                    ]
+                    ],
                 }
             )
         )
@@ -171,9 +172,7 @@ def test_report_to_lock_requires_schema_and_index_provenance() -> None:
     with pytest.raises(compiler.LockCompileError, match="version"):
         compiler._report_to_lock({"version": "2", "install": [_pip_report_row()]})
     with pytest.raises(compiler.LockCompileError, match="direct"):
-        compiler._report_to_lock(
-            {"version": "1", "install": [_pip_report_row(is_direct=True)]}
-        )
+        compiler._report_to_lock({"version": "1", "install": [_pip_report_row(is_direct=True)]})
     ambiguous = _pip_report_row()
     ambiguous.pop("is_direct")
     with pytest.raises(compiler.LockCompileError, match="ambiguous artifact provenance"):
