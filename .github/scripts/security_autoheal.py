@@ -2873,15 +2873,23 @@ def _prune_orphan_repair_refs(
 
 
 def _generated_repairs(pulls: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [
-        pr
-        for pr in pulls
-        if (pr.get("user") or {}).get("login") == GITHUB_ACTIONS_LOGIN
-        and (pr.get("user") or {}).get("id") == GITHUB_ACTIONS_USER_ID
-        and isinstance(((pr.get("head") or {}).get("ref")), str)
-        and str((pr.get("head") or {}).get("ref")).startswith(BRANCH_PREFIX)
-        and _parse_marker(pr.get("body")) is not None
-    ]
+    repairs: list[dict[str, Any]] = []
+    for pr in pulls:
+        actor = pr.get("user") or {}
+        branch = (pr.get("head") or {}).get("ref")
+        if (
+            actor.get("login") != GITHUB_ACTIONS_LOGIN
+            or actor.get("id") != GITHUB_ACTIONS_USER_ID
+            or not isinstance(branch, str)
+            or not branch.startswith(BRANCH_PREFIX)
+        ):
+            continue
+        if _parse_marker(pr.get("body")) is None:
+            raise PolicyBlock(
+                "GitHub Actions auto-heal namespace PR has missing or malformed provenance marker"
+            )
+        repairs.append(pr)
+    return repairs
 
 
 def _github_timestamp_at_or_before(value: Any, cutoff: Any) -> bool:
