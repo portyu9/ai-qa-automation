@@ -951,3 +951,37 @@ def test_routing_record_idempotency_rejects_parent_swap_during_read(
 
     with pytest.raises(routing.RoutingPolicyError, match="parent path identity changed"):
         routing.persist_record(target, record)
+
+
+def test_routing_record_retry_reconciles_failed_parent_fsync(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = routing.route_alert(_alert(), main_sha=MAIN, config=_config())
+    target = tmp_path / "route.json"
+    real_fsync = routing.os.fsync
+    fsync_calls = 0
+
+    def fail_first_parent_fsync(fd: int) -> None:
+        nonlocal fsync_calls
+        fsync_calls += 1
+        if fsync_calls == 2:
+            raise OSError("injected parent fsync failure")
+        real_fsync(fd)
+
+    monkeypatch.setattr(routing.os, "fsync", fail_first_parent_fsync)
+    with pytest.raises(OSError, match="injected parent fsync failure"):
+        routing.persist_record(target, record)
+
+    assert target.read_bytes() == routing.canonical_record(record)
+
+    reconciled_calls = 0
+
+    def count_reconciliation_fsync(fd: int) -> None:
+        nonlocal reconciled_calls
+        reconciled_calls += 1
+        real_fsync(fd)
+
+    monkeypatch.setattr(routing.os, "fsync", count_reconciliation_fsync)
+    assert routing.persist_record(target, record) is False
+    assert reconciled_calls == 1
