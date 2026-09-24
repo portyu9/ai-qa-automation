@@ -2676,8 +2676,6 @@ def _verify_merged_repair_subject(
     pr: dict[str, Any],
     main_sha: str,
     config: dict[str, Any],
-    *,
-    require_route_artifact: bool = True,
 ) -> tuple[int, dict[str, Any], dict[str, Any]]:
     number = pr.get("number")
     if not isinstance(number, int) or isinstance(number, bool) or number < 1:
@@ -2736,8 +2734,6 @@ def _verify_merged_repair_subject(
         raise PolicyBlock(
             "terminal repair commit is not immutably bound to its persisted route evidence"
         )
-    if require_route_artifact:
-        _require_marker_route_artifact(api, metadata, base_sha)
     merge_evidence = _finalize_post_merge_evidence(
         api,
         {"sha": merge_sha},
@@ -2780,28 +2776,40 @@ def _reconcile_terminal_closure(
     merged = _current_main_merged_repair(api, main_sha)
     if merged is None:
         return False
-    merged_number = merged.get("number")
-    if (
-        not isinstance(merged_number, int)
-        or isinstance(merged_number, bool)
-        or merged_number < 1
-    ):
-        raise PolicyBlock("merged auto-heal PR has invalid number")
-    terminal_comments = api.list_all(f"/issues/{merged_number}/comments", max_pages=2)
-    has_actions_terminal_comment = any(
-        (row.get("user") or {}).get("login") == GITHUB_ACTIONS_LOGIN
-        and (row.get("user") or {}).get("id") == GITHUB_ACTIONS_USER_ID
-        and isinstance(row.get("body"), str)
-        and str(row["body"]).startswith(TERMINAL_CLOSURE_COMMENT_PREFIX)
-        for row in terminal_comments
-    )
     number, metadata, merge_evidence = _verify_merged_repair_subject(
         api,
         merged,
         main_sha,
         config,
-        require_route_artifact=not has_actions_terminal_comment,
     )
+    terminal_comments = api.list_all(f"/issues/{number}/comments", max_pages=2)
+    existing_terminal_certificates: list[dict[str, Any]] = []
+    for row in terminal_comments:
+        actor = row.get("user") or {}
+        body = row.get("body")
+        if (
+            actor.get("login") == GITHUB_ACTIONS_LOGIN
+            and actor.get("id") == GITHUB_ACTIONS_USER_ID
+            and isinstance(body, str)
+            and body.startswith(TERMINAL_CLOSURE_COMMENT_PREFIX)
+        ):
+            parsed = _exact_unedited_terminal_certificate(
+                row,
+                metadata,
+                number,
+                merge_evidence,
+            )
+            if parsed is None:
+                raise PolicyBlock("GitHub Actions terminal closure certificate is malformed")
+            existing_terminal_certificates.append(parsed)
+    if len(existing_terminal_certificates) > 1:
+        raise PolicyBlock("repair has ambiguous GitHub Actions terminal closure certificates")
+    if not existing_terminal_certificates:
+        _require_marker_route_artifact(
+            api,
+            metadata,
+            _require_sha(metadata.get("base"), "terminal repair base SHA"),
+        )
     trusted_gate = _terminal_trusted_gate_evidence(api, number, metadata)
 
     ci = _select_post_merge_ci_run(
