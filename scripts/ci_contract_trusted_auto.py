@@ -24,6 +24,7 @@ del _export_name
 EXPECTED_WORKFLOW_NAMES = {
     "ci.yml",
     "manual-validation.yml",
+    "protected-security-remediation.yml",
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
