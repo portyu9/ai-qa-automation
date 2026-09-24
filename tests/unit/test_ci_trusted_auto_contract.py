@@ -257,6 +257,24 @@ def test_trusted_auto_contract_rejects_reporter_secret_before_final_revalidation
         ci_contract.verify_ci_contract(root)
 
 
+def test_protected_remediation_author_action_is_scoped_to_its_workflow(tmp_path: Path) -> None:
+    root = _copy_contract_repo(tmp_path)
+    path = root / ".github" / "workflows" / "manual-validation.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = "      - name: Verify exact source revision\n"
+    assert marker in text
+    injected = (
+        "      - name: Illicit protected author token mint\n"
+        "        uses: actions/create-github-app-token@"
+        + ci_contract.EXPECTED_PROTECTED_AUTHOR_ACTION_SHA
+        + " # v3.2.0\n\n"
+    )
+    path.write_text(text.replace(marker, injected + marker, 1), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="unreviewed GitHub Action identity"):
+        ci_contract.verify_ci_contract(root)
+
+
 def test_protected_remediation_workflow_is_schedule_only_and_author_token_is_narrow() -> None:
     result = ci_contract.verify_ci_contract(ROOT)
     protected = result["workflows"]["protected_remediation"]
