@@ -198,6 +198,25 @@ def test_paginated_ingestion_rejects_non_objects_and_stops_at_overflow_sentinel(
         malformed.list_all("/code-scanning/alerts?state=open", max_pages=2, max_items=101)
 
 
+def test_route_planning_rejects_overflow_sentinel_before_routing_records() -> None:
+    class _OverflowApi(_PlanApi):
+        def list_all(
+            self,
+            path: str,
+            *,
+            max_pages: int = 10,
+            max_items: int | None = None,
+        ) -> list[dict[str, Any]]:
+            if path.startswith("/code-scanning/alerts?"):
+                assert max_pages == 2
+                assert max_items == 101
+                return [_alert(number=value + 1) for value in range(101)]
+            raise AssertionError(path)
+
+    with pytest.raises(autoheal.AutohealError, match="exceeds the bounded routing limit"):
+        autoheal._build_route_plan(_OverflowApi(_alert()), _config(), MAIN)
+
+
 def test_deterministic_route_plan_never_queries_autofix() -> None:
     api = _PlanApi(_alert())
 
