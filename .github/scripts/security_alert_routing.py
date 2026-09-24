@@ -849,15 +849,11 @@ def _reconcile_identical_record(
     try:
         fd = os.open(name, os.O_RDONLY | nofollow | nonblock, dir_fd=parent_fd)
     except OSError as exc:
-        raise RoutingPolicyError(
-            "routing record changed during durability reconciliation"
-        ) from exc
+        raise RoutingPolicyError("routing record changed during durability reconciliation") from exc
     try:
         initial = os.fstat(fd)
         if not stat.S_ISREG(initial.st_mode) or initial.st_size > MAX_ROUTE_RECORD_BYTES:
-            raise RoutingPolicyError(
-                "routing record changed during durability reconciliation"
-            )
+            raise RoutingPolicyError("routing record changed during durability reconciliation")
         _require_owned_nonwritable(initial, label="existing routing record")
         observed = bytearray()
         while len(observed) <= MAX_ROUTE_RECORD_BYTES:
@@ -869,9 +865,7 @@ def _reconcile_identical_record(
                 break
             observed.extend(chunk)
         if bytes(observed) != payload:
-            raise RoutingPolicyError(
-                "routing record changed during durability reconciliation"
-            )
+            raise RoutingPolicyError("routing record changed during durability reconciliation")
         before_sync = os.fstat(fd)
         if (
             initial.st_dev,
@@ -892,9 +886,7 @@ def _reconcile_identical_record(
             before_sync.st_mtime_ns,
             before_sync.st_ctime_ns,
         ):
-            raise RoutingPolicyError(
-                "routing record changed during durability reconciliation"
-            )
+            raise RoutingPolicyError("routing record changed during durability reconciliation")
         _require_named_file_identity(
             parent_fd,
             name,
@@ -922,9 +914,7 @@ def _reconcile_identical_record(
             after_file_sync.st_mtime_ns,
             after_file_sync.st_ctime_ns,
         ):
-            raise RoutingPolicyError(
-                "routing record changed during durability reconciliation"
-            )
+            raise RoutingPolicyError("routing record changed during durability reconciliation")
         _require_named_file_identity(
             parent_fd,
             name,
@@ -952,9 +942,7 @@ def _reconcile_identical_record(
             after_parent_sync.st_mtime_ns,
             after_parent_sync.st_ctime_ns,
         ):
-            raise RoutingPolicyError(
-                "routing record changed during durability reconciliation"
-            )
+            raise RoutingPolicyError("routing record changed during durability reconciliation")
         _require_named_file_identity(
             parent_fd,
             name,
