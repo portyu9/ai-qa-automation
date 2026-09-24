@@ -264,6 +264,26 @@ def test_route_bound_marker_requires_successful_originating_controller_run() -> 
     assert record["decision"] == "ordinary-deterministic-autoheal"
 
 
+def test_generated_repair_discovery_rejects_stripped_marker() -> None:
+    stripped = {
+        "number": 99,
+        "user": {
+            "login": autoheal.GITHUB_ACTIONS_LOGIN,
+            "id": autoheal.GITHUB_ACTIONS_USER_ID,
+        },
+        "head": {
+            "ref": "automation/codeql-autoheal-7-" + "a" * 64 + "-a1",
+        },
+        "body": "marker removed",
+    }
+
+    with pytest.raises(
+        autoheal.PolicyBlock,
+        match="missing or malformed provenance marker",
+    ):
+        autoheal._generated_repairs([stripped])
+
+
 def test_repair_admission_rejects_route_provenance_stripping() -> None:
     class _Api:
         def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
