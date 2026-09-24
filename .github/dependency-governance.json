@@ -30,6 +30,7 @@
     ".github/dependency-governance.json",
     ".github/dependency-recovery.json",
     ".github/scripts/dependency_governance.py",
+    ".github/scripts/dependency_trusted_gate.py",
     ".github/scripts/dependency_governance_selfcheck.py",
     ".github/scripts/dependency_lock_compiler.py",
     ".github/scripts/dependency_promotion.py",
