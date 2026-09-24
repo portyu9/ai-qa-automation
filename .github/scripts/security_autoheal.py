@@ -1297,6 +1297,12 @@ def _create_pull_request(
             "candidate-alert regression checks, and the App-owned Trusted PR Gate before merge.",
         )
     )
+    live_main = _require_sha(
+        ((api.get("/branches/main") or {}).get("commit") or {}).get("sha"),
+        "pre-publication current main SHA",
+    )
+    if live_main != subject["baseSha"]:
+        raise PolicyBlock("main advanced before route-authorized repair PR publication")
     try:
         pr = api.post(
             "/pulls",
@@ -3742,6 +3748,10 @@ def reconcile(
             ):
                 subject = _subject_from_route(record)
                 if _ensure_autofix_submission_intent(api, record, config):
+                    if _current_main(api, config) != subject["baseSha"]:
+                        raise PolicyBlock(
+                            "main advanced immediately before Autofix provider submission"
+                        )
                     _ensure_copilot_autofix(api, subject["number"])
                     intent_state = "provider-submission-attempted"
                 else:
