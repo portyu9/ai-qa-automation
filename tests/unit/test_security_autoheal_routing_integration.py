@@ -264,6 +264,29 @@ def test_route_bound_marker_requires_successful_originating_controller_run() -> 
     assert record["decision"] == "ordinary-deterministic-autoheal"
 
 
+def test_repair_admission_rejects_route_provenance_stripping() -> None:
+    class _Api:
+        def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+            assert path.startswith("/code-scanning/alerts?")
+            assert max_pages == 10
+            return [_alert()]
+
+    metadata = {
+        "alert": 7,
+        "attempt": 1,
+        "generator": "deterministic",
+        "strategy": autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY,
+    }
+
+    with pytest.raises(autoheal.PolicyBlock, match="lacks persisted route provenance"):
+        autoheal._rebind_repair_alert(
+            _Api(),
+            metadata,
+            {"baseSha": MAIN},
+            _config(),
+        )
+
+
 def test_generated_pr_marker_binds_route_and_artifact_provenance() -> None:
     plan_api = _PlanApi(_alert())
     plan = autoheal._build_route_plan(plan_api, _config(), MAIN)
