@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 from types import ModuleType
 
@@ -55,13 +56,18 @@ def test_parse_frozen_lock_rejects_noncanonical_bytes(raw: bytes) -> None:
         compiler._parse_frozen_lock(raw, name="dev.lock")
 
 
-def _pip_report_row(*, is_yanked: object = False) -> dict[str, object]:
+def _pip_report_row(
+    *,
+    is_yanked: object = False,
+    version: str = "1.0",
+    digest: str = "1" * 64,
+) -> dict[str, object]:
     return {
         "is_yanked": is_yanked,
-        "metadata": {"name": "alpha", "version": "1.0"},
+        "metadata": {"name": "alpha", "version": version},
         "download_info": {
-            "url": "https://files.pythonhosted.org/packages/alpha-1.0-py3-none-any.whl",
-            "archive_info": {"hashes": {"sha256": "1" * 64}},
+            "url": f"https://files.pythonhosted.org/packages/alpha-{version}-py3-none-any.whl",
+            "archive_info": {"hashes": {"sha256": digest}},
         },
     }
 
@@ -78,6 +84,60 @@ def test_report_to_lock_requires_explicit_non_yanked_artifact() -> None:
     missing.pop("is_yanked")
     with pytest.raises(compiler.LockCompileError, match="non-yanked provenance"):
         compiler._report_to_lock({"install": [missing]})
+
+
+@pytest.mark.parametrize(
+    ("is_yanked", "digest", "error"),
+    [
+        (False, "1" * 64, None),
+        (True, "1" * 64, "yanked"),
+        (False, "2" * 64, "exact locked artifact graph"),
+    ],
+)
+def test_hash_replay_revalidates_terminal_artifact_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    is_yanked: bool,
+    digest: str,
+    error: str | None,
+) -> None:
+    lock = tmp_path / "dev.lock"
+    lock.write_bytes(_lock(("alpha", "1.0", "1" * 64)))
+    observed: dict[str, object] = {}
+
+    class Result:
+        returncode = 0
+        stdout = ""
+
+    def fake_run(command: list[str], **kwargs: object) -> Result:
+        observed["command"] = command
+        report_path = Path(command[command.index("--report") + 1])
+        report_path.write_text(
+            json.dumps(
+                {
+                    "install": [
+                        _pip_report_row(
+                            is_yanked=is_yanked,
+                            digest=digest,
+                        )
+                    ]
+                }
+            )
+        )
+        return Result()
+
+    monkeypatch.setattr(compiler.subprocess, "run", fake_run)
+    if error is None:
+        compiler._verify_hash_lock("/python", tmp_path, lock)
+    else:
+        with pytest.raises(compiler.LockCompileError, match=error):
+            compiler._verify_hash_lock("/python", tmp_path, lock)
+
+    command = observed["command"]
+    assert isinstance(command, list)
+    assert "--report" in command
+    assert "--require-hashes" in command
+    assert "--only-binary=:all:" in command
 
 
 def test_authority_bytes_bind_pyproject_base_image_and_every_lock(tmp_path: Path) -> None:
