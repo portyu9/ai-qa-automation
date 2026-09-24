@@ -281,6 +281,10 @@ def test_generated_pr_marker_binds_route_and_artifact_provenance() -> None:
     class _PrApi:
         body: str | None = None
 
+        def get(self, path: str) -> dict[str, Any]:
+            assert path == "/branches/main"
+            return {"commit": {"sha": MAIN}}
+
         def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
             assert path == "/pulls"
             self.body = payload["body"]
@@ -306,6 +310,46 @@ def test_generated_pr_marker_binds_route_and_artifact_provenance() -> None:
     assert marker["routePlanDigest"] == plan["planDigest"]
     assert marker["routeArtifactId"] == ARTIFACT_ID
     assert marker["routeDecision"] == "ordinary-deterministic-autoheal"
+
+
+def test_generated_pr_publication_rejects_main_drift() -> None:
+    plan = autoheal._build_route_plan(_PlanApi(_alert()), _config(), MAIN)
+    record = plan["records"][0]
+    subject = autoheal._subject_from_route(record)
+    route_evidence = {
+        "routePlanDigest": plan["planDigest"],
+        "routePlanRunId": RUN_ID,
+        "routePlanRunAttempt": RUN_ATTEMPT,
+        "routeArtifactId": ARTIFACT_ID,
+        "routeArtifactName": f"{autoheal.ROUTE_PLAN_ARTIFACT_PREFIX}-{RUN_ID}-{RUN_ATTEMPT}",
+        "routeArtifactDigest": ARTIFACT_DIGEST,
+    }
+
+    class _DriftApi:
+        posts = 0
+
+        def get(self, path: str) -> dict[str, Any]:
+            assert path == "/branches/main"
+            return {"commit": {"sha": "b" * 40}}
+
+        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            self.posts += 1
+            raise AssertionError("stale subject must not publish a pull request")
+
+    api = _DriftApi()
+    with pytest.raises(autoheal.PolicyBlock, match="main advanced before route-authorized repair PR"):
+        autoheal._create_pull_request(
+            api,
+            "automation/codeql-autoheal-7-" + record["fingerprint"] + "-a1",
+            "c" * 40,
+            subject,
+            1,
+            deterministic=True,
+            strategy=record["strategy"],
+            route_record=record,
+            route_evidence=route_evidence,
+        )
+    assert api.posts == 0
 
 
 def test_workflow_persists_route_plan_before_live_reconcile() -> None:
