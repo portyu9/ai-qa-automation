@@ -1364,6 +1364,78 @@ def _verify_codeql_remediation(
             )
 
 
+def _require_marker_route_artifact(
+    api: GitHubApi,
+    metadata: dict[str, Any],
+    base_sha: str,
+) -> None:
+    required = {
+        "routePlanDigest",
+        "routePlanRunId",
+        "routePlanRunAttempt",
+        "routeArtifactId",
+        "routeArtifactName",
+        "routeArtifactDigest",
+    }
+    present = {key for key in required if metadata.get(key) is not None}
+    if not present:
+        return
+    if present != required:
+        raise PolicyBlock("generated repair marker has incomplete route artifact provenance")
+    plan_digest = metadata.get("routePlanDigest")
+    run_id = metadata.get("routePlanRunId")
+    run_attempt = metadata.get("routePlanRunAttempt")
+    artifact_id = metadata.get("routeArtifactId")
+    artifact_name = metadata.get("routeArtifactName")
+    artifact_digest = metadata.get("routeArtifactDigest")
+    if (
+        not isinstance(plan_digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", plan_digest) is None
+        or not isinstance(run_id, int)
+        or isinstance(run_id, bool)
+        or run_id < 1
+        or not isinstance(run_attempt, int)
+        or isinstance(run_attempt, bool)
+        or run_attempt < 1
+        or not isinstance(artifact_id, int)
+        or isinstance(artifact_id, bool)
+        or artifact_id < 1
+        or not isinstance(artifact_name, str)
+        or artifact_name
+        != f"{ROUTE_PLAN_ARTIFACT_PREFIX}-{run_id}-{run_attempt}"
+        or not isinstance(artifact_digest, str)
+        or ROUTE_ARTIFACT_DIGEST_RE.fullmatch(artifact_digest) is None
+    ):
+        raise PolicyBlock("generated repair marker route artifact provenance is malformed")
+    artifact = api.get(f"/actions/artifacts/{artifact_id}")
+    workflow_run = (artifact or {}).get("workflow_run") or {}
+    if (
+        not isinstance(artifact, dict)
+        or artifact.get("id") != artifact_id
+        or artifact.get("name") != artifact_name
+        or artifact.get("expired") is not False
+        or artifact.get("digest") != artifact_digest
+        or workflow_run.get("id") != run_id
+        or workflow_run.get("head_sha") != base_sha
+        or workflow_run.get("head_branch") != "main"
+    ):
+        raise PolicyBlock("generated repair route artifact drifted from its marker")
+    run = api.get(f"/actions/runs/{run_id}")
+    if (
+        not isinstance(run, dict)
+        or run.get("id") != run_id
+        or run.get("workflow_id") != SECURITY_AUTOHEAL_WORKFLOW_ID
+        or run.get("path") != SECURITY_AUTOHEAL_WORKFLOW_PATH
+        or run.get("run_attempt") != run_attempt
+        or run.get("event") not in SECURITY_AUTOHEAL_RECONCILE_EVENTS
+        or run.get("head_branch") != "main"
+        or run.get("head_sha") != base_sha
+        or run.get("status") != "completed"
+        or run.get("conclusion") != "success"
+    ):
+        raise PolicyBlock("generated repair route plan lacks successful controller-run authority")
+
+
 def _rebind_repair_alert(
     api: GitHubApi,
     metadata: dict[str, Any],
@@ -1380,18 +1452,6 @@ def _rebind_repair_alert(
     ]
     if len(matches) != 1:
         raise PolicyBlock("generated repair no longer maps to exactly one open main CodeQL alert")
-    subject = validate_alert(matches[0], live["baseSha"], config)
-    expected = {
-        "alert": subject["number"],
-        "rule": subject["rule"],
-        "severity": subject["severity"],
-        "path": subject["path"],
-        "base": subject["baseSha"],
-        "fingerprint": subject["fingerprint"],
-    }
-    observed = {key: metadata.get(key) for key in expected}
-    if observed != expected:
-        raise PolicyBlock("generated repair marker drifted from the exact live CodeQL alert")
     attempt = metadata.get("attempt")
     if (
         not isinstance(attempt, int)
@@ -1403,6 +1463,60 @@ def _rebind_repair_alert(
     generator = metadata.get("generator")
     if generator not in {"deterministic", "github-codeql-autofix"}:
         raise PolicyBlock("generated repair marker generator is outside reviewed authority")
+
+    route_digest = metadata.get("routeRecordDigest")
+    if route_digest is None:
+        subject = validate_alert(matches[0], live["baseSha"], config)
+    else:
+        strategy = metadata.get("strategy")
+        eligibility = metadata.get("routeAutofixEligibility")
+        if (
+            not isinstance(route_digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", route_digest) is None
+            or not isinstance(strategy, str)
+            or not strategy
+            or eligibility not in {"available", "unavailable", "unknown"}
+        ):
+            raise PolicyBlock("generated repair marker routing provenance is malformed")
+        try:
+            route_record = route_security_alert(
+                matches[0],
+                main_sha=live["baseSha"],
+                config=config,
+                attempts_by_strategy={strategy: attempt - 1},
+                autofix_eligibility=eligibility,
+            )
+            canonical_routing_record(route_record)
+        except RoutingPolicyError as exc:
+            raise PolicyBlock(f"generated repair route cannot be revalidated: {exc}") from exc
+        expected_decision = (
+            "ordinary-deterministic-autoheal"
+            if generator == "deterministic"
+            else "ordinary-bounded-autofix"
+        )
+        if (
+            route_record.get("recordDigest") != route_digest
+            or route_record.get("decision") != expected_decision
+            or metadata.get("routeDecision") != expected_decision
+            or metadata.get("routeAuthority") != route_record.get("authority")
+            or metadata.get("routingPolicyVersion") != route_record.get("routingPolicyVersion")
+            or route_record.get("strategy") != strategy
+        ):
+            raise PolicyBlock("generated repair marker drifted from deterministic routing truth")
+        _require_marker_route_artifact(api, metadata, live["baseSha"])
+        subject = _subject_from_route(route_record)
+
+    expected = {
+        "alert": subject["number"],
+        "rule": subject["rule"],
+        "severity": subject["severity"],
+        "path": subject["path"],
+        "base": subject["baseSha"],
+        "fingerprint": subject["fingerprint"],
+    }
+    observed = {key: metadata.get(key) for key in expected}
+    if observed != expected:
+        raise PolicyBlock("generated repair marker drifted from the exact live CodeQL alert")
     _require_strategy_binding(metadata, subject)
     return subject
 
