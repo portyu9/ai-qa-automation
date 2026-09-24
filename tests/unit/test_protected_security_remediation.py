@@ -400,6 +400,26 @@ def test_generated_protected_pr_rejects_replay_after_main_moves() -> None:
             return super().get(path)
 
     api = MovedMainApi()
+    assert author._generated_repair_is_stale(
+        api,
+        api.pr,
+        bot_login=BOT_LOGIN,
+        bot_id=BOT_ID,
+    )
+
+    class CloseApi:
+        def patch(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            assert path == "/pulls/301"
+            assert payload == {"state": "closed"}
+            return {"number": 301, "state": "closed"}
+
+    assert author._close_stale_generated_repair(CloseApi(), api.pr) == {
+        "decision": "stale-protected-repair-closed",
+        "pr": 301,
+        "headSha": HEAD,
+        "baseSha": MAIN,
+    }
+
     with pytest.raises(author.ProtectedRemediationError, match="stale relative to current main"):
         author.validate_generated_pr(
             api,
