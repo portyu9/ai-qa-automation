@@ -804,7 +804,10 @@ def test_post_merge_ci_liveness_fails_closed_on_registration_and_main_drift(
     wrong_event = _PostMergeCiApi(
         registered=_post_merge_ci_row(run_id=88004, event="push"),
     )
-    with pytest.raises(governance.GovernanceError, match="unexpected event after explicit dispatch"):
+    with pytest.raises(
+        governance.GovernanceError,
+        match="unexpected event after explicit dispatch",
+    ):
         governance._ensure_post_merge_ci(wrong_event, MERGE, {"baseBranch": "main"})
 
     moved = _PostMergeCiApi(
