@@ -58,13 +58,20 @@ TRANSIENT_GET_ATTEMPTS = 3
 TRANSIENT_GET_DELAY_SECONDS = 1
 GITHUB_ACTIONS_LOGIN = "github-actions[bot]"
 GITHUB_ACTIONS_USER_ID = 41898282
+GITHUB_ACTIONS_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
+GITHUB_WEB_FLOW_LOGIN = "web-flow"
+GITHUB_WEB_FLOW_USER_ID = 19864447
+GITHUB_COMMITTER_NAME = "GitHub"
+GITHUB_COMMITTER_EMAIL = "noreply@github.com"
 SECURITY_AUTOHEAL_WORKFLOW_ID = 359898109
 SECURITY_AUTOHEAL_WORKFLOW_PATH = ".github/workflows/security-autoheal.yml"
 SECURITY_AUTOHEAL_RECONCILE_EVENTS = {"workflow_run", "schedule", "workflow_dispatch"}
 MARKER_PREFIX = "<!-- aiqa-codeql-autoheal:"
 MARKER_SUFFIX = " -->"
 BRANCH_PREFIX = "automation/codeql-autoheal-"
-AUTOHEAL_BRANCH_RE = re.compile(r"^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{12}$")
+AUTOHEAL_BRANCH_RE = re.compile(
+    r"^automation/codeql-autoheal-[1-9][0-9]*-(?:[0-9a-f]{12}|[0-9a-f]{64}-a[1-9][0-9]*)$"
+)
 AUTOHEAL_COMMIT_MESSAGE_RE = re.compile(r"^security: auto-heal CodeQL alert #[1-9][0-9]*$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 SAFE_RULES = {
@@ -760,8 +767,56 @@ def _ensure_stale_supersession_certificate(
     return certificate
 
 
-def _branch_name(subject: dict[str, Any]) -> str:
-    return f"{BRANCH_PREFIX}{subject['number']}-{subject['fingerprint'][:12]}"
+def _branch_name(subject: dict[str, Any], attempt: int | None = None) -> str:
+    legacy = f"{BRANCH_PREFIX}{subject['number']}-{subject['fingerprint'][:12]}"
+    if attempt is None:
+        return legacy
+    if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
+        raise AutohealError("auto-heal attempt must be a positive integer")
+    fingerprint = subject.get("fingerprint")
+    if not isinstance(fingerprint, str) or re.fullmatch(r"[0-9a-f]{64}", fingerprint) is None:
+        raise AutohealError("auto-heal subject fingerprint is not canonical SHA-256")
+    return f"{BRANCH_PREFIX}{subject['number']}-{fingerprint}-a{attempt}"
+
+
+def _require_repair_branch_binding(
+    branch: str,
+    metadata: dict[str, Any],
+    subject: dict[str, Any],
+) -> None:
+    attempt = metadata.get("attempt")
+    if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
+        raise PolicyBlock("generated repair marker attempt is invalid for branch binding")
+    allowed = {
+        _branch_name(subject),
+        _branch_name(subject, attempt),
+    }
+    if branch not in allowed:
+        raise PolicyBlock(
+            "generated repair branch does not match the exact alert fingerprint and attempt"
+        )
+
+
+def _recoverable_model_autofix_branches(
+    alerts: list[dict[str, Any]],
+    main_sha: str,
+    config: dict[str, Any],
+) -> set[str]:
+    branches: set[str] = set()
+    max_attempts = int(config["maxAttemptsPerAlert"])
+    for alert in alerts:
+        try:
+            subject = validate_alert(alert, main_sha, config)
+        except PolicyBlock:
+            continue
+        if _repair_strategy(subject) != MODEL_AUTOFIX_STRATEGY:
+            continue
+        if _is_deterministic_only(subject["path"], config):
+            continue
+        if not _model_path_allowed(subject["path"], config):
+            continue
+        branches.update(_branch_name(subject, attempt) for attempt in range(1, max_attempts + 1))
+    return branches
 
 
 def _is_deterministic_only(path: str, config: dict[str, Any]) -> bool:
@@ -905,17 +960,21 @@ def _git_commit(api: GitHubApi, sha: str) -> dict[str, Any]:
     return payload
 
 
-def _create_branch(api: GitHubApi, branch: str, base_sha: str) -> None:
+def _branch_head(api: GitHubApi, branch: str) -> str | None:
     encoded = urllib.parse.quote(branch, safe="")
     try:
         existing = api.get(f"/git/ref/heads/{encoded}")
     except AutohealError as exc:
-        if "HTTP 404" not in str(exc):
-            raise
-    else:
-        observed = _require_sha(
-            ((existing or {}).get("object") or {}).get("sha"), "existing branch SHA"
-        )
+        if "HTTP 404" in str(exc):
+            return None
+        raise
+    return _require_sha(((existing or {}).get("object") or {}).get("sha"), "existing branch SHA")
+
+
+def _create_branch(api: GitHubApi, branch: str, base_sha: str) -> None:
+    encoded = urllib.parse.quote(branch, safe="")
+    observed = _branch_head(api, branch)
+    if observed is not None:
         if observed == base_sha:
             return
         api.delete(f"/git/refs/heads/{encoded}")
@@ -989,8 +1048,75 @@ def _ensure_copilot_autofix(api: GitHubApi, alert_number: int) -> None:
     raise RetryLater("GitHub CodeQL Autofix is still generating a proposal")
 
 
+def _require_exact_copilot_autofix_commit(
+    api: GitHubApi,
+    alert_number: int,
+    head_sha: str,
+    base_sha: str,
+) -> str:
+    head_sha = _require_sha(head_sha, "Copilot Autofix commit SHA")
+    commit = _git_commit(api, head_sha)
+    parents = commit.get("parents")
+    if not isinstance(parents, list) or len(parents) != 1:
+        raise PolicyBlock("Copilot Autofix commit must have exactly one parent")
+    if _require_sha((parents[0] or {}).get("sha"), "Copilot Autofix parent SHA") != base_sha:
+        raise PolicyBlock("Copilot Autofix commit is not parented to exact current main")
+    repository_commit = api.get(f"/commits/{head_sha}")
+    if not _owned_generated_repair_commit(repository_commit, head_sha):
+        raise PolicyBlock("Copilot Autofix commit lacks exact GitHub Actions ownership")
+    author = (repository_commit or {}).get("author") or {}
+    committer = (repository_commit or {}).get("committer") or {}
+    commit = (repository_commit or {}).get("commit") or {}
+    git_author = commit.get("author") or {}
+    git_committer = commit.get("committer") or {}
+    verification = commit.get("verification") or {}
+    if (
+        author.get("type") != "Bot"
+        or committer.get("login") != GITHUB_WEB_FLOW_LOGIN
+        or committer.get("id") != GITHUB_WEB_FLOW_USER_ID
+        or committer.get("type") != "User"
+        or git_author.get("name") != GITHUB_ACTIONS_LOGIN
+        or git_author.get("email") != GITHUB_ACTIONS_EMAIL
+        or git_committer.get("name") != GITHUB_COMMITTER_NAME
+        or git_committer.get("email") != GITHUB_COMMITTER_EMAIL
+        or verification.get("verified") is not True
+        or verification.get("reason") != "valid"
+    ):
+        raise PolicyBlock("Copilot Autofix commit lacks exact GitHub-signed provider provenance")
+    message = str(commit.get("message") or "")
+    if message.splitlines()[0] != f"security: auto-heal CodeQL alert #{alert_number}":
+        raise PolicyBlock("Copilot Autofix commit is bound to a different alert")
+    return head_sha
+
+
 def _commit_copilot_autofix(api: GitHubApi, alert_number: int, branch: str, base_sha: str) -> str:
-    _create_branch(api, branch, base_sha)
+    existing_head = _branch_head(api, branch)
+    if existing_head is None:
+        _create_branch(api, branch, base_sha)
+    elif existing_head == base_sha:
+        raise PolicyBlock(
+            "existing Copilot Autofix attempt branch has ambiguous provider-submission state"
+        )
+    else:
+        recovered = _require_exact_copilot_autofix_commit(
+            api,
+            alert_number,
+            existing_head,
+            base_sha,
+        )
+        print(
+            json.dumps(
+                {
+                    "alert": alert_number,
+                    "branch": branch,
+                    "decision": "autofix-commit-recovered",
+                    "headSha": recovered,
+                },
+                sort_keys=True,
+            )
+        )
+        return recovered
+
     payload = api.post(
         f"/code-scanning/alerts/{alert_number}/autofix/commits",
         {
@@ -999,13 +1125,10 @@ def _commit_copilot_autofix(api: GitHubApi, alert_number: int, branch: str, base
         },
     )
     head_sha = _require_sha((payload or {}).get("sha"), "Copilot Autofix commit SHA")
-    commit = _git_commit(api, head_sha)
-    parents = commit.get("parents")
-    if not isinstance(parents, list) or len(parents) != 1:
-        raise PolicyBlock("Copilot Autofix commit must have exactly one parent")
-    if _require_sha((parents[0] or {}).get("sha"), "Copilot Autofix parent SHA") != base_sha:
-        raise PolicyBlock("Copilot Autofix commit is not parented to exact current main")
-    return head_sha
+    observed_head = _branch_head(api, branch)
+    if observed_head != head_sha:
+        raise AutohealError("Copilot Autofix branch did not advance to the returned commit")
+    return _require_exact_copilot_autofix_commit(api, alert_number, head_sha, base_sha)
 
 
 def _changed_files(api: GitHubApi, base_sha: str, head_sha: str) -> list[dict[str, Any]]:
@@ -1268,6 +1391,7 @@ def assess_trusted_admission(
     if not _owned_generated_repair_commit(commit, live["headSha"]):
         raise PolicyBlock("generated repair head lacks exact GitHub Actions ownership")
     subject = _rebind_repair_alert(api, metadata, live, config)
+    _require_repair_branch_binding(live["branch"], metadata, subject)
     if metadata.get("generator") == "deterministic":
         expected_content = _deterministic_repair(subject)
         if expected_content is None:
@@ -2500,7 +2624,15 @@ def _owned_generated_repair_commit(payload: Any, head_sha: str) -> bool:
     )
 
 
-def _prune_orphan_repair_refs(api: GitHubApi, pulls: list[dict[str, Any]]) -> int:
+def _prune_orphan_repair_refs(
+    api: GitHubApi,
+    pulls: list[dict[str, Any]],
+    *,
+    preserve_branches: set[str] | None = None,
+) -> int:
+    preserved = preserve_branches or set()
+    if any(AUTOHEAL_BRANCH_RE.fullmatch(branch) is None for branch in preserved):
+        raise AutohealError("orphan-ref preservation contains an invalid auto-heal branch")
     open_heads = {
         str((row.get("head") or {}).get("ref"))
         for row in pulls
@@ -2514,7 +2646,7 @@ def _prune_orphan_repair_refs(api: GitHubApi, pulls: list[dict[str, Any]]) -> in
         if not isinstance(ref, str) or not ref.startswith(prefix):
             raise AutohealError("GitHub returned a ref outside CodeQL auto-heal namespace")
         branch = ref.removeprefix("refs/heads/")
-        if branch in open_heads:
+        if branch in open_heads or branch in preserved:
             continue
         obj = row.get("object") or {}
         if obj.get("type") != "commit":
@@ -2729,7 +2861,7 @@ def _create_repair(
     attempt: int,
     strategy: str,
 ) -> int:
-    branch = _branch_name(subject)
+    branch = _branch_name(subject, attempt)
     expected_strategy = _repair_strategy(subject)
     if strategy != expected_strategy:
         raise PolicyBlock("repair creation strategy drifted from the code-owned live strategy")
@@ -2797,7 +2929,6 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
     if _reconcile_terminal_closure(api, main_sha, config):
         return 0
     pulls = _open_pulls(api)
-    _prune_orphan_repair_refs(api, pulls)
     repairs = _generated_repairs(pulls)
     active_alerts: set[int] = set()
     closed_stale = 0
@@ -2858,42 +2989,54 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
                     active_alerts.discard(alert_number)
 
     remaining_repairs = len(repairs) - closed_stale
-    capacity = max(0, int(config["maxOpenRepairs"]) - remaining_repairs)
-    if capacity == 0:
-        return remaining_repairs
 
     query = urllib.parse.urlencode(
         {"state": "open", "ref": "refs/heads/main", "tool_name": "CodeQL"},
         quote_via=urllib.parse.quote,
     )
     alerts = api.list_all(f"/code-scanning/alerts?{query}", max_pages=10)
+    for alert in alerts:
+        instance = alert.get("most_recent_instance") or {}
+        if instance.get("ref") != "refs/heads/main":
+            continue
+        alert_instance_sha = _require_sha(instance.get("commit_sha"), "alert instance SHA")
+        if alert_instance_sha == main_sha:
+            continue
+        refresh = _ensure_current_main_codeql(api, main_sha, config)
+        print(
+            json.dumps(
+                {
+                    "alert": alert.get("number"),
+                    "decision": (
+                        "codeql-refresh-dispatched"
+                        if refresh["codeqlDispatched"]
+                        else "codeql-refresh-waiting"
+                    ),
+                    "staleSha": alert_instance_sha,
+                    "currentMain": main_sha,
+                    **refresh,
+                },
+                sort_keys=True,
+            )
+        )
+        return remaining_repairs
+
+    preserve_branches = _recoverable_model_autofix_branches(alerts, main_sha, config)
+    _prune_orphan_repair_refs(
+        api,
+        pulls,
+        preserve_branches=preserve_branches,
+    )
+
+    capacity = max(0, int(config["maxOpenRepairs"]) - remaining_repairs)
+    if capacity == 0:
+        return remaining_repairs
+
     created = 0
     for alert in alerts:
         if created >= capacity:
             break
         try:
-            instance = alert.get("most_recent_instance") or {}
-            if instance.get("ref") == "refs/heads/main":
-                alert_instance_sha = _require_sha(instance.get("commit_sha"), "alert instance SHA")
-                if alert_instance_sha != main_sha:
-                    refresh = _ensure_current_main_codeql(api, main_sha, config)
-                    print(
-                        json.dumps(
-                            {
-                                "alert": alert.get("number"),
-                                "decision": (
-                                    "codeql-refresh-dispatched"
-                                    if refresh["codeqlDispatched"]
-                                    else "codeql-refresh-waiting"
-                                ),
-                                "staleSha": alert_instance_sha,
-                                "currentMain": main_sha,
-                                **refresh,
-                            },
-                            sort_keys=True,
-                        )
-                    )
-                    return remaining_repairs + created
             subject = validate_alert(alert, main_sha, config)
             if subject["number"] in active_alerts:
                 continue
