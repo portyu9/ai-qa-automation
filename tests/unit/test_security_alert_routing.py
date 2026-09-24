@@ -857,7 +857,10 @@ def test_json_ingestion_rejects_target_swap_during_read(
 
     monkeypatch.setattr(routing.os, "read", swapping_read)
 
-    with pytest.raises(routing.RoutingPolicyError, match="path identity changed"):
+    with pytest.raises(
+        routing.RoutingPolicyError,
+        match="(?:changed during ingestion|path identity changed)",
+    ):
         routing._read_json(target, max_bytes=1024, label="alert input")
 
 
@@ -916,7 +919,10 @@ def test_routing_record_idempotency_rejects_target_swap_during_read(
 
     monkeypatch.setattr(routing.os, "read", swapping_read)
 
-    with pytest.raises(routing.RoutingPolicyError, match="path identity changed"):
+    with pytest.raises(
+        routing.RoutingPolicyError,
+        match="(?:changed during verification|path identity changed)",
+    ):
         routing.persist_record(target, record)
 
 
@@ -985,3 +991,29 @@ def test_routing_record_retry_reconciles_failed_parent_fsync(
     monkeypatch.setattr(routing.os, "fsync", count_reconciliation_fsync)
     assert routing.persist_record(target, record) is False
     assert reconciled_calls == 1
+
+
+def test_named_file_identity_rejects_replaced_directory_entry(tmp_path: Path) -> None:
+    target = tmp_path / "route.json"
+    replacement = tmp_path / "replacement.json"
+    displaced = tmp_path / "displaced.json"
+    target.write_bytes(b"first")
+    replacement.write_bytes(b"second")
+    expected = target.stat()
+    target.rename(displaced)
+    replacement.rename(target)
+
+    directory = routing.os.open(
+        tmp_path,
+        routing.os.O_RDONLY | getattr(routing.os, "O_DIRECTORY", 0),
+    )
+    try:
+        with pytest.raises(routing.RoutingPolicyError, match="path identity changed"):
+            routing._require_named_file_identity(
+                directory,
+                target.name,
+                expected,
+                label="routing record",
+            )
+    finally:
+        routing.os.close(directory)
