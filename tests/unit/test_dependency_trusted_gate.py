@@ -573,6 +573,7 @@ def test_dependency_promotion_reconcile_stops_after_successful_merge(
     config = {
         "repository": gate.EXPECTED_REPOSITORY,
         "automergeEnabled": True,
+        "pipMode": "promotion",
     }
     monkeypatch.setenv("GITHUB_REPOSITORY", gate.EXPECTED_REPOSITORY)
     monkeypatch.setattr(promotion, "GitHubApi", lambda token, repository: api)
