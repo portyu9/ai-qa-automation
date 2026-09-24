@@ -569,11 +569,17 @@ def test_repair_admission_rejects_route_provenance_stripping() -> None:
 def test_generated_repair_commit_route_binding_is_immutable_and_unambiguous() -> None:
     digest = "f" * 64
     plan_digest = "e" * 64
-    message = autoheal._route_bound_commit_message(7, digest, plan_digest)
+    message = autoheal._route_bound_commit_message(
+        7,
+        digest,
+        plan_digest,
+        ARTIFACT_DIGEST,
+    )
     payload = {"commit": {"message": message}}
 
     assert autoheal._generated_commit_route_digest(payload) == digest
     assert autoheal._generated_commit_plan_digest(payload) == plan_digest
+    assert autoheal._generated_commit_artifact_digest(payload) == ARTIFACT_DIGEST
     assert (
         autoheal._generated_commit_route_digest(
             {
@@ -601,6 +607,21 @@ def test_generated_repair_commit_route_binding_is_immutable_and_unambiguous() ->
             {
                 "commit": {
                     "message": (message + "\n" + autoheal.ROUTE_PLAN_TRAILER_PREFIX + ("a" * 64))
+                }
+            }
+        )
+        is None
+    )
+    assert (
+        autoheal._generated_commit_artifact_digest(
+            {
+                "commit": {
+                    "message": (
+                        message
+                        + "\n"
+                        + autoheal.ROUTE_ARTIFACT_TRAILER_PREFIX
+                        + ("sha256:" + ("a" * 64))
+                    )
                 }
             }
         )
