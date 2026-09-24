@@ -394,13 +394,8 @@ class GitHubApi:
         max_pages: int = 10,
         max_items: int | None = None,
     ) -> list[dict[str, Any]]:
-        if (
-            max_items is not None
-            and (
-                not isinstance(max_items, int)
-                or isinstance(max_items, bool)
-                or max_items < 1
-            )
+        if max_items is not None and (
+            not isinstance(max_items, int) or isinstance(max_items, bool) or max_items < 1
         ):
             raise AutohealError("pagination max_items must be a positive integer")
         if not isinstance(max_pages, int) or isinstance(max_pages, bool) or max_pages < 1:
@@ -3430,6 +3425,23 @@ def _canonical_route_plan(plan: dict[str, Any]) -> bytes:
     return payload
 
 
+def _validated_live_alert_numbers(alerts: list[dict[str, Any]]) -> set[int]:
+    numbers: set[int] = set()
+    for alert in alerts:
+        if not isinstance(alert, dict):
+            raise AutohealError("GitHub returned a non-object CodeQL alert")
+        number = alert.get("number")
+        if (
+            not isinstance(number, int)
+            or isinstance(number, bool)
+            or number < 1
+            or number in numbers
+        ):
+            raise AutohealError("GitHub returned an invalid or duplicate CodeQL alert identity")
+        numbers.add(number)
+    return numbers
+
+
 def _build_route_plan(
     api: GitHubApi,
     config: dict[str, Any],
@@ -3446,21 +3458,8 @@ def _build_route_plan(
     )
     if len(alerts) > 100:
         raise AutohealError("live CodeQL alert set exceeds the bounded routing limit")
-    records: list[dict[str, Any]] = []
-    seen_alerts: set[int] = set()
-    for alert in alerts:
-        if not isinstance(alert, dict):
-            raise AutohealError("GitHub returned a non-object CodeQL alert")
-        number = alert.get("number")
-        if (
-            not isinstance(number, int)
-            or isinstance(number, bool)
-            or number < 1
-            or number in seen_alerts
-        ):
-            raise AutohealError("GitHub returned an invalid or duplicate CodeQL alert identity")
-        seen_alerts.add(number)
-        records.append(_route_record_for_alert(api, alert, main_sha, config))
+    _validated_live_alert_numbers(alerts)
+    records = [_route_record_for_alert(api, alert, main_sha, config) for alert in alerts]
     records.sort(key=lambda record: int(record["alertNumber"]))
     if _current_main(api, config) != main_sha:
         raise AutohealError("main advanced while deterministic route planning was in progress")
@@ -3702,25 +3701,17 @@ def _rebind_route_plan(
         max_pages=2,
         max_items=101,
     )
+    if len(alerts) > 100:
+        raise AutohealError("live CodeQL alert set exceeds the bounded routing limit")
     planned = {int(record["alertNumber"]): record for record in plan["records"]}
     if len(planned) != len(plan["records"]):
         raise AutohealError("route plan contains duplicate alert identities")
-    live_numbers: set[int] = set()
+    live_numbers = _validated_live_alert_numbers(alerts)
+    if set(planned) != live_numbers:
+        raise AutohealError("persisted route evidence does not match the live open-alert set")
     for alert in alerts:
-        if not isinstance(alert, dict):
-            raise AutohealError("GitHub returned a non-object CodeQL alert")
-        number = alert.get("number")
-        if (
-            not isinstance(number, int)
-            or isinstance(number, bool)
-            or number < 1
-            or number in live_numbers
-        ):
-            raise AutohealError("GitHub returned an invalid or duplicate CodeQL alert identity")
-        live_numbers.add(number)
-        expected = planned.get(number)
-        if expected is None:
-            raise AutohealError("live CodeQL alert is absent from persisted route evidence")
+        number = int(alert["number"])
+        expected = planned[number]
         live = _route_record_for_alert(
             api,
             alert,
@@ -3732,8 +3723,6 @@ def _rebind_route_plan(
                 raise AutohealError("live routing truth drifted from persisted route evidence")
         except RoutingPolicyError as exc:
             raise AutohealError(f"persisted route evidence is invalid: {exc}") from exc
-    if set(planned) != live_numbers:
-        raise AutohealError("persisted route evidence references an alert no longer open on main")
     if _current_main(api, config) != main_sha:
         raise AutohealError("main advanced while route plan was being revalidated")
     return planned
@@ -3759,13 +3748,9 @@ def _revalidate_route_record_before_mutation(
     )
     try:
         if canonical_routing_record(live) != canonical_routing_record(record):
-            raise AutohealError(
-                "selected CodeQL alert routing truth drifted before mutation"
-            )
+            raise AutohealError("selected CodeQL alert routing truth drifted before mutation")
     except RoutingPolicyError as exc:
-        raise AutohealError(
-            f"selected CodeQL alert route cannot be revalidated: {exc}"
-        ) from exc
+        raise AutohealError(f"selected CodeQL alert route cannot be revalidated: {exc}") from exc
     if _current_main(api, config) != main_sha:
         raise AutohealError("main advanced during selected route mutation revalidation")
     return live
