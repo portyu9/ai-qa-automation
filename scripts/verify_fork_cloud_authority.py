@@ -59,9 +59,7 @@ _FORBIDDEN_WORKFLOW_TOKENS: tuple[tuple[str, re.Pattern[str]], ...] = (
 _ALLOWED_SECRET_REFERENCE_COUNTS: dict[str, Counter[str]] = {
     "dependency-governance.yml": Counter({"GITHUB_TOKEN": 3}),
     "manual-validation.yml": Counter({"ANTHROPIC_API_KEY": 2}),
-    "protected-security-remediation.yml": Counter(
-        {"PROTECTED_REMEDIATION_APP_PRIVATE_KEY": 1}
-    ),
+    "protected-security-remediation.yml": Counter({"PROTECTED_REMEDIATION_APP_PRIVATE_KEY": 1}),
     "security-autoheal.yml": Counter(),
     "trusted-pr-auto.yml": Counter({"TRUSTED_GATE_APP_PRIVATE_KEY": 1}),
 }
@@ -185,7 +183,11 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
                 "dependency-governance.yml: reviewed credential consumers moved or changed"
             )
     if name == "protected-security-remediation.yml":
-        if "pull_request:" in text or "workflow_dispatch:" in text or "repository_dispatch:" in text:
+        if (
+            "pull_request:" in text
+            or "workflow_dispatch:" in text
+            or "repository_dispatch:" in text
+        ):
             raise ValueError(
                 "protected-security-remediation.yml must remain default-branch schedule-only"
             )
