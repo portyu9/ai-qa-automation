@@ -37,12 +37,28 @@ def _repo_commit(
     *,
     owner: str = autoheal.GITHUB_ACTIONS_LOGIN,
     owner_id: int = autoheal.GITHUB_ACTIONS_USER_ID,
+    committer_login: str = autoheal.GITHUB_WEB_FLOW_LOGIN,
+    committer_id: int = autoheal.GITHUB_WEB_FLOW_USER_ID,
+    verified: bool = True,
+    verification_reason: str = "valid",
     alert: int = ALERT,
 ) -> dict[str, Any]:
     return {
         "sha": HEAD,
-        "author": {"login": owner, "id": owner_id},
-        "commit": {"message": f"security: auto-heal CodeQL alert #{alert}\n\nAutofix"},
+        "author": {"login": owner, "id": owner_id, "type": "Bot"},
+        "committer": {"login": committer_login, "id": committer_id, "type": "User"},
+        "commit": {
+            "message": f"security: auto-heal CodeQL alert #{alert}\n\nAutofix",
+            "author": {
+                "name": autoheal.GITHUB_ACTIONS_LOGIN,
+                "email": autoheal.GITHUB_ACTIONS_EMAIL,
+            },
+            "committer": {
+                "name": autoheal.GITHUB_COMMITTER_NAME,
+                "email": autoheal.GITHUB_COMMITTER_EMAIL,
+            },
+            "verification": {"verified": verified, "reason": verification_reason},
+        },
     }
 
 
@@ -117,6 +133,16 @@ def test_ambiguous_autofix_commit_response_is_recovered_without_provider_replay(
     (
         (_repo_commit(owner="attacker", owner_id=1), BASE, "ownership"),
         (_repo_commit(), "c" * 40, "parented"),
+        (
+            _repo_commit(committer_login="attacker", committer_id=1),
+            BASE,
+            "GitHub-signed provider provenance",
+        ),
+        (
+            _repo_commit(verified=False, verification_reason="unsigned"),
+            BASE,
+            "GitHub-signed provider provenance",
+        ),
         (_repo_commit(alert=99), BASE, "different alert"),
     ),
 )
