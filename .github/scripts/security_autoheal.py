@@ -977,6 +977,7 @@ def _create_branch(api: GitHubApi, branch: str, base_sha: str) -> None:
     if not isinstance(created, dict) or created.get("ref") != f"refs/heads/{branch}":
         raise AutohealError("GitHub did not acknowledge auto-heal branch creation")
 
+
 def _commit_deterministic_repair(
     api: GitHubApi,
     branch: str,
@@ -1104,6 +1105,7 @@ def _commit_copilot_autofix(api: GitHubApi, alert_number: int, branch: str, base
     if observed_head != head_sha:
         raise AutohealError("Copilot Autofix branch did not advance to the returned commit")
     return _require_exact_copilot_autofix_commit(api, alert_number, head_sha, base_sha)
+
 
 def _changed_files(api: GitHubApi, base_sha: str, head_sha: str) -> list[dict[str, Any]]:
     payload = api.get(f"/compare/{base_sha}...{head_sha}")
