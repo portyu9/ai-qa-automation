@@ -23,6 +23,7 @@ ADDITIONAL_ALLOWED_ACTION_IDENTITIES = {
     "github/codeql-action/init",
     "github/codeql-action/analyze",
 }
+ADDITIONAL_ALLOWED_ACTION_WORKFLOWS: dict[str, frozenset[str]] = {}
 AUTOMATIC_REQUIRED_JOBS = (
     "quality",
     "deterministic-evals",
