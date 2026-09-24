@@ -351,8 +351,13 @@ class _IntentApi:
         raise AssertionError(path)
 
     def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
-        assert path == f"/commits/{self.record['baseSha']}/check-runs?filter=all"
-        assert max_pages == 4
+        name, _, _ = autoheal._autofix_intent_identity(self.record)
+        encoded = autoheal.urllib.parse.quote(name, safe="")
+        assert path == (
+            f"/commits/{self.record['baseSha']}/check-runs"
+            f"?filter=all&check_name={encoded}"
+        )
+        assert max_pages == 2
         return list(self.existing)
 
     def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
