@@ -859,7 +859,7 @@ def test_json_ingestion_rejects_target_swap_during_read(
 
     with pytest.raises(
         routing.RoutingPolicyError,
-        match="(?:changed during ingestion|path identity changed)",
+        match=r"(?:changed during ingestion|path identity changed)",
     ):
         routing._read_json(target, max_bytes=1024, label="alert input")
 
@@ -921,7 +921,7 @@ def test_routing_record_idempotency_rejects_target_swap_during_read(
 
     with pytest.raises(
         routing.RoutingPolicyError,
-        match="(?:changed during verification|path identity changed)",
+        match=r"(?:changed during verification|path identity changed)",
     ):
         routing.persist_record(target, record)
 
