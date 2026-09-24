@@ -470,6 +470,7 @@ def test_workflow_persists_route_plan_before_live_reconcile() -> None:
     assert "pull-requests: read" in workflow
     assert "security-events: read" in workflow
     assert "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8" in workflow
+    assert "artifact-ids: ${{ needs.route-plan.outputs.artifact-id }}" in workflow
     assert "--route-artifact-id ${{ needs.route-plan.outputs.artifact-id }}" in workflow
     assert (
         "--route-artifact-digest sha256:${{ needs.route-plan.outputs.artifact-digest }}"
