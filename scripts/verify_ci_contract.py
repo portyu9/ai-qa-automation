@@ -47,7 +47,7 @@ EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
     "d809771ced237ec2d02d52b0eb29432f14c6a90b"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
-    "c6943d93bb41c80605f756e4b6c21bca1a3fdbb7"  # pragma: allowlist secret
+    "e78db18d9a4a7fb721a5169fb49363e6c8c22dc6"  # pragma: allowlist secret
 )
 EXPECTED_CODEQL_MAJOR = 4
 CODEQL_ACTION_RE = re.compile(
@@ -664,7 +664,7 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         "          --route-plan artifacts/security-autoheal-route-plan/route-plan.json",
         "          --route-artifact-id ${{ steps.route-plan-artifact.outputs.artifact-id }}",
         "          --route-artifact-name security-autoheal-route-plan-${{ github.run_id }}-${{ github.run_attempt }}",
-        "          --route-artifact-digest ${{ steps.route-plan-artifact.outputs.artifact-digest }}",
+        "          --route-artifact-digest sha256:${{ steps.route-plan-artifact.outputs.artifact-digest }}",
     )
     for fragment in required:
         if fragment not in semantic:
