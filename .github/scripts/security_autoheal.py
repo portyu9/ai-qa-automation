@@ -3447,9 +3447,19 @@ def _build_route_plan(
     if len(alerts) > 100:
         raise AutohealError("live CodeQL alert set exceeds the bounded routing limit")
     records: list[dict[str, Any]] = []
+    seen_alerts: set[int] = set()
     for alert in alerts:
         if not isinstance(alert, dict):
             raise AutohealError("GitHub returned a non-object CodeQL alert")
+        number = alert.get("number")
+        if (
+            not isinstance(number, int)
+            or isinstance(number, bool)
+            or number < 1
+            or number in seen_alerts
+        ):
+            raise AutohealError("GitHub returned an invalid or duplicate CodeQL alert identity")
+        seen_alerts.add(number)
         records.append(_route_record_for_alert(api, alert, main_sha, config))
     records.sort(key=lambda record: int(record["alertNumber"]))
     if _current_main(api, config) != main_sha:
@@ -3700,8 +3710,13 @@ def _rebind_route_plan(
         if not isinstance(alert, dict):
             raise AutohealError("GitHub returned a non-object CodeQL alert")
         number = alert.get("number")
-        if not isinstance(number, int) or isinstance(number, bool) or number < 1:
-            raise AutohealError("GitHub returned an invalid CodeQL alert identity")
+        if (
+            not isinstance(number, int)
+            or isinstance(number, bool)
+            or number < 1
+            or number in live_numbers
+        ):
+            raise AutohealError("GitHub returned an invalid or duplicate CodeQL alert identity")
         live_numbers.add(number)
         expected = planned.get(number)
         if expected is None:
