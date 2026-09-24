@@ -204,6 +204,40 @@ def test_route_plan_digest_rejects_tampering() -> None:
         autoheal._canonical_route_plan(plan)
 
 
+def test_route_plan_persistence_is_runner_temp_bound_and_private(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tmp_path.chmod(0o700)
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    plan = autoheal._build_route_plan(_PlanApi(_alert()), _config(), MAIN)
+    target = autoheal._route_plan_output_path()
+
+    autoheal._write_route_plan(target, plan)
+
+    assert target.read_bytes() == autoheal._canonical_route_plan(plan)
+    assert target.stat().st_mode & 0o077 == 0
+    assert target.parent.stat().st_mode & 0o077 == 0
+
+
+def test_route_plan_persistence_rejects_workspace_or_preexisting_parent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tmp_path.chmod(0o700)
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    plan = autoheal._build_route_plan(_PlanApi(_alert()), _config(), MAIN)
+
+    with pytest.raises(autoheal.AutohealError, match="exact runner-owned temp path"):
+        autoheal._write_route_plan(tmp_path / "workspace-plan.json", plan)
+
+    redirect = tmp_path / "redirect"
+    redirect.mkdir(mode=0o700)
+    autoheal._route_plan_output_path().parent.symlink_to(redirect, target_is_directory=True)
+    with pytest.raises(autoheal.AutohealError, match="directory already exists"):
+        autoheal._write_route_plan(autoheal._route_plan_output_path(), plan)
+
+
 def test_route_plan_rebind_requires_identical_live_routing_truth() -> None:
     api = _PlanApi(_alert())
     plan = autoheal._build_route_plan(api, _config(), MAIN)
@@ -495,7 +529,7 @@ def test_workflow_persists_route_plan_before_live_reconcile() -> None:
     assert (
         "--route-artifact-digest sha256:${{ needs.route-plan.outputs.artifact-digest }}" in workflow
     )
-    assert ".github/scripts/security_alert_routing.py" in workflow
+    assert '"$RUNNER_TEMP/security-autoheal-route-plan/route-plan.json"' in workflow\n    assert "${{ runner.temp }}/security-autoheal-route-plan" in workflow\n    assert ".github/scripts/security_alert_routing.py" in workflow
 
     route_job = workflow[workflow.index("  route-plan:") : workflow.index("\n  reconcile:")]
     assert ": write" not in route_job
