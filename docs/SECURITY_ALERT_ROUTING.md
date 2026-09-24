@@ -31,7 +31,7 @@ A route is bound to:
 - strategy-version-scoped attempt count;
 - bounded CodeQL Autofix availability evidence when the model/autofix lane is considered.
 
-Malformed or ambiguous identity, disagreeing alert/instance state, boolean or non-finite severity, unsafe/control-character paths, invalid SHAs, oversized alert messages, ambiguous deterministic strategies, non-object batch entries, and malformed attempt accounting fail closed without manufacturing a routing record. File-backed alert/config ingestion also resolves every parent component with no-follow directory semantics and requires the final input file to be process-owned and not writable by group or other users before its bytes can influence routing.
+Malformed or ambiguous identity, disagreeing alert/instance state, boolean or non-finite severity, unsafe/control-character paths, invalid SHAs, oversized alert messages, ambiguous deterministic strategies, non-object batch entries, and malformed attempt accounting fail closed without manufacturing a routing record. File-backed alert/config ingestion resolves every parent component with no-follow directory semantics, opens the final target with no-follow/non-blocking semantics, requires a bounded regular file owned by the routing process and not writable by group or other users, and re-proves both the live target-name identity and live parent-path identity after the bounded read before its bytes can influence routing.
 
 ## Decision matrix
 
@@ -76,9 +76,10 @@ Each successful classification emits a bounded canonical JSON record containing 
 - every parent path component is opened with no-follow directory semantics;
 - the final parent and any pre-existing record must be owned by the routing process and not writable by group/other users;
 - an existing different record is a conflict, not an overwrite;
-- an identical existing record is idempotent only after ownership, mode, bounded-read, and digest checks succeed;
+- existing records are opened non-blocking and must remain bounded regular files whose live target-name identity still matches the verified descriptor;
+- an identical existing/concurrent record is idempotent only after ownership, mode, bounded-read, digest, fresh parent-directory fsync, exact read-back, and live parent-path identity checks succeed, so a prior post-link durability failure cannot silently become accepted evidence;
 - publication uses an owner-only fsynced temporary file and atomic hard-link creation;
-- symlink parents/targets, parent traversal, concurrent conflicting publication, and read-back drift are rejected.
+- symlink parents/targets, special-file blocking, parent traversal, concurrent conflicting publication, name/inode swaps, parent-path swaps, and read-back drift are rejected.
 
 The record explains deterministic routing truth. It is **not** itself merge authority, validation proof, or a terminal remediation certificate.
 
