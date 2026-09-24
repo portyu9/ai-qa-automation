@@ -18,6 +18,8 @@ Python dependency updates remain manual. Major GitHub Actions updates remain man
 
 Because `main` requires the dedicated `Trusted PR Gate`, dependency governance never publishes that authority itself. The default-branch Trusted PR Auto Gate must first publish an exact App-owned success from a genuine `schedule` run. Immediately before merge, the dependency controller fresh-rebinds the PR and then independently requires workflow id/path/name, `event=schedule`, `run_attempt=1`, exact current-main base, exact PR/base/head/prospective-merge parents and tree, repository identity, and the dedicated App status. Only then may it request the SHA-guarded merge. Owner-routine `workflow_run` gate evidence remains valid for its separate owner lane but is insufficient for dependency merge authority.
 
+After any governed dependency merge, the controller re-reads the actual merge commit and requires exact ordered base/head parents, a merge tree identical to the validated dependency head, and the merge SHA as current `main`. It then requires a single canonical attempt-1 CI registration for that exact resulting main. If no automatic `push` CI has registered yet, the controller may dispatch the reviewed `ci.yml` from trusted `main` with exact `subject_sha`/`subject_ref=main` inputs and boundedly wait for that new `workflow_dispatch` registration. Wrong workflow identity, ambiguity, a terminal failed run, registration timeout, or main drift fails closed. For Python promotions, the workflow emits its `merged=true` handoff only after this post-merge continuity proof completes.
+
 ## Red-path recovery
 
 Recovery has no merge or status authority. It may request at most one rerun (`maxRunAttempts == 2`) and only when all of these conditions are true:
