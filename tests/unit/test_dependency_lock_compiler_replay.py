@@ -59,11 +59,13 @@ def test_parse_frozen_lock_rejects_noncanonical_bytes(raw: bytes) -> None:
 def _pip_report_row(
     *,
     is_yanked: object = False,
+    is_direct: object = False,
     version: str = "1.0",
     digest: str = "1" * 64,
 ) -> dict[str, object]:
     return {
         "is_yanked": is_yanked,
+        "is_direct": is_direct,
         "metadata": {"name": "alpha", "version": version},
         "download_info": {
             "url": f"https://files.pythonhosted.org/packages/alpha-{version}-py3-none-any.whl",
@@ -73,17 +75,17 @@ def _pip_report_row(
 
 
 def test_report_to_lock_requires_explicit_non_yanked_artifact() -> None:
-    assert compiler._report_to_lock({"install": [_pip_report_row()]}) == _lock(
+    assert compiler._report_to_lock({"version": "1", "install": [_pip_report_row()]}) == _lock(
         ("alpha", "1.0", "1" * 64)
     ).decode()
 
     with pytest.raises(compiler.LockCompileError, match="yanked"):
-        compiler._report_to_lock({"install": [_pip_report_row(is_yanked=True)]})
+        compiler._report_to_lock({"version": "1", "install": [_pip_report_row(is_yanked=True)]})
 
     missing = _pip_report_row()
     missing.pop("is_yanked")
     with pytest.raises(compiler.LockCompileError, match="non-yanked provenance"):
-        compiler._report_to_lock({"install": [missing]})
+        compiler._report_to_lock({"version": "1", "install": [missing]})
 
 
 @pytest.mark.parametrize(
@@ -115,6 +117,7 @@ def test_hash_replay_revalidates_terminal_artifact_provenance(
         report_path.write_text(
             json.dumps(
                 {
+                    "version": "1",
                     "install": [
                         _pip_report_row(
                             is_yanked=is_yanked,
@@ -138,6 +141,21 @@ def test_hash_replay_revalidates_terminal_artifact_provenance(
     assert "--report" in command
     assert "--require-hashes" in command
     assert "--only-binary=:all:" in command
+
+
+def test_report_to_lock_requires_schema_and_index_provenance() -> None:
+    with pytest.raises(compiler.LockCompileError, match="version"):
+        compiler._report_to_lock({"install": [_pip_report_row()]})
+    with pytest.raises(compiler.LockCompileError, match="version"):
+        compiler._report_to_lock({"version": "2", "install": [_pip_report_row()]})
+    with pytest.raises(compiler.LockCompileError, match="direct"):
+        compiler._report_to_lock(
+            {"version": "1", "install": [_pip_report_row(is_direct=True)]}
+        )
+    ambiguous = _pip_report_row()
+    ambiguous.pop("is_direct")
+    with pytest.raises(compiler.LockCompileError, match="ambiguous artifact provenance"):
+        compiler._report_to_lock({"version": "1", "install": [ambiguous]})
 
 
 def test_authority_bytes_bind_pyproject_base_image_and_every_lock(tmp_path: Path) -> None:
