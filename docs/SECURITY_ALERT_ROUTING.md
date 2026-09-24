@@ -77,7 +77,7 @@ Each successful classification emits a bounded canonical JSON record containing 
 - the final parent and any pre-existing record must be owned by the routing process and not writable by group/other users;
 - an existing different record is a conflict, not an overwrite;
 - existing records are opened non-blocking and must remain bounded regular files whose live target-name identity still matches the verified descriptor;
-- an identical existing/concurrent record is idempotent only after ownership, mode, bounded-read, digest, fresh parent-directory fsync, exact read-back, and live parent-path identity checks succeed, so a prior post-link durability failure cannot silently become accepted evidence;
+- an identical existing/concurrent record is idempotent only after ownership, mode, bounded-read, digest, exact target-file fsync, parent-directory fsync, post-sync name→inode revalidation, and live parent-path identity checks succeed, so neither unflushed file data nor a prior post-link durability failure can silently become accepted evidence;
 - publication uses an owner-only fsynced temporary file and atomic hard-link creation;
 - symlink parents/targets, special-file blocking, parent traversal, concurrent conflicting publication, name/inode swaps, parent-path swaps, and read-back drift are rejected.
 
