@@ -519,6 +519,8 @@ class _ReconcileRecoveryApi(_AmbiguousCommitApi):
     def get(self, path: str) -> dict[str, Any]:
         if path == "/branches/main":
             return {"commit": {"sha": BASE}}
+        if path == f"/code-scanning/alerts/{ALERT}":
+            return _alert("src/ai_qa_automation/example.py")
         if path == f"/compare/{BASE}...{HEAD}":
             return {"files": [{"filename": "src/ai_qa_automation/example.py"}]}
         return super().get(path)
@@ -531,10 +533,10 @@ class _ReconcileRecoveryApi(_AmbiguousCommitApi):
         *,
         token: str | None = None,
     ) -> tuple[int, dict[str, Any]]:
-        assert method == "POST"
         assert path == f"/code-scanning/alerts/{ALERT}/autofix"
         assert payload is None
         assert token is None
+        assert method in {"GET", "POST"}
         return 200, {"status": "success"}
 
 
