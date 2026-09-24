@@ -403,10 +403,15 @@ class GitHubApi:
             )
         ):
             raise AutohealError("pagination max_items must be a positive integer")
+        if not isinstance(max_pages, int) or isinstance(max_pages, bool) or max_pages < 1:
+            raise AutohealError("pagination max_pages must be a positive integer")
+        page_size = 100
+        if max_items is not None:
+            page_size = min(100, (max_items + max_pages - 1) // max_pages)
         rows: list[dict[str, Any]] = []
         separator = "&" if "?" in path else "?"
         for page in range(1, max_pages + 1):
-            payload = self.get(f"{path}{separator}per_page=100&page={page}")
+            payload = self.get(f"{path}{separator}per_page={page_size}&page={page}")
             if isinstance(payload, dict):
                 items = None
                 for collection_key in ("check_runs", "workflow_runs"):
@@ -422,7 +427,7 @@ class GitHubApi:
             rows.extend(items)
             if max_items is not None and len(rows) >= max_items:
                 return rows[:max_items]
-            if len(items) < 100:
+            if len(items) < page_size:
                 return rows
         raise AutohealError(f"pagination limit reached for {path}")
 
@@ -3426,7 +3431,7 @@ def _build_route_plan(
     )
     alerts = api.list_all(
         f"/code-scanning/alerts?{query}",
-        max_pages=10,
+        max_pages=2,
         max_items=101,
     )
     if len(alerts) > 100:
@@ -3674,7 +3679,7 @@ def _rebind_route_plan(
     )
     alerts = api.list_all(
         f"/code-scanning/alerts?{query}",
-        max_pages=10,
+        max_pages=2,
         max_items=101,
     )
     planned = {int(record["alertNumber"]): record for record in plan["records"]}
@@ -3928,7 +3933,7 @@ def reconcile(
     )
     alerts = api.list_all(
         f"/code-scanning/alerts?{query}",
-        max_pages=10,
+        max_pages=2,
         max_items=101,
     )
     for alert in alerts:
