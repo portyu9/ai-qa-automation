@@ -4134,7 +4134,13 @@ def selftest(config: dict[str, Any]) -> None:
                 return {"commit": {"sha": observed}}
             raise AutohealError(f"unexpected CodeQL refresh self-test GET path: {path}")
 
-        def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+        def list_all(
+            self,
+            path: str,
+            *,
+            max_pages: int = 10,
+            max_items: int | None = None,
+        ) -> list[dict[str, Any]]:
             expected = f"/actions/runs?head_sha={current_main_sha}"
             if path != expected or max_pages != 2:
                 raise AutohealError(f"unexpected CodeQL refresh self-test list path: {path}")
@@ -4272,7 +4278,13 @@ def selftest(config: dict[str, Any]) -> None:
                 return {"commit": {"sha": "7" * 40 if self.move_main else merge_sha}}
             raise AutohealError(f"unexpected post-merge self-test GET path: {path}")
 
-        def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+        def list_all(
+            self,
+            path: str,
+            *,
+            max_pages: int = 10,
+            max_items: int | None = None,
+        ) -> list[dict[str, Any]]:
             if path == f"/actions/runs?head_sha={merge_sha}":
                 if max_pages != 2:
                     raise AutohealError("post-merge CI pagination contract drifted")
@@ -4510,7 +4522,13 @@ def selftest(config: dict[str, Any]) -> None:
                 }
             raise AutohealError(f"unexpected attempt-accounting GET path: {path}")
 
-        def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+        def list_all(
+            self,
+            path: str,
+            *,
+            max_pages: int = 10,
+            max_items: int | None = None,
+        ) -> list[dict[str, Any]]:
             if path == "/pulls?state=closed&sort=updated&direction=desc":
                 if max_pages != 10:
                     raise AutohealError("attempt-accounting pull pagination bound changed")
