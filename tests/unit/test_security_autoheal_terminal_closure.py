@@ -33,7 +33,6 @@ BASE = "a" * 40
 HEAD = "b" * 40
 MERGE = "c" * 40
 TREE = "d" * 40
-FINGERPRINT = "e" * 64
 PROSPECTIVE = "f" * 40
 PR_NUMBER = 321
 CI_RUN_ID = 7001
@@ -43,9 +42,41 @@ GATE_RUN_ID = 7004
 TRUSTED_STATUS_ID = 7005
 ROUTE_PLAN_RUN_ID = 7006
 ROUTE_ARTIFACT_ID = 7007
-ROUTE_RECORD_DIGEST = "1" * 64
 ROUTE_PLAN_DIGEST = "2" * 64
 ROUTE_ARTIFACT_DIGEST = "sha256:" + ("3" * 64)
+
+
+def _route_alert() -> dict[str, Any]:
+    return {
+        "number": 7,
+        "state": "open",
+        "tool": {"name": "CodeQL"},
+        "rule": {"id": "py/reflective-xss", "security_severity": "7.0"},
+        "most_recent_instance": {
+            "state": "open",
+            "ref": "refs/heads/main",
+            "commit_sha": BASE,
+            "location": {
+                "path": "examples/reference_sut/app.py",
+                "start_line": 10,
+                "end_line": 10,
+                "start_column": 1,
+                "end_column": 5,
+            },
+            "message": {"text": "security finding"},
+        },
+    }
+
+
+ROUTE_RECORD = autoheal.route_security_alert(
+    _route_alert(),
+    main_sha=BASE,
+    config=autoheal.load_config(),
+    attempts_by_strategy={autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY: 0},
+    autofix_eligibility="unknown",
+)
+FINGERPRINT = str(ROUTE_RECORD["fingerprint"])
+ROUTE_RECORD_DIGEST = str(ROUTE_RECORD["recordDigest"])
 
 
 def _metadata() -> dict[str, Any]:
@@ -57,15 +88,16 @@ def _metadata() -> dict[str, Any]:
         "head": HEAD,
         "fingerprint": FINGERPRINT,
         "generator": "deterministic",
-        "path": "examples/reference_sut/app.py",
-        "rule": "py/reflective-xss",
-        "severity": 7.0,
-        "strategy": autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY,
-        "routeDecision": "ordinary-deterministic-autoheal",
-        "routeAuthority": "security-autoheal-deterministic",
+        "path": str(ROUTE_RECORD["path"]),
+        "rule": str(ROUTE_RECORD["rule"]),
+        "severity": float(ROUTE_RECORD["securitySeverity"]),
+        "strategy": str(ROUTE_RECORD["strategy"]),
+        "routeDecision": str(ROUTE_RECORD["decision"]),
+        "routeAuthority": str(ROUTE_RECORD["authority"]),
         "routeRecordDigest": ROUTE_RECORD_DIGEST,
-        "routingPolicyVersion": "security-routing-v1",
-        "routeAutofixEligibility": "unknown",
+        "routingPolicyVersion": str(ROUTE_RECORD["routingPolicyVersion"]),
+        "routeAutofixEligibility": str(ROUTE_RECORD["autofixEligibility"]),
+        "routeRecord": dict(ROUTE_RECORD),
         "routePlanDigest": ROUTE_PLAN_DIGEST,
         "routePlanRunId": ROUTE_PLAN_RUN_ID,
         "routePlanRunAttempt": 1,
@@ -91,7 +123,7 @@ def _repair_pr() -> dict[str, Any]:
             "id": autoheal.GITHUB_ACTIONS_USER_ID,
         },
         "head": {
-            "ref": "automation/codeql-autoheal-7-eeeeeeeeeeee",
+            "ref": autoheal._branch_name(autoheal._subject_from_route(ROUTE_RECORD), 1),
             "sha": HEAD,
             "repo": {"full_name": "portyu9/ai-qa-automation"},
         },
@@ -394,6 +426,7 @@ def test_terminal_closure_persists_exact_idempotent_certificate(
     assert certificate["mergeSha"] == MERGE
     assert certificate["sourceTreeSha"] == TREE
     assert certificate["routeRecordDigest"] == ROUTE_RECORD_DIGEST
+    assert certificate["routeRecord"] == ROUTE_RECORD
     assert certificate["routePlanDigest"] == ROUTE_PLAN_DIGEST
     assert certificate["routePlanRunId"] == ROUTE_PLAN_RUN_ID
     assert certificate["routeArtifactId"] == ROUTE_ARTIFACT_ID
@@ -425,6 +458,23 @@ def test_terminal_closure_replay_survives_originating_artifact_expiry(
     assert autoheal._reconcile_terminal_closure(api, MERGE, config) is False
     assert len(api.comments) == 1
     assert api.route_artifact_reads == 1
+
+
+def test_terminal_closure_rejects_post_merge_marker_route_field_drift(
+    config: dict[str, Any],
+) -> None:
+    api = _TerminalApi()
+    drifted = _metadata()
+    drifted["routeAuthority"] = "security-autoheal-autofix"
+    api.pr["body"] = autoheal._marker(drifted)
+
+    with pytest.raises(
+        autoheal.PolicyBlock,
+        match="marker fields drifted from its canonical route record",
+    ):
+        autoheal._reconcile_terminal_closure(api, MERGE, config)
+
+    assert api.comments == []
 
 
 def test_terminal_closure_rejects_commit_or_artifact_route_provenance_drift() -> None:
