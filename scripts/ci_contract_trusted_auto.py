@@ -27,7 +27,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
-    "828c513950fb17b76dfd66bb0f01e181187ff9ef"  # pragma: allowlist secret
+    "36fd412054bf1d2a1aaa9d0a83db6b090bda5494"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
     "59ecd578ef05b6b45b962121a868282436ac7ded"  # pragma: allowlist secret
@@ -169,12 +169,14 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "          persist-credentials: false",
         '        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"',
         "          GITHUB_TOKEN: ${{ github.token }}",
+        "          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}",
+        "          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}",
         "          python scripts/auto_trusted_preflight.py \\",
         '            --event "$GITHUB_EVENT_PATH" \\',
         '            --event-name "$GITHUB_EVENT_NAME" \\',
         '            --github-output "$GITHUB_OUTPUT"',
         "            owner-routine)",
-        "            dependabot-actions|dependency-promotion|security-autoheal)",
+        "            dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation)",
         "            none)",
     )
     for fragment in required_preflight:
@@ -203,6 +205,8 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         '          python-version: "3.14.7"',
         "PROMOTION_PYTHON311",
         "PROMOTION_PYTHON314",
+        "          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}",
+        "          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}",
         "scripts/auto_trusted_bot_admission.py",
         "--mode full",
         '--lane "$LANE"',
@@ -253,7 +257,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         '          test "$(git rev-parse HEAD)" = "$EXPECTED_MERGE_SHA"',
         '          read -r merge_sha base_sha head_sha extra_parent < <("${git_clean_env[@]}" /usr/bin/git rev-list --parents -n 1 "$EXPECTED_MERGE_SHA")',
         '          if test "$ADMISSION_LANE" = "owner-routine"; then',
-        "              dependabot-actions|dependency-promotion|security-autoheal) ;;",
+        "              dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation) ;;",
         '            test "$BOT_AUTHORITY_RESULT" = "success"',
         '            "${git_clean_env[@]}" /usr/bin/git diff --quiet "$EXPECTED_HEAD_SHA" "$EXPECTED_MERGE_SHA" --',
     )
@@ -431,11 +435,13 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         trusted_checkout,
         "      - name: Revalidate automatic trusted admission",
         "          GITHUB_TOKEN: ${{ github.token }}",
+        "          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}",
+        "          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}",
         "          python scripts/auto_trusted_preflight.py \\",
         "      - name: Require exact final admission identity",
         '          test "$FINAL_ELIGIBLE" = "true"',
         '          test "$FINAL_LANE" = "$EXPECTED_LANE"',
-        "              dependabot-actions|dependency-promotion|security-autoheal) ;;",
+        "              dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation) ;;",
         '          test "$FINAL_MERGE_SHA" = "$EXPECTED_MERGE_SHA"',
         '          test "$FINAL_TRUSTED_SHA" = "$GITHUB_SHA"',
         "      - name: Reprove governed bot authority immediately before App publication",
@@ -458,6 +464,10 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         raise ValueError("automatic trusted App private key must have exactly one consumer")
     if semantic.count("${{ vars.TRUSTED_GATE_APP_CLIENT_ID }}") != 1:
         raise ValueError("automatic trusted App client ID must have exactly one consumer")
+    if semantic.count("${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}") != 4:
+        raise ValueError("protected remediation bot login must have exactly four trusted consumers")
+    if semantic.count("${{ vars.PROTECTED_REMEDIATION_BOT_ID }}") != 4:
+        raise ValueError("protected remediation bot id must have exactly four trusted consumers")
     if "${{ secrets." in semantic.replace(reporter, ""):
         raise ValueError("automatic trusted environment secrets must be isolated to reporter")
 
@@ -490,6 +500,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
             "dependabot-actions",
             "dependency-promotion",
             "security-autoheal",
+            "protected-security-remediation",
         ],
         "protected_paths": list(TRUSTED_AUTO_PROTECTED_PATHS),
         "validation_subject": "live-prospective-merge-sha",
