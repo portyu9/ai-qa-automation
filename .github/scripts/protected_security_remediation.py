@@ -277,17 +277,25 @@ def _require_author_identity(login: Any, user_id: Any) -> tuple[str, int]:
     return login, _require_positive_int(user_id, "protected author App user id")
 
 
-def branch_name(record: Mapping[str, Any]) -> str:
-    validate_route_record(record, main_sha=_require_sha(record.get("baseSha"), "route base SHA"))
-    alert = _require_positive_int(record.get("alertNumber"), "route alert number")
-    fingerprint = _require_digest(record.get("fingerprint"), "route fingerprint")
-    attempt = _require_positive_int(
-        int(record["strategyAttemptCount"]) + 1, "protected repair attempt"
-    )
-    branch = f"{BRANCH_PREFIX}{alert}-{fingerprint}-a{attempt}"
+def _branch_for_attempt(alert_number: int, fingerprint: str, attempt: int) -> str:
+    alert_number = _require_positive_int(alert_number, "protected repair alert number")
+    fingerprint = _require_digest(fingerprint, "protected repair fingerprint")
+    attempt = _require_positive_int(attempt, "protected repair attempt")
+    branch = f"{BRANCH_PREFIX}{alert_number}-{fingerprint}-a{attempt}"
     if BRANCH_RE.fullmatch(branch) is None:
         raise ProtectedRemediationError("protected repair branch is outside reviewed grammar")
     return branch
+
+
+def branch_name(record: Mapping[str, Any]) -> str:
+    validate_route_record(record, main_sha=_require_sha(record.get("baseSha"), "route base SHA"))
+    return _branch_for_attempt(
+        _require_positive_int(record.get("alertNumber"), "route alert number"),
+        _require_digest(record.get("fingerprint"), "route fingerprint"),
+        _require_positive_int(
+            int(record["strategyAttemptCount"]) + 1, "protected repair attempt"
+        ),
+    )
 
 
 def repair_commit_message(record: Mapping[str, Any], plan: Mapping[str, Any]) -> str:
@@ -640,6 +648,27 @@ def _generated_bot_pull(pr: Mapping[str, Any], *, login: str, user_id: int) -> b
     )
 
 
+def _pulls_for_branch(api: GitHubApi, branch: str) -> list[dict[str, Any]]:
+    if BRANCH_RE.fullmatch(branch) is None:
+        raise ProtectedRemediationError("protected repair branch lookup escaped reviewed grammar")
+    owner = EXPECTED_REPOSITORY.split("/", 1)[0]
+    query = urllib.parse.urlencode(
+        {"state": "all", "head": f"{owner}:{branch}"},
+        quote_via=urllib.parse.quote,
+    )
+    pulls = api.list_all(f"/pulls?{query}", max_pages=1, max_items=2)
+    matches = [
+        pr
+        for pr in pulls
+        if isinstance(pr.get("head"), dict)
+        and pr["head"].get("ref") == branch
+        and ((pr["head"].get("repo") or {}).get("full_name")) == EXPECTED_REPOSITORY
+    ]
+    if len(matches) > 1:
+        raise ProtectedRemediationError("protected repair branch maps to multiple pull requests")
+    return matches
+
+
 def _attempt_count(
     api: GitHubApi,
     *,
@@ -647,14 +676,22 @@ def _attempt_count(
     fingerprint: str,
     bot_login: str,
     bot_id: int,
+    max_attempts: int,
 ) -> int:
-    pulls = api.list_all("/pulls?state=all&sort=created&direction=asc", max_pages=1)
-    if len(pulls) >= MAX_PULL_HISTORY:
-        raise ProtectedRemediationError("protected repair history reached the bounded limit")
+    max_attempts = _require_positive_int(max_attempts, "protected repair maximum attempts")
+    if max_attempts > MAX_PULL_HISTORY:
+        raise ProtectedRemediationError("protected repair attempt budget exceeds history bound")
     attempts: set[int] = set()
-    for pr in pulls:
-        if not _generated_bot_pull(pr, login=bot_login, user_id=bot_id):
+    for expected_attempt in range(1, max_attempts + 1):
+        branch = _branch_for_attempt(alert_number, fingerprint, expected_attempt)
+        pulls = _pulls_for_branch(api, branch)
+        if not pulls:
             continue
+        pr = pulls[0]
+        if not _generated_bot_pull(pr, login=bot_login, user_id=bot_id):
+            raise ProtectedRemediationError(
+                "protected repair history branch is not owned by the exact author App"
+            )
         metadata = parse_marker(pr.get("body"))
         if metadata is None:
             raise ProtectedRemediationError(
@@ -678,9 +715,11 @@ def _attempt_count(
             or record.get("fingerprint") != fingerprint
             or record.get("strategy") != PROTECTED_REMEDIATION_STRATEGY
         ):
-            continue
+            raise ProtectedRemediationError(
+                "protected repair history branch evidence drifted from exact subject"
+            )
         attempt = _require_positive_int(plan.get("attempt"), "historical protected attempt")
-        if pr.get("head", {}).get("ref") != branch_name(record):
+        if attempt != expected_attempt or pr.get("head", {}).get("ref") != branch_name(record):
             raise ProtectedRemediationError("generated protected repair history branch drifted")
         attempts.add(attempt)
     if attempts and attempts != set(range(1, max(attempts) + 1)):
@@ -726,6 +765,10 @@ def _protected_route_candidates(
                 fingerprint=fingerprint,
                 bot_login=bot_login,
                 bot_id=bot_id,
+                max_attempts=_require_positive_int(
+                    provisional.get("maxAttemptsPerStrategy"),
+                    "protected route maximum attempts",
+                ),
             )
         }
     try:
@@ -891,12 +934,7 @@ def _create_repair_commit(
 
 
 def _find_pull_for_branch(api: GitHubApi, branch: str) -> dict[str, Any] | None:
-    pulls = api.list_all("/pulls?state=all&sort=created&direction=desc", max_pages=1)
-    matches = [
-        pr for pr in pulls if isinstance(pr.get("head"), dict) and pr["head"].get("ref") == branch
-    ]
-    if len(matches) > 1:
-        raise ProtectedRemediationError("protected repair branch maps to multiple pull requests")
+    matches = _pulls_for_branch(api, branch)
     return matches[0] if matches else None
 
 
@@ -959,8 +997,24 @@ def _ensure_repair_pr(
 
 
 def _open_generated_repairs(api: GitHubApi, *, bot_login: str, bot_id: int) -> list[dict[str, Any]]:
-    pulls = api.list_all("/pulls?state=open&sort=created&direction=asc", max_pages=1)
-    rows = [pr for pr in pulls if _generated_bot_pull(pr, login=bot_login, user_id=bot_id)]
+    query = urllib.parse.urlencode(
+        {
+            "state": "open",
+            "creator": bot_login,
+            "sort": "created",
+            "direction": "asc",
+        },
+        quote_via=urllib.parse.quote,
+    )
+    issues = api.list_all(f"/issues?{query}", max_pages=1)
+    rows: list[dict[str, Any]] = []
+    for issue in issues:
+        if not isinstance(issue.get("pull_request"), dict):
+            continue
+        number = _require_positive_int(issue.get("number"), "active protected repair PR number")
+        pr = api.get(f"/pulls/{number}")
+        if _generated_bot_pull(pr, login=bot_login, user_id=bot_id):
+            rows.append(pr)
     if len(rows) > 1:
         raise ProtectedRemediationError("multiple active protected repair PRs are not permitted")
     return rows
