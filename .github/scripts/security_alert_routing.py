@@ -833,6 +833,23 @@ def _read_record_at(parent_fd: int, name: str) -> bytes | None:
         os.close(fd)
 
 
+def _reconcile_identical_record(
+    parent_fd: int,
+    name: str,
+    payload: bytes,
+    *,
+    parent_path: Path,
+) -> None:
+    os.fsync(parent_fd)
+    if _read_record_at(parent_fd, name) != payload:
+        raise RoutingPolicyError("routing record changed during durability reconciliation")
+    _require_parent_path_identity(
+        parent_path,
+        parent_fd,
+        label="routing record",
+    )
+
+
 def persist_record(path: Path, record: Mapping[str, Any]) -> bool:
     payload = canonical_record(record)
     name = path.name
@@ -850,10 +867,11 @@ def persist_record(path: Path, record: Mapping[str, Any]) -> bool:
         existing = _read_record_at(parent_fd, name)
         if existing is not None:
             if existing == payload:
-                _require_parent_path_identity(
-                    path.parent,
+                _reconcile_identical_record(
                     parent_fd,
-                    label="routing record",
+                    name,
+                    payload,
+                    parent_path=path.parent,
                 )
                 return False
             raise RoutingPolicyError("routing record path already contains different evidence")
@@ -901,10 +919,11 @@ def persist_record(path: Path, record: Mapping[str, Any]) -> bool:
                 raise RoutingPolicyError(
                     "concurrent routing record publication conflicted"
                 ) from exc
-            _require_parent_path_identity(
-                path.parent,
+            _reconcile_identical_record(
                 parent_fd,
-                label="routing record",
+                name,
+                payload,
+                parent_path=path.parent,
             )
             return False
         except OSError as exc:
