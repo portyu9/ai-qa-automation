@@ -778,6 +778,31 @@ def test_post_merge_ci_liveness_reuses_existing_exact_run() -> None:
     }
 
 
+def test_post_merge_ci_liveness_fails_closed_on_dispatch_failure() -> None:
+    class _DispatchFailureApi(_PostMergeCiApi):
+        def post(
+            self,
+            path: str,
+            payload: dict[str, Any] | None = None,
+            *,
+            token: str | None = None,
+        ) -> Any:
+            assert path == "/actions/workflows/ci.yml/dispatches"
+            assert payload == {
+                "ref": "main",
+                "inputs": {"subject_sha": MERGE, "subject_ref": "main"},
+            }
+            assert token is None
+            raise governance.GovernanceError("synthetic CI dispatch failure")
+
+    with pytest.raises(governance.GovernanceError, match="synthetic CI dispatch failure"):
+        governance._ensure_post_merge_ci(
+            _DispatchFailureApi(),
+            MERGE,
+            {"baseBranch": "main"},
+        )
+
+
 def test_post_merge_ci_liveness_dispatches_exact_main_subject(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
