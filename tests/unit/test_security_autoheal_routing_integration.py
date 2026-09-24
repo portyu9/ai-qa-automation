@@ -444,7 +444,6 @@ def test_selected_route_revalidation_blocks_alert_truth_drift_before_mutation() 
             config,
         )
 
-
     model_alert = _alert(
         rule="py/incomplete-url-substring-sanitization",
         path="src/ai_qa_automation/example.py",
@@ -579,12 +578,7 @@ def test_generated_repair_commit_route_binding_is_immutable_and_unambiguous() ->
         autoheal._generated_commit_route_digest(
             {
                 "commit": {
-                    "message": (
-                        message
-                        + "\n"
-                        + autoheal.ROUTE_RECORD_TRAILER_PREFIX
-                        + ("e" * 64)
-                    )
+                    "message": (message + "\n" + autoheal.ROUTE_RECORD_TRAILER_PREFIX + ("e" * 64))
                 }
             }
         )
@@ -606,12 +600,7 @@ def test_generated_repair_commit_route_binding_is_immutable_and_unambiguous() ->
         autoheal._generated_commit_plan_digest(
             {
                 "commit": {
-                    "message": (
-                        message
-                        + "\n"
-                        + autoheal.ROUTE_PLAN_TRAILER_PREFIX
-                        + ("a" * 64)
-                    )
+                    "message": (message + "\n" + autoheal.ROUTE_PLAN_TRAILER_PREFIX + ("a" * 64))
                 }
             }
         )
