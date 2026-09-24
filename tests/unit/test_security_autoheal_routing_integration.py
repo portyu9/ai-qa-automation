@@ -557,7 +557,10 @@ def test_repair_admission_rejects_route_provenance_stripping() -> None:
         "strategy": autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY,
     }
 
-    with pytest.raises(autoheal.PolicyBlock, match="lacks persisted route provenance"):
+    with pytest.raises(
+        autoheal.PolicyBlock,
+        match="lacks the canonical persisted route record",
+    ):
         autoheal._rebind_repair_alert(
             _Api(),
             metadata,
