@@ -25,10 +25,11 @@ def test_all_repository_python_workflows_enable_safe_path() -> None:
 def test_trusted_bot_codeql_safe_path_exception_is_analyze_only() -> None:
     text = TRUSTED_AUTO_WORKFLOW.read_text(encoding="utf-8")
     bot_codeql = text[text.index("  bot-codeql:") : text.index("  required-gate:")]
-    analyze = bot_codeql[bot_codeql.index("      - name: Analyze exact governed bot branch") :]
+    analyze_start = bot_codeql.index("      - name: Analyze exact governed bot branch")
+    analyze = bot_codeql[analyze_start:]
 
     assert '          PYTHONSAFEPATH: ""' in analyze
-    assert '          PYTHONSAFEPATH: ""' not in bot_codeql[: bot_codeql.index(analyze)]
+    assert '          PYTHONSAFEPATH: ""' not in bot_codeql[:analyze_start]
 
 
 def test_python_safe_path_blocks_repository_local_pip_module_shadow(tmp_path: Path) -> None:
