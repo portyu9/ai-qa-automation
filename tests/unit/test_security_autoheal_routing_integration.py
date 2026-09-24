@@ -1,0 +1,325 @@
+from __future__ import annotations
+
+import importlib.util
+import sys
+from pathlib import Path
+from types import ModuleType
+from typing import Any
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+SCRIPT_DIR = ROOT / ".github" / "scripts"
+AUTOHEAL_SCRIPT = SCRIPT_DIR / "security_autoheal.py"
+
+
+def _load() -> ModuleType:
+    spec = importlib.util.spec_from_file_location(
+        "security_autoheal_routing_integration_test",
+        AUTOHEAL_SCRIPT,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(SCRIPT_DIR))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(SCRIPT_DIR))
+    return module
+
+
+autoheal = _load()
+MAIN = "a" * 40
+RUN_ID = 12345
+RUN_ATTEMPT = 2
+ARTIFACT_ID = 98765
+ARTIFACT_DIGEST = "sha256:" + ("d" * 64)
+
+
+def _alert(
+    *,
+    number: int = 7,
+    rule: str = "py/reflective-xss",
+    path: str = "examples/reference_sut/app.py",
+    severity: str = "8.0",
+) -> dict[str, Any]:
+    return {
+        "number": number,
+        "state": "open",
+        "tool": {"name": "CodeQL"},
+        "rule": {"id": rule, "security_severity": severity},
+        "most_recent_instance": {
+            "state": "open",
+            "ref": "refs/heads/main",
+            "commit_sha": MAIN,
+            "location": {
+                "path": path,
+                "start_line": 10,
+                "end_line": 10,
+                "start_column": 1,
+                "end_column": 5,
+            },
+            "message": {"text": "security finding"},
+        },
+    }
+
+
+class _PlanApi:
+    def __init__(
+        self,
+        alert: dict[str, Any],
+        *,
+        autofix_status: int = 404,
+        autofix_state: str | None = None,
+    ) -> None:
+        self.alert = alert
+        self.autofix_status = autofix_status
+        self.autofix_state = autofix_state
+        self.request_calls: list[tuple[str, str]] = []
+
+    def get(self, path: str) -> dict[str, Any]:
+        if path == "/branches/main":
+            return {"commit": {"sha": MAIN}}
+        raise AssertionError(path)
+
+    def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+        if path == "/pulls?state=closed&sort=updated&direction=desc":
+            assert max_pages == 10
+            return []
+        if path.startswith("/code-scanning/alerts?"):
+            assert max_pages == 10
+            return [self.alert]
+        raise AssertionError(path)
+
+    def request_status(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        token: str | None = None,
+    ) -> tuple[int, dict[str, Any]]:
+        assert payload is None
+        assert token is None
+        self.request_calls.append((method, path))
+        response: dict[str, Any] = {}
+        if self.autofix_state is not None:
+            response["status"] = self.autofix_state
+        return self.autofix_status, response
+
+
+class _ArtifactApi(_PlanApi):
+    def __init__(
+        self,
+        alert: dict[str, Any],
+        *,
+        run_status: str = "in_progress",
+        run_conclusion: str | None = None,
+    ) -> None:
+        super().__init__(alert)
+        self.run_status = run_status
+        self.run_conclusion = run_conclusion
+
+    def get(self, path: str) -> dict[str, Any]:
+        if path == "/branches/main":
+            return {"commit": {"sha": MAIN}}
+        if path == f"/actions/artifacts/{ARTIFACT_ID}":
+            return {
+                "id": ARTIFACT_ID,
+                "name": f"{autoheal.ROUTE_PLAN_ARTIFACT_PREFIX}-{RUN_ID}-{RUN_ATTEMPT}",
+                "expired": False,
+                "digest": ARTIFACT_DIGEST,
+                "size_in_bytes": 2048,
+                "workflow_run": {
+                    "id": RUN_ID,
+                    "head_sha": MAIN,
+                    "head_branch": "main",
+                },
+            }
+        if path == f"/actions/runs/{RUN_ID}":
+            return {
+                "id": RUN_ID,
+                "workflow_id": autoheal.SECURITY_AUTOHEAL_WORKFLOW_ID,
+                "path": autoheal.SECURITY_AUTOHEAL_WORKFLOW_PATH,
+                "run_attempt": RUN_ATTEMPT,
+                "event": "schedule",
+                "head_branch": "main",
+                "head_sha": MAIN,
+                "status": self.run_status,
+                "conclusion": self.run_conclusion,
+            }
+        raise AssertionError(path)
+
+
+def _config() -> dict[str, Any]:
+    return autoheal.load_config()
+
+
+@pytest.fixture(autouse=True)
+def _run_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GITHUB_REPOSITORY", "portyu9/ai-qa-automation")
+    monkeypatch.setenv("GITHUB_RUN_ID", str(RUN_ID))
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", str(RUN_ATTEMPT))
+
+
+def test_deterministic_route_plan_never_queries_autofix() -> None:
+    api = _PlanApi(_alert())
+
+    plan = autoheal._build_route_plan(api, _config(), MAIN)
+
+    assert api.request_calls == []
+    assert plan["mainSha"] == MAIN
+    assert plan["workflowRunId"] == RUN_ID
+    assert plan["workflowRunAttempt"] == RUN_ATTEMPT
+    assert len(plan["records"]) == 1
+    record = plan["records"][0]
+    assert record["decision"] == "ordinary-deterministic-autoheal"
+    assert record["strategy"] == autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY
+    assert autoheal._canonical_route_plan(plan).endswith(b"\n")
+
+
+def test_model_route_planning_uses_get_only_and_blocks_without_live_evidence() -> None:
+    alert = _alert(
+        rule="py/incomplete-url-substring-sanitization",
+        path="src/ai_qa_automation/example.py",
+    )
+    api = _PlanApi(alert, autofix_status=404)
+
+    plan = autoheal._build_route_plan(api, _config(), MAIN)
+
+    assert api.request_calls == [
+        ("GET", "/code-scanning/alerts/7/autofix"),
+    ]
+    record = plan["records"][0]
+    assert record["decision"] == "blocked-external-evidence"
+    assert record["strategy"] == autoheal.MODEL_AUTOFIX_STRATEGY
+    assert record["autofixEligibility"] == "unknown"
+
+
+def test_route_plan_digest_rejects_tampering() -> None:
+    plan = autoheal._build_route_plan(_PlanApi(_alert()), _config(), MAIN)
+    plan["mainSha"] = "b" * 40
+
+    with pytest.raises(autoheal.AutohealError, match="digest does not match"):
+        autoheal._canonical_route_plan(plan)
+
+
+def test_route_plan_rebind_requires_identical_live_routing_truth() -> None:
+    api = _PlanApi(_alert())
+    plan = autoheal._build_route_plan(api, _config(), MAIN)
+
+    rebound = autoheal._rebind_route_plan(api, plan, _config())
+    assert set(rebound) == {7}
+    assert rebound[7] == plan["records"][0]
+
+    drifted = _PlanApi(_alert(severity="9.0"))
+    with pytest.raises(autoheal.AutohealError, match="routing truth drifted"):
+        autoheal._rebind_route_plan(drifted, plan, _config())
+
+
+def test_route_artifact_must_bind_exact_in_progress_controller_run() -> None:
+    api = _ArtifactApi(_alert())
+    plan = autoheal._build_route_plan(api, _config(), MAIN)
+
+    evidence = autoheal._require_route_plan_artifact(
+        api,
+        plan,
+        artifact_id=ARTIFACT_ID,
+        artifact_name=f"{autoheal.ROUTE_PLAN_ARTIFACT_PREFIX}-{RUN_ID}-{RUN_ATTEMPT}",
+        artifact_digest=ARTIFACT_DIGEST,
+    )
+    assert evidence["routePlanDigest"] == plan["planDigest"]
+    assert evidence["routeArtifactId"] == ARTIFACT_ID
+
+    completed = _ArtifactApi(_alert(), run_status="completed", run_conclusion="success")
+    with pytest.raises(autoheal.AutohealError, match="in-progress controller authority"):
+        autoheal._require_route_plan_artifact(
+            completed,
+            plan,
+            artifact_id=ARTIFACT_ID,
+            artifact_name=f"{autoheal.ROUTE_PLAN_ARTIFACT_PREFIX}-{RUN_ID}-{RUN_ATTEMPT}",
+            artifact_digest=ARTIFACT_DIGEST,
+        )
+
+
+def test_route_bound_marker_requires_successful_originating_controller_run() -> None:
+    api = _ArtifactApi(_alert(), run_status="completed", run_conclusion="success")
+    plan = autoheal._build_route_plan(api, _config(), MAIN)
+    record = plan["records"][0]
+    metadata = {
+        "routePlanDigest": plan["planDigest"],
+        "routePlanRunId": RUN_ID,
+        "routePlanRunAttempt": RUN_ATTEMPT,
+        "routeArtifactId": ARTIFACT_ID,
+        "routeArtifactName": f"{autoheal.ROUTE_PLAN_ARTIFACT_PREFIX}-{RUN_ID}-{RUN_ATTEMPT}",
+        "routeArtifactDigest": ARTIFACT_DIGEST,
+    }
+
+    autoheal._require_marker_route_artifact(api, metadata, MAIN)
+
+    failed = _ArtifactApi(_alert(), run_status="completed", run_conclusion="failure")
+    with pytest.raises(autoheal.PolicyBlock, match="successful controller-run authority"):
+        autoheal._require_marker_route_artifact(failed, metadata, MAIN)
+
+    assert record["decision"] == "ordinary-deterministic-autoheal"
+
+
+def test_generated_pr_marker_binds_route_and_artifact_provenance() -> None:
+    plan_api = _PlanApi(_alert())
+    plan = autoheal._build_route_plan(plan_api, _config(), MAIN)
+    record = plan["records"][0]
+    subject = autoheal._subject_from_route(record)
+    route_evidence = {
+        "routePlanDigest": plan["planDigest"],
+        "routePlanRunId": RUN_ID,
+        "routePlanRunAttempt": RUN_ATTEMPT,
+        "routeArtifactId": ARTIFACT_ID,
+        "routeArtifactName": f"{autoheal.ROUTE_PLAN_ARTIFACT_PREFIX}-{RUN_ID}-{RUN_ATTEMPT}",
+        "routeArtifactDigest": ARTIFACT_DIGEST,
+    }
+
+    class _PrApi:
+        body: str | None = None
+
+        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            assert path == "/pulls"
+            self.body = payload["body"]
+            return {"number": 99, "head": {"sha": "b" * 40}}
+
+    api = _PrApi()
+    number = autoheal._create_pull_request(
+        api,
+        "automation/codeql-autoheal-7-" + record["fingerprint"] + "-a1",
+        "b" * 40,
+        subject,
+        1,
+        deterministic=True,
+        strategy=record["strategy"],
+        route_record=record,
+        route_evidence=route_evidence,
+    )
+
+    assert number == 99
+    marker = autoheal._parse_marker(api.body)
+    assert marker is not None
+    assert marker["routeRecordDigest"] == record["recordDigest"]
+    assert marker["routePlanDigest"] == plan["planDigest"]
+    assert marker["routeArtifactId"] == ARTIFACT_ID
+    assert marker["routeDecision"] == "ordinary-deterministic-autoheal"
+
+
+def test_workflow_persists_route_plan_before_live_reconcile() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "security-autoheal.yml").read_text(
+        encoding="utf-8"
+    )
+
+    plan = workflow.index("Plan exact-main deterministic security routes")
+    upload = workflow.index("Persist exact-run route plan before mutation")
+    reconcile = workflow.index(
+        "Reconcile exact-subject CodeQL remediations from persisted routes"
+    )
+
+    assert plan < upload < reconcile
+    assert "--route-artifact-id ${{ steps.route-plan-artifact.outputs.artifact-id }}" in workflow
+    assert "--route-artifact-digest ${{ steps.route-plan-artifact.outputs.artifact-digest }}" in workflow
+    assert ".github/scripts/security_alert_routing.py" in workflow
