@@ -1205,6 +1205,7 @@ def _commit_copilot_autofix(
                 alert_number,
                 route_record_digest,
                 route_plan_digest,
+                route_artifact_digest,
             ),
         },
     )
