@@ -3710,6 +3710,39 @@ def _rebind_route_plan(
     return planned
 
 
+def _revalidate_route_record_before_mutation(
+    api: GitHubApi,
+    record: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    subject = _subject_from_route(record)
+    main_sha = _current_main(api, config)
+    if main_sha != subject["baseSha"]:
+        raise AutohealError("main advanced before selected route mutation revalidation")
+    alert = api.get(f"/code-scanning/alerts/{subject['number']}")
+    if not isinstance(alert, dict):
+        raise AutohealError("selected CodeQL alert revalidation returned a non-object")
+    live = _route_record_for_alert(
+        api,
+        alert,
+        main_sha,
+        config,
+        autofix_eligibility=str(record.get("autofixEligibility") or ""),
+    )
+    try:
+        if canonical_routing_record(live) != canonical_routing_record(record):
+            raise AutohealError(
+                "selected CodeQL alert routing truth drifted before mutation"
+            )
+    except RoutingPolicyError as exc:
+        raise AutohealError(
+            f"selected CodeQL alert route cannot be revalidated: {exc}"
+        ) from exc
+    if _current_main(api, config) != main_sha:
+        raise AutohealError("main advanced during selected route mutation revalidation")
+    return live
+
+
 def _create_repair(
     api: GitHubApi,
     subject: dict[str, Any],
@@ -3965,6 +3998,7 @@ def reconcile(
                 and strategy == MODEL_AUTOFIX_STRATEGY
                 and record.get("autofixEligibility") == "unknown"
             ):
+                record = _revalidate_route_record_before_mutation(api, record, config)
                 subject = _subject_from_route(record)
                 if _ensure_autofix_submission_intent(api, record, config):
                     if _current_main(api, config) != subject["baseSha"]:
@@ -4006,6 +4040,7 @@ def reconcile(
                 )
                 continue
 
+            record = _revalidate_route_record_before_mutation(api, record, config)
             subject = _subject_from_route(record)
             if prior >= config["maxAttemptsPerAlert"]:
                 raise PolicyBlock("persisted route exceeded bounded automatic remediation attempts")
