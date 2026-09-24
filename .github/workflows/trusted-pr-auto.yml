@@ -783,6 +783,8 @@ jobs:
           queries: security-extended
 
       - name: Analyze exact governed bot branch
+        env:
+          PYTHONSAFEPATH: ""
         uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
         with:
           ref: refs/heads/${{ needs.preflight.outputs.head_ref }}
