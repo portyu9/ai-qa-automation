@@ -890,8 +890,38 @@ def test_reconcile_stops_immediately_after_successful_merge(
         "_merge",
         lambda *args: {"mergeSha": MERGE, "sourceTreeSha": TREE},
     )
+    route_plan = {
+        "mainSha": BASE,
+        "planDigest": "e" * 64,
+        "workflowRunId": 123,
+        "workflowRunAttempt": 1,
+    }
+    monkeypatch.setattr(autoheal, "_load_route_plan", lambda path, config_arg: route_plan)
+    monkeypatch.setattr(
+        autoheal,
+        "_require_route_plan_artifact",
+        lambda *args, **kwargs: {
+            "routePlanDigest": route_plan["planDigest"],
+            "routePlanRunId": 123,
+            "routePlanRunAttempt": 1,
+            "routeArtifactId": 456,
+            "routeArtifactName": "security-autoheal-route-plan-123-1",
+            "routeArtifactDigest": "sha256:" + ("f" * 64),
+        },
+    )
+    monkeypatch.setattr(autoheal, "_rebind_route_plan", lambda *args: {})
 
-    assert autoheal.reconcile(config, allow_merge=True) == 1
+    assert (
+        autoheal.reconcile(
+            config,
+            allow_merge=True,
+            route_plan_path=Path("route-plan.json"),
+            route_artifact_id=456,
+            route_artifact_name="security-autoheal-route-plan-123-1",
+            route_artifact_digest="sha256:" + ("f" * 64),
+        )
+        == 1
+    )
     assert observed_gets == ["/pulls/501"]
 
 
