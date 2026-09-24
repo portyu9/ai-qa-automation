@@ -32,6 +32,41 @@ def test_trusted_bot_codeql_safe_path_exception_is_analyze_only() -> None:
     assert '          PYTHONSAFEPATH: ""' not in bot_codeql[:analyze_start]
 
 
+def test_empty_safe_path_restores_sibling_import_for_tool_scripts(tmp_path: Path) -> None:
+    tool_dir = tmp_path / "tool"
+    tool_dir.mkdir()
+    (tool_dir / "python_tracer.py").write_text("VALUE = 1\n", encoding="utf-8")
+    index = tool_dir / "index.py"
+    index.write_text(
+        "from python_tracer import VALUE\nassert VALUE == 1\n",
+        encoding="utf-8",
+    )
+
+    env = os.environ.copy()
+    env["PYTHONSAFEPATH"] = "1"
+    blocked = subprocess.run(
+        [sys.executable, str(index)],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert blocked.returncode != 0
+    assert "No module named 'python_tracer'" in blocked.stderr
+
+    env["PYTHONSAFEPATH"] = ""
+    restored = subprocess.run(
+        [sys.executable, str(index)],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert restored.returncode == 0, restored.stderr
+
+
 def test_python_safe_path_blocks_repository_local_pip_module_shadow(tmp_path: Path) -> None:
     marker = "REPOSITORY_LOCAL_PIP_SHADOW_EXECUTED"
     (tmp_path / "pip.py").write_text(f"print({marker!r})\n", encoding="utf-8")
