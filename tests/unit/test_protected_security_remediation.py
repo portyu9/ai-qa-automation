@@ -465,31 +465,28 @@ def test_attempt_history_uses_exact_subject_branch_queries() -> None:
 
 
 def test_multiple_active_generated_repairs_fail_closed() -> None:
-    first_branch = "automation/protected-security-remediation-17-" + ("a" * 64) + "-a1"
-    second_branch = "automation/protected-security-remediation-18-" + ("b" * 64) + "-a1"
-
     class MultipleRepairsApi:
         def list_all(self, path: str, *, max_pages: int = 4) -> list[dict[str, Any]]:
-            assert path.startswith("/issues?")
-            assert "creator=protected-remediation%5Bbot%5D" in path
+            assert path == "/pulls?state=open&sort=created&direction=asc"
             assert max_pages == 1
             return [
-                {"number": 301, "pull_request": {"url": "pull-301"}},
-                {"number": 302, "pull_request": {"url": "pull-302"}},
+                {
+                    "user": {"login": BOT_LOGIN, "id": BOT_ID, "type": "Bot"},
+                    "head": {
+                        "ref": "automation/protected-security-remediation-17-"
+                        + ("a" * 64)
+                        + "-a1"
+                    },
+                },
+                {
+                    "user": {"login": BOT_LOGIN, "id": BOT_ID, "type": "Bot"},
+                    "head": {
+                        "ref": "automation/protected-security-remediation-18-"
+                        + ("b" * 64)
+                        + "-a1"
+                    },
+                },
             ]
-
-        def get(self, path: str) -> dict[str, Any]:
-            if path == "/pulls/301":
-                return {
-                    "user": {"login": BOT_LOGIN, "id": BOT_ID, "type": "Bot"},
-                    "head": {"ref": first_branch},
-                }
-            if path == "/pulls/302":
-                return {
-                    "user": {"login": BOT_LOGIN, "id": BOT_ID, "type": "Bot"},
-                    "head": {"ref": second_branch},
-                }
-            raise AssertionError(path)
 
     repairs_api: Any = MultipleRepairsApi()
     with pytest.raises(author.ProtectedRemediationError, match="multiple active"):
