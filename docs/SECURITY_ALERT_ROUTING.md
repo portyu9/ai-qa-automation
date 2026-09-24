@@ -1,6 +1,6 @@
 # Deterministic security-alert routing
 
-> **Scope:** this document describes the repository-owned routing policy core introduced for issue #212. It does **not** claim that the live Security Auto-Heal controller consumes the router yet. Until explicit controller integration is merged and revalidated, the existing controller remains authoritative for live remediation.
+> **Scope:** this document describes the repository-owned routing policy and its live Security Auto-Heal integration. The controller persists an exact-run route plan before new repair mutation and revalidates that plan against live current-main evidence before acting. Protected remediation authoring and terminal route-to-closure certification remain separate follow-on authority boundaries.
 
 ## Purpose
 
@@ -47,7 +47,7 @@ Malformed or ambiguous identity, disagreeing alert/instance state, boolean or no
 | `attempt-budget-exhausted` | The exact strategy/version has consumed its bounded attempt budget. | none |
 | `blocked-external-evidence` | A model/autofix route lacks live affirmative Autofix availability. | none |
 
-Protected classification occurs before ordinary mutation admission. A protected finding cannot fall through to model/autofix authority even if its rule would otherwise be supported. For routing purposes, the protected set is deliberately stricter than the live controller's historical `neverModifyPaths`: it also includes the five authority-bearing verifier/status files currently listed under `deterministicOnlyPaths`. That keeps trusted status and validation code on #211's independent-authoring path when this router is later integrated, without changing the live controller in this policy-core PR.
+Protected classification occurs before ordinary mutation admission. A protected finding cannot fall through to model/autofix authority even if its rule would otherwise be supported. The live controller treats `protected-independent-remediation` as non-mutating routing truth: it reports the route but does not author protected code. The protected set is deliberately stricter than the historical `neverModifyPaths`: it also includes the five authority-bearing verifier/status files under `deterministicOnlyPaths`, preserving #211's independent-authoring boundary.
 
 ## Current rule coverage
 
@@ -87,21 +87,34 @@ The record explains deterministic routing truth. It is **not** itself merge auth
 
 One routing batch is limited to 100 distinct alert identities. Duplicate alert numbers fail closed. Attempt state is limited to 16 strategy epochs per alert and bounded integer counts. Alert message ingestion and persisted record bytes are explicitly bounded.
 
-API enumeration/pagination remains an integration concern: live controller integration must preserve existing bounded GitHub pagination and exact-current-main re-fetch semantics rather than treating this pure routing module as network evidence.
+The live controller preserves bounded GitHub pagination and exact-current-main re-fetch semantics around the pure router. One route plan accepts at most 100 open alert identities, is bound to one Security Auto-Heal workflow run/attempt and exact main SHA, and is rejected if the open-alert set, route bytes, attempt accounting, Autofix evidence state, or current main drifts before mutation.
 
-## Integration boundary
+## Live controller integration
 
-The current PR intentionally does not modify `.github/scripts/security_autoheal.py` or any workflow. Before #212 can close, a later exact-main integration must:
+The Security Auto-Heal workflow uses an evidence-first two-phase boundary for **new repair creation**:
 
-1. obtain live current-main alerts through the existing bounded GitHub API layer;
-2. build/persist the routing record before mutation admission;
-3. make the controller obey the route rather than recomputing implicit path/rule authority;
-4. preserve the normal lane's never-modify boundary;
-5. connect `protected-independent-remediation` only to the independent authority built under #211;
-6. bind terminal outcome back to the same routing record and exact revision;
-7. add interruption/recovery and pagination tests at the integrated controller level.
+1. trusted default-branch controller bytes fetch exact current main and bounded open CodeQL alerts;
+2. the deterministic router computes canonical route records, including strategy-scoped prior-attempt state and GET-only Autofix availability evidence where relevant;
+3. the controller writes one canonical run-bound route plan to an owner-only file and fsyncs both file and parent directory;
+4. the workflow uploads that exact plan with the repository-pinned `actions/upload-artifact` revision before repair mutation;
+5. reconcile requires the artifact id, name, and GitHub-reported digest, re-fetches the artifact and exact Security Auto-Heal run, re-fetches main/alerts/attempt state, and requires canonical route bytes to match the persisted plan;
+6. only `ordinary-deterministic-autoheal` and `ordinary-bounded-autofix` may create repair branches/commits/PRs;
+7. generated repair markers bind the route-record digest, routing-policy version, plan digest, originating workflow run/attempt, artifact identity/digest, and the Autofix evidence state used by the route;
+8. later repair admission recomputes the same live route and requires successful originating controller-run/artifact provenance before existing diff, CodeQL, trusted-gate, and merge guards apply.
 
-Until those steps are merged and proven, this module is a deterministic policy foundation, not an active autonomous routing authority.
+For model routes whose proposal is not yet available, provider submission uses a separate non-authoritative GitHub Actions check-run intent bound to exact main, alert fingerprint, route digest, strategy, and attempt. The neutral check cannot satisfy the App-bound `Trusted PR Gate`. It exists only to suppress provider replay: once exact intent exists, later controller cycles are GET-only until provider evidence becomes affirmative or the subject changes.
+
+Existing repair merge/closure, stale-supersession, and post-merge validation paths remain governed by their existing exact-subject evidence. The integration does not give `protected-independent-remediation` code-authoring authority.
+
+## Remaining #212 boundaries
+
+The following are deliberately not claimed complete by this integration:
+
+1. terminal remediation certificates do not yet bind the originating route-plan/artifact digest end-to-end;
+2. `protected-independent-remediation` still requires #211's distinct authoring identity and authority, separate from the Trusted PR Gate certifier;
+3. a fresh autonomous acceptance cycle is still required to prove the complete route-plan → repair → scheduled trusted gate → merge → resulting-main CodeQL/CI → terminal-certificate chain without manual substitution.
+
+Until those are implemented and observed, route persistence proves mutation admission for new repairs; it does not by itself prove terminal closure or protected remediation authority.
 
 ---
 
