@@ -323,3 +323,129 @@ def test_workflow_persists_route_plan_before_live_reconcile() -> None:
     assert "--route-artifact-id ${{ steps.route-plan-artifact.outputs.artifact-id }}" in workflow
     assert "--route-artifact-digest ${{ steps.route-plan-artifact.outputs.artifact-digest }}" in workflow
     assert ".github/scripts/security_alert_routing.py" in workflow
+
+
+class _IntentApi:
+    def __init__(
+        self,
+        record: dict[str, Any],
+        *,
+        existing: list[dict[str, Any]] | None = None,
+        move_main_after_post: bool = False,
+    ) -> None:
+        self.record = record
+        self.existing = list(existing or [])
+        self.move_main_after_post = move_main_after_post
+        self.posts: list[tuple[str, dict[str, Any]]] = []
+        self.main_reads = 0
+
+    def get(self, path: str) -> dict[str, Any]:
+        if path == "/branches/main":
+            self.main_reads += 1
+            sha = (
+                "b" * 40
+                if self.move_main_after_post and self.posts
+                else str(self.record["baseSha"])
+            )
+            return {"commit": {"sha": sha}}
+        raise AssertionError(path)
+
+    def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+        assert path == f"/commits/{self.record['baseSha']}/check-runs?filter=all"
+        assert max_pages == 4
+        return list(self.existing)
+
+    def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        assert path == "/check-runs"
+        self.posts.append((path, payload))
+        return {
+            "id": 4242,
+            "name": payload["name"],
+            "external_id": payload["external_id"],
+            "head_sha": payload["head_sha"],
+            "status": "completed",
+            "conclusion": "neutral",
+            "app": {
+                "id": autoheal.GITHUB_ACTIONS_APP_ID,
+                "slug": autoheal.GITHUB_ACTIONS_APP_SLUG,
+            },
+        }
+
+
+def _model_unknown_record() -> dict[str, Any]:
+    alert = _alert(
+        rule="py/incomplete-url-substring-sanitization",
+        path="src/ai_qa_automation/example.py",
+    )
+    plan = autoheal._build_route_plan(
+        _PlanApi(alert, autofix_status=404),
+        _config(),
+        MAIN,
+    )
+    record = plan["records"][0]
+    assert record["decision"] == "blocked-external-evidence"
+    assert record["autofixEligibility"] == "unknown"
+    return record
+
+
+def test_autofix_submission_intent_is_persisted_before_provider_authority() -> None:
+    record = _model_unknown_record()
+    api = _IntentApi(record)
+
+    assert autoheal._ensure_autofix_submission_intent(api, record, _config()) is True
+    assert len(api.posts) == 1
+    payload = api.posts[0][1]
+    assert payload["head_sha"] == MAIN
+    assert payload["status"] == "completed"
+    assert payload["conclusion"] == "neutral"
+    assert payload["name"].startswith(autoheal.AUTOFIX_INTENT_CHECK_PREFIX)
+    assert payload["external_id"].startswith("aiqa-autofix-intent:")
+
+
+def test_existing_exact_autofix_intent_suppresses_provider_replay() -> None:
+    record = _model_unknown_record()
+    name, external_id, _ = autoheal._autofix_intent_identity(record)
+    existing = {
+        "id": 77,
+        "name": name,
+        "external_id": external_id,
+        "head_sha": MAIN,
+        "status": "completed",
+        "conclusion": "neutral",
+        "app": {
+            "id": autoheal.GITHUB_ACTIONS_APP_ID,
+            "slug": autoheal.GITHUB_ACTIONS_APP_SLUG,
+        },
+    }
+    api = _IntentApi(record, existing=[existing])
+
+    assert autoheal._ensure_autofix_submission_intent(api, record, _config()) is False
+    assert api.posts == []
+
+
+def test_spoofed_autofix_intent_cannot_suppress_canonical_intent() -> None:
+    record = _model_unknown_record()
+    name, external_id, _ = autoheal._autofix_intent_identity(record)
+    spoofed = {
+        "id": 78,
+        "name": name,
+        "external_id": external_id,
+        "head_sha": MAIN,
+        "status": "completed",
+        "conclusion": "neutral",
+        "app": {"id": 1, "slug": "attacker"},
+    }
+    api = _IntentApi(record, existing=[spoofed])
+
+    assert autoheal._ensure_autofix_submission_intent(api, record, _config()) is True
+    assert len(api.posts) == 1
+
+
+def test_main_drift_after_autofix_intent_blocks_provider_submission() -> None:
+    record = _model_unknown_record()
+    api = _IntentApi(record, move_main_after_post=True)
+
+    with pytest.raises(autoheal.PolicyBlock, match="main advanced after Autofix submission intent"):
+        autoheal._ensure_autofix_submission_intent(api, record, _config())
+
+    assert len(api.posts) == 1
