@@ -40,10 +40,13 @@ API_ROOT = "https://api.github.com"
 API_VERSION = "2026-03-10"
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 POST_MERGE_CI_WORKFLOW_ID = 339754724
+POST_MERGE_CI_WORKFLOW = "ci.yml"
 TRUSTED_PR_GATE_WORKFLOW_ID = 346203190
 POST_MERGE_CI_PATH = ".github/workflows/ci.yml"
 POST_MERGE_CI_NAME = "CI — ƳƤ AI QA Automation Framework"
 POST_MERGE_CI_EVENTS = {"push", "workflow_dispatch"}
+POST_MERGE_CI_REGISTRATION_ATTEMPTS = 15
+POST_MERGE_CI_REGISTRATION_DELAY_SECONDS = 2
 MAIN_CODEQL_WORKFLOW = "codeql.yml"
 MAIN_CODEQL_WORKFLOW_ID = 359681647
 MAIN_CODEQL_PATH = ".github/workflows/codeql.yml"
@@ -1392,14 +1395,26 @@ def _post_merge_ci_candidates(
     subject_sha = _require_sha(subject_sha, "post-merge CI subject SHA")
     candidates: list[dict[str, Any]] = []
     for row in rows:
-        if (
-            row.get("name") != POST_MERGE_CI_NAME
-            or row.get("path") != POST_MERGE_CI_PATH
-            or row.get("head_branch") != "main"
-            or row.get("head_sha") != subject_sha
-            or row.get("event") not in allowed_events
-        ):
+        claims_ci_identity = (
+            row.get("workflow_id") == POST_MERGE_CI_WORKFLOW_ID
+            or row.get("name") == POST_MERGE_CI_NAME
+            or row.get("path") == POST_MERGE_CI_PATH
+        )
+        if not claims_ci_identity:
             continue
+        if (
+            row.get("workflow_id") != POST_MERGE_CI_WORKFLOW_ID
+            or row.get("name") != POST_MERGE_CI_NAME
+            or row.get("path") != POST_MERGE_CI_PATH
+        ):
+            raise AutohealError("exact-subject CI run has mismatched workflow identity")
+        if row.get("head_sha") != subject_sha:
+            raise AutohealError("exact-subject CI run is bound to a different head SHA")
+        if row.get("head_branch") != "main":
+            raise AutohealError("exact-subject CI run is not bound to main")
+        event = row.get("event")
+        if event not in POST_MERGE_CI_EVENTS:
+            raise AutohealError(f"exact-subject CI run has unexpected event: {event}")
         attempt = row.get("run_attempt")
         if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt != 1:
             raise AutohealError("exact-subject CI run_attempt must equal 1")
@@ -1412,7 +1427,8 @@ def _post_merge_ci_candidates(
             raise AutohealError(f"exact-subject CI run has invalid status: {status}")
         if status == "completed" and conclusion != "success":
             raise AutohealError(f"exact-subject CI run completed non-successfully: {conclusion}")
-        candidates.append(row)
+        if event in allowed_events:
+            candidates.append(row)
     return candidates
 
 
@@ -1440,6 +1456,69 @@ def _post_merge_ci_runs(api: GitHubApi, subject_sha: str) -> list[dict[str, Any]
         _require_sha(subject_sha, "post-merge CI subject SHA"), safe=""
     )
     return api.list_all(f"/actions/runs?head_sha={encoded_sha}", max_pages=2)
+
+
+def _post_merge_ci_evidence(row: dict[str, Any], *, dispatched: bool) -> dict[str, Any]:
+    return {
+        "postMergeCiWorkflowId": POST_MERGE_CI_WORKFLOW_ID,
+        "postMergeCiRunId": int(row["id"]),
+        "postMergeCiRunAttempt": int(row["run_attempt"]),
+        "postMergeCiEvent": str(row["event"]),
+        "postMergeCiStatus": str(row["status"]),
+        "postMergeCiDispatched": dispatched,
+    }
+
+
+def _ensure_post_merge_ci(
+    api: GitHubApi,
+    subject_sha: str,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    subject_sha = _require_sha(subject_sha, "post-merge CI subject SHA")
+    if _current_main(api, config) != subject_sha:
+        raise AutohealError("current main changed before post-merge CI registration")
+
+    rows = _post_merge_ci_runs(api, subject_sha)
+    existing = _select_post_merge_ci_run(rows, subject_sha)
+    if existing is not None:
+        if _current_main(api, config) != subject_sha:
+            raise AutohealError("current main changed after post-merge CI evidence admission")
+        return _post_merge_ci_evidence(existing, dispatched=False)
+
+    observed_ids = {
+        int(row["id"])
+        for row in rows
+        if isinstance(row.get("id"), int)
+        and not isinstance(row.get("id"), bool)
+        and int(row["id"]) > 0
+    }
+    api.post(
+        f"/actions/workflows/{POST_MERGE_CI_WORKFLOW}/dispatches",
+        {
+            "ref": "main",
+            "inputs": {"subject_sha": subject_sha, "subject_ref": "main"},
+        },
+    )
+
+    registered: dict[str, Any] | None = None
+    for attempt in range(POST_MERGE_CI_REGISTRATION_ATTEMPTS):
+        candidate = _select_post_merge_ci_run(_post_merge_ci_runs(api, subject_sha), subject_sha)
+        if candidate is not None and int(candidate["id"]) not in observed_ids:
+            if candidate.get("event") != "workflow_dispatch":
+                raise AutohealError(
+                    "post-merge CI appeared through an unexpected event after explicit dispatch"
+                )
+            registered = candidate
+            break
+        if attempt + 1 < POST_MERGE_CI_REGISTRATION_ATTEMPTS:
+            time.sleep(POST_MERGE_CI_REGISTRATION_DELAY_SECONDS)
+    if registered is None:
+        raise AutohealError(
+            f"explicit CI dispatch did not register for exact current main {subject_sha}"
+        )
+    if _current_main(api, config) != subject_sha:
+        raise AutohealError("current main changed after post-merge CI registration")
+    return _post_merge_ci_evidence(registered, dispatched=True)
 
 
 def _main_codeql_candidates(rows: list[dict[str, Any]], subject_sha: str) -> list[dict[str, Any]]:
@@ -2361,10 +2440,14 @@ def _finalize_post_merge_evidence(
     config: dict[str, Any],
 ) -> dict[str, Any]:
     merge_sha, merge_tree = _verify_actual_merge_commit(api, result, live, config)
+    ci_evidence = _ensure_post_merge_ci(api, merge_sha, config)
     return {
         "mergeSha": merge_sha,
         "sourceTreeSha": merge_tree,
-        "postMergeBinding": "exact-current-main-parents-and-validated-source-tree",
+        "postMergeBinding": (
+            "exact-current-main-parents-validated-source-tree-and-ci-registration"
+        ),
+        **ci_evidence,
     }
 
 
