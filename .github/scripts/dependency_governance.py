@@ -26,6 +26,7 @@ DEFAULT_CONFIG = ROOT / ".github" / "dependency-governance.json"
 API_ROOT = "https://api.github.com"
 API_VERSION = "2022-11-28"
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+POST_MERGE_CI_WORKFLOW_ID = 339754724
 BOT_LOGIN = "dependabot[bot]"
 BOT_USER_ID = 49699333
 BOT_EMAIL = "49699333+dependabot[bot]@users.noreply.github.com"
@@ -583,21 +584,35 @@ def _ensure_action_qualification(
     return subject
 
 
-def _post_merge_ci_candidates(rows: list[dict[str, Any]], subject_sha: str) -> list[dict[str, Any]]:
+def _post_merge_ci_candidates(
+    rows: list[dict[str, Any]], subject_sha: str
+) -> list[dict[str, Any]]:
     subject_sha = require_sha(subject_sha, "post-merge CI subject SHA")
     candidates: list[dict[str, Any]] = []
     for row in rows:
-        if (
-            row.get("name") != POST_MERGE_CI_NAME
-            or row.get("path") != POST_MERGE_CI_PATH
-            or row.get("head_branch") != "main"
-            or row.get("head_sha") != subject_sha
-            or row.get("event") not in POST_MERGE_CI_EVENTS
-        ):
+        claims_ci_identity = (
+            row.get("workflow_id") == POST_MERGE_CI_WORKFLOW_ID
+            or row.get("name") == POST_MERGE_CI_NAME
+            or row.get("path") == POST_MERGE_CI_PATH
+        )
+        if not claims_ci_identity:
             continue
+        if (
+            row.get("workflow_id") != POST_MERGE_CI_WORKFLOW_ID
+            or row.get("name") != POST_MERGE_CI_NAME
+            or row.get("path") != POST_MERGE_CI_PATH
+        ):
+            raise GovernanceError("exact-subject CI run has mismatched workflow identity")
+        if row.get("head_sha") != subject_sha:
+            raise GovernanceError("exact-subject CI run is bound to a different head SHA")
+        if row.get("head_branch") != "main":
+            raise GovernanceError("exact-subject CI run is not bound to main")
+        event = row.get("event")
+        if event not in POST_MERGE_CI_EVENTS:
+            raise GovernanceError(f"exact-subject CI run has unexpected event: {event}")
         attempt = row.get("run_attempt")
-        if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
-            raise GovernanceError("exact-subject CI run has invalid run_attempt")
+        if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt != 1:
+            raise GovernanceError("exact-subject CI run_attempt must equal 1")
         run_id = row.get("id")
         if not isinstance(run_id, int) or isinstance(run_id, bool) or run_id < 1:
             raise GovernanceError("exact-subject CI run has invalid run id")
@@ -622,7 +637,6 @@ def _select_post_merge_ci_run(
         )
     return candidates[0] if candidates else None
 
-
 def _live_main_sha(api: GitHubApi, config: dict[str, Any]) -> str:
     branch = urllib.parse.quote(config["baseBranch"], safe="")
     payload = api.get(f"/branches/{branch}")
@@ -633,6 +647,63 @@ def _post_merge_ci_runs(api: GitHubApi, subject_sha: str) -> list[dict[str, Any]
     encoded_sha = urllib.parse.quote(require_sha(subject_sha, "post-merge CI subject SHA"), safe="")
     return api.list_all(f"/actions/runs?head_sha={encoded_sha}", max_pages=2)
 
+
+
+def _post_merge_ci_evidence(row: dict[str, Any], *, dispatched: bool) -> dict[str, Any]:
+    return {
+        "postMergeCiWorkflowId": POST_MERGE_CI_WORKFLOW_ID,
+        "postMergeCiRunId": int(row["id"]),
+        "postMergeCiRunAttempt": int(row["run_attempt"]),
+        "postMergeCiEvent": str(row["event"]),
+        "postMergeCiStatus": str(row["status"]),
+        "postMergeCiDispatched": dispatched,
+    }
+
+
+def _ensure_post_merge_ci(
+    api: GitHubApi,
+    subject_sha: str,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    subject_sha = require_sha(subject_sha, "post-merge CI subject SHA")
+    if _live_main_sha(api, config) != subject_sha:
+        raise GovernanceError("current main changed before post-merge CI registration")
+
+    rows = _post_merge_ci_runs(api, subject_sha)
+    existing = _select_post_merge_ci_run(rows, subject_sha)
+    if existing is not None:
+        if _live_main_sha(api, config) != subject_sha:
+            raise GovernanceError("current main changed after post-merge CI evidence admission")
+        return _post_merge_ci_evidence(existing, dispatched=False)
+
+    observed_ids = {
+        int(row["id"])
+        for row in rows
+        if isinstance(row.get("id"), int)
+        and not isinstance(row.get("id"), bool)
+        and int(row["id"]) > 0
+    }
+    dispatch_exact_ci(api, "main", subject_sha)
+
+    registered: dict[str, Any] | None = None
+    for attempt in range(POST_MERGE_CI_REGISTRATION_ATTEMPTS):
+        candidate = _select_post_merge_ci_run(_post_merge_ci_runs(api, subject_sha), subject_sha)
+        if candidate is not None and int(candidate["id"]) not in observed_ids:
+            if candidate.get("event") != "workflow_dispatch":
+                raise GovernanceError(
+                    "post-merge CI appeared through an unexpected event after explicit dispatch"
+                )
+            registered = candidate
+            break
+        if attempt + 1 < POST_MERGE_CI_REGISTRATION_ATTEMPTS:
+            time.sleep(POST_MERGE_CI_REGISTRATION_DELAY_SECONDS)
+    if registered is None:
+        raise GovernanceError(
+            f"explicit CI dispatch did not register for exact current main {subject_sha}"
+        )
+    if _live_main_sha(api, config) != subject_sha:
+        raise GovernanceError("current main changed after post-merge CI registration")
+    return _post_merge_ci_evidence(registered, dispatched=True)
 
 def _validate_qualification_ref(ref: str) -> None:
     if (
@@ -704,10 +775,14 @@ def finalize_post_merge_evidence(
     api: GitHubApi, result: dict[str, Any], subject: dict[str, Any], config: dict[str, Any]
 ) -> dict[str, Any]:
     merge_sha, merge_tree = _verify_actual_merge_commit(api, result, subject, config)
+    ci_evidence = _ensure_post_merge_ci(api, merge_sha, config)
     return {
         "mergeSha": merge_sha,
         "sourceTreeSha": merge_tree,
-        "postMergeBinding": "exact-current-main-parents-and-validated-source-tree",
+        "postMergeBinding": (
+            "exact-current-main-parents-validated-source-tree-and-ci-registration"
+        ),
+        **ci_evidence,
     }
 
 
