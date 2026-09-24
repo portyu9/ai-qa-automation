@@ -2344,6 +2344,25 @@ def _terminal_certificate_static_matches(
         )
     except PolicyBlock:
         return False
+    route_record_digest = certificate.get("routeRecordDigest")
+    route_plan_digest = certificate.get("routePlanDigest")
+    route_artifact_digest = certificate.get("routeArtifactDigest")
+    expected_route_artifact_name = (
+        f"{ROUTE_PLAN_ARTIFACT_PREFIX}-{certificate.get('routePlanRunId')}-"
+        f"{certificate.get('routePlanRunAttempt')}"
+    )
+    route_record_digest_valid = (
+        isinstance(route_record_digest, str)
+        and re.fullmatch(r"[0-9a-f]{64}", route_record_digest) is not None
+    )
+    route_plan_digest_valid = (
+        isinstance(route_plan_digest, str)
+        and re.fullmatch(r"[0-9a-f]{64}", route_plan_digest) is not None
+    )
+    route_artifact_digest_valid = (
+        isinstance(route_artifact_digest, str)
+        and ROUTE_ARTIFACT_DIGEST_RE.fullmatch(route_artifact_digest) is not None
+    )
     positive_int_fields = (
         "routePlanRunId",
         "routePlanRunAttempt",
@@ -2375,18 +2394,10 @@ def _terminal_certificate_static_matches(
         and certificate.get("routeArtifactId") == metadata.get("routeArtifactId")
         and certificate.get("routeArtifactName") == metadata.get("routeArtifactName")
         and certificate.get("routeArtifactDigest") == metadata.get("routeArtifactDigest")
-        and isinstance(certificate.get("routeRecordDigest"), str)
-        and re.fullmatch(r"[0-9a-f]{64}", str(certificate["routeRecordDigest"])) is not None
-        and isinstance(certificate.get("routePlanDigest"), str)
-        and re.fullmatch(r"[0-9a-f]{64}", str(certificate["routePlanDigest"])) is not None
-        and isinstance(certificate.get("routeArtifactDigest"), str)
-        and ROUTE_ARTIFACT_DIGEST_RE.fullmatch(str(certificate["routeArtifactDigest"]))
-        is not None
-        and certificate.get("routeArtifactName")
-        == (
-            f"{ROUTE_PLAN_ARTIFACT_PREFIX}-{certificate.get('routePlanRunId')}-"
-            f"{certificate.get('routePlanRunAttempt')}"
-        )
+        and route_record_digest_valid
+        and route_plan_digest_valid
+        and route_artifact_digest_valid
+        and certificate.get("routeArtifactName") == expected_route_artifact_name
         and certificate.get("alertState") == "fixed"
         and observed_base == expected_base
         and observed_head == expected_head
