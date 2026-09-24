@@ -169,6 +169,8 @@ def test_renderer_cleanup_failure_is_a_hard_failure(
     output.mkdir()
 
     def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        if command[1:3] == ["image", "inspect"]:
+            return subprocess.CompletedProcess(command, 0)
         if command[1] == "run":
             cidfile = Path(command[command.index("--cidfile") + 1])
             cidfile.write_text("c" * 64 + "\n", encoding="ascii")
