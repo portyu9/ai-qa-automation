@@ -44,7 +44,7 @@ EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
-    "d75700899a2256463d7d96112dd2a24b1c25c76c"  # pragma: allowlist secret
+    "d809771ced237ec2d02d52b0eb29432f14c6a90b"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
     "5b8dc48b32baf0e9b3102f4d95fb60d484233305"  # pragma: allowlist secret
@@ -557,7 +557,7 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "    name: govern-dependabot",
         "    if: github.event_name != 'pull_request'",
         "      actions: write",
-        "      checks: read",
+        "      checks: write",
         "      contents: write",
         "      pull-requests: write",
         "      statuses: read",
