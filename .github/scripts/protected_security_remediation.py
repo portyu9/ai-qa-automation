@@ -1000,24 +1000,8 @@ def _ensure_repair_pr(
 
 
 def _open_generated_repairs(api: GitHubApi, *, bot_login: str, bot_id: int) -> list[dict[str, Any]]:
-    query = urllib.parse.urlencode(
-        {
-            "state": "open",
-            "creator": bot_login,
-            "sort": "created",
-            "direction": "asc",
-        },
-        quote_via=urllib.parse.quote,
-    )
-    issues = api.list_all(f"/issues?{query}", max_pages=1)
-    rows: list[dict[str, Any]] = []
-    for issue in issues:
-        if not isinstance(issue.get("pull_request"), dict):
-            continue
-        number = _require_positive_int(issue.get("number"), "active protected repair PR number")
-        pr = api.get(f"/pulls/{number}")
-        if _generated_bot_pull(pr, login=bot_login, user_id=bot_id):
-            rows.append(pr)
+    pulls = api.list_all("/pulls?state=open&sort=created&direction=asc", max_pages=1)
+    rows = [pr for pr in pulls if _generated_bot_pull(pr, login=bot_login, user_id=bot_id)]
     if len(rows) > 1:
         raise ProtectedRemediationError("multiple active protected repair PRs are not permitted")
     return rows
