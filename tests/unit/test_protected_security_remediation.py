@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import importlib.util
 import sys
 from pathlib import Path
@@ -182,3 +183,192 @@ def test_policy_self_test_keeps_single_file_self_excluding_authority() -> None:
     author.self_test()
     assert {item.path for item in author.REPAIR_STRATEGIES}.isdisjoint(author.SELF_AUTHORITY_PATHS)
     assert author.MAX_CHANGED_FILES == 1
+
+
+BOT_LOGIN = "protected-remediation[bot]"
+BOT_ID = 424242
+HEAD = "b" * 40
+
+
+def _generated_subject() -> tuple[dict[str, Any], dict[str, Any], bytes]:
+    record = _record()
+    source = TARGET.read_bytes()
+    plan, repaired = author.build_repair_plan(source, record, main_sha=MAIN)
+    pr = {
+        "number": 301,
+        "state": "open",
+        "draft": False,
+        "user": {"login": BOT_LOGIN, "id": BOT_ID, "type": "Bot"},
+        "head": {
+            "ref": author.branch_name(record),
+            "sha": HEAD,
+            "repo": {"full_name": "portyu9/ai-qa-automation"},
+        },
+        "base": {
+            "ref": "main",
+            "sha": MAIN,
+            "repo": {"full_name": "portyu9/ai-qa-automation"},
+        },
+        "body": author.marker(record, plan, head_sha=HEAD),
+    }
+    return pr, record, repaired
+
+
+class _AdmissionApi:
+    def __init__(
+        self,
+        *,
+        alert: dict[str, Any] | None = None,
+        pr_files: list[dict[str, Any]] | None = None,
+        commit_author: dict[str, Any] | None = None,
+        commit_message: str | None = None,
+    ) -> None:
+        self.pr, self.record, self.repaired = _generated_subject()
+        self.alert = _alert() if alert is None else alert
+        self.pr_files = (
+            [{"filename": ".github/scripts/security_autoheal.py", "status": "modified"}]
+            if pr_files is None
+            else pr_files
+        )
+        self.commit_author = (
+            {"login": BOT_LOGIN, "id": BOT_ID, "type": "Bot"}
+            if commit_author is None
+            else commit_author
+        )
+        metadata = author.parse_marker(self.pr["body"])
+        assert metadata is not None
+        plan = metadata["repairPlan"]
+        self.commit_message = (
+            author.repair_commit_message(self.record, plan)
+            if commit_message is None
+            else commit_message
+        )
+
+    @staticmethod
+    def _content(raw: bytes) -> dict[str, Any]:
+        return {
+            "type": "file",
+            "encoding": "base64",
+            "content": base64.b64encode(raw).decode("ascii"),
+        }
+
+    def get(self, path: str) -> dict[str, Any]:
+        target = ".github/scripts/security_autoheal.py"
+        if path == "/branches/main":
+            return {"commit": {"sha": MAIN}}
+        if path == "/code-scanning/alerts/17":
+            return self.alert
+        if path == f"/contents/{target}?ref={MAIN}":
+            return self._content(TARGET.read_bytes())
+        if path == f"/contents/{target}?ref={HEAD}":
+            return self._content(self.repaired)
+        if path == f"/commits/{HEAD}":
+            return {
+                "sha": HEAD,
+                "author": self.commit_author,
+                "parents": [{"sha": MAIN}],
+                "commit": {"message": self.commit_message},
+            }
+        raise AssertionError(path)
+
+    def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+        assert max_pages == 2
+        assert path == "/pulls/301/files"
+        return self.pr_files
+
+
+def test_generated_protected_pr_reproves_live_route_bytes_and_app_identity() -> None:
+    api = _AdmissionApi()
+
+    observed = author.validate_generated_pr(
+        api,
+        api.pr,
+        expected_bot_login=BOT_LOGIN,
+        expected_bot_id=BOT_ID,
+        config=routing.load_config(),
+    )
+
+    assert observed == {
+        "number": 301,
+        "headSha": HEAD,
+        "baseSha": MAIN,
+        "alertNumber": 17,
+        "targetPath": ".github/scripts/security_autoheal.py",
+        "routeRecordDigest": api.record["recordDigest"],
+        "planDigest": author.parse_marker(api.pr["body"])["repairPlan"]["planDigest"],
+        "authorStrategy": "protected-security-autoheal-clear-text-log-v1",
+    }
+
+
+@pytest.mark.parametrize(
+    ("login", "user_id"),
+    [
+        ("github-actions[bot]", 41898282),
+        ("trusted-pr-gate[bot]", 322661847),
+        ("dependabot[bot]", 49699333),
+    ],
+)
+def test_protected_author_identity_cannot_collapse_into_existing_authorities(
+    login: str, user_id: int
+) -> None:
+    api = _AdmissionApi()
+    with pytest.raises(author.ProtectedRemediationError, match="independent bot identity"):
+        author.validate_generated_pr(
+            api,
+            api.pr,
+            expected_bot_login=login,
+            expected_bot_id=user_id,
+            config=routing.load_config(),
+        )
+
+
+def test_generated_protected_pr_rejects_author_diff_and_live_alert_drift() -> None:
+    wrong_author = _AdmissionApi(
+        commit_author={"login": "portyu9", "id": 35150859, "type": "User"}
+    )
+    with pytest.raises(author.ProtectedRemediationError, match="commit author"):
+        author.validate_generated_pr(
+            wrong_author,
+            wrong_author.pr,
+            expected_bot_login=BOT_LOGIN,
+            expected_bot_id=BOT_ID,
+            config=routing.load_config(),
+        )
+
+    escaped = _AdmissionApi(
+        pr_files=[
+            {"filename": ".github/scripts/security_autoheal.py", "status": "modified"},
+            {"filename": ".github/workflows/trusted-pr-auto.yml", "status": "modified"},
+        ]
+    )
+    with pytest.raises(author.ProtectedRemediationError, match="one-file authority"):
+        author.validate_generated_pr(
+            escaped,
+            escaped.pr,
+            expected_bot_login=BOT_LOGIN,
+            expected_bot_id=BOT_ID,
+            config=routing.load_config(),
+        )
+
+    moved = _alert(path=".github/scripts/trusted_status.py")
+    drifted = _AdmissionApi(alert=moved)
+    with pytest.raises(author.ProtectedRemediationError, match="drifted from persisted"):
+        author.validate_generated_pr(
+            drifted,
+            drifted.pr,
+            expected_bot_login=BOT_LOGIN,
+            expected_bot_id=BOT_ID,
+            config=routing.load_config(),
+        )
+
+
+def test_generated_protected_pr_rejects_commit_provenance_tamper() -> None:
+    api = _AdmissionApi(commit_message="security: attacker rewrite")
+    with pytest.raises(author.ProtectedRemediationError, match="trailer count"):
+        author.validate_generated_pr(
+            api,
+            api.pr,
+            expected_bot_login=BOT_LOGIN,
+            expected_bot_id=BOT_ID,
+            config=routing.load_config(),
+        )
