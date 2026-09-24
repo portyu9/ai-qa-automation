@@ -387,7 +387,22 @@ class GitHubApi:
     def delete(self, path: str) -> Any:
         return self.request("DELETE", path)
 
-    def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+    def list_all(
+        self,
+        path: str,
+        *,
+        max_pages: int = 10,
+        max_items: int | None = None,
+    ) -> list[dict[str, Any]]:
+        if (
+            max_items is not None
+            and (
+                not isinstance(max_items, int)
+                or isinstance(max_items, bool)
+                or max_items < 1
+            )
+        ):
+            raise AutohealError("pagination max_items must be a positive integer")
         rows: list[dict[str, Any]] = []
         separator = "&" if "?" in path else "?"
         for page in range(1, max_pages + 1):
@@ -402,7 +417,11 @@ class GitHubApi:
                 items = payload
             if not isinstance(items, list):
                 raise AutohealError(f"unexpected paginated response for {path}")
-            rows.extend(item for item in items if isinstance(item, dict))
+            if any(not isinstance(item, dict) for item in items):
+                raise AutohealError(f"paginated response for {path} contains a non-object item")
+            rows.extend(items)
+            if max_items is not None and len(rows) >= max_items:
+                return rows[:max_items]
             if len(items) < 100:
                 return rows
         raise AutohealError(f"pagination limit reached for {path}")
@@ -3405,7 +3424,11 @@ def _build_route_plan(
         {"state": "open", "ref": "refs/heads/main", "tool_name": "CodeQL"},
         quote_via=urllib.parse.quote,
     )
-    alerts = api.list_all(f"/code-scanning/alerts?{query}", max_pages=10)
+    alerts = api.list_all(
+        f"/code-scanning/alerts?{query}",
+        max_pages=10,
+        max_items=101,
+    )
     if len(alerts) > 100:
         raise AutohealError("live CodeQL alert set exceeds the bounded routing limit")
     records: list[dict[str, Any]] = []
@@ -3649,7 +3672,11 @@ def _rebind_route_plan(
         {"state": "open", "ref": "refs/heads/main", "tool_name": "CodeQL"},
         quote_via=urllib.parse.quote,
     )
-    alerts = api.list_all(f"/code-scanning/alerts?{query}", max_pages=10)
+    alerts = api.list_all(
+        f"/code-scanning/alerts?{query}",
+        max_pages=10,
+        max_items=101,
+    )
     planned = {int(record["alertNumber"]): record for record in plan["records"]}
     if len(planned) != len(plan["records"]):
         raise AutohealError("route plan contains duplicate alert identities")
@@ -3866,7 +3893,11 @@ def reconcile(
         {"state": "open", "ref": "refs/heads/main", "tool_name": "CodeQL"},
         quote_via=urllib.parse.quote,
     )
-    alerts = api.list_all(f"/code-scanning/alerts?{query}", max_pages=10)
+    alerts = api.list_all(
+        f"/code-scanning/alerts?{query}",
+        max_pages=10,
+        max_items=101,
+    )
     for alert in alerts:
         instance = alert.get("most_recent_instance") or {}
         if instance.get("ref") != "refs/heads/main":
