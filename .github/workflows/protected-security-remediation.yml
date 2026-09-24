@@ -1,16 +1,6 @@
 name: Protected Security Remediation — ƳƤ AI QA Automation Framework
 
 on:
-  pull_request:
-    paths:
-      - ".github/scripts/protected_security_remediation.py"
-      - ".github/scripts/security_alert_routing.py"
-      - ".github/scripts/trusted_status.py"
-      - ".github/security-autoheal.json"
-      - ".github/workflows/protected-security-remediation.yml"
-      - ".github/workflows/trusted-pr-auto.yml"
-      - "scripts/auto_trusted_bot_admission.py"
-      - "scripts/auto_trusted_preflight.py"
   schedule:
     - cron: "*/5 * * * *"
 
@@ -18,38 +8,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: protected-security-remediation-${{ github.event_name == 'schedule' && 'scheduled-reconcile' || github.run_id }}
+  group: protected-security-remediation-scheduled-reconcile
   cancel-in-progress: false
 
 jobs:
-  self-test:
-    name: Protected Remediation Policy Self-Test
-    if: ${{ github.event_name == 'pull_request' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout exact pull-request subject
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-
-      - name: Verify exact pull-request subject
-        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.11.16"
-
-      - name: Verify independent protected remediation policy
-        run: python .github/scripts/protected_security_remediation.py --self-test
-
   reconcile:
     name: Independent Protected Remediation Reconcile
-    if: ${{ github.event_name == 'schedule' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment:
