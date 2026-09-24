@@ -60,15 +60,16 @@ def _pip_report_row(
     *,
     is_yanked: object = False,
     is_direct: object = False,
+    name: str = "alpha",
     version: str = "1.0",
     digest: str = "1" * 64,
 ) -> dict[str, object]:
     return {
         "is_yanked": is_yanked,
         "is_direct": is_direct,
-        "metadata": {"name": "alpha", "version": version},
+        "metadata": {"name": name, "version": version},
         "download_info": {
-            "url": f"https://files.pythonhosted.org/packages/alpha-{version}-py3-none-any.whl",
+            "url": f"https://files.pythonhosted.org/packages/{name}-{version}-py3-none-any.whl",
             "archive_info": {"hashes": {"sha256": digest}},
         },
     }
@@ -141,6 +142,27 @@ def test_hash_replay_revalidates_terminal_artifact_provenance(
     assert "--report" in command
     assert "--require-hashes" in command
     assert "--only-binary=:all:" in command
+
+
+@pytest.mark.parametrize(
+    ("name", "version"),
+    [
+        ("alpha\n--index-url=https://evil.invalid", "1.0"),
+        ("alpha", "1.0\n--extra-index-url=https://evil.invalid"),
+        ("alpha", "1.0/../../escape"),
+    ],
+)
+def test_report_to_lock_rejects_unsafe_metadata_before_rendering(
+    name: str,
+    version: str,
+) -> None:
+    with pytest.raises(compiler.LockCompileError, match="canonical lock syntax"):
+        compiler._report_to_lock(
+            {
+                "version": "1",
+                "install": [_pip_report_row(name=name, version=version)],
+            }
+        )
 
 
 def test_report_to_lock_requires_schema_and_index_provenance() -> None:
