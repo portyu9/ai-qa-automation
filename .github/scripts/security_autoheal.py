@@ -727,7 +727,7 @@ def _autoheal_workflow_run_matches(
     try:
         current_run_id = _current_positive_int_env("GITHUB_RUN_ID")
         current_attempt = _current_positive_int_env("GITHUB_RUN_ATTEMPT")
-    except PolicyBlock:
+    except (PolicyBlock, RoutingPolicyError):
         return False
     return (
         run.get("status") in {"queued", "in_progress"}
@@ -1312,6 +1312,45 @@ def _validate_route_evidence_fields(route_evidence: dict[str, Any]) -> None:
         raise PolicyBlock("repair route artifact evidence is malformed")
 
 
+def _require_marker_route_record(metadata: dict[str, Any]) -> dict[str, Any]:
+    route_record = metadata.get("routeRecord")
+    if not isinstance(route_record, dict):
+        raise PolicyBlock("generated repair marker lacks the canonical persisted route record")
+    try:
+        canonical_routing_record(route_record)
+    except RoutingPolicyError as exc:
+        raise PolicyBlock(f"generated repair marker route record is invalid: {exc}") from exc
+
+    expected = {
+        "alert": route_record.get("alertNumber"),
+        "rule": route_record.get("rule"),
+        "severity": route_record.get("securitySeverity"),
+        "path": route_record.get("path"),
+        "base": route_record.get("baseSha"),
+        "fingerprint": route_record.get("fingerprint"),
+        "strategy": route_record.get("strategy"),
+        "routeDecision": route_record.get("decision"),
+        "routeAuthority": route_record.get("authority"),
+        "routeRecordDigest": route_record.get("recordDigest"),
+        "routingPolicyVersion": route_record.get("routingPolicyVersion"),
+        "routeAutofixEligibility": route_record.get("autofixEligibility"),
+    }
+    observed = {key: metadata.get(key) for key in expected}
+    attempt = metadata.get("attempt")
+    prior = route_record.get("strategyAttemptCount")
+    if observed != expected:
+        raise PolicyBlock("generated repair marker fields drifted from its canonical route record")
+    if (
+        not isinstance(attempt, int)
+        or isinstance(attempt, bool)
+        or not isinstance(prior, int)
+        or isinstance(prior, bool)
+        or attempt != prior + 1
+    ):
+        raise PolicyBlock("generated repair marker attempt drifted from its canonical route record")
+    return route_record
+
+
 def _create_pull_request(
     api: GitHubApi,
     branch: str,
@@ -1356,6 +1395,7 @@ def _create_pull_request(
             "routeRecordDigest": route_record["recordDigest"],
             "routingPolicyVersion": route_record["routingPolicyVersion"],
             "routeAutofixEligibility": route_record["autofixEligibility"],
+            "routeRecord": dict(route_record),
             **route_evidence,
         }
     )
@@ -1590,6 +1630,7 @@ def _rebind_repair_alert(
     generator = metadata.get("generator")
     if generator not in {"deterministic", "github-codeql-autofix"}:
         raise PolicyBlock("generated repair marker generator is outside reviewed authority")
+    persisted_route_record = _require_marker_route_record(metadata)
 
     route_digest = metadata.get("routeRecordDigest")
     if route_digest is None:
@@ -1621,7 +1662,8 @@ def _rebind_repair_alert(
         else "ordinary-bounded-autofix"
     )
     if (
-        route_record.get("recordDigest") != route_digest
+        route_record != persisted_route_record
+        or route_record.get("recordDigest") != route_digest
         or route_record.get("decision") != expected_decision
         or metadata.get("routeDecision") != expected_decision
         or metadata.get("routeAuthority") != route_record.get("authority")
@@ -2247,18 +2289,13 @@ def _terminal_closure_certificate(
         raise PolicyBlock("terminal repair path is invalid")
     if not isinstance(strategy, str) or not strategy:
         raise PolicyBlock("terminal repair strategy is invalid")
-    route_record_digest = metadata.get("routeRecordDigest")
+    route_record = _require_marker_route_record(metadata)
+    route_record_digest = route_record.get("recordDigest")
     if (
         not isinstance(route_record_digest, str)
         or re.fullmatch(r"[0-9a-f]{64}", route_record_digest) is None
     ):
         raise PolicyBlock("terminal repair route record digest is invalid")
-    for key in ("routeDecision", "routeAuthority", "routingPolicyVersion"):
-        value = metadata.get(key)
-        if not isinstance(value, str) or not value:
-            raise PolicyBlock(f"terminal repair {key} is invalid")
-    if metadata.get("routeAutofixEligibility") not in {"available", "unavailable", "unknown"}:
-        raise PolicyBlock("terminal repair Autofix routing evidence is invalid")
     route_evidence = {
         key: metadata.get(key)
         for key in (
@@ -2304,11 +2341,12 @@ def _terminal_closure_certificate(
         "sourceTreeSha": source_tree,
         "fingerprint": fingerprint,
         "strategy": strategy,
-        "routeDecision": metadata["routeDecision"],
-        "routeAuthority": metadata["routeAuthority"],
+        "routeDecision": route_record["decision"],
+        "routeAuthority": route_record["authority"],
         "routeRecordDigest": route_record_digest,
-        "routingPolicyVersion": metadata["routingPolicyVersion"],
-        "routeAutofixEligibility": metadata["routeAutofixEligibility"],
+        "routingPolicyVersion": route_record["routingPolicyVersion"],
+        "routeAutofixEligibility": route_record["autofixEligibility"],
+        "routeRecord": route_record,
         **route_evidence,
         "alertState": "fixed",
         "ciWorkflowId": POST_MERGE_CI_WORKFLOW_ID,
@@ -2341,6 +2379,11 @@ def _terminal_certificate_static_matches(
     merge_evidence: dict[str, Any],
 ) -> bool:
     try:
+        marker_route_record = _require_marker_route_record(metadata)
+        certificate_route_record = certificate.get("routeRecord")
+        if not isinstance(certificate_route_record, dict):
+            return False
+        canonical_routing_record(certificate_route_record)
         expected_base = _require_sha(metadata.get("base"), "terminal marker base SHA")
         expected_head = _require_sha(metadata.get("head"), "terminal marker head SHA")
         expected_merge = _require_sha(merge_evidence.get("mergeSha"), "terminal expected merge SHA")
@@ -2393,11 +2436,12 @@ def _terminal_certificate_static_matches(
         and certificate.get("path") == metadata.get("path")
         and certificate.get("fingerprint") == metadata.get("fingerprint")
         and certificate.get("strategy") == _marker_strategy(metadata)
-        and certificate.get("routeDecision") == metadata.get("routeDecision")
-        and certificate.get("routeAuthority") == metadata.get("routeAuthority")
-        and certificate.get("routeRecordDigest") == metadata.get("routeRecordDigest")
-        and certificate.get("routingPolicyVersion") == metadata.get("routingPolicyVersion")
-        and certificate.get("routeAutofixEligibility") == metadata.get("routeAutofixEligibility")
+        and certificate_route_record == marker_route_record
+        and certificate.get("routeDecision") == marker_route_record.get("decision")
+        and certificate.get("routeAuthority") == marker_route_record.get("authority")
+        and certificate.get("routeRecordDigest") == marker_route_record.get("recordDigest")
+        and certificate.get("routingPolicyVersion") == marker_route_record.get("routingPolicyVersion")
+        and certificate.get("routeAutofixEligibility") == marker_route_record.get("autofixEligibility")
         and certificate.get("routePlanDigest") == metadata.get("routePlanDigest")
         and certificate.get("routePlanRunId") == metadata.get("routePlanRunId")
         and certificate.get("routePlanRunAttempt") == metadata.get("routePlanRunAttempt")
@@ -2720,7 +2764,8 @@ def _verify_merged_repair_subject(
     commit = api.get(f"/commits/{head_sha}")
     if not _owned_generated_repair_commit(commit, head_sha):
         raise PolicyBlock("terminal repair head lacks exact GitHub Actions ownership")
-    route_record_digest = metadata.get("routeRecordDigest")
+    route_record = _require_marker_route_record(metadata)
+    route_record_digest = route_record.get("recordDigest")
     route_plan_digest = metadata.get("routePlanDigest")
     if (
         not isinstance(route_record_digest, str)
