@@ -238,6 +238,17 @@ def test_route_plan_persistence_rejects_workspace_or_preexisting_parent(
         autoheal._write_route_plan(autoheal._route_plan_output_path(), plan)
 
 
+def test_route_plan_loading_rejects_non_runner_temp_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tmp_path.chmod(0o700)
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+
+    with pytest.raises(autoheal.AutohealError, match="exact runner-owned temp path"):
+        autoheal._load_route_plan(tmp_path / "alternate-route-plan.json", _config())
+
+
 def test_route_plan_rebind_requires_identical_live_routing_truth() -> None:
     api = _PlanApi(_alert())
     plan = autoheal._build_route_plan(api, _config(), MAIN)
