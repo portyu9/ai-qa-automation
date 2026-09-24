@@ -62,9 +62,7 @@ def _load_controller_modules(names: tuple[str, ...]) -> dict[str, Any]:
 
 def _load_controllers(lane: str) -> dict[str, Any]:
     if lane == "protected-security-remediation":
-        return _load_controller_modules(
-            ("dependency_governance", "protected_security_remediation")
-        )
+        return _load_controller_modules(("dependency_governance", "protected_security_remediation"))
     return _load_controller_modules(
         ("dependency_governance", "dependency_promotion", "security_autoheal")
     )
