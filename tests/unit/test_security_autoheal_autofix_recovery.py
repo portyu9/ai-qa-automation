@@ -32,6 +32,7 @@ HEAD = "b" * 40
 ALERT = 42
 ROUTE_DIGEST = "e" * 64
 PLAN_DIGEST = "f" * 64
+ARTIFACT_DIGEST = "sha256:" + ("c" * 64)
 BRANCH = "automation/codeql-autoheal-42-" + ("d" * 64) + "-a1"
 
 
@@ -46,6 +47,7 @@ def _repo_commit(
     alert: int = ALERT,
     route_digest: str = ROUTE_DIGEST,
     plan_digest: str = PLAN_DIGEST,
+    artifact_digest: str = ARTIFACT_DIGEST,
 ) -> dict[str, Any]:
     return {
         "sha": HEAD,
@@ -55,7 +57,8 @@ def _repo_commit(
             "message": (
                 f"security: auto-heal CodeQL alert #{alert}\n\n"
                 f"{autoheal.ROUTE_RECORD_TRAILER_PREFIX}{route_digest}\n"
-                f"{autoheal.ROUTE_PLAN_TRAILER_PREFIX}{plan_digest}\n\nAutofix"
+                f"{autoheal.ROUTE_PLAN_TRAILER_PREFIX}{plan_digest}\n"
+                f"{autoheal.ROUTE_ARTIFACT_TRAILER_PREFIX}{artifact_digest}\n\nAutofix"
             ),
             "author": {
                 "name": autoheal.GITHUB_ACTIONS_LOGIN,
@@ -103,6 +106,7 @@ class _AmbiguousCommitApi:
                 ALERT,
                 ROUTE_DIGEST,
                 PLAN_DIGEST,
+                ARTIFACT_DIGEST,
             )
             self.branch_sha = HEAD
             if self.fail_first_commit_response:
@@ -128,6 +132,7 @@ def test_existing_base_only_attempt_branch_refuses_provider_replay() -> None:
             BASE,
             ROUTE_DIGEST,
             PLAN_DIGEST,
+            ARTIFACT_DIGEST,
         )
 
     assert api.branch_sha == BASE
@@ -145,6 +150,7 @@ def test_ambiguous_autofix_commit_response_is_recovered_without_provider_replay(
             BASE,
             ROUTE_DIGEST,
             PLAN_DIGEST,
+            ARTIFACT_DIGEST,
         )
 
     assert api.branch_sha == HEAD
@@ -157,6 +163,7 @@ def test_ambiguous_autofix_commit_response_is_recovered_without_provider_replay(
         BASE,
         ROUTE_DIGEST,
         PLAN_DIGEST,
+        ARTIFACT_DIGEST,
     )
     assert recovered == HEAD
     assert api.commit_posts == 1
@@ -180,6 +187,11 @@ def test_ambiguous_autofix_commit_response_is_recovered_without_provider_replay(
         (_repo_commit(alert=99), BASE, "different alert"),
         (_repo_commit(route_digest="a" * 64), BASE, "route digest"),
         (_repo_commit(plan_digest="a" * 64), BASE, "plan digest"),
+        (
+            _repo_commit(artifact_digest="sha256:" + ("a" * 64)),
+            BASE,
+            "artifact digest",
+        ),
     ),
 )
 def test_recovered_autofix_commit_fails_closed_on_provenance_drift(
@@ -201,6 +213,7 @@ def test_recovered_autofix_commit_fails_closed_on_provenance_drift(
             BASE,
             ROUTE_DIGEST,
             PLAN_DIGEST,
+            ARTIFACT_DIGEST,
         )
 
     assert api.commit_posts == 0
@@ -421,12 +434,14 @@ def test_model_repair_uses_attempt_scoped_branch(monkeypatch: pytest.MonkeyPatch
         base: str,
         route_record_digest: str,
         route_plan_digest: str,
+        route_artifact_digest: str,
     ) -> str:
         observed["branch"] = branch
         assert alert == ALERT
         assert base == BASE
         assert route_record_digest == route_record["recordDigest"]
         assert route_plan_digest == "e" * 64
+        assert route_artifact_digest == "sha256:" + ("f" * 64)
         return HEAD
 
     monkeypatch.setattr(autoheal, "_commit_copilot_autofix", commit_autofix)
