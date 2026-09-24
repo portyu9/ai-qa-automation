@@ -39,5 +39,42 @@
     "scripts/auto_trusted_bot_admission.py",
     "scripts/auto_trusted_preflight.py",
     "scripts/trusted_pr_control.py"
-  ]
+  ],
+  "routingPolicy": {
+    "schemaVersion": 1,
+    "policyVersion": "security-routing-v1",
+    "protectedStrategy": "protected-independent-remediation-v1",
+    "modelStrategy": "github-codeql-autofix-v1",
+    "noReviewedStrategy": "no-reviewed-strategy-v1",
+    "deterministicStrategies": [
+      {
+        "rule": "py/overly-permissive-file",
+        "pathPrefixes": [
+          "tests/"
+        ],
+        "paths": [],
+        "strategy": "deterministic-overly-permissive-test-file-v1"
+      },
+      {
+        "rule": "py/clear-text-logging-sensitive-data",
+        "pathPrefixes": [],
+        "paths": [
+          "scripts/auto_trusted_report.py",
+          "scripts/ci_contract_base.py",
+          "scripts/verify_ci_contract.py",
+          "scripts/verify_docs.py",
+          "scripts/verify_fork_cloud_authority.py"
+        ],
+        "strategy": "deterministic-clear-text-log-v1"
+      },
+      {
+        "rule": "py/reflective-xss",
+        "pathPrefixes": [],
+        "paths": [
+          "examples/reference_sut/app.py"
+        ],
+        "strategy": "deterministic-reference-sut-reflective-xss-v1"
+      }
+    ]
+  }
 }
