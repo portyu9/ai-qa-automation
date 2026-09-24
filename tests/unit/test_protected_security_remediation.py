@@ -181,6 +181,26 @@ def test_alert_text_cannot_select_authority_and_attempt_exhaustion_blocks() -> N
 
 def test_policy_self_test_keeps_single_file_self_excluding_authority() -> None:
     author.self_test()
+    certifiers = {
+        ".github/security-autoheal.json",
+        ".github/scripts/dependency_governance.py",
+        ".github/scripts/protected_security_remediation.py",
+        ".github/scripts/security_alert_routing.py",
+        ".github/scripts/trusted_qualification.py",
+        ".github/scripts/trusted_status.py",
+        ".github/workflows/ci.yml",
+        ".github/workflows/codeql.yml",
+        ".github/workflows/protected-security-remediation.yml",
+        ".github/workflows/trusted-pr-auto.yml",
+        "scripts/auto_trusted_bot_admission.py",
+        "scripts/auto_trusted_preflight.py",
+        "scripts/ci_contract_base.py",
+        "scripts/ci_contract_trusted_auto.py",
+        "scripts/trusted_pr_control.py",
+        "scripts/verify_ci_contract.py",
+        "scripts/verify_fork_cloud_authority.py",
+    }
+    assert certifiers <= author.SELF_AUTHORITY_PATHS
     assert {item.path for item in author.REPAIR_STRATEGIES}.isdisjoint(author.SELF_AUTHORITY_PATHS)
     assert author.MAX_CHANGED_FILES == 1
 
