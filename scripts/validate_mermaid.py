@@ -50,6 +50,9 @@ RENDER_WAIT_COMMAND = (
 )
 GITHUB_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 CONTAINER_ID_RE = re.compile(r"^[0-9a-f]{64}$")
+DOCKER_IMAGE_INSPECT_TIMEOUT_SECONDS = 15
+DOCKER_PULL_TIMEOUT_SECONDS = 120
+DOCKER_PULL_ATTEMPTS = 2
 DOCKER_START_TIMEOUT_SECONDS = 60
 RENDER_TIMEOUT_SECONDS = 60
 DOCKER_CLEANUP_TIMEOUT_SECONDS = 15
@@ -113,6 +116,61 @@ def _resolve_docker_executable(*, env: Mapping[str, str]) -> str:
         raise RuntimeError(
             "Docker executable is unavailable in trusted controller roots for Mermaid validation"
         ) from exc
+
+
+def _renderer_image_present(
+    *,
+    docker_executable: str,
+    docker_env: Mapping[str, str],
+) -> bool:
+    try:
+        result = subprocess.run(
+            [docker_executable, "image", "inspect", MERMAID_IMAGE],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=DOCKER_IMAGE_INSPECT_TIMEOUT_SECONDS,
+            env=dict(docker_env),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError("Mermaid renderer image inspection could not be completed") from exc
+    return result.returncode == 0
+
+
+def _ensure_renderer_image(
+    *,
+    docker_executable: str,
+    docker_env: Mapping[str, str],
+) -> None:
+    if _renderer_image_present(
+        docker_executable=docker_executable,
+        docker_env=docker_env,
+    ):
+        return
+
+    last_error: BaseException | None = None
+    for _attempt in range(DOCKER_PULL_ATTEMPTS):
+        try:
+            subprocess.run(
+                [docker_executable, "pull", "--quiet", MERMAID_IMAGE],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=DOCKER_PULL_TIMEOUT_SECONDS,
+                env=dict(docker_env),
+            )
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            last_error = exc
+            continue
+        if _renderer_image_present(
+            docker_executable=docker_executable,
+            docker_env=docker_env,
+        ):
+            return
+
+    raise RuntimeError(
+        "Mermaid renderer digest-pinned image acquisition failed after bounded attempts"
+    ) from last_error
 
 
 def _container_id_from_cidfile(path: Path) -> str | None:
@@ -298,12 +356,18 @@ def _run_mermaid(root: Path, relative: Path, output_root: Path, expected_count: 
     docker_home = output_root.parent / f".docker-home-{uuid.uuid4().hex}"
     docker_env = restricted_subprocess_env(home=docker_home)
     docker_executable = _resolve_docker_executable(env=docker_env)
+    _ensure_renderer_image(
+        docker_executable=docker_executable,
+        docker_env=docker_env,
+    )
     name = f"aiqa-mermaid-{os.getpid()}-{uuid.uuid4().hex}"
     cidfile = output_root.parent / f".{name}.cid"
     input_path = f"/repo/{relative.as_posix()}"
     command = [
         docker_executable,
         "run",
+        "--pull",
+        "never",
         "--detach",
         "--name",
         name,
