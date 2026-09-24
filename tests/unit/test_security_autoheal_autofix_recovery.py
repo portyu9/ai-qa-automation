@@ -30,6 +30,7 @@ autoheal = _load()
 BASE = "a" * 40
 HEAD = "b" * 40
 ALERT = 42
+ROUTE_DIGEST = "e" * 64
 BRANCH = "automation/codeql-autoheal-42-" + ("d" * 64) + "-a1"
 
 
@@ -42,13 +43,17 @@ def _repo_commit(
     verified: bool = True,
     verification_reason: str = "valid",
     alert: int = ALERT,
+    route_digest: str = ROUTE_DIGEST,
 ) -> dict[str, Any]:
     return {
         "sha": HEAD,
         "author": {"login": owner, "id": owner_id, "type": "Bot"},
         "committer": {"login": committer_login, "id": committer_id, "type": "User"},
         "commit": {
-            "message": f"security: auto-heal CodeQL alert #{alert}\n\nAutofix",
+            "message": (
+                f"security: auto-heal CodeQL alert #{alert}\n\n"
+                f"{autoheal.ROUTE_RECORD_TRAILER_PREFIX}{route_digest}\n\nAutofix"
+            ),
             "author": {
                 "name": autoheal.GITHUB_ACTIONS_LOGIN,
                 "email": autoheal.GITHUB_ACTIONS_EMAIL,
@@ -91,6 +96,10 @@ class _AmbiguousCommitApi:
         if path == f"/code-scanning/alerts/{ALERT}/autofix/commits":
             self.commit_posts += 1
             assert payload["target_ref"] == f"refs/heads/{self.branch}"
+            assert payload["message"] == autoheal._route_bound_commit_message(
+                ALERT,
+                ROUTE_DIGEST,
+            )
             self.branch_sha = HEAD
             if self.fail_first_commit_response:
                 self.fail_first_commit_response = False
@@ -108,7 +117,7 @@ def test_existing_base_only_attempt_branch_refuses_provider_replay() -> None:
     api.fail_first_commit_response = False
 
     with pytest.raises(autoheal.PolicyBlock, match="ambiguous provider-submission state"):
-        autoheal._commit_copilot_autofix(api, ALERT, BRANCH, BASE)
+        autoheal._commit_copilot_autofix(api, ALERT, BRANCH, BASE, ROUTE_DIGEST)
 
     assert api.branch_sha == BASE
     assert api.commit_posts == 0
@@ -118,12 +127,12 @@ def test_ambiguous_autofix_commit_response_is_recovered_without_provider_replay(
     api = _AmbiguousCommitApi()
 
     with pytest.raises(autoheal.AutohealError, match="503 after provider side effect"):
-        autoheal._commit_copilot_autofix(api, ALERT, BRANCH, BASE)
+        autoheal._commit_copilot_autofix(api, ALERT, BRANCH, BASE, ROUTE_DIGEST)
 
     assert api.branch_sha == HEAD
     assert api.commit_posts == 1
 
-    recovered = autoheal._commit_copilot_autofix(api, ALERT, BRANCH, BASE)
+    recovered = autoheal._commit_copilot_autofix(api, ALERT, BRANCH, BASE, ROUTE_DIGEST)
     assert recovered == HEAD
     assert api.commit_posts == 1
 
@@ -144,6 +153,7 @@ def test_ambiguous_autofix_commit_response_is_recovered_without_provider_replay(
             "GitHub-signed provider provenance",
         ),
         (_repo_commit(alert=99), BASE, "different alert"),
+        (_repo_commit(route_digest="f" * 64), BASE, "route digest"),
     ),
 )
 def test_recovered_autofix_commit_fails_closed_on_provenance_drift(
@@ -158,7 +168,7 @@ def test_recovered_autofix_commit_fails_closed_on_provenance_drift(
     api.fail_first_commit_response = False
 
     with pytest.raises(autoheal.PolicyBlock, match=message):
-        autoheal._commit_copilot_autofix(api, ALERT, BRANCH, BASE)
+        autoheal._commit_copilot_autofix(api, ALERT, BRANCH, BASE, ROUTE_DIGEST)
 
     assert api.commit_posts == 0
     assert api.branch_sha == HEAD
