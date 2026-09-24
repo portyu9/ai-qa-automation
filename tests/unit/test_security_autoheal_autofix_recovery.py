@@ -79,6 +79,9 @@ class _AmbiguousCommitApi:
         self.branch_sha: str | None = None
         self.commit_posts = 0
         self.fail_first_commit_response = True
+        self.expected_route_digest = ROUTE_DIGEST
+        self.expected_plan_digest = PLAN_DIGEST
+        self.expected_artifact_digest = ARTIFACT_DIGEST
         self.repository_commit = _repo_commit()
         self.parent = BASE
 
@@ -104,9 +107,9 @@ class _AmbiguousCommitApi:
             assert payload["target_ref"] == f"refs/heads/{self.branch}"
             assert payload["message"] == autoheal._route_bound_commit_message(
                 ALERT,
-                ROUTE_DIGEST,
-                PLAN_DIGEST,
-                ARTIFACT_DIGEST,
+                self.expected_route_digest,
+                self.expected_plan_digest,
+                self.expected_artifact_digest,
             )
             self.branch_sha = HEAD
             if self.fail_first_commit_response:
@@ -640,6 +643,14 @@ def test_reconcile_recovers_ambiguous_autofix_commit_without_second_submission(
 
     monkeypatch.setattr(autoheal, "_create_pull_request", create_pull_request)
     route_record = _model_route(config)
+    api.expected_route_digest = str(route_record["recordDigest"])
+    api.expected_plan_digest = "e" * 64
+    api.expected_artifact_digest = "sha256:" + ("f" * 64)
+    api.repository_commit = _repo_commit(
+        route_digest=api.expected_route_digest,
+        plan_digest=api.expected_plan_digest,
+        artifact_digest=api.expected_artifact_digest,
+    )
     route_args = _route_reconcile_args(monkeypatch, {ALERT: route_record})
 
     with pytest.raises(autoheal.AutohealError, match="503 after provider side effect"):
