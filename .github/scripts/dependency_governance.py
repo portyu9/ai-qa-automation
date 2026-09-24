@@ -1085,6 +1085,7 @@ def selftest(config: dict[str, Any]) -> None:
 
     canonical_run = {
         "id": 101,
+        "workflow_id": POST_MERGE_CI_WORKFLOW_ID,
         "name": POST_MERGE_CI_NAME,
         "path": POST_MERGE_CI_PATH,
         "head_branch": "main",
@@ -1096,14 +1097,24 @@ def selftest(config: dict[str, Any]) -> None:
     }
     if _select_post_merge_ci_run([canonical_run], exact_sha) != canonical_run:
         raise GovernanceError("post-merge CI selector rejected canonical exact-subject dispatch")
-    wrong_sha = dict(canonical_run, head_sha="2" * 40)
-    wrong_workflow = dict(canonical_run, path=".github/workflows/not-ci.yml")
-    wrong_event = dict(canonical_run, event="schedule")
-    if any(
-        _select_post_merge_ci_run([row], exact_sha) is not None
-        for row in (wrong_sha, wrong_workflow, wrong_event)
+    for drifted, expected in (
+        (dict(canonical_run, head_sha="2" * 40), "different head SHA"),
+        (
+            dict(canonical_run, path=".github/workflows/not-ci.yml"),
+            "mismatched workflow identity",
+        ),
+        (dict(canonical_run, event="schedule"), "unexpected event"),
+        (dict(canonical_run, run_attempt=2), "run_attempt must equal 1"),
     ):
-        raise GovernanceError("post-merge CI selector accepted mismatched evidence")
+        try:
+            _select_post_merge_ci_run([drifted], exact_sha)
+        except GovernanceError as exc:
+            if expected not in str(exc):
+                raise GovernanceError(
+                    "post-merge CI drift self-test failed with unexpected error"
+                ) from exc
+        else:
+            raise GovernanceError("post-merge CI selector accepted mismatched evidence")
     for terminal in ("failure", "cancelled", "timed_out"):
         try:
             _select_post_merge_ci_run(
