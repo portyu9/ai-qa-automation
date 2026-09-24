@@ -31,7 +31,7 @@ EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
     "36fd412054bf1d2a1aaa9d0a83db6b090bda5494"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
-    "59ecd578ef05b6b45b962121a868282436ac7ded"  # pragma: allowlist secret
+    "c086755ff72ce4f2916ed2436bf6404651800e1c"  # pragma: allowlist secret
 )
 TRUSTED_AUTO_WORKFLOW_NAME = "Trusted PR Auto Gate — ƳƤ AI QA Automation Framework"
 TRUSTED_AUTO_SOURCE_WORKFLOWS = (
