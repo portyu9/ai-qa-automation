@@ -1522,45 +1522,44 @@ def _rebind_repair_alert(
 
     route_digest = metadata.get("routeRecordDigest")
     if route_digest is None:
-        subject = validate_alert(matches[0], live["baseSha"], config)
-    else:
-        strategy = metadata.get("strategy")
-        eligibility = metadata.get("routeAutofixEligibility")
-        if (
-            not isinstance(route_digest, str)
-            or re.fullmatch(r"[0-9a-f]{64}", route_digest) is None
-            or not isinstance(strategy, str)
-            or not strategy
-            or eligibility not in {"available", "unavailable", "unknown"}
-        ):
-            raise PolicyBlock("generated repair marker routing provenance is malformed")
-        try:
-            route_record = route_security_alert(
-                matches[0],
-                main_sha=live["baseSha"],
-                config=config,
-                attempts_by_strategy={strategy: attempt - 1},
-                autofix_eligibility=eligibility,
-            )
-            canonical_routing_record(route_record)
-        except RoutingPolicyError as exc:
-            raise PolicyBlock(f"generated repair route cannot be revalidated: {exc}") from exc
-        expected_decision = (
-            "ordinary-deterministic-autoheal"
-            if generator == "deterministic"
-            else "ordinary-bounded-autofix"
+        raise PolicyBlock("generated repair marker lacks persisted route provenance")
+    strategy = metadata.get("strategy")
+    eligibility = metadata.get("routeAutofixEligibility")
+    if (
+        not isinstance(route_digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", route_digest) is None
+        or not isinstance(strategy, str)
+        or not strategy
+        or eligibility not in {"available", "unavailable", "unknown"}
+    ):
+        raise PolicyBlock("generated repair marker routing provenance is malformed")
+    try:
+        route_record = route_security_alert(
+            matches[0],
+            main_sha=live["baseSha"],
+            config=config,
+            attempts_by_strategy={strategy: attempt - 1},
+            autofix_eligibility=eligibility,
         )
-        if (
-            route_record.get("recordDigest") != route_digest
-            or route_record.get("decision") != expected_decision
-            or metadata.get("routeDecision") != expected_decision
-            or metadata.get("routeAuthority") != route_record.get("authority")
-            or metadata.get("routingPolicyVersion") != route_record.get("routingPolicyVersion")
-            or route_record.get("strategy") != strategy
-        ):
-            raise PolicyBlock("generated repair marker drifted from deterministic routing truth")
-        _require_marker_route_artifact(api, metadata, live["baseSha"])
-        subject = _subject_from_route(route_record)
+        canonical_routing_record(route_record)
+    except RoutingPolicyError as exc:
+        raise PolicyBlock(f"generated repair route cannot be revalidated: {exc}") from exc
+    expected_decision = (
+        "ordinary-deterministic-autoheal"
+        if generator == "deterministic"
+        else "ordinary-bounded-autofix"
+    )
+    if (
+        route_record.get("recordDigest") != route_digest
+        or route_record.get("decision") != expected_decision
+        or metadata.get("routeDecision") != expected_decision
+        or metadata.get("routeAuthority") != route_record.get("authority")
+        or metadata.get("routingPolicyVersion") != route_record.get("routingPolicyVersion")
+        or route_record.get("strategy") != strategy
+    ):
+        raise PolicyBlock("generated repair marker drifted from deterministic routing truth")
+    _require_marker_route_artifact(api, metadata, live["baseSha"])
+    subject = _subject_from_route(route_record)
 
     expected = {
         "alert": subject["number"],
