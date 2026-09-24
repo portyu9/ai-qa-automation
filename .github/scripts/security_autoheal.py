@@ -2863,6 +2863,340 @@ def _attempt_count(
     return count
 
 
+def _autofix_evidence(api: GitHubApi, alert_number: int) -> str:
+    if not isinstance(alert_number, int) or isinstance(alert_number, bool) or alert_number < 1:
+        raise AutohealError("route planning received an invalid alert number")
+    status, payload = api.request_status("GET", f"/code-scanning/alerts/{alert_number}/autofix")
+    state = (payload or {}).get("status") if isinstance(payload, dict) else None
+    if status == 200 and state == "success":
+        return "available"
+    if status == 404 or (status == 200 and state in {"pending", "in_progress", "queued"}):
+        return "unknown"
+    return "unavailable"
+
+
+def _route_record_for_alert(
+    api: GitHubApi,
+    alert: dict[str, Any],
+    main_sha: str,
+    config: dict[str, Any],
+    *,
+    autofix_eligibility: str | None = None,
+) -> dict[str, Any]:
+    number = alert.get("number")
+    if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+        raise AutohealError("route planning received an invalid alert identity")
+    evidence = (
+        _autofix_evidence(api, number)
+        if autofix_eligibility is None
+        else autofix_eligibility
+    )
+    try:
+        provisional = route_security_alert(
+            alert,
+            main_sha=main_sha,
+            config=config,
+            autofix_eligibility=evidence,
+        )
+        strategy = provisional["strategy"]
+        if not isinstance(strategy, str) or not strategy:
+            raise AutohealError("routing policy produced an invalid remediation strategy")
+        attempts = _attempt_count(api, number, strategy, main_sha)
+        return route_security_alert(
+            alert,
+            main_sha=main_sha,
+            config=config,
+            attempts_by_strategy={strategy: attempts},
+            autofix_eligibility=evidence,
+        )
+    except RoutingPolicyError as exc:
+        raise AutohealError(f"deterministic security routing failed closed: {exc}") from exc
+
+
+def _subject_from_route(record: dict[str, Any]) -> dict[str, Any]:
+    required = {
+        "alertNumber": int,
+        "rule": str,
+        "securitySeverity": (int, float),
+        "path": str,
+        "line": int,
+        "baseSha": str,
+        "fingerprint": str,
+        "strategy": str,
+        "recordDigest": str,
+    }
+    for key, expected in required.items():
+        value = record.get(key)
+        if isinstance(value, bool) or not isinstance(value, expected):
+            raise PolicyBlock(f"routing record field is malformed: {key}")
+    return {
+        "number": record["alertNumber"],
+        "rule": record["rule"],
+        "severity": float(record["securitySeverity"]),
+        "path": record["path"],
+        "line": record["line"],
+        "baseSha": _require_sha(record["baseSha"], "routing record base SHA"),
+        "fingerprint": record["fingerprint"],
+    }
+
+
+def _canonical_route_plan(plan: dict[str, Any]) -> bytes:
+    raw = dict(plan)
+    digest = raw.pop("planDigest", None)
+    if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise AutohealError("route plan digest is missing or malformed")
+    records = raw.get("records")
+    if not isinstance(records, list) or len(records) > 100:
+        raise AutohealError("route plan records are malformed or exceed the bounded alert limit")
+    seen: set[int] = set()
+    for record in records:
+        if not isinstance(record, dict):
+            raise AutohealError("route plan contains a non-object routing record")
+        try:
+            canonical_routing_record(record)
+        except RoutingPolicyError as exc:
+            raise AutohealError(f"route plan contains invalid routing evidence: {exc}") from exc
+        number = record.get("alertNumber")
+        if not isinstance(number, int) or isinstance(number, bool) or number < 1 or number in seen:
+            raise AutohealError("route plan contains an invalid or duplicate alert identity")
+        seen.add(number)
+    canonical = json.dumps(raw, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    expected = hashlib.sha256(canonical).hexdigest()
+    if digest != expected:
+        raise AutohealError("route plan digest does not match its canonical content")
+    raw["planDigest"] = digest
+    payload = (json.dumps(raw, separators=(",", ":"), sort_keys=True) + "\n").encode("utf-8")
+    if len(payload) > ROUTE_PLAN_MAX_BYTES:
+        raise AutohealError("route plan exceeds the bounded persistence limit")
+    return payload
+
+
+def _build_route_plan(
+    api: GitHubApi,
+    config: dict[str, Any],
+    main_sha: str,
+) -> dict[str, Any]:
+    query = urllib.parse.urlencode(
+        {"state": "open", "ref": "refs/heads/main", "tool_name": "CodeQL"},
+        quote_via=urllib.parse.quote,
+    )
+    alerts = api.list_all(f"/code-scanning/alerts?{query}", max_pages=10)
+    if len(alerts) > 100:
+        raise AutohealError("live CodeQL alert set exceeds the bounded routing limit")
+    records: list[dict[str, Any]] = []
+    for alert in alerts:
+        if not isinstance(alert, dict):
+            raise AutohealError("GitHub returned a non-object CodeQL alert")
+        records.append(_route_record_for_alert(api, alert, main_sha, config))
+    records.sort(key=lambda record: int(record["alertNumber"]))
+    if _current_main(api, config) != main_sha:
+        raise AutohealError("main advanced while deterministic route planning was in progress")
+    plan: dict[str, Any] = {
+        "schemaVersion": ROUTE_PLAN_SCHEMA_VERSION,
+        "repository": config["repository"],
+        "workflowId": SECURITY_AUTOHEAL_WORKFLOW_ID,
+        "workflowRunId": _current_positive_int_env("GITHUB_RUN_ID"),
+        "workflowRunAttempt": _current_positive_int_env("GITHUB_RUN_ATTEMPT"),
+        "mainSha": main_sha,
+        "records": records,
+    }
+    canonical = json.dumps(plan, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    plan["planDigest"] = hashlib.sha256(canonical).hexdigest()
+    _canonical_route_plan(plan)
+    return plan
+
+
+def _write_route_plan(path: Path, plan: dict[str, Any]) -> None:
+    payload = _canonical_route_plan(plan)
+    parent = path.parent
+    parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    parent.chmod(0o700)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    directory = getattr(os, "O_DIRECTORY", 0)
+    if not nofollow or not directory:
+        raise AutohealError("route plan persistence requires no-follow directory APIs")
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow, 0o600)
+    except OSError as exc:
+        raise AutohealError("unable to create exclusive route plan evidence") from exc
+    try:
+        view = memoryview(payload)
+        while view:
+            written = os.write(fd, view)
+            if written <= 0:
+                raise AutohealError("route plan persistence made no forward progress")
+            view = view[written:]
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    parent_fd = os.open(parent, os.O_RDONLY | directory | nofollow)
+    try:
+        os.fsync(parent_fd)
+    finally:
+        os.close(parent_fd)
+
+
+def plan_routes(config: dict[str, Any], output: Path) -> dict[str, Any]:
+    repository = os.environ.get("GITHUB_REPOSITORY", "")
+    if repository != config["repository"]:
+        raise AutohealError("workflow repository does not match security auto-heal config")
+    api = GitHubApi(os.environ.get("GITHUB_TOKEN", ""), repository)
+    main_sha = _current_main(api, config)
+    plan = _build_route_plan(api, config, main_sha)
+    _write_route_plan(output, plan)
+    print(
+        json.dumps(
+            {
+                "decision": "route-plan-persisted",
+                "mainSha": main_sha,
+                "planDigest": plan["planDigest"],
+                "records": len(plan["records"]),
+                "workflowRunId": plan["workflowRunId"],
+                "workflowRunAttempt": plan["workflowRunAttempt"],
+            },
+            sort_keys=True,
+        )
+    )
+    return plan
+
+
+def _load_route_plan(path: Path, config: dict[str, Any]) -> dict[str, Any]:
+    try:
+        plan = read_routing_json_evidence(
+            path,
+            max_bytes=ROUTE_PLAN_MAX_BYTES,
+            label="security auto-heal route plan",
+        )
+    except RoutingPolicyError as exc:
+        raise AutohealError(f"unable to read route plan evidence: {exc}") from exc
+    if not isinstance(plan, dict):
+        raise AutohealError("security auto-heal route plan must be a JSON object")
+    if set(plan) != {
+        "schemaVersion",
+        "repository",
+        "workflowId",
+        "workflowRunId",
+        "workflowRunAttempt",
+        "mainSha",
+        "records",
+        "planDigest",
+    }:
+        raise AutohealError("route plan keys must equal the reviewed schema")
+    if (
+        plan.get("schemaVersion") != ROUTE_PLAN_SCHEMA_VERSION
+        or plan.get("repository") != config["repository"]
+        or plan.get("workflowId") != SECURITY_AUTOHEAL_WORKFLOW_ID
+        or plan.get("workflowRunId") != _current_positive_int_env("GITHUB_RUN_ID")
+        or plan.get("workflowRunAttempt") != _current_positive_int_env("GITHUB_RUN_ATTEMPT")
+    ):
+        raise AutohealError("route plan is not bound to the exact controller run")
+    _require_sha(plan.get("mainSha"), "route plan main SHA")
+    _canonical_route_plan(plan)
+    return plan
+
+
+def _require_route_plan_artifact(
+    api: GitHubApi,
+    plan: dict[str, Any],
+    *,
+    artifact_id: int,
+    artifact_name: str,
+    artifact_digest: str,
+) -> dict[str, Any]:
+    if not isinstance(artifact_id, int) or isinstance(artifact_id, bool) or artifact_id < 1:
+        raise AutohealError("route plan artifact id is invalid")
+    expected_name = (
+        f"{ROUTE_PLAN_ARTIFACT_PREFIX}-{plan['workflowRunId']}-{plan['workflowRunAttempt']}"
+    )
+    if artifact_name != expected_name:
+        raise AutohealError("route plan artifact name is not bound to the exact controller run")
+    if ROUTE_ARTIFACT_DIGEST_RE.fullmatch(artifact_digest) is None:
+        raise AutohealError("route plan artifact digest is malformed")
+    artifact = api.get(f"/actions/artifacts/{artifact_id}")
+    workflow_run = (artifact or {}).get("workflow_run") or {}
+    if (
+        not isinstance(artifact, dict)
+        or artifact.get("id") != artifact_id
+        or artifact.get("name") != expected_name
+        or artifact.get("expired") is not False
+        or artifact.get("digest") != artifact_digest
+        or not isinstance(artifact.get("size_in_bytes"), int)
+        or artifact.get("size_in_bytes") <= 0
+        or artifact.get("size_in_bytes") > ROUTE_PLAN_MAX_BYTES
+        or workflow_run.get("id") != plan["workflowRunId"]
+        or workflow_run.get("head_sha") != plan["mainSha"]
+        or workflow_run.get("head_branch") != "main"
+    ):
+        raise AutohealError("route plan artifact metadata drifted from the exact controller run")
+    run = api.get(f"/actions/runs/{plan['workflowRunId']}")
+    if (
+        not isinstance(run, dict)
+        or run.get("id") != plan["workflowRunId"]
+        or run.get("workflow_id") != SECURITY_AUTOHEAL_WORKFLOW_ID
+        or run.get("path") != SECURITY_AUTOHEAL_WORKFLOW_PATH
+        or run.get("run_attempt") != plan["workflowRunAttempt"]
+        or run.get("event") not in SECURITY_AUTOHEAL_RECONCILE_EVENTS
+        or run.get("head_branch") != "main"
+        or run.get("head_sha") != plan["mainSha"]
+        or run.get("status") not in {"queued", "in_progress"}
+    ):
+        raise AutohealError("route plan artifact lacks exact in-progress controller authority")
+    return {
+        "routePlanDigest": plan["planDigest"],
+        "routePlanRunId": plan["workflowRunId"],
+        "routePlanRunAttempt": plan["workflowRunAttempt"],
+        "routeArtifactId": artifact_id,
+        "routeArtifactName": artifact_name,
+        "routeArtifactDigest": artifact_digest,
+    }
+
+
+def _rebind_route_plan(
+    api: GitHubApi,
+    plan: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[int, dict[str, Any]]:
+    main_sha = _current_main(api, config)
+    if main_sha != plan["mainSha"]:
+        raise AutohealError("route plan is stale relative to exact current main")
+    query = urllib.parse.urlencode(
+        {"state": "open", "ref": "refs/heads/main", "tool_name": "CodeQL"},
+        quote_via=urllib.parse.quote,
+    )
+    alerts = api.list_all(f"/code-scanning/alerts?{query}", max_pages=10)
+    planned = {int(record["alertNumber"]): record for record in plan["records"]}
+    if len(planned) != len(plan["records"]):
+        raise AutohealError("route plan contains duplicate alert identities")
+    live_numbers: set[int] = set()
+    for alert in alerts:
+        if not isinstance(alert, dict):
+            raise AutohealError("GitHub returned a non-object CodeQL alert")
+        number = alert.get("number")
+        if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+            raise AutohealError("GitHub returned an invalid CodeQL alert identity")
+        live_numbers.add(number)
+        expected = planned.get(number)
+        if expected is None:
+            raise AutohealError("live CodeQL alert is absent from persisted route evidence")
+        live = _route_record_for_alert(
+            api,
+            alert,
+            main_sha,
+            config,
+            autofix_eligibility=str(expected.get("autofixEligibility") or ""),
+        )
+        try:
+            if canonical_routing_record(live) != canonical_routing_record(expected):
+                raise AutohealError("live routing truth drifted from persisted route evidence")
+        except RoutingPolicyError as exc:
+            raise AutohealError(f"persisted route evidence is invalid: {exc}") from exc
+    if set(planned) != live_numbers:
+        raise AutohealError("persisted route evidence references an alert no longer open on main")
+    if _current_main(api, config) != main_sha:
+        raise AutohealError("main advanced while route plan was being revalidated")
+    return planned
+
+
 def _create_repair(
     api: GitHubApi,
     subject: dict[str, Any],
