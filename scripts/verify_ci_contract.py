@@ -47,7 +47,7 @@ EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
     "d809771ced237ec2d02d52b0eb29432f14c6a90b"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
-    "ca817d361af38d47fb36fc0ce94190a5438546a6"  # pragma: allowlist secret
+    "7e236900be3b05ab00b09d78b49007646432503e"  # pragma: allowlist secret
 )
 EXPECTED_CODEQL_MAJOR = 4
 CODEQL_ACTION_RE = re.compile(
