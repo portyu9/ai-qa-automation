@@ -317,6 +317,28 @@ def test_route_plan_rebind_requires_identical_live_routing_truth() -> None:
         autoheal._rebind_route_plan(drifted, plan, _config())
 
 
+def test_route_rebind_reobserves_live_autofix_evidence() -> None:
+    config = _config()
+    alert = _alert(
+        rule="py/incomplete-url-substring-sanitization",
+        path="src/ai_qa_automation/example.py",
+    )
+    planning = _PlanApi(alert, autofix_status=404)
+    plan = autoheal._build_route_plan(planning, config, MAIN)
+    assert planning.request_calls == [("GET", "/code-scanning/alerts/7/autofix")]
+    assert plan["records"][0]["autofixEligibility"] == "unknown"
+
+    unchanged = _PlanApi(alert, autofix_status=404)
+    rebound = autoheal._rebind_route_plan(unchanged, plan, config)
+    assert rebound[7] == plan["records"][0]
+    assert unchanged.request_calls == [("GET", "/code-scanning/alerts/7/autofix")]
+
+    available = _PlanApi(alert, autofix_status=200, autofix_state="success")
+    with pytest.raises(autoheal.AutohealError, match="routing truth drifted"):
+        autoheal._rebind_route_plan(available, plan, config)
+    assert available.request_calls == [("GET", "/code-scanning/alerts/7/autofix")]
+
+
 def test_selected_route_revalidation_blocks_alert_truth_drift_before_mutation() -> None:
     config = _config()
     plan = autoheal._build_route_plan(_PlanApi(_alert()), config, MAIN)
