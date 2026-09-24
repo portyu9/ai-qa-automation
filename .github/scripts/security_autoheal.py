@@ -4278,18 +4278,45 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Fail-closed exact-subject CodeQL auto-heal")
     parser.add_argument("--validate-config", action="store_true")
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--plan-routes", action="store_true")
+    parser.add_argument("--route-plan-output", type=Path)
     parser.add_argument("--reconcile", action="store_true")
     parser.add_argument("--allow-merge", action="store_true")
+    parser.add_argument("--route-plan", type=Path)
+    parser.add_argument("--route-artifact-id", type=int)
+    parser.add_argument("--route-artifact-name")
+    parser.add_argument("--route-artifact-digest")
     args = parser.parse_args()
     config = load_config()
     if args.validate_config:
         print("security-autoheal config: valid")
     if args.self_test:
         selftest(config)
+    if args.plan_routes:
+        if args.route_plan_output is None:
+            parser.error("--plan-routes requires --route-plan-output")
+        plan_routes(config, args.route_plan_output)
     if args.reconcile:
-        reconcile(config, allow_merge=args.allow_merge)
-    if not (args.validate_config or args.self_test or args.reconcile):
-        parser.error("choose --validate-config, --self-test, or --reconcile")
+        if (
+            args.route_plan is None
+            or args.route_artifact_id is None
+            or args.route_artifact_name is None
+            or args.route_artifact_digest is None
+        ):
+            parser.error(
+                "--reconcile requires --route-plan, --route-artifact-id, "
+                "--route-artifact-name, and --route-artifact-digest"
+            )
+        reconcile(
+            config,
+            allow_merge=args.allow_merge,
+            route_plan_path=args.route_plan,
+            route_artifact_id=args.route_artifact_id,
+            route_artifact_name=args.route_artifact_name,
+            route_artifact_digest=args.route_artifact_digest,
+        )
+    if not (args.validate_config or args.self_test or args.plan_routes or args.reconcile):
+        parser.error("choose --validate-config, --self-test, --plan-routes, or --reconcile")
 
 
 if __name__ == "__main__":
