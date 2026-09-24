@@ -500,23 +500,17 @@ def test_protected_remediation_lane_requires_external_exact_app_identity(
     monkeypatch.setenv(preflight.PROTECTED_REMEDIATION_BOT_ID_ENV, str(user_id))
 
     assert (
-        preflight._bot_lane(
-            {"user": {"login": login, "id": user_id}, "head": {"ref": branch}}
-        )
+        preflight._bot_lane({"user": {"login": login, "id": user_id}, "head": {"ref": branch}})
         == "protected-security-remediation"
     )
     assert (
-        preflight._bot_lane(
-            {"user": {"login": login, "id": user_id + 1}, "head": {"ref": branch}}
-        )
+        preflight._bot_lane({"user": {"login": login, "id": user_id + 1}, "head": {"ref": branch}})
         is None
     )
 
     monkeypatch.delenv(preflight.PROTECTED_REMEDIATION_BOT_ID_ENV)
     with pytest.raises(ValueError, match="identity is missing or malformed"):
-        preflight._bot_lane(
-            {"user": {"login": login, "id": user_id}, "head": {"ref": branch}}
-        )
+        preflight._bot_lane({"user": {"login": login, "id": user_id}, "head": {"ref": branch}})
 
 
 @pytest.mark.parametrize(
@@ -531,6 +525,4 @@ def test_protected_remediation_lane_rejects_collapsed_author_identity(
     monkeypatch.setenv(preflight.PROTECTED_REMEDIATION_BOT_ID_ENV, "42")
 
     with pytest.raises(ValueError, match="identity is missing or malformed"):
-        preflight._bot_lane(
-            {"user": {"login": login, "id": 42}, "head": {"ref": branch}}
-        )
+        preflight._bot_lane({"user": {"login": login, "id": 42}, "head": {"ref": branch}})
