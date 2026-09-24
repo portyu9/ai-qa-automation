@@ -47,7 +47,7 @@ EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
     "d809771ced237ec2d02d52b0eb29432f14c6a90b"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
-    "e78db18d9a4a7fb721a5169fb49363e6c8c22dc6"  # pragma: allowlist secret
+    "c6b39330d614be31c36594b75f7f1615b6adb37b"  # pragma: allowlist secret
 )
 EXPECTED_CODEQL_MAJOR = 4
 CODEQL_ACTION_RE = re.compile(
@@ -639,7 +639,16 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         "  workflow_dispatch:",
         "permissions:\n  contents: read",
         "    name: security-autoheal-self-test",
+        "  route-plan:",
+        "    name: plan-codeql-autoheal-routes",
+        "      actions: read",
+        "      contents: read",
+        "      pull-requests: read",
+        "      security-events: read",
+        "      artifact-id: ${{ steps.route-plan-artifact.outputs.artifact-id }}",
+        "      artifact-digest: ${{ steps.route-plan-artifact.outputs.artifact-digest }}",
         "    name: reconcile-codeql-autoheal",
+        "    needs: route-plan",
         "      actions: write",
         "      checks: write",
         "      contents: write",
@@ -658,13 +667,15 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         "          path: artifacts/security-autoheal-route-plan/route-plan.json",
         "          if-no-files-found: error",
         "          retention-days: 14",
+        "      - name: Restore exact-run route plan from prior read-only job",
+        "        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8",
         "      - name: Reconcile exact-subject CodeQL remediations from persisted routes",
         "          --reconcile",
         "          --allow-merge",
         "          --route-plan artifacts/security-autoheal-route-plan/route-plan.json",
-        "          --route-artifact-id ${{ steps.route-plan-artifact.outputs.artifact-id }}",
+        "          --route-artifact-id ${{ needs.route-plan.outputs.artifact-id }}",
         "          --route-artifact-name security-autoheal-route-plan-${{ github.run_id }}-${{ github.run_attempt }}",
-        "          --route-artifact-digest sha256:${{ steps.route-plan-artifact.outputs.artifact-digest }}",
+        "          --route-artifact-digest sha256:${{ needs.route-plan.outputs.artifact-digest }}",
     )
     for fragment in required:
         if fragment not in semantic:
@@ -689,19 +700,20 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
             )
     plan = semantic.index("      - name: Plan exact-main deterministic security routes")
     persist = semantic.index("      - name: Persist exact-run route plan before mutation")
+    restore = semantic.index("      - name: Restore exact-run route plan from prior read-only job")
     reconcile = semantic.index(
         "      - name: Reconcile exact-subject CodeQL remediations from persisted routes"
     )
-    if not plan < persist < reconcile:
+    if not plan < persist < restore < reconcile:
         raise ValueError(
-            "security route planning, durable persistence, and mutation reconciliation "
-            "are out of reviewed order"
+            "security route planning, durable persistence, artifact restoration, and "
+            "mutation reconciliation are out of reviewed order"
         )
     return {
         "triggers": ["pull_request", "workflow_run", "schedule", "workflow_dispatch"],
         "trusted_code_source": "default-branch-only-for-authority-job",
         "repair_authority": (
-            "persisted-exact-run-deterministic-route-before-generated-pr-mutation"
+            "read-only-plan-job-to-persisted-exact-run-route-before-write-authority"
         ),
         "merge_authority": "security-autoheal-namespace-only-after-exact-subject-proof",
         "trusted_status_authority": "read-only-observation-of-centralized-app-gate",
