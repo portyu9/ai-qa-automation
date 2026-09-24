@@ -82,12 +82,20 @@ class _PlanApi:
             return {"commit": {"sha": MAIN}}
         raise AssertionError(path)
 
-    def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+    def list_all(
+        self,
+        path: str,
+        *,
+        max_pages: int = 10,
+        max_items: int | None = None,
+    ) -> list[dict[str, Any]]:
         if path == "/pulls?state=closed&sort=updated&direction=desc":
             assert max_pages == 10
+            assert max_items is None
             return []
         if path.startswith("/code-scanning/alerts?"):
             assert max_pages == 10
+            assert max_items == 101
             return [self.alert]
         raise AssertionError(path)
 
@@ -160,6 +168,33 @@ def _run_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GITHUB_REPOSITORY", "portyu9/ai-qa-automation")
     monkeypatch.setenv("GITHUB_RUN_ID", str(RUN_ID))
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", str(RUN_ATTEMPT))
+
+
+def test_paginated_ingestion_rejects_non_objects_and_stops_at_overflow_sentinel() -> None:
+    class _PaginationApi(autoheal.GitHubApi):
+        def __init__(self, pages: list[list[Any]]) -> None:
+            self.pages = pages
+            self.calls: list[str] = []
+
+        def get(self, path: str) -> Any:
+            self.calls.append(path)
+            page = int(path.rsplit("page=", 1)[1])
+            return self.pages[page - 1] if page <= len(self.pages) else []
+
+    bounded = _PaginationApi(
+        [
+            [{"number": value} for value in range(100)],
+            [{"number": 100}, {"number": 101}],
+            [{"number": 102}],
+        ]
+    )
+    rows = bounded.list_all("/code-scanning/alerts?state=open", max_pages=10, max_items=101)
+    assert len(rows) == 101
+    assert len(bounded.calls) == 2
+
+    malformed = _PaginationApi([[{"number": 1}, "not-an-object"]])
+    with pytest.raises(autoheal.AutohealError, match="contains a non-object item"):
+        malformed.list_all("/code-scanning/alerts?state=open", max_pages=10, max_items=101)
 
 
 def test_deterministic_route_plan_never_queries_autofix() -> None:
@@ -331,9 +366,16 @@ def test_generated_repair_discovery_rejects_stripped_marker() -> None:
 
 def test_repair_admission_rejects_route_provenance_stripping() -> None:
     class _Api:
-        def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+        def list_all(
+        self,
+        path: str,
+        *,
+        max_pages: int = 10,
+        max_items: int | None = None,
+    ) -> list[dict[str, Any]]:
             assert path.startswith("/code-scanning/alerts?")
             assert max_pages == 10
+            assert max_items is None
             return [_alert()]
 
     metadata = {
@@ -530,9 +572,16 @@ def test_reconcile_stops_after_first_route_authorized_repair_mutation(
         def __init__(self, token: str, repository: str) -> None:
             assert repository == config["repository"]
 
-        def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+        def list_all(
+        self,
+        path: str,
+        *,
+        max_pages: int = 10,
+        max_items: int | None = None,
+    ) -> list[dict[str, Any]]:
             assert path.startswith("/code-scanning/alerts?")
             assert max_pages == 10
+            assert max_items == 101
             return alerts
 
     created: list[int] = []
@@ -625,13 +674,20 @@ class _IntentApi:
             return {"commit": {"sha": sha}}
         raise AssertionError(path)
 
-    def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+    def list_all(
+        self,
+        path: str,
+        *,
+        max_pages: int = 10,
+        max_items: int | None = None,
+    ) -> list[dict[str, Any]]:
         name, _, _ = autoheal._autofix_intent_identity(self.record)
         encoded = autoheal.urllib.parse.quote(name, safe="")
         assert path == (
             f"/commits/{self.record['baseSha']}/check-runs?filter=all&check_name={encoded}"
         )
         assert max_pages == 2
+        assert max_items is None
         return list(self.existing)
 
     def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
