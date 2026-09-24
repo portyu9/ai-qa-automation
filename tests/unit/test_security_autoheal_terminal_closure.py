@@ -452,8 +452,16 @@ def test_post_merge_ci_dispatches_new_exact_subject_run(
             "mismatched workflow identity",
         ),
         (
+            _ci_run(name="Different CI"),
+            "mismatched workflow identity",
+        ),
+        (
             _ci_run(path=".github/workflows/not-ci.yml"),
             "mismatched workflow identity",
+        ),
+        (
+            _ci_run(head_sha="8" * 40),
+            "different head SHA",
         ),
         (
             _ci_run(head_branch="feature"),
@@ -510,6 +518,31 @@ def test_post_merge_ci_rejects_main_drift_after_dispatch_registration(
         autoheal.AutohealError,
         match="current main changed after post-merge CI registration",
     ):
+        autoheal._ensure_post_merge_ci(api, MERGE, config)
+
+
+def test_post_merge_ci_dispatch_failure_fails_closed(
+    config: dict[str, Any],
+) -> None:
+    class _DispatchFailureApi(_TerminalApi):
+        def post(
+            self,
+            path: str,
+            payload: dict[str, Any] | None = None,
+            *,
+            token: str | None = None,
+        ) -> Any:
+            assert path == f"/actions/workflows/{autoheal.POST_MERGE_CI_WORKFLOW}/dispatches"
+            assert payload == {
+                "ref": "main",
+                "inputs": {"subject_sha": MERGE, "subject_ref": "main"},
+            }
+            assert token is None
+            raise autoheal.AutohealError("simulated dispatch failure")
+
+    api = _DispatchFailureApi(ci_runs=[])
+
+    with pytest.raises(autoheal.AutohealError, match="simulated dispatch failure"):
         autoheal._ensure_post_merge_ci(api, MERGE, config)
 
 
