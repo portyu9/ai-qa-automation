@@ -592,7 +592,9 @@ def test_workflow_persists_route_plan_before_live_reconcile() -> None:
     assert (
         "--route-artifact-digest sha256:${{ needs.route-plan.outputs.artifact-digest }}" in workflow
     )
-    assert '"$RUNNER_TEMP/security-autoheal-route-plan/route-plan.json"' in workflow\n    assert "${{ runner.temp }}/security-autoheal-route-plan" in workflow\n    assert ".github/scripts/security_alert_routing.py" in workflow
+    assert '"$RUNNER_TEMP/security-autoheal-route-plan/route-plan.json"' in workflow
+    assert "${{ runner.temp }}/security-autoheal-route-plan" in workflow
+    assert ".github/scripts/security_alert_routing.py" in workflow
 
     route_job = workflow[workflow.index("  route-plan:") : workflow.index("\n  reconcile:")]
     assert ": write" not in route_job
