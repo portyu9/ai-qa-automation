@@ -1213,21 +1213,20 @@ def _create_pull_request(
     *,
     deterministic: bool,
     strategy: str,
-    route_record: dict[str, Any] | None = None,
-    route_evidence: dict[str, Any] | None = None,
+    route_record: dict[str, Any],
+    route_evidence: dict[str, Any],
 ) -> int:
-    if route_record is not None:
-        try:
-            canonical_routing_record(route_record)
-        except RoutingPolicyError as exc:
-            raise PolicyBlock(f"repair route record is invalid: {exc}") from exc
-        if route_record.get("strategy") != strategy:
-            raise PolicyBlock("repair route record strategy drifted before PR creation")
-        expected_decision = (
-            "ordinary-deterministic-autoheal" if deterministic else "ordinary-bounded-autofix"
-        )
-        if route_record.get("decision") != expected_decision:
-            raise PolicyBlock("repair route record does not authorize this mutation lane")
+    try:
+        canonical_routing_record(route_record)
+    except RoutingPolicyError as exc:
+        raise PolicyBlock(f"repair route record is invalid: {exc}") from exc
+    if route_record.get("strategy") != strategy:
+        raise PolicyBlock("repair route record strategy drifted before PR creation")
+    expected_decision = (
+        "ordinary-deterministic-autoheal" if deterministic else "ordinary-bounded-autofix"
+    )
+    if route_record.get("decision") != expected_decision:
+        raise PolicyBlock("repair route record does not authorize this mutation lane")
     metadata = {
         "version": 1,
         "alert": subject["number"],
@@ -1241,17 +1240,16 @@ def _create_pull_request(
         "generator": "deterministic" if deterministic else "github-codeql-autofix",
         "strategy": strategy,
     }
-    if route_record is not None:
-        metadata.update(
-            {
-                "routeDecision": route_record["decision"],
-                "routeAuthority": route_record["authority"],
-                "routeRecordDigest": route_record["recordDigest"],
-                "routingPolicyVersion": route_record["routingPolicyVersion"],
-                "routeAutofixEligibility": route_record["autofixEligibility"],
-                **(route_evidence or {}),
-            }
-        )
+    metadata.update(
+        {
+            "routeDecision": route_record["decision"],
+            "routeAuthority": route_record["authority"],
+            "routeRecordDigest": route_record["recordDigest"],
+            "routingPolicyVersion": route_record["routingPolicyVersion"],
+            "routeAutofixEligibility": route_record["autofixEligibility"],
+            **route_evidence,
+        }
+    )
     body = "\n".join(
         (
             _marker(metadata),
@@ -3467,25 +3465,21 @@ def _create_repair(
     *,
     attempt: int,
     strategy: str,
-    route_record: dict[str, Any] | None = None,
-    route_evidence: dict[str, Any] | None = None,
+    route_record: dict[str, Any],
+    route_evidence: dict[str, Any],
 ) -> int:
     if _current_main(api, config) != subject["baseSha"]:
         raise PolicyBlock("main advanced before route-authorized repair mutation")
     branch = _branch_name(subject, attempt)
     expected_strategy = _repair_strategy(subject)
     deterministic = strategy != MODEL_AUTOFIX_STRATEGY
-    if route_record is None:
-        if strategy != expected_strategy:
-            raise PolicyBlock("repair creation strategy drifted from the code-owned live strategy")
-    else:
-        if strategy != expected_strategy or route_record.get("strategy") != strategy:
-            raise PolicyBlock("repair creation strategy drifted from the persisted route")
-        expected_decision = (
-            "ordinary-deterministic-autoheal" if deterministic else "ordinary-bounded-autofix"
-        )
-        if route_record.get("decision") != expected_decision:
-            raise PolicyBlock("persisted route does not authorize repair creation")
+    if strategy != expected_strategy or route_record.get("strategy") != strategy:
+        raise PolicyBlock("repair creation strategy drifted from the persisted route")
+    expected_decision = (
+        "ordinary-deterministic-autoheal" if deterministic else "ordinary-bounded-autofix"
+    )
+    if route_record.get("decision") != expected_decision:
+        raise PolicyBlock("persisted route does not authorize repair creation")
     deterministic_content = _deterministic_repair(subject) if deterministic else None
     deterministic_only = _is_deterministic_only(subject["path"], config)
     if deterministic and deterministic_content is None:
@@ -3506,9 +3500,7 @@ def _create_repair(
     else:
         if not _model_path_allowed(subject["path"], config):
             raise PolicyBlock("alert path is outside model-autofix authority")
-        if route_record is None:
-            _ensure_copilot_autofix(api, subject["number"])
-        elif route_record.get("autofixEligibility") != "available":
+        if route_record.get("autofixEligibility") != "available":
             raise PolicyBlock("persisted route lacks affirmative Autofix availability")
         head_sha = _commit_copilot_autofix(api, subject["number"], branch, subject["baseSha"])
 
@@ -3545,10 +3537,10 @@ def reconcile(
     config: dict[str, Any],
     *,
     allow_merge: bool,
-    route_plan_path: Path | None = None,
-    route_artifact_id: int | None = None,
-    route_artifact_name: str | None = None,
-    route_artifact_digest: str | None = None,
+    route_plan_path: Path,
+    route_artifact_id: int,
+    route_artifact_name: str,
+    route_artifact_digest: str,
 ) -> int:
     repository = os.environ.get("GITHUB_REPOSITORY", "")
     if repository != config["repository"]:
@@ -3559,26 +3551,17 @@ def reconcile(
         return 0
 
     main_sha = _current_main(api, config)
-    route_records: dict[int, dict[str, Any]] | None = None
-    route_evidence: dict[str, Any] | None = None
-    if route_plan_path is not None:
-        if (
-            route_artifact_id is None
-            or route_artifact_name is None
-            or route_artifact_digest is None
-        ):
-            raise AutohealError("route plan artifact provenance is required for live reconciliation")
-        plan = _load_route_plan(route_plan_path, config)
-        if plan["mainSha"] != main_sha:
-            raise AutohealError("persisted route plan is stale relative to exact current main")
-        route_evidence = _require_route_plan_artifact(
-            api,
-            plan,
-            artifact_id=route_artifact_id,
-            artifact_name=route_artifact_name,
-            artifact_digest=route_artifact_digest,
-        )
-        route_records = _rebind_route_plan(api, plan, config)
+    plan = _load_route_plan(route_plan_path, config)
+    if plan["mainSha"] != main_sha:
+        raise AutohealError("persisted route plan is stale relative to exact current main")
+    route_evidence = _require_route_plan_artifact(
+        api,
+        plan,
+        artifact_id=route_artifact_id,
+        artifact_name=route_artifact_name,
+        artifact_digest=route_artifact_digest,
+    )
+    route_records = _rebind_route_plan(api, plan, config)
     if _reconcile_terminal_closure(api, main_sha, config):
         return 0
     pulls = _open_pulls(api)
@@ -3690,27 +3673,6 @@ def reconcile(
         if created >= capacity:
             break
         try:
-            if route_records is None:
-                subject = validate_alert(alert, main_sha, config)
-                if subject["number"] in active_alerts:
-                    continue
-                strategy = _repair_strategy(subject)
-                prior = _attempt_count(api, subject["number"], strategy, main_sha)
-                if prior >= config["maxAttemptsPerAlert"]:
-                    raise PolicyBlock(
-                        "alert exhausted bounded automatic remediation attempts for current strategy"
-                    )
-                _create_repair(
-                    api,
-                    subject,
-                    config,
-                    attempt=prior + 1,
-                    strategy=strategy,
-                )
-                created += 1
-                active_alerts.add(subject["number"])
-                continue
-
             number = alert.get("number")
             if not isinstance(number, int) or isinstance(number, bool) or number < 1:
                 raise PolicyBlock("live alert identity is invalid after route-plan revalidation")
@@ -3778,8 +3740,6 @@ def reconcile(
                 raise PolicyBlock(
                     "persisted route exceeded bounded automatic remediation attempts"
                 )
-            if route_evidence is None:
-                raise PolicyBlock("persisted route artifact evidence is unavailable")
             _create_repair(
                 api,
                 subject,
