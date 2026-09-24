@@ -816,12 +816,18 @@ def _recoverable_model_autofix_branches(
     max_attempts = int(config["maxAttemptsPerAlert"])
     for alert in alerts:
         try:
-            subject = validate_alert(alert, main_sha, config)
-        except PolicyBlock:
+            provisional = route_security_alert(
+                alert,
+                main_sha=main_sha,
+                config=config,
+                autofix_eligibility="unknown",
+            )
+            subject = _subject_from_route(provisional)
+        except (RoutingPolicyError, PolicyBlock):
             continue
-        if _repair_strategy(subject) != MODEL_AUTOFIX_STRATEGY:
+        if provisional.get("strategy") != MODEL_AUTOFIX_STRATEGY:
             continue
-        if _is_deterministic_only(subject["path"], config):
+        if provisional.get("protected") is True:
             continue
         if not _model_path_allowed(subject["path"], config):
             continue
