@@ -132,7 +132,7 @@ jobs:
       - name: Restore exact-run route plan from prior read-only job
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: security-autoheal-route-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          artifact-ids: ${{ needs.route-plan.outputs.artifact-id }}
           path: artifacts/security-autoheal-route-plan
       - name: Reconcile exact-subject CodeQL remediations from persisted routes
         env:
