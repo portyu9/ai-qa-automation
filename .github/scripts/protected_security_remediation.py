@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import base64
 import binascii
 import hashlib
 import json
+import os
 import re
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -17,13 +22,18 @@ from security_alert_routing import (
     canonical_record,
     load_config,
     route_alert,
+    route_alerts,
 )
+from trusted_status import TrustedStatusError, require_automatic_trusted_gate
 
 SCHEMA_VERSION = 1
 AUTHORING_POLICY_VERSION = "protected-remediation-author-v1"
 MAX_SOURCE_BYTES = 512 * 1024
 MAX_PLAN_BYTES = 32 * 1024
 MAX_CHANGED_FILES = 1
+MAX_API_BYTES = 8 * 1024 * 1024
+MAX_OPEN_ALERTS = 100
+MAX_PULL_HISTORY = 100
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 BRANCH_PREFIX = "automation/protected-security-remediation-"
@@ -468,6 +478,615 @@ def validate_generated_pr(
         "authorStrategy": plan["authorStrategy"],
     }
 
+
+class GitHubApi:
+    def __init__(self, token: str, repository: str) -> None:
+        if repository != EXPECTED_REPOSITORY:
+            raise ProtectedRemediationError("protected remediation is bound to the reviewed repository")
+        if not token:
+            raise ProtectedRemediationError("protected remediation GitHub token is required")
+        self.token = token
+        self.repository = repository
+        self.base_url = f"https://api.github.com/repos/{repository}"
+
+    def request_status(
+        self,
+        method: str,
+        path: str,
+        payload: Mapping[str, Any] | None = None,
+    ) -> tuple[int, Any]:
+        if not path.startswith("/") or path.startswith("//"):
+            raise ProtectedRemediationError("GitHub API path must be repository-local")
+        data = None
+        if payload is not None:
+            data = json.dumps(dict(payload), separators=(",", ":")).encode("utf-8")
+        request = urllib.request.Request(
+            self.base_url + path,
+            data=data,
+            method=method,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {self.token}",
+                "X-GitHub-Api-Version": "2022-11-28",
+                "User-Agent": "yp-ai-qa-protected-remediation",
+                **({"Content-Type": "application/json"} if data is not None else {}),
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                raw = response.read(MAX_API_BYTES + 1)
+                status = response.status
+        except urllib.error.HTTPError as exc:
+            raw = exc.read(MAX_API_BYTES + 1)
+            status = exc.code
+        except urllib.error.URLError as exc:
+            raise ProtectedRemediationError(
+                f"GitHub API {method} transport failure"
+            ) from exc
+        if len(raw) > MAX_API_BYTES:
+            raise ProtectedRemediationError("GitHub API response exceeded bounded ingestion")
+        if not raw:
+            parsed: Any = {}
+        else:
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise ProtectedRemediationError(
+                    f"GitHub API {method} returned malformed JSON"
+                ) from exc
+        return status, parsed
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        payload: Mapping[str, Any] | None = None,
+    ) -> Any:
+        status, parsed = self.request_status(method, path, payload)
+        if status < 200 or status >= 300:
+            raise ProtectedRemediationError(
+                f"GitHub API {method} {path.split('?', 1)[0]} failed with status {status}"
+            )
+        return parsed
+
+    def get(self, path: str) -> Any:
+        return self.request("GET", path)
+
+    def post(self, path: str, payload: Mapping[str, Any]) -> Any:
+        return self.request("POST", path, payload)
+
+    def put(self, path: str, payload: Mapping[str, Any]) -> Any:
+        return self.request("PUT", path, payload)
+
+    def list_all(
+        self,
+        path: str,
+        *,
+        max_pages: int = 4,
+        max_items: int | None = None,
+    ) -> list[dict[str, Any]]:
+        if max_pages < 1:
+            raise ProtectedRemediationError("pagination max_pages must be positive")
+        if max_items is not None and max_items < 1:
+            raise ProtectedRemediationError("pagination max_items must be positive")
+        rows: list[dict[str, Any]] = []
+        page_size = 100 if max_items is None else min(100, max_items)
+        separator = "&" if "?" in path else "?"
+        for page in range(1, max_pages + 1):
+            payload = self.get(f"{path}{separator}per_page={page_size}&page={page}")
+            if not isinstance(payload, list):
+                raise ProtectedRemediationError("GitHub paginated response is not a list")
+            for item in payload:
+                if not isinstance(item, dict):
+                    raise ProtectedRemediationError(
+                        "GitHub paginated response contains a non-object item"
+                    )
+                rows.append(item)
+                if max_items is not None and len(rows) >= max_items:
+                    return rows
+            if len(payload) < page_size:
+                return rows
+        raise ProtectedRemediationError("GitHub pagination reached the reviewed page bound")
+
+
+def _generated_bot_pull(pr: Mapping[str, Any], *, login: str, user_id: int) -> bool:
+    user = pr.get("user") or {}
+    head = pr.get("head") or {}
+    branch = head.get("ref")
+    return (
+        user.get("login") == login
+        and user.get("id") == user_id
+        and user.get("type") == "Bot"
+        and isinstance(branch, str)
+        and BRANCH_RE.fullmatch(branch) is not None
+    )
+
+
+def _attempt_count(
+    api: GitHubApi,
+    *,
+    alert_number: int,
+    fingerprint: str,
+    bot_login: str,
+    bot_id: int,
+) -> int:
+    pulls = api.list_all("/pulls?state=all&sort=created&direction=asc", max_pages=1)
+    if len(pulls) >= MAX_PULL_HISTORY:
+        raise ProtectedRemediationError("protected repair history reached the bounded limit")
+    attempts: set[int] = set()
+    for pr in pulls:
+        if not _generated_bot_pull(pr, login=bot_login, user_id=bot_id):
+            continue
+        metadata = parse_marker(pr.get("body"))
+        if metadata is None:
+            raise ProtectedRemediationError("generated protected repair has malformed history marker")
+        record = metadata.get("routeRecord")
+        plan = metadata.get("repairPlan")
+        if not isinstance(record, dict) or not isinstance(plan, dict):
+            raise ProtectedRemediationError("generated protected repair history evidence is malformed")
+        try:
+            canonical_record(record)
+            canonical_plan(plan)
+        except (RoutingPolicyError, ProtectedRemediationError) as exc:
+            raise ProtectedRemediationError(
+                "generated protected repair history evidence is not canonical"
+            ) from exc
+        if (
+            record.get("alertNumber") != alert_number
+            or record.get("fingerprint") != fingerprint
+            or record.get("strategy") != PROTECTED_REMEDIATION_STRATEGY
+        ):
+            continue
+        attempt = _require_positive_int(plan.get("attempt"), "historical protected attempt")
+        if pr.get("head", {}).get("ref") != branch_name(record):
+            raise ProtectedRemediationError("generated protected repair history branch drifted")
+        attempts.add(attempt)
+    if attempts and attempts != set(range(1, max(attempts) + 1)):
+        raise ProtectedRemediationError("protected repair attempt history is non-contiguous")
+    return len(attempts)
+
+
+def _current_main(api: GitHubApi) -> str:
+    branch = api.get(f"/branches/{EXPECTED_BASE_BRANCH}")
+    return _require_sha(((branch or {}).get("commit") or {}).get("sha"), "current main SHA")
+
+
+def _protected_route_candidates(
+    api: GitHubApi,
+    *,
+    main_sha: str,
+    config: Mapping[str, Any],
+    bot_login: str,
+    bot_id: int,
+) -> list[dict[str, Any]]:
+    query = urllib.parse.urlencode(
+        {"state": "open", "ref": "refs/heads/main", "tool_name": "CodeQL"},
+        quote_via=urllib.parse.quote,
+    )
+    alerts = api.list_all(
+        f"/code-scanning/alerts?{query}",
+        max_pages=2,
+        max_items=MAX_OPEN_ALERTS + 1,
+    )
+    if len(alerts) > MAX_OPEN_ALERTS:
+        raise ProtectedRemediationError("open CodeQL alert set exceeds the reviewed bound")
+    attempts: dict[int, dict[str, int]] = {}
+    for alert in alerts:
+        number = _require_positive_int(alert.get("number"), "CodeQL alert number")
+        provisional = route_alert(alert, main_sha=main_sha, config=config)
+        fingerprint = provisional.get("fingerprint")
+        if not isinstance(fingerprint, str):
+            raise ProtectedRemediationError("CodeQL route fingerprint is malformed")
+        attempts[number] = {
+            PROTECTED_REMEDIATION_STRATEGY: _attempt_count(
+                api,
+                alert_number=number,
+                fingerprint=fingerprint,
+                bot_login=bot_login,
+                bot_id=bot_id,
+            )
+        }
+    try:
+        records = route_alerts(
+            alerts,
+            main_sha=main_sha,
+            config=config,
+            attempts_by_alert=attempts,
+        )
+    except RoutingPolicyError as exc:
+        raise ProtectedRemediationError(f"protected routing failed closed: {exc}") from exc
+    return [
+        record
+        for record in records
+        if record.get("decision") == "protected-independent-remediation"
+    ]
+
+
+def _exact_repair_evidence(
+    api: GitHubApi,
+    record: Mapping[str, Any],
+    *,
+    config: Mapping[str, Any],
+) -> tuple[dict[str, Any], bytes, bytes]:
+    base_sha = _require_sha(record.get("baseSha"), "protected repair base SHA")
+    if _current_main(api) != base_sha:
+        raise ProtectedRemediationError("main moved before protected repair reproof")
+    alert_number = _require_positive_int(record.get("alertNumber"), "protected alert number")
+    alert = api.get(f"/code-scanning/alerts/{alert_number}")
+    attempts = int(record.get("strategyAttemptCount", -1))
+    try:
+        rebound = route_alert(
+            alert,
+            main_sha=base_sha,
+            config=config,
+            attempts_by_strategy={PROTECTED_REMEDIATION_STRATEGY: attempts},
+            expected_fingerprint=str(record.get("fingerprint")),
+            expected_strategy=PROTECTED_REMEDIATION_STRATEGY,
+        )
+    except RoutingPolicyError as exc:
+        raise ProtectedRemediationError(f"protected alert reproof failed closed: {exc}") from exc
+    if rebound != record:
+        raise ProtectedRemediationError("protected route changed before authoring")
+    strategy = validate_route_record(record, main_sha=base_sha)
+    source = _contents_bytes(api, strategy.path, base_sha)
+    plan, repaired = build_repair_plan(source, record, main_sha=base_sha)
+
+    if _current_main(api) != base_sha:
+        raise ProtectedRemediationError("main moved during protected repair reproof")
+    alert_after = api.get(f"/code-scanning/alerts/{alert_number}")
+    try:
+        rebound_after = route_alert(
+            alert_after,
+            main_sha=base_sha,
+            config=config,
+            attempts_by_strategy={PROTECTED_REMEDIATION_STRATEGY: attempts},
+            expected_fingerprint=str(record.get("fingerprint")),
+            expected_strategy=PROTECTED_REMEDIATION_STRATEGY,
+        )
+    except RoutingPolicyError as exc:
+        raise ProtectedRemediationError(
+            f"final protected alert reproof failed closed: {exc}"
+        ) from exc
+    if rebound_after != record:
+        raise ProtectedRemediationError("protected route changed at authoring boundary")
+    if _contents_bytes(api, strategy.path, base_sha) != source:
+        raise ProtectedRemediationError("protected target source changed during authoring reproof")
+    return plan, source, repaired
+
+
+def _create_repair_commit(
+    read_api: GitHubApi,
+    write_api: GitHubApi,
+    record: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    repaired: bytes,
+    *,
+    bot_login: str,
+    bot_id: int,
+) -> str:
+    branch = branch_name(record)
+    encoded_ref = urllib.parse.quote(branch, safe="")
+    status, existing = read_api.request_status("GET", f"/git/ref/heads/{encoded_ref}")
+    if status == 200:
+        if not isinstance(existing, dict):
+            raise ProtectedRemediationError("existing protected repair ref is malformed")
+        commit_sha = _require_sha(
+            ((existing.get("object") or {}).get("sha")), "existing protected repair ref SHA"
+        )
+    elif status == 404:
+        base_sha = _require_sha(record.get("baseSha"), "protected repair base SHA")
+        base_commit = read_api.get(f"/git/commits/{base_sha}")
+        base_tree = _require_sha(
+            ((base_commit or {}).get("tree") or {}).get("sha"), "protected repair base tree SHA"
+        )
+        try:
+            text = repaired.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ProtectedRemediationError("protected repair output is not UTF-8 text") from exc
+        blob = write_api.post("/git/blobs", {"content": text, "encoding": "utf-8"})
+        blob_sha = _require_sha((blob or {}).get("sha"), "protected repair blob SHA")
+        tree = write_api.post(
+            "/git/trees",
+            {
+                "base_tree": base_tree,
+                "tree": [
+                    {
+                        "path": plan["targetPath"],
+                        "mode": "100644",
+                        "type": "blob",
+                        "sha": blob_sha,
+                    }
+                ],
+            },
+        )
+        tree_sha = _require_sha((tree or {}).get("sha"), "protected repair tree SHA")
+        commit = write_api.post(
+            "/git/commits",
+            {
+                "message": repair_commit_message(record, plan),
+                "tree": tree_sha,
+                "parents": [base_sha],
+            },
+        )
+        commit_sha = _require_sha((commit or {}).get("sha"), "protected repair commit SHA")
+        created = write_api.post(
+            "/git/refs",
+            {"ref": f"refs/heads/{branch}", "sha": commit_sha},
+        )
+        if (
+            not isinstance(created, dict)
+            or created.get("ref") != f"refs/heads/{branch}"
+            or ((created.get("object") or {}).get("sha")) != commit_sha
+        ):
+            raise ProtectedRemediationError("GitHub did not acknowledge exact protected repair ref")
+    else:
+        raise ProtectedRemediationError(
+            f"protected repair ref lookup failed with status {status}"
+        )
+
+    commit = read_api.get(f"/commits/{commit_sha}")
+    author = (commit or {}).get("author") if isinstance(commit, dict) else None
+    parents = (commit or {}).get("parents") if isinstance(commit, dict) else None
+    message = ((commit or {}).get("commit") or {}).get("message") if isinstance(commit, dict) else None
+    if (
+        not isinstance(author, dict)
+        or author.get("login") != bot_login
+        or author.get("id") != bot_id
+        or author.get("type") != "Bot"
+        or not isinstance(parents, list)
+        or len(parents) != 1
+        or (parents[0] or {}).get("sha") != record.get("baseSha")
+        or message != repair_commit_message(record, plan)
+    ):
+        raise ProtectedRemediationError("protected repair ref does not resolve to exact App-authored commit")
+    if _contents_bytes(read_api, str(plan["targetPath"]), commit_sha) != repaired:
+        raise ProtectedRemediationError("protected repair ref bytes differ from deterministic output")
+    return commit_sha
+
+
+def _find_pull_for_branch(api: GitHubApi, branch: str) -> dict[str, Any] | None:
+    pulls = api.list_all("/pulls?state=all&sort=created&direction=desc", max_pages=1)
+    matches = [
+        pr
+        for pr in pulls
+        if isinstance(pr.get("head"), dict) and pr["head"].get("ref") == branch
+    ]
+    if len(matches) > 1:
+        raise ProtectedRemediationError("protected repair branch maps to multiple pull requests")
+    return matches[0] if matches else None
+
+
+def _ensure_repair_pr(
+    read_api: GitHubApi,
+    write_api: GitHubApi,
+    record: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    repaired: bytes,
+    *,
+    bot_login: str,
+    bot_id: int,
+) -> dict[str, Any]:
+    branch = branch_name(record)
+    commit_sha = _create_repair_commit(
+        read_api,
+        write_api,
+        record,
+        plan,
+        repaired,
+        bot_login=bot_login,
+        bot_id=bot_id,
+    )
+    existing = _find_pull_for_branch(read_api, branch)
+    if existing is not None:
+        if existing.get("state") != "open":
+            raise ProtectedRemediationError("protected repair branch is already bound to a closed PR")
+        pr = read_api.get(f"/pulls/{_require_positive_int(existing.get('number'), 'repair PR number')}")
+    else:
+        body = (
+            "Automated independent protected-control-plane remediation. "
+            "The authoring App cannot publish Trusted PR Gate.\n\n"
+            + marker(record, plan, head_sha=commit_sha)
+        )
+        created = write_api.post(
+            "/pulls",
+            {
+                "title": f"security: remediate protected CodeQL alert #{record['alertNumber']}",
+                "head": branch,
+                "base": EXPECTED_BASE_BRANCH,
+                "body": body,
+                "draft": False,
+            },
+        )
+        number = _require_positive_int((created or {}).get("number"), "created repair PR number")
+        pr = read_api.get(f"/pulls/{number}")
+    observed = validate_generated_pr(
+        read_api,
+        pr,
+        expected_bot_login=bot_login,
+        expected_bot_id=bot_id,
+    )
+    if observed["headSha"] != commit_sha:
+        raise ProtectedRemediationError("protected repair PR head differs from exact repair commit")
+    return dict(pr)
+
+
+def _open_generated_repairs(
+    api: GitHubApi, *, bot_login: str, bot_id: int
+) -> list[dict[str, Any]]:
+    pulls = api.list_all("/pulls?state=open&sort=created&direction=asc", max_pages=1)
+    rows = [
+        pr for pr in pulls if _generated_bot_pull(pr, login=bot_login, user_id=bot_id)
+    ]
+    if len(rows) > 1:
+        raise ProtectedRemediationError("multiple active protected repair PRs are not permitted")
+    return rows
+
+
+def _merge_repair(
+    read_api: GitHubApi,
+    write_api: GitHubApi,
+    pr: Mapping[str, Any],
+    *,
+    bot_login: str,
+    bot_id: int,
+) -> dict[str, Any]:
+    live = validate_generated_pr(
+        read_api,
+        pr,
+        expected_bot_login=bot_login,
+        expected_bot_id=bot_id,
+    )
+    require_automatic_trusted_gate(
+        read_api,
+        int(live["number"]),
+        str(live["headSha"]),
+        str(live["baseSha"]),
+    )
+    fresh = read_api.get(f"/pulls/{live['number']}")
+    rebound = validate_generated_pr(
+        read_api,
+        fresh,
+        expected_bot_login=bot_login,
+        expected_bot_id=bot_id,
+    )
+    if rebound != live:
+        raise ProtectedRemediationError("protected repair changed before guarded merge")
+    require_automatic_trusted_gate(
+        read_api,
+        int(live["number"]),
+        str(live["headSha"]),
+        str(live["baseSha"]),
+    )
+    result = write_api.put(
+        f"/pulls/{live['number']}/merge",
+        {"sha": live["headSha"], "merge_method": "merge"},
+    )
+    if not isinstance(result, dict) or result.get("merged") is not True:
+        raise ProtectedRemediationError("GitHub declined guarded protected remediation merge")
+    merge_sha = _require_sha(result.get("sha"), "protected repair merge SHA")
+    if _current_main(read_api) != merge_sha:
+        raise ProtectedRemediationError("main does not equal protected repair merge SHA")
+    merge_commit = read_api.get(f"/git/commits/{merge_sha}")
+    parents = (merge_commit or {}).get("parents") if isinstance(merge_commit, dict) else None
+    head_commit = read_api.get(f"/git/commits/{live['headSha']}")
+    if (
+        not isinstance(parents, list)
+        or [((parent or {}).get("sha")) for parent in parents]
+        != [live["baseSha"], live["headSha"]]
+        or ((merge_commit or {}).get("tree") or {}).get("sha")
+        != ((head_commit or {}).get("tree") or {}).get("sha")
+    ):
+        raise ProtectedRemediationError("protected repair merge topology/tree drifted")
+    return {
+        "pr": live["number"],
+        "mergeSha": merge_sha,
+        "headSha": live["headSha"],
+        "baseSha": live["baseSha"],
+        "alertNumber": live["alertNumber"],
+        "decision": "protected-repair-merged",
+    }
+
+
+def reconcile(*, allow_merge: bool) -> int:
+    repository = os.environ.get("GITHUB_REPOSITORY", "")
+    bot_login, bot_id = _require_author_identity(
+        os.environ.get("PROTECTED_REMEDIATION_BOT_LOGIN", ""),
+        int(os.environ.get("PROTECTED_REMEDIATION_BOT_ID", "0") or "0"),
+    )
+    read_api = GitHubApi(os.environ.get("GITHUB_TOKEN", ""), repository)
+    write_api = GitHubApi(os.environ.get("PROTECTED_REMEDIATION_APP_TOKEN", ""), repository)
+    config = load_config()
+
+    active = _open_generated_repairs(read_api, bot_login=bot_login, bot_id=bot_id)
+    if active:
+        pr = read_api.get(
+            f"/pulls/{_require_positive_int(active[0].get('number'), 'active repair PR number')}"
+        )
+        live = validate_generated_pr(
+            read_api,
+            pr,
+            expected_bot_login=bot_login,
+            expected_bot_id=bot_id,
+            config=config,
+        )
+        try:
+            require_automatic_trusted_gate(
+                read_api,
+                int(live["number"]),
+                str(live["headSha"]),
+                str(live["baseSha"]),
+            )
+        except TrustedStatusError:
+            print(
+                json.dumps(
+                    {
+                        "decision": "protected-repair-waiting",
+                        "pr": live["number"],
+                        "headSha": live["headSha"],
+                        "reason": "Trusted PR Gate not yet admissible",
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 0
+        if not allow_merge:
+            print(json.dumps({"decision": "protected-repair-gate-ready", **live}, sort_keys=True))
+            return 0
+        print(
+            json.dumps(
+                _merge_repair(
+                    read_api,
+                    write_api,
+                    pr,
+                    bot_login=bot_login,
+                    bot_id=bot_id,
+                ),
+                sort_keys=True,
+            )
+        )
+        return 0
+
+    main_sha = _current_main(read_api)
+    candidates = _protected_route_candidates(
+        read_api,
+        main_sha=main_sha,
+        config=config,
+        bot_login=bot_login,
+        bot_id=bot_id,
+    )
+    for record in candidates:
+        try:
+            validate_route_record(record, main_sha=main_sha)
+        except ProtectedRemediationError:
+            continue
+        plan, _, repaired = _exact_repair_evidence(read_api, record, config=config)
+        pr = _ensure_repair_pr(
+            read_api,
+            write_api,
+            record,
+            plan,
+            repaired,
+            bot_login=bot_login,
+            bot_id=bot_id,
+        )
+        print(
+            json.dumps(
+                {
+                    "decision": "protected-repair-created",
+                    "pr": pr.get("number"),
+                    "headSha": (pr.get("head") or {}).get("sha"),
+                    "alert": record.get("alertNumber"),
+                    "routeRecordDigest": record.get("recordDigest"),
+                    "planDigest": plan.get("planDigest"),
+                },
+                sort_keys=True,
+            )
+        )
+        return 0
+
+    print(json.dumps({"decision": "no-protected-repair-candidate", "mainSha": main_sha}, sort_keys=True))
+    return 0
+
 def self_test() -> None:
     if not REPAIR_STRATEGIES:
         raise ProtectedRemediationError("protected authoring strategy set is empty")
@@ -489,15 +1108,29 @@ def self_test() -> None:
             )
 
 
-if __name__ == "__main__":
-    self_test()
-    print(
-        json.dumps(
-            {
-                "result": "PASS",
-                "policyVersion": AUTHORING_POLICY_VERSION,
-                "strategies": len(REPAIR_STRATEGIES),
-            },
-            sort_keys=True,
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Independent protected security remediation")
+    parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--reconcile", action="store_true")
+    parser.add_argument("--allow-merge", action="store_true")
+    args = parser.parse_args()
+    if args.self_test == args.reconcile:
+        raise ProtectedRemediationError("select exactly one protected remediation mode")
+    if args.self_test:
+        self_test()
+        print(
+            json.dumps(
+                {
+                    "result": "PASS",
+                    "policyVersion": AUTHORING_POLICY_VERSION,
+                    "strategies": len(REPAIR_STRATEGIES),
+                },
+                sort_keys=True,
+            )
         )
-    )
+        return
+    reconcile(allow_merge=args.allow_merge)
+
+
+if __name__ == "__main__":
+    main()
