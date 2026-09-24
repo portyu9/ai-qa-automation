@@ -635,3 +635,253 @@ def test_dependency_workflow_skips_action_governance_after_promotion_merge() -> 
     assert "id: python_promotion" in workflow
     assert '--github-output "$GITHUB_OUTPUT"' in workflow
     assert "if: steps.python_promotion.outputs.merged != 'true'" in workflow
+
+def _post_merge_ci_row(
+    *,
+    run_id: int = 88001,
+    workflow_id: int = governance.POST_MERGE_CI_WORKFLOW_ID,
+    run_attempt: int = 1,
+    name: str = governance.POST_MERGE_CI_NAME,
+    path: str = governance.POST_MERGE_CI_PATH,
+    head_branch: str = "main",
+    head_sha: str = MERGE,
+    event: str = "push",
+    status: str = "queued",
+    conclusion: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": run_id,
+        "workflow_id": workflow_id,
+        "run_attempt": run_attempt,
+        "name": name,
+        "path": path,
+        "head_branch": head_branch,
+        "head_sha": head_sha,
+        "event": event,
+        "status": status,
+        "conclusion": conclusion,
+    }
+
+
+def test_post_merge_ci_selector_requires_exact_attempt_one_identity() -> None:
+    canonical = _post_merge_ci_row()
+    assert governance._select_post_merge_ci_run([canonical], MERGE) == canonical
+
+    for row, message in (
+        ({**canonical, "workflow_id": 1}, "mismatched workflow identity"),
+        ({**canonical, "name": "lookalike"}, "mismatched workflow identity"),
+        ({**canonical, "path": ".github/workflows/lookalike.yml"}, "mismatched workflow identity"),
+        ({**canonical, "head_sha": "e" * 40}, "different head SHA"),
+        ({**canonical, "head_branch": "other"}, "not bound to main"),
+        ({**canonical, "event": "pull_request"}, "unexpected event"),
+        ({**canonical, "run_attempt": 2}, "run_attempt must equal 1"),
+        (
+            {**canonical, "status": "completed", "conclusion": "failure"},
+            "completed non-successfully",
+        ),
+    ):
+        with pytest.raises(governance.GovernanceError, match=message):
+            governance._select_post_merge_ci_run([row], MERGE)
+
+    with pytest.raises(governance.GovernanceError, match="ambiguous exact-subject CI evidence"):
+        governance._select_post_merge_ci_run(
+            [canonical, {**canonical, "id": 88002}],
+            MERGE,
+        )
+
+
+class _PostMergeCiApi:
+    def __init__(
+        self,
+        *,
+        existing: dict[str, Any] | None = None,
+        registered: dict[str, Any] | None = None,
+        move_main_after_registration: bool = False,
+    ) -> None:
+        self.existing = existing
+        self.registered = registered
+        self.move_main_after_registration = move_main_after_registration
+        self.dispatched = False
+        self.main_reads = 0
+        self.posts: list[tuple[str, dict[str, Any] | None]] = []
+
+    def get(self, path: str) -> Any:
+        if path == "/branches/main":
+            self.main_reads += 1
+            observed = (
+                "f" * 40
+                if self.move_main_after_registration and self.dispatched and self.main_reads >= 2
+                else MERGE
+            )
+            return {"commit": {"sha": observed}}
+        raise governance.GovernanceError(f"unexpected post-merge CI GET path: {path}")
+
+    def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+        assert path == f"/actions/runs?head_sha={MERGE}"
+        assert max_pages == 2
+        if self.existing is not None:
+            return [self.existing]
+        if self.dispatched and self.registered is not None:
+            return [self.registered]
+        return []
+
+    def post(
+        self,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        token: str | None = None,
+    ) -> Any:
+        assert token is None
+        self.posts.append((path, payload))
+        self.dispatched = True
+        return None
+
+
+def test_post_merge_ci_liveness_reuses_existing_exact_run() -> None:
+    existing = _post_merge_ci_row(
+        status="completed",
+        conclusion="success",
+    )
+    api = _PostMergeCiApi(existing=existing)
+    evidence = governance._ensure_post_merge_ci(api, MERGE, {"baseBranch": "main"})
+
+    assert api.posts == []
+    assert evidence == {
+        "postMergeCiWorkflowId": governance.POST_MERGE_CI_WORKFLOW_ID,
+        "postMergeCiRunId": 88001,
+        "postMergeCiRunAttempt": 1,
+        "postMergeCiEvent": "push",
+        "postMergeCiStatus": "completed",
+        "postMergeCiDispatched": False,
+    }
+
+
+def test_post_merge_ci_liveness_dispatches_exact_main_subject(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registered = _post_merge_ci_row(
+        run_id=88003,
+        event="workflow_dispatch",
+        status="queued",
+    )
+    api = _PostMergeCiApi(registered=registered)
+    monkeypatch.setattr(governance.time, "sleep", lambda _seconds: None)
+
+    evidence = governance._ensure_post_merge_ci(api, MERGE, {"baseBranch": "main"})
+
+    assert api.posts == [
+        (
+            "/actions/workflows/ci.yml/dispatches",
+            {
+                "ref": "main",
+                "inputs": {"subject_sha": MERGE, "subject_ref": "main"},
+            },
+        )
+    ]
+    assert evidence == {
+        "postMergeCiWorkflowId": governance.POST_MERGE_CI_WORKFLOW_ID,
+        "postMergeCiRunId": 88003,
+        "postMergeCiRunAttempt": 1,
+        "postMergeCiEvent": "workflow_dispatch",
+        "postMergeCiStatus": "queued",
+        "postMergeCiDispatched": True,
+    }
+
+
+def test_post_merge_ci_liveness_fails_closed_on_registration_and_main_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(governance.time, "sleep", lambda _seconds: None)
+
+    absent = _PostMergeCiApi()
+    with pytest.raises(
+        governance.GovernanceError,
+        match="explicit CI dispatch did not register",
+    ):
+        governance._ensure_post_merge_ci(absent, MERGE, {"baseBranch": "main"})
+
+    wrong_event = _PostMergeCiApi(
+        registered=_post_merge_ci_row(run_id=88004, event="push"),
+    )
+    with pytest.raises(governance.GovernanceError, match="unexpected event after explicit dispatch"):
+        governance._ensure_post_merge_ci(wrong_event, MERGE, {"baseBranch": "main"})
+
+    moved = _PostMergeCiApi(
+        registered=_post_merge_ci_row(
+            run_id=88005,
+            event="workflow_dispatch",
+        ),
+        move_main_after_registration=True,
+    )
+    with pytest.raises(
+        governance.GovernanceError,
+        match="current main changed after post-merge CI registration",
+    ):
+        governance._ensure_post_merge_ci(moved, MERGE, {"baseBranch": "main"})
+
+
+def test_finalize_post_merge_evidence_requires_ci_registration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    subject = {"baseSha": BASE, "headSha": HEAD}
+    config = {"baseBranch": "main"}
+    api = object()
+    calls: list[str] = []
+
+    def verify(
+        api_arg: object,
+        result: dict[str, Any],
+        subject_arg: dict[str, Any],
+        config_arg: dict[str, Any],
+    ) -> tuple[str, str]:
+        assert api_arg is api
+        assert result == {"sha": MERGE}
+        assert subject_arg is subject
+        assert config_arg is config
+        calls.append("verify")
+        return MERGE, TREE
+
+    def ensure(
+        api_arg: object,
+        subject_sha: str,
+        config_arg: dict[str, Any],
+    ) -> dict[str, Any]:
+        assert api_arg is api
+        assert subject_sha == MERGE
+        assert config_arg is config
+        calls.append("ci")
+        return {
+            "postMergeCiWorkflowId": governance.POST_MERGE_CI_WORKFLOW_ID,
+            "postMergeCiRunId": 88006,
+            "postMergeCiRunAttempt": 1,
+            "postMergeCiEvent": "push",
+            "postMergeCiStatus": "queued",
+            "postMergeCiDispatched": False,
+        }
+
+    monkeypatch.setattr(governance, "_verify_actual_merge_commit", verify)
+    monkeypatch.setattr(governance, "_ensure_post_merge_ci", ensure)
+
+    evidence = governance.finalize_post_merge_evidence(
+        api,
+        {"sha": MERGE},
+        subject,
+        config,
+    )
+
+    assert calls == ["verify", "ci"]
+    assert evidence == {
+        "mergeSha": MERGE,
+        "sourceTreeSha": TREE,
+        "postMergeBinding": (
+            "exact-current-main-parents-validated-source-tree-and-ci-registration"
+        ),
+        "postMergeCiWorkflowId": governance.POST_MERGE_CI_WORKFLOW_ID,
+        "postMergeCiRunId": 88006,
+        "postMergeCiRunAttempt": 1,
+        "postMergeCiEvent": "push",
+        "postMergeCiStatus": "queued",
+        "postMergeCiDispatched": False,
+    }
+
