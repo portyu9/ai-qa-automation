@@ -3315,11 +3315,21 @@ def _autofix_evidence(api: GitHubApi, alert_number: int) -> str:
         raise AutohealError("route planning received an invalid alert number")
     status, payload = api.request_status("GET", f"/code-scanning/alerts/{alert_number}/autofix")
     state = (payload or {}).get("status") if isinstance(payload, dict) else None
-    if status == 200 and state == "success":
-        return "available"
-    if status == 404 or (status == 200 and state in {"pending", "in_progress", "queued"}):
+    if status == 200:
+        if state == "success":
+            return "available"
+        if state in {"pending", "in_progress", "queued"}:
+            return "unknown"
+        if state in {"failure", "unavailable"}:
+            return "unavailable"
+        raise AutohealError(
+            f"GitHub CodeQL Autofix returned an unsupported evidence state: {state}"
+        )
+    if status == 404:
         return "unknown"
-    return "unavailable"
+    raise AutohealError(
+        f"GitHub CodeQL Autofix evidence request failed: status={status} state={state}"
+    )
 
 
 def _route_record_for_alert(
