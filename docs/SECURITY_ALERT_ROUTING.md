@@ -1,6 +1,6 @@
 # Deterministic security-alert routing
 
-> **Scope:** this document describes the repository-owned routing policy and its live Security Auto-Heal integration. The controller persists an exact-run route plan before new repair mutation and revalidates that plan against live current-main evidence before acting. Protected remediation authoring and terminal route-to-closure certification remain separate follow-on authority boundaries.
+> **Scope:** this document describes the repository-owned routing policy and its live Security Auto-Heal integration. The controller persists an exact-run route plan before new repair mutation, revalidates that plan against live current-main evidence before acting, and carries the originating route provenance into durable terminal closure. Protected remediation authoring remains a separate follow-on authority boundary.
 
 ## Purpose
 
@@ -101,23 +101,23 @@ The Security Auto-Heal workflow uses an evidence-first two-phase boundary for **
 6. reconcile requires the artifact id, name, and GitHub-reported digest, re-fetches the artifact and exact Security Auto-Heal run, re-fetches main/alerts/attempt state, and requires canonical route bytes to match the persisted plan;
 7. only `ordinary-deterministic-autoheal` and `ordinary-bounded-autofix` may create repair branches/commits/PRs;
 8. generated repair commits immutably bind both the route-record digest and route-plan digest in validated commit-message trailers, while generated repair markers bind those same digests plus routing-policy version, originating workflow run/attempt, artifact identity/digest, and the Autofix evidence state used by the route;
-9. later repair admission recomputes the same live route, rejects missing route provenance, requires the immutable repair-commit trailers to equal the revalidated route-record and marker plan digests, and requires successful originating controller-run/artifact provenance before existing diff, CodeQL, trusted-gate, and merge guards apply.
+9. later repair admission recomputes the same live route, rejects missing route provenance, requires the immutable repair-commit trailers to equal the revalidated route-record and marker plan digests, and requires successful originating controller-run/artifact provenance before existing diff, CodeQL, trusted-gate, and merge guards apply;
+10. durable terminal closure re-verifies those immutable commit digests and the successful originating route artifact/run, then emits schema-v2 terminal evidence carrying the same route-record digest, route-plan digest, route run/attempt, artifact identity/digest, decision, authority, policy version, and Autofix evidence alongside exact post-merge CI, CodeQL, trusted-gate, merge, and fixed-alert evidence.
 
 The route-planning job has no GitHub write permission. The later mutation job cannot run unless planning and artifact publication succeed, and current-main plus canonical route truth are re-proved after artifact restoration. Thus a planning bug cannot gain repository mutation authority merely because it executes in the same workflow.
 
 For model routes whose proposal is not yet available, provider submission uses a separate non-authoritative GitHub Actions check-run intent bound to exact main, alert fingerprint, route digest, strategy, and attempt. The neutral check cannot satisfy the App-bound `Trusted PR Gate`. It exists only to suppress provider replay: once exact intent exists, later controller cycles are GET-only until provider evidence becomes affirmative or the subject changes.
 
-Existing repair merge/closure, stale-supersession, and post-merge validation paths remain governed by their existing exact-subject evidence. The integration does not give `protected-independent-remediation` code-authoring authority.
+Existing stale-supersession and post-merge validation paths remain governed by their existing exact-subject evidence. Terminal closure now additionally fails closed unless the merged repair commit and originating route artifact reproduce the marker’s persisted route provenance. The integration does not give `protected-independent-remediation` code-authoring authority.
 
 ## Remaining #212 boundaries
 
 The following are deliberately not claimed complete by this integration:
 
-1. terminal remediation certificates do not yet bind the originating route-plan/artifact digest end-to-end;
-2. `protected-independent-remediation` still requires #211's distinct authoring identity and authority, separate from the Trusted PR Gate certifier;
-3. a fresh autonomous acceptance cycle is still required to prove the complete route-plan → repair → scheduled trusted gate → merge → resulting-main CodeQL/CI → terminal-certificate chain without manual substitution.
+1. `protected-independent-remediation` still requires #211's distinct authoring identity and authority, separate from the Trusted PR Gate certifier;
+2. a fresh autonomous acceptance cycle is still required to prove the complete route-plan → repair → scheduled trusted gate → merge → resulting-main CodeQL/CI → route-bound terminal-certificate chain without manual substitution.
 
-Until those are implemented and observed, route persistence proves mutation admission for new repairs; it does not by itself prove terminal closure or protected remediation authority.
+Until that live acceptance is observed, the implementation provides deterministic route-bound mutation and terminal-certification logic, but repository history does not yet prove a fresh unattended end-to-end closure under this exact integration.
 
 ---
 
