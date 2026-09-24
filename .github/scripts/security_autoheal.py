@@ -727,7 +727,7 @@ def _autoheal_workflow_run_matches(
     try:
         current_run_id = _current_positive_int_env("GITHUB_RUN_ID")
         current_attempt = _current_positive_int_env("GITHUB_RUN_ATTEMPT")
-    except (PolicyBlock, RoutingPolicyError):
+    except PolicyBlock:
         return False
     return (
         run.get("status") in {"queued", "in_progress"}
