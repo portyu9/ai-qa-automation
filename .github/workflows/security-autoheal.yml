@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/security-autoheal.json'
       - '.github/scripts/security_autoheal.py'
+      - '.github/scripts/security_alert_routing.py'
       - '.github/scripts/security_autoheal_selfcheck.py'
       - '.github/workflows/security-autoheal.yml'
       - '.github/workflows/ci.yml'
@@ -49,6 +50,7 @@ jobs:
         run: >-
           python -m compileall -q
           .github/scripts/security_autoheal.py
+          .github/scripts/security_alert_routing.py
           .github/scripts/security_autoheal_selfcheck.py
           .github/scripts/dependency_lock_compiler.py
           .github/scripts/trusted_qualification.py
@@ -83,7 +85,30 @@ jobs:
           python-version: '3.11.16'
       - name: Validate trusted security auto-heal policy
         run: python .github/scripts/security_autoheal.py --validate-config --self-test
-      - name: Reconcile exact-subject CodeQL remediations
+      - name: Plan exact-main deterministic security routes
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: python .github/scripts/security_autoheal.py --reconcile --allow-merge
+        run: >-
+          python .github/scripts/security_autoheal.py
+          --plan-routes
+          --route-plan-output artifacts/security-autoheal-route-plan/route-plan.json
+      - name: Persist exact-run route plan before mutation
+        id: route-plan-artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: security-autoheal-route-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/security-autoheal-route-plan/route-plan.json
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 6
+      - name: Reconcile exact-subject CodeQL remediations from persisted routes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python .github/scripts/security_autoheal.py
+          --reconcile
+          --allow-merge
+          --route-plan artifacts/security-autoheal-route-plan/route-plan.json
+          --route-artifact-id ${{ steps.route-plan-artifact.outputs.artifact-id }}
+          --route-artifact-name security-autoheal-route-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          --route-artifact-digest ${{ steps.route-plan-artifact.outputs.artifact-digest }}
