@@ -321,7 +321,7 @@ def test_workflow_persists_route_plan_before_live_reconcile() -> None:
 
     assert plan < upload < reconcile
     assert "--route-artifact-id ${{ steps.route-plan-artifact.outputs.artifact-id }}" in workflow
-    assert "--route-artifact-digest ${{ steps.route-plan-artifact.outputs.artifact-digest }}" in workflow
+    assert "--route-artifact-digest sha256:${{ steps.route-plan-artifact.outputs.artifact-digest }}" in workflow
     assert ".github/scripts/security_alert_routing.py" in workflow
 
 
