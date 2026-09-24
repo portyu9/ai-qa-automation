@@ -47,7 +47,7 @@ EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
     "1906a7c724b6fda4219bcbe2e1b678549d177af6"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
-    "5b8dc48b32baf0e9b3102f4d95fb60d484233305"  # pragma: allowlist secret
+    "caf43196e04c23191a3e34cf970864308bc4523b"  # pragma: allowlist secret
 )
 EXPECTED_CODEQL_MAJOR = 4
 CODEQL_ACTION_RE = re.compile(
@@ -636,7 +636,7 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         "    name: security-autoheal-self-test",
         "    name: reconcile-codeql-autoheal",
         "      actions: write",
-        "      checks: read",
+        "      checks: write",
         "      contents: write",
         "      pull-requests: write",
         "      security-events: write",
