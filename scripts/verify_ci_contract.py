@@ -880,7 +880,6 @@ def _verify_release_candidate_workflow(text: str) -> dict[str, Any]:
 _verify_automatic_workflow = _verify_ordinary_ci_workflow
 
 
-
 def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
     base = _trusted_auto._base
     semantic = base._semantic_text(text)
@@ -1010,7 +1009,9 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
     if semantic.count("persist-credentials: false") != 1:
         raise ValueError("protected remediation checkout must disable persisted credentials")
     if semantic.count("ref: ${{ github.sha }}") != 1:
-        raise ValueError("protected remediation must checkout only the schedule's default-branch SHA")
+        raise ValueError(
+            "protected remediation must checkout only the schedule's default-branch SHA"
+        )
     return {
         "trigger": "schedule:5m",
         "trusted_definition": "default-branch-scheduled-workflow",
@@ -1020,6 +1021,7 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
         "candidate_workflow_execution": "forbidden",
         "mutation": "exact-route+one-file+branch-pr-only",
     }
+
 
 def verify_ci_contract(root: Path) -> dict[str, Any]:
     root = root.resolve()
