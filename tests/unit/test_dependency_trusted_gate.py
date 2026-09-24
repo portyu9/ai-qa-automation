@@ -560,6 +560,8 @@ def test_dependency_promotion_reconcile_stops_after_successful_merge(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     observed_gets: list[str] = []
+    events: list[str] = []
+    output = Path("exact-github-output")
 
     class _Api:
         def get(self, path: str) -> dict[str, Any]:
@@ -601,14 +603,32 @@ def test_dependency_promotion_reconcile_stops_after_successful_merge(
         return {"source": True}, promoted
 
     monkeypatch.setattr(promotion, "_validate_promotion", validate)
-    monkeypatch.setattr(
-        promotion,
-        "_publish_and_merge",
-        lambda api_arg, promotion_arg, config_arg: {"mergeSha": MERGE},
-    )
+    def publish_and_merge(
+        api_arg: object,
+        promotion_arg: dict[str, Any],
+        config_arg: dict[str, Any],
+    ) -> dict[str, Any]:
+        assert api_arg is api
+        assert promotion_arg is promoted
+        assert config_arg is config
+        events.append("post-merge-finalized")
+        return {"mergeSha": MERGE}
 
-    assert promotion.reconcile(config, allow_merge=True) == 0
+    def publish_signal(github_output: Path | None) -> None:
+        assert github_output == output
+        assert events == ["post-merge-finalized"]
+        events.append("merge-signal")
+
+    monkeypatch.setattr(promotion, "_publish_and_merge", publish_and_merge)
+    monkeypatch.setattr(promotion, "_publish_merge_signal", publish_signal)
+
+    assert promotion.reconcile(
+        config,
+        allow_merge=True,
+        github_output=output,
+    ) == 0
     assert observed_gets == ["/pulls/701"]
+    assert events == ["post-merge-finalized", "merge-signal"]
 
 
 def test_dependency_promotion_merge_signal_is_exact_owned_github_output(
