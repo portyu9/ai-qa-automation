@@ -2929,43 +2929,6 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
     if _reconcile_terminal_closure(api, main_sha, config):
         return 0
     pulls = _open_pulls(api)
-    query = urllib.parse.urlencode(
-        {"state": "open", "ref": "refs/heads/main", "tool_name": "CodeQL"},
-        quote_via=urllib.parse.quote,
-    )
-    alerts = api.list_all(f"/code-scanning/alerts?{query}", max_pages=10)
-    for alert in alerts:
-        instance = alert.get("most_recent_instance") or {}
-        if instance.get("ref") != "refs/heads/main":
-            continue
-        alert_instance_sha = _require_sha(instance.get("commit_sha"), "alert instance SHA")
-        if alert_instance_sha == main_sha:
-            continue
-        refresh = _ensure_current_main_codeql(api, main_sha, config)
-        print(
-            json.dumps(
-                {
-                    "alert": alert.get("number"),
-                    "decision": (
-                        "codeql-refresh-dispatched"
-                        if refresh["codeqlDispatched"]
-                        else "codeql-refresh-waiting"
-                    ),
-                    "staleSha": alert_instance_sha,
-                    "currentMain": main_sha,
-                    **refresh,
-                },
-                sort_keys=True,
-            )
-        )
-        return len(_generated_repairs(pulls))
-
-    preserve_branches = _recoverable_model_autofix_branches(alerts, main_sha, config)
-    _prune_orphan_repair_refs(
-        api,
-        pulls,
-        preserve_branches=preserve_branches,
-    )
     repairs = _generated_repairs(pulls)
     active_alerts: set[int] = set()
     closed_stale = 0
@@ -3026,6 +2989,45 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
                     active_alerts.discard(alert_number)
 
     remaining_repairs = len(repairs) - closed_stale
+
+    query = urllib.parse.urlencode(
+        {"state": "open", "ref": "refs/heads/main", "tool_name": "CodeQL"},
+        quote_via=urllib.parse.quote,
+    )
+    alerts = api.list_all(f"/code-scanning/alerts?{query}", max_pages=10)
+    for alert in alerts:
+        instance = alert.get("most_recent_instance") or {}
+        if instance.get("ref") != "refs/heads/main":
+            continue
+        alert_instance_sha = _require_sha(instance.get("commit_sha"), "alert instance SHA")
+        if alert_instance_sha == main_sha:
+            continue
+        refresh = _ensure_current_main_codeql(api, main_sha, config)
+        print(
+            json.dumps(
+                {
+                    "alert": alert.get("number"),
+                    "decision": (
+                        "codeql-refresh-dispatched"
+                        if refresh["codeqlDispatched"]
+                        else "codeql-refresh-waiting"
+                    ),
+                    "staleSha": alert_instance_sha,
+                    "currentMain": main_sha,
+                    **refresh,
+                },
+                sort_keys=True,
+            )
+        )
+        return remaining_repairs
+
+    preserve_branches = _recoverable_model_autofix_branches(alerts, main_sha, config)
+    _prune_orphan_repair_refs(
+        api,
+        pulls,
+        preserve_branches=preserve_branches,
+    )
+
     capacity = max(0, int(config["maxOpenRepairs"]) - remaining_repairs)
     if capacity == 0:
         return remaining_repairs
