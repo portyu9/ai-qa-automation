@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 from copy import deepcopy
 from pathlib import Path
@@ -810,3 +811,24 @@ def test_routing_record_persistence_rejects_symlink_target(tmp_path: Path) -> No
     with pytest.raises(routing.RoutingPolicyError, match="regular file"):
         routing.persist_record(link, record)
     assert actual.read_text(encoding="utf-8") == "do not replace"
+
+
+def test_json_ingestion_rejects_fifo_without_blocking(tmp_path: Path) -> None:
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("FIFO creation is unavailable on this platform")
+    fifo = tmp_path / "alert.json"
+    os.mkfifo(fifo, 0o600)
+
+    with pytest.raises(routing.RoutingPolicyError, match="bounded regular file"):
+        routing._read_json(fifo, max_bytes=1024, label="alert input")
+
+
+def test_routing_record_persistence_rejects_fifo_without_blocking(tmp_path: Path) -> None:
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("FIFO creation is unavailable on this platform")
+    record = routing.route_alert(_alert(), main_sha=MAIN, config=_config())
+    fifo = tmp_path / "route.json"
+    os.mkfifo(fifo, 0o600)
+
+    with pytest.raises(routing.RoutingPolicyError, match="bounded regular file"):
+        routing.persist_record(fifo, record)

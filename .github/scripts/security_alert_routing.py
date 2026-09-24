@@ -734,8 +734,13 @@ def _open_parent_directory(path: Path) -> int:
 
 def _read_record_at(parent_fd: int, name: str) -> bytes | None:
     nofollow = getattr(os, "O_NOFOLLOW", 0)
+    nonblock = getattr(os, "O_NONBLOCK", 0)
+    if not nofollow or not nonblock:
+        raise RoutingPolicyError(
+            "routing record verification requires no-follow non-blocking file APIs"
+        )
     try:
-        fd = os.open(name, os.O_RDONLY | nofollow, dir_fd=parent_fd)
+        fd = os.open(name, os.O_RDONLY | nofollow | nonblock, dir_fd=parent_fd)
     except FileNotFoundError:
         return None
     except OSError as exc:
@@ -782,8 +787,11 @@ def persist_record(path: Path, record: Mapping[str, Any]) -> bool:
     if not name or name in {".", ".."}:
         raise RoutingPolicyError("routing record target name is invalid")
     nofollow = getattr(os, "O_NOFOLLOW", 0)
-    if not nofollow:
-        raise RoutingPolicyError("routing record persistence requires no-follow file APIs")
+    nonblock = getattr(os, "O_NONBLOCK", 0)
+    if not nofollow or not nonblock:
+        raise RoutingPolicyError(
+            "routing record persistence requires no-follow non-blocking file APIs"
+        )
     parent_fd = _open_parent_directory(path.parent)
     temp_name: str | None = None
     try:
@@ -877,12 +885,13 @@ def _strict_json_loads(payload: bytes, *, label: str) -> Any:
 
 def _read_json(path: Path, *, max_bytes: int, label: str) -> Any:
     nofollow = getattr(os, "O_NOFOLLOW", 0)
-    if not nofollow:
-        raise RoutingPolicyError(f"{label} requires no-follow file ingestion")
+    nonblock = getattr(os, "O_NONBLOCK", 0)
+    if not nofollow or not nonblock:
+        raise RoutingPolicyError(f"{label} requires no-follow non-blocking file ingestion")
     name = path.name
     if not name or name in {".", ".."}:
         raise RoutingPolicyError(f"{label} path has an invalid target name")
-    flags = os.O_RDONLY | nofollow | getattr(os, "O_BINARY", 0)
+    flags = os.O_RDONLY | nofollow | nonblock | getattr(os, "O_BINARY", 0)
     parent_fd = _open_parent_directory(path.parent)
     try:
         try:
