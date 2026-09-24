@@ -223,32 +223,47 @@ def _resolve_twice(python: str, root: Path, requirements: list[str]) -> str:
 
 
 def _verify_hash_lock(python: str, root: Path, lock: Path) -> None:
-    completed = subprocess.run(
-        [
-            python,
-            "-m",
-            "pip",
-            "install",
-            "--dry-run",
-            "--ignore-installed",
-            "--no-input",
-            "--only-binary=:all:",
-            "--require-hashes",
-            "-r",
-            str(lock),
-        ],
-        cwd=root,
-        env=_resolver_env(),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        timeout=300,
-        check=False,
-    )
-    if completed.returncode != 0:
-        raise LockCompileError(
-            f"generated lock {lock.name} failed wheel-only hash verification:\n{completed.stdout[-6000:]}"
+    if not lock.is_file() or lock.is_symlink():
+        raise LockCompileError(f"hash lock {lock.name} must be a regular non-symlink file")
+    lock_bytes = lock.read_bytes()
+    if not lock_bytes or len(lock_bytes) > MAX_REPORT_BYTES:
+        raise LockCompileError(f"hash lock {lock.name} exceeds bounded size")
+    with tempfile.TemporaryDirectory(prefix="dependency-hash-replay-") as temporary:
+        report = Path(temporary) / "report.json"
+        completed = subprocess.run(
+            [
+                python,
+                "-m",
+                "pip",
+                "install",
+                "--dry-run",
+                "--ignore-installed",
+                "--no-input",
+                "--only-binary=:all:",
+                "--report",
+                str(report),
+                "--require-hashes",
+                "-r",
+                str(lock),
+            ],
+            cwd=root,
+            env=_resolver_env(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=300,
+            check=False,
         )
+        if completed.returncode != 0:
+            raise LockCompileError(
+                f"generated lock {lock.name} failed wheel-only hash verification:\n"
+                + completed.stdout[-6000:]
+            )
+        replayed = _report_to_lock(_read_json(report)).encode()
+        if replayed != lock_bytes:
+            raise LockCompileError(
+                f"hash replay for {lock.name} did not select the exact locked artifact graph"
+            )
 
 
 def _requirement_graphs(
