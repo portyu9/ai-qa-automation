@@ -211,9 +211,16 @@ class _PruneApi:
     def __init__(self) -> None:
         self.deleted: list[str] = []
 
-    def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+    def list_all(
+        self,
+        path: str,
+        *,
+        max_pages: int = 10,
+        max_items: int | None = None,
+    ) -> list[dict[str, Any]]:
         assert path == f"/git/matching-refs/heads/{autoheal.BRANCH_PREFIX}"
         assert max_pages == 4
+        assert max_items is None
         return [{"ref": f"refs/heads/{BRANCH}", "object": {"type": "commit", "sha": HEAD}}]
 
     def get(self, path: str) -> dict[str, Any]:
@@ -477,15 +484,24 @@ class _ReconcileRecoveryApi(_AmbiguousCommitApi):
         super().__init__(branch=autoheal._branch_name(subject, 1))
         self.created_prs = 0
 
-    def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+    def list_all(
+        self,
+        path: str,
+        *,
+        max_pages: int = 10,
+        max_items: int | None = None,
+    ) -> list[dict[str, Any]]:
         if path == "/pulls?state=open&sort=created&direction=asc":
             assert max_pages == 4
+            assert max_items is None
             return []
         if path.startswith("/code-scanning/alerts?"):
-            assert max_pages == 10
+            assert max_pages == 2
+            assert max_items == 101
             return [_alert("src/ai_qa_automation/example.py")]
         if path == f"/git/matching-refs/heads/{autoheal.BRANCH_PREFIX}":
             assert max_pages == 4
+            assert max_items is None
             if self.branch_sha is None:
                 return []
             return [
@@ -496,6 +512,7 @@ class _ReconcileRecoveryApi(_AmbiguousCommitApi):
             ]
         if path == "/pulls?state=closed&sort=updated&direction=desc":
             assert max_pages == 10
+            assert max_items is None
             return []
         raise AssertionError(path)
 
@@ -522,11 +539,18 @@ class _ReconcileRecoveryApi(_AmbiguousCommitApi):
 
 
 class _StaleAlertRecoveryApi(_ReconcileRecoveryApi):
-    def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+    def list_all(
+        self,
+        path: str,
+        *,
+        max_pages: int = 10,
+        max_items: int | None = None,
+    ) -> list[dict[str, Any]]:
         if path.startswith("/code-scanning/alerts?"):
-            assert max_pages == 10
+            assert max_pages == 2
+            assert max_items == 101
             return [_alert("src/ai_qa_automation/example.py", sha="c" * 40)]
-        return super().list_all(path, max_pages=max_pages)
+        return super().list_all(path, max_pages=max_pages, max_items=max_items)
 
 
 def test_stale_codeql_evidence_refreshes_before_orphan_cleanup(
