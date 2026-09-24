@@ -36,9 +36,11 @@ def _reviewed_governance_secret_payload() -> str:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Reconcile exact-subject Python dependency promotion
+        id: python_promotion
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Reconcile Dependabot action merge authority
+        if: steps.python_promotion.outputs.merged != 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 """
