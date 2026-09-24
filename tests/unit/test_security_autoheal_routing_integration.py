@@ -376,6 +376,31 @@ def test_selected_route_revalidation_blocks_alert_truth_drift_before_mutation() 
         )
 
 
+    model_alert = _alert(
+        rule="py/incomplete-url-substring-sanitization",
+        path="src/ai_qa_automation/example.py",
+    )
+    model_plan = autoheal._build_route_plan(
+        _PlanApi(model_alert, autofix_status=404),
+        config,
+        MAIN,
+    )
+    model_record = model_plan["records"][0]
+    live_available = _MutationApi(model_alert)
+    live_available.autofix_status = 200
+    live_available.autofix_state = "success"
+    with pytest.raises(
+        autoheal.AutohealError,
+        match="routing truth drifted before mutation",
+    ):
+        autoheal._revalidate_route_record_before_mutation(
+            live_available,
+            model_record,
+            config,
+        )
+    assert live_available.request_calls == [("GET", "/code-scanning/alerts/7/autofix")]
+
+
 def test_route_artifact_must_bind_exact_in_progress_controller_run() -> None:
     api = _ArtifactApi(_alert())
     plan = autoheal._build_route_plan(api, _config(), MAIN)
