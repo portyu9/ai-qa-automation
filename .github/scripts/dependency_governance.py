@@ -584,9 +584,7 @@ def _ensure_action_qualification(
     return subject
 
 
-def _post_merge_ci_candidates(
-    rows: list[dict[str, Any]], subject_sha: str
-) -> list[dict[str, Any]]:
+def _post_merge_ci_candidates(rows: list[dict[str, Any]], subject_sha: str) -> list[dict[str, Any]]:
     subject_sha = require_sha(subject_sha, "post-merge CI subject SHA")
     candidates: list[dict[str, Any]] = []
     for row in rows:
@@ -637,6 +635,7 @@ def _select_post_merge_ci_run(
         )
     return candidates[0] if candidates else None
 
+
 def _live_main_sha(api: GitHubApi, config: dict[str, Any]) -> str:
     branch = urllib.parse.quote(config["baseBranch"], safe="")
     payload = api.get(f"/branches/{branch}")
@@ -646,7 +645,6 @@ def _live_main_sha(api: GitHubApi, config: dict[str, Any]) -> str:
 def _post_merge_ci_runs(api: GitHubApi, subject_sha: str) -> list[dict[str, Any]]:
     encoded_sha = urllib.parse.quote(require_sha(subject_sha, "post-merge CI subject SHA"), safe="")
     return api.list_all(f"/actions/runs?head_sha={encoded_sha}", max_pages=2)
-
 
 
 def _post_merge_ci_evidence(row: dict[str, Any], *, dispatched: bool) -> dict[str, Any]:
@@ -704,6 +702,7 @@ def _ensure_post_merge_ci(
     if _live_main_sha(api, config) != subject_sha:
         raise GovernanceError("current main changed after post-merge CI registration")
     return _post_merge_ci_evidence(registered, dispatched=True)
+
 
 def _validate_qualification_ref(ref: str) -> None:
     if (
