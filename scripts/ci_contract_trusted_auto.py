@@ -372,6 +372,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "          languages: python",
         "          queries: security-extended",
         "      - name: Analyze exact governed bot branch",
+        '        env:\n          PYTHONSAFEPATH: ""',
         "          ref: refs/heads/${{ needs.preflight.outputs.head_ref }}",
         "          sha: ${{ needs.preflight.outputs.head_sha }}",
     )
@@ -382,6 +383,10 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         raise ValueError("trusted bot CodeQL must acquire exactly one verified local bundle")
     if bot_codeql.count("          tools: ${{ steps.codeql-tools.outputs.path }}") != 1:
         raise ValueError("trusted bot CodeQL must use exactly one verified local bundle path")
+    if semantic.count('          PYTHONSAFEPATH: ""') != 1:
+        raise ValueError(
+            "trusted bot CodeQL must disable Python safe-path only for extractor analysis"
+        )
     if "${{ secrets." in bot_codeql:
         raise ValueError("trusted bot CodeQL must remain secret-free")
 
