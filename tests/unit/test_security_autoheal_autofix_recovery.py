@@ -285,7 +285,6 @@ def _route_reconcile_args(
 
 def test_only_current_policy_eligible_model_subjects_preserve_recovery_branches() -> None:
     config = autoheal.load_config()
-    model = _alert("src/ai_qa_automation/example.py")
     blocked = _alert(".github/scripts/security_autoheal.py")
     stale = _alert("src/ai_qa_automation/stale.py", sha="c" * 40)
 
