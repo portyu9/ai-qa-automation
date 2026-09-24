@@ -44,7 +44,7 @@ EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
-    "1906a7c724b6fda4219bcbe2e1b678549d177af6"  # pragma: allowlist secret
+    "d75700899a2256463d7d96112dd2a24b1c25c76c"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
     "5b8dc48b32baf0e9b3102f4d95fb60d484233305"  # pragma: allowlist secret
@@ -567,9 +567,14 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "      - name: Attempt one bounded transient recovery",
         "        run: python .github/scripts/dependency_recovery.py --recover",
         "      - name: Reconcile exact-subject Python dependency promotion",
+        "        id: python_promotion",
         "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
-        "        run: python .github/scripts/dependency_promotion.py --reconcile --allow-merge",
+        "          python .github/scripts/dependency_promotion.py",
+        "          --reconcile",
+        "          --allow-merge",
+        '          --github-output "$GITHUB_OUTPUT"',
         "      - name: Reconcile Dependabot action merge authority",
+        "        if: steps.python_promotion.outputs.merged != 'true'",
         "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
         '          case "$GITHUB_EVENT_NAME" in',
         "            workflow_run|schedule|workflow_dispatch) args+=(--allow-merge) ;;",
