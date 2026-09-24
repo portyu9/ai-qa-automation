@@ -251,6 +251,30 @@ def test_model_route_planning_uses_get_only_and_blocks_without_live_evidence() -
     assert record["autofixEligibility"] == "unknown"
 
 
+def test_autofix_evidence_distinguishes_provider_state_from_api_failure() -> None:
+    alert = _alert(
+        rule="py/incomplete-url-substring-sanitization",
+        path="src/ai_qa_automation/example.py",
+    )
+
+    unavailable = _PlanApi(alert, autofix_status=200, autofix_state="failure")
+    plan = autoheal._build_route_plan(unavailable, _config(), MAIN)
+    assert plan["records"][0]["autofixEligibility"] == "unavailable"
+    assert plan["records"][0]["decision"] == "blocked-external-evidence"
+
+    for status in (400, 403, 500):
+        failing = _PlanApi(alert, autofix_status=status)
+        with pytest.raises(
+            autoheal.AutohealError,
+            match=rf"Autofix evidence request failed: status={status}",
+        ):
+            autoheal._build_route_plan(failing, _config(), MAIN)
+
+    malformed = _PlanApi(alert, autofix_status=200, autofix_state="unexpected")
+    with pytest.raises(autoheal.AutohealError, match="unsupported evidence state"):
+        autoheal._build_route_plan(malformed, _config(), MAIN)
+
+
 def test_route_plan_digest_rejects_tampering() -> None:
     plan = autoheal._build_route_plan(_PlanApi(_alert()), _config(), MAIN)
     plan["mainSha"] = "b" * 40
