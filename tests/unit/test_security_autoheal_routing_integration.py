@@ -384,15 +384,27 @@ def test_workflow_persists_route_plan_before_live_reconcile() -> None:
 
     plan = workflow.index("Plan exact-main deterministic security routes")
     upload = workflow.index("Persist exact-run route plan before mutation")
+    restore = workflow.index("Restore exact-run route plan from prior read-only job")
     reconcile = workflow.index("Reconcile exact-subject CodeQL remediations from persisted routes")
 
-    assert plan < upload < reconcile
-    assert "--route-artifact-id ${{ steps.route-plan-artifact.outputs.artifact-id }}" in workflow
+    assert plan < upload < restore < reconcile
+    assert "name: plan-codeql-autoheal-routes" in workflow
+    assert "needs: route-plan" in workflow
+    assert "actions: read" in workflow
+    assert "pull-requests: read" in workflow
+    assert "security-events: read" in workflow
+    assert "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8" in workflow
+    assert "--route-artifact-id ${{ needs.route-plan.outputs.artifact-id }}" in workflow
     assert (
-        "--route-artifact-digest sha256:${{ steps.route-plan-artifact.outputs.artifact-digest }}"
+        "--route-artifact-digest sha256:${{ needs.route-plan.outputs.artifact-digest }}"
         in workflow
     )
     assert ".github/scripts/security_alert_routing.py" in workflow
+
+    route_job = workflow[
+        workflow.index("  route-plan:") : workflow.index("\n  reconcile:")
+    ]
+    assert ": write" not in route_job
 
 
 class _IntentApi:
