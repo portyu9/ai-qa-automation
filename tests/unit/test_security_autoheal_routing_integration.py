@@ -341,6 +341,35 @@ def test_repair_admission_rejects_route_provenance_stripping() -> None:
         )
 
 
+def test_generated_repair_commit_route_binding_is_immutable_and_unambiguous() -> None:
+    digest = "f" * 64
+    message = autoheal._route_bound_commit_message(7, digest)
+    payload = {"commit": {"message": message}}
+
+    assert autoheal._generated_commit_route_digest(payload) == digest
+    assert (
+        autoheal._generated_commit_route_digest(
+            {
+                "commit": {
+                    "message": (
+                        message
+                        + "\n"
+                        + autoheal.ROUTE_RECORD_TRAILER_PREFIX
+                        + ("e" * 64)
+                    )
+                }
+            }
+        )
+        is None
+    )
+    assert (
+        autoheal._generated_commit_route_digest(
+            {"commit": {"message": "security: auto-heal CodeQL alert #7"}}
+        )
+        is None
+    )
+
+
 def test_generated_pr_marker_binds_route_and_artifact_provenance() -> None:
     plan_api = _PlanApi(_alert())
     plan = autoheal._build_route_plan(plan_api, _config(), MAIN)
