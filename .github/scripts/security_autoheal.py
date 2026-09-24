@@ -3031,21 +3031,19 @@ def _route_record_for_alert(
     number = alert.get("number")
     if not isinstance(number, int) or isinstance(number, bool) or number < 1:
         raise AutohealError("route planning received an invalid alert identity")
-    evidence = (
-        _autofix_evidence(api, number)
-        if autofix_eligibility is None
-        else autofix_eligibility
-    )
     try:
         provisional = route_security_alert(
             alert,
             main_sha=main_sha,
             config=config,
-            autofix_eligibility=evidence,
+            autofix_eligibility=autofix_eligibility or "unknown",
         )
         strategy = provisional["strategy"]
         if not isinstance(strategy, str) or not strategy:
             raise AutohealError("routing policy produced an invalid remediation strategy")
+        evidence = autofix_eligibility or "unknown"
+        if autofix_eligibility is None and strategy == MODEL_AUTOFIX_STRATEGY:
+            evidence = _autofix_evidence(api, number)
         attempts = _attempt_count(api, number, strategy, main_sha)
         return route_security_alert(
             alert,
