@@ -551,9 +551,11 @@ def _verify_action_revisions(workflows: dict[str, str]) -> dict[str, str]:
                 f"{name}: every GitHub Action must use a canonical immutable SHA plus # vVERSION"
             )
         for action, revision, version in pins:
+            scoped_workflows = ADDITIONAL_ALLOWED_ACTION_WORKFLOWS.get(action, frozenset())
             if (
                 action not in EXPECTED_ACTION_SHAS
                 and action not in ADDITIONAL_ALLOWED_ACTION_IDENTITIES
+                and name not in scoped_workflows
             ):
                 raise ValueError(f"{name}: unreviewed GitHub Action identity: {action}")
             prior_revision = observed.get(action)
