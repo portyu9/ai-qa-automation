@@ -37,9 +37,9 @@ class RepairStrategy:
     new: bytes
 
 
-_SECURITY_AUTOHEAL_LOG_OLD = b'''                merge_evidence = _merge(api, number, validated_metadata, live, config)\n                print(\n                    json.dumps(\n                        {\n                            "pr": number,\n                            "decision": "repair-merged",\n                            "headSha": live["headSha"],\n                            **merge_evidence,\n                        },\n                        sort_keys=True,\n                    )\n                )\n'''
+_SECURITY_AUTOHEAL_LOG_OLD = b"""                merge_evidence = _merge(api, number, validated_metadata, live, config)\n                print(\n                    json.dumps(\n                        {\n                            "pr": number,\n                            "decision": "repair-merged",\n                            "headSha": live["headSha"],\n                            **merge_evidence,\n                        },\n                        sort_keys=True,\n                    )\n                )\n"""
 
-_SECURITY_AUTOHEAL_LOG_NEW = b'''                _merge(api, number, validated_metadata, live, config)\n                print(\n                    json.dumps(\n                        {\n                            "pr": number,\n                            "decision": "repair-merged",\n                            "headSha": live["headSha"],\n                        },\n                        sort_keys=True,\n                    )\n                )\n'''
+_SECURITY_AUTOHEAL_LOG_NEW = b"""                _merge(api, number, validated_metadata, live, config)\n                print(\n                    json.dumps(\n                        {\n                            "pr": number,\n                            "decision": "repair-merged",\n                            "headSha": live["headSha"],\n                        },\n                        sort_keys=True,\n                    )\n                )\n"""
 
 REPAIR_STRATEGIES = (
     RepairStrategy(
@@ -84,10 +84,14 @@ def _strategy_for(record: Mapping[str, Any]) -> RepairStrategy:
     path = record.get("path")
     matches = [item for item in REPAIR_STRATEGIES if item.rule == rule and item.path == path]
     if len(matches) != 1:
-        raise ProtectedRemediationError("protected route has no exact code-owned authoring strategy")
+        raise ProtectedRemediationError(
+            "protected route has no exact code-owned authoring strategy"
+        )
     strategy = matches[0]
     if strategy.path in SELF_AUTHORITY_PATHS:
-        raise ProtectedRemediationError("protected route targets the authoring lane's own authority")
+        raise ProtectedRemediationError(
+            "protected route targets the authoring lane's own authority"
+        )
     return strategy
 
 
@@ -105,7 +109,9 @@ def validate_route_record(record: Mapping[str, Any], *, main_sha: str) -> Repair
     if record.get("baseBranch") != EXPECTED_BASE_BRANCH:
         raise ProtectedRemediationError("protected route base branch drifted")
     if record.get("decision") != "protected-independent-remediation":
-        raise ProtectedRemediationError("route is not admitted for independent protected remediation")
+        raise ProtectedRemediationError(
+            "route is not admitted for independent protected remediation"
+        )
     if record.get("authority") != "protected-independent-remediation":
         raise ProtectedRemediationError("route authority is not the independent protected lane")
     if record.get("strategy") != PROTECTED_REMEDIATION_STRATEGY:
@@ -153,7 +159,9 @@ def canonical_plan(plan: Mapping[str, Any]) -> bytes:
         raise ProtectedRemediationError("protected repair plan digest does not match its content")
     payload = _canonical_plan_payload(plan, include_digest=True) + b"\n"
     if len(payload) > MAX_PLAN_BYTES:
-        raise ProtectedRemediationError("protected repair plan exceeds the bounded persistence limit")
+        raise ProtectedRemediationError(
+            "protected repair plan exceeds the bounded persistence limit"
+        )
     return payload
 
 
@@ -165,17 +173,23 @@ def build_repair_plan(
 ) -> tuple[dict[str, Any], bytes]:
     strategy = validate_route_record(record, main_sha=main_sha)
     if not isinstance(source, bytes) or not source or len(source) > MAX_SOURCE_BYTES:
-        raise ProtectedRemediationError("protected repair source is empty or exceeds the ingestion bound")
+        raise ProtectedRemediationError(
+            "protected repair source is empty or exceeds the ingestion bound"
+        )
     if b"\x00" in source:
         raise ProtectedRemediationError("protected repair source is not canonical text")
     if source.count(strategy.old) != 1:
-        raise ProtectedRemediationError("protected repair source does not contain exactly one reviewed target")
+        raise ProtectedRemediationError(
+            "protected repair source does not contain exactly one reviewed target"
+        )
 
     repaired = source.replace(strategy.old, strategy.new, 1)
     if repaired == source or repaired.count(strategy.old) != 0:
         raise ProtectedRemediationError("protected deterministic transformation did not converge")
     if strategy.new not in repaired:
-        raise ProtectedRemediationError("protected deterministic transformation is not present after repair")
+        raise ProtectedRemediationError(
+            "protected deterministic transformation is not present after repair"
+        )
 
     plan: dict[str, Any] = {
         "schemaVersion": SCHEMA_VERSION,
@@ -227,9 +241,13 @@ def self_test() -> None:
         raise ProtectedRemediationError("protected authoring changed-file budget drifted")
     for item in REPAIR_STRATEGIES:
         if not item.old or not item.new or item.old == item.new:
-            raise ProtectedRemediationError("protected authoring strategy transformation is invalid")
+            raise ProtectedRemediationError(
+                "protected authoring strategy transformation is invalid"
+            )
         if not item.path.startswith(".github/"):
-            raise ProtectedRemediationError("initial protected authoring strategy escaped reviewed root")
+            raise ProtectedRemediationError(
+                "initial protected authoring strategy escaped reviewed root"
+            )
 
 
 if __name__ == "__main__":
