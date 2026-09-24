@@ -473,14 +473,11 @@ def test_workflow_persists_route_plan_before_live_reconcile() -> None:
     assert "artifact-ids: ${{ needs.route-plan.outputs.artifact-id }}" in workflow
     assert "--route-artifact-id ${{ needs.route-plan.outputs.artifact-id }}" in workflow
     assert (
-        "--route-artifact-digest sha256:${{ needs.route-plan.outputs.artifact-digest }}"
-        in workflow
+        "--route-artifact-digest sha256:${{ needs.route-plan.outputs.artifact-digest }}" in workflow
     )
     assert ".github/scripts/security_alert_routing.py" in workflow
 
-    route_job = workflow[
-        workflow.index("  route-plan:") : workflow.index("\n  reconcile:")
-    ]
+    route_job = workflow[workflow.index("  route-plan:") : workflow.index("\n  reconcile:")]
     assert ": write" not in route_job
 
 
