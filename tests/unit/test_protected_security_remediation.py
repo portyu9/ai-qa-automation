@@ -399,7 +399,7 @@ def test_generated_protected_pr_rejects_replay_after_main_moves() -> None:
                 return {"commit": {"sha": "c" * 40}}
             return super().get(path)
 
-    api = MovedMainApi()
+    api: Any = MovedMainApi()
     assert author._generated_repair_is_stale(
         api,
         api.pr,
@@ -413,7 +413,8 @@ def test_generated_protected_pr_rejects_replay_after_main_moves() -> None:
             assert payload == {"state": "closed"}
             return {"number": 301, "state": "closed"}
 
-    assert author._close_stale_generated_repair(CloseApi(), api.pr) == {
+    close_api: Any = CloseApi()
+    assert author._close_stale_generated_repair(close_api, api.pr) == {
         "decision": "stale-protected-repair-closed",
         "pr": 301,
         "headSha": HEAD,
@@ -448,9 +449,10 @@ def test_attempt_history_uses_exact_subject_branch_queries() -> None:
             assert max_items == 2
             return []
 
+    history_api: Any = ExactHistoryApi()
     assert (
         author._attempt_count(
-            ExactHistoryApi(),
+            history_api,
             alert_number=17,
             fingerprint="a" * 64,
             bot_login=BOT_LOGIN,
@@ -489,9 +491,10 @@ def test_multiple_active_generated_repairs_fail_closed() -> None:
                 }
             raise AssertionError(path)
 
+    repairs_api: Any = MultipleRepairsApi()
     with pytest.raises(author.ProtectedRemediationError, match="multiple active"):
         author._open_generated_repairs(
-            MultipleRepairsApi(),
+            repairs_api,
             bot_login=BOT_LOGIN,
             bot_id=BOT_ID,
         )
@@ -557,7 +560,7 @@ def test_guarded_merge_revalidates_and_rechecks_trusted_gate_immediately_before_
 
     monkeypatch.setattr(author, "validate_generated_pr", fake_validate)
     monkeypatch.setattr(author, "require_automatic_trusted_gate", fake_gate)
-    api = MergeApi()
+    api: Any = MergeApi()
 
     result = author._merge_repair(
         api,
