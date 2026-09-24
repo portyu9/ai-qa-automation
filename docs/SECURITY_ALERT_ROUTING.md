@@ -91,16 +91,19 @@ The live controller preserves bounded GitHub pagination and exact-current-main r
 
 ## Live controller integration
 
-The Security Auto-Heal workflow uses an evidence-first two-phase boundary for **new repair creation**:
+The Security Auto-Heal workflow uses an evidence-first two-phase boundary for **new repair creation**, with the phases separated by job-level capabilities:
 
-1. trusted default-branch controller bytes fetch exact current main and bounded open CodeQL alerts;
+1. a trusted-default-branch `route-plan` job has read-only GitHub authority (`actions`, `contents`, `pull-requests`, and `security-events` read) and fetches exact current main plus bounded open CodeQL alerts;
 2. the deterministic router computes canonical route records, including strategy-scoped prior-attempt state and GET-only Autofix availability evidence where relevant;
-3. the controller writes one canonical run-bound route plan to an owner-only file and fsyncs both file and parent directory;
-4. the workflow uploads that exact plan with the repository-pinned `actions/upload-artifact` revision before repair mutation;
-5. reconcile requires the artifact id, name, and GitHub-reported digest, re-fetches the artifact and exact Security Auto-Heal run, re-fetches main/alerts/attempt state, and requires canonical route bytes to match the persisted plan;
-6. only `ordinary-deterministic-autoheal` and `ordinary-bounded-autofix` may create repair branches/commits/PRs;
-7. generated repair markers bind the route-record digest, routing-policy version, plan digest, originating workflow run/attempt, artifact identity/digest, and the Autofix evidence state used by the route;
-8. later repair admission recomputes the same live route and requires successful originating controller-run/artifact provenance before existing diff, CodeQL, trusted-gate, and merge guards apply.
+3. that read-only job writes one canonical run-bound route plan to an owner-only file and fsyncs both file and parent directory;
+4. the read-only job uploads that exact plan with the repository-pinned `actions/upload-artifact` revision and exposes only the resulting artifact id/digest as job outputs;
+5. only after the planning job succeeds does the write-capable `reconcile` job start; it restores the same-run artifact with the repository-pinned `actions/download-artifact` revision;
+6. reconcile requires the artifact id, name, and GitHub-reported digest, re-fetches the artifact and exact Security Auto-Heal run, re-fetches main/alerts/attempt state, and requires canonical route bytes to match the persisted plan;
+7. only `ordinary-deterministic-autoheal` and `ordinary-bounded-autofix` may create repair branches/commits/PRs;
+8. generated repair markers bind the route-record digest, routing-policy version, plan digest, originating workflow run/attempt, artifact identity/digest, and the Autofix evidence state used by the route;
+9. later repair admission recomputes the same live route, rejects missing route provenance, and requires successful originating controller-run/artifact provenance before existing diff, CodeQL, trusted-gate, and merge guards apply.
+
+The route-planning job has no GitHub write permission. The later mutation job cannot run unless planning and artifact publication succeed, and current-main plus canonical route truth are re-proved after artifact restoration. Thus a planning bug cannot gain repository mutation authority merely because it executes in the same workflow.
 
 For model routes whose proposal is not yet available, provider submission uses a separate non-authoritative GitHub Actions check-run intent bound to exact main, alert fingerprint, route digest, strategy, and attempt. The neutral check cannot satisfy the App-bound `Trusted PR Gate`. It exists only to suppress provider replay: once exact intent exists, later controller cycles are GET-only until provider evidence becomes affirmative or the subject changes.
 
