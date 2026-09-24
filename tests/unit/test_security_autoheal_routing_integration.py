@@ -217,6 +217,25 @@ def test_route_planning_rejects_overflow_sentinel_before_routing_records() -> No
         autoheal._build_route_plan(_OverflowApi(_alert()), _config(), MAIN)
 
 
+def test_route_planning_rejects_duplicate_live_alert_identity() -> None:
+    class _DuplicateApi(_PlanApi):
+        def list_all(
+            self,
+            path: str,
+            *,
+            max_pages: int = 10,
+            max_items: int | None = None,
+        ) -> list[dict[str, Any]]:
+            if path.startswith("/code-scanning/alerts?"):
+                assert max_pages == 2
+                assert max_items == 101
+                return [_alert(), _alert()]
+            raise AssertionError(path)
+
+    with pytest.raises(autoheal.AutohealError, match="invalid or duplicate CodeQL alert identity"):
+        autoheal._build_route_plan(_DuplicateApi(_alert()), _config(), MAIN)
+
+
 def test_deterministic_route_plan_never_queries_autofix() -> None:
     api = _PlanApi(_alert())
 
@@ -339,6 +358,32 @@ def test_route_plan_rebind_requires_identical_live_routing_truth() -> None:
     drifted = _PlanApi(_alert(severity="9.0"))
     with pytest.raises(autoheal.AutohealError, match="routing truth drifted"):
         autoheal._rebind_route_plan(drifted, plan, _config())
+
+
+def test_route_rebind_rejects_duplicate_live_alert_identity() -> None:
+    config = _config()
+    plan = autoheal._build_route_plan(_PlanApi(_alert()), config, MAIN)
+
+    class _DuplicateApi(_PlanApi):
+        def list_all(
+            self,
+            path: str,
+            *,
+            max_pages: int = 10,
+            max_items: int | None = None,
+        ) -> list[dict[str, Any]]:
+            if path.startswith("/code-scanning/alerts?"):
+                assert max_pages == 2
+                assert max_items == 101
+                return [_alert(), _alert()]
+            if path == "/pulls?state=closed&sort=updated&direction=desc":
+                assert max_pages == 10
+                assert max_items is None
+                return []
+            raise AssertionError(path)
+
+    with pytest.raises(autoheal.AutohealError, match="invalid or duplicate CodeQL alert identity"):
+        autoheal._rebind_route_plan(_DuplicateApi(_alert()), plan, config)
 
 
 def test_route_rebind_reobserves_live_autofix_evidence() -> None:
