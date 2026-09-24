@@ -548,7 +548,11 @@ def _publish_merge_signal(github_output: Path | None) -> None:
     if github_output is None:
         return
     expected = os.environ.get("GITHUB_OUTPUT")
-    if os.environ.get("GITHUB_ACTIONS") != "true" or not expected or Path(expected) != github_output:
+    if (
+        os.environ.get("GITHUB_ACTIONS") != "true"
+        or not expected
+        or Path(expected) != github_output
+    ):
         raise GovernanceError("merge signal output is not the exact GitHub Actions output file")
     flags = os.O_WRONLY | os.O_APPEND
     if hasattr(os, "O_NOFOLLOW"):
