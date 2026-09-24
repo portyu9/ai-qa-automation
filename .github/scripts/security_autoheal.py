@@ -3079,7 +3079,11 @@ def _ensure_autofix_submission_intent(
     main_sha = _require_sha(record.get("baseSha"), "Autofix intent main SHA")
     if _current_main(api, config) != main_sha:
         raise PolicyBlock("main advanced before Autofix submission intent")
-    rows = api.list_all(f"/commits/{main_sha}/check-runs?filter=all", max_pages=4)
+    encoded_name = urllib.parse.quote(name, safe="")
+    rows = api.list_all(
+        f"/commits/{main_sha}/check-runs?filter=all&check_name={encoded_name}",
+        max_pages=2,
+    )
     matches = [
         row
         for row in rows
@@ -3090,7 +3094,7 @@ def _ensure_autofix_submission_intent(
             main_sha=main_sha,
         )
     ]
-    if len(matches) > 4:
+    if len(matches) > 2:
         raise PolicyBlock("Autofix submission intent has excessive duplicate evidence")
     if matches:
         return False
