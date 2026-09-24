@@ -297,6 +297,43 @@ def test_route_plan_rebind_requires_identical_live_routing_truth() -> None:
         autoheal._rebind_route_plan(drifted, plan, _config())
 
 
+def test_selected_route_revalidation_blocks_alert_truth_drift_before_mutation() -> None:
+    config = _config()
+    plan = autoheal._build_route_plan(_PlanApi(_alert()), config, MAIN)
+    record = plan["records"][0]
+
+    class _MutationApi(_PlanApi):
+        def __init__(self, live_alert: dict[str, Any]) -> None:
+            super().__init__(live_alert)
+            self.live_alert = live_alert
+
+        def get(self, path: str) -> dict[str, Any]:
+            if path == "/branches/main":
+                return {"commit": {"sha": MAIN}}
+            if path == f"/code-scanning/alerts/{self.live_alert['number']}":
+                return self.live_alert
+            raise AssertionError(path)
+
+    assert (
+        autoheal._revalidate_route_record_before_mutation(
+            _MutationApi(_alert()),
+            record,
+            config,
+        )
+        == record
+    )
+
+    with pytest.raises(
+        autoheal.AutohealError,
+        match="routing truth drifted before mutation",
+    ):
+        autoheal._revalidate_route_record_before_mutation(
+            _MutationApi(_alert(severity="9.0")),
+            record,
+            config,
+        )
+
+
 def test_route_artifact_must_bind_exact_in_progress_controller_run() -> None:
     api = _ArtifactApi(_alert())
     plan = autoheal._build_route_plan(api, _config(), MAIN)
@@ -367,12 +404,12 @@ def test_generated_repair_discovery_rejects_stripped_marker() -> None:
 def test_repair_admission_rejects_route_provenance_stripping() -> None:
     class _Api:
         def list_all(
-        self,
-        path: str,
-        *,
-        max_pages: int = 10,
-        max_items: int | None = None,
-    ) -> list[dict[str, Any]]:
+            self,
+            path: str,
+            *,
+            max_pages: int = 10,
+            max_items: int | None = None,
+        ) -> list[dict[str, Any]]:
             assert path.startswith("/code-scanning/alerts?")
             assert max_pages == 10
             assert max_items is None
@@ -572,13 +609,23 @@ def test_reconcile_stops_after_first_route_authorized_repair_mutation(
         def __init__(self, token: str, repository: str) -> None:
             assert repository == config["repository"]
 
+        def get(self, path: str) -> dict[str, Any]:
+            if path.startswith("/code-scanning/alerts/"):
+                number = int(path.rsplit("/", 1)[1])
+                return next(alert for alert in alerts if alert["number"] == number)
+            raise AssertionError(path)
+
         def list_all(
-        self,
-        path: str,
-        *,
-        max_pages: int = 10,
-        max_items: int | None = None,
-    ) -> list[dict[str, Any]]:
+            self,
+            path: str,
+            *,
+            max_pages: int = 10,
+            max_items: int | None = None,
+        ) -> list[dict[str, Any]]:
+            if path == "/pulls?state=closed&sort=updated&direction=desc":
+                assert max_pages == 10
+                assert max_items is None
+                return []
             assert path.startswith("/code-scanning/alerts?")
             assert max_pages == 10
             assert max_items == 101
