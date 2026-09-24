@@ -21,6 +21,7 @@ def _load(name: str, path: Path) -> ModuleType:
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.path.insert(0, str(SCRIPT_DIR))
+    sys.modules[name] = module
     try:
         spec.loader.exec_module(module)
     finally:
@@ -95,7 +96,9 @@ def test_route_record_digest_staleness_and_decision_drift_fail_closed() -> None:
     with pytest.raises(author.ProtectedRemediationError, match="not canonical"):
         author.validate_route_record(tampered, main_sha=MAIN)
 
-    with pytest.raises(author.ProtectedRemediationError, match="stale relative to exact current main"):
+    with pytest.raises(
+        author.ProtectedRemediationError, match="stale relative to exact current main"
+    ):
         author.validate_route_record(record, main_sha="b" * 40)
 
     ordinary = routing.route_alert(
@@ -111,12 +114,16 @@ def test_route_record_digest_staleness_and_decision_drift_fail_closed() -> None:
 def test_self_authority_and_unreviewed_protected_targets_have_no_authoring_strategy() -> None:
     self_route = _record(path=".github/scripts/protected_security_remediation.py")
     assert self_route["decision"] == "protected-independent-remediation"
-    with pytest.raises(author.ProtectedRemediationError, match="no exact code-owned authoring strategy"):
+    with pytest.raises(
+        author.ProtectedRemediationError, match="no exact code-owned authoring strategy"
+    ):
         author.validate_route_record(self_route, main_sha=MAIN)
 
     other = _record(path=".github/scripts/trusted_status.py")
     assert other["decision"] == "protected-independent-remediation"
-    with pytest.raises(author.ProtectedRemediationError, match="no exact code-owned authoring strategy"):
+    with pytest.raises(
+        author.ProtectedRemediationError, match="no exact code-owned authoring strategy"
+    ):
         author.validate_route_record(other, main_sha=MAIN)
 
 
