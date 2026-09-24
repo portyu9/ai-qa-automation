@@ -94,7 +94,7 @@ class _PlanApi:
             assert max_items is None
             return []
         if path.startswith("/code-scanning/alerts?"):
-            assert max_pages == 10
+            assert max_pages == 2
             assert max_items == 101
             return [self.alert]
         raise AssertionError(path)
@@ -183,18 +183,19 @@ def test_paginated_ingestion_rejects_non_objects_and_stops_at_overflow_sentinel(
 
     bounded = _PaginationApi(
         [
-            [{"number": value} for value in range(100)],
-            [{"number": 100}, {"number": 101}],
+            [{"number": value} for value in range(51)],
+            [{"number": value} for value in range(51, 102)],
             [{"number": 102}],
         ]
     )
-    rows = bounded.list_all("/code-scanning/alerts?state=open", max_pages=10, max_items=101)
+    rows = bounded.list_all("/code-scanning/alerts?state=open", max_pages=2, max_items=101)
     assert len(rows) == 101
     assert len(bounded.calls) == 2
+    assert all("per_page=51" in call for call in bounded.calls)
 
     malformed = _PaginationApi([[{"number": 1}, "not-an-object"]])
     with pytest.raises(autoheal.AutohealError, match="contains a non-object item"):
-        malformed.list_all("/code-scanning/alerts?state=open", max_pages=10, max_items=101)
+        malformed.list_all("/code-scanning/alerts?state=open", max_pages=2, max_items=101)
 
 
 def test_deterministic_route_plan_never_queries_autofix() -> None:
@@ -627,7 +628,7 @@ def test_reconcile_stops_after_first_route_authorized_repair_mutation(
                 assert max_items is None
                 return []
             assert path.startswith("/code-scanning/alerts?")
-            assert max_pages == 10
+            assert max_pages == 2
             assert max_items == 101
             return alerts
 
