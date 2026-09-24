@@ -65,6 +65,9 @@ TRANSIENT_GET_DELAY_SECONDS = 1
 GITHUB_ACTIONS_LOGIN = "github-actions[bot]"
 GITHUB_ACTIONS_USER_ID = 41898282
 GITHUB_ACTIONS_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
+GITHUB_ACTIONS_APP_ID = 15368
+GITHUB_ACTIONS_APP_SLUG = "github-actions"
+AUTOFIX_INTENT_CHECK_PREFIX = "Security Auto-Heal Autofix Intent"
 GITHUB_WEB_FLOW_LOGIN = "web-flow"
 GITHUB_WEB_FLOW_USER_ID = 19864447
 GITHUB_COMMITTER_NAME = "GitHub"
@@ -3008,6 +3011,119 @@ def _attempt_count(
     return count
 
 
+def _autofix_intent_identity(record: dict[str, Any]) -> tuple[str, str, int]:
+    number = record.get("alertNumber")
+    fingerprint = record.get("fingerprint")
+    prior = record.get("strategyAttemptCount")
+    base_sha = record.get("baseSha")
+    digest = record.get("recordDigest")
+    if (
+        not isinstance(number, int)
+        or isinstance(number, bool)
+        or number < 1
+        or not isinstance(fingerprint, str)
+        or re.fullmatch(r"[0-9a-f]{64}", fingerprint) is None
+        or not isinstance(prior, int)
+        or isinstance(prior, bool)
+        or prior < 0
+        or not isinstance(base_sha, str)
+        or SHA.fullmatch(base_sha) is None
+        or not isinstance(digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+    ):
+        raise PolicyBlock("Autofix intent route identity is malformed")
+    attempt = prior + 1
+    name = f"{AUTOFIX_INTENT_CHECK_PREFIX} #{number} {fingerprint[:12]} a{attempt}"
+    material = {
+        "version": 1,
+        "repository": "portyu9/ai-qa-automation",
+        "alert": number,
+        "fingerprint": fingerprint,
+        "baseSha": base_sha,
+        "routeRecordDigest": digest,
+        "strategy": MODEL_AUTOFIX_STRATEGY,
+        "attempt": attempt,
+    }
+    external_id = "aiqa-autofix-intent:" + hashlib.sha256(
+        json.dumps(material, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    return name, external_id, attempt
+
+
+def _exact_autofix_intent_check(
+    row: Any,
+    *,
+    name: str,
+    external_id: str,
+    main_sha: str,
+) -> bool:
+    if not isinstance(row, dict):
+        return False
+    app = row.get("app") or {}
+    return (
+        row.get("name") == name
+        and row.get("external_id") == external_id
+        and row.get("head_sha") == main_sha
+        and row.get("status") == "completed"
+        and row.get("conclusion") == "neutral"
+        and app.get("id") == GITHUB_ACTIONS_APP_ID
+        and app.get("slug") == GITHUB_ACTIONS_APP_SLUG
+    )
+
+
+def _ensure_autofix_submission_intent(
+    api: GitHubApi,
+    record: dict[str, Any],
+    config: dict[str, Any],
+) -> bool:
+    """Persist provider-submission intent. True means this run may submit exactly once."""
+    name, external_id, attempt = _autofix_intent_identity(record)
+    main_sha = _require_sha(record.get("baseSha"), "Autofix intent main SHA")
+    if _current_main(api, config) != main_sha:
+        raise PolicyBlock("main advanced before Autofix submission intent")
+    rows = api.list_all(f"/commits/{main_sha}/check-runs?filter=all", max_pages=4)
+    matches = [
+        row
+        for row in rows
+        if _exact_autofix_intent_check(
+            row,
+            name=name,
+            external_id=external_id,
+            main_sha=main_sha,
+        )
+    ]
+    if len(matches) > 4:
+        raise PolicyBlock("Autofix submission intent has excessive duplicate evidence")
+    if matches:
+        return False
+
+    payload = {
+        "name": name,
+        "head_sha": main_sha,
+        "status": "completed",
+        "conclusion": "neutral",
+        "external_id": external_id,
+        "output": {
+            "title": "Autofix provider submission intent persisted",
+            "summary": (
+                f"Alert #{record['alertNumber']} exact-main Autofix attempt {attempt}; "
+                "non-authoritative replay-suppression evidence only."
+            ),
+        },
+    }
+    created = api.post("/check-runs", payload)
+    if not _exact_autofix_intent_check(
+        created,
+        name=name,
+        external_id=external_id,
+        main_sha=main_sha,
+    ):
+        raise AutohealError("GitHub did not acknowledge exact Autofix submission intent")
+    if _current_main(api, config) != main_sha:
+        raise PolicyBlock("main advanced after Autofix submission intent")
+    return True
+
+
 def _autofix_evidence(api: GitHubApi, alert_number: int) -> str:
     if not isinstance(alert_number, int) or isinstance(alert_number, bool) or alert_number < 1:
         raise AutohealError("route planning received an invalid alert number")
@@ -3621,14 +3737,17 @@ def reconcile(
                 and record.get("autofixEligibility") == "unknown"
             ):
                 subject = _subject_from_route(record)
-                if _current_main(api, config) != subject["baseSha"]:
-                    raise PolicyBlock("main advanced before Autofix evidence acquisition")
-                _ensure_copilot_autofix(api, subject["number"])
+                if _ensure_autofix_submission_intent(api, record, config):
+                    _ensure_copilot_autofix(api, subject["number"])
+                    intent_state = "provider-submission-attempted"
+                else:
+                    intent_state = "provider-submission-already-intended"
                 print(
                     json.dumps(
                         {
                             "alert": subject["number"],
-                            "decision": "autofix-evidence-ready",
+                            "decision": "autofix-evidence-waiting",
+                            "intentState": intent_state,
                             "routeRecordDigest": record["recordDigest"],
                         },
                         sort_keys=True,
