@@ -981,16 +981,48 @@ def test_routing_record_retry_reconciles_failed_parent_fsync(
 
     assert target.read_bytes() == routing.canonical_record(record)
 
-    reconciled_calls = 0
+    reconciled_syncs: list[str] = []
 
     def count_reconciliation_fsync(fd: int) -> None:
-        nonlocal reconciled_calls
-        reconciled_calls += 1
+        info = routing.os.fstat(fd)
+        if routing.stat.S_ISREG(info.st_mode):
+            reconciled_syncs.append("file")
+        elif routing.stat.S_ISDIR(info.st_mode):
+            reconciled_syncs.append("directory")
+        else:
+            reconciled_syncs.append("other")
         real_fsync(fd)
 
     monkeypatch.setattr(routing.os, "fsync", count_reconciliation_fsync)
     assert routing.persist_record(target, record) is False
-    assert reconciled_calls == 1
+    assert reconciled_syncs == ["file", "directory"]
+
+
+def test_preexisting_identical_record_reconciles_file_and_parent_durability(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = routing.route_alert(_alert(), main_sha=MAIN, config=_config())
+    target = tmp_path / "route.json"
+    target.write_bytes(routing.canonical_record(record))
+    target.chmod(0o600)
+    real_fsync = routing.os.fsync
+    reconciled_syncs: list[str] = []
+
+    def count_fsync(fd: int) -> None:
+        info = routing.os.fstat(fd)
+        if routing.stat.S_ISREG(info.st_mode):
+            reconciled_syncs.append("file")
+        elif routing.stat.S_ISDIR(info.st_mode):
+            reconciled_syncs.append("directory")
+        else:
+            reconciled_syncs.append("other")
+        real_fsync(fd)
+
+    monkeypatch.setattr(routing.os, "fsync", count_fsync)
+
+    assert routing.persist_record(target, record) is False
+    assert reconciled_syncs == ["file", "directory"]
 
 
 def test_named_file_identity_rejects_replaced_directory_entry(tmp_path: Path) -> None:
