@@ -604,6 +604,9 @@ class GitHubApi:
     def put(self, path: str, payload: Mapping[str, Any]) -> Any:
         return self.request("PUT", path, payload)
 
+    def patch(self, path: str, payload: Mapping[str, Any]) -> Any:
+        return self.request("PATCH", path, payload)
+
     def list_all(
         self,
         path: str,
@@ -1020,6 +1023,54 @@ def _open_generated_repairs(api: GitHubApi, *, bot_login: str, bot_id: int) -> l
     return rows
 
 
+def _generated_repair_is_stale(
+    api: GitHubApi,
+    pr: Mapping[str, Any],
+    *,
+    bot_login: str,
+    bot_id: int,
+) -> bool:
+    if not _generated_bot_pull(pr, login=bot_login, user_id=bot_id):
+        raise ProtectedRemediationError("stale repair cleanup subject is not the exact author App")
+    if pr.get("state") != "open" or pr.get("draft") is not False:
+        raise ProtectedRemediationError("stale repair cleanup subject is not an open non-draft PR")
+    head = pr.get("head") or {}
+    base = pr.get("base") or {}
+    if (
+        (head.get("repo") or {}).get("full_name") != EXPECTED_REPOSITORY
+        or (base.get("repo") or {}).get("full_name") != EXPECTED_REPOSITORY
+        or base.get("ref") != EXPECTED_BASE_BRANCH
+    ):
+        raise ProtectedRemediationError("stale repair cleanup repository/base identity drifted")
+    _require_sha(head.get("sha"), "stale protected repair head SHA")
+    base_sha = _require_sha(base.get("sha"), "stale protected repair base SHA")
+    return _current_main(api) != base_sha
+
+
+def _close_stale_generated_repair(
+    write_api: GitHubApi,
+    pr: Mapping[str, Any],
+) -> dict[str, Any]:
+    number = _require_positive_int(pr.get("number"), "stale protected repair PR number")
+    result = write_api.patch(f"/pulls/{number}", {"state": "closed"})
+    if (
+        not isinstance(result, dict)
+        or result.get("number") != number
+        or result.get("state") != "closed"
+    ):
+        raise ProtectedRemediationError("GitHub did not acknowledge stale protected PR closure")
+    return {
+        "decision": "stale-protected-repair-closed",
+        "pr": number,
+        "headSha": _require_sha(
+            ((pr.get("head") or {}).get("sha")), "stale protected repair head SHA"
+        ),
+        "baseSha": _require_sha(
+            ((pr.get("base") or {}).get("sha")), "stale protected repair base SHA"
+        ),
+    }
+
+
 def _merge_repair(
     read_api: GitHubApi,
     write_api: GitHubApi,
@@ -1099,6 +1150,14 @@ def reconcile(*, allow_merge: bool) -> int:
         pr = read_api.get(
             f"/pulls/{_require_positive_int(active[0].get('number'), 'active repair PR number')}"
         )
+        if _generated_repair_is_stale(
+            read_api,
+            pr,
+            bot_login=bot_login,
+            bot_id=bot_id,
+        ):
+            print(json.dumps(_close_stale_generated_repair(write_api, pr), sort_keys=True))
+            return 0
         live = validate_generated_pr(
             read_api,
             pr,
