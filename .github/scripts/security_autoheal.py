@@ -3802,6 +3802,7 @@ def reconcile(
             )
             created += 1
             active_alerts.add(subject["number"])
+            return remaining_repairs + created
         except RetryLater as exc:
             number = alert.get("number")
             print(
