@@ -636,6 +636,7 @@ def test_dependency_workflow_skips_action_governance_after_promotion_merge() -> 
     assert '--github-output "$GITHUB_OUTPUT"' in workflow
     assert "if: steps.python_promotion.outputs.merged != 'true'" in workflow
 
+
 def _post_merge_ci_row(
     *,
     run_id: int = 88001,
