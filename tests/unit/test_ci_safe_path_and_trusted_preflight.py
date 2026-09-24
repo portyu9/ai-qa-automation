@@ -14,9 +14,21 @@ TRUSTED_AUTO_WORKFLOW = ROOT / ".github" / "workflows" / "trusted-pr-auto.yml"
 def test_all_repository_python_workflows_enable_safe_path() -> None:
     ci_text = CI_WORKFLOW.read_text(encoding="utf-8")
     manual_text = MANUAL_WORKFLOW.read_text(encoding="utf-8")
+    trusted_auto_text = TRUSTED_AUTO_WORKFLOW.read_text(encoding="utf-8")
 
     assert ci_text.count('  PYTHONSAFEPATH: "1"') == 1
     assert manual_text.count('  PYTHONSAFEPATH: "1"') == 1
+    assert trusted_auto_text.count('  PYTHONSAFEPATH: "1"') == 1
+    assert trusted_auto_text.count('          PYTHONSAFEPATH: ""') == 1
+
+
+def test_trusted_bot_codeql_safe_path_exception_is_analyze_only() -> None:
+    text = TRUSTED_AUTO_WORKFLOW.read_text(encoding="utf-8")
+    bot_codeql = text[text.index("  bot-codeql:") : text.index("  required-gate:")]
+    analyze = bot_codeql[bot_codeql.index("      - name: Analyze exact governed bot branch") :]
+
+    assert '          PYTHONSAFEPATH: ""' in analyze
+    assert '          PYTHONSAFEPATH: ""' not in bot_codeql[: bot_codeql.index(analyze)]
 
 
 def test_python_safe_path_blocks_repository_local_pip_module_shadow(tmp_path: Path) -> None:
