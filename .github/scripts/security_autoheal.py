@@ -1204,6 +1204,43 @@ def _delete_exact_generated_branch(api: GitHubApi, branch: str, head_sha: str) -
     api.delete(f"/git/refs/heads/{encoded}")
 
 
+def _validate_route_evidence_fields(route_evidence: dict[str, Any]) -> None:
+    expected = {
+        "routePlanDigest",
+        "routePlanRunId",
+        "routePlanRunAttempt",
+        "routeArtifactId",
+        "routeArtifactName",
+        "routeArtifactDigest",
+    }
+    if set(route_evidence) != expected:
+        raise PolicyBlock("repair route artifact evidence keys are outside the reviewed schema")
+    run_id = route_evidence.get("routePlanRunId")
+    run_attempt = route_evidence.get("routePlanRunAttempt")
+    artifact_id = route_evidence.get("routeArtifactId")
+    if (
+        not isinstance(route_evidence.get("routePlanDigest"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", str(route_evidence["routePlanDigest"])) is None
+        or not isinstance(run_id, int)
+        or isinstance(run_id, bool)
+        or run_id < 1
+        or not isinstance(run_attempt, int)
+        or isinstance(run_attempt, bool)
+        or run_attempt < 1
+        or not isinstance(artifact_id, int)
+        or isinstance(artifact_id, bool)
+        or artifact_id < 1
+        or route_evidence.get("routeArtifactName")
+        != f"{ROUTE_PLAN_ARTIFACT_PREFIX}-{run_id}-{run_attempt}"
+        or not isinstance(route_evidence.get("routeArtifactDigest"), str)
+        or ROUTE_ARTIFACT_DIGEST_RE.fullmatch(
+            str(route_evidence["routeArtifactDigest"])
+        )
+        is None
+    ):
+        raise PolicyBlock("repair route artifact evidence is malformed")
+
+
 def _create_pull_request(
     api: GitHubApi,
     branch: str,
@@ -1227,6 +1264,7 @@ def _create_pull_request(
     )
     if route_record.get("decision") != expected_decision:
         raise PolicyBlock("repair route record does not authorize this mutation lane")
+    _validate_route_evidence_fields(route_evidence)
     metadata = {
         "version": 1,
         "alert": subject["number"],
