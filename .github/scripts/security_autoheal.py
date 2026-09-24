@@ -3115,9 +3115,7 @@ def selftest(config: dict[str, Any]) -> None:
             _select_post_merge_ci_run([drifted], merge_sha)
         except AutohealError as exc:
             if expected_message not in str(exc):
-                raise AutohealError(
-                    f"drifted post-merge CI {field} failed unexpectedly"
-                ) from exc
+                raise AutohealError(f"drifted post-merge CI {field} failed unexpectedly") from exc
         else:
             raise AutohealError(f"drifted post-merge CI {field} was accepted")
 
