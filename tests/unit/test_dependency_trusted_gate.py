@@ -603,6 +603,7 @@ def test_dependency_promotion_reconcile_stops_after_successful_merge(
         return {"source": True}, promoted
 
     monkeypatch.setattr(promotion, "_validate_promotion", validate)
+
     def publish_and_merge(
         api_arg: object,
         promotion_arg: dict[str, Any],
@@ -622,11 +623,14 @@ def test_dependency_promotion_reconcile_stops_after_successful_merge(
     monkeypatch.setattr(promotion, "_publish_and_merge", publish_and_merge)
     monkeypatch.setattr(promotion, "_publish_merge_signal", publish_signal)
 
-    assert promotion.reconcile(
-        config,
-        allow_merge=True,
-        github_output=output,
-    ) == 0
+    assert (
+        promotion.reconcile(
+            config,
+            allow_merge=True,
+            github_output=output,
+        )
+        == 0
+    )
     assert observed_gets == ["/pulls/701"]
     assert events == ["post-merge-finalized", "merge-signal"]
 
