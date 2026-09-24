@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import tempfile
 import tomllib
 import urllib.parse
@@ -34,8 +35,9 @@ from dependency_governance import (
     require_sha,
     validate_pr_identity,
 )
-from dependency_lock_compiler import LockCompileError, compile_locks, validate_frozen_locks
-from trusted_status import TrustedStatusError, require_automatic_trusted_gate
+from dependency_lock_compiler import compile_locks
+from dependency_trusted_gate import require_schedule_trusted_gate
+from trusted_status import TrustedStatusError
 
 ROOT = Path(__file__).resolve().parents[2]
 BRANCH_PREFIX = "automation/dependency-promotion-"
@@ -512,7 +514,7 @@ def _create_promotion_pr(api: GitHubApi, source: dict[str, Any], branch: str, he
             "",
             "The source Dependabot branch is never mutated by governance. This subject carries the",
             "exact signed Dependabot pyproject.toml plus deterministic wheel-only hash locks and must",
-            "pass the full locked CI, CodeQL, frozen-lock replay proof, and Trusted PR Gate before merge.",
+            "pass the full locked CI, CodeQL, regeneration proof, and Trusted PR Gate before merge.",
         )
     )
     try:
@@ -542,6 +544,35 @@ def _create_promotion_pr(api: GitHubApi, source: dict[str, Any], branch: str, he
     return number
 
 
+def _publish_merge_signal(github_output: Path | None) -> None:
+    if github_output is None:
+        return
+    expected = os.environ.get("GITHUB_OUTPUT")
+    if (
+        os.environ.get("GITHUB_ACTIONS") != "true"
+        or not expected
+        or Path(expected) != github_output
+    ):
+        raise GovernanceError("merge signal output is not the exact GitHub Actions output file")
+    flags = os.O_WRONLY | os.O_APPEND
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(github_output, flags)
+    except OSError as exc:
+        raise GovernanceError(f"unable to open exact GitHub Actions merge output: {exc}") from exc
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
+            raise GovernanceError("GitHub Actions merge output is not an owned regular file")
+        payload = b"merged=true\n"
+        if os.write(descriptor, payload) != len(payload):
+            raise GovernanceError("GitHub Actions merge output write was incomplete")
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def _promotion_pulls(api: GitHubApi) -> list[dict[str, Any]]:
     rows = api.list_all("/pulls?state=open&sort=created&direction=asc", max_pages=4)
     return [
@@ -560,34 +591,11 @@ def _require_green(api: GitHubApi, head_sha: str, config: dict[str, Any]) -> Non
 
 
 def _validate_generated_bytes(api: GitHubApi, source: dict[str, Any], head_sha: str) -> None:
-    python311 = os.environ.get("PROMOTION_PYTHON311", "")
-    python314 = os.environ.get("PROMOTION_PYTHON314", "")
-    if not python311 or not python314:
-        raise GovernanceError("PROMOTION_PYTHON311 and PROMOTION_PYTHON314 are required")
-    observed = {path: _contents_bytes(api, path, head_sha) for path in PROMOTION_PATHS}
-    if observed["pyproject.toml"] != source["pyproject"]:
-        raise PolicyBlock("promotion pyproject.toml differs from exact Dependabot source")
-    with tempfile.TemporaryDirectory(prefix="aiqa-promotion-replay-") as temporary:
-        root = Path(temporary) / "root"
-        bundle = Path(temporary) / "bundle"
-        (root / "requirements").mkdir(parents=True)
-        bundle.mkdir()
-        (root / "pyproject.toml").write_bytes(observed["pyproject.toml"])
-        shutil.copy2(
-            ROOT / "requirements" / "base-image.lock", root / "requirements" / "base-image.lock"
-        )
-        for name in (
-            "build-py311.lock",
-            "dev-py311.lock",
-            "dev-py314.lock",
-            "runtime-py311.lock",
-        ):
-            (bundle / name).write_bytes(observed[f"requirements/{name}"])
-        (bundle / "lock-authority.json").write_bytes(observed[".github/lock-authority.json"])
-        try:
-            validate_frozen_locks(root, python311, python314, bundle)
-        except LockCompileError as exc:
-            raise PolicyBlock(f"promotion frozen lock replay failed: {exc}") from exc
+    expected = _compile(source)
+    for path, raw in expected.items():
+        observed = _contents_bytes(api, path, head_sha)
+        if observed != raw:
+            raise PolicyBlock(f"promotion path does not match deterministic regeneration: {path}")
 
 
 def _require_promotion_lifecycle(
@@ -681,21 +689,21 @@ def _validate_promotion(
 def _publish_and_merge(
     api: GitHubApi, promotion: dict[str, Any], config: dict[str, Any]
 ) -> dict[str, Any]:
-    try:
-        require_automatic_trusted_gate(
-            api,
-            promotion["number"],
-            promotion["headSha"],
-            promotion["baseSha"],
-        )
-    except TrustedStatusError as exc:
-        raise PolicyBlock("automatic Trusted PR Gate is not yet admissible") from exc
     fresh_before_merge = api.get(f"/pulls/{promotion['number']}")
     _, rebound_before_merge = _validate_promotion(
         api, fresh_before_merge, config, require_checks=False
     )
     if rebound_before_merge != promotion:
         raise PolicyBlock("promotion changed before guarded merge")
+    try:
+        require_schedule_trusted_gate(
+            api,
+            promotion["number"],
+            promotion["headSha"],
+            promotion["baseSha"],
+        )
+    except TrustedStatusError as exc:
+        raise PolicyBlock("automatic Trusted PR Gate is not yet schedule-admissible") from exc
     result = api.put(
         f"/pulls/{promotion['number']}/merge",
         {"sha": promotion["headSha"], "merge_method": config["mergeMethod"]},
@@ -734,7 +742,12 @@ def _close_stale(api: GitHubApi, number: int, branch: str, head_sha: str) -> Non
     _delete_exact_generated_branch(api, branch, head_sha)
 
 
-def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
+def reconcile(
+    config: dict[str, Any],
+    *,
+    allow_merge: bool,
+    github_output: Path | None = None,
+) -> int:
     if config.get("pipMode") != "promotion":
         raise GovernanceError("dependency promotion requires pipMode=promotion")
     repository = os.environ.get("GITHUB_REPOSITORY", "")
@@ -764,6 +777,8 @@ def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
                         sort_keys=True,
                     )
                 )
+                _publish_merge_signal(github_output)
+                return 0
         except PolicyBlock as exc:
             reason = str(exc)
             print(
@@ -991,11 +1006,18 @@ def main() -> None:
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--reconcile", action="store_true")
     parser.add_argument("--allow-merge", action="store_true")
+    parser.add_argument("--github-output", type=Path)
     args = parser.parse_args()
+    if args.github_output is not None and (not args.reconcile or not args.allow_merge):
+        parser.error("--github-output requires --reconcile --allow-merge")
     if args.self_test:
         selftest()
     if args.reconcile:
-        reconcile(load_config(), allow_merge=args.allow_merge)
+        reconcile(
+            load_config(),
+            allow_merge=args.allow_merge,
+            github_output=args.github_output,
+        )
     if not args.self_test and not args.reconcile:
         parser.error("choose --self-test or --reconcile")
 
