@@ -151,13 +151,13 @@ def test_ambiguous_autofix_commit_response_is_recovered_without_provider_replay(
     assert api.commit_posts == 1
 
     recovered = autoheal._commit_copilot_autofix(
-            api,
-            ALERT,
-            BRANCH,
-            BASE,
-            ROUTE_DIGEST,
-            PLAN_DIGEST,
-        )
+        api,
+        ALERT,
+        BRANCH,
+        BASE,
+        ROUTE_DIGEST,
+        PLAN_DIGEST,
+    )
     assert recovered == HEAD
     assert api.commit_posts == 1
 
@@ -396,6 +396,14 @@ def test_model_repair_uses_attempt_scoped_branch(monkeypatch: pytest.MonkeyPatch
     subject = autoheal._subject_from_route(route_record)
     expected_branch = autoheal._branch_name(subject, 2)
     observed: dict[str, Any] = {}
+    route_evidence = {
+        "routePlanDigest": "e" * 64,
+        "routePlanRunId": 123,
+        "routePlanRunAttempt": 1,
+        "routeArtifactId": 456,
+        "routeArtifactName": "security-autoheal-route-plan-123-1",
+        "routeArtifactDigest": "sha256:" + ("f" * 64),
+    }
 
     monkeypatch.setattr(autoheal, "_current_main", lambda api, config: BASE)
 
@@ -421,6 +429,8 @@ def test_model_repair_uses_attempt_scoped_branch(monkeypatch: pytest.MonkeyPatch
         lambda api, base, head: [{"filename": subject["path"]}],
     )
 
+    expected_route_evidence = route_evidence
+
     def create_pr(
         api: object,
         branch: str,
@@ -440,7 +450,7 @@ def test_model_repair_uses_attempt_scoped_branch(monkeypatch: pytest.MonkeyPatch
         assert deterministic is False
         assert strategy == autoheal.MODEL_AUTOFIX_STRATEGY
         assert route_record["recordDigest"] == _model_route(config, prior=1)["recordDigest"]
-        assert route_evidence["routePlanDigest"] == "e" * 64
+        assert route_evidence == expected_route_evidence
         return 999
 
     monkeypatch.setattr(autoheal, "_create_pull_request", create_pr)
@@ -453,7 +463,7 @@ def test_model_repair_uses_attempt_scoped_branch(monkeypatch: pytest.MonkeyPatch
             attempt=2,
             strategy=autoheal.MODEL_AUTOFIX_STRATEGY,
             route_record=route_record,
-            route_evidence={"routePlanDigest": "e" * 64},
+            route_evidence=route_evidence,
         )
         == 999
     )
