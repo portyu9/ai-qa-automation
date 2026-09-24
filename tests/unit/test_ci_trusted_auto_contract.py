@@ -52,6 +52,7 @@ def test_trusted_auto_contract_is_frozen_and_bounded() -> None:
         "dependabot-actions",
         "dependency-promotion",
         "security-autoheal",
+        "protected-security-remediation",
     ]
     assert {".github", "scripts"} <= set(auto["protected_paths"])
     assert "tests" not in auto["protected_paths"]
@@ -253,4 +254,53 @@ def test_trusted_auto_contract_rejects_reporter_secret_before_final_revalidation
     with pytest.raises(
         ValueError, match="non-action structure differs from reviewed trust authority"
     ):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_protected_remediation_workflow_is_schedule_only_and_author_token_is_narrow() -> None:
+    result = ci_contract.verify_ci_contract(ROOT)
+    protected = result["workflows"]["protected_remediation"]
+
+    assert protected == {
+        "trigger": "schedule:5m",
+        "trusted_definition": "default-branch-scheduled-workflow",
+        "native_token": "read-only",
+        "author_token": "distinct-app:contents-write+pull-requests-write",
+        "status_authority": "none",
+        "candidate_workflow_execution": "forbidden",
+        "mutation": "exact-route+one-file+branch-pr-only",
+    }
+
+
+def test_protected_remediation_contract_rejects_candidate_trigger(tmp_path: Path) -> None:
+    root = _copy_contract_repo(tmp_path)
+    path = root / ".github" / "workflows" / "protected-security-remediation.yml"
+    text = path.read_text(encoding="utf-8")
+    path.write_text(
+        text.replace("on:\n  schedule:\n", "on:\n  pull_request:\n  schedule:\n", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="structure differs from reviewed authority"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_protected_remediation_contract_rejects_status_write_app_scope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_contract_repo(tmp_path)
+    path = root / ".github" / "workflows" / "protected-security-remediation.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = "          permission-pull-requests: write\n"
+    assert marker in text
+    mutated = text.replace(marker, marker + "          permission-statuses: write\n", 1)
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_PROTECTED_REMEDIATION_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
+    )
+
+    with pytest.raises(ValueError, match="forbidden permission"):
         ci_contract.verify_ci_contract(root)
