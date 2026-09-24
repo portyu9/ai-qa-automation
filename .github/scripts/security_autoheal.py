@@ -94,6 +94,7 @@ AUTOHEAL_BRANCH_RE = re.compile(
     r"^automation/codeql-autoheal-[1-9][0-9]*-(?:[0-9a-f]{12}|[0-9a-f]{64}-a[1-9][0-9]*)$"
 )
 AUTOHEAL_COMMIT_MESSAGE_RE = re.compile(r"^security: auto-heal CodeQL alert #[1-9][0-9]*$")
+ROUTE_RECORD_TRAILER_PREFIX = "Route-Record-Digest: "
 SHA = re.compile(r"^[0-9a-f]{40}$")
 SAFE_RULES = {
     "py/reflective-xss",
@@ -1020,6 +1021,7 @@ def _commit_deterministic_repair(
     path: str,
     content: str,
     alert_number: int,
+    route_record_digest: str,
 ) -> str:
     base_commit = _git_commit(api, base_sha)
     tree = base_commit.get("tree") or {}
@@ -1035,7 +1037,7 @@ def _commit_deterministic_repair(
     commit = api.post(
         "/git/commits",
         {
-            "message": f"security: auto-heal CodeQL alert #{alert_number}",
+            "message": _route_bound_commit_message(alert_number, route_record_digest),
             "tree": tree_sha,
             "parents": [base_sha],
         },
@@ -1083,6 +1085,7 @@ def _require_exact_copilot_autofix_commit(
     alert_number: int,
     head_sha: str,
     base_sha: str,
+    route_record_digest: str,
 ) -> str:
     head_sha = _require_sha(head_sha, "Copilot Autofix commit SHA")
     commit = _git_commit(api, head_sha)
@@ -1116,10 +1119,18 @@ def _require_exact_copilot_autofix_commit(
     message = str(commit.get("message") or "")
     if message.splitlines()[0] != f"security: auto-heal CodeQL alert #{alert_number}":
         raise PolicyBlock("Copilot Autofix commit is bound to a different alert")
+    if _generated_commit_route_digest(repository_commit) != route_record_digest:
+        raise PolicyBlock("Copilot Autofix commit route digest drifted from persisted authority")
     return head_sha
 
 
-def _commit_copilot_autofix(api: GitHubApi, alert_number: int, branch: str, base_sha: str) -> str:
+def _commit_copilot_autofix(
+    api: GitHubApi,
+    alert_number: int,
+    branch: str,
+    base_sha: str,
+    route_record_digest: str,
+) -> str:
     existing_head = _branch_head(api, branch)
     if existing_head is None:
         _create_branch(api, branch, base_sha)
@@ -1133,6 +1144,7 @@ def _commit_copilot_autofix(api: GitHubApi, alert_number: int, branch: str, base
             alert_number,
             existing_head,
             base_sha,
+            route_record_digest,
         )
         print(
             json.dumps(
@@ -1151,14 +1163,20 @@ def _commit_copilot_autofix(api: GitHubApi, alert_number: int, branch: str, base
         f"/code-scanning/alerts/{alert_number}/autofix/commits",
         {
             "target_ref": f"refs/heads/{branch}",
-            "message": f"security: auto-heal CodeQL alert #{alert_number}",
+            "message": _route_bound_commit_message(alert_number, route_record_digest),
         },
     )
     head_sha = _require_sha((payload or {}).get("sha"), "Copilot Autofix commit SHA")
     observed_head = _branch_head(api, branch)
     if observed_head != head_sha:
         raise AutohealError("Copilot Autofix branch did not advance to the returned commit")
-    return _require_exact_copilot_autofix_commit(api, alert_number, head_sha, base_sha)
+    return _require_exact_copilot_autofix_commit(
+        api,
+        alert_number,
+        head_sha,
+        base_sha,
+        route_record_digest,
+    )
 
 
 def _changed_files(api: GitHubApi, base_sha: str, head_sha: str) -> list[dict[str, Any]]:
@@ -1597,6 +1615,12 @@ def assess_trusted_admission(
     if not _owned_generated_repair_commit(commit, live["headSha"]):
         raise PolicyBlock("generated repair head lacks exact GitHub Actions ownership")
     subject = _rebind_repair_alert(api, metadata, live, config)
+    route_digest = metadata.get("routeRecordDigest")
+    if (
+        not isinstance(route_digest, str)
+        or _generated_commit_route_digest(commit) != route_digest
+    ):
+        raise PolicyBlock("generated repair commit is not immutably bound to its route record")
     _require_repair_branch_binding(live["branch"], metadata, subject)
     if metadata.get("generator") == "deterministic":
         expected_content = _deterministic_repair(subject)
@@ -2814,6 +2838,38 @@ def _open_pulls(api: GitHubApi) -> list[dict[str, Any]]:
     return api.list_all("/pulls?state=open&sort=created&direction=asc", max_pages=4)
 
 
+def _route_bound_commit_message(alert_number: int, route_record_digest: str) -> str:
+    if (
+        not isinstance(alert_number, int)
+        or isinstance(alert_number, bool)
+        or alert_number < 1
+        or not isinstance(route_record_digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", route_record_digest) is None
+    ):
+        raise PolicyBlock("generated repair commit route binding is malformed")
+    return (
+        f"security: auto-heal CodeQL alert #{alert_number}\n\n"
+        f"{ROUTE_RECORD_TRAILER_PREFIX}{route_record_digest}"
+    )
+
+
+def _generated_commit_route_digest(payload: Any) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    commit = payload.get("commit") or {}
+    message = commit.get("message")
+    if not isinstance(message, str):
+        return None
+    matches = [
+        line.removeprefix(ROUTE_RECORD_TRAILER_PREFIX)
+        for line in message.splitlines()
+        if line.startswith(ROUTE_RECORD_TRAILER_PREFIX)
+    ]
+    if len(matches) != 1 or re.fullmatch(r"[0-9a-f]{64}", matches[0]) is None:
+        return None
+    return matches[0]
+
+
 def _owned_generated_repair_commit(payload: Any, head_sha: str) -> bool:
     if not isinstance(payload, dict) or payload.get("sha") != head_sha:
         return False
@@ -3620,13 +3676,20 @@ def _create_repair(
             subject["path"],
             deterministic_content,
             subject["number"],
+            str(route_record["recordDigest"]),
         )
     else:
         if not _model_path_allowed(subject["path"], config):
             raise PolicyBlock("alert path is outside model-autofix authority")
         if route_record.get("autofixEligibility") != "available":
             raise PolicyBlock("persisted route lacks affirmative Autofix availability")
-        head_sha = _commit_copilot_autofix(api, subject["number"], branch, subject["baseSha"])
+        head_sha = _commit_copilot_autofix(
+            api,
+            subject["number"],
+            branch,
+            subject["baseSha"],
+            str(route_record["recordDigest"]),
+        )
 
     files = _changed_files(api, subject["baseSha"], head_sha)
     _validate_candidate_diff(files, subject, config, deterministic=deterministic)
