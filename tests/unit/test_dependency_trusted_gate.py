@@ -937,4 +937,3 @@ def test_finalize_post_merge_evidence_requires_ci_registration(
         "postMergeCiStatus": "queued",
         "postMergeCiDispatched": False,
     }
-
