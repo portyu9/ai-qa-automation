@@ -3091,6 +3091,7 @@ def selftest(config: dict[str, Any]) -> None:
     head_sha = "b" * 40
     canonical_ci = {
         "id": 901,
+        "workflow_id": POST_MERGE_CI_WORKFLOW_ID,
         "run_attempt": 1,
         "name": POST_MERGE_CI_NAME,
         "path": POST_MERGE_CI_PATH,
@@ -3104,13 +3105,20 @@ def selftest(config: dict[str, Any]) -> None:
     if selected != canonical_ci:
         raise AutohealError("canonical exact-main CI evidence was not selected")
 
-    for field, value in (
-        ("head_sha", "8" * 40),
-        ("path", ".github/workflows/codeql.yml"),
-        ("event", "pull_request"),
+    for field, value, expected_message in (
+        ("head_sha", "8" * 40, "different head SHA"),
+        ("path", ".github/workflows/codeql.yml", "mismatched workflow identity"),
+        ("event", "pull_request", "unexpected event"),
     ):
         drifted = {**canonical_ci, field: value}
-        if _select_post_merge_ci_run([drifted], merge_sha) is not None:
+        try:
+            _select_post_merge_ci_run([drifted], merge_sha)
+        except AutohealError as exc:
+            if expected_message not in str(exc):
+                raise AutohealError(
+                    f"drifted post-merge CI {field} failed unexpectedly"
+                ) from exc
+        else:
             raise AutohealError(f"drifted post-merge CI {field} was accepted")
 
     try:
@@ -3156,6 +3164,13 @@ def selftest(config: dict[str, Any]) -> None:
                 return {"commit": {"sha": "7" * 40 if self.move_main else merge_sha}}
             raise AutohealError(f"unexpected post-merge self-test GET path: {path}")
 
+        def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+            if path == f"/actions/runs?head_sha={merge_sha}":
+                if max_pages != 2:
+                    raise AutohealError("post-merge CI pagination contract drifted")
+                return [canonical_ci]
+            raise AutohealError(f"unexpected post-merge self-test list path: {path}")
+
     post_merge_api = _PostMergeEvidenceApi()
     evidence = _finalize_post_merge_evidence(
         post_merge_api,
@@ -3166,7 +3181,15 @@ def selftest(config: dict[str, Any]) -> None:
     if evidence != {
         "mergeSha": merge_sha,
         "sourceTreeSha": source_tree,
-        "postMergeBinding": "exact-current-main-parents-and-validated-source-tree",
+        "postMergeBinding": (
+            "exact-current-main-parents-validated-source-tree-and-ci-registration"
+        ),
+        "postMergeCiWorkflowId": POST_MERGE_CI_WORKFLOW_ID,
+        "postMergeCiRunId": 901,
+        "postMergeCiRunAttempt": 1,
+        "postMergeCiEvent": "push",
+        "postMergeCiStatus": "queued",
+        "postMergeCiDispatched": False,
     }:
         raise AutohealError("post-merge structural binding evidence payload drifted")
 
