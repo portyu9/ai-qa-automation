@@ -16,6 +16,12 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from security_alert_routing import (
+    RoutingPolicyError,
+    canonical_record as canonical_routing_record,
+    read_json_evidence as read_routing_json_evidence,
+    route_alert as route_security_alert,
+)
 from trusted_qualification import (
     TrustedQualificationError,
 )
@@ -66,6 +72,10 @@ GITHUB_COMMITTER_EMAIL = "noreply@github.com"
 SECURITY_AUTOHEAL_WORKFLOW_ID = 359898109
 SECURITY_AUTOHEAL_WORKFLOW_PATH = ".github/workflows/security-autoheal.yml"
 SECURITY_AUTOHEAL_RECONCILE_EVENTS = {"workflow_run", "schedule", "workflow_dispatch"}
+ROUTE_PLAN_SCHEMA_VERSION = 1
+ROUTE_PLAN_MAX_BYTES = 2 * 1024 * 1024
+ROUTE_PLAN_ARTIFACT_PREFIX = "security-autoheal-route-plan"
+ROUTE_ARTIFACT_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 MARKER_PREFIX = "<!-- aiqa-codeql-autoheal:"
 MARKER_SUFFIX = " -->"
 BRANCH_PREFIX = "automation/codeql-autoheal-"
