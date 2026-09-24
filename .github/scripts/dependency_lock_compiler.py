@@ -173,6 +173,10 @@ def _report_to_lock(payload: dict[str, Any]) -> str:
         if not isinstance(name, str) or not name or not isinstance(version, str) or not version:
             raise LockCompileError("pip report package identity/version is invalid")
         canonical = _canonical_name(name)
+        if row.get("is_yanked") is not False:
+            raise LockCompileError(
+                f"resolved package {canonical} is yanked or lacks explicit non-yanked provenance"
+            )
         download = row.get("download_info")
         if not isinstance(download, dict):
             raise LockCompileError(f"resolved package {canonical} lacks download provenance")
