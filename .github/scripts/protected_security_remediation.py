@@ -79,15 +79,23 @@ REPAIR_STRATEGIES = (
 # These assets define or certify this lane and therefore can never be repair targets for it.
 SELF_AUTHORITY_PATHS = frozenset(
     {
+        ".github/security-autoheal.json",
+        ".github/scripts/dependency_governance.py",
         ".github/scripts/protected_security_remediation.py",
         ".github/scripts/security_alert_routing.py",
         ".github/scripts/trusted_qualification.py",
         ".github/scripts/trusted_status.py",
+        ".github/workflows/ci.yml",
+        ".github/workflows/codeql.yml",
         ".github/workflows/protected-security-remediation.yml",
         ".github/workflows/trusted-pr-auto.yml",
         "scripts/auto_trusted_bot_admission.py",
         "scripts/auto_trusted_preflight.py",
+        "scripts/ci_contract_base.py",
+        "scripts/ci_contract_trusted_auto.py",
         "scripts/trusted_pr_control.py",
+        "scripts/verify_ci_contract.py",
+        "scripts/verify_fork_cloud_authority.py",
     }
 )
 
