@@ -1079,17 +1079,26 @@ def _publish_and_merge(
     return finalize_post_merge_evidence(api, result, promotion, config)
 
 
-def _close_stale(api: GitHubApi, number: int, branch: str, head_sha: str) -> None:
+def _close_stale(
+    api: GitHubApi,
+    number: int,
+    branch: str,
+    head_sha: str,
+    config: dict[str, Any],
+) -> None:
     if PROMOTION_BRANCH_RE.fullmatch(branch) is None:
         raise PolicyBlock("stale promotion branch is outside reviewed authority")
     fresh = api.get(f"/pulls/{number}")
     fresh_head = (fresh or {}).get("head") or {}
+    fresh_base = (fresh or {}).get("base") or {}
     metadata = _parse_marker((fresh or {}).get("body"))
     if (
         (fresh or {}).get("state") != "open"
         or (fresh or {}).get("draft") is not False
         or ((fresh or {}).get("user") or {}).get("login") != GITHUB_ACTIONS_LOGIN
         or ((fresh or {}).get("user") or {}).get("id") != GITHUB_ACTIONS_USER_ID
+        or (fresh_head.get("repo") or {}).get("full_name") != config["repository"]
+        or (fresh_base.get("repo") or {}).get("full_name") != config["repository"]
         or fresh_head.get("ref") != branch
         or require_sha(fresh_head.get("sha"), "stale promotion live head SHA") != head_sha
         or metadata is None
@@ -1097,12 +1106,34 @@ def _close_stale(api: GitHubApi, number: int, branch: str, head_sha: str) -> Non
         or metadata.get("head") != head_sha
     ):
         raise PolicyBlock("stale promotion changed before exact cleanup")
+
+    staging_base: str | None = None
+    if fresh_base.get("ref") != config["baseBranch"]:
+        source_number = metadata.get("sourcePr")
+        fingerprint = metadata.get("fingerprint")
+        if not isinstance(source_number, int) or not isinstance(fingerprint, str):
+            raise PolicyBlock("stale staged promotion marker identity is malformed")
+        staging_base = _staging_base_name(source_number, fingerprint)
+        if (
+            fresh_base.get("ref") != staging_base
+            or require_sha(fresh_base.get("sha"), "stale promotion staging-base SHA")
+            != require_sha(metadata.get("base"), "stale promotion marker base SHA")
+        ):
+            raise PolicyBlock("stale promotion staging-base identity drifted before cleanup")
+
     commit = api.get(f"/commits/{head_sha}")
     if not _owned_generated_promotion_commit(commit, head_sha):
         raise PolicyBlock("stale promotion head lacks exact GitHub Actions ownership")
     closed = api.request("PATCH", f"/pulls/{number}", {"state": "closed"})
     if not isinstance(closed, dict) or closed.get("state") != "closed":
         raise GovernanceError("GitHub did not acknowledge stale promotion closure")
+    if staging_base is not None:
+        _delete_exact_ref(
+            api,
+            staging_base,
+            require_sha(metadata.get("base"), "stale promotion marker base SHA"),
+            label="stale promotion staging-base ref",
+        )
     _delete_exact_generated_branch(api, branch, head_sha)
 
 
@@ -1184,7 +1215,7 @@ def reconcile(
                     metadata.get("head"),
                     "stale promotion marker head SHA",
                 )
-                _close_stale(api, int(number), branch, stale_head_sha)
+                _close_stale(api, int(number), branch, stale_head_sha, config)
                 if isinstance(source_number, int):
                     active_sources.discard(source_number)
 
