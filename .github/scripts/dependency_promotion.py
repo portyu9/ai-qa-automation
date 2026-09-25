@@ -1152,7 +1152,9 @@ def _advance_promotion_qualification(
 
     if codeql is None:
         if wake_stage == "codeql":
-            raise PolicyBlock("trusted-main CodeQL qualification dispatch is registered and pending")
+            raise PolicyBlock(
+                "trusted-main CodeQL qualification dispatch is registered and pending"
+            )
         dispatch_exact_codeql(api, branch, head_sha)
         _publish_qualification_wake(api, promotion, stage="codeql")
         raise PolicyBlock("trusted-main CodeQL qualification dispatched")
