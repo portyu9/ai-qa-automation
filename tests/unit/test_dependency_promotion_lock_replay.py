@@ -171,14 +171,23 @@ def test_create_promotion_pr_uses_non_main_staging_base_then_exact_retarget(
     monkeypatch.setenv("GITHUB_REPOSITORY", "portyu9/ai-qa-automation")
 
     class Api:
+        def __init__(self) -> None:
+            self.staging_exists = False
+
         def get(self, path: str) -> dict[str, Any]:
             if path == f"/git/ref/heads/{STAGING.replace('/', '%2F')}":
-                raise promotion.GovernanceError("HTTP 404")
+                if not self.staging_exists:
+                    raise promotion.GovernanceError("HTTP 404")
+                return {
+                    "ref": f"refs/heads/{STAGING}",
+                    "object": {"type": "commit", "sha": BASE},
+                }
             raise AssertionError(path)
 
         def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
             if path == "/git/refs":
                 assert payload == {"ref": f"refs/heads/{STAGING}", "sha": BASE}
+                self.staging_exists = True
                 events.append(("create-ref", STAGING))
                 return {
                     "ref": f"refs/heads/{STAGING}",
@@ -203,6 +212,8 @@ def test_create_promotion_pr_uses_non_main_staging_base_then_exact_retarget(
                 return _promotion_pr()
             if (method, path) == ("DELETE", f"/git/refs/heads/{STAGING.replace('/', '%2F')}"):
                 assert payload is None
+                assert self.staging_exists is True
+                self.staging_exists = False
                 events.append(("delete-ref", STAGING))
                 return None
             raise AssertionError((method, path, payload))
