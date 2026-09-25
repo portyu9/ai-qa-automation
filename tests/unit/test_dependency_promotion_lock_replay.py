@@ -26,6 +26,7 @@ def _load() -> ModuleType:
 
 
 promotion = _load()
+qualification = sys.modules["trusted_qualification"]
 HEAD = "a" * 40
 LOCK_NAMES = (
     "build-py311.lock",
@@ -234,10 +235,10 @@ def test_create_promotion_pr_uses_non_main_staging_base_then_exact_retarget(
     ]
 
 
-def test_exact_qualification_dispatches_both_missing_checks_and_persists_attempt(
+def test_exact_qualification_persists_intent_before_dispatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[tuple[str, str, str]] = []
+    events: list[tuple[str, str, str]] = []
     updates: list[dict[str, Any]] = []
 
     class Api:
@@ -250,8 +251,10 @@ def test_exact_qualification_dispatches_both_missing_checks_and_persists_attempt
             assert (method, path) == ("PATCH", "/pulls/901")
             assert payload is not None and isinstance(payload.get("body"), str)
             updates.append(payload)
+            events.append(("persist", path, HEAD))
             return _promotion_pr(body=str(payload["body"]))
 
+    monkeypatch.setenv("GITHUB_REPOSITORY", "portyu9/ai-qa-automation")
     monkeypatch.setattr(
         promotion,
         "qualification_states",
@@ -263,22 +266,25 @@ def test_exact_qualification_dispatches_both_missing_checks_and_persists_attempt
     monkeypatch.setattr(
         promotion,
         "dispatch_exact_ci",
-        lambda api, ref, sha: calls.append(("ci", ref, sha)),
+        lambda api, ref, sha: events.append(("ci", ref, sha)),
     )
     monkeypatch.setattr(
         promotion,
         "dispatch_exact_codeql",
-        lambda api, ref, sha: calls.append(("codeql", ref, sha)),
+        lambda api, ref, sha: events.append(("codeql", ref, sha)),
     )
 
     pr = _promotion_pr()
     assert promotion._request_exact_qualification(Api(), pr, HEAD, BASE) is False
-    assert calls == [("ci", BRANCH, HEAD), ("codeql", BRANCH, HEAD)]
+    assert events == [
+        ("persist", "/pulls/901", HEAD),
+        ("ci", BRANCH, HEAD),
+        ("codeql", BRANCH, HEAD),
+    ]
     persisted = promotion._parse_marker(str(updates[0]["body"]))
     assert persisted is not None
     assert persisted["qualificationRequest"]["attempt"] == 1
     assert isinstance(persisted["qualificationRequest"]["requestedAt"], str)
-
 
 def test_exact_qualification_reuses_green_exact_checks_without_dispatch(
     monkeypatch: pytest.MonkeyPatch,
@@ -312,6 +318,211 @@ def test_qualification_request_rejects_future_timestamp() -> None:
     }
     with pytest.raises(promotion.PolicyBlock, match="timestamp is in the future"):
         promotion._qualification_request_age(metadata)
+
+
+def test_qualification_persistence_failure_dispatches_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class Api:
+        def request(
+            self,
+            method: str,
+            path: str,
+            payload: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            del method, path, payload
+            raise promotion.GovernanceError("simulated persistence failure")
+
+    monkeypatch.setenv("GITHUB_REPOSITORY", "portyu9/ai-qa-automation")
+    monkeypatch.setattr(
+        promotion,
+        "qualification_states",
+        lambda api, head, base, required: {
+            "Required PR Gate": None,
+            "CodeQL": None,
+        },
+    )
+    monkeypatch.setattr(
+        promotion,
+        "dispatch_exact_ci",
+        lambda *args, **kwargs: calls.append("ci"),
+    )
+    monkeypatch.setattr(
+        promotion,
+        "dispatch_exact_codeql",
+        lambda *args, **kwargs: calls.append("codeql"),
+    )
+
+    with pytest.raises(promotion.GovernanceError, match="simulated persistence failure"):
+        promotion._request_exact_qualification(Api(), _promotion_pr(), HEAD, BASE)
+    assert calls == []
+
+
+def test_terminal_qualification_failure_is_non_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        promotion,
+        "qualification_states",
+        lambda api, head, base, required: {
+            "Required PR Gate": {"conclusion": "failure"},
+            "CodeQL": None,
+        },
+    )
+    monkeypatch.setattr(
+        promotion,
+        "dispatch_exact_ci",
+        lambda *args, **kwargs: calls.append("ci"),
+    )
+    monkeypatch.setattr(
+        promotion,
+        "dispatch_exact_codeql",
+        lambda *args, **kwargs: calls.append("codeql"),
+    )
+
+    with pytest.raises(promotion.PolicyBlock, match="qualification is not green"):
+        promotion._request_exact_qualification(object(), _promotion_pr(), HEAD, BASE)
+    assert calls == []
+
+
+def test_pending_qualification_intent_prevents_immediate_replay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = _promotion_metadata()
+    metadata["qualificationRequest"] = {
+        "attempt": 1,
+        "requestedAt": promotion.datetime.now(promotion.UTC).isoformat(),
+    }
+    monkeypatch.setattr(
+        promotion,
+        "qualification_states",
+        lambda api, head, base, required: {
+            "Required PR Gate": None,
+            "CodeQL": None,
+        },
+    )
+    monkeypatch.setattr(
+        promotion,
+        "dispatch_exact_ci",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected CI replay")),
+    )
+    monkeypatch.setattr(
+        promotion,
+        "dispatch_exact_codeql",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("unexpected CodeQL replay")
+        ),
+    )
+    assert (
+        promotion._request_exact_qualification(
+            object(),
+            _promotion_pr(body=promotion._promotion_body(metadata)),
+            HEAD,
+            BASE,
+        )
+        is False
+    )
+
+
+def test_expired_partial_qualification_dispatches_only_missing_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = _promotion_metadata()
+    metadata["qualificationRequest"] = {
+        "attempt": 1,
+        "requestedAt": "2000-01-01T00:00:00+00:00",
+    }
+    events: list[str] = []
+    updates: list[dict[str, Any]] = []
+
+    class Api:
+        def request(
+            self,
+            method: str,
+            path: str,
+            payload: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            assert (method, path) == ("PATCH", "/pulls/901")
+            assert payload is not None and isinstance(payload.get("body"), str)
+            updates.append(payload)
+            events.append("persist")
+            return _promotion_pr(body=str(payload["body"]))
+
+    monkeypatch.setenv("GITHUB_REPOSITORY", "portyu9/ai-qa-automation")
+    monkeypatch.setattr(
+        promotion,
+        "qualification_states",
+        lambda api, head, base, required: {
+            "Required PR Gate": {"conclusion": "success"},
+            "CodeQL": None,
+        },
+    )
+    monkeypatch.setattr(
+        promotion,
+        "dispatch_exact_ci",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected CI dispatch")),
+    )
+    monkeypatch.setattr(
+        promotion,
+        "dispatch_exact_codeql",
+        lambda *args, **kwargs: events.append("codeql"),
+    )
+
+    assert (
+        promotion._request_exact_qualification(
+            Api(),
+            _promotion_pr(body=promotion._promotion_body(metadata)),
+            HEAD,
+            BASE,
+        )
+        is False
+    )
+    assert events == ["persist", "codeql"]
+    persisted = promotion._parse_marker(str(updates[0]["body"]))
+    assert persisted is not None
+    assert persisted["qualificationRequest"]["attempt"] == 2
+
+
+def test_trusted_qualification_rejects_duplicate_exact_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Api:
+        def list_all(self, path: str, *, max_pages: int = 4) -> list[dict[str, Any]]:
+            assert path == f"/commits/{HEAD}/check-runs?filter=latest"
+            assert max_pages == 4
+            return [
+                {"id": 11, "name": "Required PR Gate"},
+                {"id": 12, "name": "Required PR Gate"},
+            ]
+
+    def fake_candidate(
+        api: Any,
+        row: dict[str, Any],
+        *,
+        name: str,
+        head_sha: str,
+        base_sha: str,
+    ) -> dict[str, Any]:
+        del api, name, head_sha, base_sha
+        return {
+            "check_id": row["id"],
+            "run_id": row["id"],
+            "run_attempt": 1,
+            "conclusion": "success",
+            "details_url": f"https://example.invalid/{row['id']}",
+        }
+
+    monkeypatch.setattr(qualification, "_check_candidate", fake_candidate)
+    with pytest.raises(qualification.TrustedQualificationError, match="ambiguous"):
+        qualification.qualification_states(
+            Api(),
+            HEAD,
+            BASE,
+            required=("Required PR Gate",),
+        )
 
 
 def test_orphan_staging_base_prune_requires_generated_parent_provenance() -> None:

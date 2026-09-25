@@ -603,15 +603,21 @@ def _ensure_staging_base_ref(api: GitHubApi, source: dict[str, Any]) -> str:
             {"ref": f"refs/heads/{branch}", "sha": source["baseSha"]},
         )
         created_obj = (created or {}).get("object") or {}
-        if (created or {}).get("ref") != f"refs/heads/{branch}" or created_obj.get("type") != "commit":
-            raise GovernanceError("GitHub did not acknowledge exact promotion staging-base creation")
+        if (created or {}).get("ref") != f"refs/heads/{branch}" or created_obj.get(
+            "type"
+        ) != "commit":
+            raise GovernanceError(
+                "GitHub did not acknowledge exact promotion staging-base creation"
+            )
         observed = require_sha(
             created_obj.get("sha"),
             "created promotion staging-base SHA",
         )
     else:
         existing_obj = (existing or {}).get("object") or {}
-        if (existing or {}).get("ref") != f"refs/heads/{branch}" or existing_obj.get("type") != "commit":
+        if (existing or {}).get("ref") != f"refs/heads/{branch}" or existing_obj.get(
+            "type"
+        ) != "commit":
             raise PolicyBlock("existing promotion staging-base ref identity drifted")
         observed = require_sha(
             existing_obj.get("sha"),
@@ -755,7 +761,8 @@ def _normalize_staged_promotion(
         or user.get("id") != GITHUB_ACTIONS_USER_ID
         or (head.get("repo") or {}).get("full_name") != config["repository"]
         or (base.get("repo") or {}).get("full_name") != config["repository"]
-        or head.get("ref") != _branch_name(
+        or head.get("ref")
+        != _branch_name(
             {
                 "number": source_number,
                 "fingerprint": fingerprint,
@@ -844,6 +851,17 @@ def _request_exact_qualification(
     ):
         return True
 
+    terminal_failures = [
+        f"{name}={states[name].get('conclusion')}"
+        for name in REQUIRED_CHECKS
+        if states[name] is not None and states[name].get("conclusion") != "success"
+    ]
+    if terminal_failures:
+        raise PolicyBlock(
+            "promotion exact-subject qualification is not green: "
+            + ", ".join(terminal_failures)
+        )
+
     request = metadata.get("qualificationRequest")
     attempt = 0
     if request is not None:
@@ -853,42 +871,54 @@ def _request_exact_qualification(
         if isinstance(raw_attempt, bool) or not isinstance(raw_attempt, int) or raw_attempt < 1:
             raise PolicyBlock("promotion qualification request attempt is malformed")
         attempt = raw_attempt
-        terminal_failure = any(
-            states[name] is not None and states[name].get("conclusion") != "success"
-            for name in REQUIRED_CHECKS
-        )
         age = _qualification_request_age(metadata)
-        if not terminal_failure and (age is None or age < QUALIFICATION_RETRY_AFTER):
+        if age is None or age < QUALIFICATION_RETRY_AFTER:
             return False
         if attempt >= MAX_QUALIFICATION_ATTEMPTS:
             raise PolicyBlock("promotion exact-subject qualification retry budget is exhausted")
 
-    missing_or_failed = [
-        name
-        for name in REQUIRED_CHECKS
-        if states[name] is None or states[name].get("conclusion") != "success"
-    ]
-    for name in missing_or_failed:
-        if name == "Required PR Gate":
-            dispatch_exact_ci(api, str((pr.get("head") or {}).get("ref") or ""), head_sha)
-        elif name == "CodeQL":
-            dispatch_exact_codeql(api, str((pr.get("head") or {}).get("ref") or ""), head_sha)
-        else:
-            raise GovernanceError(f"unsupported promotion qualification check: {name}")
-    metadata["qualificationRequest"] = {
+    missing = [name for name in REQUIRED_CHECKS if states[name] is None]
+    if not missing:
+        raise GovernanceError("promotion qualification state is internally inconsistent")
+
+    persisted_metadata = copy.deepcopy(metadata)
+    persisted_metadata["qualificationRequest"] = {
         "attempt": attempt + 1,
         "requestedAt": datetime.now(UTC).isoformat(),
     }
     number = pr.get("number")
     if not isinstance(number, int) or number < 1:
         raise GovernanceError("promotion PR number is invalid during qualification request")
-    updated = api.request("PATCH", f"/pulls/{number}", {"body": _promotion_body(metadata)})
+    updated = api.request(
+        "PATCH",
+        f"/pulls/{number}",
+        {"body": _promotion_body(persisted_metadata)},
+    )
     if not isinstance(updated, dict):
         raise GovernanceError("GitHub returned malformed promotion qualification metadata update")
-    if require_sha(((updated.get("head") or {}).get("sha")), "qualified promotion head SHA") != head_sha:
-        raise GovernanceError("promotion head changed while persisting qualification request")
-    return False
+    head = pr.get("head") or {}
+    base = pr.get("base") or {}
+    _validate_staged_or_main_pr(
+        updated,
+        number=number,
+        branch=str(head.get("ref") or ""),
+        head_sha=head_sha,
+        base_ref=str(base.get("ref") or ""),
+        base_sha=base_sha,
+        repository=os.environ.get("GITHUB_REPOSITORY", ""),
+    )
+    if _parse_marker(updated.get("body")) != persisted_metadata:
+        raise GovernanceError("promotion qualification request metadata did not persist exactly")
 
+    head_ref = str(head.get("ref") or "")
+    for name in missing:
+        if name == "Required PR Gate":
+            dispatch_exact_ci(api, head_ref, head_sha)
+        elif name == "CodeQL":
+            dispatch_exact_codeql(api, head_ref, head_sha)
+        else:
+            raise GovernanceError(f"unsupported promotion qualification check: {name}")
+    return False
 
 def _publish_merge_signal(github_output: Path | None) -> None:
     if github_output is None:
@@ -1119,11 +1149,9 @@ def _close_stale(
         if not isinstance(source_number, int) or not isinstance(fingerprint, str):
             raise PolicyBlock("stale staged promotion marker identity is malformed")
         staging_base = _staging_base_name(source_number, fingerprint)
-        if (
-            fresh_base.get("ref") != staging_base
-            or require_sha(fresh_base.get("sha"), "stale promotion staging-base SHA")
-            != require_sha(metadata.get("base"), "stale promotion marker base SHA")
-        ):
+        if fresh_base.get("ref") != staging_base or require_sha(
+            fresh_base.get("sha"), "stale promotion staging-base SHA"
+        ) != require_sha(metadata.get("base"), "stale promotion marker base SHA"):
             raise PolicyBlock("stale promotion staging-base identity drifted before cleanup")
 
     commit = api.get(f"/commits/{head_sha}")
@@ -1170,9 +1198,7 @@ def reconcile(
                 api.get(f"/pulls/{number}"),
                 config,
             )
-            _, promotion = _validate_promotion(
-                api, live_pr, config, require_checks=False
-            )
+            _, promotion = _validate_promotion(api, live_pr, config, require_checks=False)
             if not _request_exact_qualification(
                 api,
                 live_pr,
