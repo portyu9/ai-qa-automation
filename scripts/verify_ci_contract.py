@@ -37,7 +37,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
-    "377ab205014e4f30b663a6d5699654108f1aebac"  # pragma: allowlist secret
+    "2a6d848931f7eac693cbfb1a65fc847f34b4c17f"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
     "7fdf0dc85375bc78561d531f95220cd877e30b3a"  # pragma: allowlist secret
@@ -46,10 +46,10 @@ EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
-    "d809771ced237ec2d02d52b0eb29432f14c6a90b"  # pragma: allowlist secret
+    "f7e1b88ca86384795554661cb5c367a5bce4d428"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_PROMOTION_AUTHOR_WORKFLOW_BLOB_SHA = (
-    "0000000000000000000000000000000000000000"  # replaced after exact workflow review
+    "152608d71d90099d6504245f49e30647f655c87e"  # replaced after exact workflow review
 )
 EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
     "7e236900be3b05ab00b09d78b49007646432503e"  # pragma: allowlist secret
