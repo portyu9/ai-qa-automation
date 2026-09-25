@@ -310,7 +310,7 @@ Changes that are neither owner-routine eligible nor recognized by a governed-bot
 1. keep the candidate exact and review its protected transition set;
 2. run ordinary exact-revision CI as development/execution evidence;
 3. independently install a short-lived one-shot external policy bound to the exact PR/head/base/prospective-merge/protected transitions;
-4. let the external App service re-fetch and validate the exact run, jobs, artifact, manifest, and candidate workflow binding;
+4. let the external App service re-fetch and validate the exact run, jobs, artifact, manifest, and candidate workflow binding; rerun artifacts are attempt-scoped by the live successful attempt window, while duplicate artifacts inside that same attempt remain ambiguous and fail closed;
 5. observe exact App-authored `Trusted PR Gate: success` from the integration required by the live ruleset;
 6. revoke the one-shot policy in fail-closed order before merge;
 7. re-fetch PR identity, prospective merge, ruleset, App/deployment identity, and status immediately before merge;
