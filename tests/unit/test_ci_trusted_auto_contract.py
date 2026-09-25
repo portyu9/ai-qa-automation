@@ -275,7 +275,6 @@ def test_protected_remediation_author_action_is_scoped_to_its_workflow(tmp_path:
         ci_contract.verify_ci_contract(root)
 
 
-
 def test_dependency_promotion_author_workflow_is_default_branch_only_and_app_is_narrow() -> None:
     result = ci_contract.verify_ci_contract(ROOT)
     promotion = result["workflows"]["dependency_promotion_author"]
