@@ -12,7 +12,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +42,7 @@ API_VERSION = "2026-03-10"
 USER_AGENT = "yp-trusted-pr-gate-external/1"
 MAX_TOKEN_RESPONSE_BYTES = 512 * 1024
 MAX_PULL_REQUEST_CANDIDATES = 100
+MAX_ARTIFACT_CANDIDATES = 20
 MAX_PRIVATE_KEY_BYTES = 64 * 1024
 _OPENSSL_TRUSTED_ROOT = Path("/usr/bin")
 _OPENSSL_EXECUTABLE = _OPENSSL_TRUSTED_ROOT / "openssl"
@@ -360,6 +361,85 @@ def _request_json(
     return require_dict(parsed, label="GitHub API response")
 
 
+def _github_timestamp(value: Any, *, label: str) -> datetime:
+    error = f"{label} is not a canonical GitHub UTC timestamp"
+    try:
+        rendered = require_str(value, label=label, max_len=64)
+    except ValueError as exc:
+        raise GitHubProtocolError(error) from exc
+    if not rendered.endswith("Z"):
+        raise GitHubProtocolError(error)
+    try:
+        parsed = datetime.fromisoformat(rendered[:-1] + "+00:00")
+    except ValueError as exc:
+        raise GitHubProtocolError(error) from exc
+    if parsed.tzinfo is None:
+        raise GitHubProtocolError(error)
+    return parsed.astimezone(UTC)
+
+
+def _run_attempt_window(run: dict[str, Any]) -> tuple[int, datetime, datetime]:
+    try:
+        attempt = require_positive_int(run.get("run_attempt"), label="workflow run attempt")
+    except ValueError as exc:
+        raise GitHubProtocolError("workflow run attempt is malformed") from exc
+    started = _github_timestamp(run.get("run_started_at"), label="workflow run started_at")
+    completed = _github_timestamp(run.get("updated_at"), label="workflow run updated_at")
+    if completed < started:
+        raise GitHubProtocolError("workflow run attempt timestamps are inconsistent")
+    return attempt, started, completed
+
+
+def _select_current_attempt_artifact(
+    payload: dict[str, Any],
+    *,
+    run_id: int,
+    head_sha: str,
+    head_ref: str,
+    attempt_started_at: datetime,
+    attempt_completed_at: datetime,
+) -> dict[str, Any]:
+    artifacts = require_list(payload.get("artifacts"), label="workflow artifacts")
+    total_count = payload.get("total_count")
+    if (
+        isinstance(total_count, bool)
+        or not isinstance(total_count, int)
+        or total_count < 1
+        or total_count > MAX_ARTIFACT_CANDIDATES
+        or total_count != len(artifacts)
+    ):
+        raise GitHubProtocolError("supply-chain artifact listing is incomplete or outside bounds")
+
+    current_attempt: list[dict[str, Any]] = []
+    for raw in artifacts:
+        artifact = require_dict(raw, label="supply-chain artifact candidate")
+        if artifact.get("name") != "supply-chain-evidence":
+            raise GitHubProtocolError("artifact name filter returned an unexpected artifact")
+        workflow_run = require_dict(
+            artifact.get("workflow_run"),
+            label="artifact workflow run",
+        )
+        if (
+            workflow_run.get("id") != run_id
+            or workflow_run.get("head_sha") != head_sha
+            or workflow_run.get("head_branch") != head_ref
+        ):
+            raise GitHubProtocolError("artifact is not bound to the selected workflow run")
+
+        created = _github_timestamp(artifact.get("created_at"), label="artifact created_at")
+        updated = _github_timestamp(artifact.get("updated_at"), label="artifact updated_at")
+        if updated < created:
+            raise GitHubProtocolError("artifact timestamps are inconsistent")
+        if attempt_started_at <= created and updated <= attempt_completed_at:
+            current_attempt.append(artifact)
+
+    if len(current_attempt) != 1:
+        raise GitHubProtocolError(
+            "exactly one supply-chain evidence artifact is required for current workflow attempt"
+        )
+    return current_attempt[0]
+
+
 class GitHubClient:
     def __init__(self, *, token_provider: AppTokenProvider, installation_id: int) -> None:
         self._token_provider = token_provider
@@ -521,6 +601,7 @@ class GitHubClient:
     ) -> dict[str, Any]:
         run = self.get_json(f"/repos/{self.repository}/actions/runs/{run_id}")
         self._validate_run(run, run_id=run_id, event_head_sha=subject.head_sha)
+        _, attempt_started_at, attempt_completed_at = _run_attempt_window(run)
         if run.get("head_branch") != subject.head_ref:
             raise GitHubProtocolError("workflow run branch differs from live pull request head ref")
         raw_jobs = _request_bytes(
@@ -556,7 +637,12 @@ class GitHubClient:
         )
         workflow_text = _decode_github_contents_base64_utf8(encoded)
         verify_candidate_workflow(workflow_text)
-        artifact_meta = self._artifact_metadata(run_id=run_id, subject=subject)
+        artifact_meta = self._artifact_metadata(
+            run_id=run_id,
+            subject=subject,
+            attempt_started_at=attempt_started_at,
+            attempt_completed_at=attempt_completed_at,
+        )
         archive = self._download_artifact(
             artifact_id=artifact_meta["artifact_id"],
             expected_size=artifact_meta["size"],
@@ -646,6 +732,7 @@ class GitHubClient:
     ) -> None:
         if require_positive_int(run.get("id"), label="workflow run id") != run_id:
             raise GitHubProtocolError("workflow run id drifted")
+        _run_attempt_window(run)
         workflow_id = require_positive_int(run.get("workflow_id"), label="workflow id")
         if workflow_id != EXPECTED_WORKFLOW_ID:
             raise GitHubProtocolError("workflow id is not reviewed")
@@ -720,25 +807,29 @@ class GitHubClient:
         *,
         run_id: int,
         subject: Subject,
+        attempt_started_at: datetime,
+        attempt_completed_at: datetime,
     ) -> dict[str, Any]:
         token = self._token_provider.installation_token()
         name = urllib.parse.quote("supply-chain-evidence", safe="")
         payload = _request_json(
             method="GET",
             path=(
-                f"/repos/{self.repository}/actions/runs/{run_id}/artifacts?per_page=20&name={name}"
+                f"/repos/{self.repository}/actions/runs/{run_id}/artifacts"
+                f"?per_page={MAX_ARTIFACT_CANDIDATES}&name={name}"
             ),
             bearer=token,
         )
-        artifacts = require_list(
-            payload.get("artifacts"),
-            label="workflow artifacts",
+        artifact = _select_current_attempt_artifact(
+            payload,
+            run_id=run_id,
+            head_sha=subject.head_sha,
+            head_ref=subject.head_ref,
+            attempt_started_at=attempt_started_at,
+            attempt_completed_at=attempt_completed_at,
         )
-        if payload.get("total_count") != 1 or len(artifacts) != 1:
-            raise GitHubProtocolError("exactly one supply-chain evidence artifact is required")
-        artifact = require_dict(artifacts[0], label="supply-chain artifact")
-        if artifact.get("name") != "supply-chain-evidence" or artifact.get("expired") is not False:
-            raise GitHubProtocolError("supply-chain artifact is missing/expired/misnamed")
+        if artifact.get("expired") is not False:
+            raise GitHubProtocolError("current-attempt supply-chain artifact is expired")
         artifact_id = require_positive_int(artifact.get("id"), label="artifact id")
         size = require_positive_int(
             artifact.get("size_in_bytes"),
@@ -759,16 +850,6 @@ class GitHubClient:
         )
         if artifact.get("archive_download_url") != expected_download_url:
             raise GitHubProtocolError("supply-chain artifact download URL is not canonical")
-        workflow_run = require_dict(
-            artifact.get("workflow_run"),
-            label="artifact workflow run",
-        )
-        if (
-            workflow_run.get("id") != run_id
-            or workflow_run.get("head_sha") != subject.head_sha
-            or workflow_run.get("head_branch") != subject.head_ref
-        ):
-            raise GitHubProtocolError("artifact is not bound to the selected workflow run")
         return {
             "artifact_id": artifact_id,
             "size": size,
