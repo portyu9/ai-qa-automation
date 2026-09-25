@@ -486,14 +486,6 @@ def _create_promotion_commit(
     return head_sha, generated
 
 
-def _github_actions_pr_creation_denied(exc: Exception) -> bool:
-    detail = str(exc)
-    return (
-        "HTTP 403" in detail
-        and "GitHub Actions is not permitted to create or approve pull requests" in detail
-    )
-
-
 def _delete_exact_generated_branch(api: GitHubApi, branch: str, head_sha: str) -> None:
     encoded = urllib.parse.quote(branch, safe="")
     ref = api.get(f"/git/ref/heads/{encoded}")
@@ -778,11 +770,12 @@ def _close_stale(api: GitHubApi, number: int, branch: str, head_sha: str) -> Non
     fresh = api.get(f"/pulls/{number}")
     fresh_head = (fresh or {}).get("head") or {}
     metadata = _parse_marker((fresh or {}).get("body"))
+    author_login, author_id = _promotion_author_identity()
     if (
         (fresh or {}).get("state") != "open"
         or (fresh or {}).get("draft") is not False
-        or ((fresh or {}).get("user") or {}).get("login") != _promotion_author_identity()[0]
-        or ((fresh or {}).get("user") or {}).get("id") != _promotion_author_identity()[1]
+        or ((fresh or {}).get("user") or {}).get("login") != author_login
+        or ((fresh or {}).get("user") or {}).get("id") != author_id
         or fresh_head.get("ref") != branch
         or require_sha(fresh_head.get("sha"), "stale promotion live head SHA") != head_sha
         or metadata is None
@@ -933,15 +926,6 @@ dev = ["mypy>=2,<3", "playwright>=1.52,<2"]
     ):
         if _owned_generated_promotion_commit(drifted, "d" * 40):
             raise GovernanceError("non-canonical generated promotion ownership was accepted")
-
-    denied = GovernanceError(
-        "GitHub API POST /pulls failed HTTP 403: "
-        '{"message":"GitHub Actions is not permitted to create or approve pull requests."}'
-    )
-    if not _github_actions_pr_creation_denied(denied):
-        raise GovernanceError("GitHub Actions PR creation denial was not classified")
-    if _github_actions_pr_creation_denied(GovernanceError("HTTP 403: unrelated policy")):
-        raise GovernanceError("unrelated HTTP 403 was misclassified as PR creation denial")
 
     exact_commit = {
         "tree": {"sha": "c" * 40},
