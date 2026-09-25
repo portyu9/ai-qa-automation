@@ -311,10 +311,16 @@ def _owned_generated_promotion_commit(payload: Any, head_sha: str) -> bool:
 
 
 def _prune_orphan_promotion_refs(api: GitHubApi) -> int:
+    open_prs = api.list_all("/pulls?state=open&sort=created&direction=asc", max_pages=4)
     open_heads = {
         str((row.get("head") or {}).get("ref"))
-        for row in api.list_all("/pulls?state=open&sort=created&direction=asc", max_pages=4)
+        for row in open_prs
         if isinstance((row.get("head") or {}).get("ref"), str)
+    }
+    open_bases = {
+        str((row.get("base") or {}).get("ref"))
+        for row in open_prs
+        if isinstance((row.get("base") or {}).get("ref"), str)
     }
     prefix = f"refs/heads/{BRANCH_PREFIX}"
     refs = api.list_all(f"/git/matching-refs/heads/{BRANCH_PREFIX}", max_pages=4)
@@ -324,20 +330,75 @@ def _prune_orphan_promotion_refs(api: GitHubApi) -> int:
         if not isinstance(ref, str) or not ref.startswith(prefix):
             raise GovernanceError("GitHub returned a ref outside dependency promotion namespace")
         branch = ref.removeprefix("refs/heads/")
-        if branch in open_heads:
-            continue
         obj = row.get("object") or {}
         if obj.get("type") != "commit":
             raise PolicyBlock("orphan dependency promotion ref does not point to a commit")
-        head_sha = require_sha(obj.get("sha"), "orphan dependency promotion SHA")
-        commit = api.get(f"/commits/{head_sha}")
-        if not _owned_generated_promotion_commit(commit, head_sha):
+        ref_sha = require_sha(obj.get("sha"), "orphan dependency promotion SHA")
+
+        if STAGING_BASE_RE.fullmatch(branch) is not None:
+            if branch in open_bases:
+                continue
+            suffix = branch.removeprefix(STAGING_BASE_PREFIX)
+            generated_branch = f"{BRANCH_PREFIX}{suffix}"
+            if PROMOTION_BRANCH_RE.fullmatch(generated_branch) is None:
+                raise PolicyBlock("orphan promotion staging-base counterpart is malformed")
+            encoded_generated = urllib.parse.quote(generated_branch, safe="")
+            generated_ref = api.get(f"/git/ref/heads/{encoded_generated}")
+            generated_sha = require_sha(
+                ((generated_ref or {}).get("object") or {}).get("sha"),
+                "orphan staging-base generated counterpart SHA",
+            )
+            generated_commit = api.get(f"/commits/{generated_sha}")
+            parents = (generated_commit or {}).get("parents")
+            if (
+                not _owned_generated_promotion_commit(generated_commit, generated_sha)
+                or not isinstance(parents, list)
+                or len(parents) != 1
+                or require_sha(
+                    (parents[0] or {}).get("sha"),
+                    "orphan staging-base counterpart parent SHA",
+                )
+                != ref_sha
+            ):
+                raise PolicyBlock(
+                    "orphan promotion staging-base lacks exact generated counterpart provenance"
+                )
+            _delete_exact_ref(
+                api,
+                branch,
+                ref_sha,
+                label="orphan promotion staging-base ref",
+            )
+            pruned += 1
+            print(
+                json.dumps(
+                    {
+                        "branch": branch,
+                        "baseSha": ref_sha,
+                        "decision": "orphan-staging-base-pruned",
+                    },
+                    sort_keys=True,
+                )
+            )
+            continue
+
+        if PROMOTION_BRANCH_RE.fullmatch(branch) is None:
+            raise PolicyBlock("dependency promotion namespace contains an unreviewed branch")
+        if branch in open_heads:
+            continue
+        commit = api.get(f"/commits/{ref_sha}")
+        if not _owned_generated_promotion_commit(commit, ref_sha):
             raise PolicyBlock(
                 "orphan dependency promotion ref lacks exact GitHub Actions ownership"
             )
-        encoded_branch = urllib.parse.quote(branch, safe="")
-        api.request("DELETE", f"/git/refs/heads/{encoded_branch}")
+        _delete_exact_ref(
+            api,
+            branch,
+            ref_sha,
+            label="orphan generated promotion ref",
+        )
         try:
+            encoded_branch = urllib.parse.quote(branch, safe="")
             api.get(f"/git/ref/heads/{encoded_branch}")
         except GovernanceError as exc:
             if "HTTP 404" not in str(exc):
@@ -347,7 +408,7 @@ def _prune_orphan_promotion_refs(api: GitHubApi) -> int:
         pruned += 1
         print(
             json.dumps(
-                {"branch": branch, "headSha": head_sha, "decision": "orphan-ref-pruned"},
+                {"branch": branch, "headSha": ref_sha, "decision": "orphan-ref-pruned"},
                 sort_keys=True,
             )
         )
@@ -577,13 +638,16 @@ def _validate_staged_or_main_pr(
     head_sha: str,
     base_ref: str,
     base_sha: str,
+    repository: str,
 ) -> None:
     if pr.get("number") != number or pr.get("state") != "open" or pr.get("draft") is not False:
         raise GovernanceError("promotion PR lifecycle changed during staged-base transition")
     head = pr.get("head") or {}
     base = pr.get("base") or {}
     if (
-        head.get("ref") != branch
+        (head.get("repo") or {}).get("full_name") != repository
+        or (base.get("repo") or {}).get("full_name") != repository
+        or head.get("ref") != branch
         or require_sha(head.get("sha"), "promotion PR head SHA") != head_sha
         or base.get("ref") != base_ref
         or require_sha(base.get("sha"), "promotion PR base SHA") != base_sha
@@ -638,6 +702,7 @@ def _create_promotion_pr(api: GitHubApi, source: dict[str, Any], branch: str, he
         head_sha=head_sha,
         base_ref=staging_base,
         base_sha=source["baseSha"],
+        repository=os.environ.get("GITHUB_REPOSITORY", ""),
     )
     retargeted = api.request("PATCH", f"/pulls/{number}", {"base": "main"})
     if not isinstance(retargeted, dict):
@@ -649,6 +714,7 @@ def _create_promotion_pr(api: GitHubApi, source: dict[str, Any], branch: str, he
         head_sha=head_sha,
         base_ref="main",
         base_sha=source["baseSha"],
+        repository=os.environ.get("GITHUB_REPOSITORY", ""),
     )
     _delete_exact_ref(
         api,
@@ -682,6 +748,8 @@ def _normalize_staged_promotion(
     if (
         user.get("login") != GITHUB_ACTIONS_LOGIN
         or user.get("id") != GITHUB_ACTIONS_USER_ID
+        or (head.get("repo") or {}).get("full_name") != config["repository"]
+        or (base.get("repo") or {}).get("full_name") != config["repository"]
         or head.get("ref") != _branch_name(
             {
                 "number": source_number,
@@ -719,6 +787,7 @@ def _normalize_staged_promotion(
         head_sha=str(metadata["head"]),
         base_ref=config["baseBranch"],
         base_sha=live_sha,
+        repository=config["repository"],
     )
     _delete_exact_ref(
         api,
@@ -742,7 +811,11 @@ def _qualification_request_age(metadata: dict[str, Any]) -> timedelta | None:
         raise PolicyBlock("promotion qualification request timestamp is malformed") from exc
     if requested.tzinfo is None:
         raise PolicyBlock("promotion qualification request timestamp is not timezone-aware")
-    return datetime.now(UTC) - requested.astimezone(UTC)
+    now = datetime.now(UTC)
+    requested_utc = requested.astimezone(UTC)
+    if requested_utc > now:
+        raise PolicyBlock("promotion qualification request timestamp is in the future")
+    return now - requested_utc
 
 
 def _request_exact_qualification(
