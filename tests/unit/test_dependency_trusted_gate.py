@@ -173,17 +173,27 @@ def test_dependency_gate_accepts_exact_schedule_attempt_one() -> None:
     }
 
 
-def test_dependency_gate_rejects_workflow_run_even_when_shared_gate_accepts_it() -> None:
-    with pytest.raises(
-        gate.TrustedStatusError,
-        match="not exact schedule-owned authority",
-    ):
+def test_dependency_gate_rejects_workflow_run_for_schedule_only_path() -> None:
+    with pytest.raises(gate.TrustedStatusError):
         gate.require_schedule_trusted_gate(
             _GateApi(event="workflow_run"),
             PR_NUMBER,
             HEAD,
             BASE,
         )
+
+
+def test_dependency_gate_accepts_workflow_run_for_exact_qualified_path() -> None:
+    evidence = gate.require_qualified_trusted_gate(
+        _GateApi(event="workflow_run"),
+        PR_NUMBER,
+        HEAD,
+        BASE,
+    )
+
+    assert evidence["event"] == "workflow_run"
+    assert evidence["runId"] == RUN_ID
+    assert evidence["mergeSha"] == MERGE
 
 
 @pytest.mark.parametrize("event", ("workflow_dispatch", "pull_request", "push"))
@@ -440,7 +450,7 @@ def test_dependency_promotion_revalidates_gate_after_fresh_rebind(
         assert api_arg is api
         assert pr == {"number": PR_NUMBER}
         assert config_arg is config
-        assert require_checks is False
+        assert require_checks is True
         api.events.append("rebind")
         return {"source": True}, promoted
 
@@ -464,7 +474,7 @@ def test_dependency_promotion_revalidates_gate_after_fresh_rebind(
         return {"mergeSha": MERGE}
 
     monkeypatch.setattr(promotion, "_validate_promotion", validate)
-    monkeypatch.setattr(promotion, "require_schedule_trusted_gate", require_gate)
+    monkeypatch.setattr(promotion, "require_qualified_trusted_gate", require_gate)
     monkeypatch.setattr(promotion, "finalize_post_merge_evidence", finalize)
 
     assert promotion._publish_and_merge(api, promoted, config) == {"mergeSha": MERGE}
@@ -489,7 +499,7 @@ def test_dependency_promotion_moved_subject_stops_before_gate(
         assert api_arg is api
         assert pr == {"number": PR_NUMBER}
         assert config_arg is config
-        assert require_checks is False
+        assert require_checks is True
         api.events.append("rebind")
         return {"source": True}, moved
 
@@ -497,7 +507,7 @@ def test_dependency_promotion_moved_subject_stops_before_gate(
         raise AssertionError("gate must not be consulted for moved promotion")
 
     monkeypatch.setattr(promotion, "_validate_promotion", validate)
-    monkeypatch.setattr(promotion, "require_schedule_trusted_gate", forbidden_gate)
+    monkeypatch.setattr(promotion, "require_qualified_trusted_gate", forbidden_gate)
 
     with pytest.raises(promotion.PolicyBlock, match="changed before guarded merge"):
         promotion._publish_and_merge(api, promoted, config)
