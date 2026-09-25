@@ -288,9 +288,7 @@ def test_exact_qualification_reuses_green_exact_checks_without_dispatch(
     monkeypatch.setattr(
         promotion,
         "dispatch_exact_codeql",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("unexpected CodeQL dispatch")
-        ),
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected CodeQL dispatch")),
     )
     assert promotion._request_exact_qualification(object(), _promotion_pr(), HEAD, BASE) is True
 
