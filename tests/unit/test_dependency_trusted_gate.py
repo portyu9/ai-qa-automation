@@ -460,12 +460,136 @@ def test_dependency_promotion_revalidates_gate_after_fresh_rebind(
         api.events.append("finalize")
         return {"mergeSha": MERGE}
 
+    def advance(
+        api_arg: Any,
+        subject_arg: dict[str, Any],
+        branch: str,
+    ) -> None:
+        assert api_arg is api
+        assert subject_arg is promoted
+        assert branch == ""
+        api.events.append("qualification")
+
     monkeypatch.setattr(promotion, "_validate_promotion", validate)
+    monkeypatch.setattr(promotion, "_advance_promotion_qualification", advance)
     monkeypatch.setattr(promotion, "require_schedule_trusted_gate", require_gate)
     monkeypatch.setattr(promotion, "finalize_post_merge_evidence", finalize)
 
     assert promotion._publish_and_merge(api, promoted, config) == {"mergeSha": MERGE}
-    assert api.events == ["fresh-pr", "rebind", "gate", "merge", "finalize"]
+    assert api.events == ["fresh-pr", "rebind", "qualification", "gate", "merge", "finalize"]
+
+
+def test_dependency_promotion_qualification_dispatches_ci_before_codeql(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = object()
+    promoted = {"number": PR_NUMBER, "headSha": HEAD, "baseSha": BASE}
+    branch = f"automation/dependency-promotion-{PR_NUMBER}-aaaaaaaaaaaa"
+    events: list[str] = []
+
+    monkeypatch.setattr(
+        promotion,
+        "qualification_states",
+        lambda *args, **kwargs: {"Required PR Gate": None, "CodeQL": None},
+    )
+    monkeypatch.setattr(promotion, "_qualification_wake_stage", lambda *args: None)
+    monkeypatch.setattr(
+        promotion,
+        "dispatch_exact_ci",
+        lambda api_arg, ref, sha: events.append(f"ci:{ref}:{sha}"),
+    )
+    monkeypatch.setattr(
+        promotion,
+        "dispatch_exact_codeql",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("CodeQL must not dispatch before CI qualification succeeds")
+        ),
+    )
+    monkeypatch.setattr(
+        promotion,
+        "_publish_qualification_wake",
+        lambda api_arg, subject, *, stage: events.append(f"wake:{stage}"),
+    )
+
+    with pytest.raises(promotion.PolicyBlock, match="CI qualification dispatched"):
+        promotion._advance_promotion_qualification(api, promoted, branch)
+
+    assert events == [f"ci:{branch}:{HEAD}", "wake:ci"]
+
+
+def test_dependency_promotion_qualification_dispatches_codeql_after_ci(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = object()
+    promoted = {"number": PR_NUMBER, "headSha": HEAD, "baseSha": BASE}
+    branch = f"automation/dependency-promotion-{PR_NUMBER}-aaaaaaaaaaaa"
+    events: list[str] = []
+
+    monkeypatch.setattr(
+        promotion,
+        "qualification_states",
+        lambda *args, **kwargs: {
+            "Required PR Gate": {"conclusion": "success"},
+            "CodeQL": None,
+        },
+    )
+    monkeypatch.setattr(promotion, "_qualification_wake_stage", lambda *args: "ci")
+    monkeypatch.setattr(
+        promotion,
+        "dispatch_exact_ci",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("CI must not redispatch after exact qualification succeeds")
+        ),
+    )
+    monkeypatch.setattr(
+        promotion,
+        "dispatch_exact_codeql",
+        lambda api_arg, ref, sha: events.append(f"codeql:{ref}:{sha}"),
+    )
+    monkeypatch.setattr(
+        promotion,
+        "_publish_qualification_wake",
+        lambda api_arg, subject, *, stage: events.append(f"wake:{stage}"),
+    )
+
+    with pytest.raises(promotion.PolicyBlock, match="CodeQL qualification dispatched"):
+        promotion._advance_promotion_qualification(api, promoted, branch)
+
+    assert events == [f"codeql:{branch}:{HEAD}", "wake:codeql"]
+
+
+def test_dependency_promotion_qualification_pending_wake_suppresses_duplicate_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = object()
+    promoted = {"number": PR_NUMBER, "headSha": HEAD, "baseSha": BASE}
+    branch = f"automation/dependency-promotion-{PR_NUMBER}-aaaaaaaaaaaa"
+
+    monkeypatch.setattr(
+        promotion,
+        "qualification_states",
+        lambda *args, **kwargs: {"Required PR Gate": None, "CodeQL": None},
+    )
+    monkeypatch.setattr(promotion, "_qualification_wake_stage", lambda *args: "ci")
+    monkeypatch.setattr(
+        promotion,
+        "dispatch_exact_ci",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("registered CI wake must suppress duplicate dispatch")
+        ),
+    )
+
+    with pytest.raises(promotion.PolicyBlock, match="CI qualification dispatch is registered"):
+        promotion._advance_promotion_qualification(api, promoted, branch)
+
+
+def test_dependency_promotion_qualification_rejects_unreviewed_branch() -> None:
+    with pytest.raises(promotion.PolicyBlock, match="branch is outside reviewed authority"):
+        promotion._advance_promotion_qualification(
+            object(),
+            {"number": PR_NUMBER, "headSha": HEAD, "baseSha": BASE},
+            "automation/not-reviewed",
+        )
 
 
 def test_dependency_promotion_moved_subject_stops_before_gate(
