@@ -49,6 +49,15 @@ MARKER_PREFIX = "<!-- aiqa-dependency-promotion:"
 MARKER_SUFFIX = " -->"
 GITHUB_ACTIONS_LOGIN = "github-actions[bot]"
 GITHUB_ACTIONS_USER_ID = 41898282
+PROMOTION_AUTHOR_LOGIN_ENV = "DEPENDENCY_PROMOTION_BOT_LOGIN"
+PROMOTION_AUTHOR_ID_ENV = "DEPENDENCY_PROMOTION_BOT_ID"
+PROMOTION_AUTHOR_TOKEN_ENV = "DEPENDENCY_PROMOTION_APP_TOKEN"
+DISALLOWED_PROMOTION_AUTHOR_LOGINS = {
+    GITHUB_ACTIONS_LOGIN,
+    BOT_LOGIN,
+    "trusted-pr-gate[bot]",
+    "github-advanced-security[bot]",
+}
 REQUIREMENT = re.compile(
     r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)(?P<extras>\[[A-Za-z0-9_,.-]+\])?(?P<specifier>[^;@\s]*)$"
 )
@@ -497,6 +506,33 @@ def _delete_exact_generated_branch(api: GitHubApi, branch: str, head_sha: str) -
     api.request("DELETE", f"/git/refs/heads/{encoded}")
 
 
+def _promotion_author_identity() -> tuple[str, int]:
+    login = os.environ.get(PROMOTION_AUTHOR_LOGIN_ENV, "")
+    raw_id = os.environ.get(PROMOTION_AUTHOR_ID_ENV, "")
+    protected_login = os.environ.get("PROTECTED_REMEDIATION_BOT_LOGIN", "")
+    disallowed = set(DISALLOWED_PROMOTION_AUTHOR_LOGINS)
+    if protected_login:
+        disallowed.add(protected_login)
+    if (
+        not login
+        or not login.endswith("[bot]")
+        or login in disallowed
+        or not raw_id.isdigit()
+    ):
+        raise GovernanceError("dependency promotion author App identity is missing or malformed")
+    user_id = int(raw_id)
+    if user_id < 1:
+        raise GovernanceError("dependency promotion author App user id must be positive")
+    return login, user_id
+
+
+def _promotion_author_token() -> str:
+    token = os.environ.get(PROMOTION_AUTHOR_TOKEN_ENV, "")
+    if not token:
+        raise GovernanceError("DEPENDENCY_PROMOTION_APP_TOKEN is required for promotion PR creation")
+    return token
+
+
 def _create_promotion_pr(api: GitHubApi, source: dict[str, Any], branch: str, head_sha: str) -> int:
     metadata = {
         "version": 1,
@@ -517,25 +553,21 @@ def _create_promotion_pr(api: GitHubApi, source: dict[str, Any], branch: str, he
             "pass the full locked CI, CodeQL, frozen-lock replay proof, and Trusted PR Gate before merge.",
         )
     )
-    try:
-        pr = api.post(
-            "/pulls",
-            {
-                "title": f"deps: promote Dependabot PR #{source['number']}",
-                "head": branch,
-                "base": "main",
-                "body": body,
-                "draft": False,
-            },
-        )
-    except GovernanceError as exc:
-        if not _github_actions_pr_creation_denied(exc):
-            raise
-        _delete_exact_generated_branch(api, branch, head_sha)
-        raise GovernanceError(
-            "repository Actions policy blocks generated pull-request creation; "
-            "enable 'Allow GitHub Actions to create and approve pull requests'"
-        ) from exc
+    author_login, author_id = _promotion_author_identity()
+    pr = api.post(
+        "/pulls",
+        {
+            "title": f"deps: promote Dependabot PR #{source['number']}",
+            "head": branch,
+            "base": "main",
+            "body": body,
+            "draft": False,
+        },
+        token=_promotion_author_token(),
+    )
+    author = (pr or {}).get("user") or {}
+    if author.get("login") != author_login or author.get("id") != author_id:
+        raise GovernanceError("promotion PR was not authored by the configured GitHub App")
     number = (pr or {}).get("number")
     if not isinstance(number, int) or number < 1:
         raise GovernanceError("GitHub did not acknowledge dependency promotion PR creation")
@@ -574,12 +606,13 @@ def _publish_merge_signal(github_output: Path | None) -> None:
 
 
 def _promotion_pulls(api: GitHubApi) -> list[dict[str, Any]]:
+    author_login, author_id = _promotion_author_identity()
     rows = api.list_all("/pulls?state=open&sort=created&direction=asc", max_pages=4)
     return [
         row
         for row in rows
-        if (row.get("user") or {}).get("login") == GITHUB_ACTIONS_LOGIN
-        and (row.get("user") or {}).get("id") == GITHUB_ACTIONS_USER_ID
+        if (row.get("user") or {}).get("login") == author_login
+        and (row.get("user") or {}).get("id") == author_id
         and isinstance(((row.get("head") or {}).get("ref")), str)
         and str((row.get("head") or {}).get("ref")).startswith(BRANCH_PREFIX)
         and _parse_marker(row.get("body")) is not None
@@ -647,10 +680,11 @@ def _validate_promotion(
     metadata = _parse_marker(pr.get("body"))
     if metadata is None or metadata.get("version") != 1:
         raise PolicyBlock("promotion PR lacks exact promotion marker")
-    if (pr.get("user") or {}).get("login") != GITHUB_ACTIONS_LOGIN or (pr.get("user") or {}).get(
+    author_login, author_id = _promotion_author_identity()
+    if (pr.get("user") or {}).get("login") != author_login or (pr.get("user") or {}).get(
         "id"
-    ) != GITHUB_ACTIONS_USER_ID:
-        raise PolicyBlock("promotion PR is not authored by canonical GitHub Actions")
+    ) != author_id:
+        raise PolicyBlock("promotion PR is not authored by the configured GitHub App")
     head = pr.get("head") or {}
     base = pr.get("base") or {}
     if (head.get("repo") or {}).get("full_name") != config["repository"] or (
@@ -747,8 +781,8 @@ def _close_stale(api: GitHubApi, number: int, branch: str, head_sha: str) -> Non
     if (
         (fresh or {}).get("state") != "open"
         or (fresh or {}).get("draft") is not False
-        or ((fresh or {}).get("user") or {}).get("login") != GITHUB_ACTIONS_LOGIN
-        or ((fresh or {}).get("user") or {}).get("id") != GITHUB_ACTIONS_USER_ID
+        or ((fresh or {}).get("user") or {}).get("login") != _promotion_author_identity()[0]
+        or ((fresh or {}).get("user") or {}).get("id") != _promotion_author_identity()[1]
         or fresh_head.get("ref") != branch
         or require_sha(fresh_head.get("sha"), "stale promotion live head SHA") != head_sha
         or metadata is None
