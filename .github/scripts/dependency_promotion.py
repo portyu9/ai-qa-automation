@@ -615,6 +615,12 @@ def _create_promotion_pr(api: GitHubApi, source: dict[str, Any], branch: str, he
             },
         )
     except GovernanceError as exc:
+        _delete_exact_ref(
+            api,
+            staging_base,
+            source["baseSha"],
+            label="promotion staging-base ref",
+        )
         if not _github_actions_pr_creation_denied(exc):
             raise
         _delete_exact_generated_branch(api, branch, head_sha)
