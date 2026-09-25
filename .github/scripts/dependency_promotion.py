@@ -315,15 +315,30 @@ def _prune_orphan_promotion_refs(api: GitHubApi) -> int:
         for row in open_prs
         if isinstance((row.get("head") or {}).get("ref"), str)
     }
-    open_bases = {
+    open_staged_bases = {
         str((row.get("base") or {}).get("ref"))
         for row in open_prs
-        if isinstance((row.get("base") or {}).get("ref"), str)
+        if (row.get("user") or {}).get("login") == GITHUB_ACTIONS_LOGIN
+        and (row.get("user") or {}).get("id") == GITHUB_ACTIONS_USER_ID
+        and isinstance((row.get("head") or {}).get("ref"), str)
+        and isinstance((row.get("base") or {}).get("ref"), str)
+        and PROMOTION_BRANCH_RE.fullmatch(str((row.get("head") or {}).get("ref"))) is not None
+        and STAGING_BASE_RE.fullmatch(str((row.get("base") or {}).get("ref"))) is not None
+        and str((row.get("head") or {}).get("ref")).removeprefix(BRANCH_PREFIX)
+        == str((row.get("base") or {}).get("ref")).removeprefix(STAGING_BASE_PREFIX)
     }
     prefix = f"refs/heads/{BRANCH_PREFIX}"
     refs = api.list_all(f"/git/matching-refs/heads/{BRANCH_PREFIX}", max_pages=4)
+
+    def cleanup_priority(row: dict[str, Any]) -> int:
+        ref = row.get("ref")
+        if not isinstance(ref, str) or not ref.startswith(prefix):
+            return 1
+        branch = ref.removeprefix("refs/heads/")
+        return 0 if STAGING_BASE_RE.fullmatch(branch) is not None else 1
+
     pruned = 0
-    for row in refs:
+    for row in sorted(refs, key=cleanup_priority):
         ref = row.get("ref")
         if not isinstance(ref, str) or not ref.startswith(prefix):
             raise GovernanceError("GitHub returned a ref outside dependency promotion namespace")
@@ -334,7 +349,7 @@ def _prune_orphan_promotion_refs(api: GitHubApi) -> int:
         ref_sha = require_sha(obj.get("sha"), "orphan dependency promotion SHA")
 
         if STAGING_BASE_RE.fullmatch(branch) is not None:
-            if branch in open_bases:
+            if branch in open_staged_bases:
                 continue
             suffix = branch.removeprefix(STAGING_BASE_PREFIX)
             generated_branch = f"{BRANCH_PREFIX}{suffix}"
