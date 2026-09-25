@@ -537,4 +537,4 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
             "autonomous-governed-bots;external-one-shot-only-for-unrecognized-protected-change"
         ),
         "workflow_definition": "action-pin-normalized-reviewed-git-blob",
-    }
+    }\n

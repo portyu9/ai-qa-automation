@@ -547,7 +547,7 @@ def _select_dependency_governance_pull_request(
         max_pages=1,
     )
     if len(rows) >= MAX_PULL_REQUEST_CANDIDATES:
-        raise ValueError("dependency governance wake discovery reached the bounded pagination limit")
+        raise ValueError(\n            "dependency governance wake discovery reached the bounded pagination limit"\n        )
     matches: list[dict[str, Any]] = []
     for pr in rows:
         if _bot_lane(pr) != "dependency-promotion" or pr.get("draft") is not False:
@@ -891,7 +891,7 @@ def evaluate_admission(
         if pr is None:
             return None
         head_sha = _require_sha(
-            _require_dict(pr.get("head"), label="dependency promotion wake candidate head").get("sha"),
+            _require_dict(pr.get("head"), label="dependency promotion wake candidate head").get(\n                "sha"\n            ),
             label="dependency promotion wake candidate head SHA",
         )
         return _resolve_subject(
@@ -1007,4 +1007,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main()\n

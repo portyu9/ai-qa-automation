@@ -285,7 +285,7 @@ def test_governance_wake_check_is_neutral_only_and_non_authoritative() -> None:
 
 def test_failed_governance_run_cannot_wake_trusted_validation() -> None:
     api = _governance_wake_api()
-    api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]["conclusion"] = "failure"
+    api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]["conclusion"] = (\n        "failure"\n    )
     event = {"action": "completed", "workflow_run": {"id": 42, "head_sha": BASE}}
 
     assert preflight.evaluate_admission(api, event=event) is None
@@ -627,4 +627,4 @@ def test_protected_remediation_lane_rejects_collapsed_author_identity(
     monkeypatch.setenv(preflight.PROTECTED_REMEDIATION_BOT_ID_ENV, "42")
 
     with pytest.raises(ValueError, match="identity is missing or malformed"):
-        preflight._bot_lane({"user": {"login": login, "id": 42}, "head": {"ref": branch}})
+        preflight._bot_lane({"user": {"login": login, "id": 42}, "head": {"ref": branch}})\n
