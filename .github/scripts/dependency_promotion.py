@@ -1209,9 +1209,9 @@ def _publish_and_merge(
             promotion["headSha"],
             promotion["baseSha"],
         )
-    except TrustedStatusError:
+    except TrustedStatusError as exc:
         _advance_promotion_qualification(api, promotion, branch)
-        raise GovernanceError("promotion qualification wake returned unexpectedly")
+        raise GovernanceError("promotion qualification wake returned unexpectedly") from exc
     result = api.put(
         f"/pulls/{promotion['number']}/merge",
         {"sha": promotion["headSha"], "merge_method": config["mergeMethod"]},
