@@ -608,7 +608,7 @@ def _ensure_staging_base_ref(api: GitHubApi, source: dict[str, Any]) -> str:
         ) != "commit":
             raise GovernanceError(
                 "GitHub did not acknowledge exact promotion staging-base creation"
-            )
+            ) from None
         observed = require_sha(
             created_obj.get("sha"),
             "created promotion staging-base SHA",
