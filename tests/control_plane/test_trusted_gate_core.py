@@ -336,6 +336,9 @@ def _run(
         "event": "pull_request",
         "status": "completed",
         "conclusion": "success",
+        "run_attempt": 1,
+        "run_started_at": "2026-09-25T13:00:00Z",
+        "updated_at": "2026-09-25T13:05:00Z",
         "repository": {
             "id": EXPECTED_REPOSITORY_ID,
             "full_name": EXPECTED_REPOSITORY,
@@ -361,6 +364,22 @@ def test_live_run_requires_owner_actor_and_triggering_actor() -> None:
             run_id=RUN_ID,
             event_head_sha=HEAD,
         )
+
+
+def test_live_run_requires_bounded_attempt_identity_and_window() -> None:
+    client = GitHubClient(  # type: ignore[arg-type]
+        token_provider=_Provider(),
+        installation_id=INSTALLATION_ID,
+    )
+    invalid_attempt = _run()
+    invalid_attempt["run_attempt"] = 0
+    with pytest.raises(GitHubProtocolError, match="workflow run attempt is malformed"):
+        client._validate_run(invalid_attempt, run_id=RUN_ID, event_head_sha=HEAD)
+
+    inverted_window = _run()
+    inverted_window["run_started_at"] = "2026-09-25T13:06:00Z"
+    with pytest.raises(GitHubProtocolError, match="timestamps are inconsistent"):
+        client._validate_run(inverted_window, run_id=RUN_ID, event_head_sha=HEAD)
 
 
 def test_live_run_rejects_fork_and_wrong_workflow() -> None:
