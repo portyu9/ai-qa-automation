@@ -274,6 +274,27 @@ def test_successful_governance_wake_selects_exact_dependency_promotion() -> None
     assert admission.base_sha == BASE
 
 
+def test_governance_wake_actor_is_not_admission_authority() -> None:
+    api = _governance_wake_api()
+    run = api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]
+    run["actor"] = {
+        "login": preflight.GITHUB_ACTIONS_LOGIN,
+        "id": preflight.GITHUB_ACTIONS_USER_ID,
+    }
+    run["triggering_actor"] = {
+        "login": preflight.GITHUB_ACTIONS_LOGIN,
+        "id": preflight.GITHUB_ACTIONS_USER_ID,
+    }
+    event = {"action": "completed", "workflow_run": {"id": 42, "head_sha": BASE}}
+
+    admission = preflight.evaluate_admission(api, event=event)
+
+    assert admission is not None
+    assert admission.eligible is True
+    assert admission.lane == "dependency-promotion"
+    assert admission.pr_number == 65
+
+
 def test_governance_wake_check_is_neutral_only_and_non_authoritative() -> None:
     api = _governance_wake_api(wake_conclusion="success")
     event = {"action": "completed", "workflow_run": {"id": 42, "head_sha": BASE}}
