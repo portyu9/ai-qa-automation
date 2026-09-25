@@ -40,7 +40,7 @@ from dependency_governance import (
 )
 from dependency_lock_compiler import LockCompileError, compile_locks, validate_frozen_locks
 from dependency_trusted_gate import require_qualified_trusted_gate
-from trusted_qualification import qualification_states
+from trusted_qualification import EXPECTED_REPOSITORY, qualification_states
 from trusted_status import TrustedStatusError
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -314,16 +314,18 @@ def _prune_orphan_promotion_refs(api: GitHubApi) -> int:
         str((row.get("head") or {}).get("ref"))
         for row in open_prs
         if isinstance((row.get("head") or {}).get("ref"), str)
+        and PROMOTION_BRANCH_RE.fullmatch(str((row.get("head") or {}).get("ref"))) is not None
+        and ((row.get("head") or {}).get("repo") or {}).get("full_name") == EXPECTED_REPOSITORY
     }
     open_staged_bases = {
         str((row.get("base") or {}).get("ref"))
         for row in open_prs
-        if (row.get("user") or {}).get("login") == GITHUB_ACTIONS_LOGIN
-        and (row.get("user") or {}).get("id") == GITHUB_ACTIONS_USER_ID
-        and isinstance((row.get("head") or {}).get("ref"), str)
+        if isinstance((row.get("head") or {}).get("ref"), str)
         and isinstance((row.get("base") or {}).get("ref"), str)
         and PROMOTION_BRANCH_RE.fullmatch(str((row.get("head") or {}).get("ref"))) is not None
         and STAGING_BASE_RE.fullmatch(str((row.get("base") or {}).get("ref"))) is not None
+        and ((row.get("head") or {}).get("repo") or {}).get("full_name") == EXPECTED_REPOSITORY
+        and ((row.get("base") or {}).get("repo") or {}).get("full_name") == EXPECTED_REPOSITORY
         and str((row.get("head") or {}).get("ref")).removeprefix(BRANCH_PREFIX)
         == str((row.get("base") or {}).get("ref")).removeprefix(STAGING_BASE_PREFIX)
     }
