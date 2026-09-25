@@ -292,9 +292,7 @@ def branch_name(record: Mapping[str, Any]) -> str:
     return _branch_for_attempt(
         _require_positive_int(record.get("alertNumber"), "route alert number"),
         _require_digest(record.get("fingerprint"), "route fingerprint"),
-        _require_positive_int(
-            int(record["strategyAttemptCount"]) + 1, "protected repair attempt"
-        ),
+        _require_positive_int(int(record["strategyAttemptCount"]) + 1, "protected repair attempt"),
     )
 
 
