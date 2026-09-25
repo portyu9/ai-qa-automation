@@ -27,6 +27,9 @@ def _successful_run() -> dict[str, object]:
         "event": "pull_request",
         "status": "completed",
         "conclusion": "success",
+        "run_attempt": 1,
+        "run_started_at": "2026-09-25T13:00:00Z",
+        "updated_at": "2026-09-25T13:05:00Z",
         "repository": {
             "id": EXPECTED_REPOSITORY_ID,
             "full_name": EXPECTED_REPOSITORY,

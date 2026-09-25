@@ -44,6 +44,7 @@ def test_trusted_auto_contract_is_frozen_and_bounded() -> None:
     assert auto["validation_authority"] == (
         "secret-free;read-only-except-bot-codeql-security-events-write-before-reporter"
     )
+    assert auto["codeql_status_anchor"] == "scheduled-idle-default-branch-same-analysis-key"
     assert auto["status_writer"] == "dedicated-github-app"
     assert auto["maintenance_authority"] == (
         "autonomous-governed-bots;external-one-shot-only-for-unrecognized-protected-change"
@@ -232,6 +233,23 @@ def test_trusted_auto_contract_rejects_candidate_identity_in_trusted_jobs(
     _accept_mutated_workflow_hash(monkeypatch, mutated)
 
     with pytest.raises(ValueError, match=message):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_trusted_auto_contract_rejects_removed_default_branch_codeql_anchor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_contract_repo(tmp_path)
+    path = root / ".github" / "workflows" / "trusted-pr-auto.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = '            test "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH"\n'
+    assert marker in text
+    mutated = text.replace(marker, '            test -n "$GITHUB_REF"\n', 1)
+    path.write_text(mutated, encoding="utf-8")
+    _accept_mutated_workflow_hash(monkeypatch, mutated)
+
+    with pytest.raises(ValueError, match="trusted bot CodeQL is missing reviewed fragment"):
         ci_contract.verify_ci_contract(root)
 
 
