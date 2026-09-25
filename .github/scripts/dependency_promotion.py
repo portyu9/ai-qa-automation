@@ -571,8 +571,11 @@ def _delete_exact_ref(
 ) -> None:
     encoded = urllib.parse.quote(branch, safe="")
     ref = api.get(f"/git/ref/heads/{encoded}")
+    obj = (ref or {}).get("object") or {}
+    if (ref or {}).get("ref") != f"refs/heads/{branch}" or obj.get("type") != "commit":
+        raise PolicyBlock(f"{label} identity changed before exact cleanup")
     observed = require_sha(
-        ((ref or {}).get("object") or {}).get("sha"),
+        obj.get("sha"),
         f"{label} SHA before cleanup",
     )
     if observed != expected_sha:
@@ -601,15 +604,25 @@ def _ensure_staging_base_ref(api: GitHubApi, source: dict[str, Any]) -> str:
             "/git/refs",
             {"ref": f"refs/heads/{branch}", "sha": source["baseSha"]},
         )
-        if (created or {}).get("ref") != f"refs/heads/{branch}":
-            raise GovernanceError("GitHub did not acknowledge promotion staging-base creation")
+        created_obj = (created or {}).get("object") or {}
+        if (
+            (created or {}).get("ref") != f"refs/heads/{branch}"
+            or created_obj.get("type") != "commit"
+        ):
+            raise GovernanceError("GitHub did not acknowledge exact promotion staging-base creation")
         observed = require_sha(
-            ((created or {}).get("object") or {}).get("sha"),
+            created_obj.get("sha"),
             "created promotion staging-base SHA",
         )
     else:
+        existing_obj = (existing or {}).get("object") or {}
+        if (
+            (existing or {}).get("ref") != f"refs/heads/{branch}"
+            or existing_obj.get("type") != "commit"
+        ):
+            raise PolicyBlock("existing promotion staging-base ref identity drifted")
         observed = require_sha(
-            ((existing or {}).get("object") or {}).get("sha"),
+            existing_obj.get("sha"),
             "existing promotion staging-base SHA",
         )
     if observed != source["baseSha"]:
