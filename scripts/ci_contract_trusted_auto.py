@@ -28,7 +28,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
-    "36fd412054bf1d2a1aaa9d0a83db6b090bda5494"  # pragma: allowlist secret
+    "9fac2c40725e5bff0221a00685c6d345c38c2ef6"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
     "c086755ff72ce4f2916ed2436bf6404651800e1c"  # pragma: allowlist secret
@@ -281,9 +281,9 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         raise ValueError(
             "trusted automatic bot policy and reporter must have exactly two trusted-base checkouts"
         )
-    bot_head_checkout = "ref: ${{ needs.preflight.outputs.head_sha }}"
-    if semantic.count(bot_head_checkout) != 1:
-        raise ValueError("trusted automatic bot CodeQL must have exactly one bot-head checkout")
+    codeql_subject_checkout = "ref: ${{ steps.codeql-subject.outputs.sha }}"
+    if semantic.count(codeql_subject_checkout) != 1:
+        raise ValueError("trusted automatic bot CodeQL must have exactly one exact-subject checkout")
     if semantic.count("persist-credentials: false") != 10:
         raise ValueError("every trusted automatic checkout must disable persisted credentials")
 
@@ -361,11 +361,27 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     required_bot_codeql = (
         "    name: Trusted Bot CodeQL",
         "    needs: [preflight, subject-guard]",
-        "    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.eligible == 'true' && needs.preflight.outputs.lane != 'owner-routine' && needs.subject-guard.result == 'success' }}",
-        bot_head_checkout,
+        "    if: ${{ !cancelled() && needs.preflight.result == 'success' && ((needs.preflight.outputs.eligible == 'true' && needs.preflight.outputs.lane != 'owner-routine' && needs.subject-guard.result == 'success') || (github.event_name == 'schedule' && needs.preflight.outputs.eligible == 'false' && needs.preflight.outputs.lane == 'none')) }}",
+        "      - name: Resolve exact CodeQL analysis subject",
+        "        id: codeql-subject",
+        "          ELIGIBLE: ${{ needs.preflight.outputs.eligible }}",
+        "          LANE: ${{ needs.preflight.outputs.lane }}",
+        "          BOT_HEAD_REF: ${{ needs.preflight.outputs.head_ref }}",
+        "          BOT_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}",
+        "          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}",
+        '          if test "$ELIGIBLE" = "true"; then',
+        "              dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation) ;;",
+        '            mode="governed-bot"',
+        '            test "$GITHUB_EVENT_NAME" = "schedule"',
+        '            test "$LANE" = "none"',
+        '            test "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH"',
+        '            mode="default-branch-anchor"',
+        "          [[ \"$subject_sha\" =~ ^[0-9a-f]{40}$ ]]",
+        "          printf 'ref=%s\\nsha=%s\\nmode=%s\\n' \"$subject_ref\" \"$subject_sha\" \"$mode\" >> \"$GITHUB_OUTPUT\"",
+        codeql_subject_checkout,
         "          persist-credentials: false",
-        "          EXPECTED_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}",
-        '        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"',
+        "          EXPECTED_SUBJECT_SHA: ${{ steps.codeql-subject.outputs.sha }}",
+        '        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SUBJECT_SHA"',
         "      - name: Acquire verified CodeQL 2.27.0 bundle",
         "        id: codeql-tools",
         "release_api='https://api.github.com/repos/github/codeql-action/releases/tags/codeql-bundle-v2.27.0'",
@@ -376,10 +392,10 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "          tools: ${{ steps.codeql-tools.outputs.path }}",
         "          languages: python",
         "          queries: security-extended",
-        "      - name: Analyze exact governed bot branch",
+        "      - name: Analyze exact CodeQL subject",
         '        env:\n          PYTHONSAFEPATH: ""',
-        "          ref: refs/heads/${{ needs.preflight.outputs.head_ref }}",
-        "          sha: ${{ needs.preflight.outputs.head_sha }}",
+        "          ref: ${{ steps.codeql-subject.outputs.ref }}",
+        "          sha: ${{ steps.codeql-subject.outputs.sha }}",
     )
     for fragment in required_bot_codeql:
         if fragment not in bot_codeql:
@@ -510,6 +526,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "validation_authority": (
             "secret-free;read-only-except-bot-codeql-security-events-write-before-reporter"
         ),
+        "codeql_status_anchor": "scheduled-idle-default-branch-same-analysis-key",
         "quality_lanes": quality_lanes,
         "terminal_revalidation": "fresh-live-admission-plus-terminal-bot-authority-reproof",
         "status_writer": "dedicated-github-app",
