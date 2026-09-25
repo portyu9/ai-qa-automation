@@ -56,6 +56,16 @@ class RecordingApi:
         }
 
 
+class LiveMainApi:
+    def __init__(self, sha: str) -> None:
+        self.sha = sha
+        self.calls: list[str] = []
+
+    def get(self, path: str) -> dict[str, Any]:
+        self.calls.append(path)
+        return {"commit": {"sha": self.sha}}
+
+
 def _source() -> dict[str, Any]:
     return {
         "number": 171,
@@ -70,6 +80,35 @@ def _configure_author(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(promotion.PROMOTION_AUTHOR_LOGIN_ENV, AUTHOR_LOGIN)
     monkeypatch.setenv(promotion.PROMOTION_AUTHOR_ID_ENV, str(AUTHOR_ID))
     monkeypatch.setenv(promotion.PROMOTION_AUTHOR_TOKEN_ENV, "app-token")
+
+
+def test_live_main_guard_accepts_only_exact_workflow_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_SHA", BASE)
+    api = LiveMainApi(BASE)
+
+    assert promotion._require_exact_live_main(api, {"baseBranch": "main"}) == BASE
+    assert api.calls == ["/branches/main"]
+
+
+def test_live_main_guard_rejects_stale_workflow_before_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_SHA", BASE)
+    api = LiveMainApi("f" * 40)
+
+    with pytest.raises(promotion.GovernanceError, match="stale relative to current main"):
+        promotion._require_exact_live_main(api, {"baseBranch": "main"})
+
+
+def test_live_main_guard_rejects_missing_workflow_sha(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GITHUB_SHA", raising=False)
+
+    with pytest.raises(promotion.GovernanceError, match="missing or malformed"):
+        promotion._require_exact_live_main(LiveMainApi(BASE), {"baseBranch": "main"})
 
 
 def test_create_promotion_pr_uses_only_configured_app_token(
