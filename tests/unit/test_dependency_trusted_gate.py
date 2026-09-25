@@ -519,9 +519,7 @@ def test_dependency_promotion_pending_wake_suppresses_duplicate_registration(
     promoted = {"number": PR_NUMBER, "headSha": HEAD, "baseSha": BASE}
     branch = f"automation/dependency-promotion-{PR_NUMBER}-aaaaaaaaaaaa"
     monkeypatch.setattr(promotion, "_exact_terminal_trusted_gate_state", lambda *args: None)
-    monkeypatch.setattr(
-        promotion, "_qualification_wake_stage", lambda *args: "trusted-gate"
-    )
+    monkeypatch.setattr(promotion, "_qualification_wake_stage", lambda *args: "trusted-gate")
     monkeypatch.setattr(
         promotion,
         "_publish_qualification_wake",
@@ -539,9 +537,7 @@ def test_dependency_promotion_exact_terminal_failure_suppresses_retry_loop(
 ) -> None:
     promoted = {"number": PR_NUMBER, "headSha": HEAD, "baseSha": BASE}
     branch = f"automation/dependency-promotion-{PR_NUMBER}-aaaaaaaaaaaa"
-    monkeypatch.setattr(
-        promotion, "_exact_terminal_trusted_gate_state", lambda *args: "failure"
-    )
+    monkeypatch.setattr(promotion, "_exact_terminal_trusted_gate_state", lambda *args: "failure")
     monkeypatch.setattr(
         promotion,
         "_publish_qualification_wake",
@@ -1036,4 +1032,3 @@ def test_finalize_post_merge_evidence_requires_ci_registration(
         "postMergeCiStatus": "queued",
         "postMergeCiDispatched": False,
     }
-
