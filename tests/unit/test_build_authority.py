@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import tomllib
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -77,8 +78,10 @@ def test_build_authority_rejects_expanded_build_requirement(
 ) -> None:
     root = _copy_build_inputs(tmp_path)
     path = root / "pyproject.toml"
+    current = tomllib.loads(path.read_text(encoding="utf-8"))["build-system"]["requires"][0]
+    assert isinstance(current, str)
     text = path.read_text(encoding="utf-8").replace(
-        'requires = ["hatchling==1.32.0"]',
+        f'requires = ["{current}"]',
         f'requires = ["{build_requirement}"]',
         1,
     )

@@ -372,10 +372,8 @@ def _verify_locks(root: Path, pyproject: dict[str, Any]) -> tuple[dict[str, Any]
 
     project = pyproject["project"]
     runtime_declared = list(project.get("dependencies", []))
-    dev_declared = runtime_declared + list(project.get("optional-dependencies", {}).get("dev", []))
+    optional_dev_declared = list(project.get("optional-dependencies", {}).get("dev", []))
     _assert_declared_requirements_satisfied(runtime_declared, runtime, context="runtime lock")
-    _assert_declared_requirements_satisfied(dev_declared, dev311, context="Python 3.11 dev lock")
-    _assert_declared_requirements_satisfied(dev_declared, dev314, context="Python 3.14 dev lock")
 
     build_system = pyproject.get("build-system")
     if not isinstance(build_system, dict) or set(build_system) != {"requires", "build-backend"}:
@@ -408,6 +406,9 @@ def _verify_locks(root: Path, pyproject: dict[str, Any]) -> tuple[dict[str, Any]
         )
     Version(build_specifiers[0].version)
     _assert_declared_requirements_satisfied(build_requires, build, context="build lock")
+    dev_declared = runtime_declared + optional_dev_declared + list(build_requires)
+    _assert_declared_requirements_satisfied(dev_declared, dev311, context="Python 3.11 dev lock")
+    _assert_declared_requirements_satisfied(dev_declared, dev314, context="Python 3.14 dev lock")
 
     leaked = BUILD_ONLY_RUNTIME_DENY.intersection(runtime)
     if leaked:

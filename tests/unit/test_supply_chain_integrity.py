@@ -28,41 +28,85 @@ def test_repository_supply_chain_contract_is_self_consistent() -> None:
     assert result["base_image"].startswith("python:3.11.16-slim@sha256:")
 
 
+def _current_build_requirement() -> str:
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    build_system = pyproject["build-system"]
+    requires = build_system["requires"]
+    assert isinstance(requires, list) and len(requires) == 1 and isinstance(requires[0], str)
+    return requires[0]
+
+
 def _supply_chain_pyproject(*, build_requirement: str, extra_build_key: bool = False) -> dict[str, Any]:
-    text = (ROOT / "pyproject.toml").read_text(encoding="utf-8").replace(
-        'requires = ["hatchling==1.32.0"]',
-        f'requires = ["{build_requirement}"]',
-        1,
-    )
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    build_system = pyproject["build-system"]
+    assert isinstance(build_system, dict)
+    build_system["requires"] = [build_requirement]
     if extra_build_key:
-        text = text.replace(
-            'build-backend = "hatchling.build"\n',
-            'build-backend = "hatchling.build"\nbackend-path = ["."]\n',
-            1,
-        )
-    return tomllib.loads(text)
+        build_system["backend-path"] = ["."]
+    return pyproject
+
+
+def _replace_locked_build_requirement(
+    root: Path,
+    *,
+    replacement: str,
+    lock_names: tuple[str, ...] = ("build-py311.lock", "dev-py311.lock", "dev-py314.lock"),
+) -> None:
+    current = _current_build_requirement()
+    for name in lock_names:
+        lock = root / "requirements" / name
+        text = lock.read_text(encoding="utf-8")
+        assert text.count(current) == 1
+        lock.write_text(text.replace(current, replacement, 1), encoding="utf-8")
 
 
 def test_supply_chain_accepts_exact_promoted_hatchling_pin(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     shutil.copytree(ROOT / "requirements", root / "requirements")
-    build_lock = root / "requirements" / "build-py311.lock"
-    build_lock.write_text(
-        build_lock.read_text(encoding="utf-8").replace(
-            "hatchling==1.32.0",
-            "hatchling==1.32.4",
-            1,
-        ),
-        encoding="utf-8",
-    )
+    promoted_requirement = "hatchling==99.0.0"
+    _replace_locked_build_requirement(root, replacement=promoted_requirement)
 
     locks, _ = supply_chain._verify_locks(
         root,
-        _supply_chain_pyproject(build_requirement="hatchling==1.32.4"),
+        _supply_chain_pyproject(build_requirement=promoted_requirement),
     )
 
     assert locks["build-py311.lock"]["packages"] > 0
+
+
+@pytest.mark.parametrize(
+    ("stale_dev_lock", "expected_context"),
+    [
+        ("dev-py311.lock", "Python 3.11 dev lock"),
+        ("dev-py314.lock", "Python 3.14 dev lock"),
+    ],
+)
+def test_supply_chain_rejects_promoted_build_pin_missing_from_dev_graph(
+    tmp_path: Path,
+    stale_dev_lock: str,
+    expected_context: str,
+) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    shutil.copytree(ROOT / "requirements", root / "requirements")
+    promoted_requirement = "hatchling==99.0.0"
+    updated = tuple(
+        name
+        for name in ("build-py311.lock", "dev-py311.lock", "dev-py314.lock")
+        if name != stale_dev_lock
+    )
+    _replace_locked_build_requirement(
+        root,
+        replacement=promoted_requirement,
+        lock_names=updated,
+    )
+
+    with pytest.raises(ValueError, match=expected_context):
+        supply_chain._verify_locks(
+            root,
+            _supply_chain_pyproject(build_requirement=promoted_requirement),
+        )
 
 
 @pytest.mark.parametrize(
@@ -102,7 +146,7 @@ def test_supply_chain_rejects_build_backend_path_authority(tmp_path: Path) -> No
         supply_chain._verify_locks(
             root,
             _supply_chain_pyproject(
-                build_requirement="hatchling==1.32.0",
+                build_requirement=_current_build_requirement(),
                 extra_build_key=True,
             ),
         )
