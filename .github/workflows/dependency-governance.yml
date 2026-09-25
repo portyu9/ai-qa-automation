@@ -13,6 +13,7 @@ on:
       - '.github/scripts/dependency_recovery.py'
       - '.github/scripts/dependency_recovery_selfcheck.py'
       - '.github/workflows/dependency-governance.yml'
+      - '.github/workflows/dependency-promotion-author.yml'
       - '.github/workflows/ci.yml'
       - '.github/workflows/codeql.yml'
   workflow_run:
