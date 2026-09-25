@@ -46,7 +46,7 @@ EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
-    "f7e1b88ca86384795554661cb5c367a5bce4d428"  # pragma: allowlist secret
+    "1db85d020dd5672fb93600040cc87e697d3b4f53"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_PROMOTION_AUTHOR_WORKFLOW_BLOB_SHA = (
     "bd2667e3e7db33818d0886ad277e3ff4dafcf64e"  # pragma: allowlist secret
