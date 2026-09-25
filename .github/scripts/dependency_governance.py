@@ -135,6 +135,7 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         ".github/scripts/trusted_qualification.py",
         ".github/scripts/trusted_status.py",
         ".github/workflows/dependency-governance.yml",
+        ".github/workflows/dependency-promotion-author.yml",
         ".github/workflows/security-autoheal.yml",
         ".github/workflows/trusted-pr-auto.yml",
         "scripts/auto_trusted_preflight.py",
