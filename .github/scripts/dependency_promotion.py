@@ -792,6 +792,24 @@ def _close_stale(api: GitHubApi, number: int, branch: str, head_sha: str) -> Non
     _delete_exact_generated_branch(api, branch, head_sha)
 
 
+def _require_exact_live_main(api: GitHubApi, config: dict[str, Any]) -> str:
+    raw_workflow_sha = os.environ.get("GITHUB_SHA", "")
+    try:
+        workflow_sha = require_sha(raw_workflow_sha, "trusted workflow SHA")
+    except PolicyBlock as exc:
+        raise GovernanceError("trusted workflow SHA is missing or malformed") from exc
+    live = api.get(f"/branches/{urllib.parse.quote(config['baseBranch'], safe='')}")
+    try:
+        live_sha = require_sha(((live or {}).get("commit") or {}).get("sha"), "live main SHA")
+    except PolicyBlock as exc:
+        raise GovernanceError("live main SHA is missing or malformed") from exc
+    if live_sha != workflow_sha:
+        raise GovernanceError(
+            "trusted dependency promotion workflow revision is stale relative to current main"
+        )
+    return live_sha
+
+
 def reconcile(
     config: dict[str, Any],
     *,
@@ -804,6 +822,7 @@ def reconcile(
     if repository != config["repository"]:
         raise GovernanceError("workflow repository does not match dependency promotion config")
     api = GitHubApi(os.environ.get("GITHUB_TOKEN", ""), repository)
+    _require_exact_live_main(api, config)
     _prune_orphan_promotion_refs(api)
 
     active_sources: set[int] = set()
