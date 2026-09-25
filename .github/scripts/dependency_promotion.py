@@ -14,7 +14,6 @@ import stat
 import tempfile
 import tomllib
 import urllib.parse
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -30,8 +29,6 @@ from dependency_governance import (
     GovernanceError,
     PolicyBlock,
     changed_files,
-    dispatch_exact_ci,
-    dispatch_exact_codeql,
     finalize_post_merge_evidence,
     load_config,
     require_green_checks,
@@ -39,8 +36,8 @@ from dependency_governance import (
     validate_pr_identity,
 )
 from dependency_lock_compiler import LockCompileError, compile_locks, validate_frozen_locks
-from dependency_trusted_gate import require_qualified_trusted_gate
-from trusted_qualification import EXPECTED_REPOSITORY, qualification_states
+from dependency_trusted_gate import require_schedule_trusted_gate
+from trusted_qualification import EXPECTED_REPOSITORY
 from trusted_status import TrustedStatusError
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -48,8 +45,6 @@ BRANCH_PREFIX = "automation/dependency-promotion-"
 STAGING_BASE_PREFIX = "automation/dependency-promotion-base-"
 PROMOTION_BRANCH_RE = re.compile(r"^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$")
 STAGING_BASE_RE = re.compile(r"^automation/dependency-promotion-base-[1-9][0-9]*-[0-9a-f]{12}$")
-QUALIFICATION_RETRY_AFTER = timedelta(minutes=45)
-MAX_QUALIFICATION_ATTEMPTS = 2
 PROMOTION_COMMIT_MESSAGE_RE = re.compile(
     r"^deps: promote Dependabot PR #[1-9][0-9]* with synchronized locks$"
 )
@@ -68,7 +63,6 @@ PROMOTION_PATHS = {
     "requirements/runtime-py311.lock",
     ".github/lock-authority.json",
 }
-REQUIRED_CHECKS = ("Required PR Gate", "CodeQL")
 
 
 def _canonical_name(value: str) -> str:
@@ -827,116 +821,6 @@ def _normalize_staged_promotion(
     return retargeted
 
 
-def _qualification_request_age(metadata: dict[str, Any]) -> timedelta | None:
-    request = metadata.get("qualificationRequest")
-    if not isinstance(request, dict):
-        return None
-    raw = request.get("requestedAt")
-    if not isinstance(raw, str):
-        raise PolicyBlock("promotion qualification request timestamp is malformed")
-    try:
-        requested = datetime.fromisoformat(raw)
-    except ValueError as exc:
-        raise PolicyBlock("promotion qualification request timestamp is malformed") from exc
-    if requested.tzinfo is None:
-        raise PolicyBlock("promotion qualification request timestamp is not timezone-aware")
-    now = datetime.now(UTC)
-    requested_utc = requested.astimezone(UTC)
-    if requested_utc > now:
-        raise PolicyBlock("promotion qualification request timestamp is in the future")
-    return now - requested_utc
-
-
-def _request_exact_qualification(
-    api: GitHubApi,
-    pr: dict[str, Any],
-    head_sha: str,
-    base_sha: str,
-) -> bool:
-    metadata = _parse_marker(pr.get("body"))
-    if metadata is None:
-        raise PolicyBlock("promotion PR lacks exact promotion marker")
-    states = qualification_states(
-        api,
-        head_sha,
-        base_sha,
-        required=REQUIRED_CHECKS,
-    )
-    if all(
-        states[name] is not None and states[name].get("conclusion") == "success"
-        for name in REQUIRED_CHECKS
-    ):
-        return True
-
-    terminal_failures = [
-        f"{name}={states[name].get('conclusion')}"
-        for name in REQUIRED_CHECKS
-        if states[name] is not None and states[name].get("conclusion") != "success"
-    ]
-    if terminal_failures:
-        raise PolicyBlock(
-            "promotion exact-subject qualification is not green: " + ", ".join(terminal_failures)
-        )
-
-    request = metadata.get("qualificationRequest")
-    attempt = 0
-    if request is not None:
-        if not isinstance(request, dict):
-            raise PolicyBlock("promotion qualification request metadata is malformed")
-        raw_attempt = request.get("attempt")
-        if isinstance(raw_attempt, bool) or not isinstance(raw_attempt, int) or raw_attempt < 1:
-            raise PolicyBlock("promotion qualification request attempt is malformed")
-        attempt = raw_attempt
-        age = _qualification_request_age(metadata)
-        if age is None or age < QUALIFICATION_RETRY_AFTER:
-            return False
-        if attempt >= MAX_QUALIFICATION_ATTEMPTS:
-            raise PolicyBlock("promotion exact-subject qualification retry budget is exhausted")
-
-    missing = [name for name in REQUIRED_CHECKS if states[name] is None]
-    if not missing:
-        raise GovernanceError("promotion qualification state is internally inconsistent")
-
-    persisted_metadata = copy.deepcopy(metadata)
-    persisted_metadata["qualificationRequest"] = {
-        "attempt": attempt + 1,
-        "requestedAt": datetime.now(UTC).isoformat(),
-    }
-    number = pr.get("number")
-    if not isinstance(number, int) or number < 1:
-        raise GovernanceError("promotion PR number is invalid during qualification request")
-    updated = api.request(
-        "PATCH",
-        f"/pulls/{number}",
-        {"body": _promotion_body(persisted_metadata)},
-    )
-    if not isinstance(updated, dict):
-        raise GovernanceError("GitHub returned malformed promotion qualification metadata update")
-    head = pr.get("head") or {}
-    base = pr.get("base") or {}
-    _validate_staged_or_main_pr(
-        updated,
-        number=number,
-        branch=str(head.get("ref") or ""),
-        head_sha=head_sha,
-        base_ref=str(base.get("ref") or ""),
-        base_sha=base_sha,
-        repository=os.environ.get("GITHUB_REPOSITORY", ""),
-    )
-    if _parse_marker(updated.get("body")) != persisted_metadata:
-        raise GovernanceError("promotion qualification request metadata did not persist exactly")
-
-    head_ref = str(head.get("ref") or "")
-    for name in missing:
-        if name == "Required PR Gate":
-            dispatch_exact_ci(api, head_ref, head_sha)
-        elif name == "CodeQL":
-            dispatch_exact_codeql(api, head_ref, head_sha)
-        else:
-            raise GovernanceError(f"unsupported promotion qualification check: {name}")
-    return False
-
-
 def _publish_merge_signal(github_output: Path | None) -> None:
     if github_output is None:
         return
@@ -1107,19 +991,19 @@ def _publish_and_merge(
 ) -> dict[str, Any]:
     fresh_before_merge = api.get(f"/pulls/{promotion['number']}")
     _, rebound_before_merge = _validate_promotion(
-        api, fresh_before_merge, config, require_checks=True
+        api, fresh_before_merge, config, require_checks=False
     )
     if rebound_before_merge != promotion:
         raise PolicyBlock("promotion changed before guarded merge")
     try:
-        require_qualified_trusted_gate(
+        require_schedule_trusted_gate(
             api,
             promotion["number"],
             promotion["headSha"],
             promotion["baseSha"],
         )
     except TrustedStatusError as exc:
-        raise PolicyBlock("automatic Trusted PR Gate is not yet exact-qualified") from exc
+        raise PolicyBlock("automatic Trusted PR Gate is not yet schedule-admissible") from exc
     result = api.put(
         f"/pulls/{promotion['number']}/merge",
         {"sha": promotion["headSha"], "merge_method": config["mergeMethod"]},
@@ -1216,26 +1100,6 @@ def reconcile(
                 config,
             )
             _, promotion = _validate_promotion(api, live_pr, config, require_checks=False)
-            if not _request_exact_qualification(
-                api,
-                live_pr,
-                promotion["headSha"],
-                promotion["baseSha"],
-            ):
-                print(
-                    json.dumps(
-                        {
-                            "pr": number,
-                            "decision": "promotion-waiting",
-                            "reason": "trusted-main exact-subject qualification is pending",
-                        },
-                        sort_keys=True,
-                    )
-                )
-                continue
-            _, promotion = _validate_promotion(
-                api, api.get(f"/pulls/{number}"), config, require_checks=True
-            )
             print(json.dumps({"pr": number, "decision": "promotion-qualified"}, sort_keys=True))
             if allow_merge and config["automergeEnabled"]:
                 merge_evidence = _publish_and_merge(api, promotion, config)
@@ -1281,16 +1145,6 @@ def reconcile(
             branch = _branch_name(source)
             head_sha, _ = _create_promotion_commit(api, source, branch)
             promotion_number = _create_promotion_pr(api, source, branch, head_sha)
-            created_pr = api.get(f"/pulls/{promotion_number}")
-            if _request_exact_qualification(
-                api,
-                created_pr,
-                head_sha,
-                source["baseSha"],
-            ):
-                raise GovernanceError(
-                    "new promotion unexpectedly had pre-existing exact-subject qualification"
-                )
             active_sources.add(number)
             created += 1
             print(

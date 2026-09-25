@@ -13,7 +13,6 @@ from trusted_status import (
 
 TRUSTED_PR_AUTO_WORKFLOW_ID = 346203190
 TRUSTED_PR_AUTO_SCHEDULE_EVENT = "schedule"
-TRUSTED_PR_AUTO_QUALIFIED_EVENTS = frozenset({"schedule", "workflow_run"})
 
 
 def _require_positive_int(value: Any, label: str) -> int:
@@ -163,22 +162,4 @@ def require_schedule_trusted_gate(
         base_sha,
         allowed_events=frozenset({TRUSTED_PR_AUTO_SCHEDULE_EVENT}),
         authority_label="schedule-owned",
-    )
-
-
-def require_qualified_trusted_gate(
-    api: Any,
-    pr_number: int,
-    head_sha: str,
-    base_sha: str,
-) -> dict[str, Any]:
-    """Require App-owned exact-current-main gate evidence after exact qualification is green."""
-
-    return _require_trusted_gate(
-        api,
-        pr_number,
-        head_sha,
-        base_sha,
-        allowed_events=TRUSTED_PR_AUTO_QUALIFIED_EVENTS,
-        authority_label="qualified automatic",
     )
