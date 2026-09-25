@@ -759,8 +759,9 @@ def _protected_route_candidates(
         fingerprint = provisional.get("fingerprint")
         if not isinstance(fingerprint, str):
             raise ProtectedRemediationError("CodeQL route fingerprint is malformed")
-        attempts[number] = {
-            PROTECTED_REMEDIATION_STRATEGY: _attempt_count(
+        attempts[number] = {PROTECTED_REMEDIATION_STRATEGY: 0}
+        if provisional.get("decision") == "protected-independent-remediation":
+            attempts[number][PROTECTED_REMEDIATION_STRATEGY] = _attempt_count(
                 api,
                 alert_number=number,
                 fingerprint=fingerprint,
@@ -771,7 +772,6 @@ def _protected_route_candidates(
                     "protected route maximum attempts",
                 ),
             )
-        }
     try:
         records = route_alerts(
             alerts,
