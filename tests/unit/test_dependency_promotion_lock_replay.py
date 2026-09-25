@@ -329,7 +329,16 @@ def test_orphan_staging_base_prune_requires_generated_parent_provenance() -> Non
             raise AssertionError(path)
 
         def get(self, path: str) -> dict[str, Any]:
+            if path == f"/git/ref/heads/{encoded_staging}":
+                if f"/git/refs/heads/{encoded_staging}" in deleted:
+                    raise promotion.GovernanceError("HTTP 404")
+                return {
+                    "ref": f"refs/heads/{STAGING}",
+                    "object": {"type": "commit", "sha": BASE},
+                }
             if path == f"/git/ref/heads/{encoded_generated}":
+                if f"/git/refs/heads/{encoded_generated}" in deleted:
+                    raise promotion.GovernanceError("HTTP 404")
                 return {
                     "ref": f"refs/heads/{generated_branch}",
                     "object": {"type": "commit", "sha": HEAD},
@@ -346,11 +355,6 @@ def test_orphan_staging_base_prune_requires_generated_parent_provenance() -> Non
                     },
                     "parents": [{"sha": BASE}],
                 }
-            if path in {
-                f"/git/ref/heads/{encoded_staging}",
-                f"/git/ref/heads/{encoded_generated}",
-            } and path.endswith(encoded_staging):
-                raise promotion.GovernanceError("HTTP 404")
             raise promotion.GovernanceError("HTTP 404")
 
         def request(
