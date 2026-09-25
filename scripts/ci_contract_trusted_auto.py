@@ -283,7 +283,9 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         )
     codeql_subject_checkout = "ref: ${{ steps.codeql-subject.outputs.sha }}"
     if semantic.count(codeql_subject_checkout) != 1:
-        raise ValueError("trusted automatic bot CodeQL must have exactly one exact-subject checkout")
+        raise ValueError(
+            "trusted automatic bot CodeQL must have exactly one exact-subject checkout"
+        )
     if semantic.count("persist-credentials: false") != 10:
         raise ValueError("every trusted automatic checkout must disable persisted credentials")
 
@@ -376,8 +378,8 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         '            test "$LANE" = "none"',
         '            test "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH"',
         '            mode="default-branch-anchor"',
-        "          [[ \"$subject_sha\" =~ ^[0-9a-f]{40}$ ]]",
-        "          printf 'ref=%s\\nsha=%s\\nmode=%s\\n' \"$subject_ref\" \"$subject_sha\" \"$mode\" >> \"$GITHUB_OUTPUT\"",
+        '          [[ "$subject_sha" =~ ^[0-9a-f]{40}$ ]]',
+        '          printf \'ref=%s\\nsha=%s\\nmode=%s\\n\' "$subject_ref" "$subject_sha" "$mode" >> "$GITHUB_OUTPUT"',
         codeql_subject_checkout,
         "          persist-credentials: false",
         "          EXPECTED_SUBJECT_SHA: ${{ steps.codeql-subject.outputs.sha }}",
