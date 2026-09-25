@@ -329,12 +329,19 @@ def _requirement_graphs(
         raise LockCompileError(
             "optional requirements must not duplicate runtime dependency identities"
         )
+    build_requirement = build_requires[0]
+    build_name = _requirement_name(build_requirement)
+    if build_name in runtime_names or build_name in optional_requirements:
+        raise LockCompileError(
+            "build-system requirement identity must remain separate from project dependencies"
+        )
     all_optional = [optional_requirements[name] for name in sorted(optional_requirements)]
+    dev_requirements = runtime + all_optional + [build_requirement]
     return {
         "runtime-py311.lock": (python311, runtime),
-        "dev-py311.lock": (python311, runtime + all_optional),
-        "dev-py314.lock": (python314, runtime + all_optional),
-        "build-py311.lock": (python311, [build_requires[0]]),
+        "dev-py311.lock": (python311, dev_requirements),
+        "dev-py314.lock": (python314, dev_requirements),
+        "build-py311.lock": (python311, [build_requirement]),
     }
 
 
