@@ -473,17 +473,13 @@ def test_multiple_active_generated_repairs_fail_closed() -> None:
                 {
                     "user": {"login": BOT_LOGIN, "id": BOT_ID, "type": "Bot"},
                     "head": {
-                        "ref": "automation/protected-security-remediation-17-"
-                        + ("a" * 64)
-                        + "-a1"
+                        "ref": "automation/protected-security-remediation-17-" + ("a" * 64) + "-a1"
                     },
                 },
                 {
                     "user": {"login": BOT_LOGIN, "id": BOT_ID, "type": "Bot"},
                     "head": {
-                        "ref": "automation/protected-security-remediation-18-"
-                        + ("b" * 64)
-                        + "-a1"
+                        "ref": "automation/protected-security-remediation-18-" + ("b" * 64) + "-a1"
                     },
                 },
             ]
