@@ -346,7 +346,7 @@ def test_unreviewed_or_unsuccessful_workflow_wake_is_ignored(
             "dependabot-actions",
         ),
         (
-            {"login": preflight.GITHUB_ACTIONS_LOGIN, "id": preflight.GITHUB_ACTIONS_USER_ID},
+            {"login": "dependency-promotion-author[bot]", "id": 434343},
             "automation/dependency-promotion-171-abcdef123456",
             "dependency-promotion",
         ),
@@ -358,10 +358,16 @@ def test_unreviewed_or_unsuccessful_workflow_wake_is_ignored(
     ],
 )
 def test_governed_bot_lane_requires_exact_identity_and_branch_grammar(
+    monkeypatch: pytest.MonkeyPatch,
     user: dict[str, object],
     branch: str,
     expected_lane: str,
 ) -> None:
+    monkeypatch.setenv(
+        preflight.DEPENDENCY_PROMOTION_BOT_LOGIN_ENV,
+        "dependency-promotion-author[bot]",
+    )
+    monkeypatch.setenv(preflight.DEPENDENCY_PROMOTION_BOT_ID_ENV, "434343")
     pr = {"user": user, "head": {"ref": branch}}
     assert preflight._bot_lane(pr) == expected_lane
 
@@ -374,7 +380,14 @@ def test_governed_bot_lane_requires_exact_identity_and_branch_grammar(
         "automation/codeql-autoheal-7-abcdef123456",
     ],
 )
-def test_advanced_security_reporting_actor_has_no_governed_lane(branch: str) -> None:
+def test_advanced_security_reporting_actor_has_no_governed_lane(
+    monkeypatch: pytest.MonkeyPatch, branch: str
+) -> None:
+    monkeypatch.setenv(
+        preflight.DEPENDENCY_PROMOTION_BOT_LOGIN_ENV,
+        "dependency-promotion-author[bot]",
+    )
+    monkeypatch.setenv(preflight.DEPENDENCY_PROMOTION_BOT_ID_ENV, "434343")
     pr = {
         "user": {
             "login": "github-advanced-security[bot]",
@@ -385,6 +398,50 @@ def test_advanced_security_reporting_actor_has_no_governed_lane(branch: str) -> 
 
     assert preflight._bot_lane(pr) is None
 
+
+
+
+def test_dependency_promotion_lane_requires_external_exact_app_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "automation/dependency-promotion-171-abcdef123456"
+    login = "dependency-promotion-author[bot]"
+    user_id = 434343
+    monkeypatch.setenv(preflight.DEPENDENCY_PROMOTION_BOT_LOGIN_ENV, login)
+    monkeypatch.setenv(preflight.DEPENDENCY_PROMOTION_BOT_ID_ENV, str(user_id))
+
+    assert (
+        preflight._bot_lane({"user": {"login": login, "id": user_id}, "head": {"ref": branch}})
+        == "dependency-promotion"
+    )
+    assert (
+        preflight._bot_lane({"user": {"login": login, "id": user_id + 1}, "head": {"ref": branch}})
+        is None
+    )
+
+    monkeypatch.delenv(preflight.DEPENDENCY_PROMOTION_BOT_ID_ENV)
+    with pytest.raises(ValueError, match="identity is missing or malformed"):
+        preflight._bot_lane({"user": {"login": login, "id": user_id}, "head": {"ref": branch}})
+
+
+@pytest.mark.parametrize(
+    "login",
+    [
+        "github-actions[bot]",
+        "dependabot[bot]",
+        "trusted-pr-gate[bot]",
+        "github-advanced-security[bot]",
+    ],
+)
+def test_dependency_promotion_lane_rejects_collapsed_author_identity(
+    monkeypatch: pytest.MonkeyPatch, login: str
+) -> None:
+    branch = "automation/dependency-promotion-171-abcdef123456"
+    monkeypatch.setenv(preflight.DEPENDENCY_PROMOTION_BOT_LOGIN_ENV, login)
+    monkeypatch.setenv(preflight.DEPENDENCY_PROMOTION_BOT_ID_ENV, "42")
+
+    with pytest.raises(ValueError, match="identity is missing or malformed"):
+        preflight._bot_lane({"user": {"login": login, "id": 42}, "head": {"ref": branch}})
 
 def test_governed_bot_lane_rejects_lookalike_identity() -> None:
     pr = {
