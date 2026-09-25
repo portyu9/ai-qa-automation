@@ -29,6 +29,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "ci.yml",
     "codeql.yml",
     "dependency-governance.yml",
+    "dependency-promotion-author.yml",
     "manual-validation.yml",
     "protected-security-remediation.yml",
     "release-candidate.yml",
@@ -46,6 +47,9 @@ EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
 )
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
     "d809771ced237ec2d02d52b0eb29432f14c6a90b"  # pragma: allowlist secret
+)
+EXPECTED_DEPENDENCY_PROMOTION_AUTHOR_WORKFLOW_BLOB_SHA = (
+    "0000000000000000000000000000000000000000"  # replaced after exact workflow review
 )
 EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
     "7e236900be3b05ab00b09d78b49007646432503e"  # pragma: allowlist secret
@@ -67,7 +71,7 @@ EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA
 _trusted_auto.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
 _trusted_auto._base.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
 _trusted_auto._base.ADDITIONAL_ALLOWED_ACTION_WORKFLOWS["actions/create-github-app-token"] = (
-    frozenset({"protected-security-remediation.yml"})
+    frozenset({"dependency-promotion-author.yml", "protected-security-remediation.yml"})
 )
 
 
@@ -613,20 +617,119 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
             raise ValueError(
                 f"dependency-governance.yml contains forbidden authority token: {forbidden}"
             )
+    if "      - name: Reconcile exact-subject Python dependency promotion" in semantic:
+        raise ValueError("dependency-governance.yml must not retain promotion mutation authority")
+    if "DEPENDENCY_PROMOTION_APP_" in semantic or "DEPENDENCY_PROMOTION_BOT_" in semantic:
+        raise ValueError("dependency-governance.yml must not consume promotion author credentials")
     recovery = semantic.index("      - name: Attempt one bounded transient recovery")
-    promotion = semantic.index("      - name: Reconcile exact-subject Python dependency promotion")
     reconcile = semantic.index("      - name: Reconcile Dependabot action merge authority")
-    if not recovery < promotion < reconcile:
+    if not recovery < reconcile:
         raise ValueError(
-            "dependency recovery, promotion, and action reconciliation are out of reviewed order"
+            "dependency recovery and action reconciliation are out of reviewed order"
         )
     return {
         "triggers": ["pull_request", "workflow_run", "schedule", "workflow_dispatch"],
         "trusted_code_source": "default-branch-only-for-authority-job",
         "recovery_authority": "one-rerun-no-branch-mutation-no-merge",
-        "python_dependency_authority": "signed-dependabot-intent-to-deterministic-lock-promotion",
+        "python_dependency_authority": "promotion-mutation-isolated-to-dedicated-author-workflow",
         "merge_authority": "single-provenance-qualified-dependabot-controller",
         "trusted_status_authority": "read-only-observation-of-centralized-app-gate",
+        "workflow_definition": "action-pin-normalized-reviewed-git-blob",
+    }
+
+
+def _verify_dependency_promotion_author_workflow(text: str) -> dict[str, Any]:
+    base = _trusted_auto._base
+    name = "dependency-promotion-author.yml"
+    semantic = base._semantic_text(text)
+    if base._workflow_structure_sha1(text) != EXPECTED_DEPENDENCY_PROMOTION_AUTHOR_WORKFLOW_BLOB_SHA:
+        raise ValueError(
+            "dependency-promotion-author.yml structure differs from reviewed authority"
+        )
+    expected_on = "\n".join(
+        (
+            "on:",
+            "  workflow_run:",
+            "    workflows: ['CI — ƳƤ AI QA Automation Framework', CodeQL, 'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework']",
+            "    types: [completed]",
+            "  schedule:",
+            '    - cron: "*/5 * * * *"',
+        )
+    )
+    if base._semantic_text(base._top_level_block(text, "on")).strip("\n") != expected_on:
+        raise ValueError("dependency promotion author workflow must be workflow-run/schedule only")
+    if base._top_level_keys(base._top_level_block(text, "on")) != {"workflow_run", "schedule"}:
+        raise ValueError("dependency promotion author workflow exposes an unreviewed trigger")
+    base._verify_top_level_read_only_permissions(text, name=name)
+    if base._top_level_keys(base._top_level_block(text, "jobs")) != {"reconcile"}:
+        raise ValueError("dependency promotion author workflow must expose exactly one reconcile job")
+    job = base._semantic_text(base._job_block(text, "reconcile"))
+    required_job = (
+        "    name: Independent Dependency Promotion Reconcile",
+        "    environment:\n      name: dependency-promotion-author\n      deployment: false",
+        "      actions: write",
+        "      checks: write",
+        "      contents: write",
+        "      pull-requests: write",
+        "      statuses: read",
+        "          ref: ${{ github.event.repository.default_branch }}",
+        "          persist-credentials: false",
+        "          fetch-depth: 1",
+        '        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"',
+        "          DEPENDENCY_PROMOTION_APP_TOKEN: ${{ steps.author-app.outputs.token }}",
+        "          DEPENDENCY_PROMOTION_BOT_LOGIN: ${{ vars.DEPENDENCY_PROMOTION_BOT_LOGIN }}",
+        "          DEPENDENCY_PROMOTION_BOT_ID: ${{ vars.DEPENDENCY_PROMOTION_BOT_ID }}",
+        "          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}",
+        "          python .github/scripts/dependency_promotion.py",
+        "          --reconcile",
+        "          --allow-merge",
+    )
+    for fragment in required_job:
+        if fragment not in job:
+            raise ValueError(
+                f"dependency promotion author reconcile is missing reviewed fragment: {fragment}"
+            )
+    mint = base._semantic_text(
+        base._step_block(job, "Mint dedicated dependency-promotion author token")
+    )
+    required_mint = (
+        "        id: author-app",
+        f"        uses: actions/create-github-app-token@{EXPECTED_PROTECTED_AUTHOR_ACTION_SHA} # v3.2.0",
+        "          client-id: ${{ vars.DEPENDENCY_PROMOTION_APP_CLIENT_ID }}",
+        "          private-key: ${{ secrets.DEPENDENCY_PROMOTION_APP_PRIVATE_KEY }}",
+        "          owner: portyu9",
+        "          repositories: ai-qa-automation",
+        "          permission-pull-requests: write",
+    )
+    for fragment in required_mint:
+        if fragment not in mint:
+            raise ValueError(
+                f"dependency promotion author App mint is missing reviewed fragment: {fragment}"
+            )
+    for forbidden_permission in (
+        "permission-actions:",
+        "permission-checks:",
+        "permission-contents:",
+        "permission-statuses:",
+        "permission-workflows:",
+        "permission-administration:",
+    ):
+        if forbidden_permission in mint:
+            raise ValueError(
+                f"dependency promotion author App has forbidden permission: {forbidden_permission}"
+            )
+    if semantic.count("actions/create-github-app-token@") != 1:
+        raise ValueError("dependency promotion author must mint exactly one author App token")
+    if semantic.count("${{ secrets.DEPENDENCY_PROMOTION_APP_PRIVATE_KEY }}") != 1:
+        raise ValueError("dependency promotion author private key must have exactly one consumer")
+    if "pull_request:" in semantic or "pull_request_target:" in semantic:
+        raise ValueError("dependency promotion author secret must never execute from PR events")
+    return {
+        "triggers": ["schedule", "workflow_run"],
+        "author_app_permissions": ["pull_requests:write"],
+        "commit_authority": "native-default-branch-github-actions-token",
+        "pr_authority": "dedicated-repository-scoped-github-app",
+        "candidate_execution": "none",
         "workflow_definition": "action-pin-normalized-reviewed-git-blob",
     }
 
@@ -1042,6 +1145,9 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
     dependency_governance = _verify_dependency_governance_workflow(
         workflows["dependency-governance.yml"]
     )
+    dependency_promotion_author = _verify_dependency_promotion_author_workflow(
+        workflows["dependency-promotion-author.yml"]
+    )
     manual = base._verify_manual_workflow(workflows["manual-validation.yml"])
     release_candidate = _verify_release_candidate_workflow(workflows["release-candidate.yml"])
     security_autoheal = _verify_security_autoheal_workflow(workflows["security-autoheal.yml"])
@@ -1057,6 +1163,7 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
             "automatic": ordinary,
             "codeql": codeql,
             "dependency_governance": dependency_governance,
+            "dependency_promotion_author": dependency_promotion_author,
             "manual": manual,
             "protected_remediation": protected_remediation,
             "release_candidate": release_candidate,
