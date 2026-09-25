@@ -236,9 +236,7 @@ def _governance_wake_api(*, wake_conclusion: str = "neutral") -> GovernanceWakeF
     }
     live["head"]["ref"] = "automation/dependency-promotion-179-abcdef123456"
     summary = deepcopy(live)
-    check_path = (
-        f"/repos/{preflight.EXPECTED_REPOSITORY}/commits/{HEAD}/check-runs?filter=all"
-    )
+    check_path = f"/repos/{preflight.EXPECTED_REPOSITORY}/commits/{HEAD}/check-runs?filter=all"
     wake_external_id = (
         f"{preflight.DEPENDENCY_PROMOTION_WAKE_PREFIX}:{HEAD}:{BASE}:trusted-gate:42:1"
     )
