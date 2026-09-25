@@ -351,6 +351,17 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
                 inode = run_root_identity.get("inode")
                 if type(device) is not int or type(inode) is not int or device < 0 or inode < 0:
                     raise OSError("workspace lease run-root identity authority is invalid")
+        if "lease_root_identity" in previous:
+            lease_root_identity = previous["lease_root_identity"]
+            if not isinstance(lease_root_identity, dict) or set(lease_root_identity) != {
+                "device",
+                "inode",
+            }:
+                raise OSError("workspace lease lease-root identity authority is invalid")
+            device = lease_root_identity.get("device")
+            inode = lease_root_identity.get("inode")
+            if type(device) is not int or type(inode) is not int or device < 0 or inode < 0:
+                raise OSError("workspace lease lease-root identity authority is invalid")
         return previous
 
     def _current_metadata_bytes(self) -> bytes:
@@ -373,12 +384,17 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             if self._run_root_identity is not None
             else None
         )
+        lease_root_identity = {
+            "device": self._lease_root_identity[0],
+            "inode": self._lease_root_identity[1],
+        }
         metadata = {
             "lease_id": self.lease_id,
             "run_id": self.run_id,
             "workspace": str(self.workspace),
             "workspace_root_identity": workspace_root_identity,
             "run_root_identity": run_root_identity,
+            "lease_root_identity": lease_root_identity,
             "mutation_recovery_closed": self._mutation_recovery_closed,
             "pid": os.getpid(),
             "hostname": socket.gethostname(),
@@ -389,20 +405,186 @@ class WorkspaceLease(AbstractContextManager["WorkspaceLease"]):
             raise OSError("workspace lease metadata exceeds persistence limit")
         return rendered
 
-    def _persist_current_owner(self, stream: Any, directory_fd: int | None) -> None:
-        rendered = self._current_metadata_bytes()
+    @staticmethod
+    def _read_locked_lease_bytes(stream: Any) -> bytes:
         stream.seek(0)
-        stream.truncate(0)
-        stream.write(rendered)
-        stream.flush()
-        os.fsync(stream.fileno())
+        raw = stream.read(_MAX_LEASE_METADATA_BYTES + 1)
+        if not isinstance(raw, bytes):
+            raise OSError("workspace lease metadata read returned non-bytes content")
+        if len(raw) > _MAX_LEASE_METADATA_BYTES:
+            raise OSError("workspace lease metadata exceeds bounded ingestion limit")
+        return raw
+
+    def _assert_locked_lease_file_identity(self, stream: Any, directory_fd: int | None) -> None:
+        opened = os.fstat(stream.fileno())
+        current = (
+            self.path.stat(follow_symlinks=False)
+            if directory_fd is None
+            else os.stat(self.path.name, dir_fd=directory_fd, follow_symlinks=False)
+        )
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or not stat.S_ISREG(current.st_mode)
+            or _identity(opened) != _identity(current)
+        ):
+            raise OSError("workspace lease file changed identity during publication")
+
+    @staticmethod
+    def _assert_locked_stream_identity(stream: Any, expected_identity: tuple[int, int]) -> None:
+        opened = os.fstat(stream.fileno())
+        if not stat.S_ISREG(opened.st_mode) or _identity(opened) != expected_identity:
+            raise OSError("workspace lease descriptor changed identity during rollback")
+
+    def _sync_lease_parent(self, directory_fd: int | None) -> None:
         if directory_fd is not None:
             os.fsync(directory_fd)
         else:
             fsync_directory(self.path.parent)
+
+    def _preflight_owner_publication(self, stream: Any, directory_fd: int | None) -> None:
         self._revalidate_lease_root(directory_fd)
         self._revalidate_run_root()
         self._revalidate_workspace_root()
+        self._assert_locked_lease_file_identity(stream, directory_fd)
+
+    def _write_owner_bytes(
+        self,
+        stream: Any,
+        directory_fd: int | None,
+        rendered: bytes,
+    ) -> None:
+        stream.seek(0)
+        stream.truncate(0)
+        written = stream.write(rendered)
+        if written != len(rendered):
+            raise OSError("workspace lease publication write was incomplete")
+        stream.flush()
+        os.fsync(stream.fileno())
+        self._sync_lease_parent(directory_fd)
+        self._revalidate_lease_root(directory_fd)
+        self._revalidate_run_root()
+        self._revalidate_workspace_root()
+        self._assert_locked_lease_file_identity(stream, directory_fd)
+        if self._read_locked_lease_bytes(stream) != rendered:
+            raise OSError("workspace lease publication bytes changed after persistence")
+
+    def _reconcile_persisted_owner(
+        self,
+        stream: Any,
+        directory_fd: int | None,
+        expected: bytes,
+    ) -> bool:
+        """Prove an ambiguous lease publication without replaying its content write."""
+
+        try:
+            self._revalidate_lease_root(directory_fd)
+            self._revalidate_run_root()
+            self._revalidate_workspace_root()
+            self._assert_locked_lease_file_identity(stream, directory_fd)
+            if self._read_locked_lease_bytes(stream) != expected:
+                return False
+            stream.flush()
+            os.fsync(stream.fileno())
+            self._sync_lease_parent(directory_fd)
+            self._revalidate_lease_root(directory_fd)
+            self._revalidate_run_root()
+            self._revalidate_workspace_root()
+            self._assert_locked_lease_file_identity(stream, directory_fd)
+            return self._read_locked_lease_bytes(stream) == expected
+        except (OSError, RuntimeError, ValueError):
+            return False
+
+    def _write_previous_owner_to_locked_stream(self, stream: Any, previous: bytes) -> None:
+        """Erase our ambiguous write through the still-owned inode without path trust."""
+
+        initial = os.fstat(stream.fileno())
+        if not stat.S_ISREG(initial.st_mode):
+            raise OSError("workspace lease rollback descriptor is not a regular file")
+        descriptor_identity = _identity(initial)
+        stream.seek(0)
+        stream.truncate(0)
+        written = stream.write(previous)
+        if written != len(previous):
+            raise OSError("workspace lease rollback write was incomplete")
+        stream.flush()
+        os.fsync(stream.fileno())
+        self._assert_locked_stream_identity(stream, descriptor_identity)
+        if self._read_locked_lease_bytes(stream) != previous:
+            raise OSError("workspace lease rollback bytes could not be verified")
+
+    def _reconcile_previous_owner_on_locked_stream(self, stream: Any, previous: bytes) -> bool:
+        try:
+            opened = os.fstat(stream.fileno())
+            if not stat.S_ISREG(opened.st_mode):
+                return False
+            descriptor_identity = _identity(opened)
+            if self._read_locked_lease_bytes(stream) != previous:
+                return False
+            stream.flush()
+            os.fsync(stream.fileno())
+            self._assert_locked_stream_identity(stream, descriptor_identity)
+            return self._read_locked_lease_bytes(stream) == previous
+        except (OSError, RuntimeError, ValueError):
+            return False
+
+    def _restore_previous_owner(self, stream: Any, previous: bytes) -> None:
+        rollback_error: BaseException | None = None
+        try:
+            self._write_previous_owner_to_locked_stream(stream, previous)
+            return
+        except BaseException as exc:
+            rollback_error = exc
+
+        try:
+            if self._reconcile_previous_owner_on_locked_stream(stream, previous):
+                return
+        except BaseException:
+            pass
+
+        # Exact restoration is idempotent and narrows authority. One replay is safe
+        # even after interruption because it can only reinstate the bytes observed
+        # immediately before this publication attempt.
+        try:
+            self._write_previous_owner_to_locked_stream(stream, previous)
+            return
+        except BaseException as retry_error:
+            try:
+                if self._reconcile_previous_owner_on_locked_stream(stream, previous):
+                    return
+            except BaseException as reconciliation_error:
+                raise OSError(
+                    "workspace lease publication rollback could not be durably proven"
+                ) from reconciliation_error
+            error = OSError("workspace lease publication rollback could not be durably proven")
+            if rollback_error is not None:
+                error.add_note(f"Initial rollback failure: {type(rollback_error).__name__}.")
+            raise error from retry_error
+
+    def _persist_current_owner(self, stream: Any, directory_fd: int | None) -> None:
+        rendered = self._current_metadata_bytes()
+        self._preflight_owner_publication(stream, directory_fd)
+        previous = self._read_locked_lease_bytes(stream)
+        try:
+            self._write_owner_bytes(stream, directory_fd, rendered)
+        except BaseException as publication_error:
+            reconciliation_error: BaseException | None = None
+            if isinstance(publication_error, Exception):
+                try:
+                    if self._reconcile_persisted_owner(stream, directory_fd, rendered):
+                        return
+                except BaseException as exc:
+                    reconciliation_error = exc
+            try:
+                self._restore_previous_owner(stream, previous)
+            except BaseException as rollback_error:
+                error = OSError(
+                    "workspace lease publication failed and previous authority could not be durably restored"
+                )
+                error.add_note(f"Original publication failure: {type(publication_error).__name__}.")
+                raise error from rollback_error
+            if reconciliation_error is not None:
+                raise reconciliation_error from publication_error
+            raise
 
     def acquire(self, *, publish: bool = True) -> WorkspaceLease:
         with self._lifecycle_lock:
