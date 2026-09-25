@@ -150,14 +150,25 @@ def _promotion_pr(*, base_ref: str = "main", body: str | None = None) -> dict[st
             "login": promotion.GITHUB_ACTIONS_LOGIN,
             "id": promotion.GITHUB_ACTIONS_USER_ID,
         },
-        "head": {"ref": BRANCH, "sha": HEAD},
-        "base": {"ref": base_ref, "sha": BASE},
+        "head": {
+            "ref": BRANCH,
+            "sha": HEAD,
+            "repo": {"full_name": "portyu9/ai-qa-automation"},
+        },
+        "base": {
+            "ref": base_ref,
+            "sha": BASE,
+            "repo": {"full_name": "portyu9/ai-qa-automation"},
+        },
         "body": body or promotion._promotion_body(_promotion_metadata()),
     }
 
 
-def test_create_promotion_pr_uses_non_main_staging_base_then_exact_retarget() -> None:
+def test_create_promotion_pr_uses_non_main_staging_base_then_exact_retarget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     events: list[tuple[str, str]] = []
+    monkeypatch.setenv("GITHUB_REPOSITORY", "portyu9/ai-qa-automation")
 
     class Api:
         def get(self, path: str) -> dict[str, Any]:
@@ -282,3 +293,125 @@ def test_exact_qualification_reuses_green_exact_checks_without_dispatch(
         ),
     )
     assert promotion._request_exact_qualification(object(), _promotion_pr(), HEAD, BASE) is True
+
+
+def test_qualification_request_rejects_future_timestamp() -> None:
+    metadata = _promotion_metadata()
+    metadata["qualificationRequest"] = {
+        "attempt": 1,
+        "requestedAt": "2999-01-01T00:00:00+00:00",
+    }
+    with pytest.raises(promotion.PolicyBlock, match="timestamp is in the future"):
+        promotion._qualification_request_age(metadata)
+
+
+def test_orphan_staging_base_prune_requires_generated_parent_provenance() -> None:
+    generated_branch = BRANCH
+    encoded_generated = generated_branch.replace("/", "%2F")
+    encoded_staging = STAGING.replace("/", "%2F")
+    deleted: list[str] = []
+
+    class Api:
+        def list_all(self, path: str, *, max_pages: int = 4) -> list[dict[str, Any]]:
+            if path.startswith("/pulls?"):
+                return []
+            if path == f"/git/matching-refs/heads/{promotion.BRANCH_PREFIX}":
+                return [
+                    {
+                        "ref": f"refs/heads/{STAGING}",
+                        "object": {"type": "commit", "sha": BASE},
+                    },
+                    {
+                        "ref": f"refs/heads/{generated_branch}",
+                        "object": {"type": "commit", "sha": HEAD},
+                    },
+                ]
+            raise AssertionError(path)
+
+        def get(self, path: str) -> dict[str, Any]:
+            if path == f"/git/ref/heads/{encoded_generated}":
+                return {
+                    "ref": f"refs/heads/{generated_branch}",
+                    "object": {"type": "commit", "sha": HEAD},
+                }
+            if path == f"/commits/{HEAD}":
+                return {
+                    "sha": HEAD,
+                    "author": {
+                        "login": promotion.GITHUB_ACTIONS_LOGIN,
+                        "id": promotion.GITHUB_ACTIONS_USER_ID,
+                    },
+                    "commit": {
+                        "message": "deps: promote Dependabot PR #171 with synchronized locks"
+                    },
+                    "parents": [{"sha": BASE}],
+                }
+            if path in {
+                f"/git/ref/heads/{encoded_staging}",
+                f"/git/ref/heads/{encoded_generated}",
+            } and path.endswith(encoded_staging):
+                raise promotion.GovernanceError("HTTP 404")
+            raise promotion.GovernanceError("HTTP 404")
+
+        def request(
+            self,
+            method: str,
+            path: str,
+            payload: dict[str, Any] | None = None,
+        ) -> None:
+            assert method == "DELETE"
+            assert payload is None
+            deleted.append(path)
+            return None
+
+    assert promotion._prune_orphan_promotion_refs(Api()) == 2
+    assert deleted == [
+        f"/git/refs/heads/{encoded_staging}",
+        f"/git/refs/heads/{encoded_generated}",
+    ]
+
+
+def test_orphan_staging_base_prune_rejects_parent_mismatch() -> None:
+    encoded_generated = BRANCH.replace("/", "%2F")
+
+    class Api:
+        def list_all(self, path: str, *, max_pages: int = 4) -> list[dict[str, Any]]:
+            if path.startswith("/pulls?"):
+                return []
+            if path == f"/git/matching-refs/heads/{promotion.BRANCH_PREFIX}":
+                return [
+                    {
+                        "ref": f"refs/heads/{STAGING}",
+                        "object": {"type": "commit", "sha": BASE},
+                    }
+                ]
+            raise AssertionError(path)
+
+        def get(self, path: str) -> dict[str, Any]:
+            if path == f"/git/ref/heads/{encoded_generated}":
+                return {
+                    "ref": f"refs/heads/{BRANCH}",
+                    "object": {"type": "commit", "sha": HEAD},
+                }
+            if path == f"/commits/{HEAD}":
+                return {
+                    "sha": HEAD,
+                    "author": {
+                        "login": promotion.GITHUB_ACTIONS_LOGIN,
+                        "id": promotion.GITHUB_ACTIONS_USER_ID,
+                    },
+                    "commit": {
+                        "message": "deps: promote Dependabot PR #171 with synchronized locks"
+                    },
+                    "parents": [{"sha": "f" * 40}],
+                }
+            raise AssertionError(path)
+
+        def request(self, *args: Any, **kwargs: Any) -> None:
+            raise AssertionError("unproven staging ref must not be deleted")
+
+    with pytest.raises(
+        promotion.PolicyBlock,
+        match="lacks exact generated counterpart provenance",
+    ):
+        promotion._prune_orphan_promotion_refs(Api())
