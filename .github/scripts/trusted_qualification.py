@@ -173,9 +173,7 @@ def qualification_states(
             if candidate is not None:
                 candidates.append(candidate)
         if len(candidates) > 1:
-            raise TrustedQualificationError(
-                f"{name} trusted qualification evidence is ambiguous"
-            )
+            raise TrustedQualificationError(f"{name} trusted qualification evidence is ambiguous")
         states[name] = candidates[0] if candidates else None
     return states
 

@@ -858,8 +858,7 @@ def _request_exact_qualification(
     ]
     if terminal_failures:
         raise PolicyBlock(
-            "promotion exact-subject qualification is not green: "
-            + ", ".join(terminal_failures)
+            "promotion exact-subject qualification is not green: " + ", ".join(terminal_failures)
         )
 
     request = metadata.get("qualificationRequest")
@@ -919,6 +918,7 @@ def _request_exact_qualification(
         else:
             raise GovernanceError(f"unsupported promotion qualification check: {name}")
     return False
+
 
 def _publish_merge_signal(github_output: Path | None) -> None:
     if github_output is None:

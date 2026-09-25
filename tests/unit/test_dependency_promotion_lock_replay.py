@@ -286,6 +286,7 @@ def test_exact_qualification_persists_intent_before_dispatch(
     assert persisted["qualificationRequest"]["attempt"] == 1
     assert isinstance(persisted["qualificationRequest"]["requestedAt"], str)
 
+
 def test_exact_qualification_reuses_green_exact_checks_without_dispatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -412,9 +413,7 @@ def test_pending_qualification_intent_prevents_immediate_replay(
     monkeypatch.setattr(
         promotion,
         "dispatch_exact_codeql",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("unexpected CodeQL replay")
-        ),
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected CodeQL replay")),
     )
     assert (
         promotion._request_exact_qualification(
