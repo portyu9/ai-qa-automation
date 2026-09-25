@@ -282,6 +282,7 @@ def test_dependency_promotion_author_workflow_is_default_branch_only_and_app_is_
     assert promotion == {
         "triggers": ["schedule", "workflow_run"],
         "author_app_permissions": ["pull_requests:write"],
+        "reconcile_concurrency": "global-serialized",
         "commit_authority": "native-default-branch-github-actions-token",
         "pr_authority": "dedicated-repository-scoped-github-app",
         "candidate_execution": "none",
