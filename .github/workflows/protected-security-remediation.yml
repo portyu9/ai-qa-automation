@@ -1,0 +1,91 @@
+name: Protected Security Remediation — ƳƤ AI QA Automation Framework
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: protected-security-remediation-scheduled-reconcile
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    name: Independent Protected Remediation Reconcile
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: protected-remediation-author
+      deployment: false
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+      pull-requests: read
+      security-events: read
+      statuses: read
+    steps:
+      - name: Checkout trusted default-branch control plane
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify trusted workflow revision
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11.16"
+
+      - name: Validate independent author identity configuration
+        env:
+          AUTHOR_APP_CLIENT_ID: ${{ vars.PROTECTED_REMEDIATION_APP_CLIENT_ID }}
+          AUTHOR_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
+          AUTHOR_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}
+        run: |
+          set -euo pipefail
+          test -n "$AUTHOR_APP_CLIENT_ID"
+          case "$AUTHOR_BOT_LOGIN" in
+            *"[bot]") ;;
+            *) exit 1 ;;
+          esac
+          case "$AUTHOR_BOT_LOGIN" in
+            "github-actions[bot]"|"dependabot[bot]"|"trusted-pr-gate[bot]") exit 1 ;;
+          esac
+          case "$AUTHOR_BOT_ID" in
+            ''|*[!0-9]*) exit 1 ;;
+          esac
+          test "$AUTHOR_BOT_ID" -gt 0
+
+      - name: Mint dedicated protected-remediation author token
+        id: author-app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.PROTECTED_REMEDIATION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}
+          owner: portyu9
+          repositories: ai-qa-automation
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Bind minted App to reviewed bot identity
+        env:
+          OBSERVED_APP_SLUG: ${{ steps.author-app.outputs.app-slug }}
+          EXPECTED_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
+        run: |
+          set -euo pipefail
+          test "${OBSERVED_APP_SLUG}[bot]" = "$EXPECTED_BOT_LOGIN"
+
+      - name: Reconcile protected security remediation
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PROTECTED_REMEDIATION_APP_TOKEN: ${{ steps.author-app.outputs.token }}
+          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
+          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}
+        run: |
+          set -euo pipefail
+          python .github/scripts/protected_security_remediation.py --reconcile --allow-merge

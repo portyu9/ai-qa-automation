@@ -65,6 +65,8 @@ jobs:
         id: admission
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
+          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}
         run: |
           set -euo pipefail
           python scripts/auto_trusted_preflight.py \
@@ -90,7 +92,7 @@ jobs:
                 test "$PROTECTED_CHANGES_JSON" != "[]"
               fi
               ;;
-            dependabot-actions|dependency-promotion|security-autoheal)
+            dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation)
               test "$TRUSTED_SHA" = "$GITHUB_SHA"
               test "$ELIGIBLE" = "true" -o "$ELIGIBLE" = "false"
               ;;
@@ -152,6 +154,8 @@ jobs:
       - name: Prove exact governed bot authority
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
+          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}
           LANE: ${{ needs.preflight.outputs.lane }}
           PR_NUMBER: ${{ needs.preflight.outputs.pr_number }}
           EXPECTED_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
@@ -170,7 +174,7 @@ jobs:
   subject-guard:
     name: Exact Subject + Protected Authority Guard
     needs: [preflight, bot-authority]
-    if: ${{ always() && needs.preflight.result == 'success' && needs.preflight.outputs.eligible == 'true' && (needs.preflight.outputs.lane == 'owner-routine' || needs.bot-authority.result == 'success') }}
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.eligible == 'true' && (needs.preflight.outputs.lane == 'owner-routine' || needs.bot-authority.result == 'success') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -244,7 +248,7 @@ jobs:
             done
           else
             case "$ADMISSION_LANE" in
-              dependabot-actions|dependency-promotion|security-autoheal) ;;
+              dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation) ;;
               *)
                 echo "::error::unreviewed bot lane reached subject guard"
                 exit 1
@@ -257,7 +261,7 @@ jobs:
   supply-chain:
     name: Trusted Supply Chain / Wheel + SBOM + Container
     needs: [preflight, subject-guard]
-    if: ${{ needs.preflight.outputs.eligible == 'true' && needs.subject-guard.result == 'success' }}
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.eligible == 'true' && needs.subject-guard.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -423,7 +427,7 @@ jobs:
   quality:
     name: Trusted Quality / Python ${{ matrix.python-version }}
     needs: [preflight, subject-guard, supply-chain]
-    if: ${{ needs.preflight.outputs.eligible == 'true' && needs.subject-guard.result == 'success' && needs.supply-chain.result == 'success' }}
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.eligible == 'true' && needs.subject-guard.result == 'success' && needs.supply-chain.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -503,7 +507,7 @@ jobs:
   deterministic-evals:
     name: Trusted 34-Case Deterministic Control Evaluation
     needs: [preflight, subject-guard, supply-chain]
-    if: ${{ needs.preflight.outputs.eligible == 'true' && needs.subject-guard.result == 'success' && needs.supply-chain.result == 'success' }}
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.eligible == 'true' && needs.subject-guard.result == 'success' && needs.supply-chain.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -569,7 +573,7 @@ jobs:
   security:
     name: Trusted Security Gates
     needs: [preflight, subject-guard, supply-chain]
-    if: ${{ needs.preflight.outputs.eligible == 'true' && needs.subject-guard.result == 'success' && needs.supply-chain.result == 'success' }}
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.eligible == 'true' && needs.subject-guard.result == 'success' && needs.supply-chain.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -633,7 +637,7 @@ jobs:
   browser-reference-sut:
     name: Trusted Playwright Reference SUT
     needs: [preflight, subject-guard, supply-chain]
-    if: ${{ needs.preflight.outputs.eligible == 'true' && needs.subject-guard.result == 'success' && needs.supply-chain.result == 'success' }}
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.eligible == 'true' && needs.subject-guard.result == 'success' && needs.supply-chain.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
@@ -693,7 +697,7 @@ jobs:
   bot-codeql:
     name: Trusted Bot CodeQL
     needs: [preflight, subject-guard]
-    if: ${{ needs.preflight.outputs.eligible == 'true' && needs.preflight.outputs.lane != 'owner-routine' && needs.subject-guard.result == 'success' }}
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && ((needs.preflight.outputs.eligible == 'true' && needs.preflight.outputs.lane != 'owner-routine' && needs.subject-guard.result == 'success') || (github.event_name == 'schedule' && needs.preflight.outputs.eligible == 'false' && needs.preflight.outputs.lane == 'none')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -701,32 +705,133 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - name: Checkout exact governed bot head
+      - name: Resolve exact CodeQL analysis subject
+        id: codeql-subject
+        env:
+          ELIGIBLE: ${{ needs.preflight.outputs.eligible }}
+          LANE: ${{ needs.preflight.outputs.lane }}
+          BOT_HEAD_REF: ${{ needs.preflight.outputs.head_ref }}
+          BOT_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if test "$ELIGIBLE" = "true"; then
+            case "$LANE" in
+              dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation) ;;
+              *)
+                echo "::error::unreviewed CodeQL candidate lane: $LANE"
+                exit 1
+                ;;
+            esac
+            test -n "$BOT_HEAD_REF"
+            subject_ref="refs/heads/$BOT_HEAD_REF"
+            subject_sha="$BOT_HEAD_SHA"
+            mode="governed-bot"
+          else
+            test "$GITHUB_EVENT_NAME" = "schedule"
+            test "$LANE" = "none"
+            test -n "$DEFAULT_BRANCH"
+            test "$DEFAULT_BRANCH" != "null"
+            test "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH"
+            subject_ref="$GITHUB_REF"
+            subject_sha="$GITHUB_SHA"
+            mode="default-branch-anchor"
+          fi
+          [[ "$subject_sha" =~ ^[0-9a-f]{40}$ ]]
+          printf 'ref=%s\nsha=%s\nmode=%s\n' "$subject_ref" "$subject_sha" "$mode" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact CodeQL subject
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.preflight.outputs.head_sha }}
+          ref: ${{ steps.codeql-subject.outputs.sha }}
           persist-credentials: false
 
-      - name: Verify exact governed bot head
+      - name: Verify exact CodeQL subject
         env:
-          EXPECTED_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
-        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+          EXPECTED_SUBJECT_SHA: ${{ steps.codeql-subject.outputs.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SUBJECT_SHA"
+
+      - name: Acquire verified CodeQL 2.27.0 bundle
+        id: codeql-tools
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release_api='https://api.github.com/repos/github/codeql-action/releases/tags/codeql-bundle-v2.27.0'
+          asset_url='https://github.com/github/codeql-action/releases/download/codeql-bundle-v2.27.0/codeql-bundle-linux64.tar.zst'
+          metadata="$RUNNER_TEMP/codeql-bundle-v2.27.0.release.json"
+          archive="$RUNNER_TEMP/codeql-bundle-linux64.tar.zst"
+          rm -f -- "$metadata" "$archive" "$archive.part"
+          curl --proto '=https' --tlsv1.2 --fail-with-body --location --silent --show-error \
+            --retry 2 --retry-all-errors --connect-timeout 20 --max-time 60 \
+            --max-filesize 1048576 \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "$release_api" -o "$metadata"
+          read -r expected_sha expected_size observed_url < <(
+            /usr/bin/python3 - "$metadata" <<'PY'
+          import json
+          import re
+          import sys
+          from pathlib import Path
+
+          payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          if payload.get("tag_name") != "codeql-bundle-v2.27.0":
+              raise SystemExit("CodeQL release tag identity drifted")
+          if payload.get("draft") is not False or payload.get("prerelease") is not False:
+              raise SystemExit("CodeQL release is not a stable published release")
+          matches = [
+              asset
+              for asset in payload.get("assets", [])
+              if isinstance(asset, dict)
+              and asset.get("name") == "codeql-bundle-linux64.tar.zst"
+          ]
+          if len(matches) != 1:
+              raise SystemExit("CodeQL release asset identity is missing or ambiguous")
+          asset = matches[0]
+          digest = asset.get("digest")
+          size = asset.get("size")
+          url = asset.get("browser_download_url")
+          if not isinstance(digest, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
+              raise SystemExit("CodeQL release asset lacks a canonical SHA-256 digest")
+          if not isinstance(size, int) or isinstance(size, bool) or size < 1:
+              raise SystemExit("CodeQL release asset size is invalid")
+          if not isinstance(url, str):
+              raise SystemExit("CodeQL release asset URL is invalid")
+          print(digest.removeprefix("sha256:"), size, url)
+          PY
+          )
+          test "$observed_url" = "$asset_url"
+          test "$expected_size" -le 1073741824
+          curl --proto '=https' --tlsv1.2 --fail-with-body --location --silent --show-error \
+            --retry 2 --retry-all-errors --connect-timeout 20 --max-time 300 \
+            --max-filesize 1073741824 \
+            "$asset_url" -o "$archive.part"
+          test "$(stat -c '%s' "$archive.part")" = "$expected_size"
+          read -r observed_sha _ < <(/usr/bin/sha256sum "$archive.part")
+          test "$observed_sha" = "$expected_sha"
+          mv -- "$archive.part" "$archive"
+          printf 'path=%s\n' "$archive" >> "$GITHUB_OUTPUT"
 
       - name: Initialize governed bot CodeQL
         uses: github/codeql-action/init@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
         with:
+          tools: ${{ steps.codeql-tools.outputs.path }}
           languages: python
           queries: security-extended
 
-      - name: Analyze exact governed bot branch
+      - name: Analyze exact CodeQL subject
+        env:
+          PYTHONSAFEPATH: ""
         uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
         with:
-          ref: refs/heads/${{ needs.preflight.outputs.head_ref }}
-          sha: ${{ needs.preflight.outputs.head_sha }}
+          ref: ${{ steps.codeql-subject.outputs.ref }}
+          sha: ${{ steps.codeql-subject.outputs.sha }}
 
   required-gate:
     name: Automatic Trusted Validation Aggregate
-    if: ${{ always() && needs.preflight.result == 'success' && needs.preflight.outputs.eligible == 'true' }}
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.eligible == 'true' }}
     needs:
       - preflight
       - subject-guard
@@ -755,7 +860,7 @@ jobs:
 
   trusted-status:
     name: Automatic Trusted PR Gate Reporter
-    if: ${{ always() && needs.preflight.result == 'success' && needs.preflight.outputs.eligible == 'true' }}
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.eligible == 'true' }}
     needs: [preflight, required-gate]
     environment:
       name: trusted-pr-gate
@@ -791,6 +896,8 @@ jobs:
         id: final-admission
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
+          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}
         run: |
           set -euo pipefail
           python scripts/auto_trusted_preflight.py \
@@ -822,7 +929,7 @@ jobs:
             test "$FINAL_PROTECTED_CHANGES" = "[]"
           else
             case "$FINAL_LANE" in
-              dependabot-actions|dependency-promotion|security-autoheal) ;;
+              dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation) ;;
               *)
                 echo "::error::unreviewed final automatic admission lane"
                 exit 1
@@ -840,6 +947,8 @@ jobs:
         if: ${{ needs.preflight.outputs.lane != 'owner-routine' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
+          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}
           LANE: ${{ needs.preflight.outputs.lane }}
           PR_NUMBER: ${{ needs.preflight.outputs.pr_number }}
           EXPECTED_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}

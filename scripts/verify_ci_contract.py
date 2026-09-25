@@ -30,12 +30,13 @@ EXPECTED_WORKFLOW_NAMES = {
     "codeql.yml",
     "dependency-governance.yml",
     "manual-validation.yml",
+    "protected-security-remediation.yml",
     "release-candidate.yml",
     "security-autoheal.yml",
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
-    "11c87c0fdf98e38706dccc2d81f87b591c2cfb09"  # pragma: allowlist secret
+    "995f686555c0394500b65510ea0bd401dfc4571a"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
     "7fdf0dc85375bc78561d531f95220cd877e30b3a"  # pragma: allowlist secret
@@ -44,10 +45,16 @@ EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
-    "1906a7c724b6fda4219bcbe2e1b678549d177af6"  # pragma: allowlist secret
+    "d809771ced237ec2d02d52b0eb29432f14c6a90b"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
-    "5b8dc48b32baf0e9b3102f4d95fb60d484233305"  # pragma: allowlist secret
+    "7e236900be3b05ab00b09d78b49007646432503e"  # pragma: allowlist secret
+)
+EXPECTED_PROTECTED_REMEDIATION_WORKFLOW_BLOB_SHA = (
+    "1dd58588ea4833bee8b2c5c4bf86e24021baebd7"  # pragma: allowlist secret
+)
+EXPECTED_PROTECTED_AUTHOR_ACTION_SHA = (
+    "bcd2ba49218906704ab6c1aa796996da409d3eb1"  # pragma: allowlist secret
 )
 EXPECTED_CODEQL_MAJOR = 4
 CODEQL_ACTION_RE = re.compile(
@@ -59,6 +66,9 @@ EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA
 
 _trusted_auto.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
 _trusted_auto._base.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
+_trusted_auto._base.ADDITIONAL_ALLOWED_ACTION_WORKFLOWS["actions/create-github-app-token"] = (
+    frozenset({"protected-security-remediation.yml"})
+)
 
 
 def _verify_frozen_trusted_auto_extension() -> None:
@@ -422,6 +432,13 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
         "    timeout-minutes: 20",
         f"uses: actions/checkout@{base.EXPECTED_ACTION_SHAS['actions/checkout']}",
         "          persist-credentials: false",
+        "      - name: Acquire verified CodeQL 2.27.0 bundle",
+        "        id: codeql-tools",
+        "release_api='https://api.github.com/repos/github/codeql-action/releases/tags/codeql-bundle-v2.27.0'",
+        "asset_url='https://github.com/github/codeql-action/releases/download/codeql-bundle-v2.27.0/codeql-bundle-linux64.tar.zst'",
+        're.fullmatch(r"sha256:[0-9a-f]{64}", digest)',
+        'test "$observed_sha" = "$expected_sha"',
+        "          tools: ${{ steps.codeql-tools.outputs.path }}",
         "          languages: python",
         "          queries: security-extended",
     )
@@ -444,6 +461,13 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
         'live_subject_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${EXPECTED_SUBJECT_REF}" --jq .object.sha)"',
         "          ref: ${{ inputs.subject_sha }}",
         'run: test "$(git rev-parse HEAD)" = "$EXPECTED_SUBJECT_SHA"',
+        "      - name: Acquire verified CodeQL 2.27.0 bundle",
+        "        id: codeql-tools",
+        "release_api='https://api.github.com/repos/github/codeql-action/releases/tags/codeql-bundle-v2.27.0'",
+        "asset_url='https://github.com/github/codeql-action/releases/download/codeql-bundle-v2.27.0/codeql-bundle-linux64.tar.zst'",
+        're.fullmatch(r"sha256:[0-9a-f]{64}", digest)',
+        'test "$observed_sha" = "$expected_sha"',
+        "          tools: ${{ steps.codeql-tools.outputs.path }}",
         "      - name: Analyze exact generated subject",
         "          ref: refs/heads/${{ inputs.subject_ref }}",
         "          sha: ${{ inputs.subject_sha }}",
@@ -470,6 +494,11 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
         raise ValueError(
             "codeql.yml publication must not execute candidate bytes or consume secrets"
         )
+
+    if semantic.count("      - name: Acquire verified CodeQL 2.27.0 bundle") != 2:
+        raise ValueError("codeql.yml must acquire one verified local bundle per analysis job")
+    if semantic.count("          tools: ${{ steps.codeql-tools.outputs.path }}") != 2:
+        raise ValueError("codeql.yml must bind both analyses to verified local bundle paths")
 
     uses = base.ACTION_RE.findall(text)
     if len(uses) != 6:
@@ -503,6 +532,7 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
         "queries": "security-extended",
         "codeql_action_sha": next(iter(codeql_refs)),
         "codeql_major": EXPECTED_CODEQL_MAJOR,
+        "codeql_tools_authority": "release-asset-sha256-verified-local-archive",
         "checkout_authority": "exact-reviewed-immutable-sha",
         "security_events_write": True,
         "workflow_dispatch_subject": "trusted-main-plus-explicit-ref-sha",
@@ -537,7 +567,7 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "    name: govern-dependabot",
         "    if: github.event_name != 'pull_request'",
         "      actions: write",
-        "      checks: read",
+        "      checks: write",
         "      contents: write",
         "      pull-requests: write",
         "      statuses: read",
@@ -547,9 +577,14 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "      - name: Attempt one bounded transient recovery",
         "        run: python .github/scripts/dependency_recovery.py --recover",
         "      - name: Reconcile exact-subject Python dependency promotion",
+        "        id: python_promotion",
         "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
-        "        run: python .github/scripts/dependency_promotion.py --reconcile --allow-merge",
+        "          python .github/scripts/dependency_promotion.py",
+        "          --reconcile",
+        "          --allow-merge",
+        '          --github-output "$GITHUB_OUTPUT"',
         "      - name: Reconcile Dependabot action merge authority",
+        "        if: steps.python_promotion.outputs.merged != 'true'",
         "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
         '          case "$GITHUB_EVENT_NAME" in',
         "            workflow_run|schedule|workflow_dispatch) args+=(--allow-merge) ;;",
@@ -614,18 +649,45 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         "  workflow_dispatch:",
         "permissions:\n  contents: read",
         "    name: security-autoheal-self-test",
+        "  route-plan:",
+        "    name: plan-codeql-autoheal-routes",
+        "      actions: read",
+        "      contents: read",
+        "      pull-requests: read",
+        "      security-events: read",
+        "      artifact-id: ${{ steps.route-plan-artifact.outputs.artifact-id }}",
+        "      artifact-digest: ${{ steps.route-plan-artifact.outputs.artifact-digest }}",
         "    name: reconcile-codeql-autoheal",
+        "    needs: route-plan",
         "      actions: write",
-        "      checks: read",
+        "      checks: write",
         "      contents: write",
         "      pull-requests: write",
         "      security-events: write",
         "      statuses: read",
         "          ref: ${{ github.event.repository.default_branch }}",
         "          persist-credentials: false",
-        "      - name: Reconcile exact-subject CodeQL remediations",
+        "      - name: Plan exact-main deterministic security routes",
         "          GITHUB_TOKEN: ${{ github.token }}",
-        "        run: python .github/scripts/security_autoheal.py --reconcile --allow-merge",
+        "          --plan-routes",
+        '          --route-plan-output "$RUNNER_TEMP/security-autoheal-route-plan/route-plan.json"',
+        "      - name: Persist exact-run route plan before mutation",
+        "        id: route-plan-artifact",
+        "          name: security-autoheal-route-plan-${{ github.run_id }}-${{ github.run_attempt }}",
+        "          path: ${{ runner.temp }}/security-autoheal-route-plan/route-plan.json",
+        "          if-no-files-found: error",
+        "          retention-days: 14",
+        "      - name: Restore exact-run route plan from prior read-only job",
+        "        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8",
+        "          artifact-ids: ${{ needs.route-plan.outputs.artifact-id }}",
+        "          path: ${{ runner.temp }}/security-autoheal-route-plan",
+        "      - name: Reconcile exact-subject CodeQL remediations from persisted routes",
+        "          --reconcile",
+        "          --allow-merge",
+        '          --route-plan "$RUNNER_TEMP/security-autoheal-route-plan/route-plan.json"',
+        "          --route-artifact-id ${{ needs.route-plan.outputs.artifact-id }}",
+        "          --route-artifact-name security-autoheal-route-plan-${{ github.run_id }}-${{ github.run_attempt }}",
+        "          --route-artifact-digest sha256:${{ needs.route-plan.outputs.artifact-digest }}",
     )
     for fragment in required:
         if fragment not in semantic:
@@ -648,10 +710,23 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
             raise ValueError(
                 f"security-autoheal.yml contains forbidden authority token: {forbidden}"
             )
+    plan = semantic.index("      - name: Plan exact-main deterministic security routes")
+    persist = semantic.index("      - name: Persist exact-run route plan before mutation")
+    restore = semantic.index("      - name: Restore exact-run route plan from prior read-only job")
+    reconcile = semantic.index(
+        "      - name: Reconcile exact-subject CodeQL remediations from persisted routes"
+    )
+    if not plan < persist < restore < reconcile:
+        raise ValueError(
+            "security route planning, durable persistence, artifact restoration, and "
+            "mutation reconciliation are out of reviewed order"
+        )
     return {
         "triggers": ["pull_request", "workflow_run", "schedule", "workflow_dispatch"],
         "trusted_code_source": "default-branch-only-for-authority-job",
-        "repair_authority": "code-owned-rule-and-path-bounded-generated-prs",
+        "repair_authority": (
+            "read-only-plan-job-to-persisted-exact-run-route-before-write-authority"
+        ),
         "merge_authority": "security-autoheal-namespace-only-after-exact-subject-proof",
         "trusted_status_authority": "read-only-observation-of-centralized-app-gate",
         "workflow_definition": "action-pin-normalized-reviewed-git-blob",
@@ -807,6 +882,149 @@ def _verify_release_candidate_workflow(text: str) -> dict[str, Any]:
 _verify_automatic_workflow = _verify_ordinary_ci_workflow
 
 
+def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
+    base = _trusted_auto._base
+    semantic = base._semantic_text(text)
+    if base._workflow_structure_sha1(text) != EXPECTED_PROTECTED_REMEDIATION_WORKFLOW_BLOB_SHA:
+        raise ValueError(
+            "protected-security-remediation.yml structure differs from reviewed authority"
+        )
+    expected_on = "\n".join(
+        (
+            "on:",
+            "  schedule:",
+            '    - cron: "*/5 * * * *"',
+        )
+    )
+    if base._semantic_text(base._top_level_block(text, "on")).strip("\n") != expected_on:
+        raise ValueError("protected remediation workflow must be schedule-only")
+    if base._top_level_keys(base._top_level_block(text, "on")) != {"schedule"}:
+        raise ValueError("protected remediation workflow exposes an unreviewed trigger")
+    base._verify_top_level_read_only_permissions(text, name="protected-security-remediation.yml")
+    if base._top_level_keys(base._top_level_block(text, "jobs")) != {"reconcile"}:
+        raise ValueError("protected remediation workflow must expose exactly one reconcile job")
+    concurrency = base._semantic_text(base._top_level_block(text, "concurrency"))
+    for fragment in (
+        "  group: protected-security-remediation-scheduled-reconcile",
+        "  cancel-in-progress: false",
+    ):
+        if fragment not in concurrency:
+            raise ValueError("protected remediation concurrency contract drifted")
+
+    for forbidden in (
+        "pull_request:",
+        "pull_request_target:",
+        "workflow_dispatch:",
+        "repository_dispatch:",
+        "continue-on-error: true",
+        "ubuntu-latest",
+        "skip-token-revoke:",
+        "TRUSTED_GATE_APP_CLIENT_ID",
+        "TRUSTED_GATE_APP_PRIVATE_KEY",
+    ):
+        if forbidden in semantic:
+            raise ValueError(
+                f"protected remediation workflow contains forbidden authority token: {forbidden}"
+            )
+    if base.CACHE_CONFIGURATION_RE.search(semantic):
+        raise ValueError("protected remediation workflow dependency caching is forbidden")
+
+    job = base._semantic_text(base._job_block(text, "reconcile"))
+    if _trusted_auto._job_permissions(job) != {
+        "actions": "read",
+        "checks": "read",
+        "contents": "read",
+        "pull-requests": "read",
+        "security-events": "read",
+        "statuses": "read",
+    }:
+        raise ValueError("protected remediation native GitHub token must remain exactly read-only")
+    required_job = (
+        "    name: Independent Protected Remediation Reconcile",
+        "    runs-on: ubuntu-24.04",
+        "    timeout-minutes: 10",
+        "    environment:\n      name: protected-remediation-author\n      deployment: false",
+        "      - name: Checkout trusted default-branch control plane",
+        "          ref: ${{ github.sha }}",
+        "          persist-credentials: false",
+        '        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"',
+        '          python-version: "3.11.16"',
+        "      - name: Validate independent author identity configuration",
+        '            "github-actions[bot]"|"dependabot[bot]"|"trusted-pr-gate[bot]") exit 1 ;;',
+        "      - name: Mint dedicated protected-remediation author token",
+        "      - name: Bind minted App to reviewed bot identity",
+        '          test "${OBSERVED_APP_SLUG}[bot]" = "$EXPECTED_BOT_LOGIN"',
+        "      - name: Reconcile protected security remediation",
+        "          GITHUB_TOKEN: ${{ github.token }}",
+        "          PROTECTED_REMEDIATION_APP_TOKEN: ${{ steps.author-app.outputs.token }}",
+        "          python .github/scripts/protected_security_remediation.py --reconcile --allow-merge",
+    )
+    for fragment in required_job:
+        if fragment not in job:
+            raise ValueError(
+                f"protected remediation reconcile is missing reviewed fragment: {fragment}"
+            )
+
+    mint = base._semantic_text(
+        base._step_block(job, "Mint dedicated protected-remediation author token")
+    )
+    required_mint = (
+        "        id: author-app",
+        f"        uses: actions/create-github-app-token@{EXPECTED_PROTECTED_AUTHOR_ACTION_SHA} # v3.2.0",
+        "          client-id: ${{ vars.PROTECTED_REMEDIATION_APP_CLIENT_ID }}",
+        "          private-key: ${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}",
+        "          owner: portyu9",
+        "          repositories: ai-qa-automation",
+        "          permission-contents: write",
+        "          permission-pull-requests: write",
+    )
+    for fragment in required_mint:
+        if fragment not in mint:
+            raise ValueError(
+                f"protected remediation App mint is missing reviewed fragment: {fragment}"
+            )
+    for forbidden_permission in (
+        "permission-actions:",
+        "permission-checks:",
+        "permission-statuses:",
+        "permission-workflows:",
+        "permission-administration:",
+    ):
+        if forbidden_permission in mint:
+            raise ValueError(
+                f"protected remediation author App has forbidden permission: {forbidden_permission}"
+            )
+    if semantic.count("actions/create-github-app-token@") != 1:
+        raise ValueError("protected remediation must mint exactly one author App token")
+    if semantic.count("${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}") != 1:
+        raise ValueError("protected remediation private key must have exactly one consumer")
+    if semantic.count("${{ vars.PROTECTED_REMEDIATION_APP_CLIENT_ID }}") != 2:
+        raise ValueError("protected remediation App client id must have exactly two consumers")
+    if semantic.count("${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}") != 3:
+        raise ValueError("protected remediation bot login must have exactly three consumers")
+    if semantic.count("${{ vars.PROTECTED_REMEDIATION_BOT_ID }}") != 2:
+        raise ValueError("protected remediation bot id must have exactly two consumers")
+    if semantic.count("${{ steps.author-app.outputs.token }}") != 1:
+        raise ValueError("protected remediation App token must have exactly one execution consumer")
+    if semantic.count("${{ steps.author-app.outputs.app-slug }}") != 1:
+        raise ValueError("protected remediation App slug must be checked exactly once")
+    if semantic.count("persist-credentials: false") != 1:
+        raise ValueError("protected remediation checkout must disable persisted credentials")
+    if semantic.count("ref: ${{ github.sha }}") != 1:
+        raise ValueError(
+            "protected remediation must checkout only the schedule's default-branch SHA"
+        )
+    return {
+        "trigger": "schedule:5m",
+        "trusted_definition": "default-branch-scheduled-workflow",
+        "native_token": "read-only",
+        "author_token": "distinct-app:contents-write+pull-requests-write",
+        "status_authority": "none",
+        "candidate_workflow_execution": "forbidden",
+        "mutation": "exact-route+one-file+branch-pr-only",
+    }
+
+
 def verify_ci_contract(root: Path) -> dict[str, Any]:
     root = root.resolve()
     base = _trusted_auto._base
@@ -827,6 +1045,9 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
     manual = base._verify_manual_workflow(workflows["manual-validation.yml"])
     release_candidate = _verify_release_candidate_workflow(workflows["release-candidate.yml"])
     security_autoheal = _verify_security_autoheal_workflow(workflows["security-autoheal.yml"])
+    protected_remediation = _verify_protected_remediation_workflow(
+        workflows["protected-security-remediation.yml"]
+    )
     trusted_auto = _trusted_auto._verify_trusted_auto_workflow(workflows["trusted-pr-auto.yml"])
     return {
         "schema_version": 1,
@@ -837,6 +1058,7 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
             "codeql": codeql,
             "dependency_governance": dependency_governance,
             "manual": manual,
+            "protected_remediation": protected_remediation,
             "release_candidate": release_candidate,
             "security_autoheal": security_autoheal,
             "trusted_auto": trusted_auto,
@@ -875,8 +1097,9 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
                 "provenance proof; candidate validation remains read-only and secret-free until the reporter."
             ),
             (
-                "Recognized Dependabot Actions, deterministic dependency-promotion, and CodeQL auto-heal "
-                "subjects are autonomously admitted by the centralized App gate after exact qualification "
+                "Recognized Dependabot Actions, deterministic dependency-promotion, CodeQL auto-heal, and "
+                "independently App-authored protected-remediation subjects are autonomously admitted by the "
+                "centralized App gate after exact qualification "
                 "and prospective-merge validation; unrecognized protected maintenance still requires the "
                 "independent external one-shot gate."
             ),

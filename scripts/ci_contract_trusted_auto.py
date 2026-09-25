@@ -24,13 +24,14 @@ del _export_name
 EXPECTED_WORKFLOW_NAMES = {
     "ci.yml",
     "manual-validation.yml",
+    "protected-security-remediation.yml",
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
-    "4c61f2e733ce2a4181c05232fe6713a5b21c04d2"  # pragma: allowlist secret
+    "9fac2c40725e5bff0221a00685c6d345c38c2ef6"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
-    "6c5dd5dda830a4d97c82068f360e99b8800a020e"  # pragma: allowlist secret
+    "c086755ff72ce4f2916ed2436bf6404651800e1c"  # pragma: allowlist secret
 )
 TRUSTED_AUTO_WORKFLOW_NAME = "Trusted PR Auto Gate — ƳƤ AI QA Automation Framework"
 TRUSTED_AUTO_SOURCE_WORKFLOWS = (
@@ -169,12 +170,14 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "          persist-credentials: false",
         '        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"',
         "          GITHUB_TOKEN: ${{ github.token }}",
+        "          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}",
+        "          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}",
         "          python scripts/auto_trusted_preflight.py \\",
         '            --event "$GITHUB_EVENT_PATH" \\',
         '            --event-name "$GITHUB_EVENT_NAME" \\',
         '            --github-output "$GITHUB_OUTPUT"',
         "            owner-routine)",
-        "            dependabot-actions|dependency-promotion|security-autoheal)",
+        "            dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation)",
         "            none)",
     )
     for fragment in required_preflight:
@@ -203,6 +206,8 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         '          python-version: "3.14.7"',
         "PROMOTION_PYTHON311",
         "PROMOTION_PYTHON314",
+        "          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}",
+        "          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}",
         "scripts/auto_trusted_bot_admission.py",
         "--mode full",
         '--lane "$LANE"',
@@ -219,11 +224,31 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     if "needs.bot-authority.result" in bot_authority:
         raise ValueError("governed bot authority must not self-reference its own result")
 
+    cancellation_safe_jobs = (
+        "subject-guard",
+        "supply-chain",
+        "quality",
+        "deterministic-evals",
+        "security",
+        "browser-reference-sut",
+        "bot-codeql",
+        "required-gate",
+        "trusted-status",
+    )
+    for job_id in cancellation_safe_jobs:
+        job = _base._semantic_text(_base._job_block(text, job_id))
+        if "    if: ${{ !cancelled()" not in job:
+            raise ValueError(
+                f"trusted automatic job {job_id} must override skipped dependency propagation "
+                "without running after cancellation"
+            )
+
     subject_guard = _base._semantic_text(_base._job_block(text, "subject-guard"))
     required_guard = (
         "    name: Exact Subject + Protected Authority Guard",
         "    needs: [preflight, bot-authority]",
-        "always()",
+        "!cancelled()",
+        "needs.preflight.result == 'success'",
         "needs.preflight.outputs.lane == 'owner-routine' || needs.bot-authority.result == 'success'",
         "          ref: ${{ needs.preflight.outputs.merge_sha }}",
         "          persist-credentials: false",
@@ -233,7 +258,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         '          test "$(git rev-parse HEAD)" = "$EXPECTED_MERGE_SHA"',
         '          read -r merge_sha base_sha head_sha extra_parent < <("${git_clean_env[@]}" /usr/bin/git rev-list --parents -n 1 "$EXPECTED_MERGE_SHA")',
         '          if test "$ADMISSION_LANE" = "owner-routine"; then',
-        "              dependabot-actions|dependency-promotion|security-autoheal) ;;",
+        "              dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation) ;;",
         '            test "$BOT_AUTHORITY_RESULT" = "success"',
         '            "${git_clean_env[@]}" /usr/bin/git diff --quiet "$EXPECTED_HEAD_SHA" "$EXPECTED_MERGE_SHA" --',
     )
@@ -256,9 +281,11 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         raise ValueError(
             "trusted automatic bot policy and reporter must have exactly two trusted-base checkouts"
         )
-    bot_head_checkout = "ref: ${{ needs.preflight.outputs.head_sha }}"
-    if semantic.count(bot_head_checkout) != 1:
-        raise ValueError("trusted automatic bot CodeQL must have exactly one bot-head checkout")
+    codeql_subject_checkout = "ref: ${{ steps.codeql-subject.outputs.sha }}"
+    if semantic.count(codeql_subject_checkout) != 1:
+        raise ValueError(
+            "trusted automatic bot CodeQL must have exactly one exact-subject checkout"
+        )
     if semantic.count("persist-credentials: false") != 10:
         raise ValueError("every trusted automatic checkout must disable persisted credentials")
 
@@ -272,8 +299,44 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "security",
         "browser-reference-sut",
     )
+    expected_validation_conditions = {
+        "supply-chain": (
+            "    if: ${{ !cancelled() && needs.preflight.result == 'success' && "
+            "needs.preflight.outputs.eligible == 'true' && "
+            "needs.subject-guard.result == 'success' }}"
+        ),
+        "quality": (
+            "    if: ${{ !cancelled() && needs.preflight.result == 'success' && "
+            "needs.preflight.outputs.eligible == 'true' && "
+            "needs.subject-guard.result == 'success' && "
+            "needs.supply-chain.result == 'success' }}"
+        ),
+        "deterministic-evals": (
+            "    if: ${{ !cancelled() && needs.preflight.result == 'success' && "
+            "needs.preflight.outputs.eligible == 'true' && "
+            "needs.subject-guard.result == 'success' && "
+            "needs.supply-chain.result == 'success' }}"
+        ),
+        "security": (
+            "    if: ${{ !cancelled() && needs.preflight.result == 'success' && "
+            "needs.preflight.outputs.eligible == 'true' && "
+            "needs.subject-guard.result == 'success' && "
+            "needs.supply-chain.result == 'success' }}"
+        ),
+        "browser-reference-sut": (
+            "    if: ${{ !cancelled() && needs.preflight.result == 'success' && "
+            "needs.preflight.outputs.eligible == 'true' && "
+            "needs.subject-guard.result == 'success' && "
+            "needs.supply-chain.result == 'success' }}"
+        ),
+    }
     for job_id in validation_jobs:
         job = _base._semantic_text(_base._job_block(text, job_id))
+        if expected_validation_conditions[job_id] not in job:
+            raise ValueError(
+                f"trusted automatic validation job {job_id} must be cancellation-safe and "
+                "explicitly direct-needs-bound"
+            )
         if candidate_checkout not in job:
             raise ValueError(
                 f"trusted automatic validation job {job_id} is not merge-subject-bound"
@@ -300,25 +363,63 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     required_bot_codeql = (
         "    name: Trusted Bot CodeQL",
         "    needs: [preflight, subject-guard]",
-        "needs.preflight.outputs.lane != 'owner-routine'",
-        bot_head_checkout,
+        "    if: ${{ !cancelled() && needs.preflight.result == 'success' && ((needs.preflight.outputs.eligible == 'true' && needs.preflight.outputs.lane != 'owner-routine' && needs.subject-guard.result == 'success') || (github.event_name == 'schedule' && needs.preflight.outputs.eligible == 'false' && needs.preflight.outputs.lane == 'none')) }}",
+        "      - name: Resolve exact CodeQL analysis subject",
+        "        id: codeql-subject",
+        "          ELIGIBLE: ${{ needs.preflight.outputs.eligible }}",
+        "          LANE: ${{ needs.preflight.outputs.lane }}",
+        "          BOT_HEAD_REF: ${{ needs.preflight.outputs.head_ref }}",
+        "          BOT_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}",
+        "          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}",
+        '          if test "$ELIGIBLE" = "true"; then',
+        "              dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation) ;;",
+        '            mode="governed-bot"',
+        '            test "$GITHUB_EVENT_NAME" = "schedule"',
+        '            test "$LANE" = "none"',
+        '            test "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH"',
+        '            mode="default-branch-anchor"',
+        '          [[ "$subject_sha" =~ ^[0-9a-f]{40}$ ]]',
+        '          printf \'ref=%s\\nsha=%s\\nmode=%s\\n\' "$subject_ref" "$subject_sha" "$mode" >> "$GITHUB_OUTPUT"',
+        codeql_subject_checkout,
         "          persist-credentials: false",
-        "          EXPECTED_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}",
-        '        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"',
+        "          EXPECTED_SUBJECT_SHA: ${{ steps.codeql-subject.outputs.sha }}",
+        '        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SUBJECT_SHA"',
+        "      - name: Acquire verified CodeQL 2.27.0 bundle",
+        "        id: codeql-tools",
+        "release_api='https://api.github.com/repos/github/codeql-action/releases/tags/codeql-bundle-v2.27.0'",
+        "asset_url='https://github.com/github/codeql-action/releases/download/codeql-bundle-v2.27.0/codeql-bundle-linux64.tar.zst'",
+        're.fullmatch(r"sha256:[0-9a-f]{64}", digest)',
+        'test "$observed_sha" = "$expected_sha"',
         "      - name: Initialize governed bot CodeQL",
+        "          tools: ${{ steps.codeql-tools.outputs.path }}",
         "          languages: python",
         "          queries: security-extended",
-        "      - name: Analyze exact governed bot branch",
-        "          ref: refs/heads/${{ needs.preflight.outputs.head_ref }}",
-        "          sha: ${{ needs.preflight.outputs.head_sha }}",
+        "      - name: Analyze exact CodeQL subject",
+        '        env:\n          PYTHONSAFEPATH: ""',
+        "          ref: ${{ steps.codeql-subject.outputs.ref }}",
+        "          sha: ${{ steps.codeql-subject.outputs.sha }}",
     )
     for fragment in required_bot_codeql:
         if fragment not in bot_codeql:
             raise ValueError(f"trusted bot CodeQL is missing reviewed fragment: {fragment}")
+    if bot_codeql.count("      - name: Acquire verified CodeQL 2.27.0 bundle") != 1:
+        raise ValueError("trusted bot CodeQL must acquire exactly one verified local bundle")
+    if bot_codeql.count("          tools: ${{ steps.codeql-tools.outputs.path }}") != 1:
+        raise ValueError("trusted bot CodeQL must use exactly one verified local bundle path")
+    if semantic.count('          PYTHONSAFEPATH: ""') != 1:
+        raise ValueError(
+            "trusted bot CodeQL must disable Python safe-path only for extractor analysis"
+        )
     if "${{ secrets." in bot_codeql:
         raise ValueError("trusted bot CodeQL must remain secret-free")
 
     required_gate = _base._semantic_text(_base._job_block(text, "required-gate"))
+    required_gate_condition = (
+        "    if: ${{ !cancelled() && needs.preflight.result == 'success' && "
+        "needs.preflight.outputs.eligible == 'true' }}"
+    )
+    if required_gate_condition not in required_gate:
+        raise ValueError("automatic trusted aggregate cancellation/eligibility guard drifted")
     for dependency in (
         "subject-guard",
         "quality",
@@ -343,6 +444,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     reporter = _base._semantic_text(_base._job_block(text, "trusted-status"))
     required_reporter = (
         "    name: Automatic Trusted PR Gate Reporter",
+        "    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.eligible == 'true' }}",
         "    environment:\n      name: trusted-pr-gate\n      deployment: false",
         "      actions: read",
         "      checks: read",
@@ -352,11 +454,13 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         trusted_checkout,
         "      - name: Revalidate automatic trusted admission",
         "          GITHUB_TOKEN: ${{ github.token }}",
+        "          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}",
+        "          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}",
         "          python scripts/auto_trusted_preflight.py \\",
         "      - name: Require exact final admission identity",
         '          test "$FINAL_ELIGIBLE" = "true"',
         '          test "$FINAL_LANE" = "$EXPECTED_LANE"',
-        "              dependabot-actions|dependency-promotion|security-autoheal) ;;",
+        "              dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation) ;;",
         '          test "$FINAL_MERGE_SHA" = "$EXPECTED_MERGE_SHA"',
         '          test "$FINAL_TRUSTED_SHA" = "$GITHUB_SHA"',
         "      - name: Reprove governed bot authority immediately before App publication",
@@ -379,6 +483,10 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         raise ValueError("automatic trusted App private key must have exactly one consumer")
     if semantic.count("${{ vars.TRUSTED_GATE_APP_CLIENT_ID }}") != 1:
         raise ValueError("automatic trusted App client ID must have exactly one consumer")
+    if semantic.count("${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}") != 4:
+        raise ValueError("protected remediation bot login must have exactly four trusted consumers")
+    if semantic.count("${{ vars.PROTECTED_REMEDIATION_BOT_ID }}") != 4:
+        raise ValueError("protected remediation bot id must have exactly four trusted consumers")
     if "${{ secrets." in semantic.replace(reporter, ""):
         raise ValueError("automatic trusted environment secrets must be isolated to reporter")
 
@@ -411,13 +519,16 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
             "dependabot-actions",
             "dependency-promotion",
             "security-autoheal",
+            "protected-security-remediation",
         ],
         "protected_paths": list(TRUSTED_AUTO_PROTECTED_PATHS),
         "validation_subject": "live-prospective-merge-sha",
         "candidate_subject_binding": "job-level-exact-prospective-merge",
+        "needs_skip_policy": "not-cancelled-plus-explicit-direct-needs-success",
         "validation_authority": (
             "secret-free;read-only-except-bot-codeql-security-events-write-before-reporter"
         ),
+        "codeql_status_anchor": "scheduled-idle-default-branch-same-analysis-key",
         "quality_lanes": quality_lanes,
         "terminal_revalidation": "fresh-live-admission-plus-terminal-bot-authority-reproof",
         "status_writer": "dedicated-github-app",

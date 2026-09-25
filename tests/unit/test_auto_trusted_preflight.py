@@ -210,6 +210,22 @@ def test_scheduled_bot_reconciliation_selects_security_lane_from_fresh_pr() -> N
     assert api.calls.count(f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65") == 2
 
 
+def test_scheduled_reconciliation_ignores_advanced_security_reporting_actor() -> None:
+    responses = _responses()
+    summary = deepcopy(responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"])
+    summary["user"] = {
+        "login": "github-advanced-security[bot]",
+        "id": preflight.GITHUB_ACTIONS_USER_ID,
+    }
+    summary["head"]["ref"] = "automation/codeql-autoheal-7-abcdef123456"
+    api = ScheduledFakeAPI(responses, [summary])
+
+    admission = preflight.evaluate_admission(api, event={}, event_name="schedule")
+
+    assert admission is None
+    assert api.calls == [f"/repos/{preflight.EXPECTED_REPOSITORY}/git/ref/heads/main"]
+
+
 def test_scheduled_bot_reconciliation_skips_nonmergeable_higher_priority_candidate() -> None:
     responses = _responses()
     security = responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]
@@ -350,6 +366,26 @@ def test_governed_bot_lane_requires_exact_identity_and_branch_grammar(
     assert preflight._bot_lane(pr) == expected_lane
 
 
+@pytest.mark.parametrize(
+    "branch",
+    [
+        "dependabot/github_actions/actions/checkout-7",
+        "automation/dependency-promotion-171-abcdef123456",
+        "automation/codeql-autoheal-7-abcdef123456",
+    ],
+)
+def test_advanced_security_reporting_actor_has_no_governed_lane(branch: str) -> None:
+    pr = {
+        "user": {
+            "login": "github-advanced-security[bot]",
+            "id": preflight.GITHUB_ACTIONS_USER_ID,
+        },
+        "head": {"ref": branch},
+    }
+
+    assert preflight._bot_lane(pr) is None
+
+
 def test_governed_bot_lane_rejects_lookalike_identity() -> None:
     pr = {
         "user": {"login": preflight.GITHUB_ACTIONS_LOGIN, "id": 1},
@@ -452,3 +488,41 @@ def test_api_path_rejects_traversal_before_network() -> None:
 
     with pytest.raises(ValueError, match="fixed-repository path"):
         api.get("/repos/portyu9/ai-qa-automation/../other")
+
+
+def test_protected_remediation_lane_requires_external_exact_app_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login = "protected-remediation[bot]"
+    user_id = 424242
+    branch = "automation/protected-security-remediation-17-" + ("a" * 64) + "-a1"
+    monkeypatch.setenv(preflight.PROTECTED_REMEDIATION_BOT_LOGIN_ENV, login)
+    monkeypatch.setenv(preflight.PROTECTED_REMEDIATION_BOT_ID_ENV, str(user_id))
+
+    assert (
+        preflight._bot_lane({"user": {"login": login, "id": user_id}, "head": {"ref": branch}})
+        == "protected-security-remediation"
+    )
+    assert (
+        preflight._bot_lane({"user": {"login": login, "id": user_id + 1}, "head": {"ref": branch}})
+        is None
+    )
+
+    monkeypatch.delenv(preflight.PROTECTED_REMEDIATION_BOT_ID_ENV)
+    with pytest.raises(ValueError, match="identity is missing or malformed"):
+        preflight._bot_lane({"user": {"login": login, "id": user_id}, "head": {"ref": branch}})
+
+
+@pytest.mark.parametrize(
+    "login",
+    ["github-actions[bot]", "dependabot[bot]", "trusted-pr-gate[bot]"],
+)
+def test_protected_remediation_lane_rejects_collapsed_author_identity(
+    monkeypatch: pytest.MonkeyPatch, login: str
+) -> None:
+    branch = "automation/protected-security-remediation-17-" + ("b" * 64) + "-a1"
+    monkeypatch.setenv(preflight.PROTECTED_REMEDIATION_BOT_LOGIN_ENV, login)
+    monkeypatch.setenv(preflight.PROTECTED_REMEDIATION_BOT_ID_ENV, "42")
+
+    with pytest.raises(ValueError, match="identity is missing or malformed"):
+        preflight._bot_lane({"user": {"login": login, "id": 42}, "head": {"ref": branch}})

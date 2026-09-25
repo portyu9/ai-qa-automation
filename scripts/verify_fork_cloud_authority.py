@@ -16,6 +16,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "codeql.yml",
     "dependency-governance.yml",
     "manual-validation.yml",
+    "protected-security-remediation.yml",
     "release-candidate.yml",
     "security-autoheal.yml",
     "trusted-pr-auto.yml",
@@ -58,6 +59,7 @@ _FORBIDDEN_WORKFLOW_TOKENS: tuple[tuple[str, re.Pattern[str]], ...] = (
 _ALLOWED_SECRET_REFERENCE_COUNTS: dict[str, Counter[str]] = {
     "dependency-governance.yml": Counter({"GITHUB_TOKEN": 3}),
     "manual-validation.yml": Counter({"ANTHROPIC_API_KEY": 2}),
+    "protected-security-remediation.yml": Counter({"PROTECTED_REMEDIATION_APP_PRIVATE_KEY": 1}),
     "security-autoheal.yml": Counter(),
     "trusted-pr-auto.yml": Counter({"TRUSTED_GATE_APP_PRIVATE_KEY": 1}),
 }
@@ -70,11 +72,22 @@ _MANUAL_SECRET_CONTEXT_FRAGMENTS = (
 )
 _GOVERNANCE_SECRET_CONTEXT_FRAGMENTS = (
     "- name: Attempt one bounded transient recovery\n        if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
-    "- name: Reconcile exact-subject Python dependency promotion\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
-    "- name: Reconcile Dependabot action merge authority\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+    "- name: Reconcile exact-subject Python dependency promotion\n        id: python_promotion\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+    "- name: Reconcile Dependabot action merge authority\n        if: steps.python_promotion.outputs.merged != 'true'\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+)
+_PROTECTED_REMEDIATION_SECRET_CONTEXT_FRAGMENTS = (
+    'on:\n  schedule:\n    - cron: "*/5 * * * *"',
+    "environment:\n      name: protected-remediation-author\n      deployment: false",
+    "- name: Mint dedicated protected-remediation author token",
+    "private-key: ${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}",
+    "permission-contents: write",
+    "permission-pull-requests: write",
+    "python .github/scripts/protected_security_remediation.py --reconcile --allow-merge",
 )
 _SECURITY_AUTOHEAL_SECRET_CONTEXT_FRAGMENTS = (
-    "- name: Reconcile exact-subject CodeQL remediations\n        env:\n          GITHUB_TOKEN: ${{ github.token }}\n        run: python .github/scripts/security_autoheal.py --reconcile --allow-merge",
+    "- name: Plan exact-main deterministic security routes\n        env:\n          GITHUB_TOKEN: ${{ github.token }}\n        run: >-\n          python .github/scripts/security_autoheal.py\n          --plan-routes",
+    "- name: Persist exact-run route plan before mutation\n        id: route-plan-artifact\n        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1",
+    '- name: Reconcile exact-subject CodeQL remediations from persisted routes\n        env:\n          GITHUB_TOKEN: ${{ github.token }}\n        run: >-\n          python .github/scripts/security_autoheal.py\n          --reconcile\n          --allow-merge\n          --route-plan "$RUNNER_TEMP/security-autoheal-route-plan/route-plan.json"',
 )
 
 _REQUIRED_PREFLIGHT_FRAGMENTS = (
@@ -89,6 +102,9 @@ _REQUIRED_PREFLIGHT_FRAGMENTS = (
     'triggering_actor.get("id") != EXPECTED_OWNER_ID',
     'head_repo.get("full_name") == EXPECTED_REPOSITORY',
     'base_repo.get("full_name") == EXPECTED_REPOSITORY',
+    'PROTECTED_REMEDIATION_BOT_LOGIN_ENV = "PROTECTED_REMEDIATION_BOT_LOGIN"',
+    'PROTECTED_REMEDIATION_BOT_ID_ENV = "PROTECTED_REMEDIATION_BOT_ID"',
+    'return "protected-security-remediation"',
 )
 
 
@@ -165,6 +181,24 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
         if missing:
             raise ValueError(
                 "dependency-governance.yml: reviewed credential consumers moved or changed"
+            )
+    if name == "protected-security-remediation.yml":
+        if (
+            "pull_request:" in text
+            or "workflow_dispatch:" in text
+            or "repository_dispatch:" in text
+        ):
+            raise ValueError(
+                "protected-security-remediation.yml must remain default-branch schedule-only"
+            )
+        missing = [
+            fragment
+            for fragment in _PROTECTED_REMEDIATION_SECRET_CONTEXT_FRAGMENTS
+            if fragment not in text
+        ]
+        if missing:
+            raise ValueError(
+                "protected-security-remediation.yml: reviewed author credential boundary changed"
             )
     if name == "security-autoheal.yml":
         missing = [

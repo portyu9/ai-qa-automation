@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/security-autoheal.json'
       - '.github/scripts/security_autoheal.py'
+      - '.github/scripts/security_alert_routing.py'
       - '.github/scripts/security_autoheal_selfcheck.py'
       - '.github/workflows/security-autoheal.yml'
       - '.github/workflows/ci.yml'
@@ -49,6 +50,7 @@ jobs:
         run: >-
           python -m compileall -q
           .github/scripts/security_autoheal.py
+          .github/scripts/security_alert_routing.py
           .github/scripts/security_autoheal_selfcheck.py
           .github/scripts/dependency_lock_compiler.py
           .github/scripts/trusted_qualification.py
@@ -58,20 +60,21 @@ jobs:
       - name: Exercise security auto-heal self-check
         run: python .github/scripts/security_autoheal_selfcheck.py
 
-  reconcile:
-    name: reconcile-codeql-autoheal
+  route-plan:
+    name: plan-codeql-autoheal-routes
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 5
     permissions:
-      actions: write
-      checks: read
-      contents: write
-      pull-requests: write
-      security-events: write
-      statuses: read
+      actions: read
+      contents: read
+      pull-requests: read
+      security-events: read
+    outputs:
+      artifact-id: ${{ steps.route-plan-artifact.outputs.artifact-id }}
+      artifact-digest: ${{ steps.route-plan-artifact.outputs.artifact-digest }}
     steps:
-      - name: Checkout trusted default-branch security controller only
+      - name: Checkout trusted default-branch security controller for route planning
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.repository.default_branch }}
@@ -81,9 +84,64 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.11.16'
-      - name: Validate trusted security auto-heal policy
+      - name: Validate trusted security route planner
         run: python .github/scripts/security_autoheal.py --validate-config --self-test
-      - name: Reconcile exact-subject CodeQL remediations
+      - name: Plan exact-main deterministic security routes
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: python .github/scripts/security_autoheal.py --reconcile --allow-merge
+        run: >-
+          python .github/scripts/security_autoheal.py
+          --plan-routes
+          --route-plan-output "$RUNNER_TEMP/security-autoheal-route-plan/route-plan.json"
+      - name: Persist exact-run route plan before mutation
+        id: route-plan-artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: security-autoheal-route-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/security-autoheal-route-plan/route-plan.json
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 6
+
+  reconcile:
+    name: reconcile-codeql-autoheal
+    if: github.event_name != 'pull_request'
+    needs: route-plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      checks: write
+      contents: write
+      pull-requests: write
+      security-events: write
+      statuses: read
+    steps:
+      - name: Checkout trusted default-branch security controller for mutation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11.16'
+      - name: Validate trusted security mutation controller
+        run: python .github/scripts/security_autoheal.py --validate-config --self-test
+      - name: Restore exact-run route plan from prior read-only job
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.route-plan.outputs.artifact-id }}
+          path: ${{ runner.temp }}/security-autoheal-route-plan
+      - name: Reconcile exact-subject CodeQL remediations from persisted routes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python .github/scripts/security_autoheal.py
+          --reconcile
+          --allow-merge
+          --route-plan "$RUNNER_TEMP/security-autoheal-route-plan/route-plan.json"
+          --route-artifact-id ${{ needs.route-plan.outputs.artifact-id }}
+          --route-artifact-name security-autoheal-route-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          --route-artifact-digest sha256:${{ needs.route-plan.outputs.artifact-digest }}

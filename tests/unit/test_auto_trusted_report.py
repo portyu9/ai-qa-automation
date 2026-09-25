@@ -103,12 +103,17 @@ def _subject() -> control.PullRequestSubject:
     return control.PullRequestSubject(43, HEAD_SHA, BASE_SHA, MERGE_SHA)
 
 
-def _report(monkeypatch: pytest.MonkeyPatch, *, result: str = "success") -> dict[str, Any]:
+def _report(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    result: str = "success",
+    event: str = "workflow_run",
+) -> dict[str, Any]:
     monkeypatch.setattr(reporter, "GitHubApi", FakeApi)
     return reporter.report_automatic_result(
         repository=REPOSITORY,
         token="app-token",
-        workflow_event="workflow_run",
+        workflow_event=event,
         workflow_ref="refs/heads/main",
         expected=_subject(),
         job_results={"validation": result},
@@ -116,10 +121,12 @@ def _report(monkeypatch: pytest.MonkeyPatch, *, result: str = "success") -> dict
     )
 
 
+@pytest.mark.parametrize("event", ["workflow_run", "schedule"])
 def test_automatic_report_uses_shared_exact_subject_resolver(
     monkeypatch: pytest.MonkeyPatch,
+    event: str,
 ) -> None:
-    result = _report(monkeypatch)
+    result = _report(monkeypatch, event=event)
 
     assert result["result"] == "SUCCESS"
     assert result["authorization_mode"] == "automatic-default-branch"
@@ -137,7 +144,7 @@ def test_automatic_report_uses_shared_exact_subject_resolver(
 @pytest.mark.parametrize(
     ("event", "ref", "match"),
     [
-        ("repository_dispatch", "refs/heads/main", "workflow_run"),
+        ("repository_dispatch", "refs/heads/main", "workflow_run or schedule"),
         ("workflow_run", "refs/heads/feature", "refs/heads/main"),
     ],
 )

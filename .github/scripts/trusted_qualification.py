@@ -172,9 +172,9 @@ def qualification_states(
             )
             if candidate is not None:
                 candidates.append(candidate)
-        states[name] = (
-            max(candidates, key=lambda item: int(item["check_id"])) if candidates else None
-        )
+        if len(candidates) > 1:
+            raise TrustedQualificationError(f"{name} trusted qualification evidence is ambiguous")
+        states[name] = candidates[0] if candidates else None
     return states
 
 
