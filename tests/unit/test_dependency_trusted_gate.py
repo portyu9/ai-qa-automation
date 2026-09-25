@@ -604,6 +604,7 @@ def test_dependency_promotion_reconcile_stops_after_successful_merge(
 
     promoted = {"number": 701, "headSha": HEAD, "baseSha": BASE}
     qualification_calls: list[tuple[object, dict[str, Any], str, str]] = []
+    validation_modes: list[bool] = []
 
     def validate(
         api_arg: object,
@@ -615,7 +616,7 @@ def test_dependency_promotion_reconcile_stops_after_successful_merge(
         assert api_arg is api
         assert pr == {"number": 701}
         assert config_arg is config
-        assert require_checks is False
+        validation_modes.append(require_checks)
         return {"source": True}, promoted
 
     monkeypatch.setattr(promotion, "_validate_promotion", validate)
@@ -659,6 +660,7 @@ def test_dependency_promotion_reconcile_stops_after_successful_merge(
         == 0
     )
     assert observed_gets == ["/pulls/701", "/pulls/701"]
+    assert validation_modes == [False, True]
     assert qualification_calls == [(api, {"number": 701}, HEAD, BASE)]
     assert events == ["post-merge-finalized", "merge-signal"]
 
