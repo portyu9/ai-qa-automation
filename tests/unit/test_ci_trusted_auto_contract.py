@@ -275,6 +275,55 @@ def test_protected_remediation_author_action_is_scoped_to_its_workflow(tmp_path:
         ci_contract.verify_ci_contract(root)
 
 
+
+def test_dependency_promotion_author_workflow_is_default_branch_only_and_app_is_narrow() -> None:
+    result = ci_contract.verify_ci_contract(ROOT)
+    promotion = result["workflows"]["dependency_promotion_author"]
+
+    assert promotion == {
+        "triggers": ["schedule", "workflow_run"],
+        "author_app_permissions": ["pull_requests:write"],
+        "commit_authority": "native-default-branch-github-actions-token",
+        "pr_authority": "dedicated-repository-scoped-github-app",
+        "candidate_execution": "none",
+        "workflow_definition": "action-pin-normalized-reviewed-git-blob",
+    }
+
+
+def test_dependency_promotion_author_contract_rejects_candidate_trigger(tmp_path: Path) -> None:
+    root = _copy_contract_repo(tmp_path)
+    path = root / ".github" / "workflows" / "dependency-promotion-author.yml"
+    text = path.read_text(encoding="utf-8")
+    path.write_text(
+        text.replace("on:\n  workflow_run:\n", "on:\n  pull_request:\n  workflow_run:\n", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="structure differs from reviewed authority"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_dependency_promotion_author_contract_rejects_status_write_app_scope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_contract_repo(tmp_path)
+    path = root / ".github" / "workflows" / "dependency-promotion-author.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = "          permission-pull-requests: write\n"
+    assert marker in text
+    mutated = text.replace(marker, marker + "          permission-statuses: write\n", 1)
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_DEPENDENCY_PROMOTION_AUTHOR_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
+    )
+
+    with pytest.raises(ValueError, match="forbidden permission"):
+        ci_contract.verify_ci_contract(root)
+
+
 def test_protected_remediation_workflow_is_schedule_only_and_author_token_is_narrow() -> None:
     result = ci_contract.verify_ci_contract(ROOT)
     protected = result["workflows"]["protected_remediation"]
