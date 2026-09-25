@@ -15,6 +15,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "ci.yml",
     "codeql.yml",
     "dependency-governance.yml",
+    "dependency-promotion-author.yml",
     "manual-validation.yml",
     "protected-security-remediation.yml",
     "release-candidate.yml",
@@ -57,7 +58,10 @@ _FORBIDDEN_WORKFLOW_TOKENS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 _ALLOWED_SECRET_REFERENCE_COUNTS: dict[str, Counter[str]] = {
-    "dependency-governance.yml": Counter({"GITHUB_TOKEN": 3}),
+    "dependency-governance.yml": Counter({"GITHUB_TOKEN": 2}),
+    "dependency-promotion-author.yml": Counter(
+        {"DEPENDENCY_PROMOTION_APP_PRIVATE_KEY": 1, "GITHUB_TOKEN": 1}
+    ),
     "manual-validation.yml": Counter({"ANTHROPIC_API_KEY": 2}),
     "protected-security-remediation.yml": Counter({"PROTECTED_REMEDIATION_APP_PRIVATE_KEY": 1}),
     "security-autoheal.yml": Counter(),
@@ -74,6 +78,18 @@ _GOVERNANCE_SECRET_CONTEXT_FRAGMENTS = (
     "- name: Attempt one bounded transient recovery\n        if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
     "- name: Reconcile exact-subject Python dependency promotion\n        id: python_promotion\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
     "- name: Reconcile Dependabot action merge authority\n        if: steps.python_promotion.outputs.merged != 'true'\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+)
+_DEPENDENCY_PROMOTION_AUTHOR_SECRET_CONTEXT_FRAGMENTS = (
+    "  workflow_run:\n",
+    '  schedule:\n    - cron: "*/5 * * * *"',
+    "environment:\n      name: dependency-promotion-author\n      deployment: false",
+    "- name: Mint dedicated dependency-promotion author token",
+    "private-key: ${{ secrets.DEPENDENCY_PROMOTION_APP_PRIVATE_KEY }}",
+    "permission-pull-requests: write",
+    "DEPENDENCY_PROMOTION_APP_TOKEN: ${{ steps.author-app.outputs.token }}",
+    "python .github/scripts/dependency_promotion.py",
+    "--reconcile",
+    "--allow-merge",
 )
 _PROTECTED_REMEDIATION_SECRET_CONTEXT_FRAGMENTS = (
     'on:\n  schedule:\n    - cron: "*/5 * * * *"',
@@ -104,7 +120,10 @@ _REQUIRED_PREFLIGHT_FRAGMENTS = (
     'base_repo.get("full_name") == EXPECTED_REPOSITORY',
     'PROTECTED_REMEDIATION_BOT_LOGIN_ENV = "PROTECTED_REMEDIATION_BOT_LOGIN"',
     'PROTECTED_REMEDIATION_BOT_ID_ENV = "PROTECTED_REMEDIATION_BOT_ID"',
+    'DEPENDENCY_PROMOTION_BOT_LOGIN_ENV = "DEPENDENCY_PROMOTION_BOT_LOGIN"',
+    'DEPENDENCY_PROMOTION_BOT_ID_ENV = "DEPENDENCY_PROMOTION_BOT_ID"',
     'return "protected-security-remediation"',
+    'return "dependency-promotion"',
 )
 
 
@@ -181,6 +200,25 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
         if missing:
             raise ValueError(
                 "dependency-governance.yml: reviewed credential consumers moved or changed"
+            )
+    if name == "dependency-promotion-author.yml":
+        if (
+            "pull_request:" in text
+            or "pull_request_target:" in text
+            or "workflow_dispatch:" in text
+            or "repository_dispatch:" in text
+        ):
+            raise ValueError(
+                "dependency-promotion-author.yml must remain default-branch workflow-run/schedule only"
+            )
+        missing = [
+            fragment
+            for fragment in _DEPENDENCY_PROMOTION_AUTHOR_SECRET_CONTEXT_FRAGMENTS
+            if fragment not in text
+        ]
+        if missing:
+            raise ValueError(
+                "dependency-promotion-author.yml: reviewed author credential boundary changed"
             )
     if name == "protected-security-remediation.yml":
         if (
