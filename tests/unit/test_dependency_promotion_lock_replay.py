@@ -182,7 +182,7 @@ def test_create_promotion_pr_uses_non_main_staging_base_then_exact_retarget(
                 events.append(("create-ref", STAGING))
                 return {
                     "ref": f"refs/heads/{STAGING}",
-                    "object": {"sha": BASE},
+                    "object": {"type": "commit", "sha": BASE},
                 }
             if path == "/pulls":
                 assert payload["head"] == BRANCH
