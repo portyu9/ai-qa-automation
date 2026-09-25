@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: dependency-promotion-author-${{ github.event_name == 'schedule' && 'scheduled-reconcile' || github.event.workflow_run.id }}
+  group: dependency-promotion-author-reconcile
   cancel-in-progress: false
 
 env:
