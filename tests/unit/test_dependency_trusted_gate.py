@@ -183,19 +183,6 @@ def test_dependency_gate_rejects_workflow_run_for_schedule_only_path() -> None:
         )
 
 
-def test_dependency_gate_accepts_workflow_run_for_exact_qualified_path() -> None:
-    evidence = gate.require_qualified_trusted_gate(
-        _GateApi(event="workflow_run"),
-        PR_NUMBER,
-        HEAD,
-        BASE,
-    )
-
-    assert evidence["event"] == "workflow_run"
-    assert evidence["runId"] == RUN_ID
-    assert evidence["mergeSha"] == MERGE
-
-
 @pytest.mark.parametrize("event", ("workflow_dispatch", "pull_request", "push"))
 def test_dependency_gate_rejects_unreviewed_events_at_shared_boundary(event: str) -> None:
     with pytest.raises(
@@ -450,7 +437,7 @@ def test_dependency_promotion_revalidates_gate_after_fresh_rebind(
         assert api_arg is api
         assert pr == {"number": PR_NUMBER}
         assert config_arg is config
-        assert require_checks is True
+        assert require_checks is False
         api.events.append("rebind")
         return {"source": True}, promoted
 
@@ -474,7 +461,7 @@ def test_dependency_promotion_revalidates_gate_after_fresh_rebind(
         return {"mergeSha": MERGE}
 
     monkeypatch.setattr(promotion, "_validate_promotion", validate)
-    monkeypatch.setattr(promotion, "require_qualified_trusted_gate", require_gate)
+    monkeypatch.setattr(promotion, "require_schedule_trusted_gate", require_gate)
     monkeypatch.setattr(promotion, "finalize_post_merge_evidence", finalize)
 
     assert promotion._publish_and_merge(api, promoted, config) == {"mergeSha": MERGE}
@@ -499,7 +486,7 @@ def test_dependency_promotion_moved_subject_stops_before_gate(
         assert api_arg is api
         assert pr == {"number": PR_NUMBER}
         assert config_arg is config
-        assert require_checks is True
+        assert require_checks is False
         api.events.append("rebind")
         return {"source": True}, moved
 
@@ -507,7 +494,7 @@ def test_dependency_promotion_moved_subject_stops_before_gate(
         raise AssertionError("gate must not be consulted for moved promotion")
 
     monkeypatch.setattr(promotion, "_validate_promotion", validate)
-    monkeypatch.setattr(promotion, "require_qualified_trusted_gate", forbidden_gate)
+    monkeypatch.setattr(promotion, "require_schedule_trusted_gate", forbidden_gate)
 
     with pytest.raises(promotion.PolicyBlock, match="changed before guarded merge"):
         promotion._publish_and_merge(api, promoted, config)
@@ -603,7 +590,6 @@ def test_dependency_promotion_reconcile_stops_after_successful_merge(
     )
 
     promoted = {"number": 701, "headSha": HEAD, "baseSha": BASE}
-    qualification_calls: list[tuple[object, dict[str, Any], str, str]] = []
     validation_modes: list[bool] = []
 
     def validate(
@@ -620,17 +606,6 @@ def test_dependency_promotion_reconcile_stops_after_successful_merge(
         return {"source": True}, promoted
 
     monkeypatch.setattr(promotion, "_validate_promotion", validate)
-
-    def request_qualification(
-        api_arg: object,
-        pr: dict[str, Any],
-        head_sha: str,
-        base_sha: str,
-    ) -> bool:
-        qualification_calls.append((api_arg, pr, head_sha, base_sha))
-        return True
-
-    monkeypatch.setattr(promotion, "_request_exact_qualification", request_qualification)
 
     def publish_and_merge(
         api_arg: object,
@@ -659,9 +634,8 @@ def test_dependency_promotion_reconcile_stops_after_successful_merge(
         )
         == 0
     )
-    assert observed_gets == ["/pulls/701", "/pulls/701"]
-    assert validation_modes == [False, True]
-    assert qualification_calls == [(api, {"number": 701}, HEAD, BASE)]
+    assert observed_gets == ["/pulls/701"]
+    assert validation_modes == [False]
     assert events == ["post-merge-finalized", "merge-signal"]
 
 
