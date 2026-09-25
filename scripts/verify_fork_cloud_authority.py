@@ -76,8 +76,7 @@ _MANUAL_SECRET_CONTEXT_FRAGMENTS = (
 )
 _GOVERNANCE_SECRET_CONTEXT_FRAGMENTS = (
     "- name: Attempt one bounded transient recovery\n        if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
-    "- name: Reconcile exact-subject Python dependency promotion\n        id: python_promotion\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
-    "- name: Reconcile Dependabot action merge authority\n        if: steps.python_promotion.outputs.merged != 'true'\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+    "- name: Reconcile Dependabot action merge authority\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
 )
 _DEPENDENCY_PROMOTION_AUTHOR_SECRET_CONTEXT_FRAGMENTS = (
     "  workflow_run:\n",
