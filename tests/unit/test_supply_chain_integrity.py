@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,86 @@ def test_repository_supply_chain_contract_is_self_consistent() -> None:
     assert result["locks"]["build-py311.lock"]["packages"] > 0
     assert result["locks"]["runtime-py311.lock"]["packages"] > 0
     assert result["base_image"].startswith("python:3.11.16-slim@sha256:")
+
+
+def _supply_chain_pyproject(*, build_requirement: str, extra_build_key: bool = False) -> dict[str, Any]:
+    text = (ROOT / "pyproject.toml").read_text(encoding="utf-8").replace(
+        'requires = ["hatchling==1.32.0"]',
+        f'requires = ["{build_requirement}"]',
+        1,
+    )
+    if extra_build_key:
+        text = text.replace(
+            'build-backend = "hatchling.build"\n',
+            'build-backend = "hatchling.build"\nbackend-path = ["."]\n',
+            1,
+        )
+    return tomllib.loads(text)
+
+
+def test_supply_chain_accepts_exact_promoted_hatchling_pin(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    shutil.copytree(ROOT / "requirements", root / "requirements")
+    build_lock = root / "requirements" / "build-py311.lock"
+    build_lock.write_text(
+        build_lock.read_text(encoding="utf-8").replace(
+            "hatchling==1.32.0",
+            "hatchling==1.32.4",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    locks, _ = supply_chain._verify_locks(
+        root,
+        _supply_chain_pyproject(build_requirement="hatchling==1.32.4"),
+    )
+
+    assert locks["build-py311.lock"]["packages"] > 0
+
+
+@pytest.mark.parametrize(
+    "build_requirement",
+    [
+        "hatchling>=1.32.0",
+        "hatchling==1.32.*",
+        "hatchling[extra]==1.32.4",
+        "hatchling==1.32.4; python_version >= '3.11'",
+        "setuptools==80.0.0",
+    ],
+)
+def test_supply_chain_rejects_expanded_build_requirement_authority(
+    tmp_path: Path,
+    build_requirement: str,
+) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    shutil.copytree(ROOT / "requirements", root / "requirements")
+
+    with pytest.raises(
+        ValueError,
+        match="one exact hatchling==VERSION declaration",
+    ):
+        supply_chain._verify_locks(
+            root,
+            _supply_chain_pyproject(build_requirement=build_requirement),
+        )
+
+
+def test_supply_chain_rejects_build_backend_path_authority(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    shutil.copytree(ROOT / "requirements", root / "requirements")
+
+    with pytest.raises(ValueError, match="contain only requires and build-backend"):
+        supply_chain._verify_locks(
+            root,
+            _supply_chain_pyproject(
+                build_requirement="hatchling==1.32.0",
+                extra_build_key=True,
+            ),
+        )
 
 
 def test_hash_lock_rejects_missing_hash(tmp_path: Path) -> None:
