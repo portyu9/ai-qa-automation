@@ -47,9 +47,7 @@ ROOT = Path(__file__).resolve().parents[2]
 BRANCH_PREFIX = "automation/dependency-promotion-"
 STAGING_BASE_PREFIX = "automation/dependency-promotion-base-"
 PROMOTION_BRANCH_RE = re.compile(r"^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$")
-STAGING_BASE_RE = re.compile(
-    r"^automation/dependency-promotion-base-[1-9][0-9]*-[0-9a-f]{12}$"
-)
+STAGING_BASE_RE = re.compile(r"^automation/dependency-promotion-base-[1-9][0-9]*-[0-9a-f]{12}$")
 QUALIFICATION_RETRY_AFTER = timedelta(minutes=45)
 MAX_QUALIFICATION_ATTEMPTS = 2
 PROMOTION_COMMIT_MESSAGE_RE = re.compile(
