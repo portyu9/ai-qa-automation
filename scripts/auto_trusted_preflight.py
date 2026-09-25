@@ -48,6 +48,8 @@ PROTECTED_REMEDIATION_REF_RE = re.compile(
 )
 PROTECTED_REMEDIATION_BOT_LOGIN_ENV = "PROTECTED_REMEDIATION_BOT_LOGIN"
 PROTECTED_REMEDIATION_BOT_ID_ENV = "PROTECTED_REMEDIATION_BOT_ID"
+DEPENDENCY_PROMOTION_BOT_LOGIN_ENV = "DEPENDENCY_PROMOTION_BOT_LOGIN"
+DEPENDENCY_PROMOTION_BOT_ID_ENV = "DEPENDENCY_PROMOTION_BOT_ID"
 DISALLOWED_PROTECTED_AUTHOR_LOGINS = {
     GITHUB_ACTIONS_LOGIN,
     DEPENDABOT_LOGIN,
@@ -412,6 +414,27 @@ def _protected_remediation_bot_identity() -> tuple[str, int]:
     return login, user_id
 
 
+def _dependency_promotion_bot_identity() -> tuple[str, int]:
+    login = os.environ.get(DEPENDENCY_PROMOTION_BOT_LOGIN_ENV, "")
+    raw_id = os.environ.get(DEPENDENCY_PROMOTION_BOT_ID_ENV, "")
+    disallowed = set(DISALLOWED_PROTECTED_AUTHOR_LOGINS)
+    disallowed.add("github-advanced-security[bot]")
+    protected_login = os.environ.get(PROTECTED_REMEDIATION_BOT_LOGIN_ENV, "")
+    if protected_login:
+        disallowed.add(protected_login)
+    if (
+        not login
+        or not login.endswith("[bot]")
+        or login in disallowed
+        or not raw_id.isdigit()
+    ):
+        raise ValueError("dependency promotion author App identity is missing or malformed")
+    user_id = int(raw_id)
+    if user_id < 1:
+        raise ValueError("dependency promotion author App user id must be positive")
+    return login, user_id
+
+
 def _bot_lane(pr: dict[str, Any]) -> str | None:
     user = _require_dict(pr.get("user"), label="bot pull request user")
     head = _require_dict(pr.get("head"), label="bot pull request head")
@@ -427,11 +450,17 @@ def _bot_lane(pr: dict[str, Any]) -> str | None:
         and DEPENDABOT_ACTION_REF_RE.fullmatch(branch) is not None
     ):
         return "dependabot-actions"
-    if user.get("login") == GITHUB_ACTIONS_LOGIN and user.get("id") == GITHUB_ACTIONS_USER_ID:
-        if PROMOTION_REF_RE.fullmatch(branch) is not None:
+    if PROMOTION_REF_RE.fullmatch(branch) is not None:
+        login, user_id = _dependency_promotion_bot_identity()
+        if user.get("login") == login and user.get("id") == user_id:
             return "dependency-promotion"
-        if AUTOHEAL_REF_RE.fullmatch(branch) is not None:
-            return "security-autoheal"
+        return None
+    if (
+        user.get("login") == GITHUB_ACTIONS_LOGIN
+        and user.get("id") == GITHUB_ACTIONS_USER_ID
+        and AUTOHEAL_REF_RE.fullmatch(branch) is not None
+    ):
+        return "security-autoheal"
     return None
 
 
