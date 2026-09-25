@@ -67,6 +67,8 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
           PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}
+          DEPENDENCY_PROMOTION_BOT_LOGIN: ${{ vars.DEPENDENCY_PROMOTION_BOT_LOGIN }}
+          DEPENDENCY_PROMOTION_BOT_ID: ${{ vars.DEPENDENCY_PROMOTION_BOT_ID }}
         run: |
           set -euo pipefail
           python scripts/auto_trusted_preflight.py \
@@ -156,6 +158,8 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
           PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}
+          DEPENDENCY_PROMOTION_BOT_LOGIN: ${{ vars.DEPENDENCY_PROMOTION_BOT_LOGIN }}
+          DEPENDENCY_PROMOTION_BOT_ID: ${{ vars.DEPENDENCY_PROMOTION_BOT_ID }}
           LANE: ${{ needs.preflight.outputs.lane }}
           PR_NUMBER: ${{ needs.preflight.outputs.pr_number }}
           EXPECTED_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
@@ -863,6 +867,8 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
           PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}
+          DEPENDENCY_PROMOTION_BOT_LOGIN: ${{ vars.DEPENDENCY_PROMOTION_BOT_LOGIN }}
+          DEPENDENCY_PROMOTION_BOT_ID: ${{ vars.DEPENDENCY_PROMOTION_BOT_ID }}
         run: |
           set -euo pipefail
           python scripts/auto_trusted_preflight.py \
@@ -914,6 +920,8 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
           PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}
+          DEPENDENCY_PROMOTION_BOT_LOGIN: ${{ vars.DEPENDENCY_PROMOTION_BOT_LOGIN }}
+          DEPENDENCY_PROMOTION_BOT_ID: ${{ vars.DEPENDENCY_PROMOTION_BOT_ID }}
           LANE: ${{ needs.preflight.outputs.lane }}
           PR_NUMBER: ${{ needs.preflight.outputs.pr_number }}
           EXPECTED_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
