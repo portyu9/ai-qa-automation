@@ -172,6 +172,8 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "          GITHUB_TOKEN: ${{ github.token }}",
         "          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}",
         "          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}",
+        "          DEPENDENCY_PROMOTION_BOT_LOGIN: ${{ vars.DEPENDENCY_PROMOTION_BOT_LOGIN }}",
+        "          DEPENDENCY_PROMOTION_BOT_ID: ${{ vars.DEPENDENCY_PROMOTION_BOT_ID }}",
         "          python scripts/auto_trusted_preflight.py \\",
         '            --event "$GITHUB_EVENT_PATH" \\',
         '            --event-name "$GITHUB_EVENT_NAME" \\',
@@ -208,6 +210,8 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "PROMOTION_PYTHON314",
         "          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}",
         "          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}",
+        "          DEPENDENCY_PROMOTION_BOT_LOGIN: ${{ vars.DEPENDENCY_PROMOTION_BOT_LOGIN }}",
+        "          DEPENDENCY_PROMOTION_BOT_ID: ${{ vars.DEPENDENCY_PROMOTION_BOT_ID }}",
         "scripts/auto_trusted_bot_admission.py",
         "--mode full",
         '--lane "$LANE"',
@@ -438,6 +442,8 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "          GITHUB_TOKEN: ${{ github.token }}",
         "          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}",
         "          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}",
+        "          DEPENDENCY_PROMOTION_BOT_LOGIN: ${{ vars.DEPENDENCY_PROMOTION_BOT_LOGIN }}",
+        "          DEPENDENCY_PROMOTION_BOT_ID: ${{ vars.DEPENDENCY_PROMOTION_BOT_ID }}",
         "          python scripts/auto_trusted_preflight.py \\",
         "      - name: Require exact final admission identity",
         '          test "$FINAL_ELIGIBLE" = "true"',
@@ -469,6 +475,10 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         raise ValueError("protected remediation bot login must have exactly four trusted consumers")
     if semantic.count("${{ vars.PROTECTED_REMEDIATION_BOT_ID }}") != 4:
         raise ValueError("protected remediation bot id must have exactly four trusted consumers")
+    if semantic.count("${{ vars.DEPENDENCY_PROMOTION_BOT_LOGIN }}") != 4:
+        raise ValueError("dependency promotion bot login must have exactly four trusted consumers")
+    if semantic.count("${{ vars.DEPENDENCY_PROMOTION_BOT_ID }}") != 4:
+        raise ValueError("dependency promotion bot id must have exactly four trusted consumers")
     if "${{ secrets." in semantic.replace(reporter, ""):
         raise ValueError("automatic trusted environment secrets must be isolated to reporter")
 
