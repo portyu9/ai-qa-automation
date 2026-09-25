@@ -344,4 +344,4 @@ def test_protected_remediation_contract_rejects_status_write_app_scope(
     )
 
     with pytest.raises(ValueError, match="forbidden permission"):
-        ci_contract.verify_ci_contract(root)\n
+        ci_contract.verify_ci_contract(root)
