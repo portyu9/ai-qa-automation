@@ -697,7 +697,7 @@ jobs:
   bot-codeql:
     name: Trusted Bot CodeQL
     needs: [preflight, subject-guard]
-    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.eligible == 'true' && needs.preflight.outputs.lane != 'owner-routine' && needs.subject-guard.result == 'success' }}
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && ((needs.preflight.outputs.eligible == 'true' && needs.preflight.outputs.lane != 'owner-routine' && needs.subject-guard.result == 'success') || (github.event_name == 'schedule' && needs.preflight.outputs.eligible == 'false' && needs.preflight.outputs.lane == 'none')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -705,16 +705,51 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - name: Checkout exact governed bot head
+      - name: Resolve exact CodeQL analysis subject
+        id: codeql-subject
+        env:
+          ELIGIBLE: ${{ needs.preflight.outputs.eligible }}
+          LANE: ${{ needs.preflight.outputs.lane }}
+          BOT_HEAD_REF: ${{ needs.preflight.outputs.head_ref }}
+          BOT_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if test "$ELIGIBLE" = "true"; then
+            case "$LANE" in
+              dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation) ;;
+              *)
+                echo "::error::unreviewed CodeQL candidate lane: $LANE"
+                exit 1
+                ;;
+            esac
+            test -n "$BOT_HEAD_REF"
+            subject_ref="refs/heads/$BOT_HEAD_REF"
+            subject_sha="$BOT_HEAD_SHA"
+            mode="governed-bot"
+          else
+            test "$GITHUB_EVENT_NAME" = "schedule"
+            test "$LANE" = "none"
+            test -n "$DEFAULT_BRANCH"
+            test "$DEFAULT_BRANCH" != "null"
+            test "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH"
+            subject_ref="$GITHUB_REF"
+            subject_sha="$GITHUB_SHA"
+            mode="default-branch-anchor"
+          fi
+          [[ "$subject_sha" =~ ^[0-9a-f]{40}$ ]]
+          printf 'ref=%s\nsha=%s\nmode=%s\n' "$subject_ref" "$subject_sha" "$mode" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact CodeQL subject
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.preflight.outputs.head_sha }}
+          ref: ${{ steps.codeql-subject.outputs.sha }}
           persist-credentials: false
 
-      - name: Verify exact governed bot head
+      - name: Verify exact CodeQL subject
         env:
-          EXPECTED_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
-        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+          EXPECTED_SUBJECT_SHA: ${{ steps.codeql-subject.outputs.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SUBJECT_SHA"
 
       - name: Acquire verified CodeQL 2.27.0 bundle
         id: codeql-tools
@@ -786,13 +821,13 @@ jobs:
           languages: python
           queries: security-extended
 
-      - name: Analyze exact governed bot branch
+      - name: Analyze exact CodeQL subject
         env:
           PYTHONSAFEPATH: ""
         uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
         with:
-          ref: refs/heads/${{ needs.preflight.outputs.head_ref }}
-          sha: ${{ needs.preflight.outputs.head_sha }}
+          ref: ${{ steps.codeql-subject.outputs.ref }}
+          sha: ${{ steps.codeql-subject.outputs.sha }}
 
   required-gate:
     name: Automatic Trusted Validation Aggregate
