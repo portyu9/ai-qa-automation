@@ -252,6 +252,7 @@ def test_trusted_auto_contract_rejects_removed_default_branch_codeql_anchor(
     with pytest.raises(ValueError, match="trusted bot CodeQL is missing reviewed fragment"):
         ci_contract.verify_ci_contract(root)
 
+
 def test_trusted_auto_contract_rejects_reporter_secret_before_final_revalidation(
     tmp_path: Path,
 ) -> None:
