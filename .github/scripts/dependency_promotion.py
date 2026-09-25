@@ -81,6 +81,10 @@ PROMOTION_PATHS = {
 }
 
 
+class QualificationWakeRegistered(PolicyBlock):
+    """A single exact-run qualification wake was durably published."""
+
+
 def _canonical_name(value: str) -> str:
     return re.sub(r"[-_.]+", "-", value).lower()
 
@@ -1189,7 +1193,7 @@ def _advance_promotion_qualification(
     if wake_stage is not None:
         raise PolicyBlock("automatic Trusted PR Gate qualification wake is registered and pending")
     _publish_qualification_wake(api, promotion, stage="trusted-gate")
-    raise PolicyBlock("automatic Trusted PR Gate qualification wake registered")
+    raise QualificationWakeRegistered("automatic Trusted PR Gate qualification wake registered")
 
 
 def _publish_and_merge(
@@ -1319,6 +1323,14 @@ def reconcile(
                 )
                 _publish_merge_signal(github_output)
                 return 0
+        except QualificationWakeRegistered as exc:
+            print(
+                json.dumps(
+                    {"pr": number, "decision": "promotion-waiting", "reason": str(exc)},
+                    sort_keys=True,
+                )
+            )
+            return 0
         except PolicyBlock as exc:
             reason = str(exc)
             print(
