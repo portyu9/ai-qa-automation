@@ -33,7 +33,8 @@ def test_repository_build_authority_is_static() -> None:
 
     assert result["result"] == "PASS"
     assert result["build_backend"] == "hatchling.build"
-    assert result["build_requirements"] == ["hatchling==1.32.0"]
+    assert len(result["build_requirements"]) == 1
+    assert result["build_requirements"][0].startswith("hatchling==")
     assert result["project_name"] == "ai-qa-automation"
     assert result["project_scripts"] == {"ai-qa": "ai_qa_automation.cli:app"}
     assert result["project_entry_points"] is False
@@ -58,6 +59,36 @@ def test_repository_build_authority_is_static() -> None:
     assert result["source_execution_extensions"] is False
     assert result["installed_hatch_entry_points"] == []
     assert len(result["pyproject_sha256"]) == 64
+
+
+@pytest.mark.parametrize(
+    "build_requirement",
+    [
+        "hatchling>=1.32.0",
+        "hatchling==1.32.*",
+        "hatchling[extra]==1.32.4",
+        "hatchling==1.32.4; python_version >= '3.11'",
+        "setuptools==80.0.0",
+    ],
+)
+def test_build_authority_rejects_expanded_build_requirement(
+    tmp_path: Path,
+    build_requirement: str,
+) -> None:
+    root = _copy_build_inputs(tmp_path)
+    path = root / "pyproject.toml"
+    text = path.read_text(encoding="utf-8").replace(
+        'requires = ["hatchling==1.32.0"]',
+        f'requires = ["{build_requirement}"]',
+        1,
+    )
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match="one exact hatchling==VERSION declaration",
+    ):
+        build_authority.verify_build_authority(root)
 
 
 def test_build_authority_rejects_backend_path(tmp_path: Path) -> None:
