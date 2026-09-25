@@ -42,6 +42,7 @@
     ".github/scripts/trusted_status.py",
     ".github/security-autoheal.json",
     ".github/workflows/dependency-governance.yml",
+    ".github/workflows/dependency-promotion-author.yml",
     ".github/workflows/security-autoheal.yml",
     ".github/workflows/trusted-pr-auto.yml",
     "scripts/auto_trusted_bot_admission.py",
