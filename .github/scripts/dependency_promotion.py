@@ -14,6 +14,7 @@ import stat
 import tempfile
 import tomllib
 import urllib.parse
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,8 @@ from dependency_governance import (
     GovernanceError,
     PolicyBlock,
     changed_files,
+    dispatch_exact_ci,
+    dispatch_exact_codeql,
     finalize_post_merge_evidence,
     load_config,
     require_green_checks,
@@ -36,12 +39,19 @@ from dependency_governance import (
     validate_pr_identity,
 )
 from dependency_lock_compiler import LockCompileError, compile_locks, validate_frozen_locks
-from dependency_trusted_gate import require_schedule_trusted_gate
+from dependency_trusted_gate import require_qualified_trusted_gate
+from trusted_qualification import qualification_states
 from trusted_status import TrustedStatusError
 
 ROOT = Path(__file__).resolve().parents[2]
 BRANCH_PREFIX = "automation/dependency-promotion-"
+STAGING_BASE_PREFIX = "automation/dependency-promotion-base-"
 PROMOTION_BRANCH_RE = re.compile(r"^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$")
+STAGING_BASE_RE = re.compile(
+    r"^automation/dependency-promotion-base-[1-9][0-9]*-[0-9a-f]{12}$"
+)
+QUALIFICATION_RETRY_AFTER = timedelta(minutes=45)
+MAX_QUALIFICATION_ATTEMPTS = 2
 PROMOTION_COMMIT_MESSAGE_RE = re.compile(
     r"^deps: promote Dependabot PR #[1-9][0-9]* with synchronized locks$"
 )
@@ -280,6 +290,12 @@ def _branch_name(source: dict[str, Any]) -> str:
     return f"{BRANCH_PREFIX}{source['number']}-{source['fingerprint'][:12]}"
 
 
+def _staging_base_name(source_number: int, fingerprint: str) -> str:
+    if source_number < 1 or re.fullmatch(r"[0-9a-f]{64}", fingerprint) is None:
+        raise GovernanceError("promotion staging-base identity is malformed")
+    return f"{STAGING_BASE_PREFIX}{source_number}-{fingerprint[:12]}"
+
+
 def _owned_generated_promotion_commit(payload: Any, head_sha: str) -> bool:
     if not isinstance(payload, dict) or payload.get("sha") != head_sha:
         return False
@@ -485,16 +501,94 @@ def _github_actions_pr_creation_denied(exc: Exception) -> bool:
     )
 
 
-def _delete_exact_generated_branch(api: GitHubApi, branch: str, head_sha: str) -> None:
+def _delete_exact_ref(
+    api: GitHubApi,
+    branch: str,
+    expected_sha: str,
+    *,
+    label: str,
+) -> None:
     encoded = urllib.parse.quote(branch, safe="")
     ref = api.get(f"/git/ref/heads/{encoded}")
     observed = require_sha(
         ((ref or {}).get("object") or {}).get("sha"),
-        "generated promotion branch SHA before cleanup",
+        f"{label} SHA before cleanup",
     )
-    if observed != head_sha:
-        raise PolicyBlock("generated promotion branch changed before exact cleanup")
+    if observed != expected_sha:
+        raise PolicyBlock(f"{label} changed before exact cleanup")
     api.request("DELETE", f"/git/refs/heads/{encoded}")
+
+
+def _delete_exact_generated_branch(api: GitHubApi, branch: str, head_sha: str) -> None:
+    _delete_exact_ref(
+        api,
+        branch,
+        head_sha,
+        label="generated promotion branch",
+    )
+
+
+def _ensure_staging_base_ref(api: GitHubApi, source: dict[str, Any]) -> str:
+    branch = _staging_base_name(int(source["number"]), str(source["fingerprint"]))
+    encoded = urllib.parse.quote(branch, safe="")
+    try:
+        existing = api.get(f"/git/ref/heads/{encoded}")
+    except GovernanceError as exc:
+        if "HTTP 404" not in str(exc):
+            raise
+        created = api.post(
+            "/git/refs",
+            {"ref": f"refs/heads/{branch}", "sha": source["baseSha"]},
+        )
+        if (created or {}).get("ref") != f"refs/heads/{branch}":
+            raise GovernanceError("GitHub did not acknowledge promotion staging-base creation")
+        observed = require_sha(
+            ((created or {}).get("object") or {}).get("sha"),
+            "created promotion staging-base SHA",
+        )
+    else:
+        observed = require_sha(
+            ((existing or {}).get("object") or {}).get("sha"),
+            "existing promotion staging-base SHA",
+        )
+    if observed != source["baseSha"]:
+        raise PolicyBlock("promotion staging-base ref does not equal exact current main")
+    return branch
+
+
+def _promotion_body(metadata: dict[str, Any]) -> str:
+    return "\n".join(
+        (
+            _marker(metadata),
+            "Generated exact-subject Python dependency promotion.",
+            "",
+            "The source Dependabot branch is never mutated by governance. This subject carries the",
+            "exact signed Dependabot pyproject.toml plus deterministic wheel-only hash locks and must",
+            "pass the full locked CI, CodeQL, frozen-lock replay proof, and Trusted PR Gate before merge.",
+        )
+    )
+
+
+def _validate_staged_or_main_pr(
+    pr: dict[str, Any],
+    *,
+    number: int,
+    branch: str,
+    head_sha: str,
+    base_ref: str,
+    base_sha: str,
+) -> None:
+    if pr.get("number") != number or pr.get("state") != "open" or pr.get("draft") is not False:
+        raise GovernanceError("promotion PR lifecycle changed during staged-base transition")
+    head = pr.get("head") or {}
+    base = pr.get("base") or {}
+    if (
+        head.get("ref") != branch
+        or require_sha(head.get("sha"), "promotion PR head SHA") != head_sha
+        or base.get("ref") != base_ref
+        or require_sha(base.get("sha"), "promotion PR base SHA") != base_sha
+    ):
+        raise GovernanceError("promotion PR identity changed during staged-base transition")
 
 
 def _create_promotion_pr(api: GitHubApi, source: dict[str, Any], branch: str, head_sha: str) -> int:
@@ -507,23 +601,15 @@ def _create_promotion_pr(api: GitHubApi, source: dict[str, Any], branch: str, he
         "head": head_sha,
         "fingerprint": source["fingerprint"],
     }
-    body = "\n".join(
-        (
-            _marker(metadata),
-            "Generated exact-subject Python dependency promotion.",
-            "",
-            "The source Dependabot branch is never mutated by governance. This subject carries the",
-            "exact signed Dependabot pyproject.toml plus deterministic wheel-only hash locks and must",
-            "pass the full locked CI, CodeQL, frozen-lock replay proof, and Trusted PR Gate before merge.",
-        )
-    )
+    body = _promotion_body(metadata)
+    staging_base = _ensure_staging_base_ref(api, source)
     try:
         pr = api.post(
             "/pulls",
             {
                 "title": f"deps: promote Dependabot PR #{source['number']}",
                 "head": branch,
-                "base": "main",
+                "base": staging_base,
                 "body": body,
                 "draft": False,
             },
@@ -539,9 +625,185 @@ def _create_promotion_pr(api: GitHubApi, source: dict[str, Any], branch: str, he
     number = (pr or {}).get("number")
     if not isinstance(number, int) or number < 1:
         raise GovernanceError("GitHub did not acknowledge dependency promotion PR creation")
-    if require_sha(((pr or {}).get("head") or {}).get("sha"), "promotion PR head SHA") != head_sha:
-        raise GovernanceError("promotion PR head differs from generated exact subject")
+    _validate_staged_or_main_pr(
+        pr,
+        number=number,
+        branch=branch,
+        head_sha=head_sha,
+        base_ref=staging_base,
+        base_sha=source["baseSha"],
+    )
+    retargeted = api.request("PATCH", f"/pulls/{number}", {"base": "main"})
+    if not isinstance(retargeted, dict):
+        raise GovernanceError("GitHub returned a malformed promotion retarget response")
+    _validate_staged_or_main_pr(
+        retargeted,
+        number=number,
+        branch=branch,
+        head_sha=head_sha,
+        base_ref="main",
+        base_sha=source["baseSha"],
+    )
+    _delete_exact_ref(
+        api,
+        staging_base,
+        source["baseSha"],
+        label="promotion staging-base ref",
+    )
     return number
+
+
+def _normalize_staged_promotion(
+    api: GitHubApi,
+    pr: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    base = pr.get("base") or {}
+    if base.get("ref") == config["baseBranch"]:
+        return pr
+    metadata = _parse_marker(pr.get("body"))
+    if metadata is None or metadata.get("version") != 1:
+        raise PolicyBlock("staged promotion lacks exact promotion marker")
+    source_number = metadata.get("sourcePr")
+    fingerprint = metadata.get("fingerprint")
+    if not isinstance(source_number, int) or not isinstance(fingerprint, str):
+        raise PolicyBlock("staged promotion marker identity is malformed")
+    expected_base = _staging_base_name(source_number, fingerprint)
+    if base.get("ref") != expected_base or STAGING_BASE_RE.fullmatch(expected_base) is None:
+        raise PolicyBlock("promotion targets an unreviewed non-main base")
+    user = pr.get("user") or {}
+    head = pr.get("head") or {}
+    if (
+        user.get("login") != GITHUB_ACTIONS_LOGIN
+        or user.get("id") != GITHUB_ACTIONS_USER_ID
+        or head.get("ref") != _branch_name(
+            {
+                "number": source_number,
+                "fingerprint": fingerprint,
+            }
+        )
+        or require_sha(head.get("sha"), "staged promotion head SHA") != metadata.get("head")
+        or require_sha(base.get("sha"), "staged promotion base SHA") != metadata.get("base")
+    ):
+        raise PolicyBlock("staged promotion identity drifted before retarget")
+    live = api.get(f"/branches/{urllib.parse.quote(config['baseBranch'], safe='')}")
+    live_sha = require_sha(((live or {}).get("commit") or {}).get("sha"), "live main SHA")
+    if live_sha != metadata.get("base"):
+        raise PolicyBlock("promotion is stale relative to current main")
+    encoded = urllib.parse.quote(expected_base, safe="")
+    staging_ref = api.get(f"/git/ref/heads/{encoded}")
+    if (
+        require_sha(
+            ((staging_ref or {}).get("object") or {}).get("sha"),
+            "staged promotion ref SHA",
+        )
+        != live_sha
+    ):
+        raise PolicyBlock("promotion staging-base ref drifted before retarget")
+    number = pr.get("number")
+    if not isinstance(number, int) or number < 1:
+        raise PolicyBlock("staged promotion PR number is invalid")
+    retargeted = api.request("PATCH", f"/pulls/{number}", {"base": config["baseBranch"]})
+    if not isinstance(retargeted, dict):
+        raise GovernanceError("GitHub returned a malformed staged promotion retarget response")
+    _validate_staged_or_main_pr(
+        retargeted,
+        number=number,
+        branch=str(head.get("ref")),
+        head_sha=str(metadata["head"]),
+        base_ref=config["baseBranch"],
+        base_sha=live_sha,
+    )
+    _delete_exact_ref(
+        api,
+        expected_base,
+        live_sha,
+        label="promotion staging-base ref",
+    )
+    return retargeted
+
+
+def _qualification_request_age(metadata: dict[str, Any]) -> timedelta | None:
+    request = metadata.get("qualificationRequest")
+    if not isinstance(request, dict):
+        return None
+    raw = request.get("requestedAt")
+    if not isinstance(raw, str):
+        raise PolicyBlock("promotion qualification request timestamp is malformed")
+    try:
+        requested = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise PolicyBlock("promotion qualification request timestamp is malformed") from exc
+    if requested.tzinfo is None:
+        raise PolicyBlock("promotion qualification request timestamp is not timezone-aware")
+    return datetime.now(UTC) - requested.astimezone(UTC)
+
+
+def _request_exact_qualification(
+    api: GitHubApi,
+    pr: dict[str, Any],
+    head_sha: str,
+    base_sha: str,
+) -> bool:
+    metadata = _parse_marker(pr.get("body"))
+    if metadata is None:
+        raise PolicyBlock("promotion PR lacks exact promotion marker")
+    states = qualification_states(
+        api,
+        head_sha,
+        base_sha,
+        required=REQUIRED_CHECKS,
+    )
+    if all(
+        states[name] is not None and states[name].get("conclusion") == "success"
+        for name in REQUIRED_CHECKS
+    ):
+        return True
+
+    request = metadata.get("qualificationRequest")
+    attempt = 0
+    if request is not None:
+        if not isinstance(request, dict):
+            raise PolicyBlock("promotion qualification request metadata is malformed")
+        raw_attempt = request.get("attempt")
+        if isinstance(raw_attempt, bool) or not isinstance(raw_attempt, int) or raw_attempt < 1:
+            raise PolicyBlock("promotion qualification request attempt is malformed")
+        attempt = raw_attempt
+        terminal_failure = any(
+            states[name] is not None and states[name].get("conclusion") != "success"
+            for name in REQUIRED_CHECKS
+        )
+        age = _qualification_request_age(metadata)
+        if not terminal_failure and (age is None or age < QUALIFICATION_RETRY_AFTER):
+            return False
+        if attempt >= MAX_QUALIFICATION_ATTEMPTS:
+            raise PolicyBlock("promotion exact-subject qualification retry budget is exhausted")
+
+    missing_or_failed = [
+        name
+        for name in REQUIRED_CHECKS
+        if states[name] is None or states[name].get("conclusion") != "success"
+    ]
+    for name in missing_or_failed:
+        if name == "Required PR Gate":
+            dispatch_exact_ci(api, str((pr.get("head") or {}).get("ref") or ""), head_sha)
+        elif name == "CodeQL":
+            dispatch_exact_codeql(api, str((pr.get("head") or {}).get("ref") or ""), head_sha)
+        else:
+            raise GovernanceError(f"unsupported promotion qualification check: {name}")
+    metadata["qualificationRequest"] = {
+        "attempt": attempt + 1,
+        "requestedAt": datetime.now(UTC).isoformat(),
+    }
+    number = pr.get("number")
+    if not isinstance(number, int) or number < 1:
+        raise GovernanceError("promotion PR number is invalid during qualification request")
+    updated = api.request("PATCH", f"/pulls/{number}", {"body": _promotion_body(metadata)})
+    if not isinstance(updated, dict):
+        raise GovernanceError("GitHub returned malformed promotion qualification metadata update")
+    if require_sha(((updated.get("head") or {}).get("sha")), "qualified promotion head SHA") != head_sha:
+        raise GovernanceError("promotion head changed while persisting qualification request")
+    return False
 
 
 def _publish_merge_signal(github_output: Path | None) -> None:
@@ -714,19 +976,19 @@ def _publish_and_merge(
 ) -> dict[str, Any]:
     fresh_before_merge = api.get(f"/pulls/{promotion['number']}")
     _, rebound_before_merge = _validate_promotion(
-        api, fresh_before_merge, config, require_checks=False
+        api, fresh_before_merge, config, require_checks=True
     )
     if rebound_before_merge != promotion:
         raise PolicyBlock("promotion changed before guarded merge")
     try:
-        require_schedule_trusted_gate(
+        require_qualified_trusted_gate(
             api,
             promotion["number"],
             promotion["headSha"],
             promotion["baseSha"],
         )
     except TrustedStatusError as exc:
-        raise PolicyBlock("automatic Trusted PR Gate is not yet schedule-admissible") from exc
+        raise PolicyBlock("automatic Trusted PR Gate is not yet exact-qualified") from exc
     result = api.put(
         f"/pulls/{promotion['number']}/merge",
         {"sha": promotion["headSha"], "merge_method": config["mergeMethod"]},
@@ -788,8 +1050,33 @@ def reconcile(
         if isinstance(source_number, int):
             active_sources.add(source_number)
         try:
+            live_pr = _normalize_staged_promotion(
+                api,
+                api.get(f"/pulls/{number}"),
+                config,
+            )
             _, promotion = _validate_promotion(
-                api, api.get(f"/pulls/{number}"), config, require_checks=False
+                api, live_pr, config, require_checks=False
+            )
+            if not _request_exact_qualification(
+                api,
+                live_pr,
+                promotion["headSha"],
+                promotion["baseSha"],
+            ):
+                print(
+                    json.dumps(
+                        {
+                            "pr": number,
+                            "decision": "promotion-waiting",
+                            "reason": "trusted-main exact-subject qualification is pending",
+                        },
+                        sort_keys=True,
+                    )
+                )
+                continue
+            _, promotion = _validate_promotion(
+                api, api.get(f"/pulls/{number}"), config, require_checks=True
             )
             print(json.dumps({"pr": number, "decision": "promotion-qualified"}, sort_keys=True))
             if allow_merge and config["automergeEnabled"]:
