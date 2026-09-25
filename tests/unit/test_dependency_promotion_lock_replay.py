@@ -594,7 +594,7 @@ def test_orphan_staging_base_prune_requires_generated_parent_provenance() -> Non
     ]
 
 
-def test_unrelated_open_pr_cannot_pin_orphan_staging_base() -> None:
+def test_fork_open_pr_cannot_pin_promotion_or_staging_refs() -> None:
     encoded_generated = BRANCH.replace("/", "%2F")
     encoded_staging = STAGING.replace("/", "%2F")
     deleted: list[str] = []
@@ -604,9 +604,18 @@ def test_unrelated_open_pr_cannot_pin_orphan_staging_base() -> None:
             if path.startswith("/pulls?"):
                 return [
                     {
-                        "user": {"login": "untrusted-contributor", "id": 999},
-                        "head": {"ref": "feature/pin-staging"},
-                        "base": {"ref": STAGING},
+                        "user": {
+                            "login": promotion.GITHUB_ACTIONS_LOGIN,
+                            "id": promotion.GITHUB_ACTIONS_USER_ID,
+                        },
+                        "head": {
+                            "ref": BRANCH,
+                            "repo": {"full_name": "attacker/fork"},
+                        },
+                        "base": {
+                            "ref": STAGING,
+                            "repo": {"full_name": promotion.EXPECTED_REPOSITORY},
+                        },
                     }
                 ]
             if path == f"/git/matching-refs/heads/{promotion.BRANCH_PREFIX}":
