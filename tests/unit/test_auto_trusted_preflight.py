@@ -399,8 +399,6 @@ def test_advanced_security_reporting_actor_has_no_governed_lane(
     assert preflight._bot_lane(pr) is None
 
 
-
-
 def test_dependency_promotion_lane_requires_external_exact_app_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
