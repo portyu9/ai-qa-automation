@@ -11,8 +11,9 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any
 
 from security_alert_routing import (
     EXPECTED_BASE_BRANCH,
