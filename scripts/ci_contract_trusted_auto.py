@@ -28,7 +28,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
-    "9fac2c40725e5bff0221a00685c6d345c38c2ef6"  # pragma: allowlist secret
+    "d2f6570859d1c1d577f4f5604c207dbd9d370c95"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
     "c086755ff72ce4f2916ed2436bf6404651800e1c"  # pragma: allowlist secret
@@ -37,6 +37,7 @@ TRUSTED_AUTO_WORKFLOW_NAME = "Trusted PR Auto Gate — ƳƤ AI QA Automation Fra
 TRUSTED_AUTO_SOURCE_WORKFLOWS = (
     "CI — ƳƤ AI QA Automation Framework",
     "CodeQL",
+    "dependency-governance",
 )
 TRUSTED_AUTO_PROTECTED_PATHS = (
     ".github",
@@ -105,7 +106,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         (
             "on:",
             "  workflow_run:",
-            '    workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL"]',
+            '    workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL", "dependency-governance"]',
             "    types: [completed]",
             "  schedule:",
             '    - cron: "*/5 * * * *"',
@@ -113,8 +114,8 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     )
     if on_block != expected_on:
         raise ValueError(
-            "trusted-pr-auto.yml must be triggered only by completed reviewed CI/CodeQL runs "
-            "or the reviewed five-minute schedule"
+            "trusted-pr-auto.yml must be triggered only by completed reviewed CI/CodeQL/"
+            "dependency-governance runs or the reviewed five-minute schedule"
         )
 
     concurrency = _base._semantic_text(_base._top_level_block(text, "concurrency"))
@@ -509,8 +510,8 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         raise ValueError("automatic trusted reporter authority steps are out of reviewed order")
 
     return {
-        "trigger": "workflow_run:completed:reviewed-ci-or-codeql+schedule:5m",
-        "wake_signal": "owner-pull-request-ci-or-trusted-main-scheduled-bot-reconciliation",
+        "trigger": "workflow_run:completed:reviewed-ci-codeql-or-dependency-governance+schedule:5m",
+        "wake_signal": "owner-ci-or-exact-governance-neutral-wake-or-scheduled-bot-reconciliation",
         "trusted_definition": "default-branch-workflow-run-or-schedule-revision",
         "candidate_execution_guard": (
             "owner-zero-protected-drift-or-exact-governed-bot-provenance"

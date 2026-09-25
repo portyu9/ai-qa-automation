@@ -36,7 +36,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
-    "995f686555c0394500b65510ea0bd401dfc4571a"  # pragma: allowlist secret
+    "44c6fbaddf9edbd778c85a1f0983d408e8650a4c"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
     "7fdf0dc85375bc78561d531f95220cd877e30b3a"  # pragma: allowlist secret
@@ -1098,38 +1098,3 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
             ),
             (
                 "Recognized Dependabot Actions, deterministic dependency-promotion, CodeQL auto-heal, and "
-                "independently App-authored protected-remediation subjects are autonomously admitted by the "
-                "centralized App gate after exact qualification "
-                "and prospective-merge validation; unrecognized protected maintenance still requires the "
-                "independent external one-shot gate."
-            ),
-            (
-                "The trusted-pr-gate Environment/App credential remains required by the routine "
-                "automatic reporter and must not be retired while that live path depends on it."
-            ),
-            (
-                "Repository code cannot attest external break-glass deployment state, Environment "
-                "protection, App installation, ruleset binding, or hosted infrastructure state; "
-                "those require live external evidence."
-            ),
-            (
-                "Trusted PR Gate is published on the PR head with an exact PR/base/head/merge-bound "
-                "target and terminal live revalidation; protected-branch enforcement must still remain "
-                "strict/up-to-date as an independent defense in depth."
-            ),
-        ],
-    }
-
-
-def main() -> None:
-    root = Path(__file__).resolve().parents[1]
-    verify_ci_contract(root)
-    print(
-        json.dumps(
-            {"schema_version": 1, "result": "PASS", "verifier": "ci-contract"}, sort_keys=True
-        )
-    )
-
-
-if __name__ == "__main__":
-    main()
