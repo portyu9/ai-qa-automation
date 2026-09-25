@@ -12,7 +12,12 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 CONTROLLER_DIR = ROOT / ".github" / "scripts"
 EXPECTED_REPOSITORY = "portyu9/ai-qa-automation"
-LANES = {"dependabot-actions", "dependency-promotion", "security-autoheal"}
+LANES = {
+    "dependabot-actions",
+    "dependency-promotion",
+    "security-autoheal",
+    "protected-security-remediation",
+}
 MODES = {"full", "terminal"}
 
 
@@ -22,36 +27,45 @@ def _require_sha(value: str, label: str) -> str:
     return value
 
 
-def _load_controllers() -> tuple[Any, Any, Any]:
+def _load_controller_modules(names: tuple[str, ...]) -> dict[str, Any]:
     directory = CONTROLLER_DIR.stat(follow_symlinks=False)
     if not stat.S_ISDIR(directory.st_mode) or CONTROLLER_DIR.is_symlink():
         raise RuntimeError("trusted controller directory must be a real directory")
-    required = (
-        "dependency_governance.py",
-        "dependency_promotion.py",
-        "dependency_lock_compiler.py",
-        "security_autoheal.py",
-        "trusted_qualification.py",
-        "trusted_status.py",
-    )
-    for name in required:
-        path = CONTROLLER_DIR / name
+    required = {
+        "dependency_governance": "dependency_governance.py",
+        "dependency_promotion": "dependency_promotion.py",
+        "security_autoheal": "security_autoheal.py",
+        "protected_security_remediation": "protected_security_remediation.py",
+        "dependency_lock_compiler": "dependency_lock_compiler.py",
+        "trusted_qualification": "trusted_qualification.py",
+        "trusted_status": "trusted_status.py",
+    }
+    for module_name in names:
+        file_name = required.get(module_name)
+        if file_name is None:
+            raise RuntimeError("trusted controller module request is outside reviewed authority")
+        path = CONTROLLER_DIR / file_name
         info = path.stat(follow_symlinks=False)
         if not stat.S_ISREG(info.st_mode) or path.is_symlink():
-            raise RuntimeError(f"trusted controller source must be a regular file: {name}")
+            raise RuntimeError(f"trusted controller source must be a regular file: {file_name}")
     controller_path = str(CONTROLLER_DIR)
     if controller_path in sys.path:
         raise RuntimeError("trusted controller path unexpectedly exists in sys.path")
     sys.path.insert(0, controller_path)
     try:
-        governance = importlib.import_module("dependency_governance")
-        promotion = importlib.import_module("dependency_promotion")
-        autoheal = importlib.import_module("security_autoheal")
+        return {name: importlib.import_module(name) for name in names}
     finally:
         if sys.path[0] != controller_path:
             raise RuntimeError("trusted controller import path order changed")
         sys.path.pop(0)
-    return governance, promotion, autoheal
+
+
+def _load_controllers(lane: str) -> dict[str, Any]:
+    if lane == "protected-security-remediation":
+        return _load_controller_modules(("dependency_governance", "protected_security_remediation"))
+    return _load_controller_modules(
+        ("dependency_governance", "dependency_promotion", "security_autoheal")
+    )
 
 
 def _expected_subject(args: argparse.Namespace) -> dict[str, Any]:
@@ -81,7 +95,8 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
     if args.lane not in LANES or args.mode not in MODES:
         raise RuntimeError("trusted bot admission lane/mode is outside reviewed authority")
 
-    governance, promotion, autoheal = _load_controllers()
+    controllers = _load_controllers(args.lane)
+    governance = controllers["dependency_governance"]
     expected = _expected_subject(args)
 
     if args.lane == "dependabot-actions":
@@ -102,6 +117,7 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             "mergeSha": merge_sha,
         }
     elif args.lane == "dependency-promotion":
+        promotion = controllers["dependency_promotion"]
         api = governance.GitHubApi(token, repository)
         config = governance.load_config()
         if args.mode == "full":
@@ -129,7 +145,8 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             "baseSha": subject["baseSha"],
             "mergeSha": merge_sha,
         }
-    else:
+    elif args.lane == "security-autoheal":
+        autoheal = controllers["security_autoheal"]
         api = autoheal.GitHubApi(token, repository)
         config = autoheal.load_config()
         pr = api.get(f"/pulls/{args.pr_number}")
@@ -139,6 +156,32 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             config,
             require_checks=False,
             verify_codeql=args.mode == "terminal",
+        )
+        merge_sha = governance.verify_merge_subject(
+            api,
+            args.pr_number,
+            live["headSha"],
+            live["baseSha"],
+        )
+        observed = {
+            "number": args.pr_number,
+            "headSha": live["headSha"],
+            "baseSha": live["baseSha"],
+            "mergeSha": merge_sha,
+        }
+    else:
+        protected = controllers["protected_security_remediation"]
+        author_login = os.environ.get("PROTECTED_REMEDIATION_BOT_LOGIN", "")
+        raw_author_id = os.environ.get("PROTECTED_REMEDIATION_BOT_ID", "")
+        if not raw_author_id.isdigit():
+            raise RuntimeError("protected remediation author App user id is missing or malformed")
+        api = protected.GitHubApi(token, repository)
+        pr = api.get(f"/pulls/{args.pr_number}")
+        live = protected.validate_generated_pr(
+            api,
+            pr,
+            expected_bot_login=author_login,
+            expected_bot_id=int(raw_author_id),
         )
         merge_sha = governance.verify_merge_subject(
             api,

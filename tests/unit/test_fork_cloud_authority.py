@@ -170,7 +170,31 @@ def test_current_repository_has_no_github_actions_aws_authority() -> None:
         "codeql.yml",
         "dependency-governance.yml",
         "manual-validation.yml",
+        "protected-security-remediation.yml",
         "release-candidate.yml",
         "security-autoheal.yml",
         "trusted-pr-auto.yml",
     }
+
+
+def test_protected_remediation_author_secret_is_schedule_only() -> None:
+    root = Path(__file__).parents[2]
+    workflow = (root / ".github" / "workflows" / "protected-security-remediation.yml").read_text(
+        encoding="utf-8"
+    )
+
+    result = _verify_workflow_text("protected-security-remediation.yml", workflow)
+
+    assert result["secrets"] == {"PROTECTED_REMEDIATION_APP_PRIVATE_KEY": 1}
+    assert result["pull_request_target"] == "forbidden"
+
+
+def test_protected_remediation_author_secret_rejects_pull_request_execution() -> None:
+    root = Path(__file__).parents[2]
+    workflow = (root / ".github" / "workflows" / "protected-security-remediation.yml").read_text(
+        encoding="utf-8"
+    )
+    mutated = workflow.replace("on:\n  schedule:\n", "on:\n  pull_request:\n  schedule:\n", 1)
+
+    with pytest.raises(ValueError, match="default-branch schedule-only"):
+        _verify_workflow_text("protected-security-remediation.yml", mutated)

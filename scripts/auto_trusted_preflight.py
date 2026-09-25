@@ -43,11 +43,27 @@ DEPENDABOT_ACTION_REF_RE = re.compile(
 )
 PROMOTION_REF_RE = re.compile(r"^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$")
 AUTOHEAL_REF_RE = re.compile(r"^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{12}$")
-BOT_LANES = {"dependabot-actions", "dependency-promotion", "security-autoheal"}
+PROTECTED_REMEDIATION_REF_RE = re.compile(
+    r"^automation/protected-security-remediation-[1-9][0-9]*-[0-9a-f]{64}-a[1-9][0-9]*$"
+)
+PROTECTED_REMEDIATION_BOT_LOGIN_ENV = "PROTECTED_REMEDIATION_BOT_LOGIN"
+PROTECTED_REMEDIATION_BOT_ID_ENV = "PROTECTED_REMEDIATION_BOT_ID"
+DISALLOWED_PROTECTED_AUTHOR_LOGINS = {
+    GITHUB_ACTIONS_LOGIN,
+    DEPENDABOT_LOGIN,
+    "trusted-pr-gate[bot]",
+}
+BOT_LANES = {
+    "dependabot-actions",
+    "dependency-promotion",
+    "security-autoheal",
+    "protected-security-remediation",
+}
 BOT_LANE_ORDER = {
-    "security-autoheal": 0,
-    "dependabot-actions": 1,
-    "dependency-promotion": 2,
+    "protected-security-remediation": 0,
+    "security-autoheal": 1,
+    "dependabot-actions": 2,
+    "dependency-promotion": 3,
 }
 PROTECTED_PATHS = (
     ".github",
@@ -380,10 +396,31 @@ def _select_pull_request(candidates: Any, *, head_sha: str) -> int:
     return matching[0]
 
 
+def _protected_remediation_bot_identity() -> tuple[str, int]:
+    login = os.environ.get(PROTECTED_REMEDIATION_BOT_LOGIN_ENV, "")
+    raw_id = os.environ.get(PROTECTED_REMEDIATION_BOT_ID_ENV, "")
+    if (
+        not login
+        or not login.endswith("[bot]")
+        or login in DISALLOWED_PROTECTED_AUTHOR_LOGINS
+        or not raw_id.isdigit()
+    ):
+        raise ValueError("protected remediation author App identity is missing or malformed")
+    user_id = int(raw_id)
+    if user_id < 1:
+        raise ValueError("protected remediation author App user id must be positive")
+    return login, user_id
+
+
 def _bot_lane(pr: dict[str, Any]) -> str | None:
     user = _require_dict(pr.get("user"), label="bot pull request user")
     head = _require_dict(pr.get("head"), label="bot pull request head")
     branch = _require_str(head.get("ref"), label="bot pull request head ref")
+    if PROTECTED_REMEDIATION_REF_RE.fullmatch(branch) is not None:
+        login, user_id = _protected_remediation_bot_identity()
+        if user.get("login") == login and user.get("id") == user_id:
+            return "protected-security-remediation"
+        return None
     if (
         user.get("login") == DEPENDABOT_LOGIN
         and user.get("id") == DEPENDABOT_USER_ID
