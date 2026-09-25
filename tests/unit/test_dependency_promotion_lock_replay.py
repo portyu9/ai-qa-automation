@@ -121,3 +121,164 @@ def test_generated_validation_translates_frozen_replay_failure_to_policy_block(
     monkeypatch.setattr(promotion, "validate_frozen_locks", fail)
     with pytest.raises(promotion.PolicyBlock, match="promotion frozen lock replay failed"):
         promotion._validate_generated_bytes(object(), {"pyproject": pyproject}, HEAD)
+
+
+BASE = "b" * 40
+FINGERPRINT = "c" * 64
+BRANCH = "automation/dependency-promotion-171-" + FINGERPRINT[:12]
+STAGING = "automation/dependency-promotion-base-171-" + FINGERPRINT[:12]
+
+
+def _promotion_metadata() -> dict[str, Any]:
+    return {
+        "version": 1,
+        "sourcePr": 171,
+        "sourceHead": "d" * 40,
+        "sourceBase": "e" * 40,
+        "base": BASE,
+        "head": HEAD,
+        "fingerprint": FINGERPRINT,
+    }
+
+
+def _promotion_pr(*, base_ref: str = "main", body: str | None = None) -> dict[str, Any]:
+    return {
+        "number": 901,
+        "state": "open",
+        "draft": False,
+        "user": {
+            "login": promotion.GITHUB_ACTIONS_LOGIN,
+            "id": promotion.GITHUB_ACTIONS_USER_ID,
+        },
+        "head": {"ref": BRANCH, "sha": HEAD},
+        "base": {"ref": base_ref, "sha": BASE},
+        "body": body or promotion._promotion_body(_promotion_metadata()),
+    }
+
+
+def test_create_promotion_pr_uses_non_main_staging_base_then_exact_retarget() -> None:
+    events: list[tuple[str, str]] = []
+
+    class Api:
+        def get(self, path: str) -> dict[str, Any]:
+            if path == f"/git/ref/heads/{STAGING.replace('/', '%2F')}":
+                raise promotion.GovernanceError("HTTP 404")
+            raise AssertionError(path)
+
+        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            if path == "/git/refs":
+                assert payload == {"ref": f"refs/heads/{STAGING}", "sha": BASE}
+                events.append(("create-ref", STAGING))
+                return {
+                    "ref": f"refs/heads/{STAGING}",
+                    "object": {"sha": BASE},
+                }
+            if path == "/pulls":
+                assert payload["head"] == BRANCH
+                assert payload["base"] == STAGING
+                events.append(("create-pr", STAGING))
+                return _promotion_pr(base_ref=STAGING, body=str(payload["body"]))
+            raise AssertionError(path)
+
+        def request(
+            self,
+            method: str,
+            path: str,
+            payload: dict[str, Any] | None = None,
+        ) -> dict[str, Any] | None:
+            if (method, path) == ("PATCH", "/pulls/901"):
+                assert payload == {"base": "main"}
+                events.append(("retarget", "main"))
+                return _promotion_pr()
+            if (method, path) == ("DELETE", f"/git/refs/heads/{STAGING.replace('/', '%2F')}"):
+                assert payload is None
+                events.append(("delete-ref", STAGING))
+                return None
+            raise AssertionError((method, path, payload))
+
+    source = {
+        "number": 171,
+        "headSha": "d" * 40,
+        "sourceBaseSha": "e" * 40,
+        "baseSha": BASE,
+        "fingerprint": FINGERPRINT,
+    }
+    assert promotion._create_promotion_pr(Api(), source, BRANCH, HEAD) == 901
+    assert events == [
+        ("create-ref", STAGING),
+        ("create-pr", STAGING),
+        ("retarget", "main"),
+        ("delete-ref", STAGING),
+    ]
+
+
+def test_exact_qualification_dispatches_both_missing_checks_and_persists_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str, str]] = []
+    updates: list[dict[str, Any]] = []
+
+    class Api:
+        def request(
+            self,
+            method: str,
+            path: str,
+            payload: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            assert (method, path) == ("PATCH", "/pulls/901")
+            assert payload is not None and isinstance(payload.get("body"), str)
+            updates.append(payload)
+            return _promotion_pr(body=str(payload["body"]))
+
+    monkeypatch.setattr(
+        promotion,
+        "qualification_states",
+        lambda api, head, base, required: {
+            "Required PR Gate": None,
+            "CodeQL": None,
+        },
+    )
+    monkeypatch.setattr(
+        promotion,
+        "dispatch_exact_ci",
+        lambda api, ref, sha: calls.append(("ci", ref, sha)),
+    )
+    monkeypatch.setattr(
+        promotion,
+        "dispatch_exact_codeql",
+        lambda api, ref, sha: calls.append(("codeql", ref, sha)),
+    )
+
+    pr = _promotion_pr()
+    assert promotion._request_exact_qualification(Api(), pr, HEAD, BASE) is False
+    assert calls == [("ci", BRANCH, HEAD), ("codeql", BRANCH, HEAD)]
+    persisted = promotion._parse_marker(str(updates[0]["body"]))
+    assert persisted is not None
+    assert persisted["qualificationRequest"]["attempt"] == 1
+    assert isinstance(persisted["qualificationRequest"]["requestedAt"], str)
+
+
+def test_exact_qualification_reuses_green_exact_checks_without_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        promotion,
+        "qualification_states",
+        lambda api, head, base, required: {
+            "Required PR Gate": {"conclusion": "success"},
+            "CodeQL": {"conclusion": "success"},
+        },
+    )
+    monkeypatch.setattr(
+        promotion,
+        "dispatch_exact_ci",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected CI dispatch")),
+    )
+    monkeypatch.setattr(
+        promotion,
+        "dispatch_exact_codeql",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("unexpected CodeQL dispatch")
+        ),
+    )
+    assert promotion._request_exact_qualification(object(), _promotion_pr(), HEAD, BASE) is True
