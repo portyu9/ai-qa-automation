@@ -12,7 +12,8 @@ from trusted_status import (
 )
 
 TRUSTED_PR_AUTO_WORKFLOW_ID = 346203190
-TRUSTED_PR_AUTO_EVENT = "schedule"
+TRUSTED_PR_AUTO_SCHEDULE_EVENT = "schedule"
+TRUSTED_PR_AUTO_QUALIFIED_EVENTS = frozenset({"schedule", "workflow_run"})
 
 
 def _require_positive_int(value: Any, label: str) -> int:
@@ -31,15 +32,22 @@ def _require_sha(value: Any, label: str) -> str:
     return value
 
 
-def require_schedule_trusted_gate(
+def _require_trusted_gate(
     api: Any,
     pr_number: int,
     head_sha: str,
     base_sha: str,
+    *,
+    allowed_events: frozenset[str],
+    authority_label: str,
 ) -> dict[str, Any]:
-    """Require schedule-owned Trusted PR Gate evidence for governed dependency merges."""
-
-    status = require_automatic_trusted_gate(api, pr_number, head_sha, base_sha)
+    status = require_automatic_trusted_gate(
+        api,
+        pr_number,
+        head_sha,
+        base_sha,
+        allowed_events=allowed_events,
+    )
     target_url = status.get("target_url")
     if not isinstance(target_url, str):
         raise TrustedStatusError("dependency Trusted PR Gate target URL is missing")
@@ -59,7 +67,7 @@ def require_schedule_trusted_gate(
         != TRUSTED_PR_AUTO_WORKFLOW_ID
         or run.get("name") != EXPECTED_GATE_WORKFLOW_NAME
         or run.get("path") != EXPECTED_GATE_WORKFLOW_PATH
-        or run.get("event") != TRUSTED_PR_AUTO_EVENT
+        or run.get("event") not in allowed_events
         or _require_positive_int(run.get("run_attempt"), "dependency gate run attempt") != 1
         or run.get("head_branch") != "main"
         or _require_sha(run.get("head_sha"), "dependency gate run head SHA") != base_sha
@@ -71,7 +79,7 @@ def require_schedule_trusted_gate(
         or head_repository.get("full_name") != EXPECTED_REPOSITORY
     ):
         raise TrustedStatusError(
-            "dependency Trusted PR Gate run is not exact schedule-owned authority"
+            f"dependency Trusted PR Gate run is not exact {authority_label} authority"
         )
 
     live_main = api.get("/branches/main")
@@ -133,8 +141,44 @@ def require_schedule_trusted_gate(
         "statusId": _require_positive_int(status.get("id"), "dependency gate status id"),
         "runId": run_id,
         "workflowId": TRUSTED_PR_AUTO_WORKFLOW_ID,
-        "event": TRUSTED_PR_AUTO_EVENT,
+        "event": str(run.get("event")),
         "runAttempt": 1,
         "mergeSha": merge_sha,
         "mergeTreeSha": merge_tree,
     }
+
+
+def require_schedule_trusted_gate(
+    api: Any,
+    pr_number: int,
+    head_sha: str,
+    base_sha: str,
+) -> dict[str, Any]:
+    """Require schedule-owned Trusted PR Gate evidence for ordinary governed dependency merges."""
+
+    return _require_trusted_gate(
+        api,
+        pr_number,
+        head_sha,
+        base_sha,
+        allowed_events=frozenset({TRUSTED_PR_AUTO_SCHEDULE_EVENT}),
+        authority_label="schedule-owned",
+    )
+
+
+def require_qualified_trusted_gate(
+    api: Any,
+    pr_number: int,
+    head_sha: str,
+    base_sha: str,
+) -> dict[str, Any]:
+    """Require App-owned exact-current-main gate evidence after exact qualification is green."""
+
+    return _require_trusted_gate(
+        api,
+        pr_number,
+        head_sha,
+        base_sha,
+        allowed_events=TRUSTED_PR_AUTO_QUALIFIED_EVENTS,
+        authority_label="qualified automatic",
+    )
