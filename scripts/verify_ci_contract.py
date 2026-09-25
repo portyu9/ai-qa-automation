@@ -49,7 +49,7 @@ EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
     "f7e1b88ca86384795554661cb5c367a5bce4d428"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_PROMOTION_AUTHOR_WORKFLOW_BLOB_SHA = (
-    "152608d71d90099d6504245f49e30647f655c87e"  # replaced after exact workflow review
+    "bd2667e3e7db33818d0886ad277e3ff4dafcf64e"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
     "7e236900be3b05ab00b09d78b49007646432503e"  # pragma: allowlist secret
@@ -575,7 +575,7 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "      contents: write",
         "      pull-requests: write",
         "      statuses: read",
-        "          ref: ${{ github.event.repository.default_branch }}",
+        "          ref: ${{ github.sha }}",
         "          persist-credentials: false",
         "          fetch-depth: 1",
         "      - name: Attempt one bounded transient recovery",
