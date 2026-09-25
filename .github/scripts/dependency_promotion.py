@@ -1539,14 +1539,14 @@ dev = ["mypy>=2,<3", "playwright>=1.52,<2"]
             )
 
     wake_re = QUALIFICATION_WAKE_RE.fullmatch(
-        f"{QUALIFICATION_WAKE_PREFIX}:{'a' * 40}:{'b' * 40}:ci:123:1"
+        f"{QUALIFICATION_WAKE_PREFIX}:{'a' * 40}:{'b' * 40}:trusted-gate:123:1"
     )
-    if wake_re is None or wake_re.group("stage") != "ci":
+    if wake_re is None or wake_re.group("stage") != "trusted-gate":
         raise GovernanceError("qualification wake identity parser rejected canonical evidence")
     for malformed in (
-        f"{QUALIFICATION_WAKE_PREFIX}:{'a' * 39}:{'b' * 40}:ci:123:1",
+        f"{QUALIFICATION_WAKE_PREFIX}:{'a' * 39}:{'b' * 40}:trusted-gate:123:1",
         f"{QUALIFICATION_WAKE_PREFIX}:{'a' * 40}:{'b' * 40}:other:123:1",
-        f"{QUALIFICATION_WAKE_PREFIX}:{'a' * 40}:{'b' * 40}:ci:0:1",
+        f"{QUALIFICATION_WAKE_PREFIX}:{'a' * 40}:{'b' * 40}:trusted-gate:0:1",
     ):
         if QUALIFICATION_WAKE_RE.fullmatch(malformed) is not None:
             raise GovernanceError("qualification wake identity parser accepted malformed evidence")

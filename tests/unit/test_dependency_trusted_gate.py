@@ -950,3 +950,70 @@ def test_post_merge_ci_liveness_fails_closed_on_registration_and_main_drift(
     with pytest.raises(
         governance.GovernanceError,
         match="current main changed after post-merge CI registration",
+    ):
+        governance._ensure_post_merge_ci(moved, MERGE, {"baseBranch": "main"})
+
+
+def test_finalize_post_merge_evidence_requires_ci_registration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    subject = {"baseSha": BASE, "headSha": HEAD}
+    config = {"baseBranch": "main"}
+    api = object()
+    calls: list[str] = []
+
+    def verify(
+        api_arg: object,
+        result: dict[str, Any],
+        subject_arg: dict[str, Any],
+        config_arg: dict[str, Any],
+    ) -> tuple[str, str]:
+        assert api_arg is api
+        assert result == {"sha": MERGE}
+        assert subject_arg is subject
+        assert config_arg is config
+        calls.append("verify")
+        return MERGE, TREE
+
+    def ensure(
+        api_arg: object,
+        subject_sha: str,
+        config_arg: dict[str, Any],
+    ) -> dict[str, Any]:
+        assert api_arg is api
+        assert subject_sha == MERGE
+        assert config_arg is config
+        calls.append("ci")
+        return {
+            "postMergeCiWorkflowId": governance.POST_MERGE_CI_WORKFLOW_ID,
+            "postMergeCiRunId": 88006,
+            "postMergeCiRunAttempt": 1,
+            "postMergeCiEvent": "push",
+            "postMergeCiStatus": "queued",
+            "postMergeCiDispatched": False,
+        }
+
+    monkeypatch.setattr(governance, "_verify_actual_merge_commit", verify)
+    monkeypatch.setattr(governance, "_ensure_post_merge_ci", ensure)
+
+    evidence = governance.finalize_post_merge_evidence(
+        api,
+        {"sha": MERGE},
+        subject,
+        config,
+    )
+
+    assert calls == ["verify", "ci"]
+    assert evidence == {
+        "mergeSha": MERGE,
+        "sourceTreeSha": TREE,
+        "postMergeBinding": (
+            "exact-current-main-parents-validated-source-tree-and-ci-registration"
+        ),
+        "postMergeCiWorkflowId": governance.POST_MERGE_CI_WORKFLOW_ID,
+        "postMergeCiRunId": 88006,
+        "postMergeCiRunAttempt": 1,
+        "postMergeCiEvent": "push",
+        "postMergeCiStatus": "queued",
+        "postMergeCiDispatched": False,
+    }
