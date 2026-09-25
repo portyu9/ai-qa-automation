@@ -49,7 +49,7 @@ EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
     "1db85d020dd5672fb93600040cc87e697d3b4f53"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_PROMOTION_AUTHOR_WORKFLOW_BLOB_SHA = (
-    "bd2667e3e7db33818d0886ad277e3ff4dafcf64e"  # pragma: allowlist secret
+    "3beb619e643bb01e733ea3fbb3d7ce956abe5f1c"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
     "7e236900be3b05ab00b09d78b49007646432503e"  # pragma: allowlist secret
@@ -653,6 +653,12 @@ def _verify_dependency_promotion_author_workflow(text: str) -> dict[str, Any]:
     if base._top_level_keys(base._top_level_block(text, "on")) != {"workflow_run", "schedule"}:
         raise ValueError("dependency promotion author workflow exposes an unreviewed trigger")
     base._verify_top_level_read_only_permissions(text, name=name)
+    concurrency = base._semantic_text(base._top_level_block(text, "concurrency"))
+    if (
+        "  group: dependency-promotion-author-reconcile" not in concurrency
+        or "  cancel-in-progress: false" not in concurrency
+    ):
+        raise ValueError("dependency promotion author reconciliation must remain globally serialized")
     if base._top_level_keys(base._top_level_block(text, "jobs")) != {"reconcile"}:
         raise ValueError("dependency promotion author workflow must expose exactly one reconcile job")
     job = base._semantic_text(base._job_block(text, "reconcile"))
@@ -719,6 +725,7 @@ def _verify_dependency_promotion_author_workflow(text: str) -> dict[str, Any]:
     return {
         "triggers": ["schedule", "workflow_run"],
         "author_app_permissions": ["pull_requests:write"],
+        "reconcile_concurrency": "global-serialized",
         "commit_authority": "native-default-branch-github-actions-token",
         "pr_authority": "dedicated-repository-scoped-github-app",
         "candidate_execution": "none",
