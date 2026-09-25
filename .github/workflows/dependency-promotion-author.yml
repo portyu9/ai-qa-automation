@@ -1,0 +1,118 @@
+name: Dependency Promotion Author — ƳƤ AI QA Automation Framework
+
+on:
+  workflow_run:
+    workflows: ['CI — ƳƤ AI QA Automation Framework', CodeQL, 'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework']
+    types: [completed]
+  schedule:
+    - cron: "*/5 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-promotion-author-${{ github.event_name == 'schedule' && 'scheduled-reconcile' || github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+env:
+  GOVERNANCE_CONFIG: .github/dependency-governance.json
+
+jobs:
+  reconcile:
+    name: Independent Dependency Promotion Reconcile
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment:
+      name: dependency-promotion-author
+      deployment: false
+    permissions:
+      actions: write
+      checks: write
+      contents: write
+      pull-requests: write
+      statuses: read
+    steps:
+      - name: Checkout trusted default-branch promotion code only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify trusted workflow revision
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11.16'
+
+      - name: Capture Python 3.11 resolver
+        run: printf 'PROMOTION_PYTHON311=%s\n' "$(command -v python)" >> "$GITHUB_ENV"
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14.7'
+
+      - name: Capture Python 3.14 resolver
+        run: printf 'PROMOTION_PYTHON314=%s\n' "$(command -v python)" >> "$GITHUB_ENV"
+
+      - name: Validate independent promotion author identity configuration
+        env:
+          AUTHOR_APP_CLIENT_ID: ${{ vars.DEPENDENCY_PROMOTION_APP_CLIENT_ID }}
+          AUTHOR_BOT_LOGIN: ${{ vars.DEPENDENCY_PROMOTION_BOT_LOGIN }}
+          AUTHOR_BOT_ID: ${{ vars.DEPENDENCY_PROMOTION_BOT_ID }}
+          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
+        run: |
+          set -euo pipefail
+          test -n "$AUTHOR_APP_CLIENT_ID"
+          case "$AUTHOR_BOT_LOGIN" in
+            *"[bot]") ;;
+            *) exit 1 ;;
+          esac
+          case "$AUTHOR_BOT_LOGIN" in
+            "github-actions[bot]"|"dependabot[bot]"|"trusted-pr-gate[bot]"|"github-advanced-security[bot]") exit 1 ;;
+          esac
+          if test -n "$PROTECTED_REMEDIATION_BOT_LOGIN"; then
+            test "$AUTHOR_BOT_LOGIN" != "$PROTECTED_REMEDIATION_BOT_LOGIN"
+          fi
+          case "$AUTHOR_BOT_ID" in
+            ''|*[!0-9]*) exit 1 ;;
+          esac
+          test "$AUTHOR_BOT_ID" -gt 0
+
+      - name: Mint dedicated dependency-promotion author token
+        id: author-app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.DEPENDENCY_PROMOTION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.DEPENDENCY_PROMOTION_APP_PRIVATE_KEY }}
+          owner: portyu9
+          repositories: ai-qa-automation
+          permission-pull-requests: write
+
+      - name: Bind minted App to reviewed promotion bot identity
+        env:
+          OBSERVED_APP_SLUG: ${{ steps.author-app.outputs.app-slug }}
+          EXPECTED_BOT_LOGIN: ${{ vars.DEPENDENCY_PROMOTION_BOT_LOGIN }}
+        run: |
+          set -euo pipefail
+          test "${OBSERVED_APP_SLUG}[bot]" = "$EXPECTED_BOT_LOGIN"
+
+      - name: Validate trusted promotion policy
+        run: |
+          python .github/scripts/dependency_governance.py --validate-config
+          python .github/scripts/dependency_promotion.py --self-test
+
+      - name: Reconcile exact-subject Python dependency promotion
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEPENDENCY_PROMOTION_APP_TOKEN: ${{ steps.author-app.outputs.token }}
+          DEPENDENCY_PROMOTION_BOT_LOGIN: ${{ vars.DEPENDENCY_PROMOTION_BOT_LOGIN }}
+          DEPENDENCY_PROMOTION_BOT_ID: ${{ vars.DEPENDENCY_PROMOTION_BOT_ID }}
+          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
+        run: >-
+          python .github/scripts/dependency_promotion.py
+          --reconcile
+          --allow-merge
