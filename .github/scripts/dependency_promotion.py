@@ -603,10 +603,7 @@ def _ensure_staging_base_ref(api: GitHubApi, source: dict[str, Any]) -> str:
             {"ref": f"refs/heads/{branch}", "sha": source["baseSha"]},
         )
         created_obj = (created or {}).get("object") or {}
-        if (
-            (created or {}).get("ref") != f"refs/heads/{branch}"
-            or created_obj.get("type") != "commit"
-        ):
+        if (created or {}).get("ref") != f"refs/heads/{branch}" or created_obj.get("type") != "commit":
             raise GovernanceError("GitHub did not acknowledge exact promotion staging-base creation")
         observed = require_sha(
             created_obj.get("sha"),
@@ -614,10 +611,7 @@ def _ensure_staging_base_ref(api: GitHubApi, source: dict[str, Any]) -> str:
         )
     else:
         existing_obj = (existing or {}).get("object") or {}
-        if (
-            (existing or {}).get("ref") != f"refs/heads/{branch}"
-            or existing_obj.get("type") != "commit"
-        ):
+        if (existing or {}).get("ref") != f"refs/heads/{branch}" or existing_obj.get("type") != "commit":
             raise PolicyBlock("existing promotion staging-base ref identity drifted")
         observed = require_sha(
             existing_obj.get("sha"),
