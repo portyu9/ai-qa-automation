@@ -431,6 +431,59 @@ def test_generated_protected_pr_rejects_replay_after_main_moves() -> None:
         )
 
 
+def test_candidate_discovery_skips_history_reads_for_nonprotected_routes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    protected = _alert()
+    ordinary = _alert(
+        number=18,
+        path="examples/reference_sut/app.py",
+        rule="py/reflective-xss",
+        message="ordinary source finding",
+    )
+
+    class CandidateApi:
+        def list_all(
+            self,
+            path: str,
+            *,
+            max_pages: int = 4,
+            max_items: int | None = None,
+        ) -> list[dict[str, Any]]:
+            assert path.startswith("/code-scanning/alerts?")
+            assert max_pages == 2
+            assert max_items == author.MAX_OPEN_ALERTS + 1
+            return [ordinary, protected]
+
+    calls: list[int] = []
+
+    def fake_attempt_count(
+        api: Any,
+        *,
+        alert_number: int,
+        fingerprint: str,
+        bot_login: str,
+        bot_id: int,
+        max_attempts: int,
+    ) -> int:
+        del api, fingerprint, bot_login, bot_id, max_attempts
+        calls.append(alert_number)
+        return 0
+
+    monkeypatch.setattr(author, "_attempt_count", fake_attempt_count)
+    api: Any = CandidateApi()
+    rows = author._protected_route_candidates(
+        api,
+        main_sha=MAIN,
+        config=routing.load_config(),
+        bot_login=BOT_LOGIN,
+        bot_id=BOT_ID,
+    )
+
+    assert calls == [17]
+    assert [row["alertNumber"] for row in rows] == [17]
+
+
 def test_attempt_history_uses_exact_subject_branch_queries() -> None:
     calls: list[str] = []
 
