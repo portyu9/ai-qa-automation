@@ -286,3 +286,72 @@ def test_frozen_report_uses_exact_constraints_for_every_locked_package(
     assert "--only-binary=:all:" in command
     assert "-r" in command
     assert "-c" in command
+
+
+def _pyproject_with_build_requirement(build_requirement: str) -> bytes:
+    return f"""[build-system]
+requires = ["{build_requirement}"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ai-qa-automation"
+dependencies = ["requests>=2,<3"]
+
+[project.optional-dependencies]
+dev = ["pytest>=9,<10"]
+browser = ["playwright>=1,<2"]
+""".encode()
+
+
+@pytest.mark.parametrize("build_requirement", ["hatchling==1.32.0", "hatchling==1.32.3"])
+def test_requirement_graphs_bind_exact_build_backend_into_both_dev_graphs(
+    build_requirement: str,
+) -> None:
+    graphs = compiler._requirement_graphs(
+        _pyproject_with_build_requirement(build_requirement),
+        "/python311",
+        "/python314",
+    )
+
+    assert graphs["runtime-py311.lock"] == (
+        "/python311",
+        ["requests>=2,<3"],
+    )
+    assert graphs["build-py311.lock"] == (
+        "/python311",
+        [build_requirement],
+    )
+    assert graphs["dev-py311.lock"] == (
+        "/python311",
+        ["requests>=2,<3", "playwright>=1,<2", "pytest>=9,<10", build_requirement],
+    )
+    assert graphs["dev-py314.lock"] == (
+        "/python314",
+        ["requests>=2,<3", "playwright>=1,<2", "pytest>=9,<10", build_requirement],
+    )
+
+
+@pytest.mark.parametrize(
+    "section",
+    [
+        'dependencies = ["hatchling>=1,<2"]',
+        '[project.optional-dependencies]\ndev = ["hatchling>=1,<2"]',
+    ],
+)
+def test_requirement_graphs_reject_build_backend_identity_collision(section: str) -> None:
+    if section.startswith("dependencies"):
+        raw = _pyproject_with_build_requirement("hatchling==1.32.0").replace(
+            b'dependencies = ["requests>=2,<3"]',
+            section.encode(),
+        )
+    else:
+        raw = _pyproject_with_build_requirement("hatchling==1.32.0").replace(
+            b'[project.optional-dependencies]\ndev = ["pytest>=9,<10"]',
+            section.encode(),
+        )
+
+    with pytest.raises(
+        compiler.LockCompileError,
+        match="build-system requirement identity must remain separate",
+    ):
+        compiler._requirement_graphs(raw, "/python311", "/python314")
