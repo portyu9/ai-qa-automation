@@ -111,17 +111,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python .github/scripts/dependency_recovery.py --recover
-      - name: Reconcile exact-subject Python dependency promotion
-        id: python_promotion
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: >-
-          python .github/scripts/dependency_promotion.py
-          --reconcile
-          --allow-merge
-          --github-output "$GITHUB_OUTPUT"
       - name: Reconcile Dependabot action merge authority
-        if: steps.python_promotion.outputs.merged != 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
