@@ -173,8 +173,6 @@ def test_current_repository_has_no_github_actions_aws_authority() -> None:
     }
 
 
-
-
 def test_dependency_promotion_author_secret_is_default_branch_only() -> None:
     root = Path(__file__).parents[2]
     workflow = (root / ".github" / "workflows" / "dependency-promotion-author.yml").read_text(
