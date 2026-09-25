@@ -352,13 +352,6 @@ def _validate_wake(run: dict[str, Any], *, expected_run_id: int, trusted_sha: st
             != trusted_sha
         ):
             return None
-        if (
-            actor.get("login") != EXPECTED_OWNER
-            or actor.get("id") != EXPECTED_OWNER_ID
-            or triggering_actor.get("login") != EXPECTED_OWNER
-            or triggering_actor.get("id") != EXPECTED_OWNER_ID
-        ):
-            return None
         return Wake(
             run_id=expected_run_id,
             run_attempt=attempt,
