@@ -173,6 +173,25 @@ def test_dependency_gate_accepts_exact_schedule_attempt_one() -> None:
     }
 
 
+def test_dependency_promotion_gate_accepts_exact_workflow_run_attempt_one() -> None:
+    evidence = gate.require_promotion_trusted_gate(
+        _GateApi(event="workflow_run"),
+        PR_NUMBER,
+        HEAD,
+        BASE,
+    )
+
+    assert evidence == {
+        "statusId": STATUS_ID,
+        "runId": RUN_ID,
+        "workflowId": gate.TRUSTED_PR_AUTO_WORKFLOW_ID,
+        "event": "workflow_run",
+        "runAttempt": 1,
+        "mergeSha": MERGE,
+        "mergeTreeSha": TREE,
+    }
+
+
 def test_dependency_gate_rejects_workflow_run_for_schedule_only_path() -> None:
     with pytest.raises(gate.TrustedStatusError):
         gate.require_schedule_trusted_gate(
@@ -465,7 +484,7 @@ def test_dependency_promotion_revalidates_gate_before_merge(
 
     monkeypatch.setattr(promotion, "_validate_promotion", validate)
     monkeypatch.setattr(promotion, "_advance_promotion_qualification", forbidden_advance)
-    monkeypatch.setattr(promotion, "require_schedule_trusted_gate", require_gate)
+    monkeypatch.setattr(promotion, "require_promotion_trusted_gate", require_gate)
     monkeypatch.setattr(promotion, "finalize_post_merge_evidence", finalize)
 
     assert promotion._publish_and_merge(api, promoted, config) == {"mergeSha": MERGE}
@@ -570,7 +589,7 @@ def test_dependency_promotion_moved_subject_stops_before_gate(
         raise AssertionError("gate must not be consulted for moved promotion")
 
     monkeypatch.setattr(promotion, "_validate_promotion", validate)
-    monkeypatch.setattr(promotion, "require_schedule_trusted_gate", forbidden_gate)
+    monkeypatch.setattr(promotion, "require_promotion_trusted_gate", forbidden_gate)
 
     with pytest.raises(promotion.PolicyBlock, match="changed before guarded merge"):
         promotion._publish_and_merge(api, promoted, config)

@@ -36,7 +36,7 @@ from dependency_governance import (
     validate_pr_identity,
 )
 from dependency_lock_compiler import LockCompileError, compile_locks, validate_frozen_locks
-from dependency_trusted_gate import require_schedule_trusted_gate
+from dependency_trusted_gate import require_promotion_trusted_gate
 from trusted_qualification import EXPECTED_REPOSITORY
 from trusted_status import (
     TARGET_URL_RE,
@@ -1203,7 +1203,7 @@ def _publish_and_merge(
         raise PolicyBlock("promotion changed before guarded merge")
     branch = str((fresh_before_merge.get("head") or {}).get("ref") or "")
     try:
-        require_schedule_trusted_gate(
+        require_promotion_trusted_gate(
             api,
             promotion["number"],
             promotion["headSha"],
