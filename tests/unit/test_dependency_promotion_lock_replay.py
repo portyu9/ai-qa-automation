@@ -537,12 +537,12 @@ def test_orphan_staging_base_prune_requires_generated_parent_provenance() -> Non
             if path == f"/git/matching-refs/heads/{promotion.BRANCH_PREFIX}":
                 return [
                     {
-                        "ref": f"refs/heads/{STAGING}",
-                        "object": {"type": "commit", "sha": BASE},
-                    },
-                    {
                         "ref": f"refs/heads/{generated_branch}",
                         "object": {"type": "commit", "sha": HEAD},
+                    },
+                    {
+                        "ref": f"refs/heads/{STAGING}",
+                        "object": {"type": "commit", "sha": BASE},
                     },
                 ]
             raise AssertionError(path)
@@ -586,6 +586,80 @@ def test_orphan_staging_base_prune_requires_generated_parent_provenance() -> Non
             assert payload is None
             deleted.append(path)
             return None
+
+    assert promotion._prune_orphan_promotion_refs(Api()) == 2
+    assert deleted == [
+        f"/git/refs/heads/{encoded_staging}",
+        f"/git/refs/heads/{encoded_generated}",
+    ]
+
+
+def test_unrelated_open_pr_cannot_pin_orphan_staging_base() -> None:
+    encoded_generated = BRANCH.replace("/", "%2F")
+    encoded_staging = STAGING.replace("/", "%2F")
+    deleted: list[str] = []
+
+    class Api:
+        def list_all(self, path: str, *, max_pages: int = 4) -> list[dict[str, Any]]:
+            if path.startswith("/pulls?"):
+                return [
+                    {
+                        "user": {"login": "untrusted-contributor", "id": 999},
+                        "head": {"ref": "feature/pin-staging"},
+                        "base": {"ref": STAGING},
+                    }
+                ]
+            if path == f"/git/matching-refs/heads/{promotion.BRANCH_PREFIX}":
+                return [
+                    {
+                        "ref": f"refs/heads/{BRANCH}",
+                        "object": {"type": "commit", "sha": HEAD},
+                    },
+                    {
+                        "ref": f"refs/heads/{STAGING}",
+                        "object": {"type": "commit", "sha": BASE},
+                    },
+                ]
+            raise AssertionError(path)
+
+        def get(self, path: str) -> dict[str, Any]:
+            if path == f"/git/ref/heads/{encoded_staging}":
+                if f"/git/refs/heads/{encoded_staging}" in deleted:
+                    raise promotion.GovernanceError("HTTP 404")
+                return {
+                    "ref": f"refs/heads/{STAGING}",
+                    "object": {"type": "commit", "sha": BASE},
+                }
+            if path == f"/git/ref/heads/{encoded_generated}":
+                if f"/git/refs/heads/{encoded_generated}" in deleted:
+                    raise promotion.GovernanceError("HTTP 404")
+                return {
+                    "ref": f"refs/heads/{BRANCH}",
+                    "object": {"type": "commit", "sha": HEAD},
+                }
+            if path == f"/commits/{HEAD}":
+                return {
+                    "sha": HEAD,
+                    "author": {
+                        "login": promotion.GITHUB_ACTIONS_LOGIN,
+                        "id": promotion.GITHUB_ACTIONS_USER_ID,
+                    },
+                    "commit": {
+                        "message": "deps: promote Dependabot PR #171 with synchronized locks"
+                    },
+                    "parents": [{"sha": BASE}],
+                }
+            raise promotion.GovernanceError("HTTP 404")
+
+        def request(
+            self,
+            method: str,
+            path: str,
+            payload: dict[str, Any] | None = None,
+        ) -> None:
+            assert method == "DELETE"
+            assert payload is None
+            deleted.append(path)
 
     assert promotion._prune_orphan_promotion_refs(Api()) == 2
     assert deleted == [
