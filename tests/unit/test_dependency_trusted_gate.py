@@ -507,7 +507,10 @@ def test_dependency_promotion_registers_one_non_authoritative_trusted_gate_wake(
         lambda api_arg, subject, *, stage: events.append(f"wake:{stage}"),
     )
 
-    with pytest.raises(promotion.PolicyBlock, match="qualification wake registered"):
+    with pytest.raises(
+        promotion.QualificationWakeRegistered,
+        match="qualification wake registered",
+    ):
         promotion._advance_promotion_qualification(api, promoted, branch)
 
     assert events == ["wake:trusted-gate"]
@@ -641,6 +644,74 @@ def test_dependency_governance_reconcile_stops_after_successful_merge(
 
     assert governance.reconcile(config, allow_merge=True) == 1
     assert observed_gets == ["/pulls/601"]
+
+
+def test_dependency_promotion_reconcile_stops_after_new_qualification_wake(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_gets: list[str] = []
+    published: list[int] = []
+
+    class _Api:
+        def get(self, path: str) -> dict[str, Any]:
+            observed_gets.append(path)
+            if path == "/pulls/701":
+                return {"number": 701}
+            raise AssertionError(f"promotion continued after qualification wake: {path}")
+
+    api = _Api()
+    config = {
+        "repository": gate.EXPECTED_REPOSITORY,
+        "automergeEnabled": True,
+        "pipMode": "promotion",
+    }
+    monkeypatch.setenv("GITHUB_REPOSITORY", gate.EXPECTED_REPOSITORY)
+    monkeypatch.setattr(promotion, "GitHubApi", lambda token, repository: api)
+    monkeypatch.setattr(promotion, "_prune_orphan_promotion_refs", lambda api_arg: 0)
+    monkeypatch.setattr(
+        promotion,
+        "_promotion_pulls",
+        lambda api_arg: [
+            {"number": 701, "head": {"ref": "automation/dependency-promotion-1-aaaaaaaaaaaa"}},
+            {"number": 702, "head": {"ref": "automation/dependency-promotion-2-bbbbbbbbbbbb"}},
+        ],
+    )
+    monkeypatch.setattr(
+        promotion,
+        "_normalize_staged_promotion",
+        lambda api_arg, pr, config_arg: pr,
+    )
+
+    def validate(
+        api_arg: object,
+        pr: dict[str, Any],
+        config_arg: dict[str, Any],
+        *,
+        require_checks: bool,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        assert api_arg is api
+        assert config_arg is config
+        assert require_checks is False
+        return {"source": True}, {"number": pr["number"], "headSha": HEAD, "baseSha": BASE}
+
+    def publish_and_merge(
+        api_arg: object,
+        promotion_arg: dict[str, Any],
+        config_arg: dict[str, Any],
+    ) -> dict[str, Any]:
+        assert api_arg is api
+        assert config_arg is config
+        published.append(int(promotion_arg["number"]))
+        raise promotion.QualificationWakeRegistered(
+            "automatic Trusted PR Gate qualification wake registered"
+        )
+
+    monkeypatch.setattr(promotion, "_validate_promotion", validate)
+    monkeypatch.setattr(promotion, "_publish_and_merge", publish_and_merge)
+
+    assert promotion.reconcile(config, allow_merge=True) == 0
+    assert observed_gets == ["/pulls/701"]
+    assert published == [701]
 
 
 def test_dependency_promotion_reconcile_stops_after_successful_merge(
