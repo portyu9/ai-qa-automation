@@ -35,12 +35,7 @@ def _reviewed_governance_secret_payload() -> str:
         if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Reconcile exact-subject Python dependency promotion
-        id: python_promotion
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Reconcile Dependabot action merge authority
-        if: steps.python_promotion.outputs.merged != 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 """
@@ -124,12 +119,12 @@ def test_reviewed_governance_secret_consumers_do_not_create_aws_authority() -> N
     )
     assert result["aws_authentication"] == "forbidden"
     assert result["pull_request_target"] == "forbidden"
-    assert result["secrets"] == {"GITHUB_TOKEN": 3}
+    assert result["secrets"] == {"GITHUB_TOKEN": 2}
 
 
 def test_reviewed_governance_secret_consumer_movement_fails_closed() -> None:
     payload = _reviewed_governance_secret_payload().replace(
-        "- name: Reconcile exact-subject Python dependency promotion",
+        "- name: Reconcile Dependabot action merge authority",
         "- name: Export governance token elsewhere",
         1,
     )
@@ -169,6 +164,7 @@ def test_current_repository_has_no_github_actions_aws_authority() -> None:
         "ci.yml",
         "codeql.yml",
         "dependency-governance.yml",
+        "dependency-promotion-author.yml",
         "manual-validation.yml",
         "protected-security-remediation.yml",
         "release-candidate.yml",
@@ -176,6 +172,34 @@ def test_current_repository_has_no_github_actions_aws_authority() -> None:
         "trusted-pr-auto.yml",
     }
 
+
+
+
+def test_dependency_promotion_author_secret_is_default_branch_only() -> None:
+    root = Path(__file__).parents[2]
+    workflow = (root / ".github" / "workflows" / "dependency-promotion-author.yml").read_text(
+        encoding="utf-8"
+    )
+
+    result = _verify_workflow_text("dependency-promotion-author.yml", workflow)
+
+    assert result["secrets"] == {
+        "DEPENDENCY_PROMOTION_APP_PRIVATE_KEY": 1,
+        "GITHUB_TOKEN": 1,
+    }
+    assert result["pull_request_target"] == "forbidden"
+
+
+@pytest.mark.parametrize("trigger", ["pull_request:", "pull_request_target:", "workflow_dispatch:"])
+def test_dependency_promotion_author_secret_rejects_unreviewed_trigger(trigger: str) -> None:
+    root = Path(__file__).parents[2]
+    workflow = (root / ".github" / "workflows" / "dependency-promotion-author.yml").read_text(
+        encoding="utf-8"
+    )
+    mutated = workflow.replace("on:\n  workflow_run:\n", f"on:\n  {trigger}\n  workflow_run:\n", 1)
+
+    with pytest.raises(ValueError, match="default-branch workflow-run/schedule only"):
+        _verify_workflow_text("dependency-promotion-author.yml", mutated)
 
 def test_protected_remediation_author_secret_is_schedule_only() -> None:
     root = Path(__file__).parents[2]
