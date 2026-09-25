@@ -1123,6 +1123,16 @@ def reconcile(
             branch = _branch_name(source)
             head_sha, _ = _create_promotion_commit(api, source, branch)
             promotion_number = _create_promotion_pr(api, source, branch, head_sha)
+            created_pr = api.get(f"/pulls/{promotion_number}")
+            if _request_exact_qualification(
+                api,
+                created_pr,
+                head_sha,
+                source["baseSha"],
+            ):
+                raise GovernanceError(
+                    "new promotion unexpectedly had pre-existing exact-subject qualification"
+                )
             active_sources.add(number)
             created += 1
             print(
