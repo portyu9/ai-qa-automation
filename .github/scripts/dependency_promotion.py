@@ -29,8 +29,6 @@ from dependency_governance import (
     GovernanceError,
     PolicyBlock,
     changed_files,
-    dispatch_exact_ci,
-    dispatch_exact_codeql,
     finalize_post_merge_evidence,
     load_config,
     require_green_checks,
@@ -39,8 +37,14 @@ from dependency_governance import (
 )
 from dependency_lock_compiler import LockCompileError, compile_locks, validate_frozen_locks
 from dependency_trusted_gate import require_schedule_trusted_gate
-from trusted_qualification import EXPECTED_REPOSITORY, qualification_states
-from trusted_status import TrustedStatusError
+from trusted_qualification import EXPECTED_REPOSITORY
+from trusted_status import (
+    TARGET_URL_RE,
+    TRUSTED_STATUS_BOT_ID,
+    TRUSTED_STATUS_BOT_LOGIN,
+    TRUSTED_STATUS_CONTEXT,
+    TrustedStatusError,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 BRANCH_PREFIX = "automation/dependency-promotion-"
@@ -59,7 +63,7 @@ QUALIFICATION_WAKE_CHECK = "Dependency Promotion Qualification Wake"
 QUALIFICATION_WAKE_PREFIX = "aiqa-dependency-promotion-qualification-wake"
 QUALIFICATION_WAKE_RE = re.compile(
     rf"^{QUALIFICATION_WAKE_PREFIX}:(?P<head>[0-9a-f]{{40}}):(?P<base>[0-9a-f]{{40}}):"
-    r"(?P<stage>ci|codeql):(?P<run>[1-9][0-9]*):(?P<attempt>[1-9][0-9]*)$"
+    r"(?P<stage>trusted-gate):(?P<run>[1-9][0-9]*):(?P<attempt>[1-9][0-9]*)$"
 )
 DEPENDENCY_GOVERNANCE_WORKFLOW_NAME = "dependency-governance"
 DEPENDENCY_GOVERNANCE_WORKFLOW_PATH = ".github/workflows/dependency-governance.yml"
@@ -1065,7 +1069,7 @@ def _publish_qualification_wake(
     *,
     stage: str,
 ) -> None:
-    if stage not in {"ci", "codeql"}:
+    if stage != "trusted-gate":
         raise GovernanceError("promotion qualification wake stage is outside reviewed authority")
     head_sha = require_sha(promotion.get("headSha"), "promotion qualification head SHA")
     base_sha = require_sha(promotion.get("baseSha"), "promotion qualification base SHA")
@@ -1091,7 +1095,7 @@ def _publish_qualification_wake(
             "details_url": details_url,
             "external_id": external_id,
             "output": {
-                "title": f"Trusted-main {stage.upper()} qualification wake dispatched",
+                "title": "Trusted-main automatic gate qualification wake registered",
                 "summary": (
                     "Wake evidence only; this check is not validation authority and cannot "
                     "satisfy Required PR Gate, CodeQL, or Trusted PR Gate."
@@ -1114,6 +1118,60 @@ def _publish_qualification_wake(
         raise GovernanceError("GitHub did not acknowledge exact promotion qualification wake")
 
 
+def _exact_terminal_trusted_gate_state(
+    api: GitHubApi,
+    promotion: dict[str, Any],
+) -> str | None:
+    head_sha = require_sha(promotion.get("headSha"), "promotion trusted gate head SHA")
+    base_sha = require_sha(promotion.get("baseSha"), "promotion trusted gate base SHA")
+    number = promotion.get("number")
+    if isinstance(number, bool) or not isinstance(number, int) or number < 1:
+        raise GovernanceError("promotion trusted gate PR number is invalid")
+    merge_ref = api.get(f"/git/ref/pull/{number}/merge")
+    if (
+        not isinstance(merge_ref, dict)
+        or merge_ref.get("ref") != f"refs/pull/{number}/merge"
+        or ((merge_ref.get("object") or {}).get("type")) != "commit"
+    ):
+        raise PolicyBlock("promotion trusted gate merge ref is unavailable")
+    merge_sha = require_sha(
+        (merge_ref.get("object") or {}).get("sha"),
+        "promotion trusted gate merge SHA",
+    )
+    matches: list[dict[str, Any]] = []
+    for row in api.list_all(f"/commits/{head_sha}/statuses", max_pages=4):
+        if row.get("context") != TRUSTED_STATUS_CONTEXT:
+            continue
+        creator = row.get("creator") or {}
+        if (
+            creator.get("login") != TRUSTED_STATUS_BOT_LOGIN
+            or creator.get("id") != TRUSTED_STATUS_BOT_ID
+            or creator.get("type") != "Bot"
+        ):
+            continue
+        target_url = row.get("target_url")
+        match = TARGET_URL_RE.fullmatch(target_url) if isinstance(target_url, str) else None
+        if (
+            match is None
+            or int(match.group("pr")) != number
+            or match.group("base") != base_sha
+            or match.group("head") != head_sha
+            or match.group("merge") != merge_sha
+        ):
+            continue
+        status_id = row.get("id")
+        if isinstance(status_id, bool) or not isinstance(status_id, int) or status_id < 1:
+            raise GovernanceError("exact Trusted PR Gate status id is invalid")
+        matches.append(row)
+    if not matches:
+        return None
+    latest = max(matches, key=lambda row: int(row["id"]))
+    state = latest.get("state")
+    if state not in {"pending", "success", "failure", "error"}:
+        raise GovernanceError("exact Trusted PR Gate status state is invalid")
+    return str(state)
+
+
 def _advance_promotion_qualification(
     api: GitHubApi,
     promotion: dict[str, Any],
@@ -1121,48 +1179,17 @@ def _advance_promotion_qualification(
 ) -> None:
     if PROMOTION_BRANCH_RE.fullmatch(branch) is None:
         raise PolicyBlock("promotion qualification branch is outside reviewed authority")
-    head_sha = require_sha(promotion.get("headSha"), "promotion qualification head SHA")
-    base_sha = require_sha(promotion.get("baseSha"), "promotion qualification base SHA")
-    states = qualification_states(
-        api,
-        head_sha,
-        base_sha,
-        required=("Required PR Gate", "CodeQL"),
-    )
-    ci = states["Required PR Gate"]
-    codeql = states["CodeQL"]
+    terminal_state = _exact_terminal_trusted_gate_state(api, promotion)
+    if terminal_state is not None:
+        raise PolicyBlock(
+            "automatic Trusted PR Gate already has exact-subject state "
+            f"{terminal_state}; refusing duplicate qualification wake"
+        )
     wake_stage = _qualification_wake_stage(api, promotion)
-
-    if ci is None:
-        if codeql is not None:
-            raise PolicyBlock(
-                "CodeQL qualification exists without prior Required PR Gate; refusing ambiguous wake"
-            )
-        if wake_stage is not None:
-            raise PolicyBlock("trusted-main CI qualification dispatch is registered and pending")
-        dispatch_exact_ci(api, branch, head_sha)
-        _publish_qualification_wake(api, promotion, stage="ci")
-        raise PolicyBlock("trusted-main CI qualification dispatched")
-
-    if ci.get("conclusion") != "success":
-        raise PolicyBlock(
-            f"trusted-main Required PR Gate qualification is terminal non-success: "
-            f"{ci.get('conclusion')}"
-        )
-
-    if codeql is None:
-        if wake_stage == "codeql":
-            raise PolicyBlock(
-                "trusted-main CodeQL qualification dispatch is registered and pending"
-            )
-        dispatch_exact_codeql(api, branch, head_sha)
-        _publish_qualification_wake(api, promotion, stage="codeql")
-        raise PolicyBlock("trusted-main CodeQL qualification dispatched")
-
-    if codeql.get("conclusion") != "success":
-        raise PolicyBlock(
-            f"trusted-main CodeQL qualification is terminal non-success: {codeql.get('conclusion')}"
-        )
+    if wake_stage is not None:
+        raise PolicyBlock("automatic Trusted PR Gate qualification wake is registered and pending")
+    _publish_qualification_wake(api, promotion, stage="trusted-gate")
+    raise PolicyBlock("automatic Trusted PR Gate qualification wake registered")
 
 
 def _publish_and_merge(
@@ -1175,7 +1202,6 @@ def _publish_and_merge(
     if rebound_before_merge != promotion:
         raise PolicyBlock("promotion changed before guarded merge")
     branch = str((fresh_before_merge.get("head") or {}).get("ref") or "")
-    _advance_promotion_qualification(api, promotion, branch)
     try:
         require_schedule_trusted_gate(
             api,
@@ -1183,8 +1209,9 @@ def _publish_and_merge(
             promotion["headSha"],
             promotion["baseSha"],
         )
-    except TrustedStatusError as exc:
-        raise PolicyBlock("automatic Trusted PR Gate is not yet schedule-admissible") from exc
+    except TrustedStatusError:
+        _advance_promotion_qualification(api, promotion, branch)
+        raise GovernanceError("promotion qualification wake returned unexpectedly")
     result = api.put(
         f"/pulls/{promotion['number']}/merge",
         {"sha": promotion["headSha"], "merge_method": config["mergeMethod"]},

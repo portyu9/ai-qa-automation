@@ -5,7 +5,7 @@ name: Trusted PR Auto Gate — ƳƤ AI QA Automation Framework
 # the trusted default branch resolves live identity/provenance, then validates the prospective merge.
 on:
   workflow_run:
-    workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL"]
+    workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL", "dependency-governance"]
     types: [completed]
   schedule:
     - cron: "*/5 * * * *"

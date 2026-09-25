@@ -26,6 +26,16 @@ EXPECTED_CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
 EXPECTED_CODEQL_WORKFLOW_ID = 359681647
 EXPECTED_CODEQL_WORKFLOW_NAME = "CodeQL"
 EXPECTED_CODEQL_WORKFLOW_PATH = ".github/workflows/codeql.yml"
+EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_ID = 359681650
+EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_NAME = "dependency-governance"
+EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_PATH = ".github/workflows/dependency-governance.yml"
+DEPENDENCY_GOVERNANCE_EVENTS = frozenset({"workflow_run", "schedule", "workflow_dispatch"})
+DEPENDENCY_PROMOTION_WAKE_CHECK = "Dependency Promotion Qualification Wake"
+DEPENDENCY_PROMOTION_WAKE_PREFIX = "aiqa-dependency-promotion-qualification-wake"
+DEPENDENCY_PROMOTION_WAKE_RE = re.compile(
+    rf"^{DEPENDENCY_PROMOTION_WAKE_PREFIX}:(?P<head>[0-9a-f]{{40}}):(?P<base>[0-9a-f]{{40}}):"
+    r"trusted-gate:(?P<run>[1-9][0-9]*):(?P<attempt>[1-9][0-9]*)$"
+)
 GITHUB_ACTIONS_LOGIN = "github-actions[bot]"
 GITHUB_ACTIONS_USER_ID = 41898282
 DEPENDABOT_LOGIN = "dependabot[bot]"
@@ -332,6 +342,30 @@ def _validate_wake(run: dict[str, Any], *, expected_run_id: int, trusted_sha: st
             head_sha=_require_sha(run.get("head_sha"), label="workflow head SHA"),
         )
 
+    if workflow_id == EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_ID:
+        if (
+            run.get("name") != EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_NAME
+            or run.get("path") != EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_PATH
+            or run.get("event") not in DEPENDENCY_GOVERNANCE_EVENTS
+            or run.get("head_branch") != EXPECTED_DEFAULT_BRANCH
+            or _require_sha(run.get("head_sha"), label="dependency governance head SHA")
+            != trusted_sha
+        ):
+            return None
+        if (
+            actor.get("login") != EXPECTED_OWNER
+            or actor.get("id") != EXPECTED_OWNER_ID
+            or triggering_actor.get("login") != EXPECTED_OWNER
+            or triggering_actor.get("id") != EXPECTED_OWNER_ID
+        ):
+            return None
+        return Wake(
+            run_id=expected_run_id,
+            run_attempt=attempt,
+            kind="dependency-governance",
+            head_sha=trusted_sha,
+        )
+
     expected_dispatch = {
         EXPECTED_CI_WORKFLOW_ID: (
             EXPECTED_CI_WORKFLOW_NAME,
@@ -497,6 +531,73 @@ def _select_bot_pull_request(
         return None
     if len(matches) != 1:
         raise ValueError("trusted workflow wake maps to multiple governed bot pull requests")
+    return matches[0]
+
+
+def _select_dependency_governance_pull_request(
+    api: GitHubAPI,
+    *,
+    wake: Wake,
+    trusted_sha: str,
+) -> dict[str, Any] | None:
+    if wake.kind != "dependency-governance" or wake.head_sha != trusted_sha:
+        raise ValueError("dependency governance wake identity is malformed")
+    rows = api.list_all(
+        f"/repos/{EXPECTED_REPOSITORY}/pulls?state=open&base={EXPECTED_DEFAULT_BRANCH}",
+        max_pages=1,
+    )
+    if len(rows) >= MAX_PULL_REQUEST_CANDIDATES:
+        raise ValueError("dependency governance wake discovery reached the bounded pagination limit")
+    matches: list[dict[str, Any]] = []
+    for pr in rows:
+        if _bot_lane(pr) != "dependency-promotion" or pr.get("draft") is not False:
+            continue
+        head = _require_dict(pr.get("head"), label="dependency promotion wake head")
+        base = _require_dict(pr.get("base"), label="dependency promotion wake base")
+        head_repo = _require_dict(head.get("repo"), label="dependency promotion wake head repository")
+        base_repo = _require_dict(base.get("repo"), label="dependency promotion wake base repository")
+        if (
+            head_repo.get("full_name") != EXPECTED_REPOSITORY
+            or base_repo.get("full_name") != EXPECTED_REPOSITORY
+            or base.get("ref") != EXPECTED_DEFAULT_BRANCH
+            or base.get("sha") != trusted_sha
+        ):
+            continue
+        head_sha = _require_sha(head.get("sha"), label="dependency promotion wake head SHA")
+        external_id = (
+            f"{DEPENDENCY_PROMOTION_WAKE_PREFIX}:{head_sha}:{trusted_sha}:trusted-gate:"
+            f"{wake.run_id}:{wake.run_attempt}"
+        )
+        checks = api.list_all(
+            f"/repos/{EXPECTED_REPOSITORY}/commits/{head_sha}/check-runs?filter=all",
+            max_pages=2,
+        )
+        for check in checks:
+            app = check.get("app") or {}
+            observed_external_id = check.get("external_id")
+            parsed = (
+                DEPENDENCY_PROMOTION_WAKE_RE.fullmatch(observed_external_id)
+                if isinstance(observed_external_id, str)
+                else None
+            )
+            if (
+                check.get("name") == DEPENDENCY_PROMOTION_WAKE_CHECK
+                and check.get("head_sha") == head_sha
+                and observed_external_id == external_id
+                and parsed is not None
+                and check.get("status") == "completed"
+                and check.get("conclusion") == "neutral"
+                and app.get("id") == GITHUB_ACTIONS_APP_ID
+                and app.get("slug") == "github-actions"
+                and check.get("details_url")
+                == f"https://github.com/{EXPECTED_REPOSITORY}/actions/runs/{wake.run_id}"
+            ):
+                matches.append(pr)
+                break
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise ValueError("dependency governance wake maps to multiple promotion pull requests")
     return matches[0]
 
 
@@ -777,6 +878,27 @@ def evaluate_admission(
             lane="owner-routine",
             pr=pr,
             head_sha=wake.head_sha,
+            trusted_sha=trusted_sha,
+            qualification_ready=True,
+        )
+
+    if wake.kind == "dependency-governance":
+        pr = _select_dependency_governance_pull_request(
+            api,
+            wake=wake,
+            trusted_sha=trusted_sha,
+        )
+        if pr is None:
+            return None
+        head_sha = _require_sha(
+            _require_dict(pr.get("head"), label="dependency promotion wake candidate head").get("sha"),
+            label="dependency promotion wake candidate head SHA",
+        )
+        return _resolve_subject(
+            api,
+            lane="dependency-promotion",
+            pr=pr,
+            head_sha=head_sha,
             trusted_sha=trusted_sha,
             qualification_ready=True,
         )
