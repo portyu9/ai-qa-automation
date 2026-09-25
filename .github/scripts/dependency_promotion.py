@@ -29,6 +29,8 @@ from dependency_governance import (
     GovernanceError,
     PolicyBlock,
     changed_files,
+    dispatch_exact_ci,
+    dispatch_exact_codeql,
     finalize_post_merge_evidence,
     load_config,
     require_green_checks,
@@ -37,7 +39,7 @@ from dependency_governance import (
 )
 from dependency_lock_compiler import LockCompileError, compile_locks, validate_frozen_locks
 from dependency_trusted_gate import require_schedule_trusted_gate
-from trusted_qualification import EXPECTED_REPOSITORY
+from trusted_qualification import EXPECTED_REPOSITORY, qualification_states
 from trusted_status import TrustedStatusError
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -52,6 +54,16 @@ MARKER_PREFIX = "<!-- aiqa-dependency-promotion:"
 MARKER_SUFFIX = " -->"
 GITHUB_ACTIONS_LOGIN = "github-actions[bot]"
 GITHUB_ACTIONS_USER_ID = 41898282
+GITHUB_ACTIONS_APP_ID = 15368
+QUALIFICATION_WAKE_CHECK = "Dependency Promotion Qualification Wake"
+QUALIFICATION_WAKE_PREFIX = "aiqa-dependency-promotion-qualification-wake"
+QUALIFICATION_WAKE_RE = re.compile(
+    rf"^{QUALIFICATION_WAKE_PREFIX}:(?P<head>[0-9a-f]{{40}}):(?P<base>[0-9a-f]{{40}}):"
+    r"(?P<stage>ci|codeql):(?P<run>[1-9][0-9]*):(?P<attempt>[1-9][0-9]*)$"
+)
+DEPENDENCY_GOVERNANCE_WORKFLOW_NAME = "dependency-governance"
+DEPENDENCY_GOVERNANCE_WORKFLOW_PATH = ".github/workflows/dependency-governance.yml"
+DEPENDENCY_GOVERNANCE_EVENTS = {"workflow_run", "schedule", "workflow_dispatch"}
 REQUIREMENT = re.compile(
     r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)(?P<extras>\[[A-Za-z0-9_,.-]+\])?(?P<specifier>[^;@\s]*)$"
 )
@@ -986,6 +998,171 @@ def _validate_promotion(
     return source, {"number": pr["number"], "headSha": head_sha, "baseSha": base_sha}
 
 
+def _qualification_wake_stage(
+    api: GitHubApi,
+    promotion: dict[str, Any],
+) -> str | None:
+    head_sha = require_sha(promotion.get("headSha"), "promotion qualification head SHA")
+    base_sha = require_sha(promotion.get("baseSha"), "promotion qualification base SHA")
+    rows = api.list_all(
+        f"/commits/{head_sha}/check-runs?filter=all",
+        max_pages=2,
+    )
+    matches: list[tuple[int, str]] = []
+    for row in rows:
+        if row.get("name") != QUALIFICATION_WAKE_CHECK:
+            continue
+        external_id = row.get("external_id")
+        if not isinstance(external_id, str):
+            raise GovernanceError("promotion qualification wake has no external identity")
+        match = QUALIFICATION_WAKE_RE.fullmatch(external_id)
+        if match is None:
+            raise GovernanceError("promotion qualification wake external identity is malformed")
+        if match.group("head") != head_sha or match.group("base") != base_sha:
+            raise GovernanceError("promotion qualification wake subject drifted")
+        app = row.get("app") or {}
+        if (
+            row.get("head_sha") != head_sha
+            or row.get("status") != "completed"
+            or row.get("conclusion") != "neutral"
+            or app.get("id") != GITHUB_ACTIONS_APP_ID
+            or app.get("slug") != "github-actions"
+        ):
+            raise GovernanceError("promotion qualification wake check provenance is invalid")
+        run_id = int(match.group("run"))
+        run_attempt = int(match.group("attempt"))
+        if row.get("details_url") != (
+            f"https://github.com/{EXPECTED_REPOSITORY}/actions/runs/{run_id}"
+        ):
+            raise GovernanceError("promotion qualification wake details URL is not exact-run-bound")
+        run = api.get(f"/actions/runs/{run_id}")
+        repository = (run or {}).get("repository") or {}
+        head_repository = (run or {}).get("head_repository") or {}
+        if (
+            (run or {}).get("id") != run_id
+            or (run or {}).get("run_attempt") != run_attempt
+            or (run or {}).get("name") != DEPENDENCY_GOVERNANCE_WORKFLOW_NAME
+            or (run or {}).get("path") != DEPENDENCY_GOVERNANCE_WORKFLOW_PATH
+            or (run or {}).get("event") not in DEPENDENCY_GOVERNANCE_EVENTS
+            or (run or {}).get("head_branch") != "main"
+            or (run or {}).get("head_sha") != base_sha
+            or (run or {}).get("status") != "completed"
+            or (run or {}).get("conclusion") != "success"
+            or repository.get("full_name") != EXPECTED_REPOSITORY
+            or head_repository.get("full_name") != EXPECTED_REPOSITORY
+        ):
+            raise GovernanceError("promotion qualification wake workflow provenance is invalid")
+        check_id = row.get("id")
+        if not isinstance(check_id, int) or isinstance(check_id, bool) or check_id < 1:
+            raise GovernanceError("promotion qualification wake check id is invalid")
+        matches.append((check_id, match.group("stage")))
+    return max(matches)[1] if matches else None
+
+
+def _publish_qualification_wake(
+    api: GitHubApi,
+    promotion: dict[str, Any],
+    *,
+    stage: str,
+) -> None:
+    if stage not in {"ci", "codeql"}:
+        raise GovernanceError("promotion qualification wake stage is outside reviewed authority")
+    head_sha = require_sha(promotion.get("headSha"), "promotion qualification head SHA")
+    base_sha = require_sha(promotion.get("baseSha"), "promotion qualification base SHA")
+    raw_run_id = os.environ.get("GITHUB_RUN_ID", "")
+    raw_attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "")
+    if not raw_run_id.isdigit() or not raw_attempt.isdigit():
+        raise GovernanceError("workflow run identity is required for qualification wake evidence")
+    run_id = int(raw_run_id)
+    run_attempt = int(raw_attempt)
+    if run_id < 1 or run_attempt < 1:
+        raise GovernanceError("workflow run identity for qualification wake must be positive")
+    external_id = (
+        f"{QUALIFICATION_WAKE_PREFIX}:{head_sha}:{base_sha}:{stage}:{run_id}:{run_attempt}"
+    )
+    details_url = f"https://github.com/{EXPECTED_REPOSITORY}/actions/runs/{run_id}"
+    response = api.post(
+        "/check-runs",
+        {
+            "name": QUALIFICATION_WAKE_CHECK,
+            "head_sha": head_sha,
+            "status": "completed",
+            "conclusion": "neutral",
+            "details_url": details_url,
+            "external_id": external_id,
+            "output": {
+                "title": f"Trusted-main {stage.upper()} qualification wake dispatched",
+                "summary": (
+                    "Wake evidence only; this check is not validation authority and cannot "
+                    "satisfy Required PR Gate, CodeQL, or Trusted PR Gate."
+                ),
+            },
+        },
+    )
+    app = (response or {}).get("app") or {}
+    if (
+        not isinstance(response, dict)
+        or response.get("name") != QUALIFICATION_WAKE_CHECK
+        or response.get("head_sha") != head_sha
+        or response.get("status") != "completed"
+        or response.get("conclusion") != "neutral"
+        or response.get("details_url") != details_url
+        or response.get("external_id") != external_id
+        or app.get("id") != GITHUB_ACTIONS_APP_ID
+        or app.get("slug") != "github-actions"
+    ):
+        raise GovernanceError("GitHub did not acknowledge exact promotion qualification wake")
+
+
+def _advance_promotion_qualification(
+    api: GitHubApi,
+    promotion: dict[str, Any],
+    branch: str,
+) -> None:
+    if PROMOTION_BRANCH_RE.fullmatch(branch) is None:
+        raise PolicyBlock("promotion qualification branch is outside reviewed authority")
+    head_sha = require_sha(promotion.get("headSha"), "promotion qualification head SHA")
+    base_sha = require_sha(promotion.get("baseSha"), "promotion qualification base SHA")
+    states = qualification_states(
+        api,
+        head_sha,
+        base_sha,
+        required=("Required PR Gate", "CodeQL"),
+    )
+    ci = states["Required PR Gate"]
+    codeql = states["CodeQL"]
+    wake_stage = _qualification_wake_stage(api, promotion)
+
+    if ci is None:
+        if codeql is not None:
+            raise PolicyBlock(
+                "CodeQL qualification exists without prior Required PR Gate; refusing ambiguous wake"
+            )
+        if wake_stage is not None:
+            raise PolicyBlock("trusted-main CI qualification dispatch is registered and pending")
+        dispatch_exact_ci(api, branch, head_sha)
+        _publish_qualification_wake(api, promotion, stage="ci")
+        raise PolicyBlock("trusted-main CI qualification dispatched")
+
+    if ci.get("conclusion") != "success":
+        raise PolicyBlock(
+            f"trusted-main Required PR Gate qualification is terminal non-success: "
+            f"{ci.get('conclusion')}"
+        )
+
+    if codeql is None:
+        if wake_stage == "codeql":
+            raise PolicyBlock("trusted-main CodeQL qualification dispatch is registered and pending")
+        dispatch_exact_codeql(api, branch, head_sha)
+        _publish_qualification_wake(api, promotion, stage="codeql")
+        raise PolicyBlock("trusted-main CodeQL qualification dispatched")
+
+    if codeql.get("conclusion") != "success":
+        raise PolicyBlock(
+            f"trusted-main CodeQL qualification is terminal non-success: {codeql.get('conclusion')}"
+        )
+
+
 def _publish_and_merge(
     api: GitHubApi, promotion: dict[str, Any], config: dict[str, Any]
 ) -> dict[str, Any]:
@@ -995,6 +1172,8 @@ def _publish_and_merge(
     )
     if rebound_before_merge != promotion:
         raise PolicyBlock("promotion changed before guarded merge")
+    branch = str((fresh_before_merge.get("head") or {}).get("ref") or "")
+    _advance_promotion_qualification(api, promotion, branch)
     try:
         require_schedule_trusted_gate(
             api,
@@ -1329,6 +1508,19 @@ dev = ["mypy>=2,<3", "playwright>=1.52,<2"]
             raise GovernanceError(
                 f"promotion self-test accepted external dependency authority: {bad!r}"
             )
+
+    wake_re = QUALIFICATION_WAKE_RE.fullmatch(
+        f"{QUALIFICATION_WAKE_PREFIX}:{'a' * 40}:{'b' * 40}:ci:123:1"
+    )
+    if wake_re is None or wake_re.group("stage") != "ci":
+        raise GovernanceError("qualification wake identity parser rejected canonical evidence")
+    for malformed in (
+        f"{QUALIFICATION_WAKE_PREFIX}:{'a' * 39}:{'b' * 40}:ci:123:1",
+        f"{QUALIFICATION_WAKE_PREFIX}:{'a' * 40}:{'b' * 40}:other:123:1",
+        f"{QUALIFICATION_WAKE_PREFIX}:{'a' * 40}:{'b' * 40}:ci:0:1",
+    ):
+        if QUALIFICATION_WAKE_RE.fullmatch(malformed) is not None:
+            raise GovernanceError("qualification wake identity parser accepted malformed evidence")
 
     print("dependency-promotion self-test: ok")
 
