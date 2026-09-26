@@ -494,7 +494,11 @@ def verify_build_authority(root: Path) -> dict[str, Any]:
         not isinstance(build_requirements, list)
         or len(build_requirements) != 1
         or not isinstance(build_requirements[0], str)
-        or re.fullmatch(r"hatchling==[^\s;@]+", build_requirements[0]) is None
+        or re.fullmatch(
+            r"hatchling==[A-Za-z0-9][A-Za-z0-9.!+_-]*",
+            build_requirements[0],
+        )
+        is None
     ):
         raise ValueError(
             "build-system requires must remain one exact hatchling==VERSION declaration"
