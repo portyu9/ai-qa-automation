@@ -103,7 +103,9 @@ def _promotion_author_identity() -> tuple[str, int]:
             or not raw_id.isdigit()
             or int(raw_id) != PROMOTION_AUTHOR_USER_ID
         ):
-            raise GovernanceError("independent promotion author App identity drifted from trusted policy")
+            raise GovernanceError(
+                "independent promotion author App identity drifted from trusted policy"
+            )
     return PROMOTION_AUTHOR_LOGIN, PROMOTION_AUTHOR_USER_ID
 
 
