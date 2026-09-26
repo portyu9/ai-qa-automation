@@ -641,14 +641,6 @@ def _create_promotion_commit(
     return head_sha, generated
 
 
-def _github_actions_pr_creation_denied(exc: Exception) -> bool:
-    detail = str(exc)
-    return (
-        "HTTP 403" in detail
-        and "GitHub Actions is not permitted to create or approve pull requests" in detail
-    )
-
-
 def _delete_exact_ref(
     api: GitHubApi,
     branch: str,
@@ -1499,15 +1491,6 @@ dev = ["mypy>=2,<3", "playwright>=1.52,<2"]
     ):
         if _owned_generated_promotion_commit(drifted, "d" * 40):
             raise GovernanceError("non-canonical generated promotion ownership was accepted")
-
-    denied = GovernanceError(
-        "GitHub API POST /pulls failed HTTP 403: "
-        '{"message":"GitHub Actions is not permitted to create or approve pull requests."}'
-    )
-    if not _github_actions_pr_creation_denied(denied):
-        raise GovernanceError("GitHub Actions PR creation denial was not classified")
-    if _github_actions_pr_creation_denied(GovernanceError("HTTP 403: unrelated policy")):
-        raise GovernanceError("unrelated HTTP 403 was misclassified as PR creation denial")
 
     exact_commit = {
         "tree": {"sha": "c" * 40},
