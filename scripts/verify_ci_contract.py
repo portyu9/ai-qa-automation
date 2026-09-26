@@ -563,9 +563,7 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
             "github.run_id",
         )
     ):
-        raise ValueError(
-            "dependency-governance.yml reconciliation concurrency contract drifted"
-        )
+        raise ValueError("dependency-governance.yml reconciliation concurrency contract drifted")
     if base._workflow_structure_sha1(text) != EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA:
         raise ValueError(
             "dependency-governance.yml non-action structure differs from reviewed dependency authority"
