@@ -448,6 +448,16 @@ def _bot_lane(pr: dict[str, Any]) -> str | None:
         if user.get("login") == login and user.get("id") == user_id:
             return "protected-security-remediation"
         return None
+    if PROMOTION_REF_RE.fullmatch(branch) is not None:
+        if (
+            user.get("login") == GITHUB_ACTIONS_LOGIN
+            and user.get("id") == GITHUB_ACTIONS_USER_ID
+        ):
+            return "dependency-promotion"
+        login, user_id = _protected_remediation_bot_identity()
+        if user.get("login") == login and user.get("id") == user_id:
+            return "dependency-promotion"
+        return None
     if (
         user.get("login") == DEPENDABOT_LOGIN
         and user.get("id") == DEPENDABOT_USER_ID
@@ -455,8 +465,6 @@ def _bot_lane(pr: dict[str, Any]) -> str | None:
     ):
         return "dependabot-actions"
     if user.get("login") == GITHUB_ACTIONS_LOGIN and user.get("id") == GITHUB_ACTIONS_USER_ID:
-        if PROMOTION_REF_RE.fullmatch(branch) is not None:
-            return "dependency-promotion"
         if AUTOHEAL_REF_RE.fullmatch(branch) is not None:
             return "security-autoheal"
     return None
