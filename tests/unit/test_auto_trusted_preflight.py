@@ -274,6 +274,27 @@ def test_successful_governance_wake_selects_exact_dependency_promotion() -> None
     assert admission.base_sha == BASE
 
 
+def test_successful_governance_wake_accepts_independent_app_promotion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = _governance_wake_api()
+    login = "portyu9-security-remediator[bot]"
+    user_id = 333833782
+    monkeypatch.setenv(preflight.PROTECTED_REMEDIATION_BOT_LOGIN_ENV, login)
+    monkeypatch.setenv(preflight.PROTECTED_REMEDIATION_BOT_ID_ENV, str(user_id))
+    live = api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]
+    live["user"] = {"login": login, "id": user_id}
+    api.pulls[0]["user"] = {"login": login, "id": user_id}
+    event = {"action": "completed", "workflow_run": {"id": 42, "head_sha": BASE}}
+
+    admission = preflight.evaluate_admission(api, event=event)
+
+    assert admission is not None
+    assert admission.eligible is True
+    assert admission.lane == "dependency-promotion"
+    assert admission.pr_number == 65
+
+
 def test_governance_wake_actor_is_not_admission_authority() -> None:
     api = _governance_wake_api()
     run = api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]
