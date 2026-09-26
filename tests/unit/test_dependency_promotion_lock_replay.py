@@ -173,7 +173,7 @@ def _promotion_pr(
     }
 
 
-def test_create_promotion_pr_uses_non_main_staging_base_then_exact_retarget(
+def test_create_promotion_pr_opens_exact_app_subject_directly_to_main(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[tuple[str, str]] = []
@@ -182,39 +182,17 @@ def test_create_promotion_pr_uses_non_main_staging_base_then_exact_retarget(
     monkeypatch.setenv(promotion.PROMOTION_AUTHOR_ID_ENV, str(AUTHOR_ID))
 
     class Api:
-        def __init__(self) -> None:
-            self.staging_exists = False
-
-        def get(self, path: str) -> dict[str, Any]:
-            if path == f"/git/ref/heads/{STAGING.replace('/', '%2F')}":
-                if not self.staging_exists:
-                    raise promotion.GovernanceError("HTTP 404")
-                return {
-                    "ref": f"refs/heads/{STAGING}",
-                    "object": {"type": "commit", "sha": BASE},
-                }
-            raise AssertionError(path)
-
         def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-            if path == "/git/refs":
-                assert payload == {"ref": f"refs/heads/{STAGING}", "sha": BASE}
-                self.staging_exists = True
-                events.append(("create-ref", STAGING))
-                return {
-                    "ref": f"refs/heads/{STAGING}",
-                    "object": {"type": "commit", "sha": BASE},
-                }
-            if path == "/pulls":
-                assert payload["head"] == BRANCH
-                assert payload["base"] == STAGING
-                events.append(("create-pr", STAGING))
-                return _promotion_pr(
-                    base_ref=STAGING,
-                    body=str(payload["body"]),
-                    author_login=AUTHOR_LOGIN,
-                    author_id=AUTHOR_ID,
-                )
-            raise AssertionError(path)
+            assert path == "/pulls"
+            assert payload["head"] == BRANCH
+            assert payload["base"] == "main"
+            assert payload["draft"] is False
+            events.append(("create-pr", "main"))
+            return _promotion_pr(
+                body=str(payload["body"]),
+                author_login=AUTHOR_LOGIN,
+                author_id=AUTHOR_ID,
+            )
 
         def request(
             self,
@@ -222,16 +200,6 @@ def test_create_promotion_pr_uses_non_main_staging_base_then_exact_retarget(
             path: str,
             payload: dict[str, Any] | None = None,
         ) -> dict[str, Any] | None:
-            if (method, path) == ("PATCH", "/pulls/901"):
-                assert payload == {"base": "main"}
-                events.append(("retarget", "main"))
-                return _promotion_pr(author_login=AUTHOR_LOGIN, author_id=AUTHOR_ID)
-            if (method, path) == ("DELETE", f"/git/refs/heads/{STAGING.replace('/', '%2F')}"):
-                assert payload is None
-                assert self.staging_exists is True
-                self.staging_exists = False
-                events.append(("delete-ref", STAGING))
-                return None
             raise AssertionError((method, path, payload))
 
     source = {
@@ -242,12 +210,7 @@ def test_create_promotion_pr_uses_non_main_staging_base_then_exact_retarget(
         "fingerprint": FINGERPRINT,
     }
     assert promotion._create_promotion_pr(Api(), source, BRANCH, HEAD) == 901
-    assert events == [
-        ("create-ref", STAGING),
-        ("create-pr", STAGING),
-        ("retarget", "main"),
-        ("delete-ref", STAGING),
-    ]
+    assert events == [("create-pr", "main")]
 
 
 def test_new_promotion_author_must_be_independent_app(
