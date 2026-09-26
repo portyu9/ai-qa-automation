@@ -92,7 +92,7 @@ class QualificationWakeRegistered(PolicyBlock):
     """A single exact-run qualification wake was durably published."""
 
 
-def _promotion_author_identity(*, required: bool) -> tuple[str, int] | None:
+def _promotion_author_identity() -> tuple[str, int]:
     login = os.environ.get(PROMOTION_AUTHOR_LOGIN_ENV, "")
     raw_id = os.environ.get(PROMOTION_AUTHOR_ID_ENV, "")
     if bool(login) != bool(raw_id):
@@ -104,8 +104,6 @@ def _promotion_author_identity(*, required: bool) -> tuple[str, int] | None:
             or int(raw_id) != PROMOTION_AUTHOR_USER_ID
         ):
             raise GovernanceError("independent promotion author App identity drifted from trusted policy")
-    if not required and not login and not raw_id:
-        return PROMOTION_AUTHOR_LOGIN, PROMOTION_AUTHOR_USER_ID
     return PROMOTION_AUTHOR_LOGIN, PROMOTION_AUTHOR_USER_ID
 
 
@@ -117,7 +115,7 @@ def _promotion_actor_matches(user: Any, *, allow_legacy: bool) -> bool:
         and user.get("id") == GITHUB_ACTIONS_USER_ID
     ):
         return True
-    identity = _promotion_author_identity(required=False)
+    identity = _promotion_author_identity()
     return identity is not None and (
         user.get("login") == identity[0] and user.get("id") == identity[1]
     )
@@ -593,7 +591,7 @@ def _existing_promotion_head(
 def _create_promotion_commit(
     api: GitHubApi, source: dict[str, Any], branch: str
 ) -> tuple[str, dict[str, bytes]]:
-    _promotion_author_identity(required=True)
+    _promotion_author_identity()
     generated = _compile(source)
     base_commit = api.get(f"/git/commits/{source['baseSha']}")
     base_tree = require_sha(
@@ -752,7 +750,7 @@ def _validate_staged_or_main_pr(
 
 
 def _create_promotion_pr(api: GitHubApi, source: dict[str, Any], branch: str, head_sha: str) -> int:
-    _promotion_author_identity(required=True)
+    _promotion_author_identity()
     metadata = {
         "version": 1,
         "sourcePr": source["number"],
@@ -1415,7 +1413,7 @@ def reconcile(
                 raise GovernanceError(
                     "independent promotion author App token is required for new promotion creation"
                 )
-            _promotion_author_identity(required=True)
+            _promotion_author_identity()
             author_api = GitHubApi(author_token, repository)
             head_sha, _ = _create_promotion_commit(author_api, source, branch)
             promotion_number = _create_promotion_pr(author_api, source, branch, head_sha)
