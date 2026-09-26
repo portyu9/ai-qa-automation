@@ -56,6 +56,8 @@ AUTOHEAL_REF_RE = re.compile(r"^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{
 PROTECTED_REMEDIATION_REF_RE = re.compile(
     r"^automation/protected-security-remediation-[1-9][0-9]*-[0-9a-f]{64}-a[1-9][0-9]*$"
 )
+PROTECTED_REMEDIATION_BOT_LOGIN = "portyu9-security-remediator[bot]"
+PROTECTED_REMEDIATION_BOT_USER_ID = 333833782
 PROTECTED_REMEDIATION_BOT_LOGIN_ENV = "PROTECTED_REMEDIATION_BOT_LOGIN"
 PROTECTED_REMEDIATION_BOT_ID_ENV = "PROTECTED_REMEDIATION_BOT_ID"
 DISALLOWED_PROTECTED_AUTHOR_LOGINS = {
@@ -426,17 +428,16 @@ def _select_pull_request(candidates: Any, *, head_sha: str) -> int:
 def _protected_remediation_bot_identity() -> tuple[str, int]:
     login = os.environ.get(PROTECTED_REMEDIATION_BOT_LOGIN_ENV, "")
     raw_id = os.environ.get(PROTECTED_REMEDIATION_BOT_ID_ENV, "")
-    if (
-        not login
-        or not login.endswith("[bot]")
-        or login in DISALLOWED_PROTECTED_AUTHOR_LOGINS
-        or not raw_id.isdigit()
-    ):
-        raise ValueError("protected remediation author App identity is missing or malformed")
-    user_id = int(raw_id)
-    if user_id < 1:
-        raise ValueError("protected remediation author App user id must be positive")
-    return login, user_id
+    if bool(login) != bool(raw_id):
+        raise ValueError("protected remediation author App identity is partially configured")
+    if login or raw_id:
+        if (
+            login != PROTECTED_REMEDIATION_BOT_LOGIN
+            or not raw_id.isdigit()
+            or int(raw_id) != PROTECTED_REMEDIATION_BOT_USER_ID
+        ):
+            raise ValueError("protected remediation author App identity drifted from trusted policy")
+    return PROTECTED_REMEDIATION_BOT_LOGIN, PROTECTED_REMEDIATION_BOT_USER_ID
 
 
 def _bot_lane(pr: dict[str, Any]) -> str | None:
