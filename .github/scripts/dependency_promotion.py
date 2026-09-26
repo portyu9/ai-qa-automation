@@ -670,44 +670,6 @@ def _delete_exact_generated_branch(api: GitHubApi, branch: str, head_sha: str) -
     )
 
 
-def _ensure_staging_base_ref(api: GitHubApi, source: dict[str, Any]) -> str:
-    branch = _staging_base_name(int(source["number"]), str(source["fingerprint"]))
-    encoded = urllib.parse.quote(branch, safe="")
-    try:
-        existing = api.get(f"/git/ref/heads/{encoded}")
-    except GovernanceError as exc:
-        if "HTTP 404" not in str(exc):
-            raise
-        created = api.post(
-            "/git/refs",
-            {"ref": f"refs/heads/{branch}", "sha": source["baseSha"]},
-        )
-        created_obj = (created or {}).get("object") or {}
-        if (created or {}).get("ref") != f"refs/heads/{branch}" or created_obj.get(
-            "type"
-        ) != "commit":
-            raise GovernanceError(
-                "GitHub did not acknowledge exact promotion staging-base creation"
-            ) from None
-        observed = require_sha(
-            created_obj.get("sha"),
-            "created promotion staging-base SHA",
-        )
-    else:
-        existing_obj = (existing or {}).get("object") or {}
-        if (existing or {}).get("ref") != f"refs/heads/{branch}" or existing_obj.get(
-            "type"
-        ) != "commit":
-            raise PolicyBlock("existing promotion staging-base ref identity drifted")
-        observed = require_sha(
-            existing_obj.get("sha"),
-            "existing promotion staging-base SHA",
-        )
-    if observed != source["baseSha"]:
-        raise PolicyBlock("promotion staging-base ref does not equal exact current main")
-    return branch
-
-
 def _promotion_body(metadata: dict[str, Any]) -> str:
     return "\n".join(
         (
@@ -751,7 +713,12 @@ def _validate_staged_or_main_pr(
         raise GovernanceError("promotion PR identity changed during staged-base transition")
 
 
-def _create_promotion_pr(api: GitHubApi, source: dict[str, Any], branch: str, head_sha: str) -> int:
+def _create_promotion_pr(
+    api: GitHubApi,
+    source: dict[str, Any],
+    branch: str,
+    head_sha: str,
+) -> int:
     _promotion_author_identity()
     metadata = {
         "version": 1,
@@ -763,61 +730,42 @@ def _create_promotion_pr(api: GitHubApi, source: dict[str, Any], branch: str, he
         "fingerprint": source["fingerprint"],
     }
     body = _promotion_body(metadata)
-    staging_base = _ensure_staging_base_ref(api, source)
     try:
         pr = api.post(
             "/pulls",
             {
                 "title": f"deps: promote Dependabot PR #{source['number']}",
                 "head": branch,
-                "base": staging_base,
+                "base": "main",
                 "body": body,
                 "draft": False,
             },
         )
     except GovernanceError:
-        _delete_exact_ref(
-            api,
-            staging_base,
-            source["baseSha"],
-            label="promotion staging-base ref",
-        )
         _delete_exact_generated_branch(api, branch, head_sha)
         raise
     number = (pr or {}).get("number")
-    if not isinstance(number, int) or number < 1:
+    if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+        _delete_exact_generated_branch(api, branch, head_sha)
         raise GovernanceError("GitHub did not acknowledge dependency promotion PR creation")
-    _validate_staged_or_main_pr(
-        pr,
-        number=number,
-        branch=branch,
-        head_sha=head_sha,
-        base_ref=staging_base,
-        base_sha=source["baseSha"],
-        repository=os.environ.get("GITHUB_REPOSITORY", ""),
-        allow_legacy_author=False,
-    )
-    retargeted = api.request("PATCH", f"/pulls/{number}", {"base": "main"})
-    if not isinstance(retargeted, dict):
-        raise GovernanceError("GitHub returned a malformed promotion retarget response")
-    _validate_staged_or_main_pr(
-        retargeted,
-        number=number,
-        branch=branch,
-        head_sha=head_sha,
-        base_ref="main",
-        base_sha=source["baseSha"],
-        repository=os.environ.get("GITHUB_REPOSITORY", ""),
-        allow_legacy_author=False,
-    )
-    _delete_exact_ref(
-        api,
-        staging_base,
-        source["baseSha"],
-        label="promotion staging-base ref",
-    )
+    try:
+        _validate_staged_or_main_pr(
+            pr,
+            number=number,
+            branch=branch,
+            head_sha=head_sha,
+            base_ref="main",
+            base_sha=source["baseSha"],
+            repository=os.environ.get("GITHUB_REPOSITORY", ""),
+            allow_legacy_author=False,
+        )
+    except (GovernanceError, PolicyBlock):
+        try:
+            api.request("PATCH", f"/pulls/{number}", {"state": "closed"})
+        finally:
+            _delete_exact_generated_branch(api, branch, head_sha)
+        raise
     return number
-
 
 def _normalize_staged_promotion(
     api: GitHubApi,
