@@ -128,6 +128,8 @@ BASE = "b" * 40
 FINGERPRINT = "c" * 64
 BRANCH = "automation/dependency-promotion-171-" + FINGERPRINT[:12]
 STAGING = "automation/dependency-promotion-base-171-" + FINGERPRINT[:12]
+AUTHOR_LOGIN = "portyu9-security-remediator[bot]"
+AUTHOR_ID = 333833782
 
 
 def _promotion_metadata() -> dict[str, Any]:
@@ -142,14 +144,20 @@ def _promotion_metadata() -> dict[str, Any]:
     }
 
 
-def _promotion_pr(*, base_ref: str = "main", body: str | None = None) -> dict[str, Any]:
+def _promotion_pr(
+    *,
+    base_ref: str = "main",
+    body: str | None = None,
+    author_login: str = promotion.GITHUB_ACTIONS_LOGIN,
+    author_id: int = promotion.GITHUB_ACTIONS_USER_ID,
+) -> dict[str, Any]:
     return {
         "number": 901,
         "state": "open",
         "draft": False,
         "user": {
-            "login": promotion.GITHUB_ACTIONS_LOGIN,
-            "id": promotion.GITHUB_ACTIONS_USER_ID,
+            "login": author_login,
+            "id": author_id,
         },
         "head": {
             "ref": BRANCH,
@@ -170,6 +178,8 @@ def test_create_promotion_pr_uses_non_main_staging_base_then_exact_retarget(
 ) -> None:
     events: list[tuple[str, str]] = []
     monkeypatch.setenv("GITHUB_REPOSITORY", "portyu9/ai-qa-automation")
+    monkeypatch.setenv(promotion.PROMOTION_AUTHOR_LOGIN_ENV, AUTHOR_LOGIN)
+    monkeypatch.setenv(promotion.PROMOTION_AUTHOR_ID_ENV, str(AUTHOR_ID))
 
     class Api:
         def __init__(self) -> None:
@@ -198,7 +208,12 @@ def test_create_promotion_pr_uses_non_main_staging_base_then_exact_retarget(
                 assert payload["head"] == BRANCH
                 assert payload["base"] == STAGING
                 events.append(("create-pr", STAGING))
-                return _promotion_pr(base_ref=STAGING, body=str(payload["body"]))
+                return _promotion_pr(
+                    base_ref=STAGING,
+                    body=str(payload["body"]),
+                    author_login=AUTHOR_LOGIN,
+                    author_id=AUTHOR_ID,
+                )
             raise AssertionError(path)
 
         def request(
@@ -210,7 +225,7 @@ def test_create_promotion_pr_uses_non_main_staging_base_then_exact_retarget(
             if (method, path) == ("PATCH", "/pulls/901"):
                 assert payload == {"base": "main"}
                 events.append(("retarget", "main"))
-                return _promotion_pr()
+                return _promotion_pr(author_login=AUTHOR_LOGIN, author_id=AUTHOR_ID)
             if (method, path) == ("DELETE", f"/git/refs/heads/{STAGING.replace('/', '%2F')}"):
                 assert payload is None
                 assert self.staging_exists is True
@@ -233,6 +248,36 @@ def test_create_promotion_pr_uses_non_main_staging_base_then_exact_retarget(
         ("retarget", "main"),
         ("delete-ref", STAGING),
     ]
+
+
+def test_new_promotion_author_must_be_independent_app(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(promotion.PROMOTION_AUTHOR_LOGIN_ENV, raising=False)
+    monkeypatch.delenv(promotion.PROMOTION_AUTHOR_ID_ENV, raising=False)
+    with pytest.raises(promotion.GovernanceError, match="identity is missing or malformed"):
+        promotion._promotion_author_identity(required=True)
+
+    monkeypatch.setenv(promotion.PROMOTION_AUTHOR_LOGIN_ENV, AUTHOR_LOGIN)
+    monkeypatch.setenv(promotion.PROMOTION_AUTHOR_ID_ENV, str(AUTHOR_ID))
+    assert promotion._promotion_actor_matches(
+        {"login": AUTHOR_LOGIN, "id": AUTHOR_ID},
+        allow_legacy=False,
+    )
+    assert not promotion._promotion_actor_matches(
+        {
+            "login": promotion.GITHUB_ACTIONS_LOGIN,
+            "id": promotion.GITHUB_ACTIONS_USER_ID,
+        },
+        allow_legacy=False,
+    )
+    assert promotion._promotion_actor_matches(
+        {
+            "login": promotion.GITHUB_ACTIONS_LOGIN,
+            "id": promotion.GITHUB_ACTIONS_USER_ID,
+        },
+        allow_legacy=True,
+    )
 
 
 def test_trusted_qualification_rejects_duplicate_exact_evidence(
