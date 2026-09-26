@@ -80,7 +80,7 @@ def test_dependency_governance_rejects_status_authority_for_promotion_app(
         ci_contract._workflow_structure_sha1(mutated),
     )
 
-    with pytest.raises(ValueError, match="forbidden permission"):
+    with pytest.raises(ValueError, match="forbidden authority token"):
         ci_contract.verify_ci_contract(root)
 
 
