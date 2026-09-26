@@ -113,8 +113,7 @@ def _promotion_actor_matches(user: Any, *, allow_legacy: bool) -> bool:
     if not isinstance(user, dict):
         return False
     if allow_legacy and (
-        user.get("login") == GITHUB_ACTIONS_LOGIN
-        and user.get("id") == GITHUB_ACTIONS_USER_ID
+        user.get("login") == GITHUB_ACTIONS_LOGIN and user.get("id") == GITHUB_ACTIONS_USER_ID
     ):
         return True
     identity = _promotion_author_identity()
@@ -571,18 +570,15 @@ def _existing_promotion_head(
         "existing promotion branch SHA",
     )
     commit = api.get(f"/git/commits/{head_sha}")
-    if (
-        not _promotion_commit_matches(
-            commit,
-            tree_sha=tree_sha,
-            base_sha=base_sha,
-            message=message,
-        )
-        or not _owned_generated_promotion_commit(
-            api.get(f"/commits/{head_sha}"),
-            head_sha,
-            allow_legacy=False,
-        )
+    if not _promotion_commit_matches(
+        commit,
+        tree_sha=tree_sha,
+        base_sha=base_sha,
+        message=message,
+    ) or not _owned_generated_promotion_commit(
+        api.get(f"/commits/{head_sha}"),
+        head_sha,
+        allow_legacy=False,
     ):
         raise PolicyBlock(
             "existing dependency promotion branch does not match the exact independent-App subject"
@@ -769,6 +765,7 @@ def _create_promotion_pr(
         _delete_exact_generated_branch(api, branch, head_sha)
         raise
     return number
+
 
 def _normalize_staged_promotion(
     api: GitHubApi,
