@@ -38,8 +38,12 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     assert result["workflows"]["trusted_auto"]["maintenance_authority"] == (
         "autonomous-governed-bots;external-one-shot-only-for-unrecognized-protected-change"
     )
-    assert result["workflows"]["dependency_governance"]["reconciliation_concurrency"] == (
+    dependency_governance = result["workflows"]["dependency_governance"]
+    assert dependency_governance["reconciliation_concurrency"] == (
         "single-global-mutex-with-pr-self-test-isolation"
+    )
+    assert dependency_governance["promotion_authority"] == (
+        "independent-noncertifying-app:contents-write+pull-requests-write:new-subject-only"
     )
     assert result["workflows"]["manual"]["credentialed_model"] == "manual-only"
 
@@ -56,6 +60,27 @@ def test_ci_contract_rejects_partitioned_dependency_governance_reconciliation(
     path.write_text(text.replace(current, partitioned, 1), encoding="utf-8")
 
     with pytest.raises(ValueError, match="reconciliation concurrency contract drifted"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_dependency_governance_rejects_status_authority_for_promotion_app(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "dependency-governance.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = "          permission-pull-requests: write\n"
+    assert marker in text
+    mutated = text.replace(marker, marker + "          permission-statuses: write\n", 1)
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
+    )
+
+    with pytest.raises(ValueError, match="forbidden permission"):
         ci_contract.verify_ci_contract(root)
 
 
