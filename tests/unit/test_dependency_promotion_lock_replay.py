@@ -339,7 +339,7 @@ def test_malformed_new_promotion_pr_is_closed_and_branch_cleaned(
         "baseSha": BASE,
         "fingerprint": FINGERPRINT,
     }
-    with pytest.raises(promotion.GovernanceError, match="identity changed"):
+    with pytest.raises(promotion.GovernanceError, match="identity drifted"):
         promotion._create_promotion_pr(Api(), source, BRANCH, HEAD)
 
     assert closed == [901]
