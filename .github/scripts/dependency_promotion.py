@@ -62,6 +62,8 @@ GITHUB_ACTIONS_APP_ID = 15368
 DEPENDABOT_LOGIN = "dependabot[bot]"
 TRUSTED_GATE_LOGIN = "trusted-pr-gate[bot]"
 PROMOTION_AUTHOR_TOKEN_ENV = "PROMOTION_AUTHOR_TOKEN"
+PROMOTION_AUTHOR_LOGIN = "portyu9-security-remediator[bot]"
+PROMOTION_AUTHOR_USER_ID = 333833782
 PROMOTION_AUTHOR_LOGIN_ENV = "PROTECTED_REMEDIATION_BOT_LOGIN"
 PROMOTION_AUTHOR_ID_ENV = "PROTECTED_REMEDIATION_BOT_ID"
 QUALIFICATION_WAKE_CHECK = "Dependency Promotion Qualification Wake"
@@ -93,23 +95,18 @@ class QualificationWakeRegistered(PolicyBlock):
 def _promotion_author_identity(*, required: bool) -> tuple[str, int] | None:
     login = os.environ.get(PROMOTION_AUTHOR_LOGIN_ENV, "")
     raw_id = os.environ.get(PROMOTION_AUTHOR_ID_ENV, "")
-    if not login and not raw_id and not required:
-        return None
-    if (
-        not login
-        or not login.endswith("[bot]")
-        or login in {
-            GITHUB_ACTIONS_LOGIN,
-            DEPENDABOT_LOGIN,
-            TRUSTED_GATE_LOGIN,
-        }
-        or not raw_id.isdigit()
-    ):
-        raise GovernanceError("independent promotion author App identity is missing or malformed")
-    user_id = int(raw_id)
-    if user_id < 1:
-        raise GovernanceError("independent promotion author App user id must be positive")
-    return login, user_id
+    if bool(login) != bool(raw_id):
+        raise GovernanceError("independent promotion author App identity is partially configured")
+    if login or raw_id:
+        if (
+            login != PROMOTION_AUTHOR_LOGIN
+            or not raw_id.isdigit()
+            or int(raw_id) != PROMOTION_AUTHOR_USER_ID
+        ):
+            raise GovernanceError("independent promotion author App identity drifted from trusted policy")
+    if not required and not login and not raw_id:
+        return PROMOTION_AUTHOR_LOGIN, PROMOTION_AUTHOR_USER_ID
+    return PROMOTION_AUTHOR_LOGIN, PROMOTION_AUTHOR_USER_ID
 
 
 def _promotion_actor_matches(user: Any, *, allow_legacy: bool) -> bool:
