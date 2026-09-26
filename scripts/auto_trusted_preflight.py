@@ -430,15 +430,12 @@ def _protected_remediation_bot_identity() -> tuple[str, int]:
     raw_id = os.environ.get(PROTECTED_REMEDIATION_BOT_ID_ENV, "")
     if bool(login) != bool(raw_id):
         raise ValueError("protected remediation author App identity is partially configured")
-    if login or raw_id:
-        if (
-            login != PROTECTED_REMEDIATION_BOT_LOGIN
-            or not raw_id.isdigit()
-            or int(raw_id) != PROTECTED_REMEDIATION_BOT_USER_ID
-        ):
-            raise ValueError(
-                "protected remediation author App identity drifted from trusted policy"
-            )
+    if (login or raw_id) and (
+        login != PROTECTED_REMEDIATION_BOT_LOGIN
+        or not raw_id.isdigit()
+        or int(raw_id) != PROTECTED_REMEDIATION_BOT_USER_ID
+    ):
+        raise ValueError("protected remediation author App identity drifted from trusted policy")
     return PROTECTED_REMEDIATION_BOT_LOGIN, PROTECTED_REMEDIATION_BOT_USER_ID
 
 
@@ -464,9 +461,12 @@ def _bot_lane(pr: dict[str, Any]) -> str | None:
         and DEPENDABOT_ACTION_REF_RE.fullmatch(branch) is not None
     ):
         return "dependabot-actions"
-    if user.get("login") == GITHUB_ACTIONS_LOGIN and user.get("id") == GITHUB_ACTIONS_USER_ID:
-        if AUTOHEAL_REF_RE.fullmatch(branch) is not None:
-            return "security-autoheal"
+    if (
+        user.get("login") == GITHUB_ACTIONS_LOGIN
+        and user.get("id") == GITHUB_ACTIONS_USER_ID
+        and AUTOHEAL_REF_RE.fullmatch(branch) is not None
+    ):
+        return "security-autoheal"
     return None
 
 
