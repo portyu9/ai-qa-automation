@@ -436,7 +436,9 @@ def _protected_remediation_bot_identity() -> tuple[str, int]:
             or not raw_id.isdigit()
             or int(raw_id) != PROTECTED_REMEDIATION_BOT_USER_ID
         ):
-            raise ValueError("protected remediation author App identity drifted from trusted policy")
+            raise ValueError(
+                "protected remediation author App identity drifted from trusted policy"
+            )
     return PROTECTED_REMEDIATION_BOT_LOGIN, PROTECTED_REMEDIATION_BOT_USER_ID
 
 
