@@ -177,15 +177,12 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         raw_author_id = os.environ.get("PROTECTED_REMEDIATION_BOT_ID", "")
         if bool(author_login) != bool(raw_author_id):
             raise RuntimeError("protected remediation author App identity is partially configured")
-        if author_login or raw_author_id:
-            if (
-                author_login != PROTECTED_REMEDIATION_BOT_LOGIN
-                or not raw_author_id.isdigit()
-                or int(raw_author_id) != PROTECTED_REMEDIATION_BOT_USER_ID
-            ):
-                raise RuntimeError(
-                    "protected remediation author App identity drifted from trusted policy"
-                )
+        if (author_login or raw_author_id) and (
+            author_login != PROTECTED_REMEDIATION_BOT_LOGIN
+            or not raw_author_id.isdigit()
+            or int(raw_author_id) != PROTECTED_REMEDIATION_BOT_USER_ID
+        ):
+            raise RuntimeError("protected remediation author App identity drifted from trusted policy")
         api = protected.GitHubApi(token, repository)
         pr = api.get(f"/pulls/{args.pr_number}")
         live = protected.validate_generated_pr(
