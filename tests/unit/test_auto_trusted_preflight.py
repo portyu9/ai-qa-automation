@@ -648,9 +648,7 @@ def test_protected_remediation_lane_requires_exact_pinned_app_identity(
         == "protected-security-remediation"
     )
     assert (
-        preflight._bot_lane(
-            {"user": {"login": login, "id": user_id + 1}, "head": {"ref": branch}}
-        )
+        preflight._bot_lane({"user": {"login": login, "id": user_id + 1}, "head": {"ref": branch}})
         is None
     )
 
