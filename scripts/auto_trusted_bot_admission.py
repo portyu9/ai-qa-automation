@@ -182,7 +182,9 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             or not raw_author_id.isdigit()
             or int(raw_author_id) != PROTECTED_REMEDIATION_BOT_USER_ID
         ):
-            raise RuntimeError("protected remediation author App identity drifted from trusted policy")
+            raise RuntimeError(
+                "protected remediation author App identity drifted from trusted policy"
+            )
         api = protected.GitHubApi(token, repository)
         pr = api.get(f"/pulls/{args.pr_number}")
         live = protected.validate_generated_pr(
