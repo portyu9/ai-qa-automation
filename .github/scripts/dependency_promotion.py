@@ -683,7 +683,7 @@ def _promotion_body(metadata: dict[str, Any]) -> str:
     )
 
 
-def _validate_staged_or_main_pr(
+def _validate_promotion_pr_identity(
     pr: dict[str, Any],
     *,
     number: int,
@@ -695,7 +695,7 @@ def _validate_staged_or_main_pr(
     allow_legacy_author: bool = True,
 ) -> None:
     if pr.get("number") != number or pr.get("state") != "open" or pr.get("draft") is not False:
-        raise GovernanceError("promotion PR lifecycle changed during staged-base transition")
+        raise GovernanceError("promotion PR lifecycle drifted from the exact generated subject")
     head = pr.get("head") or {}
     base = pr.get("base") or {}
     if (
@@ -710,7 +710,7 @@ def _validate_staged_or_main_pr(
         or base.get("ref") != base_ref
         or require_sha(base.get("sha"), "promotion PR base SHA") != base_sha
     ):
-        raise GovernanceError("promotion PR identity changed during staged-base transition")
+        raise GovernanceError("promotion PR identity drifted from the exact generated subject")
 
 
 def _create_promotion_pr(
@@ -746,7 +746,7 @@ def _create_promotion_pr(
             "GitHub promotion PR creation response is ambiguous; retaining exact branch for recovery"
         )
     try:
-        _validate_staged_or_main_pr(
+        _validate_promotion_pr_identity(
             pr,
             number=number,
             branch=branch,
@@ -825,7 +825,7 @@ def _normalize_staged_promotion(
     retargeted = api.request("PATCH", f"/pulls/{number}", {"base": config["baseBranch"]})
     if not isinstance(retargeted, dict):
         raise GovernanceError("GitHub returned a malformed staged promotion retarget response")
-    _validate_staged_or_main_pr(
+    _validate_promotion_pr_identity(
         retargeted,
         number=number,
         branch=str(head.get("ref")),
