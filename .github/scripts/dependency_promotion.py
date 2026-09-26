@@ -730,24 +730,21 @@ def _create_promotion_pr(
         "fingerprint": source["fingerprint"],
     }
     body = _promotion_body(metadata)
-    try:
-        pr = api.post(
-            "/pulls",
-            {
-                "title": f"deps: promote Dependabot PR #{source['number']}",
-                "head": branch,
-                "base": "main",
-                "body": body,
-                "draft": False,
-            },
-        )
-    except GovernanceError:
-        _delete_exact_generated_branch(api, branch, head_sha)
-        raise
+    pr = api.post(
+        "/pulls",
+        {
+            "title": f"deps: promote Dependabot PR #{source['number']}",
+            "head": branch,
+            "base": "main",
+            "body": body,
+            "draft": False,
+        },
+    )
     number = (pr or {}).get("number")
     if not isinstance(number, int) or isinstance(number, bool) or number < 1:
-        _delete_exact_generated_branch(api, branch, head_sha)
-        raise GovernanceError("GitHub did not acknowledge dependency promotion PR creation")
+        raise GovernanceError(
+            "GitHub promotion PR creation response is ambiguous; retaining exact branch for recovery"
+        )
     try:
         _validate_staged_or_main_pr(
             pr,
@@ -760,10 +757,16 @@ def _create_promotion_pr(
             allow_legacy_author=False,
         )
     except (GovernanceError, PolicyBlock):
-        try:
-            api.request("PATCH", f"/pulls/{number}", {"state": "closed"})
-        finally:
-            _delete_exact_generated_branch(api, branch, head_sha)
+        closed = api.request("PATCH", f"/pulls/{number}", {"state": "closed"})
+        if (
+            not isinstance(closed, dict)
+            or closed.get("number") != number
+            or closed.get("state") != "closed"
+        ):
+            raise GovernanceError(
+                "malformed promotion PR could not be durably closed; retaining exact branch"
+            )
+        _delete_exact_generated_branch(api, branch, head_sha)
         raise
     return number
 
