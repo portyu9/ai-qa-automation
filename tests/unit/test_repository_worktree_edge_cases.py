@@ -29,12 +29,22 @@ def _git(repo: Path, *args: str) -> str:
         "PATH": os.environ.get("PATH", ""),
         "HOME": str(home),
         "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_OPTIONAL_LOCKS": "0",
         "GIT_TERMINAL_PROMPT": "0",
         "GIT_PAGER": "cat",
         "LANG": os.environ.get("LANG", "C.UTF-8"),
     }
     result = subprocess.run(
-        [executable, *args],
+        [
+            executable,
+            "-c",
+            "gc.auto=0",
+            "-c",
+            "gc.autoPackLimit=0",
+            "-c",
+            "maintenance.auto=false",
+            *args,
+        ],
         cwd=repo,
         env=env,
         text=True,
