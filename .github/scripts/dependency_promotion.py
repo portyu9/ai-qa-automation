@@ -59,6 +59,11 @@ MARKER_SUFFIX = " -->"
 GITHUB_ACTIONS_LOGIN = "github-actions[bot]"
 GITHUB_ACTIONS_USER_ID = 41898282
 GITHUB_ACTIONS_APP_ID = 15368
+DEPENDABOT_LOGIN = "dependabot[bot]"
+TRUSTED_GATE_LOGIN = "trusted-pr-gate[bot]"
+PROMOTION_AUTHOR_TOKEN_ENV = "PROMOTION_AUTHOR_TOKEN"
+PROMOTION_AUTHOR_LOGIN_ENV = "PROTECTED_REMEDIATION_BOT_LOGIN"
+PROMOTION_AUTHOR_ID_ENV = "PROTECTED_REMEDIATION_BOT_ID"
 QUALIFICATION_WAKE_CHECK = "Dependency Promotion Qualification Wake"
 QUALIFICATION_WAKE_PREFIX = "aiqa-dependency-promotion-qualification-wake"
 QUALIFICATION_WAKE_RE = re.compile(
@@ -83,6 +88,42 @@ PROMOTION_PATHS = {
 
 class QualificationWakeRegistered(PolicyBlock):
     """A single exact-run qualification wake was durably published."""
+
+
+def _promotion_author_identity(*, required: bool) -> tuple[str, int] | None:
+    login = os.environ.get(PROMOTION_AUTHOR_LOGIN_ENV, "")
+    raw_id = os.environ.get(PROMOTION_AUTHOR_ID_ENV, "")
+    if not login and not raw_id and not required:
+        return None
+    if (
+        not login
+        or not login.endswith("[bot]")
+        or login in {
+            GITHUB_ACTIONS_LOGIN,
+            DEPENDABOT_LOGIN,
+            TRUSTED_GATE_LOGIN,
+        }
+        or not raw_id.isdigit()
+    ):
+        raise GovernanceError("independent promotion author App identity is missing or malformed")
+    user_id = int(raw_id)
+    if user_id < 1:
+        raise GovernanceError("independent promotion author App user id must be positive")
+    return login, user_id
+
+
+def _promotion_actor_matches(user: Any, *, allow_legacy: bool) -> bool:
+    if not isinstance(user, dict):
+        return False
+    if allow_legacy and (
+        user.get("login") == GITHUB_ACTIONS_LOGIN
+        and user.get("id") == GITHUB_ACTIONS_USER_ID
+    ):
+        return True
+    identity = _promotion_author_identity(required=False)
+    return identity is not None and (
+        user.get("login") == identity[0] and user.get("id") == identity[1]
+    )
 
 
 def _canonical_name(value: str) -> str:
@@ -308,15 +349,19 @@ def _staging_base_name(source_number: int, fingerprint: str) -> str:
     return f"{STAGING_BASE_PREFIX}{source_number}-{fingerprint[:12]}"
 
 
-def _owned_generated_promotion_commit(payload: Any, head_sha: str) -> bool:
+def _owned_generated_promotion_commit(
+    payload: Any,
+    head_sha: str,
+    *,
+    allow_legacy: bool = True,
+) -> bool:
     if not isinstance(payload, dict) or payload.get("sha") != head_sha:
         return False
     author = payload.get("author") or {}
     commit = payload.get("commit") or {}
     message = commit.get("message")
     return (
-        author.get("login") == GITHUB_ACTIONS_LOGIN
-        and author.get("id") == GITHUB_ACTIONS_USER_ID
+        _promotion_actor_matches(author, allow_legacy=allow_legacy)
         and isinstance(message, str)
         and PROMOTION_COMMIT_MESSAGE_RE.fullmatch(message) is not None
     )
@@ -788,8 +833,7 @@ def _normalize_staged_promotion(
     user = pr.get("user") or {}
     head = pr.get("head") or {}
     if (
-        user.get("login") != GITHUB_ACTIONS_LOGIN
-        or user.get("id") != GITHUB_ACTIONS_USER_ID
+        not _promotion_actor_matches(user, allow_legacy=True)
         or (head.get("repo") or {}).get("full_name") != config["repository"]
         or (base.get("repo") or {}).get("full_name") != config["repository"]
         or head.get("ref")
@@ -875,8 +919,7 @@ def _promotion_pulls(api: GitHubApi) -> list[dict[str, Any]]:
     return [
         row
         for row in rows
-        if (row.get("user") or {}).get("login") == GITHUB_ACTIONS_LOGIN
-        and (row.get("user") or {}).get("id") == GITHUB_ACTIONS_USER_ID
+        if _promotion_actor_matches(row.get("user") or {}, allow_legacy=True)
         and isinstance(((row.get("head") or {}).get("ref")), str)
         and str((row.get("head") or {}).get("ref")).startswith(BRANCH_PREFIX)
         and _parse_marker(row.get("body")) is not None
@@ -944,10 +987,8 @@ def _validate_promotion(
     metadata = _parse_marker(pr.get("body"))
     if metadata is None or metadata.get("version") != 1:
         raise PolicyBlock("promotion PR lacks exact promotion marker")
-    if (pr.get("user") or {}).get("login") != GITHUB_ACTIONS_LOGIN or (pr.get("user") or {}).get(
-        "id"
-    ) != GITHUB_ACTIONS_USER_ID:
-        raise PolicyBlock("promotion PR is not authored by canonical GitHub Actions")
+    if not _promotion_actor_matches(pr.get("user") or {}, allow_legacy=True):
+        raise PolicyBlock("promotion PR is not authored by a reviewed promotion identity")
     head = pr.get("head") or {}
     base = pr.get("base") or {}
     if (head.get("repo") or {}).get("full_name") != config["repository"] or (
@@ -1243,8 +1284,7 @@ def _close_stale(
     if (
         (fresh or {}).get("state") != "open"
         or (fresh or {}).get("draft") is not False
-        or ((fresh or {}).get("user") or {}).get("login") != GITHUB_ACTIONS_LOGIN
-        or ((fresh or {}).get("user") or {}).get("id") != GITHUB_ACTIONS_USER_ID
+        or not _promotion_actor_matches((fresh or {}).get("user") or {}, allow_legacy=True)
         or (fresh_head.get("repo") or {}).get("full_name") != config["repository"]
         or (fresh_base.get("repo") or {}).get("full_name") != config["repository"]
         or fresh_head.get("ref") != branch
