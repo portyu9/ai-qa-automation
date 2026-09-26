@@ -634,26 +634,32 @@ def test_api_path_rejects_traversal_before_network() -> None:
         api.get("/repos/portyu9/ai-qa-automation/../other")
 
 
-def test_protected_remediation_lane_requires_external_exact_app_identity(
+def test_protected_remediation_lane_requires_exact_pinned_app_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    login = "protected-remediation[bot]"
-    user_id = 424242
+    login = preflight.PROTECTED_REMEDIATION_BOT_LOGIN
+    user_id = preflight.PROTECTED_REMEDIATION_BOT_USER_ID
     branch = "automation/protected-security-remediation-17-" + ("a" * 64) + "-a1"
-    monkeypatch.setenv(preflight.PROTECTED_REMEDIATION_BOT_LOGIN_ENV, login)
-    monkeypatch.setenv(preflight.PROTECTED_REMEDIATION_BOT_ID_ENV, str(user_id))
+    monkeypatch.delenv(preflight.PROTECTED_REMEDIATION_BOT_LOGIN_ENV, raising=False)
+    monkeypatch.delenv(preflight.PROTECTED_REMEDIATION_BOT_ID_ENV, raising=False)
 
     assert (
         preflight._bot_lane({"user": {"login": login, "id": user_id}, "head": {"ref": branch}})
         == "protected-security-remediation"
     )
     assert (
-        preflight._bot_lane({"user": {"login": login, "id": user_id + 1}, "head": {"ref": branch}})
+        preflight._bot_lane(
+            {"user": {"login": login, "id": user_id + 1}, "head": {"ref": branch}}
+        )
         is None
     )
 
-    monkeypatch.delenv(preflight.PROTECTED_REMEDIATION_BOT_ID_ENV)
-    with pytest.raises(ValueError, match="identity is missing or malformed"):
+    monkeypatch.setenv(preflight.PROTECTED_REMEDIATION_BOT_LOGIN_ENV, login)
+    with pytest.raises(ValueError, match="partially configured"):
+        preflight._bot_lane({"user": {"login": login, "id": user_id}, "head": {"ref": branch}})
+
+    monkeypatch.setenv(preflight.PROTECTED_REMEDIATION_BOT_ID_ENV, str(user_id + 1))
+    with pytest.raises(ValueError, match="drifted from trusted policy"):
         preflight._bot_lane({"user": {"login": login, "id": user_id}, "head": {"ref": branch}})
 
 
@@ -668,5 +674,5 @@ def test_protected_remediation_lane_rejects_collapsed_author_identity(
     monkeypatch.setenv(preflight.PROTECTED_REMEDIATION_BOT_LOGIN_ENV, login)
     monkeypatch.setenv(preflight.PROTECTED_REMEDIATION_BOT_ID_ENV, "42")
 
-    with pytest.raises(ValueError, match="identity is missing or malformed"):
+    with pytest.raises(ValueError, match="drifted from trusted policy"):
         preflight._bot_lane({"user": {"login": login, "id": 42}, "head": {"ref": branch}})
