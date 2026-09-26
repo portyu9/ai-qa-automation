@@ -362,7 +362,7 @@ def _contents_bytes(api: Any, path: str, ref: str) -> bytes:
     ):
         raise ProtectedRemediationError(f"repository content is not one canonical file: {path}")
     encoded = payload["content"]
-    compact = "".join(character for character in encoded if character not in " \\t\\r\\n")
+    compact = encoded.replace("\\r", "").replace("\\n", "")
     if not compact:
         raise ProtectedRemediationError(f"repository content base64 is invalid: {path}")
     try:
