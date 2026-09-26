@@ -12,6 +12,8 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 CONTROLLER_DIR = ROOT / ".github" / "scripts"
 EXPECTED_REPOSITORY = "portyu9/ai-qa-automation"
+PROTECTED_REMEDIATION_BOT_LOGIN = "portyu9-security-remediator[bot]"
+PROTECTED_REMEDIATION_BOT_USER_ID = 333833782
 LANES = {
     "dependabot-actions",
     "dependency-promotion",
@@ -173,15 +175,24 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         protected = controllers["protected_security_remediation"]
         author_login = os.environ.get("PROTECTED_REMEDIATION_BOT_LOGIN", "")
         raw_author_id = os.environ.get("PROTECTED_REMEDIATION_BOT_ID", "")
-        if not raw_author_id.isdigit():
-            raise RuntimeError("protected remediation author App user id is missing or malformed")
+        if bool(author_login) != bool(raw_author_id):
+            raise RuntimeError("protected remediation author App identity is partially configured")
+        if author_login or raw_author_id:
+            if (
+                author_login != PROTECTED_REMEDIATION_BOT_LOGIN
+                or not raw_author_id.isdigit()
+                or int(raw_author_id) != PROTECTED_REMEDIATION_BOT_USER_ID
+            ):
+                raise RuntimeError(
+                    "protected remediation author App identity drifted from trusted policy"
+                )
         api = protected.GitHubApi(token, repository)
         pr = api.get(f"/pulls/{args.pr_number}")
         live = protected.validate_generated_pr(
             api,
             pr,
-            expected_bot_login=author_login,
-            expected_bot_id=int(raw_author_id),
+            expected_bot_login=PROTECTED_REMEDIATION_BOT_LOGIN,
+            expected_bot_id=PROTECTED_REMEDIATION_BOT_USER_ID,
         )
         merge_sha = governance.verify_merge_subject(
             api,
