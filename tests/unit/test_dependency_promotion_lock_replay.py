@@ -255,7 +255,11 @@ def test_new_promotion_author_must_be_independent_app(
 ) -> None:
     monkeypatch.delenv(promotion.PROMOTION_AUTHOR_LOGIN_ENV, raising=False)
     monkeypatch.delenv(promotion.PROMOTION_AUTHOR_ID_ENV, raising=False)
-    with pytest.raises(promotion.GovernanceError, match="identity is missing or malformed"):
+    assert promotion._promotion_author_identity(required=True) == (AUTHOR_LOGIN, AUTHOR_ID)
+
+    monkeypatch.setenv(promotion.PROMOTION_AUTHOR_LOGIN_ENV, "attacker-app[bot]")
+    monkeypatch.setenv(promotion.PROMOTION_AUTHOR_ID_ENV, str(AUTHOR_ID))
+    with pytest.raises(promotion.GovernanceError, match="drifted from trusted policy"):
         promotion._promotion_author_identity(required=True)
 
     monkeypatch.setenv(promotion.PROMOTION_AUTHOR_LOGIN_ENV, AUTHOR_LOGIN)
