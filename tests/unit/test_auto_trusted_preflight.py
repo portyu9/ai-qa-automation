@@ -30,6 +30,33 @@ class FakeAPI:
             raise AssertionError(f"unexpected API path: {path}") from exc
 
 
+class GovernanceWakeFakeAPI(FakeAPI):
+    def __init__(
+        self,
+        responses: dict[str, Any],
+        pulls: list[dict[str, Any]],
+        checks: dict[str, list[dict[str, Any]]],
+    ) -> None:
+        super().__init__(responses)
+        self.pulls = pulls
+        self.checks = checks
+        self.list_calls: list[tuple[str, int]] = []
+
+    def list_all(
+        self, path: str, *, max_pages: int = preflight.MAX_API_PAGES
+    ) -> list[dict[str, Any]]:
+        self.list_calls.append((path, max_pages))
+        pulls_path = (
+            f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls"
+            f"?state=open&base={preflight.EXPECTED_DEFAULT_BRANCH}"
+        )
+        if path == pulls_path and max_pages == 1:
+            return deepcopy(self.pulls)
+        if path in self.checks and max_pages == 2:
+            return deepcopy(self.checks[path])
+        raise AssertionError(f"unexpected governance wake list path: {path} max_pages={max_pages}")
+
+
 class ScheduledFakeAPI(FakeAPI):
     def __init__(self, responses: dict[str, Any], pulls: list[dict[str, Any]]) -> None:
         super().__init__(responses)
@@ -187,6 +214,123 @@ def test_protected_change_is_observed_but_not_auto_authorized(changed_path: str)
             "subject_oid": "7" * 40,
         },
     )
+
+
+def _governance_wake_api(*, wake_conclusion: str = "neutral") -> GovernanceWakeFakeAPI:
+    responses = _responses()
+    run = responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]
+    run.update(
+        {
+            "workflow_id": preflight.EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_ID,
+            "name": preflight.EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_NAME,
+            "path": preflight.EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_PATH,
+            "event": "workflow_run",
+            "head_branch": preflight.EXPECTED_DEFAULT_BRANCH,
+            "head_sha": BASE,
+        }
+    )
+    live = responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]
+    live["user"] = {
+        "login": preflight.GITHUB_ACTIONS_LOGIN,
+        "id": preflight.GITHUB_ACTIONS_USER_ID,
+    }
+    live["head"]["ref"] = "automation/dependency-promotion-179-abcdef123456"
+    summary = deepcopy(live)
+    check_path = f"/repos/{preflight.EXPECTED_REPOSITORY}/commits/{HEAD}/check-runs?filter=all"
+    wake_external_id = (
+        f"{preflight.DEPENDENCY_PROMOTION_WAKE_PREFIX}:{HEAD}:{BASE}:trusted-gate:42:1"
+    )
+    checks = {
+        check_path: [
+            {
+                "id": 77,
+                "name": preflight.DEPENDENCY_PROMOTION_WAKE_CHECK,
+                "head_sha": HEAD,
+                "external_id": wake_external_id,
+                "status": "completed",
+                "conclusion": wake_conclusion,
+                "details_url": (
+                    f"https://github.com/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"
+                ),
+                "app": {"id": preflight.GITHUB_ACTIONS_APP_ID, "slug": "github-actions"},
+            }
+        ]
+    }
+    return GovernanceWakeFakeAPI(responses, [summary], checks)
+
+
+def test_successful_governance_wake_selects_exact_dependency_promotion() -> None:
+    api = _governance_wake_api()
+    event = {"action": "completed", "workflow_run": {"id": 42, "head_sha": BASE}}
+
+    admission = preflight.evaluate_admission(api, event=event)
+
+    assert admission is not None
+    assert admission.eligible is True
+    assert admission.qualification_ready is True
+    assert admission.lane == "dependency-promotion"
+    assert admission.pr_number == 65
+    assert admission.head_sha == HEAD
+    assert admission.base_sha == BASE
+
+
+def test_successful_governance_wake_accepts_independent_app_promotion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = _governance_wake_api()
+    login = "portyu9-security-remediator[bot]"
+    user_id = 333833782
+    monkeypatch.setenv(preflight.PROTECTED_REMEDIATION_BOT_LOGIN_ENV, login)
+    monkeypatch.setenv(preflight.PROTECTED_REMEDIATION_BOT_ID_ENV, str(user_id))
+    live = api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]
+    live["user"] = {"login": login, "id": user_id}
+    api.pulls[0]["user"] = {"login": login, "id": user_id}
+    event = {"action": "completed", "workflow_run": {"id": 42, "head_sha": BASE}}
+
+    admission = preflight.evaluate_admission(api, event=event)
+
+    assert admission is not None
+    assert admission.eligible is True
+    assert admission.lane == "dependency-promotion"
+    assert admission.pr_number == 65
+
+
+def test_governance_wake_actor_is_not_admission_authority() -> None:
+    api = _governance_wake_api()
+    run = api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]
+    run["actor"] = {
+        "login": preflight.GITHUB_ACTIONS_LOGIN,
+        "id": preflight.GITHUB_ACTIONS_USER_ID,
+    }
+    run["triggering_actor"] = {
+        "login": preflight.GITHUB_ACTIONS_LOGIN,
+        "id": preflight.GITHUB_ACTIONS_USER_ID,
+    }
+    event = {"action": "completed", "workflow_run": {"id": 42, "head_sha": BASE}}
+
+    admission = preflight.evaluate_admission(api, event=event)
+
+    assert admission is not None
+    assert admission.eligible is True
+    assert admission.lane == "dependency-promotion"
+    assert admission.pr_number == 65
+
+
+def test_governance_wake_check_is_neutral_only_and_non_authoritative() -> None:
+    api = _governance_wake_api(wake_conclusion="success")
+    event = {"action": "completed", "workflow_run": {"id": 42, "head_sha": BASE}}
+
+    assert preflight.evaluate_admission(api, event=event) is None
+
+
+def test_failed_governance_run_cannot_wake_trusted_validation() -> None:
+    api = _governance_wake_api()
+    api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]["conclusion"] = (
+        "failure"
+    )
+    event = {"action": "completed", "workflow_run": {"id": 42, "head_sha": BASE}}
+
+    assert preflight.evaluate_admission(api, event=event) is None
 
 
 def test_scheduled_bot_reconciliation_selects_security_lane_from_fresh_pr() -> None:
@@ -490,14 +634,14 @@ def test_api_path_rejects_traversal_before_network() -> None:
         api.get("/repos/portyu9/ai-qa-automation/../other")
 
 
-def test_protected_remediation_lane_requires_external_exact_app_identity(
+def test_protected_remediation_lane_requires_exact_pinned_app_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    login = "protected-remediation[bot]"
-    user_id = 424242
+    login = preflight.PROTECTED_REMEDIATION_BOT_LOGIN
+    user_id = preflight.PROTECTED_REMEDIATION_BOT_USER_ID
     branch = "automation/protected-security-remediation-17-" + ("a" * 64) + "-a1"
-    monkeypatch.setenv(preflight.PROTECTED_REMEDIATION_BOT_LOGIN_ENV, login)
-    monkeypatch.setenv(preflight.PROTECTED_REMEDIATION_BOT_ID_ENV, str(user_id))
+    monkeypatch.delenv(preflight.PROTECTED_REMEDIATION_BOT_LOGIN_ENV, raising=False)
+    monkeypatch.delenv(preflight.PROTECTED_REMEDIATION_BOT_ID_ENV, raising=False)
 
     assert (
         preflight._bot_lane({"user": {"login": login, "id": user_id}, "head": {"ref": branch}})
@@ -508,8 +652,12 @@ def test_protected_remediation_lane_requires_external_exact_app_identity(
         is None
     )
 
-    monkeypatch.delenv(preflight.PROTECTED_REMEDIATION_BOT_ID_ENV)
-    with pytest.raises(ValueError, match="identity is missing or malformed"):
+    monkeypatch.setenv(preflight.PROTECTED_REMEDIATION_BOT_LOGIN_ENV, login)
+    with pytest.raises(ValueError, match="partially configured"):
+        preflight._bot_lane({"user": {"login": login, "id": user_id}, "head": {"ref": branch}})
+
+    monkeypatch.setenv(preflight.PROTECTED_REMEDIATION_BOT_ID_ENV, str(user_id + 1))
+    with pytest.raises(ValueError, match="drifted from trusted policy"):
         preflight._bot_lane({"user": {"login": login, "id": user_id}, "head": {"ref": branch}})
 
 
@@ -524,5 +672,5 @@ def test_protected_remediation_lane_rejects_collapsed_author_identity(
     monkeypatch.setenv(preflight.PROTECTED_REMEDIATION_BOT_LOGIN_ENV, login)
     monkeypatch.setenv(preflight.PROTECTED_REMEDIATION_BOT_ID_ENV, "42")
 
-    with pytest.raises(ValueError, match="identity is missing or malformed"):
+    with pytest.raises(ValueError, match="drifted from trusted policy"):
         preflight._bot_lane({"user": {"login": login, "id": 42}, "head": {"ref": branch}})

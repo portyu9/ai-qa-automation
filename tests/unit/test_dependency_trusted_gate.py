@@ -173,6 +173,25 @@ def test_dependency_gate_accepts_exact_schedule_attempt_one() -> None:
     }
 
 
+def test_dependency_promotion_gate_accepts_exact_workflow_run_attempt_one() -> None:
+    evidence = gate.require_promotion_trusted_gate(
+        _GateApi(event="workflow_run"),
+        PR_NUMBER,
+        HEAD,
+        BASE,
+    )
+
+    assert evidence == {
+        "statusId": STATUS_ID,
+        "runId": RUN_ID,
+        "workflowId": gate.TRUSTED_PR_AUTO_WORKFLOW_ID,
+        "event": "workflow_run",
+        "runAttempt": 1,
+        "mergeSha": MERGE,
+        "mergeTreeSha": TREE,
+    }
+
+
 def test_dependency_gate_rejects_workflow_run_for_schedule_only_path() -> None:
     with pytest.raises(gate.TrustedStatusError):
         gate.require_schedule_trusted_gate(
@@ -420,7 +439,7 @@ def test_dependency_governance_moved_subject_stops_before_gate(
     assert api.events == ["fresh-pr", "rebind"]
 
 
-def test_dependency_promotion_revalidates_gate_after_fresh_rebind(
+def test_dependency_promotion_revalidates_gate_before_merge(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     api = _MergeApi()
@@ -460,12 +479,87 @@ def test_dependency_promotion_revalidates_gate_after_fresh_rebind(
         api.events.append("finalize")
         return {"mergeSha": MERGE}
 
+    def forbidden_advance(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("green trusted gate must not emit another qualification wake")
+
     monkeypatch.setattr(promotion, "_validate_promotion", validate)
-    monkeypatch.setattr(promotion, "require_schedule_trusted_gate", require_gate)
+    monkeypatch.setattr(promotion, "_advance_promotion_qualification", forbidden_advance)
+    monkeypatch.setattr(promotion, "require_promotion_trusted_gate", require_gate)
     monkeypatch.setattr(promotion, "finalize_post_merge_evidence", finalize)
 
     assert promotion._publish_and_merge(api, promoted, config) == {"mergeSha": MERGE}
     assert api.events == ["fresh-pr", "rebind", "gate", "merge", "finalize"]
+
+
+def test_dependency_promotion_registers_one_non_authoritative_trusted_gate_wake(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = object()
+    promoted = {"number": PR_NUMBER, "headSha": HEAD, "baseSha": BASE}
+    branch = f"automation/dependency-promotion-{PR_NUMBER}-aaaaaaaaaaaa"
+    events: list[str] = []
+
+    monkeypatch.setattr(promotion, "_exact_terminal_trusted_gate_state", lambda *args: None)
+    monkeypatch.setattr(promotion, "_qualification_wake_stage", lambda *args: None)
+    monkeypatch.setattr(
+        promotion,
+        "_publish_qualification_wake",
+        lambda api_arg, subject, *, stage: events.append(f"wake:{stage}"),
+    )
+
+    with pytest.raises(
+        promotion.QualificationWakeRegistered,
+        match="qualification wake registered",
+    ):
+        promotion._advance_promotion_qualification(api, promoted, branch)
+
+    assert events == ["wake:trusted-gate"]
+
+
+def test_dependency_promotion_pending_wake_suppresses_duplicate_registration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    promoted = {"number": PR_NUMBER, "headSha": HEAD, "baseSha": BASE}
+    branch = f"automation/dependency-promotion-{PR_NUMBER}-aaaaaaaaaaaa"
+    monkeypatch.setattr(promotion, "_exact_terminal_trusted_gate_state", lambda *args: None)
+    monkeypatch.setattr(promotion, "_qualification_wake_stage", lambda *args: "trusted-gate")
+    monkeypatch.setattr(
+        promotion,
+        "_publish_qualification_wake",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("registered wake must suppress duplicate publication")
+        ),
+    )
+
+    with pytest.raises(promotion.PolicyBlock, match="wake is registered and pending"):
+        promotion._advance_promotion_qualification(object(), promoted, branch)
+
+
+def test_dependency_promotion_exact_terminal_failure_suppresses_retry_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    promoted = {"number": PR_NUMBER, "headSha": HEAD, "baseSha": BASE}
+    branch = f"automation/dependency-promotion-{PR_NUMBER}-aaaaaaaaaaaa"
+    monkeypatch.setattr(promotion, "_exact_terminal_trusted_gate_state", lambda *args: "failure")
+    monkeypatch.setattr(
+        promotion,
+        "_publish_qualification_wake",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("terminal exact-subject gate must suppress duplicate wake")
+        ),
+    )
+
+    with pytest.raises(promotion.PolicyBlock, match="exact-subject state failure"):
+        promotion._advance_promotion_qualification(object(), promoted, branch)
+
+
+def test_dependency_promotion_qualification_rejects_unreviewed_branch() -> None:
+    with pytest.raises(promotion.PolicyBlock, match="branch is outside reviewed authority"):
+        promotion._advance_promotion_qualification(
+            object(),
+            {"number": PR_NUMBER, "headSha": HEAD, "baseSha": BASE},
+            "automation/not-reviewed",
+        )
 
 
 def test_dependency_promotion_moved_subject_stops_before_gate(
@@ -494,7 +588,7 @@ def test_dependency_promotion_moved_subject_stops_before_gate(
         raise AssertionError("gate must not be consulted for moved promotion")
 
     monkeypatch.setattr(promotion, "_validate_promotion", validate)
-    monkeypatch.setattr(promotion, "require_schedule_trusted_gate", forbidden_gate)
+    monkeypatch.setattr(promotion, "require_promotion_trusted_gate", forbidden_gate)
 
     with pytest.raises(promotion.PolicyBlock, match="changed before guarded merge"):
         promotion._publish_and_merge(api, promoted, config)
@@ -550,6 +644,74 @@ def test_dependency_governance_reconcile_stops_after_successful_merge(
 
     assert governance.reconcile(config, allow_merge=True) == 1
     assert observed_gets == ["/pulls/601"]
+
+
+def test_dependency_promotion_reconcile_stops_after_new_qualification_wake(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_gets: list[str] = []
+    published: list[int] = []
+
+    class _Api:
+        def get(self, path: str) -> dict[str, Any]:
+            observed_gets.append(path)
+            if path == "/pulls/701":
+                return {"number": 701}
+            raise AssertionError(f"promotion continued after qualification wake: {path}")
+
+    api = _Api()
+    config = {
+        "repository": gate.EXPECTED_REPOSITORY,
+        "automergeEnabled": True,
+        "pipMode": "promotion",
+    }
+    monkeypatch.setenv("GITHUB_REPOSITORY", gate.EXPECTED_REPOSITORY)
+    monkeypatch.setattr(promotion, "GitHubApi", lambda token, repository: api)
+    monkeypatch.setattr(promotion, "_prune_orphan_promotion_refs", lambda api_arg: 0)
+    monkeypatch.setattr(
+        promotion,
+        "_promotion_pulls",
+        lambda api_arg: [
+            {"number": 701, "head": {"ref": "automation/dependency-promotion-1-aaaaaaaaaaaa"}},
+            {"number": 702, "head": {"ref": "automation/dependency-promotion-2-bbbbbbbbbbbb"}},
+        ],
+    )
+    monkeypatch.setattr(
+        promotion,
+        "_normalize_staged_promotion",
+        lambda api_arg, pr, config_arg: pr,
+    )
+
+    def validate(
+        api_arg: object,
+        pr: dict[str, Any],
+        config_arg: dict[str, Any],
+        *,
+        require_checks: bool,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        assert api_arg is api
+        assert config_arg is config
+        assert require_checks is False
+        return {"source": True}, {"number": pr["number"], "headSha": HEAD, "baseSha": BASE}
+
+    def publish_and_merge(
+        api_arg: object,
+        promotion_arg: dict[str, Any],
+        config_arg: dict[str, Any],
+    ) -> dict[str, Any]:
+        assert api_arg is api
+        assert config_arg is config
+        published.append(int(promotion_arg["number"]))
+        raise promotion.QualificationWakeRegistered(
+            "automatic Trusted PR Gate qualification wake registered"
+        )
+
+    monkeypatch.setattr(promotion, "_validate_promotion", validate)
+    monkeypatch.setattr(promotion, "_publish_and_merge", publish_and_merge)
+
+    assert promotion.reconcile(config, allow_merge=True) == 0
+    assert observed_gets == ["/pulls/701"]
+    assert published == [701]
 
 
 def test_dependency_promotion_reconcile_stops_after_successful_merge(

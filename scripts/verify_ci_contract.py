@@ -36,7 +36,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
-    "995f686555c0394500b65510ea0bd401dfc4571a"  # pragma: allowlist secret
+    "7ba3679c3edccc893d2913bd8b6dd1afcb6fd37b"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
     "7fdf0dc85375bc78561d531f95220cd877e30b3a"  # pragma: allowlist secret
@@ -45,7 +45,7 @@ EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
-    "d809771ced237ec2d02d52b0eb29432f14c6a90b"  # pragma: allowlist secret
+    "7365feb44ae47f1d7ee9395f7279e67a51d1e028"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
     "7e236900be3b05ab00b09d78b49007646432503e"  # pragma: allowlist secret
@@ -67,7 +67,7 @@ EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA
 _trusted_auto.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
 _trusted_auto._base.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
 _trusted_auto._base.ADDITIONAL_ALLOWED_ACTION_WORKFLOWS["actions/create-github-app-token"] = (
-    frozenset({"protected-security-remediation.yml"})
+    frozenset({"dependency-governance.yml", "protected-security-remediation.yml"})
 )
 
 
@@ -549,6 +549,21 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
     semantic = base._semantic_text(text)
     if "  pull_request_target:" in semantic:
         raise ValueError("dependency-governance.yml must not use pull_request_target")
+    concurrency = base._semantic_text(base._top_level_block(text, "concurrency"))
+    required_concurrency = (
+        "concurrency:",
+        "  group: dependency-governance-${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || 'global' }}-${{ github.event_name == 'pull_request' && 'self-test' || 'reconcile' }}",
+        "  cancel-in-progress: false",
+    )
+    if any(fragment not in concurrency for fragment in required_concurrency) or any(
+        forbidden in concurrency
+        for forbidden in (
+            "github.event.workflow_run.head_branch",
+            "github.ref_name",
+            "github.run_id",
+        )
+    ):
+        raise ValueError("dependency-governance.yml reconciliation concurrency contract drifted")
     if base._workflow_structure_sha1(text) != EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA:
         raise ValueError(
             "dependency-governance.yml non-action structure differs from reviewed dependency authority"
@@ -566,6 +581,7 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "    if: github.event_name == 'pull_request'",
         "    name: govern-dependabot",
         "    if: github.event_name != 'pull_request'",
+        "    environment:\n      name: protected-remediation-author\n      deployment: false",
         "      actions: write",
         "      checks: write",
         "      contents: write",
@@ -576,9 +592,22 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "          fetch-depth: 1",
         "      - name: Attempt one bounded transient recovery",
         "        run: python .github/scripts/dependency_recovery.py --recover",
+        "      - name: Validate independent promotion author identity configuration",
+        "      - name: Mint independent promotion author token",
+        "        id: promotion-author-app",
+        f"        uses: actions/create-github-app-token@{EXPECTED_PROTECTED_AUTHOR_ACTION_SHA} # v3.2.0",
+        "          client-id: ${{ vars.PROTECTED_REMEDIATION_APP_CLIENT_ID }}",
+        "          private-key: ${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}",
+        "          permission-contents: write",
+        "          permission-pull-requests: write",
+        "      - name: Bind promotion author token to reviewed bot identity",
+        '          test "${OBSERVED_APP_SLUG}[bot]" = "$EXPECTED_BOT_LOGIN"',
         "      - name: Reconcile exact-subject Python dependency promotion",
         "        id: python_promotion",
         "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+        "          PROMOTION_AUTHOR_TOKEN: ${{ steps.promotion-author-app.outputs.token }}",
+        "          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}",
+        "          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}",
         "          python .github/scripts/dependency_promotion.py",
         "          --reconcile",
         "          --allow-merge",
@@ -613,10 +642,35 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
             raise ValueError(
                 f"dependency-governance.yml contains forbidden authority token: {forbidden}"
             )
+    if semantic.count("actions/create-github-app-token@") != 1:
+        raise ValueError("dependency governance must mint exactly one independent author App token")
+    if semantic.count("${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}") != 1:
+        raise ValueError("dependency governance private key must have exactly one consumer")
+    if semantic.count("${{ steps.promotion-author-app.outputs.token }}") != 1:
+        raise ValueError("dependency governance author App token must have exactly one consumer")
+    mint = base._semantic_text(
+        base._step_block(semantic, "Mint independent promotion author token")
+    )
+    for forbidden_permission in (
+        "permission-actions:",
+        "permission-checks:",
+        "permission-statuses:",
+        "permission-workflows:",
+        "permission-administration:",
+    ):
+        if forbidden_permission in mint:
+            raise ValueError(
+                f"dependency promotion author App has forbidden permission: {forbidden_permission}"
+            )
     recovery = semantic.index("      - name: Attempt one bounded transient recovery")
+    identity = semantic.index(
+        "      - name: Validate independent promotion author identity configuration"
+    )
+    mint_index = semantic.index("      - name: Mint independent promotion author token")
+    bind = semantic.index("      - name: Bind promotion author token to reviewed bot identity")
     promotion = semantic.index("      - name: Reconcile exact-subject Python dependency promotion")
     reconcile = semantic.index("      - name: Reconcile Dependabot action merge authority")
-    if not recovery < promotion < reconcile:
+    if not recovery < identity < mint_index < bind < promotion < reconcile:
         raise ValueError(
             "dependency recovery, promotion, and action reconciliation are out of reviewed order"
         )
@@ -625,6 +679,10 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "trusted_code_source": "default-branch-only-for-authority-job",
         "recovery_authority": "one-rerun-no-branch-mutation-no-merge",
         "python_dependency_authority": "signed-dependabot-intent-to-deterministic-lock-promotion",
+        "promotion_authority": (
+            "independent-noncertifying-app:contents-write+pull-requests-write:new-subject-only"
+        ),
+        "reconciliation_concurrency": "single-global-mutex-with-pr-self-test-isolation",
         "merge_authority": "single-provenance-qualified-dependabot-controller",
         "trusted_status_authority": "read-only-observation-of-centralized-app-gate",
         "workflow_definition": "action-pin-normalized-reviewed-git-blob",

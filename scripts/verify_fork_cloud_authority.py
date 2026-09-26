@@ -57,7 +57,9 @@ _FORBIDDEN_WORKFLOW_TOKENS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 _ALLOWED_SECRET_REFERENCE_COUNTS: dict[str, Counter[str]] = {
-    "dependency-governance.yml": Counter({"GITHUB_TOKEN": 3}),
+    "dependency-governance.yml": Counter(
+        {"GITHUB_TOKEN": 3, "PROTECTED_REMEDIATION_APP_PRIVATE_KEY": 1}
+    ),
     "manual-validation.yml": Counter({"ANTHROPIC_API_KEY": 2}),
     "protected-security-remediation.yml": Counter({"PROTECTED_REMEDIATION_APP_PRIVATE_KEY": 1}),
     "security-autoheal.yml": Counter(),
@@ -72,7 +74,11 @@ _MANUAL_SECRET_CONTEXT_FRAGMENTS = (
 )
 _GOVERNANCE_SECRET_CONTEXT_FRAGMENTS = (
     "- name: Attempt one bounded transient recovery\n        if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
-    "- name: Reconcile exact-subject Python dependency promotion\n        id: python_promotion\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+    "- name: Mint independent promotion author token",
+    "private-key: ${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}",
+    "permission-contents: write",
+    "permission-pull-requests: write",
+    "- name: Reconcile exact-subject Python dependency promotion\n        id: python_promotion\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n          PROMOTION_AUTHOR_TOKEN: ${{ steps.promotion-author-app.outputs.token }}",
     "- name: Reconcile Dependabot action merge authority\n        if: steps.python_promotion.outputs.merged != 'true'\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
 )
 _PROTECTED_REMEDIATION_SECRET_CONTEXT_FRAGMENTS = (

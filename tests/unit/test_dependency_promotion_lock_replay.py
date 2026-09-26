@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import importlib.util
 import sys
 from pathlib import Path
@@ -128,6 +129,8 @@ BASE = "b" * 40
 FINGERPRINT = "c" * 64
 BRANCH = "automation/dependency-promotion-171-" + FINGERPRINT[:12]
 STAGING = "automation/dependency-promotion-base-171-" + FINGERPRINT[:12]
+AUTHOR_LOGIN = "portyu9-security-remediator[bot]"
+AUTHOR_ID = 333833782
 
 
 def _promotion_metadata() -> dict[str, Any]:
@@ -142,14 +145,20 @@ def _promotion_metadata() -> dict[str, Any]:
     }
 
 
-def _promotion_pr(*, base_ref: str = "main", body: str | None = None) -> dict[str, Any]:
+def _promotion_pr(
+    *,
+    base_ref: str = "main",
+    body: str | None = None,
+    author_login: str = promotion.GITHUB_ACTIONS_LOGIN,
+    author_id: int = promotion.GITHUB_ACTIONS_USER_ID,
+) -> dict[str, Any]:
     return {
         "number": 901,
         "state": "open",
         "draft": False,
         "user": {
-            "login": promotion.GITHUB_ACTIONS_LOGIN,
-            "id": promotion.GITHUB_ACTIONS_USER_ID,
+            "login": author_login,
+            "id": author_id,
         },
         "head": {
             "ref": BRANCH,
@@ -165,41 +174,26 @@ def _promotion_pr(*, base_ref: str = "main", body: str | None = None) -> dict[st
     }
 
 
-def test_create_promotion_pr_uses_non_main_staging_base_then_exact_retarget(
+def test_create_promotion_pr_opens_exact_app_subject_directly_to_main(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[tuple[str, str]] = []
     monkeypatch.setenv("GITHUB_REPOSITORY", "portyu9/ai-qa-automation")
+    monkeypatch.setenv(promotion.PROMOTION_AUTHOR_LOGIN_ENV, AUTHOR_LOGIN)
+    monkeypatch.setenv(promotion.PROMOTION_AUTHOR_ID_ENV, str(AUTHOR_ID))
 
     class Api:
-        def __init__(self) -> None:
-            self.staging_exists = False
-
-        def get(self, path: str) -> dict[str, Any]:
-            if path == f"/git/ref/heads/{STAGING.replace('/', '%2F')}":
-                if not self.staging_exists:
-                    raise promotion.GovernanceError("HTTP 404")
-                return {
-                    "ref": f"refs/heads/{STAGING}",
-                    "object": {"type": "commit", "sha": BASE},
-                }
-            raise AssertionError(path)
-
         def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-            if path == "/git/refs":
-                assert payload == {"ref": f"refs/heads/{STAGING}", "sha": BASE}
-                self.staging_exists = True
-                events.append(("create-ref", STAGING))
-                return {
-                    "ref": f"refs/heads/{STAGING}",
-                    "object": {"type": "commit", "sha": BASE},
-                }
-            if path == "/pulls":
-                assert payload["head"] == BRANCH
-                assert payload["base"] == STAGING
-                events.append(("create-pr", STAGING))
-                return _promotion_pr(base_ref=STAGING, body=str(payload["body"]))
-            raise AssertionError(path)
+            assert path == "/pulls"
+            assert payload["head"] == BRANCH
+            assert payload["base"] == "main"
+            assert payload["draft"] is False
+            events.append(("create-pr", "main"))
+            return _promotion_pr(
+                body=str(payload["body"]),
+                author_login=AUTHOR_LOGIN,
+                author_id=AUTHOR_ID,
+            )
 
         def request(
             self,
@@ -207,16 +201,6 @@ def test_create_promotion_pr_uses_non_main_staging_base_then_exact_retarget(
             path: str,
             payload: dict[str, Any] | None = None,
         ) -> dict[str, Any] | None:
-            if (method, path) == ("PATCH", "/pulls/901"):
-                assert payload == {"base": "main"}
-                events.append(("retarget", "main"))
-                return _promotion_pr()
-            if (method, path) == ("DELETE", f"/git/refs/heads/{STAGING.replace('/', '%2F')}"):
-                assert payload is None
-                assert self.staging_exists is True
-                self.staging_exists = False
-                events.append(("delete-ref", STAGING))
-                return None
             raise AssertionError((method, path, payload))
 
     source = {
@@ -227,12 +211,240 @@ def test_create_promotion_pr_uses_non_main_staging_base_then_exact_retarget(
         "fingerprint": FINGERPRINT,
     }
     assert promotion._create_promotion_pr(Api(), source, BRANCH, HEAD) == 901
-    assert events == [
-        ("create-ref", STAGING),
-        ("create-pr", STAGING),
-        ("retarget", "main"),
-        ("delete-ref", STAGING),
-    ]
+    assert events == [("create-pr", "main")]
+
+
+def test_ambiguous_promotion_pr_create_retains_branch_for_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_REPOSITORY", "portyu9/ai-qa-automation")
+
+    class Api:
+        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            assert path == "/pulls"
+            return {}
+
+        def get(self, path: str) -> dict[str, Any]:
+            raise AssertionError(f"ambiguous create must retain branch: {path}")
+
+        def request(
+            self,
+            method: str,
+            path: str,
+            payload: dict[str, Any] | None = None,
+        ) -> dict[str, Any] | None:
+            raise AssertionError((method, path, payload))
+
+    source = {
+        "number": 171,
+        "headSha": "d" * 40,
+        "sourceBaseSha": "e" * 40,
+        "baseSha": BASE,
+        "fingerprint": FINGERPRINT,
+    }
+    with pytest.raises(
+        promotion.GovernanceError,
+        match="ambiguous; retaining exact branch",
+    ):
+        promotion._create_promotion_pr(Api(), source, BRANCH, HEAD)
+
+
+def test_failed_malformed_pr_closure_retains_branch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_REPOSITORY", "portyu9/ai-qa-automation")
+
+    class Api:
+        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            assert path == "/pulls"
+            pr = _promotion_pr(
+                body=str(payload["body"]),
+                author_login=AUTHOR_LOGIN,
+                author_id=AUTHOR_ID,
+            )
+            pr["head"]["sha"] = "9" * 40
+            return pr
+
+        def get(self, path: str) -> dict[str, Any]:
+            raise AssertionError(f"failed closure must retain branch: {path}")
+
+        def request(
+            self,
+            method: str,
+            path: str,
+            payload: dict[str, Any] | None = None,
+        ) -> dict[str, Any] | None:
+            assert (method, path) == ("PATCH", "/pulls/901")
+            assert payload == {"state": "closed"}
+            return {"number": 901, "state": "open"}
+
+    source = {
+        "number": 171,
+        "headSha": "d" * 40,
+        "sourceBaseSha": "e" * 40,
+        "baseSha": BASE,
+        "fingerprint": FINGERPRINT,
+    }
+    with pytest.raises(
+        promotion.GovernanceError,
+        match="could not be durably closed; retaining exact branch",
+    ):
+        promotion._create_promotion_pr(Api(), source, BRANCH, HEAD)
+
+
+def test_malformed_new_promotion_pr_is_closed_and_branch_cleaned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_REPOSITORY", "portyu9/ai-qa-automation")
+    deleted: list[str] = []
+    closed: list[int] = []
+
+    class Api:
+        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            assert path == "/pulls"
+            pr = _promotion_pr(
+                body=str(payload["body"]),
+                author_login=AUTHOR_LOGIN,
+                author_id=AUTHOR_ID,
+            )
+            pr["head"]["sha"] = "9" * 40
+            return pr
+
+        def get(self, path: str) -> dict[str, Any]:
+            encoded = BRANCH.replace("/", "%2F")
+            assert path == f"/git/ref/heads/{encoded}"
+            return {
+                "ref": f"refs/heads/{BRANCH}",
+                "object": {"type": "commit", "sha": HEAD},
+            }
+
+        def request(
+            self,
+            method: str,
+            path: str,
+            payload: dict[str, Any] | None = None,
+        ) -> dict[str, Any] | None:
+            if (method, path) == ("PATCH", "/pulls/901"):
+                assert payload == {"state": "closed"}
+                closed.append(901)
+                return {"number": 901, "state": "closed"}
+            if method == "DELETE":
+                deleted.append(path)
+                return None
+            raise AssertionError((method, path, payload))
+
+    source = {
+        "number": 171,
+        "headSha": "d" * 40,
+        "sourceBaseSha": "e" * 40,
+        "baseSha": BASE,
+        "fingerprint": FINGERPRINT,
+    }
+    with pytest.raises(promotion.GovernanceError, match="identity drifted"):
+        promotion._create_promotion_pr(Api(), source, BRANCH, HEAD)
+
+    assert closed == [901]
+    assert deleted == [f"/git/refs/heads/{BRANCH.replace('/', '%2F')}"]
+
+
+def test_new_promotion_author_must_be_independent_app(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(promotion.PROMOTION_AUTHOR_LOGIN_ENV, raising=False)
+    monkeypatch.delenv(promotion.PROMOTION_AUTHOR_ID_ENV, raising=False)
+    assert promotion._promotion_author_identity() == (AUTHOR_LOGIN, AUTHOR_ID)
+
+    monkeypatch.setenv(promotion.PROMOTION_AUTHOR_LOGIN_ENV, "attacker-app[bot]")
+    monkeypatch.setenv(promotion.PROMOTION_AUTHOR_ID_ENV, str(AUTHOR_ID))
+    with pytest.raises(promotion.GovernanceError, match="drifted from trusted policy"):
+        promotion._promotion_author_identity()
+
+    monkeypatch.setenv(promotion.PROMOTION_AUTHOR_LOGIN_ENV, AUTHOR_LOGIN)
+    monkeypatch.setenv(promotion.PROMOTION_AUTHOR_ID_ENV, str(AUTHOR_ID))
+    assert promotion._promotion_actor_matches(
+        {"login": AUTHOR_LOGIN, "id": AUTHOR_ID},
+        allow_legacy=False,
+    )
+    assert not promotion._promotion_actor_matches(
+        {
+            "login": promotion.GITHUB_ACTIONS_LOGIN,
+            "id": promotion.GITHUB_ACTIONS_USER_ID,
+        },
+        allow_legacy=False,
+    )
+    assert promotion._promotion_actor_matches(
+        {
+            "login": promotion.GITHUB_ACTIONS_LOGIN,
+            "id": promotion.GITHUB_ACTIONS_USER_ID,
+        },
+        allow_legacy=True,
+    )
+
+
+def test_new_promotion_commit_requires_independent_app_author(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generated = {"pyproject.toml": b"exact generated bytes\n"}
+    base_tree = "f" * 40
+    tree_sha = "1" * 40
+
+    class Api:
+        def __init__(self, author_login: str, author_id: int) -> None:
+            self.author_login = author_login
+            self.author_id = author_id
+
+        def get(self, path: str) -> dict[str, Any]:
+            if path == f"/git/commits/{BASE}":
+                return {"sha": BASE, "tree": {"sha": base_tree}}
+            if path == f"/git/ref/heads/{BRANCH.replace('/', '%2F')}":
+                raise promotion.GovernanceError("GitHub API GET failed HTTP 404")
+            if path == f"/commits/{HEAD}":
+                return {
+                    "sha": HEAD,
+                    "author": {"login": self.author_login, "id": self.author_id},
+                    "commit": {
+                        "message": "deps: promote Dependabot PR #171 with synchronized locks"
+                    },
+                }
+            raise AssertionError(path)
+
+        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            if path == "/git/blobs":
+                raw = base64.b64decode(payload["content"], validate=True)
+                return {"sha": promotion._git_blob_sha1(raw)}
+            if path == "/git/trees":
+                assert payload["base_tree"] == base_tree
+                return {"sha": tree_sha}
+            if path == "/git/commits":
+                assert payload == {
+                    "message": "deps: promote Dependabot PR #171 with synchronized locks",
+                    "tree": tree_sha,
+                    "parents": [BASE],
+                }
+                return {"sha": HEAD}
+            if path == "/git/refs":
+                assert payload == {"ref": f"refs/heads/{BRANCH}", "sha": HEAD}
+                return {"ref": f"refs/heads/{BRANCH}", "object": {"type": "commit", "sha": HEAD}}
+            raise AssertionError(path)
+
+    source = {"number": 171, "baseSha": BASE}
+    monkeypatch.setattr(promotion, "_compile", lambda source_arg: generated)
+
+    assert promotion._create_promotion_commit(
+        Api(AUTHOR_LOGIN, AUTHOR_ID),
+        source,
+        BRANCH,
+    ) == (HEAD, generated)
+
+    with pytest.raises(
+        promotion.GovernanceError,
+        match="not authored by the exact independent App",
+    ):
+        promotion._create_promotion_commit(
+            Api(promotion.GITHUB_ACTIONS_LOGIN, promotion.GITHUB_ACTIONS_USER_ID),
+            source,
+            BRANCH,
+        )
 
 
 def test_trusted_qualification_rejects_duplicate_exact_evidence(

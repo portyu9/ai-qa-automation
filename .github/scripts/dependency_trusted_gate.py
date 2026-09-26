@@ -163,3 +163,26 @@ def require_schedule_trusted_gate(
         allowed_events=frozenset({TRUSTED_PR_AUTO_SCHEDULE_EVENT}),
         authority_label="schedule-owned",
     )
+
+
+def require_promotion_trusted_gate(
+    api: Any,
+    pr_number: int,
+    head_sha: str,
+    base_sha: str,
+) -> dict[str, Any]:
+    """Require exact automatic gate evidence for generated dependency promotions.
+
+    Promotions may converge through the five-minute schedule or through the reviewed
+    dependency-governance workflow_run wake. Both events execute the same trusted-main
+    workflow and retain exact current-main/head/merge/tree revalidation here.
+    """
+
+    return _require_trusted_gate(
+        api,
+        pr_number,
+        head_sha,
+        base_sha,
+        allowed_events=frozenset({"schedule", "workflow_run"}),
+        authority_label="promotion automatic",
+    )

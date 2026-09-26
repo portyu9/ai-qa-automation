@@ -179,6 +179,48 @@ def test_alert_text_cannot_select_authority_and_attempt_exhaustion_blocks() -> N
         author.validate_route_record(exhausted, main_sha=MAIN)
 
 
+class _ContentsApi:
+    def __init__(self, content: str) -> None:
+        self.content = content
+
+    def get(self, path: str) -> dict[str, Any]:
+        assert path == f"/contents/.github/scripts/security_autoheal.py?ref={MAIN}"
+        return {"type": "file", "encoding": "base64", "content": self.content}
+
+
+def test_contents_bytes_accepts_github_wrapped_base64() -> None:
+    raw = b"first line\\nsecond line\\n"
+    encoded = base64.b64encode(raw).decode("ascii")
+    wrapped = "\\r\\n".join(encoded[index : index + 8] for index in range(0, len(encoded), 8))
+
+    observed = author._contents_bytes(
+        _ContentsApi(wrapped),
+        ".github/scripts/security_autoheal.py",
+        MAIN,
+    )
+
+    assert observed == raw
+
+
+@pytest.mark.parametrize(
+    "encoded",
+    [
+        "Zm9v$YmFy",
+        "YQ=",
+        "Y Q==",
+        "",
+        "\\r\\n",
+    ],
+)
+def test_contents_bytes_rejects_noncanonical_base64(encoded: str) -> None:
+    with pytest.raises(author.ProtectedRemediationError, match="base64 is invalid"):
+        author._contents_bytes(
+            _ContentsApi(encoded),
+            ".github/scripts/security_autoheal.py",
+            MAIN,
+        )
+
+
 def test_policy_self_test_keeps_single_file_self_excluding_authority() -> None:
     author.self_test()
     certifiers = {

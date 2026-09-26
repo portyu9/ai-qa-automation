@@ -35,10 +35,16 @@ def _reviewed_governance_secret_payload() -> str:
         if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Mint independent promotion author token
+        with:
+          private-key: ${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
       - name: Reconcile exact-subject Python dependency promotion
         id: python_promotion
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROMOTION_AUTHOR_TOKEN: ${{ steps.promotion-author-app.outputs.token }}
       - name: Reconcile Dependabot action merge authority
         if: steps.python_promotion.outputs.merged != 'true'
         env:
@@ -124,7 +130,10 @@ def test_reviewed_governance_secret_consumers_do_not_create_aws_authority() -> N
     )
     assert result["aws_authentication"] == "forbidden"
     assert result["pull_request_target"] == "forbidden"
-    assert result["secrets"] == {"GITHUB_TOKEN": 3}
+    assert result["secrets"] == {
+        "GITHUB_TOKEN": 3,
+        "PROTECTED_REMEDIATION_APP_PRIVATE_KEY": 1,
+    }
 
 
 def test_reviewed_governance_secret_consumer_movement_fails_closed() -> None:
