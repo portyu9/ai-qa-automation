@@ -36,7 +36,9 @@ def _current_build_requirement() -> str:
     return requires[0]
 
 
-def _supply_chain_pyproject(\n    *, build_requirement: str, extra_build_key: bool = False\n) -> dict[str, Any]:
+def _supply_chain_pyproject(
+    *, build_requirement: str, extra_build_key: bool = False
+) -> dict[str, Any]:
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     build_system = pyproject["build-system"]
     assert isinstance(build_system, dict)
