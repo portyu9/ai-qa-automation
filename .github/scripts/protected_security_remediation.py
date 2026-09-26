@@ -361,8 +361,12 @@ def _contents_bytes(api: Any, path: str, ref: str) -> bytes:
         or not isinstance(payload.get("content"), str)
     ):
         raise ProtectedRemediationError(f"repository content is not one canonical file: {path}")
+    encoded = payload["content"]
+    compact = "".join(character for character in encoded if character not in " \\t\\r\\n")
+    if not compact:
+        raise ProtectedRemediationError(f"repository content base64 is invalid: {path}")
     try:
-        raw = base64.b64decode(payload["content"], validate=True)
+        raw = base64.b64decode(compact, validate=True)
     except (binascii.Error, ValueError) as exc:
         raise ProtectedRemediationError(f"repository content base64 is invalid: {path}") from exc
     if not raw or len(raw) > MAX_SOURCE_BYTES:
