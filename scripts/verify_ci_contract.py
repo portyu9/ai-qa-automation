@@ -45,7 +45,7 @@ EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
-    "d809771ced237ec2d02d52b0eb29432f14c6a90b"  # pragma: allowlist secret
+    "bc497a5ab8e6543fa8ff625a5bcb2321cc9e29bf"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
     "7e236900be3b05ab00b09d78b49007646432503e"  # pragma: allowlist secret
@@ -549,6 +549,23 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
     semantic = base._semantic_text(text)
     if "  pull_request_target:" in semantic:
         raise ValueError("dependency-governance.yml must not use pull_request_target")
+    concurrency = base._semantic_text(base._top_level_block(text, "concurrency"))
+    required_concurrency = (
+        "concurrency:",
+        "  group: dependency-governance-${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || 'global' }}-${{ github.event_name == 'pull_request' && 'self-test' || 'reconcile' }}",
+        "  cancel-in-progress: false",
+    )
+    if any(fragment not in concurrency for fragment in required_concurrency) or any(
+        forbidden in concurrency
+        for forbidden in (
+            "github.event.workflow_run.head_branch",
+            "github.ref_name",
+            "github.run_id",
+        )
+    ):
+        raise ValueError(
+            "dependency-governance.yml reconciliation concurrency contract drifted"
+        )
     if base._workflow_structure_sha1(text) != EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA:
         raise ValueError(
             "dependency-governance.yml non-action structure differs from reviewed dependency authority"
@@ -625,6 +642,7 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "trusted_code_source": "default-branch-only-for-authority-job",
         "recovery_authority": "one-rerun-no-branch-mutation-no-merge",
         "python_dependency_authority": "signed-dependabot-intent-to-deterministic-lock-promotion",
+        "reconciliation_concurrency": "single-global-mutex-with-pr-self-test-isolation",
         "merge_authority": "single-provenance-qualified-dependabot-controller",
         "trusted_status_authority": "read-only-observation-of-centralized-app-gate",
         "workflow_definition": "action-pin-normalized-reviewed-git-blob",

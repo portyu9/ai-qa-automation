@@ -38,7 +38,25 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     assert result["workflows"]["trusted_auto"]["maintenance_authority"] == (
         "autonomous-governed-bots;external-one-shot-only-for-unrecognized-protected-change"
     )
+    assert result["workflows"]["dependency_governance"]["reconciliation_concurrency"] == (
+        "single-global-mutex-with-pr-self-test-isolation"
+    )
     assert result["workflows"]["manual"]["credentialed_model"] == "manual-only"
+
+
+def test_ci_contract_rejects_partitioned_dependency_governance_reconciliation(
+    tmp_path: Path,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "dependency-governance.yml"
+    text = path.read_text(encoding="utf-8")
+    current = "  group: dependency-governance-${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || 'global' }}-${{ github.event_name == 'pull_request' && 'self-test' || 'reconcile' }}\n"
+    partitioned = "  group: dependency-governance-${{ github.event.pull_request.head.ref || github.event.workflow_run.head_branch || github.ref_name || github.run_id }}-${{ github.event_name == 'pull_request' && 'self-test' || 'reconcile' }}\n"
+    assert current in text
+    path.write_text(text.replace(current, partitioned, 1), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="reconciliation concurrency contract drifted"):
+        ci_contract.verify_ci_contract(root)
 
 
 def test_ci_action_authority_matches_supply_chain_verifier() -> None:
