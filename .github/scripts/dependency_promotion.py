@@ -572,14 +572,21 @@ def _existing_promotion_head(
         "existing promotion branch SHA",
     )
     commit = api.get(f"/git/commits/{head_sha}")
-    if not _promotion_commit_matches(
-        commit,
-        tree_sha=tree_sha,
-        base_sha=base_sha,
-        message=message,
+    if (
+        not _promotion_commit_matches(
+            commit,
+            tree_sha=tree_sha,
+            base_sha=base_sha,
+            message=message,
+        )
+        or not _owned_generated_promotion_commit(
+            api.get(f"/commits/{head_sha}"),
+            head_sha,
+            allow_legacy=False,
+        )
     ):
         raise PolicyBlock(
-            "existing dependency promotion branch does not match the exact generated subject"
+            "existing dependency promotion branch does not match the exact independent-App subject"
         )
     return head_sha
 
@@ -587,6 +594,7 @@ def _existing_promotion_head(
 def _create_promotion_commit(
     api: GitHubApi, source: dict[str, Any], branch: str
 ) -> tuple[str, dict[str, bytes]]:
+    _promotion_author_identity(required=True)
     generated = _compile(source)
     base_commit = api.get(f"/git/commits/{source['baseSha']}")
     base_tree = require_sha(
@@ -625,6 +633,11 @@ def _create_promotion_commit(
     created = api.post("/git/refs", {"ref": f"refs/heads/{branch}", "sha": head_sha})
     if (created or {}).get("ref") != f"refs/heads/{branch}":
         raise GovernanceError("GitHub did not acknowledge dependency promotion branch creation")
+    observed = api.get(f"/commits/{head_sha}")
+    if not _owned_generated_promotion_commit(observed, head_sha, allow_legacy=False):
+        raise GovernanceError(
+            "new dependency promotion commit is not authored by the exact independent App"
+        )
     return head_sha, generated
 
 
@@ -726,13 +739,18 @@ def _validate_staged_or_main_pr(
     base_ref: str,
     base_sha: str,
     repository: str,
+    allow_legacy_author: bool = True,
 ) -> None:
     if pr.get("number") != number or pr.get("state") != "open" or pr.get("draft") is not False:
         raise GovernanceError("promotion PR lifecycle changed during staged-base transition")
     head = pr.get("head") or {}
     base = pr.get("base") or {}
     if (
-        (head.get("repo") or {}).get("full_name") != repository
+        not _promotion_actor_matches(
+            pr.get("user") or {},
+            allow_legacy=allow_legacy_author,
+        )
+        or (head.get("repo") or {}).get("full_name") != repository
         or (base.get("repo") or {}).get("full_name") != repository
         or head.get("ref") != branch
         or require_sha(head.get("sha"), "promotion PR head SHA") != head_sha
@@ -743,6 +761,7 @@ def _validate_staged_or_main_pr(
 
 
 def _create_promotion_pr(api: GitHubApi, source: dict[str, Any], branch: str, head_sha: str) -> int:
+    _promotion_author_identity(required=True)
     metadata = {
         "version": 1,
         "sourcePr": source["number"],
@@ -765,20 +784,15 @@ def _create_promotion_pr(api: GitHubApi, source: dict[str, Any], branch: str, he
                 "draft": False,
             },
         )
-    except GovernanceError as exc:
+    except GovernanceError:
         _delete_exact_ref(
             api,
             staging_base,
             source["baseSha"],
             label="promotion staging-base ref",
         )
-        if not _github_actions_pr_creation_denied(exc):
-            raise
         _delete_exact_generated_branch(api, branch, head_sha)
-        raise GovernanceError(
-            "repository Actions policy blocks generated pull-request creation; "
-            "enable 'Allow GitHub Actions to create and approve pull requests'"
-        ) from exc
+        raise
     number = (pr or {}).get("number")
     if not isinstance(number, int) or number < 1:
         raise GovernanceError("GitHub did not acknowledge dependency promotion PR creation")
@@ -790,6 +804,7 @@ def _create_promotion_pr(api: GitHubApi, source: dict[str, Any], branch: str, he
         base_ref=staging_base,
         base_sha=source["baseSha"],
         repository=os.environ.get("GITHUB_REPOSITORY", ""),
+        allow_legacy_author=False,
     )
     retargeted = api.request("PATCH", f"/pulls/{number}", {"base": "main"})
     if not isinstance(retargeted, dict):
@@ -802,6 +817,7 @@ def _create_promotion_pr(api: GitHubApi, source: dict[str, Any], branch: str, he
         base_ref="main",
         base_sha=source["baseSha"],
         repository=os.environ.get("GITHUB_REPOSITORY", ""),
+        allow_legacy_author=False,
     )
     _delete_exact_ref(
         api,
@@ -1403,8 +1419,23 @@ def reconcile(
         try:
             source = source_subject(api, api.get(f"/pulls/{number}"), config)
             branch = _branch_name(source)
-            head_sha, _ = _create_promotion_commit(api, source, branch)
-            promotion_number = _create_promotion_pr(api, source, branch, head_sha)
+            author_token = os.environ.get(PROMOTION_AUTHOR_TOKEN_ENV, "")
+            if not author_token:
+                raise GovernanceError(
+                    "independent promotion author App token is required for new promotion creation"
+                )
+            _promotion_author_identity(required=True)
+            author_api = GitHubApi(author_token, repository)
+            head_sha, _ = _create_promotion_commit(author_api, source, branch)
+            promotion_number = _create_promotion_pr(author_api, source, branch, head_sha)
+            created_pr = api.get(f"/pulls/{promotion_number}")
+            if not _promotion_actor_matches(
+                (created_pr or {}).get("user") or {},
+                allow_legacy=False,
+            ):
+                raise GovernanceError(
+                    "created promotion PR is not authored by the exact independent App"
+                )
             active_sources.add(number)
             created += 1
             print(
