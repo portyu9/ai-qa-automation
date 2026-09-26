@@ -213,6 +213,84 @@ def test_create_promotion_pr_opens_exact_app_subject_directly_to_main(
     assert events == [("create-pr", "main")]
 
 
+def test_ambiguous_promotion_pr_create_retains_branch_for_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_REPOSITORY", "portyu9/ai-qa-automation")
+
+    class Api:
+        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            assert path == "/pulls"
+            return {}
+
+        def get(self, path: str) -> dict[str, Any]:
+            raise AssertionError(f"ambiguous create must retain branch: {path}")
+
+        def request(
+            self,
+            method: str,
+            path: str,
+            payload: dict[str, Any] | None = None,
+        ) -> dict[str, Any] | None:
+            raise AssertionError((method, path, payload))
+
+    source = {
+        "number": 171,
+        "headSha": "d" * 40,
+        "sourceBaseSha": "e" * 40,
+        "baseSha": BASE,
+        "fingerprint": FINGERPRINT,
+    }
+    with pytest.raises(
+        promotion.GovernanceError,
+        match="ambiguous; retaining exact branch",
+    ):
+        promotion._create_promotion_pr(Api(), source, BRANCH, HEAD)
+
+
+def test_failed_malformed_pr_closure_retains_branch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_REPOSITORY", "portyu9/ai-qa-automation")
+
+    class Api:
+        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            assert path == "/pulls"
+            pr = _promotion_pr(
+                body=str(payload["body"]),
+                author_login=AUTHOR_LOGIN,
+                author_id=AUTHOR_ID,
+            )
+            pr["head"]["sha"] = "9" * 40
+            return pr
+
+        def get(self, path: str) -> dict[str, Any]:
+            raise AssertionError(f"failed closure must retain branch: {path}")
+
+        def request(
+            self,
+            method: str,
+            path: str,
+            payload: dict[str, Any] | None = None,
+        ) -> dict[str, Any] | None:
+            assert (method, path) == ("PATCH", "/pulls/901")
+            assert payload == {"state": "closed"}
+            return {"number": 901, "state": "open"}
+
+    source = {
+        "number": 171,
+        "headSha": "d" * 40,
+        "sourceBaseSha": "e" * 40,
+        "baseSha": BASE,
+        "fingerprint": FINGERPRINT,
+    }
+    with pytest.raises(
+        promotion.GovernanceError,
+        match="could not be durably closed; retaining exact branch",
+    ):
+        promotion._create_promotion_pr(Api(), source, BRANCH, HEAD)
+
+
 def test_malformed_new_promotion_pr_is_closed_and_branch_cleaned(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
