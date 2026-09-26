@@ -76,6 +76,9 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    environment:
+      name: protected-remediation-author
+      deployment: false
     permissions:
       actions: write
       checks: write
@@ -111,10 +114,49 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python .github/scripts/dependency_recovery.py --recover
+      - name: Validate independent promotion author identity configuration
+        env:
+          AUTHOR_APP_CLIENT_ID: ${{ vars.PROTECTED_REMEDIATION_APP_CLIENT_ID }}
+          AUTHOR_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
+          AUTHOR_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}
+        run: |
+          set -euo pipefail
+          test -n "$AUTHOR_APP_CLIENT_ID"
+          case "$AUTHOR_BOT_LOGIN" in
+            *"[bot]") ;;
+            *) exit 1 ;;
+          esac
+          case "$AUTHOR_BOT_LOGIN" in
+            "github-actions[bot]"|"dependabot[bot]"|"trusted-pr-gate[bot]") exit 1 ;;
+          esac
+          case "$AUTHOR_BOT_ID" in
+            ''|*[!0-9]*) exit 1 ;;
+          esac
+          test "$AUTHOR_BOT_ID" -gt 0
+      - name: Mint independent promotion author token
+        id: promotion-author-app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.PROTECTED_REMEDIATION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}
+          owner: portyu9
+          repositories: ai-qa-automation
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Bind promotion author token to reviewed bot identity
+        env:
+          OBSERVED_APP_SLUG: ${{ steps.promotion-author-app.outputs.app-slug }}
+          EXPECTED_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
+        run: |
+          set -euo pipefail
+          test "${OBSERVED_APP_SLUG}[bot]" = "$EXPECTED_BOT_LOGIN"
       - name: Reconcile exact-subject Python dependency promotion
         id: python_promotion
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROMOTION_AUTHOR_TOKEN: ${{ steps.promotion-author-app.outputs.token }}
+          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
+          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}
         run: >-
           python .github/scripts/dependency_promotion.py
           --reconcile
