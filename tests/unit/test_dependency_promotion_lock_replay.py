@@ -213,6 +213,61 @@ def test_create_promotion_pr_opens_exact_app_subject_directly_to_main(
     assert events == [("create-pr", "main")]
 
 
+def test_malformed_new_promotion_pr_is_closed_and_branch_cleaned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_REPOSITORY", "portyu9/ai-qa-automation")
+    deleted: list[str] = []
+    closed: list[int] = []
+
+    class Api:
+        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            assert path == "/pulls"
+            pr = _promotion_pr(
+                body=str(payload["body"]),
+                author_login=AUTHOR_LOGIN,
+                author_id=AUTHOR_ID,
+            )
+            pr["head"]["sha"] = "9" * 40
+            return pr
+
+        def get(self, path: str) -> dict[str, Any]:
+            encoded = BRANCH.replace("/", "%2F")
+            assert path == f"/git/ref/heads/{encoded}"
+            return {
+                "ref": f"refs/heads/{BRANCH}",
+                "object": {"type": "commit", "sha": HEAD},
+            }
+
+        def request(
+            self,
+            method: str,
+            path: str,
+            payload: dict[str, Any] | None = None,
+        ) -> dict[str, Any] | None:
+            if (method, path) == ("PATCH", "/pulls/901"):
+                assert payload == {"state": "closed"}
+                closed.append(901)
+                return {"number": 901, "state": "closed"}
+            if method == "DELETE":
+                deleted.append(path)
+                return None
+            raise AssertionError((method, path, payload))
+
+    source = {
+        "number": 171,
+        "headSha": "d" * 40,
+        "sourceBaseSha": "e" * 40,
+        "baseSha": BASE,
+        "fingerprint": FINGERPRINT,
+    }
+    with pytest.raises(promotion.GovernanceError, match="identity changed"):
+        promotion._create_promotion_pr(Api(), source, BRANCH, HEAD)
+
+    assert closed == [901]
+    assert deleted == [f"/git/refs/heads/{BRANCH.replace('/', '%2F')}"]
+
+
 def test_new_promotion_author_must_be_independent_app(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
