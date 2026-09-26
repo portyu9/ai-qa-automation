@@ -226,7 +226,9 @@ def validate_pyproject_transition(base_raw: bytes, head_raw: bytes) -> None:
 
 
 def _decode_contents_base64(content: str, path: str) -> bytes:
-    compact = "".join(content.split())
+    compact = content.replace("\r", "").replace("\n", "")
+    if not compact:
+        raise PolicyBlock(f"repository content base64 is invalid: {path}")
     try:
         return base64.b64decode(compact, validate=True)
     except (ValueError, binascii.Error) as exc:
@@ -1523,12 +1525,13 @@ dev = ["mypy>=2,<3", "playwright>=1.52,<2"]
     )
     if _decode_contents_base64(wrapped_base, "pyproject.toml") != base_raw:
         raise GovernanceError("wrapped GitHub Contents base64 did not round-trip")
-    try:
-        _decode_contents_base64(encoded_base + "%", "pyproject.toml")
-    except PolicyBlock:
-        pass
-    else:
-        raise GovernanceError("malformed GitHub Contents base64 did not fail closed")
+    for malformed in (encoded_base + "%", "Y Q==", "", "\r\n"):
+        try:
+            _decode_contents_base64(malformed, "pyproject.toml")
+        except PolicyBlock:
+            pass
+        else:
+            raise GovernanceError("malformed GitHub Contents base64 did not fail closed")
 
     if _promotion_base("a" * 40, "b" * 40, base_raw, base_raw) != "b" * 40:
         raise GovernanceError(
