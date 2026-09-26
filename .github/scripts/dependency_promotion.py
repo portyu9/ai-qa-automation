@@ -97,15 +97,12 @@ def _promotion_author_identity() -> tuple[str, int]:
     raw_id = os.environ.get(PROMOTION_AUTHOR_ID_ENV, "")
     if bool(login) != bool(raw_id):
         raise GovernanceError("independent promotion author App identity is partially configured")
-    if login or raw_id:
-        if (
-            login != PROMOTION_AUTHOR_LOGIN
-            or not raw_id.isdigit()
-            or int(raw_id) != PROMOTION_AUTHOR_USER_ID
-        ):
-            raise GovernanceError(
-                "independent promotion author App identity drifted from trusted policy"
-            )
+    if (login or raw_id) and (
+        login != PROMOTION_AUTHOR_LOGIN
+        or not raw_id.isdigit()
+        or int(raw_id) != PROMOTION_AUTHOR_USER_ID
+    ):
+        raise GovernanceError("independent promotion author App identity drifted from trusted policy")
     return PROMOTION_AUTHOR_LOGIN, PROMOTION_AUTHOR_USER_ID
 
 
@@ -752,7 +749,7 @@ def _create_promotion_pr(
             repository=os.environ.get("GITHUB_REPOSITORY", ""),
             allow_legacy_author=False,
         )
-    except (GovernanceError, PolicyBlock):
+    except (GovernanceError, PolicyBlock) as exc:
         closed = api.request("PATCH", f"/pulls/{number}", {"state": "closed"})
         if (
             not isinstance(closed, dict)
@@ -761,7 +758,7 @@ def _create_promotion_pr(
         ):
             raise GovernanceError(
                 "malformed promotion PR could not be durably closed; retaining exact branch"
-            )
+            ) from exc
         _delete_exact_generated_branch(api, branch, head_sha)
         raise
     return number
