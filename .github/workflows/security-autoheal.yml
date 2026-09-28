@@ -1,14 +1,9 @@
 name: Security Auto-Heal
 
+# Privileged accepted-main security controller. Candidate PR validation is isolated in
+# security-autoheal-pr.yml so candidate-controlled workflow bytes cannot request write authority.
+
 on:
-  pull_request:
-    paths:
-      - '.github/security-autoheal.json'
-      - '.github/scripts/security_autoheal.py'
-      - '.github/scripts/security_alert_routing.py'
-      - '.github/scripts/security_autoheal_selfcheck.py'
-      - '.github/workflows/security-autoheal.yml'
-      - '.github/workflows/ci.yml'
   workflow_run:
     workflows:
       - CodeQL
@@ -23,46 +18,23 @@ permissions:
   contents: read
 
 concurrency:
-  group: security-autoheal-${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'reconcile' }}
+  group: security-autoheal-reconcile
   cancel-in-progress: false
 
 env:
   SECURITY_AUTOHEAL_CONFIG: .github/security-autoheal.json
 
 jobs:
-  self-test:
-    name: security-autoheal-self-test
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout proposed security control plane without credentials
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.11.16'
-      - name: Compile security control plane
-        run: >-
-          python -m compileall -q
-          .github/scripts/security_autoheal.py
-          .github/scripts/security_alert_routing.py
-          .github/scripts/security_autoheal_selfcheck.py
-          .github/scripts/dependency_lock_compiler.py
-          .github/scripts/trusted_qualification.py
-          .github/scripts/trusted_status.py
-      - name: Validate security auto-heal policy
-        run: python .github/scripts/security_autoheal.py --validate-config --self-test
-      - name: Exercise security auto-heal self-check
-        run: python .github/scripts/security_autoheal_selfcheck.py
-
   route-plan:
     name: plan-codeql-autoheal-routes
-    if: github.event_name != 'pull_request'
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       (github.event.workflow_run.head_branch == 'main' ||
+        github.event.workflow_run.name == 'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework'))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -105,7 +77,14 @@ jobs:
 
   reconcile:
     name: reconcile-codeql-autoheal
-    if: github.event_name != 'pull_request'
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       (github.event.workflow_run.head_branch == 'main' ||
+        github.event.workflow_run.name == 'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework'))
     needs: route-plan
     runs-on: ubuntu-24.04
     timeout-minutes: 10

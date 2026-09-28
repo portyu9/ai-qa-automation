@@ -35,6 +35,7 @@ MAX_CHANGED_FILES = 1
 MAX_API_BYTES = 8 * 1024 * 1024
 MAX_OPEN_ALERTS = 100
 MAX_PULL_HISTORY = 100
+CONTROL_SHA_ENV = "PROTECTED_REMEDIATION_CONTROL_SHA"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 BRANCH_PREFIX = "automation/protected-security-remediation-"
@@ -361,8 +362,12 @@ def _contents_bytes(api: Any, path: str, ref: str) -> bytes:
         or not isinstance(payload.get("content"), str)
     ):
         raise ProtectedRemediationError(f"repository content is not one canonical file: {path}")
+    encoded = payload["content"]
+    compact = encoded.replace("\r", "").replace("\n", "")
+    if not compact:
+        raise ProtectedRemediationError(f"repository content base64 is invalid: {path}")
     try:
-        raw = base64.b64decode(payload["content"], validate=True)
+        raw = base64.b64decode(compact, validate=True)
     except (binascii.Error, ValueError) as exc:
         raise ProtectedRemediationError(f"repository content base64 is invalid: {path}") from exc
     if not raw or len(raw) > MAX_SOURCE_BYTES:
@@ -606,6 +611,9 @@ class GitHubApi:
     def patch(self, path: str, payload: Mapping[str, Any]) -> Any:
         return self.request("PATCH", path, payload)
 
+    def delete(self, path: str) -> Any:
+        return self.request("DELETE", path)
+
     def list_all(
         self,
         path: str,
@@ -734,6 +742,98 @@ def _current_main(api: GitHubApi) -> str:
     return _require_sha(((branch or {}).get("commit") or {}).get("sha"), "current main SHA")
 
 
+def _required_control_sha() -> str:
+    return _require_sha(
+        os.environ.get(CONTROL_SHA_ENV),
+        "trusted protected-remediation control SHA",
+    )
+
+
+def require_current_control_revision(api: GitHubApi, expected_sha: str) -> str:
+    expected = _require_sha(expected_sha, "trusted protected-remediation control SHA")
+    observed = _current_main(api)
+    if observed != expected:
+        raise ProtectedRemediationError(
+            "trusted protected-remediation control revision is stale relative to current main"
+        )
+    return observed
+
+
+def _require_branch_unclaimed_by_open_pr(api: GitHubApi, branch: str) -> None:
+    rows = api.list_all("/pulls?state=open&sort=created&direction=asc", max_pages=4)
+    for row in rows:
+        head = row.get("head") or {}
+        if (
+            row.get("state") == "open"
+            and head.get("ref") == branch
+            and (head.get("repo") or {}).get("full_name") == EXPECTED_REPOSITORY
+        ):
+            raise ProtectedRemediationError(
+                "protected repair branch became claimed by an open PR before rollback"
+            )
+
+
+def _delete_exact_generated_branch(
+    read_api: GitHubApi,
+    write_api: GitHubApi,
+    branch: str,
+    expected_sha: str,
+) -> None:
+    if BRANCH_RE.fullmatch(branch) is None:
+        raise ProtectedRemediationError("protected repair rollback branch escaped reviewed grammar")
+    expected_sha = _require_sha(expected_sha, "protected repair rollback head SHA")
+    encoded_ref = urllib.parse.quote(branch, safe="")
+    status, ref = read_api.request_status("GET", f"/git/ref/heads/{encoded_ref}")
+    if status == 404:
+        return
+    if status != 200 or not isinstance(ref, dict):
+        raise ProtectedRemediationError("protected repair rollback ref lookup failed")
+
+    def require_exact_ref_sha(payload: dict[str, Any], *, label: str) -> str:
+        obj = payload.get("object") or {}
+        if (
+            payload.get("ref") != f"refs/heads/{branch}"
+            or not isinstance(obj, dict)
+            or obj.get("type") != "commit"
+        ):
+            raise ProtectedRemediationError(f"protected repair {label} ref identity drifted")
+        return _require_sha(
+            obj.get("sha"),
+            f"protected repair {label} ref SHA",
+        )
+
+    observed = require_exact_ref_sha(ref, label="rollback")
+    if observed != expected_sha:
+        raise ProtectedRemediationError("protected repair branch changed before exact rollback")
+    _require_branch_unclaimed_by_open_pr(read_api, branch)
+    terminal_status, terminal_ref = read_api.request_status(
+        "GET",
+        f"/git/ref/heads/{encoded_ref}",
+    )
+    if terminal_status == 404:
+        return
+    if terminal_status != 200 or not isinstance(terminal_ref, dict):
+        raise ProtectedRemediationError("protected repair rollback terminal ref lookup failed")
+    terminal_sha = require_exact_ref_sha(terminal_ref, label="rollback terminal")
+    if terminal_sha != expected_sha:
+        raise ProtectedRemediationError(
+            "protected repair branch changed at terminal rollback boundary"
+        )
+    delete_error: ProtectedRemediationError | None = None
+    try:
+        write_api.delete(f"/git/refs/heads/{encoded_ref}")
+    except ProtectedRemediationError as exc:
+        delete_error = exc
+    final_status, _ = read_api.request_status("GET", f"/git/ref/heads/{encoded_ref}")
+    if final_status == 404:
+        return
+    if delete_error is not None:
+        raise ProtectedRemediationError(
+            "protected repair branch deletion outcome is not durably closed"
+        ) from delete_error
+    raise ProtectedRemediationError("protected repair branch deletion was not durable")
+
+
 def _protected_route_candidates(
     api: GitHubApi,
     *,
@@ -850,10 +950,17 @@ def _create_repair_commit(
     *,
     bot_login: str,
     bot_id: int,
-) -> str:
+    control_sha: str,
+) -> tuple[str, bool]:
     branch = branch_name(record)
+    base_sha = _require_sha(record.get("baseSha"), "protected repair base SHA")
+    control_sha = _require_sha(control_sha, "trusted protected-remediation control SHA")
+    if base_sha != control_sha:
+        raise ProtectedRemediationError("protected repair base is not the trusted control revision")
+    require_current_control_revision(read_api, control_sha)
     encoded_ref = urllib.parse.quote(branch, safe="")
     status, existing = read_api.request_status("GET", f"/git/ref/heads/{encoded_ref}")
+    created_ref = False
     if status == 200:
         if not isinstance(existing, dict):
             raise ProtectedRemediationError("existing protected repair ref is malformed")
@@ -861,7 +968,6 @@ def _create_repair_commit(
             ((existing.get("object") or {}).get("sha")), "existing protected repair ref SHA"
         )
     elif status == 404:
-        base_sha = _require_sha(record.get("baseSha"), "protected repair base SHA")
         base_commit = read_api.get(f"/git/commits/{base_sha}")
         base_tree = _require_sha(
             ((base_commit or {}).get("tree") or {}).get("sha"), "protected repair base tree SHA"
@@ -870,8 +976,10 @@ def _create_repair_commit(
             text = repaired.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise ProtectedRemediationError("protected repair output is not UTF-8 text") from exc
+        require_current_control_revision(read_api, control_sha)
         blob = write_api.post("/git/blobs", {"content": text, "encoding": "utf-8"})
         blob_sha = _require_sha((blob or {}).get("sha"), "protected repair blob SHA")
+        require_current_control_revision(read_api, control_sha)
         tree = write_api.post(
             "/git/trees",
             {
@@ -887,6 +995,7 @@ def _create_repair_commit(
             },
         )
         tree_sha = _require_sha((tree or {}).get("sha"), "protected repair tree SHA")
+        require_current_control_revision(read_api, control_sha)
         commit = write_api.post(
             "/git/commits",
             {
@@ -896,6 +1005,7 @@ def _create_repair_commit(
             },
         )
         commit_sha = _require_sha((commit or {}).get("sha"), "protected repair commit SHA")
+        require_current_control_revision(read_api, control_sha)
         created = write_api.post(
             "/git/refs",
             {"ref": f"refs/heads/{branch}", "sha": commit_sha},
@@ -906,38 +1016,136 @@ def _create_repair_commit(
             or ((created.get("object") or {}).get("sha")) != commit_sha
         ):
             raise ProtectedRemediationError("GitHub did not acknowledge exact protected repair ref")
+        created_ref = True
+        try:
+            require_current_control_revision(read_api, control_sha)
+        except ProtectedRemediationError:
+            _delete_exact_generated_branch(read_api, write_api, branch, commit_sha)
+            raise
     else:
         raise ProtectedRemediationError(f"protected repair ref lookup failed with status {status}")
 
-    commit = read_api.get(f"/commits/{commit_sha}")
-    author = (commit or {}).get("author") if isinstance(commit, dict) else None
-    parents = (commit or {}).get("parents") if isinstance(commit, dict) else None
-    message = (
-        ((commit or {}).get("commit") or {}).get("message") if isinstance(commit, dict) else None
-    )
-    if (
-        not isinstance(author, dict)
-        or author.get("login") != bot_login
-        or author.get("id") != bot_id
-        or author.get("type") != "Bot"
-        or not isinstance(parents, list)
-        or len(parents) != 1
-        or (parents[0] or {}).get("sha") != record.get("baseSha")
-        or message != repair_commit_message(record, plan)
-    ):
-        raise ProtectedRemediationError(
-            "protected repair ref does not resolve to exact App-authored commit"
+    try:
+        commit = read_api.get(f"/commits/{commit_sha}")
+        author = (commit or {}).get("author") if isinstance(commit, dict) else None
+        parents = (commit or {}).get("parents") if isinstance(commit, dict) else None
+        message = (
+            ((commit or {}).get("commit") or {}).get("message")
+            if isinstance(commit, dict)
+            else None
         )
-    if _contents_bytes(read_api, str(plan["targetPath"]), commit_sha) != repaired:
-        raise ProtectedRemediationError(
-            "protected repair ref bytes differ from deterministic output"
-        )
-    return commit_sha
+        if (
+            not isinstance(author, dict)
+            or author.get("login") != bot_login
+            or author.get("id") != bot_id
+            or author.get("type") != "Bot"
+            or not isinstance(parents, list)
+            or len(parents) != 1
+            or (parents[0] or {}).get("sha") != record.get("baseSha")
+            or message != repair_commit_message(record, plan)
+        ):
+            raise ProtectedRemediationError(
+                "protected repair ref does not resolve to exact App-authored commit"
+            )
+        if _contents_bytes(read_api, str(plan["targetPath"]), commit_sha) != repaired:
+            raise ProtectedRemediationError(
+                "protected repair ref bytes differ from deterministic output"
+            )
+    except ProtectedRemediationError:
+        if created_ref:
+            _delete_exact_generated_branch(read_api, write_api, branch, commit_sha)
+        raise
+    return commit_sha, created_ref
 
 
 def _find_pull_for_branch(api: GitHubApi, branch: str) -> dict[str, Any] | None:
     matches = _pulls_for_branch(api, branch)
     return matches[0] if matches else None
+
+
+def _validate_created_repair_rollback_identity(
+    pr: Any,
+    *,
+    number: int,
+    branch: str,
+    head_sha: str,
+    title: str,
+    body: str,
+    bot_login: str,
+    bot_id: int,
+    expected_state: str,
+) -> None:
+    if expected_state not in {"open", "closed"}:
+        raise ProtectedRemediationError("created protected repair rollback state is invalid")
+    if not isinstance(pr, dict):
+        raise ProtectedRemediationError("created protected repair rollback PR is malformed")
+    user = pr.get("user") or {}
+    head = pr.get("head") or {}
+    base = pr.get("base") or {}
+    if (
+        pr.get("number") != number
+        or pr.get("state") != expected_state
+        or pr.get("draft") is not False
+        or pr.get("title") != title
+        or pr.get("body") != body
+        or user.get("login") != bot_login
+        or user.get("id") != bot_id
+        or user.get("type") != "Bot"
+        or head.get("ref") != branch
+        or _require_sha(head.get("sha"), "created protected repair rollback head SHA") != head_sha
+        or (head.get("repo") or {}).get("full_name") != EXPECTED_REPOSITORY
+        or base.get("ref") != EXPECTED_BASE_BRANCH
+        or (base.get("repo") or {}).get("full_name") != EXPECTED_REPOSITORY
+    ):
+        raise ProtectedRemediationError(
+            "created protected repair PR could not be proven exact for rollback"
+        )
+
+
+def _rollback_created_repair_pr(
+    read_api: GitHubApi,
+    write_api: GitHubApi,
+    *,
+    number: int,
+    branch: str,
+    head_sha: str,
+    title: str,
+    body: str,
+    bot_login: str,
+    bot_id: int,
+) -> None:
+    _validate_created_repair_rollback_identity(
+        read_api.get(f"/pulls/{number}"),
+        number=number,
+        branch=branch,
+        head_sha=head_sha,
+        title=title,
+        body=body,
+        bot_login=bot_login,
+        bot_id=bot_id,
+        expected_state="open",
+    )
+    closed = write_api.patch(f"/pulls/{number}", {"state": "closed"})
+    if (
+        not isinstance(closed, dict)
+        or closed.get("number") != number
+        or closed.get("state") != "closed"
+    ):
+        raise ProtectedRemediationError(
+            "GitHub did not acknowledge created protected repair PR rollback"
+        )
+    _validate_created_repair_rollback_identity(
+        read_api.get(f"/pulls/{number}"),
+        number=number,
+        branch=branch,
+        head_sha=head_sha,
+        title=title,
+        body=body,
+        bot_login=bot_login,
+        bot_id=bot_id,
+        expected_state="closed",
+    )
+    _delete_exact_generated_branch(read_api, write_api, branch, head_sha)
 
 
 def _ensure_repair_pr(
@@ -949,9 +1157,10 @@ def _ensure_repair_pr(
     *,
     bot_login: str,
     bot_id: int,
+    control_sha: str,
 ) -> dict[str, Any]:
     branch = branch_name(record)
-    commit_sha = _create_repair_commit(
+    commit_sha, created_ref = _create_repair_commit(
         read_api,
         write_api,
         record,
@@ -959,8 +1168,16 @@ def _ensure_repair_pr(
         repaired,
         bot_login=bot_login,
         bot_id=bot_id,
+        control_sha=control_sha,
     )
     existing = _find_pull_for_branch(read_api, branch)
+    created_number: int | None = None
+    created_title = f"security: remediate protected CodeQL alert #{record['alertNumber']}"
+    created_body = (
+        "Automated independent protected-control-plane remediation. "
+        "The authoring App cannot publish Trusted PR Gate.\n\n"
+        + marker(record, plan, head_sha=commit_sha)
+    )
     if existing is not None:
         if existing.get("state") != "open":
             raise ProtectedRemediationError(
@@ -970,31 +1187,60 @@ def _ensure_repair_pr(
             f"/pulls/{_require_positive_int(existing.get('number'), 'repair PR number')}"
         )
     else:
-        body = (
-            "Automated independent protected-control-plane remediation. "
-            "The authoring App cannot publish Trusted PR Gate.\n\n"
-            + marker(record, plan, head_sha=commit_sha)
-        )
+        try:
+            require_current_control_revision(read_api, control_sha)
+        except ProtectedRemediationError:
+            if created_ref:
+                _delete_exact_generated_branch(read_api, write_api, branch, commit_sha)
+            raise
         created = write_api.post(
             "/pulls",
             {
-                "title": f"security: remediate protected CodeQL alert #{record['alertNumber']}",
+                "title": created_title,
                 "head": branch,
                 "base": EXPECTED_BASE_BRANCH,
-                "body": body,
+                "body": created_body,
                 "draft": False,
             },
         )
-        number = _require_positive_int((created or {}).get("number"), "created repair PR number")
-        pr = read_api.get(f"/pulls/{number}")
-    observed = validate_generated_pr(
-        read_api,
-        pr,
-        expected_bot_login=bot_login,
-        expected_bot_id=bot_id,
-    )
-    if observed["headSha"] != commit_sha:
-        raise ProtectedRemediationError("protected repair PR head differs from exact repair commit")
+        created_number = _require_positive_int(
+            (created or {}).get("number"),
+            "created repair PR number",
+        )
+
+    try:
+        if created_number is not None:
+            pr = read_api.get(f"/pulls/{created_number}")
+            require_current_control_revision(read_api, control_sha)
+        observed = validate_generated_pr(
+            read_api,
+            pr,
+            expected_bot_login=bot_login,
+            expected_bot_id=bot_id,
+        )
+        if observed["headSha"] != commit_sha:
+            raise ProtectedRemediationError(
+                "protected repair PR head differs from exact repair commit"
+            )
+    except ProtectedRemediationError:
+        if created_number is not None:
+            try:
+                _rollback_created_repair_pr(
+                    read_api,
+                    write_api,
+                    number=created_number,
+                    branch=branch,
+                    head_sha=commit_sha,
+                    title=created_title,
+                    body=created_body,
+                    bot_login=bot_login,
+                    bot_id=bot_id,
+                )
+            except ProtectedRemediationError as rollback_exc:
+                raise ProtectedRemediationError(
+                    "created protected repair could not be safely rolled back"
+                ) from rollback_exc
+        raise
     return dict(pr)
 
 
@@ -1017,6 +1263,7 @@ def _generated_repair_is_stale(
         raise ProtectedRemediationError("stale repair cleanup subject is not the exact author App")
     if pr.get("state") != "open" or pr.get("draft") is not False:
         raise ProtectedRemediationError("stale repair cleanup subject is not an open non-draft PR")
+    number = _require_positive_int(pr.get("number"), "stale protected repair PR number")
     head = pr.get("head") or {}
     base = pr.get("base") or {}
     if (
@@ -1025,32 +1272,179 @@ def _generated_repair_is_stale(
         or base.get("ref") != EXPECTED_BASE_BRANCH
     ):
         raise ProtectedRemediationError("stale repair cleanup repository/base identity drifted")
-    _require_sha(head.get("sha"), "stale protected repair head SHA")
+    head_sha = _require_sha(head.get("sha"), "stale protected repair head SHA")
     base_sha = _require_sha(base.get("sha"), "stale protected repair base SHA")
-    return _current_main(api) != base_sha
+    current_main = _current_main(api)
+
+    metadata = parse_marker(pr.get("body"))
+    if metadata is None or set(metadata) != {
+        "version",
+        "base",
+        "head",
+        "routeRecord",
+        "repairPlan",
+    }:
+        raise ProtectedRemediationError("stale repair cleanup marker is missing or malformed")
+    marker_base = _require_sha(
+        metadata.get("base"),
+        "stale protected repair marker base SHA",
+    )
+    if metadata.get("version") != 1 or metadata.get("head") != head_sha:
+        raise ProtectedRemediationError("stale repair cleanup marker identity drifted")
+    record = metadata.get("routeRecord")
+    plan = metadata.get("repairPlan")
+    if not isinstance(record, dict) or not isinstance(plan, dict):
+        raise ProtectedRemediationError("stale repair cleanup marker evidence is malformed")
+    try:
+        strategy = validate_route_record(record, main_sha=marker_base)
+        canonical_plan(plan)
+        expected_branch = branch_name(record)
+    except (RoutingPolicyError, ProtectedRemediationError) as exc:
+        raise ProtectedRemediationError(
+            "stale repair cleanup marker evidence is not canonical"
+        ) from exc
+    if (
+        plan.get("baseSha") != marker_base
+        or plan.get("targetPath") != strategy.path
+        or plan.get("changedFiles") != [strategy.path]
+        or plan.get("maxChangedFiles") != MAX_CHANGED_FILES
+        or head.get("ref") != expected_branch
+    ):
+        raise ProtectedRemediationError("stale repair cleanup marker authority drifted")
+
+    expected_title = f"security: remediate protected CodeQL alert #{record['alertNumber']}"
+    expected_body = (
+        "Automated independent protected-control-plane remediation. "
+        "The authoring App cannot publish Trusted PR Gate.\n\n"
+        + marker(record, plan, head_sha=head_sha)
+    )
+    if pr.get("title") != expected_title or pr.get("body") != expected_body:
+        raise ProtectedRemediationError("stale repair cleanup presentation identity drifted")
+
+    base_source = _contents_bytes(api, strategy.path, marker_base)
+    repaired = revalidate_repair_plan(plan, base_source, record, main_sha=marker_base)
+    if _contents_bytes(api, strategy.path, head_sha) != repaired:
+        raise ProtectedRemediationError(
+            "stale repair cleanup head bytes differ from deterministic output"
+        )
+
+    files = api.list_all(f"/pulls/{number}/files", max_pages=2)
+    if (
+        len(files) != 1
+        or not isinstance(files[0], dict)
+        or files[0].get("filename") != strategy.path
+        or files[0].get("status") != "modified"
+    ):
+        raise ProtectedRemediationError(
+            "stale repair cleanup diff escaped exact one-file authority"
+        )
+
+    commit = api.get(f"/commits/{head_sha}")
+    author = (commit or {}).get("author") if isinstance(commit, dict) else None
+    parents = (commit or {}).get("parents") if isinstance(commit, dict) else None
+    message = (
+        ((commit or {}).get("commit") or {}).get("message") if isinstance(commit, dict) else None
+    )
+    if (
+        not isinstance(author, dict)
+        or author.get("login") != bot_login
+        or author.get("id") != bot_id
+        or author.get("type") != "Bot"
+        or not isinstance(parents, list)
+        or len(parents) != 1
+        or (parents[0] or {}).get("sha") != marker_base
+        or message != repair_commit_message(record, plan)
+    ):
+        raise ProtectedRemediationError(
+            "stale repair cleanup head is not the exact App-authored repair commit"
+        )
+
+    return current_main != base_sha or marker_base != base_sha
 
 
 def _close_stale_generated_repair(
+    read_api: GitHubApi,
     write_api: GitHubApi,
     pr: Mapping[str, Any],
+    *,
+    bot_login: str,
+    bot_id: int,
+    control_sha: str,
 ) -> dict[str, Any]:
     number = _require_positive_int(pr.get("number"), "stale protected repair PR number")
-    result = write_api.patch(f"/pulls/{number}", {"state": "closed"})
-    if (
-        not isinstance(result, dict)
-        or result.get("number") != number
-        or result.get("state") != "closed"
+    head = pr.get("head") or {}
+    base = pr.get("base") or {}
+    branch = head.get("ref")
+    title = pr.get("title")
+    body = pr.get("body")
+    if not isinstance(branch, str) or not isinstance(title, str) or not isinstance(body, str):
+        raise ProtectedRemediationError("stale protected repair cleanup identity is malformed")
+    head_sha = _require_sha(head.get("sha"), "stale protected repair head SHA")
+    base_sha = _require_sha(base.get("sha"), "stale protected repair base SHA")
+
+    require_current_control_revision(read_api, control_sha)
+    fresh = read_api.get(f"/pulls/{number}")
+    _validate_created_repair_rollback_identity(
+        fresh,
+        number=number,
+        branch=branch,
+        head_sha=head_sha,
+        title=title,
+        body=body,
+        bot_login=bot_login,
+        bot_id=bot_id,
+        expected_state="open",
+    )
+    if not _generated_repair_is_stale(
+        read_api,
+        fresh,
+        bot_login=bot_login,
+        bot_id=bot_id,
     ):
-        raise ProtectedRemediationError("GitHub did not acknowledge stale protected PR closure")
+        raise ProtectedRemediationError("protected repair is no longer stale at cleanup boundary")
+
+    require_current_control_revision(read_api, control_sha)
+    close_error: ProtectedRemediationError | None = None
+    try:
+        result = write_api.patch(f"/pulls/{number}", {"state": "closed"})
+    except ProtectedRemediationError as exc:
+        result = None
+        close_error = exc
+
+    closed = read_api.get(f"/pulls/{number}")
+    try:
+        _validate_created_repair_rollback_identity(
+            closed,
+            number=number,
+            branch=branch,
+            head_sha=head_sha,
+            title=title,
+            body=body,
+            bot_login=bot_login,
+            bot_id=bot_id,
+            expected_state="closed",
+        )
+    except ProtectedRemediationError as state_exc:
+        if close_error is not None:
+            raise ProtectedRemediationError(
+                "stale protected repair closure outcome is not durably closed"
+            ) from close_error
+        if (
+            not isinstance(result, dict)
+            or result.get("number") != number
+            or result.get("state") != "closed"
+        ):
+            raise ProtectedRemediationError(
+                "GitHub did not acknowledge stale protected PR closure"
+            ) from state_exc
+        raise
+
+    _delete_exact_generated_branch(read_api, write_api, branch, head_sha)
     return {
         "decision": "stale-protected-repair-closed",
         "pr": number,
-        "headSha": _require_sha(
-            ((pr.get("head") or {}).get("sha")), "stale protected repair head SHA"
-        ),
-        "baseSha": _require_sha(
-            ((pr.get("base") or {}).get("sha")), "stale protected repair base SHA"
-        ),
+        "headSha": head_sha,
+        "baseSha": base_sha,
     }
 
 
@@ -1061,6 +1455,7 @@ def _merge_repair(
     *,
     bot_login: str,
     bot_id: int,
+    control_sha: str,
 ) -> dict[str, Any]:
     live = validate_generated_pr(
         read_api,
@@ -1089,6 +1484,11 @@ def _merge_repair(
         str(live["headSha"]),
         str(live["baseSha"]),
     )
+    require_current_control_revision(read_api, control_sha)
+    if live["baseSha"] != control_sha:
+        raise ProtectedRemediationError(
+            "protected repair merge base is not the trusted control revision"
+        )
     result = write_api.put(
         f"/pulls/{live['number']}/merge",
         {"sha": live["headSha"], "merge_method": "merge"},
@@ -1118,6 +1518,14 @@ def _merge_repair(
     }
 
 
+def validate_control_revision() -> str:
+    repository = os.environ.get("GITHUB_REPOSITORY", "")
+    read_api = GitHubApi(os.environ.get("GITHUB_TOKEN", ""), repository)
+    control_sha = _required_control_sha()
+    require_current_control_revision(read_api, control_sha)
+    return control_sha
+
+
 def reconcile(*, allow_merge: bool) -> int:
     repository = os.environ.get("GITHUB_REPOSITORY", "")
     bot_login, bot_id = _require_author_identity(
@@ -1125,6 +1533,8 @@ def reconcile(*, allow_merge: bool) -> int:
         int(os.environ.get("PROTECTED_REMEDIATION_BOT_ID", "0") or "0"),
     )
     read_api = GitHubApi(os.environ.get("GITHUB_TOKEN", ""), repository)
+    control_sha = _required_control_sha()
+    require_current_control_revision(read_api, control_sha)
     write_api = GitHubApi(os.environ.get("PROTECTED_REMEDIATION_APP_TOKEN", ""), repository)
     config = load_config()
 
@@ -1139,7 +1549,19 @@ def reconcile(*, allow_merge: bool) -> int:
             bot_login=bot_login,
             bot_id=bot_id,
         ):
-            print(json.dumps(_close_stale_generated_repair(write_api, pr), sort_keys=True))
+            print(
+                json.dumps(
+                    _close_stale_generated_repair(
+                        read_api,
+                        write_api,
+                        pr,
+                        bot_login=bot_login,
+                        bot_id=bot_id,
+                        control_sha=control_sha,
+                    ),
+                    sort_keys=True,
+                )
+            )
             return 0
         live = validate_generated_pr(
             read_api,
@@ -1179,13 +1601,14 @@ def reconcile(*, allow_merge: bool) -> int:
                     pr,
                     bot_login=bot_login,
                     bot_id=bot_id,
+                    control_sha=control_sha,
                 ),
                 sort_keys=True,
             )
         )
         return 0
 
-    main_sha = _current_main(read_api)
+    main_sha = require_current_control_revision(read_api, control_sha)
     candidates = _protected_route_candidates(
         read_api,
         main_sha=main_sha,
@@ -1207,6 +1630,7 @@ def reconcile(*, allow_merge: bool) -> int:
             repaired,
             bot_login=bot_login,
             bot_id=bot_id,
+            control_sha=control_sha,
         )
         print(
             json.dumps(
@@ -1255,11 +1679,15 @@ def self_test() -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Independent protected security remediation")
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--validate-control-revision", action="store_true")
     parser.add_argument("--reconcile", action="store_true")
     parser.add_argument("--allow-merge", action="store_true")
     args = parser.parse_args()
-    if args.self_test == args.reconcile:
+    selected = int(args.self_test) + int(args.validate_control_revision) + int(args.reconcile)
+    if selected != 1:
         raise ProtectedRemediationError("select exactly one protected remediation mode")
+    if args.allow_merge and not args.reconcile:
+        raise ProtectedRemediationError("--allow-merge requires --reconcile")
     if args.self_test:
         self_test()
         print(
@@ -1272,6 +1700,10 @@ def main() -> None:
                 sort_keys=True,
             )
         )
+        return
+    if args.validate_control_revision:
+        control_sha = validate_control_revision()
+        print(json.dumps({"result": "PASS", "controlSha": control_sha}, sort_keys=True))
         return
     reconcile(allow_merge=args.allow_merge)
 

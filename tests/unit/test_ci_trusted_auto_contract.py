@@ -35,9 +35,21 @@ def test_trusted_auto_contract_is_frozen_and_bounded() -> None:
     result = ci_contract.verify_ci_contract(ROOT)
     auto = result["workflows"]["trusted_auto"]
 
-    assert auto["trigger"] == "workflow_run:completed:reviewed-ci-or-codeql+schedule:5m"
+    assert auto["trigger"] == (
+        "workflow_run:completed:reviewed-ci-codeql-or-dependency-governance+schedule:5m+"
+        "issue_comment:created:exact-owner-protected-maintenance"
+    )
+    assert auto["wake_signal"] == (
+        "owner-ci-or-exact-dependabot-actions-ci-or-"
+        "exact-governance-neutral-wake-or-scheduled-bot-reconciliation-or-"
+        "exact-owner-comment-protected-maintenance"
+    )
+    assert auto["trusted_definition"] == (
+        "default-branch-workflow-run-or-schedule-or-owner-comment-maintenance"
+    )
     assert auto["candidate_execution_guard"] == (
-        "owner-zero-protected-drift-or-exact-governed-bot-provenance"
+        "owner-zero-protected-drift-or-exact-owner-protected-comment-or-"
+        "exact-governed-bot-provenance"
     )
     assert auto["candidate_subject_binding"] == "job-level-exact-prospective-merge"
     assert auto["needs_skip_policy"] == "not-cancelled-plus-explicit-direct-needs-success"
@@ -46,8 +58,13 @@ def test_trusted_auto_contract_is_frozen_and_bounded() -> None:
     )
     assert auto["codeql_status_anchor"] == "scheduled-idle-default-branch-same-analysis-key"
     assert auto["status_writer"] == "dedicated-github-app"
+    assert auto["terminal_revalidation"] == (
+        "fresh-live-admission-plus-lane-specific-terminal-reproof;"
+        "protected-owner-exact-comment-revalidation-before-and-after-app-mint"
+    )
     assert auto["maintenance_authority"] == (
-        "autonomous-governed-bots;external-one-shot-only-for-unrecognized-protected-change"
+        "autonomous-governed-bots;exact-owner-default-branch-comment-authorization;"
+        "first-attempt-only;dedicated-app-terminal-writer"
     )
     assert auto["governed_bot_lanes"] == [
         "dependabot-actions",
@@ -78,6 +95,74 @@ def test_ci_verifier_executes_under_python_safe_path() -> None:
         "result": "PASS",
         "verifier": "ci-contract",
     }
+
+
+def test_trusted_auto_contract_rejects_unreviewed_maintenance_comment_trigger(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_contract_repo(tmp_path)
+    path = root / ".github" / "workflows" / "trusted-pr-auto.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = "  issue_comment:\n    types: [created]\n"
+    assert marker in text
+    mutated = text.replace(marker, "  issue_comment:\n    types: [created, edited]\n", 1)
+    path.write_text(mutated, encoding="utf-8")
+    _accept_mutated_workflow_hash(monkeypatch, mutated)
+
+    with pytest.raises(ValueError, match="exact protected-maintenance comment triggers"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_trusted_auto_contract_rejects_candidate_ref_workflow_dispatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_contract_repo(tmp_path)
+    path = root / ".github" / "workflows" / "trusted-pr-auto.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = "  issue_comment:\n    types: [created]\n"
+    assert marker in text
+    mutated = text.replace(marker, "  workflow_dispatch:\n", 1)
+    path.write_text(mutated, encoding="utf-8")
+    _accept_mutated_workflow_hash(monkeypatch, mutated)
+
+    with pytest.raises(ValueError, match="exact protected-maintenance comment triggers"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_trusted_auto_contract_rejects_broad_issue_comment_wake_filter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_contract_repo(tmp_path)
+    path = root / ".github" / "workflows" / "trusted-pr-auto.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = "       github.event.sender.login == github.repository_owner &&\n"
+    assert marker in text
+    mutated = text.replace(marker, "", 1)
+    path.write_text(mutated, encoding="utf-8")
+    _accept_mutated_workflow_hash(monkeypatch, mutated)
+
+    with pytest.raises(ValueError, match="preflight is missing reviewed fragment"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_trusted_auto_contract_rejects_protected_owner_bot_authority_reentry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_contract_repo(tmp_path)
+    path = root / ".github" / "workflows" / "trusted-pr-auto.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = " && needs.preflight.outputs.lane != 'owner-protected-maintenance'"
+    assert marker in text
+    mutated = text.replace(marker, "", 1)
+    path.write_text(mutated, encoding="utf-8")
+    _accept_mutated_workflow_hash(monkeypatch, mutated)
+
+    with pytest.raises(ValueError, match="governed bot authority is missing reviewed fragment"):
+        ci_contract.verify_ci_contract(root)
 
 
 def test_trusted_auto_contract_rejects_candidate_checkout_in_preflight(tmp_path: Path) -> None:
@@ -177,6 +262,28 @@ def test_trusted_auto_contract_rejects_removed_cancel_safe_skip_override(
     with pytest.raises(
         ValueError,
         match=rf"trusted automatic job {job_id} must override skipped dependency propagation",
+    ):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_trusted_auto_contract_rejects_reporter_rerun_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_contract_repo(tmp_path)
+    path = root / ".github" / "workflows" / "trusted-pr-auto.yml"
+    text = path.read_text(encoding="utf-8")
+    job = ci_contract._job_block(text, "trusted-status")
+    marker = "github.run_attempt == 1 && "
+    assert marker in job
+    mutated_job = job.replace(marker, "", 1)
+    mutated = text.replace(job, mutated_job, 1)
+    path.write_text(mutated, encoding="utf-8")
+    _accept_mutated_workflow_hash(monkeypatch, mutated)
+
+    with pytest.raises(
+        ValueError,
+        match="automatic trusted reporter is missing reviewed fragment",
     ):
         ci_contract.verify_ci_contract(root)
 
@@ -293,13 +400,13 @@ def test_protected_remediation_author_action_is_scoped_to_its_workflow(tmp_path:
         ci_contract.verify_ci_contract(root)
 
 
-def test_protected_remediation_workflow_is_schedule_only_and_author_token_is_narrow() -> None:
+def test_protected_remediation_workflow_uses_trusted_wakes_and_narrow_author_token() -> None:
     result = ci_contract.verify_ci_contract(ROOT)
     protected = result["workflows"]["protected_remediation"]
 
     assert protected == {
-        "trigger": "schedule:5m",
-        "trusted_definition": "default-branch-scheduled-workflow",
+        "trigger": "workflow_run:Security Auto-Heal:completed+schedule:5m",
+        "trusted_definition": "default-branch-exact-main-workflow-run-or-schedule",
         "native_token": "read-only",
         "author_token": "distinct-app:contents-write+pull-requests-write",
         "status_authority": "none",
@@ -313,11 +420,69 @@ def test_protected_remediation_contract_rejects_candidate_trigger(tmp_path: Path
     path = root / ".github" / "workflows" / "protected-security-remediation.yml"
     text = path.read_text(encoding="utf-8")
     path.write_text(
-        text.replace("on:\n  schedule:\n", "on:\n  pull_request:\n  schedule:\n", 1),
+        text.replace(
+            "on:\n  workflow_run:\n",
+            "on:\n  pull_request:\n  workflow_run:\n",
+            1,
+        ),
         encoding="utf-8",
     )
 
     with pytest.raises(ValueError, match="structure differs from reviewed authority"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_protected_remediation_contract_rejects_unbound_workflow_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_contract_repo(tmp_path)
+    path = root / ".github" / "workflows" / "protected-security-remediation.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = "       github.event.workflow_run.head_sha == github.sha)\n"
+    assert marker in text
+    mutated = text.replace(marker, "       github.event.workflow_run.head_sha != '')\n", 1)
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_PROTECTED_REMEDIATION_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
+    )
+
+    with pytest.raises(ValueError, match="missing reviewed fragment"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_protected_remediation_contract_rejects_control_check_after_app_mint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_contract_repo(tmp_path)
+    path = root / ".github" / "workflows" / "protected-security-remediation.yml"
+    text = path.read_text(encoding="utf-8")
+    job = ci_contract._job_block(text, "reconcile")
+    control = ci_contract._step_block(
+        job,
+        "Verify current trusted protected-remediation control revision",
+    )
+    assert control in text
+    without = text.replace(control, "", 1)
+    assert without != text
+    reconcile_job = ci_contract._job_block(without, "reconcile")
+    reconcile = ci_contract._step_block(
+        reconcile_job,
+        "Reconcile protected security remediation",
+    )
+    assert reconcile in without
+    mutated = without.replace(reconcile, control + "\n\n" + reconcile, 1)
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_PROTECTED_REMEDIATION_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
+    )
+
+    with pytest.raises(ValueError, match="steps are out of reviewed order"):
         ci_contract.verify_ci_contract(root)
 
 

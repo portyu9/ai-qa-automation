@@ -86,6 +86,8 @@ class _GateApi:
         if path == f"/actions/runs/{RUN_ID}":
             return {
                 "id": RUN_ID,
+                "workflow_id": trusted_status.EXPECTED_GATE_WORKFLOW_ID,
+                "run_attempt": 1,
                 "name": trusted_status.EXPECTED_GATE_WORKFLOW_NAME,
                 "path": trusted_status.EXPECTED_GATE_WORKFLOW_PATH,
                 "event": self.event,

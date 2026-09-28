@@ -1,0 +1,124 @@
+name: Post-Merge CI — ƳƤ AI QA Automation Framework
+
+# Accepted-main liveness/verification bridge for merges performed with GITHUB_TOKEN.
+# It never merges, publishes Trusted PR Gate, consumes secrets, or executes candidate workflow bytes.
+on:
+  workflow_run:
+    workflows: [dependency-governance]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: post-merge-ci-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  bind:
+    name: Bind exact governed main advance
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions:
+      contents: read
+    outputs:
+      run_validation: ${{ steps.bind.outputs.run_validation }}
+    steps:
+      - name: Bind exact governed merge
+        id: bind
+        env:
+          CONTROL_SHA: ${{ github.event.workflow_run.head_sha }}
+          SUBJECT_SHA: ${{ github.sha }}
+          UPSTREAM_RUN_ID: ${{ github.event.workflow_run.id }}
+          UPSTREAM_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          UPSTREAM_NAME: ${{ github.event.workflow_run.name }}
+          UPSTREAM_PATH: ${{ github.event.workflow_run.path }}
+          UPSTREAM_EVENT: ${{ github.event.workflow_run.event }}
+          UPSTREAM_STATUS: ${{ github.event.workflow_run.status }}
+          UPSTREAM_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          UPSTREAM_REPOSITORY: ${{ github.event.workflow_run.repository.full_name }}
+          UPSTREAM_HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha_re='^[0-9a-f]{40}$'
+          [[ "$CONTROL_SHA" =~ $sha_re ]]
+          [[ "$SUBJECT_SHA" =~ $sha_re ]]
+          [[ "$UPSTREAM_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$UPSTREAM_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$UPSTREAM_NAME" = "dependency-governance"
+          test "$UPSTREAM_PATH" = ".github/workflows/dependency-governance.yml"
+          case "$UPSTREAM_EVENT" in
+            workflow_run|status|schedule) ;;
+            *) exit 1 ;;
+          esac
+          test "$UPSTREAM_STATUS" = "completed"
+          test "$UPSTREAM_CONCLUSION" = "success"
+          test "$UPSTREAM_REPOSITORY" = "$GITHUB_REPOSITORY"
+          test "$UPSTREAM_HEAD_REPOSITORY" = "$GITHUB_REPOSITORY"
+
+          live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
+          test "$live_main" = "$SUBJECT_SHA"
+
+          if [ "$SUBJECT_SHA" = "$CONTROL_SHA" ]; then
+            printf 'run_validation=false\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          commit_json="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${SUBJECT_SHA}")"
+          jq -e \
+            --arg subject "$SUBJECT_SHA" \
+            --arg control "$CONTROL_SHA" \
+            '
+              .sha == $subject and
+              (.parents | length) == 2 and
+              .parents[0].sha == $control and
+              (.parents[1].sha | test("^[0-9a-f]{40}$")) and
+              .author.login == "github-actions[bot]" and
+              .author.id == 41898282 and
+              .committer.login == "web-flow" and
+              .committer.id == 19864447 and
+              .commit.verification.verified == true and
+              .commit.verification.reason == "valid" and
+              (.commit.message | test("^Merge pull request #[1-9][0-9]* from portyu9/(dependabot/|automation/dependency-promotion-)"))
+            ' <<<"$commit_json" >/dev/null
+
+          printf 'run_validation=true\n' >> "$GITHUB_OUTPUT"
+
+  validate-ci:
+    name: Validate exact governed main CI
+    needs: bind
+    if: ${{ needs.bind.outputs.run_validation == 'true' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
+  validate-codeql:
+    name: Validate exact governed main CodeQL
+    needs: bind
+    if: ${{ needs.bind.outputs.run_validation == 'true' }}
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/codeql.yml
+
+  required:
+    name: Post-Merge Required Gate
+    needs: [bind, validate-ci, validate-codeql]
+    if: ${{ always() && needs.bind.result == 'success' && needs.bind.outputs.run_validation == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions:
+      contents: read
+    steps:
+      - name: Require canonical reusable validations to succeed
+        run: |
+          test "${{ needs.validate-ci.result }}" = "success"
+          test "${{ needs.validate-codeql.result }}" = "success"

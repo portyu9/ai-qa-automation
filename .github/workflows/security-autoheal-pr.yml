@@ -1,0 +1,63 @@
+name: security-autoheal-pr-self-test
+
+# Candidate-controlled development evidence only. This workflow is deliberately read-only,
+# secret-free, and mutation-free; the privileged controller lives in security-autoheal.yml.
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - '.github/security-autoheal.json'
+      - '.github/scripts/dependency_lock_compiler.py'
+      - '.github/scripts/security_alert_routing.py'
+      - '.github/scripts/security_autoheal.py'
+      - '.github/scripts/security_autoheal_selfcheck.py'
+      - '.github/scripts/trusted_qualification.py'
+      - '.github/scripts/trusted_status.py'
+      - '.github/workflows/security-autoheal-pr.yml'
+      - '.github/workflows/security-autoheal.yml'
+      - '.github/workflows/ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-autoheal-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUNBUFFERED: "1"
+  PYTHONSAFEPATH: "1"
+  PYTHONPATH: .github/scripts
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  SECURITY_AUTOHEAL_CONFIG: .github/security-autoheal.json
+
+jobs:
+  self-test:
+    name: security-autoheal-self-test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout proposed security control plane without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11.16'
+      - name: Compile security control plane
+        run: >-
+          python -m compileall -q
+          .github/scripts/security_autoheal.py
+          .github/scripts/security_alert_routing.py
+          .github/scripts/security_autoheal_selfcheck.py
+          .github/scripts/dependency_lock_compiler.py
+          .github/scripts/trusted_qualification.py
+          .github/scripts/trusted_status.py
+      - name: Validate security auto-heal policy
+        run: python .github/scripts/security_autoheal.py --validate-config --self-test
+      - name: Exercise security auto-heal self-check
+        run: python .github/scripts/security_autoheal_selfcheck.py

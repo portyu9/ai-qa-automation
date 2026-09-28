@@ -20,6 +20,7 @@ from dependency_governance import (
     assess,
     load_config,
     open_dependabot_prs,
+    require_current_control_revision,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -303,18 +304,23 @@ def _latest_failed_run(api: GitHubApi, head_sha: str, workflow: str) -> dict[str
     return max(matching, key=lambda row: int(row.get("id") or 0))
 
 
-def _recover_run(api: GitHubApi, run: dict[str, Any], config: dict[str, Any]) -> bool:
+def _recover_run(
+    api: GitHubApi,
+    run: dict[str, Any],
+    recovery: dict[str, Any],
+    governance: dict[str, Any],
+) -> bool:
     attempt = run.get("run_attempt")
     if not isinstance(attempt, int) or attempt < 1:
         raise GovernanceError("workflow run_attempt is invalid")
-    if attempt >= config["maxRunAttempts"]:
-        print(f"recovery blocked: run attempt {attempt} reached cap {config['maxRunAttempts']}")
+    if attempt >= recovery["maxRunAttempts"]:
+        print(f"recovery blocked: run attempt {attempt} reached cap {recovery['maxRunAttempts']}")
         return False
     run_id = run.get("id")
     if not isinstance(run_id, int) or run_id < 1:
         raise GovernanceError("workflow run id is invalid")
     jobs = api.list_all(f"/actions/runs/{run_id}/jobs?filter=latest", max_pages=3)
-    aggregate_names = set(config["aggregateJobs"])
+    aggregate_names = set(recovery["aggregateJobs"])
     failed_leaf: list[dict[str, Any]] = []
     for job in jobs:
         if job.get("status") != "completed":
@@ -336,12 +342,13 @@ def _recover_run(api: GitHubApi, run: dict[str, Any], config: dict[str, Any]) ->
     job_id = job.get("id")
     if not isinstance(job_id, int) or job_id < 1:
         raise GovernanceError("failed job id is invalid")
-    decision = classify_failed_job(job, _fetch_job_logs(api, job_id), config)
+    decision = classify_failed_job(job, _fetch_job_logs(api, job_id), recovery)
     if decision.get("transient") is not True:
         print(
             json.dumps({"recovery": "blocked", "job": job.get("name"), **decision}, sort_keys=True)
         )
         return False
+    require_current_control_revision(api, governance)
     api.post(f"/actions/jobs/{job_id}/rerun")
     print(
         json.dumps(
@@ -376,7 +383,7 @@ def recover(config: dict[str, Any], recovery: dict[str, Any]) -> int:
         run = _latest_failed_run(api, subject["headSha"], recovery["workflow"])
         if run is None:
             continue
-        if _recover_run(api, run, recovery):
+        if _recover_run(api, run, recovery, config):
             count += 1
     return count
 

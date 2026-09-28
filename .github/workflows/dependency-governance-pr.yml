@@ -1,0 +1,78 @@
+name: dependency-governance-pr-self-test
+
+# Candidate-controlled development evidence only. This workflow is deliberately secret-free
+# and has no mutation authority; the privileged controller lives in dependency-governance.yml
+# and has no pull_request trigger.
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - '.github/dependabot.yml'
+      - '.github/dependency-governance.json'
+      - '.github/dependency-recovery.json'
+      - '.github/scripts/dependency_governance.py'
+      - '.github/scripts/dependency_governance_selfcheck.py'
+      - '.github/scripts/dependency_lock_compiler.py'
+      - '.github/scripts/dependency_promotion.py'
+      - '.github/scripts/dependency_recovery.py'
+      - '.github/scripts/dependency_recovery_selfcheck.py'
+      - '.github/scripts/trusted_qualification.py'
+      - '.github/scripts/trusted_status.py'
+      - '.github/workflows/dependency-governance.yml'
+      - '.github/workflows/post-merge-ci.yml'
+      - '.github/workflows/dependency-governance-pr.yml'
+      - '.github/workflows/ci.yml'
+      - '.github/workflows/codeql.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-governance-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUNBUFFERED: "1"
+  PYTHONSAFEPATH: "1"
+  PYTHONPATH: .github/scripts
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  GOVERNANCE_CONFIG: .github/dependency-governance.json
+  RECOVERY_CONFIG: .github/dependency-recovery.json
+
+jobs:
+  self-test:
+    name: governance-self-test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout proposed governance code without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11.16'
+      - name: Compile governance control plane
+        run: >-
+          python -m compileall -q
+          .github/scripts/dependency_governance.py
+          .github/scripts/dependency_governance_selfcheck.py
+          .github/scripts/dependency_lock_compiler.py
+          .github/scripts/dependency_promotion.py
+          .github/scripts/dependency_recovery.py
+          .github/scripts/dependency_recovery_selfcheck.py
+          .github/scripts/trusted_qualification.py
+          .github/scripts/trusted_status.py
+      - name: Validate governance and recovery configuration
+        run: |
+          python .github/scripts/dependency_governance.py --validate-config
+          python .github/scripts/dependency_recovery.py --validate-config
+      - name: Exercise fail-closed policy self-checks
+        run: |
+          python .github/scripts/dependency_governance_selfcheck.py
+          python .github/scripts/dependency_promotion.py --self-test
+          python .github/scripts/dependency_recovery_selfcheck.py

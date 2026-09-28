@@ -372,15 +372,43 @@ def _verify_locks(root: Path, pyproject: dict[str, Any]) -> tuple[dict[str, Any]
 
     project = pyproject["project"]
     runtime_declared = list(project.get("dependencies", []))
-    dev_declared = runtime_declared + list(project.get("optional-dependencies", {}).get("dev", []))
+    optional_dev_declared = list(project.get("optional-dependencies", {}).get("dev", []))
     _assert_declared_requirements_satisfied(runtime_declared, runtime, context="runtime lock")
+
+    build_system = pyproject.get("build-system")
+    if not isinstance(build_system, dict) or set(build_system) != {"requires", "build-backend"}:
+        raise ValueError("build-system authority must contain only requires and build-backend")
+    if build_system.get("build-backend") != "hatchling.build":
+        raise ValueError("build-system backend authority must remain hatchling.build")
+
+    build_requires = build_system.get("requires")
+    if (
+        not isinstance(build_requires, list)
+        or len(build_requires) != 1
+        or not isinstance(build_requires[0], str)
+    ):
+        raise ValueError(
+            "build-system requires must remain one exact hatchling==VERSION declaration"
+        )
+    build_requirement = Requirement(build_requires[0])
+    build_specifiers = list(build_requirement.specifier)
+    if (
+        canonicalize_name(build_requirement.name) != "hatchling"
+        or build_requirement.url is not None
+        or build_requirement.marker is not None
+        or build_requirement.extras
+        or len(build_specifiers) != 1
+        or build_specifiers[0].operator != "=="
+        or build_specifiers[0].version.endswith(".*")
+    ):
+        raise ValueError(
+            "build-system requires must remain one exact hatchling==VERSION declaration"
+        )
+    Version(build_specifiers[0].version)
+    _assert_declared_requirements_satisfied(build_requires, build, context="build lock")
+    dev_declared = runtime_declared + optional_dev_declared + list(build_requires)
     _assert_declared_requirements_satisfied(dev_declared, dev311, context="Python 3.11 dev lock")
     _assert_declared_requirements_satisfied(dev_declared, dev314, context="Python 3.14 dev lock")
-
-    build_requires = list(pyproject["build-system"].get("requires", []))
-    if build_requires != ["hatchling==1.32.0"]:
-        raise ValueError("build-system authority must be exactly hatchling==1.32.0")
-    _assert_declared_requirements_satisfied(build_requires, build, context="build lock")
 
     leaked = BUILD_ONLY_RUNTIME_DENY.intersection(runtime)
     if leaked:

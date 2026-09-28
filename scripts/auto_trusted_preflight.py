@@ -26,6 +26,16 @@ EXPECTED_CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
 EXPECTED_CODEQL_WORKFLOW_ID = 359681647
 EXPECTED_CODEQL_WORKFLOW_NAME = "CodeQL"
 EXPECTED_CODEQL_WORKFLOW_PATH = ".github/workflows/codeql.yml"
+EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_ID = 359681650
+EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_NAME = "dependency-governance"
+EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_PATH = ".github/workflows/dependency-governance.yml"
+DEPENDENCY_GOVERNANCE_EVENTS = frozenset({"workflow_run", "schedule"})
+DEPENDENCY_PROMOTION_WAKE_CHECK = "Dependency Promotion Qualification Wake"
+DEPENDENCY_PROMOTION_WAKE_PREFIX = "aiqa-dependency-promotion-qualification-wake"
+DEPENDENCY_PROMOTION_WAKE_RE = re.compile(
+    rf"^{DEPENDENCY_PROMOTION_WAKE_PREFIX}:(?P<head>[0-9a-f]{{40}}):(?P<base>[0-9a-f]{{40}}):"
+    r"trusted-gate:(?P<run>[1-9][0-9]*):(?P<attempt>[1-9][0-9]*)$"
+)
 GITHUB_ACTIONS_LOGIN = "github-actions[bot]"
 GITHUB_ACTIONS_USER_ID = 41898282
 DEPENDABOT_LOGIN = "dependabot[bot]"
@@ -46,6 +56,8 @@ AUTOHEAL_REF_RE = re.compile(r"^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{
 PROTECTED_REMEDIATION_REF_RE = re.compile(
     r"^automation/protected-security-remediation-[1-9][0-9]*-[0-9a-f]{64}-a[1-9][0-9]*$"
 )
+PROTECTED_REMEDIATION_BOT_LOGIN = "portyu9-security-remediator[bot]"
+PROTECTED_REMEDIATION_BOT_USER_ID = 333833782
 PROTECTED_REMEDIATION_BOT_LOGIN_ENV = "PROTECTED_REMEDIATION_BOT_LOGIN"
 PROTECTED_REMEDIATION_BOT_ID_ENV = "PROTECTED_REMEDIATION_BOT_ID"
 DISALLOWED_PROTECTED_AUTHOR_LOGINS = {
@@ -53,6 +65,13 @@ DISALLOWED_PROTECTED_AUTHOR_LOGINS = {
     DEPENDABOT_LOGIN,
     "trusted-pr-gate[bot]",
 }
+PROTECTED_OWNER_LANE = "owner-protected-maintenance"
+PROTECTED_OWNER_REASON = "protected-control-plane-maintenance"
+PROTECTED_OWNER_COMMAND_RE = re.compile(
+    rf"^/trusted-maintenance authorization={PROTECTED_OWNER_REASON} "
+    r"pr=(?P<pr>[1-9][0-9]*) head=(?P<head>[0-9a-f]{40}) "
+    r"base=(?P<base>[0-9a-f]{40}) merge=(?P<merge>[0-9a-f]{40})$"
+)
 BOT_LANES = {
     "dependabot-actions",
     "dependency-promotion",
@@ -112,6 +131,8 @@ class Admission:
     def eligible(self) -> bool:
         if self.lane == "owner-routine":
             return self.qualification_ready and not self.protected_changes
+        if self.lane == PROTECTED_OWNER_LANE:
+            return self.qualification_ready and bool(self.protected_changes)
         if self.lane in BOT_LANES:
             return self.qualification_ready
         return False
@@ -318,18 +339,48 @@ def _validate_wake(run: dict[str, Any], *, expected_run_id: int, trusted_sha: st
         and run.get("path") == EXPECTED_CI_WORKFLOW_PATH
         and run.get("event") == "pull_request"
     ):
+        head_sha = _require_sha(run.get("head_sha"), label="workflow head SHA")
         if (
-            actor.get("login") != EXPECTED_OWNER
-            or actor.get("id") != EXPECTED_OWNER_ID
-            or triggering_actor.get("login") != EXPECTED_OWNER
-            or triggering_actor.get("id") != EXPECTED_OWNER_ID
+            actor.get("login") == EXPECTED_OWNER
+            and actor.get("id") == EXPECTED_OWNER_ID
+            and triggering_actor.get("login") == EXPECTED_OWNER
+            and triggering_actor.get("id") == EXPECTED_OWNER_ID
+        ):
+            return Wake(
+                run_id=expected_run_id,
+                run_attempt=attempt,
+                kind="owner-ci",
+                head_sha=head_sha,
+            )
+        if (
+            actor.get("login") == DEPENDABOT_LOGIN
+            and actor.get("id") == DEPENDABOT_USER_ID
+            and triggering_actor.get("login") == DEPENDABOT_LOGIN
+            and triggering_actor.get("id") == DEPENDABOT_USER_ID
+        ):
+            return Wake(
+                run_id=expected_run_id,
+                run_attempt=attempt,
+                kind="dependabot-actions-ci",
+                head_sha=head_sha,
+            )
+        return None
+
+    if workflow_id == EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_ID:
+        if (
+            run.get("name") != EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_NAME
+            or run.get("path") != EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_PATH
+            or run.get("event") not in DEPENDENCY_GOVERNANCE_EVENTS
+            or run.get("head_branch") != EXPECTED_DEFAULT_BRANCH
+            or _require_sha(run.get("head_sha"), label="dependency governance head SHA")
+            != trusted_sha
         ):
             return None
         return Wake(
             run_id=expected_run_id,
             run_attempt=attempt,
-            kind="owner-ci",
-            head_sha=_require_sha(run.get("head_sha"), label="workflow head SHA"),
+            kind="dependency-governance",
+            head_sha=trusted_sha,
         )
 
     expected_dispatch = {
@@ -399,17 +450,15 @@ def _select_pull_request(candidates: Any, *, head_sha: str) -> int:
 def _protected_remediation_bot_identity() -> tuple[str, int]:
     login = os.environ.get(PROTECTED_REMEDIATION_BOT_LOGIN_ENV, "")
     raw_id = os.environ.get(PROTECTED_REMEDIATION_BOT_ID_ENV, "")
-    if (
-        not login
-        or not login.endswith("[bot]")
-        or login in DISALLOWED_PROTECTED_AUTHOR_LOGINS
+    if bool(login) != bool(raw_id):
+        raise ValueError("protected remediation author App identity is partially configured")
+    if (login or raw_id) and (
+        login != PROTECTED_REMEDIATION_BOT_LOGIN
         or not raw_id.isdigit()
+        or int(raw_id) != PROTECTED_REMEDIATION_BOT_USER_ID
     ):
-        raise ValueError("protected remediation author App identity is missing or malformed")
-    user_id = int(raw_id)
-    if user_id < 1:
-        raise ValueError("protected remediation author App user id must be positive")
-    return login, user_id
+        raise ValueError("protected remediation author App identity drifted from trusted policy")
+    return PROTECTED_REMEDIATION_BOT_LOGIN, PROTECTED_REMEDIATION_BOT_USER_ID
 
 
 def _bot_lane(pr: dict[str, Any]) -> str | None:
@@ -421,17 +470,23 @@ def _bot_lane(pr: dict[str, Any]) -> str | None:
         if user.get("login") == login and user.get("id") == user_id:
             return "protected-security-remediation"
         return None
+    if PROMOTION_REF_RE.fullmatch(branch) is not None:
+        login, user_id = _protected_remediation_bot_identity()
+        if user.get("login") == login and user.get("id") == user_id:
+            return "dependency-promotion"
+        return None
     if (
         user.get("login") == DEPENDABOT_LOGIN
         and user.get("id") == DEPENDABOT_USER_ID
         and DEPENDABOT_ACTION_REF_RE.fullmatch(branch) is not None
     ):
         return "dependabot-actions"
-    if user.get("login") == GITHUB_ACTIONS_LOGIN and user.get("id") == GITHUB_ACTIONS_USER_ID:
-        if PROMOTION_REF_RE.fullmatch(branch) is not None:
-            return "dependency-promotion"
-        if AUTOHEAL_REF_RE.fullmatch(branch) is not None:
-            return "security-autoheal"
+    if (
+        user.get("login") == GITHUB_ACTIONS_LOGIN
+        and user.get("id") == GITHUB_ACTIONS_USER_ID
+        and AUTOHEAL_REF_RE.fullmatch(branch) is not None
+    ):
+        return "security-autoheal"
     return None
 
 
@@ -497,6 +552,79 @@ def _select_bot_pull_request(
         return None
     if len(matches) != 1:
         raise ValueError("trusted workflow wake maps to multiple governed bot pull requests")
+    return matches[0]
+
+
+def _select_dependency_governance_pull_request(
+    api: GitHubAPI,
+    *,
+    wake: Wake,
+    trusted_sha: str,
+) -> dict[str, Any] | None:
+    if wake.kind != "dependency-governance" or wake.head_sha != trusted_sha:
+        raise ValueError("dependency governance wake identity is malformed")
+    rows = api.list_all(
+        f"/repos/{EXPECTED_REPOSITORY}/pulls?state=open&base={EXPECTED_DEFAULT_BRANCH}",
+        max_pages=1,
+    )
+    if len(rows) >= MAX_PULL_REQUEST_CANDIDATES:
+        raise ValueError(
+            "dependency governance wake discovery reached the bounded pagination limit"
+        )
+    matches: list[dict[str, Any]] = []
+    for pr in rows:
+        if _bot_lane(pr) != "dependency-promotion" or pr.get("draft") is not False:
+            continue
+        head = _require_dict(pr.get("head"), label="dependency promotion wake head")
+        base = _require_dict(pr.get("base"), label="dependency promotion wake base")
+        head_repo = _require_dict(
+            head.get("repo"), label="dependency promotion wake head repository"
+        )
+        base_repo = _require_dict(
+            base.get("repo"), label="dependency promotion wake base repository"
+        )
+        if (
+            head_repo.get("full_name") != EXPECTED_REPOSITORY
+            or base_repo.get("full_name") != EXPECTED_REPOSITORY
+            or base.get("ref") != EXPECTED_DEFAULT_BRANCH
+            or base.get("sha") != trusted_sha
+        ):
+            continue
+        head_sha = _require_sha(head.get("sha"), label="dependency promotion wake head SHA")
+        external_id = (
+            f"{DEPENDENCY_PROMOTION_WAKE_PREFIX}:{head_sha}:{trusted_sha}:trusted-gate:"
+            f"{wake.run_id}:{wake.run_attempt}"
+        )
+        checks = api.list_all(
+            f"/repos/{EXPECTED_REPOSITORY}/commits/{head_sha}/check-runs?filter=all",
+            max_pages=2,
+        )
+        for check in checks:
+            app = check.get("app") or {}
+            observed_external_id = check.get("external_id")
+            parsed = (
+                DEPENDENCY_PROMOTION_WAKE_RE.fullmatch(observed_external_id)
+                if isinstance(observed_external_id, str)
+                else None
+            )
+            if (
+                check.get("name") == DEPENDENCY_PROMOTION_WAKE_CHECK
+                and check.get("head_sha") == head_sha
+                and observed_external_id == external_id
+                and parsed is not None
+                and check.get("status") == "completed"
+                and check.get("conclusion") == "neutral"
+                and app.get("id") == GITHUB_ACTIONS_APP_ID
+                and app.get("slug") == "github-actions"
+                and check.get("details_url")
+                == f"https://github.com/{EXPECTED_REPOSITORY}/actions/runs/{wake.run_id}"
+            ):
+                matches.append(pr)
+                break
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise ValueError("dependency governance wake maps to multiple promotion pull requests")
     return matches[0]
 
 
@@ -595,9 +723,12 @@ def _resolve_subject(
     if lane in BOT_LANES:
         if observed_lane != lane:
             raise ValueError("live governed bot lane drifted before subject resolution")
-    elif lane == "owner-routine":
+    elif lane in {"owner-routine", PROTECTED_OWNER_LANE}:
         if observed_lane is not None:
-            raise ValueError("owner-routine admission resolved to a governed bot pull request")
+            raise ValueError("owner admission resolved to a governed bot pull request")
+        owner = _require_dict(live_pr.get("user"), label="owner pull request user")
+        if owner.get("login") != EXPECTED_OWNER or owner.get("id") != EXPECTED_OWNER_ID:
+            raise ValueError("owner admission requires the exact repository owner identity")
     else:
         raise ValueError("automatic trusted admission lane is not reviewed")
     base_sha = _validate_pull_request(
@@ -723,10 +854,126 @@ def _select_scheduled_bot_pull_request(
     return None
 
 
+def _protected_owner_comment(
+    api: GitHubAPI,
+    *,
+    event: dict[str, Any],
+    trusted_sha: str,
+) -> Admission:
+    repository = _require_dict(event.get("repository"), label="issue comment repository")
+    sender = _require_dict(event.get("sender"), label="issue comment sender")
+    issue = _require_dict(event.get("issue"), label="issue comment issue")
+    comment = _require_dict(event.get("comment"), label="issue comment")
+    if event.get("action") != "created":
+        raise ValueError("protected maintenance requires a newly created issue comment")
+    if repository.get("full_name") != EXPECTED_REPOSITORY:
+        raise ValueError("protected maintenance comment repository identity drifted")
+    if (
+        sender.get("login") != EXPECTED_OWNER
+        or sender.get("id") != EXPECTED_OWNER_ID
+        or sender.get("type") != "User"
+    ):
+        raise ValueError("protected maintenance comment requires the exact repository owner")
+    if not isinstance(issue.get("pull_request"), dict):
+        raise ValueError("protected maintenance comment must belong to a pull request")
+    pr_number = _require_positive_int(issue.get("number"), label="protected maintenance PR number")
+    comment_id = _require_positive_int(
+        comment.get("id"),
+        label="protected maintenance comment id",
+    )
+    comment_user = _require_dict(
+        comment.get("user"),
+        label="protected maintenance comment user",
+    )
+    if (
+        comment_user.get("login") != EXPECTED_OWNER
+        or comment_user.get("id") != EXPECTED_OWNER_ID
+        or comment_user.get("type") != "User"
+    ):
+        raise ValueError("protected maintenance comment author is not the exact repository owner")
+    body = _require_str(comment.get("body"), label="protected maintenance comment body")
+    match = PROTECTED_OWNER_COMMAND_RE.fullmatch(body)
+    if match is None:
+        raise ValueError("protected maintenance comment is not the exact reviewed authorization")
+    if int(match.group("pr")) != pr_number:
+        raise ValueError("protected maintenance comment PR claim differs from the commented PR")
+
+    expected_issue_url = f"https://api.github.com/repos/{EXPECTED_REPOSITORY}/issues/{pr_number}"
+    if comment.get("issue_url") != expected_issue_url:
+        raise ValueError("protected maintenance event comment issue URL drifted")
+    live_comment = _require_dict(
+        api.get(f"/repos/{EXPECTED_REPOSITORY}/issues/comments/{comment_id}"),
+        label="live protected maintenance comment",
+    )
+    live_user = _require_dict(
+        live_comment.get("user"),
+        label="live protected maintenance comment user",
+    )
+    if (
+        live_comment.get("id") != comment_id
+        or live_comment.get("body") != body
+        or live_comment.get("issue_url") != expected_issue_url
+        or live_user.get("login") != EXPECTED_OWNER
+        or live_user.get("id") != EXPECTED_OWNER_ID
+        or live_user.get("type") != "User"
+    ):
+        raise ValueError("protected maintenance authorization comment changed or lost provenance")
+
+    if os.environ.get("GITHUB_REF", "") != f"refs/heads/{EXPECTED_DEFAULT_BRANCH}":
+        raise ValueError("protected maintenance comment must execute from refs/heads/main")
+    if os.environ.get("GITHUB_SHA", "") != trusted_sha:
+        raise ValueError("protected maintenance comment must execute exact current main")
+    if os.environ.get("GITHUB_ACTOR", "") != EXPECTED_OWNER:
+        raise ValueError("protected maintenance comment actor is not the exact repository owner")
+    if os.environ.get("GITHUB_TRIGGERING_ACTOR", "") != EXPECTED_OWNER:
+        raise ValueError(
+            "protected maintenance comment triggering actor is not the exact repository owner"
+        )
+    if os.environ.get("GITHUB_RUN_ATTEMPT", "") != "1":
+        raise ValueError("protected maintenance comment cannot be rerun")
+    expected_workflow_ref = (
+        f"{EXPECTED_REPOSITORY}/.github/workflows/trusted-pr-auto.yml"
+        f"@refs/heads/{EXPECTED_DEFAULT_BRANCH}"
+    )
+    if os.environ.get("GITHUB_WORKFLOW_REF", "") != expected_workflow_ref:
+        raise ValueError("protected maintenance comment workflow ref is not exact accepted main")
+
+    head_sha = _require_sha(match.group("head"), label="protected maintenance head SHA")
+    expected_base_sha = _require_sha(
+        match.group("base"),
+        label="protected maintenance base SHA",
+    )
+    expected_merge_sha = _require_sha(
+        match.group("merge"),
+        label="protected maintenance merge SHA",
+    )
+    pr = _require_dict(
+        api.get(f"/repos/{EXPECTED_REPOSITORY}/pulls/{pr_number}"),
+        label="protected maintenance live pull request",
+    )
+    admission = _resolve_subject(
+        api,
+        lane=PROTECTED_OWNER_LANE,
+        pr=pr,
+        head_sha=head_sha,
+        trusted_sha=trusted_sha,
+        qualification_ready=True,
+    )
+    if admission.base_sha != expected_base_sha:
+        raise ValueError("protected maintenance exact base claim drifted")
+    if admission.merge_sha != expected_merge_sha:
+        raise ValueError("protected maintenance exact merge claim drifted")
+    if not admission.protected_changes:
+        raise ValueError("protected maintenance comment requires a protected-path transition")
+    return admission
+
+
 def evaluate_admission(
     api: GitHubAPI, *, event: dict[str, Any], event_name: str = "workflow_run"
 ) -> Admission | None:
     trusted_sha = _current_main(api)
+    if event_name == "issue_comment":
+        return _protected_owner_comment(api, event=event, trusted_sha=trusted_sha)
     if event_name == "schedule":
         selected = _select_scheduled_bot_pull_request(api, trusted_sha=trusted_sha)
         if selected is None:
@@ -745,7 +992,9 @@ def evaluate_admission(
             qualification_ready=True,
         )
     if event_name != "workflow_run":
-        raise ValueError("automatic trusted admission supports workflow_run or schedule only")
+        raise ValueError(
+            "automatic trusted admission supports workflow_run, schedule, or issue_comment only"
+        )
     if event.get("action") != "completed":
         raise ValueError("workflow_run event action must be completed")
     event_run = _require_dict(event.get("workflow_run"), label="workflow_run event")
@@ -760,7 +1009,7 @@ def evaluate_admission(
     if event_run.get("head_sha") != live_run.get("head_sha"):
         raise ValueError("workflow_run event head SHA differs from live run")
 
-    if wake.kind == "owner-ci":
+    if wake.kind in {"owner-ci", "dependabot-actions-ci"}:
         pulls = api.get(
             f"/repos/{EXPECTED_REPOSITORY}/commits/{wake.head_sha}/pulls"
             f"?per_page={MAX_PULL_REQUEST_CANDIDATES}"
@@ -770,13 +1019,41 @@ def evaluate_admission(
             api.get(f"/repos/{EXPECTED_REPOSITORY}/pulls/{pr_number}"),
             label="live pull request",
         )
-        if _bot_lane(pr) is not None:
+        lane = _bot_lane(pr)
+        if wake.kind == "owner-ci":
+            if lane is not None:
+                return None
+            lane = "owner-routine"
+        elif lane != "dependabot-actions":
             return None
         return _resolve_subject(
             api,
-            lane="owner-routine",
+            lane=lane,
             pr=pr,
             head_sha=wake.head_sha,
+            trusted_sha=trusted_sha,
+            qualification_ready=True,
+        )
+
+    if wake.kind == "dependency-governance":
+        pr = _select_dependency_governance_pull_request(
+            api,
+            wake=wake,
+            trusted_sha=trusted_sha,
+        )
+        if pr is None:
+            return None
+        head_sha = _require_sha(
+            _require_dict(pr.get("head"), label="dependency promotion wake candidate head").get(
+                "sha"
+            ),
+            label="dependency promotion wake candidate head SHA",
+        )
+        return _resolve_subject(
+            api,
+            lane="dependency-promotion",
+            pr=pr,
+            head_sha=head_sha,
             trusted_sha=trusted_sha,
             qualification_ready=True,
         )
@@ -847,7 +1124,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--event", type=Path, required=True)
     parser.add_argument(
-        "--event-name", choices=("workflow_run", "schedule"), default="workflow_run"
+        "--event-name",
+        choices=("workflow_run", "schedule", "issue_comment"),
+        default="workflow_run",
     )
     parser.add_argument("--github-output", type=Path, required=True)
     args = parser.parse_args()

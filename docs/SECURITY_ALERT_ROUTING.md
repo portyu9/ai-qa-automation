@@ -91,7 +91,7 @@ The live controller preserves bounded GitHub pagination and exact-current-main r
 
 ## Live controller integration
 
-The Security Auto-Heal workflow uses an evidence-first two-phase boundary for **new repair creation**, with the phases separated by job-level capabilities:
+Security Auto-Heal candidate validation is physically separate from mutation authority. `.github/workflows/security-autoheal-pr.yml` is exact `pull_request`-only, `contents: read`, secret-free, variable-free, and mutation-free; it compiles and self-tests candidate controller bytes with `PYTHONSAFEPATH=1` and the explicit narrow `PYTHONPATH=.github/scripts`. The privileged `.github/workflows/security-autoheal.yml` has no `pull_request` trigger and therefore executes only accepted-main workflow bytes. Its workflow-run jobs additionally require the completed upstream run to originate from this repository.\n\nThe accepted-main Security Auto-Heal controller then uses an evidence-first two-phase boundary for **new repair creation**, with the phases separated by job-level capabilities:
 
 1. a trusted-default-branch `route-plan` job has read-only GitHub authority (`actions`, `contents`, `pull-requests`, and `security-events` read) and fetches exact current main plus bounded open CodeQL alerts;
 2. the deterministic router computes canonical route records, including strategy-scoped prior-attempt state and GET-only Autofix availability evidence where relevant;

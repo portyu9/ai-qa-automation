@@ -60,13 +60,10 @@ POST_MERGE_CI_NAME = "CI — ƳƤ AI QA Automation Framework"
 POST_MERGE_CI_EVENTS = {"push", "workflow_dispatch"}
 POST_MERGE_CI_REGISTRATION_ATTEMPTS = 15
 POST_MERGE_CI_REGISTRATION_DELAY_SECONDS = 2
-MAIN_CODEQL_WORKFLOW = "codeql.yml"
 MAIN_CODEQL_WORKFLOW_ID = 359681647
 MAIN_CODEQL_PATH = ".github/workflows/codeql.yml"
 MAIN_CODEQL_NAME = "CodeQL"
 MAIN_CODEQL_EVENTS = {"push", "workflow_dispatch", "schedule"}
-MAIN_CODEQL_REGISTRATION_ATTEMPTS = 15
-MAIN_CODEQL_REGISTRATION_DELAY_SECONDS = 2
 TRANSIENT_GET_ATTEMPTS = 3
 TRANSIENT_GET_DELAY_SECONDS = 1
 GITHUB_ACTIONS_LOGIN = "github-actions[bot]"
@@ -123,6 +120,10 @@ TERMINAL_CLOSURE_COMMENT_SUFFIX = " -->"
 TERMINAL_TRUSTED_GATE_EVENTS = {"schedule"}
 TERMINAL_MAIN_EVENTS = {"push"}
 TERMINAL_AUTOHEAL_EVENTS = {"workflow_run", "schedule"}
+STALE_REPAIR_POLICY_REASON = "generated repair is stale relative to current main"
+REPAIR_WAITING_LOG_STALE = "stale-main"
+REPAIR_WAITING_LOG_BLOCKED = "policy-blocked"
+AUTOFIX_PENDING_LOG_REASON = "provider-pending"
 LEGACY_STALE_CLOSURE_CUTOFF = "2026-09-23T00:11:00Z"
 LEGACY_STALE_SUPERSESSIONS = {
     207: {
@@ -191,6 +192,14 @@ class AutohealError(RuntimeError):
 
 class PolicyBlock(RuntimeError):
     """Expected fail-closed decision for one alert or repair candidate."""
+
+
+def _repair_waiting_log_reason(exc: PolicyBlock) -> str:
+    """Return only a code-owned diagnostic category, never raw exception text."""
+
+    if str(exc) == STALE_REPAIR_POLICY_REASON:
+        return REPAIR_WAITING_LOG_STALE
+    return REPAIR_WAITING_LOG_BLOCKED
 
 
 class RetryLater(RuntimeError):
@@ -1739,7 +1748,7 @@ def _require_repair_lifecycle(
     if pr.get("state") != "open" or pr.get("draft") is not False:
         raise PolicyBlock("generated repair PR is not open and non-draft")
     if base_sha != main_sha or metadata.get("base") != main_sha:
-        raise PolicyBlock("generated repair is stale relative to current main")
+        raise PolicyBlock(STALE_REPAIR_POLICY_REASON)
     if pr.get("mergeable") is not True:
         raise PolicyBlock("generated repair PR is not definitively mergeable")
 
@@ -1900,7 +1909,10 @@ def _post_merge_ci_runs(api: GitHubApi, subject_sha: str) -> list[dict[str, Any]
     encoded_sha = urllib.parse.quote(
         _require_sha(subject_sha, "post-merge CI subject SHA"), safe=""
     )
-    return api.list_all(f"/actions/runs?head_sha={encoded_sha}", max_pages=2)
+    return api.list_all(
+        f"/actions/workflows/{POST_MERGE_CI_WORKFLOW_ID}/runs?head_sha={encoded_sha}",
+        max_pages=2,
+    )
 
 
 def _post_merge_ci_evidence(row: dict[str, Any], *, dispatched: bool) -> dict[str, Any]:
@@ -1970,10 +1982,21 @@ def _main_codeql_candidates(rows: list[dict[str, Any]], subject_sha: str) -> lis
     subject_sha = _require_sha(subject_sha, "current-main CodeQL subject SHA")
     candidates: list[dict[str, Any]] = []
     for row in rows:
+        claims_codeql_identity = (
+            row.get("workflow_id") == MAIN_CODEQL_WORKFLOW_ID
+            or row.get("name") == MAIN_CODEQL_NAME
+            or row.get("path") == MAIN_CODEQL_PATH
+        )
+        if not claims_codeql_identity:
+            continue
         if (
-            row.get("name") != MAIN_CODEQL_NAME
+            row.get("workflow_id") != MAIN_CODEQL_WORKFLOW_ID
+            or row.get("name") != MAIN_CODEQL_NAME
             or row.get("path") != MAIN_CODEQL_PATH
-            or row.get("head_branch") != "main"
+        ):
+            raise AutohealError("exact-main CodeQL run has mismatched workflow identity")
+        if (
+            row.get("head_branch") != "main"
             or row.get("head_sha") != subject_sha
             or row.get("event") not in MAIN_CODEQL_EVENTS
         ):
@@ -2004,69 +2027,35 @@ def _main_codeql_runs(api: GitHubApi, subject_sha: str) -> list[dict[str, Any]]:
     encoded_sha = urllib.parse.quote(
         _require_sha(subject_sha, "current-main CodeQL subject SHA"), safe=""
     )
-    return api.list_all(f"/actions/runs?head_sha={encoded_sha}", max_pages=2)
+    return api.list_all(
+        f"/actions/workflows/{MAIN_CODEQL_WORKFLOW_ID}/runs?head_sha={encoded_sha}",
+        max_pages=2,
+    )
 
 
-def _ensure_current_main_codeql(
+def _observe_current_main_codeql(
     api: GitHubApi,
     subject_sha: str,
     config: dict[str, Any],
 ) -> dict[str, Any]:
+    """Observe exact-main CodeQL liveness without creating or replaying workflow runs."""
+
     subject_sha = _require_sha(subject_sha, "current-main CodeQL subject SHA")
     if _current_main(api, config) != subject_sha:
-        raise AutohealError("current main changed before CodeQL refresh admission")
+        raise AutohealError("current main changed before CodeQL liveness observation")
 
     rows = _main_codeql_runs(api, subject_sha)
     existing = _select_main_codeql_run(rows, subject_sha)
-    if existing is not None:
-        return {
-            "codeqlRunId": int(existing["id"]),
-            "codeqlRunAttempt": int(existing["run_attempt"]),
-            "codeqlEvent": str(existing["event"]),
-            "codeqlStatus": str(existing["status"]),
-            "codeqlDispatched": False,
-        }
-
-    observed_ids = {
-        int(row["id"])
-        for row in rows
-        if isinstance(row.get("id"), int)
-        and not isinstance(row.get("id"), bool)
-        and int(row["id"]) > 0
-    }
-    api.post(
-        f"/actions/workflows/{MAIN_CODEQL_WORKFLOW}/dispatches",
-        {
-            "ref": "main",
-            "inputs": {"subject_sha": subject_sha, "subject_ref": "main"},
-        },
-    )
-
-    registered: dict[str, Any] | None = None
-    for attempt in range(MAIN_CODEQL_REGISTRATION_ATTEMPTS):
-        candidate = _select_main_codeql_run(_main_codeql_runs(api, subject_sha), subject_sha)
-        if candidate is not None and int(candidate["id"]) not in observed_ids:
-            if candidate.get("event") != "workflow_dispatch":
-                raise AutohealError(
-                    "current-main CodeQL refresh appeared through an unexpected event "
-                    "after explicit dispatch"
-                )
-            registered = candidate
-            break
-        if attempt + 1 < MAIN_CODEQL_REGISTRATION_ATTEMPTS:
-            time.sleep(MAIN_CODEQL_REGISTRATION_DELAY_SECONDS)
-    if registered is None:
-        raise AutohealError(
-            f"explicit CodeQL dispatch did not register for exact current main {subject_sha}"
-        )
     if _current_main(api, config) != subject_sha:
-        raise AutohealError("current main changed after CodeQL refresh registration")
+        raise AutohealError("current main changed during CodeQL liveness observation")
+    if existing is None:
+        return {"codeqlObserved": False}
     return {
-        "codeqlRunId": int(registered["id"]),
-        "codeqlRunAttempt": int(registered["run_attempt"]),
-        "codeqlEvent": str(registered["event"]),
-        "codeqlStatus": str(registered["status"]),
-        "codeqlDispatched": True,
+        "codeqlObserved": True,
+        "codeqlRunId": int(existing["id"]),
+        "codeqlRunAttempt": int(existing["run_attempt"]),
+        "codeqlEvent": str(existing["event"]),
+        "codeqlStatus": str(existing["status"]),
     }
 
 
@@ -2076,10 +2065,21 @@ def _terminal_main_codeql_candidates(
     subject_sha = _require_sha(subject_sha, "terminal CodeQL subject SHA")
     candidates: list[dict[str, Any]] = []
     for row in rows:
+        claims_codeql_identity = (
+            row.get("workflow_id") == MAIN_CODEQL_WORKFLOW_ID
+            or row.get("name") == MAIN_CODEQL_NAME
+            or row.get("path") == MAIN_CODEQL_PATH
+        )
+        if not claims_codeql_identity:
+            continue
         if (
-            row.get("name") != MAIN_CODEQL_NAME
+            row.get("workflow_id") != MAIN_CODEQL_WORKFLOW_ID
+            or row.get("name") != MAIN_CODEQL_NAME
             or row.get("path") != MAIN_CODEQL_PATH
-            or row.get("head_branch") != "main"
+        ):
+            raise AutohealError("terminal exact-main CodeQL run has mismatched workflow identity")
+        if (
+            row.get("head_branch") != "main"
             or row.get("head_sha") != subject_sha
             or row.get("event") not in TERMINAL_MAIN_EVENTS
         ):
@@ -4097,28 +4097,27 @@ def reconcile(
                     )
                 except TrustedStatusError as exc:
                     raise PolicyBlock("automatic Trusted PR Gate is not yet admissible") from exc
-                merge_evidence = _merge(api, number, validated_metadata, live, config)
+                _merge(api, number, validated_metadata, live, config)
                 print(
                     json.dumps(
                         {
                             "pr": number,
                             "decision": "repair-merged",
                             "headSha": live["headSha"],
-                            **merge_evidence,
                         },
                         sort_keys=True,
                     )
                 )
                 return max(0, len(repairs) - closed_stale - 1)
         except PolicyBlock as exc:
-            reason = str(exc)
+            logged_reason = _repair_waiting_log_reason(exc)
             print(
                 json.dumps(
-                    {"pr": number, "decision": "repair-waiting", "reason": reason},
+                    {"pr": number, "decision": "repair-waiting", "reason": logged_reason},
                     sort_keys=True,
                 )
             )
-            if reason == "generated repair is stale relative to current main":
+            if logged_reason == REPAIR_WAITING_LOG_STALE:
                 branch = str((summary.get("head") or {}).get("ref") or "")
                 stale_head_sha = _require_sha(
                     ((summary.get("head") or {}).get("sha")),
@@ -4147,19 +4146,16 @@ def reconcile(
         alert_instance_sha = _require_sha(instance.get("commit_sha"), "alert instance SHA")
         if alert_instance_sha == main_sha:
             continue
-        refresh = _ensure_current_main_codeql(api, main_sha, config)
+        observation = _observe_current_main_codeql(api, main_sha, config)
         print(
             json.dumps(
                 {
                     "alert": alert.get("number"),
-                    "decision": (
-                        "codeql-refresh-dispatched"
-                        if refresh["codeqlDispatched"]
-                        else "codeql-refresh-waiting"
-                    ),
+                    "decision": "codeql-refresh-waiting",
+                    "reason": "stale-alert-requires-external-exact-main-validation",
                     "staleSha": alert_instance_sha,
                     "currentMain": main_sha,
-                    **refresh,
+                    **observation,
                 },
                 sort_keys=True,
             )
@@ -4265,20 +4261,28 @@ def reconcile(
             created += 1
             active_alerts.add(subject["number"])
             return remaining_repairs + created
-        except RetryLater as exc:
+        except RetryLater:
             number = alert.get("number")
             print(
                 json.dumps(
-                    {"alert": number, "decision": "autofix-pending", "reason": str(exc)},
+                    {
+                        "alert": number,
+                        "decision": "autofix-pending",
+                        "reason": AUTOFIX_PENDING_LOG_REASON,
+                    },
                     sort_keys=True,
                 )
             )
             return remaining_repairs + created
-        except PolicyBlock as exc:
+        except PolicyBlock:
             number = alert.get("number")
             print(
                 json.dumps(
-                    {"alert": number, "decision": "blocked", "reason": str(exc)},
+                    {
+                        "alert": number,
+                        "decision": "blocked",
+                        "reason": REPAIR_WAITING_LOG_BLOCKED,
+                    },
                     sort_keys=True,
                 )
             )
@@ -4335,6 +4339,7 @@ def selftest(config: dict[str, Any]) -> None:
     current_main_sha = "6" * 40
     canonical_codeql = {
         "id": 801,
+        "workflow_id": MAIN_CODEQL_WORKFLOW_ID,
         "run_attempt": 1,
         "name": MAIN_CODEQL_NAME,
         "path": MAIN_CODEQL_PATH,
@@ -4349,34 +4354,43 @@ def selftest(config: dict[str, Any]) -> None:
         raise AutohealError("canonical exact-main CodeQL refresh run was not selected")
     for field, value in (
         ("head_sha", "5" * 40),
-        ("path", ".github/workflows/ci.yml"),
         ("event", "pull_request"),
     ):
         drifted = {**canonical_codeql, field: value}
         if _select_main_codeql_run([drifted], current_main_sha) is not None:
             raise AutohealError(f"drifted exact-main CodeQL {field} was accepted")
+    for field, value in (
+        ("workflow_id", MAIN_CODEQL_WORKFLOW_ID + 1),
+        ("path", ".github/workflows/ci.yml"),
+        ("name", "Lookalike CodeQL"),
+    ):
+        try:
+            _select_main_codeql_run([{**canonical_codeql, field: value}], current_main_sha)
+        except AutohealError as exc:
+            if "mismatched workflow identity" not in str(exc):
+                raise
+        else:
+            raise AutohealError(f"drifted exact-main CodeQL {field} identity was accepted")
     failed_codeql = {
         **canonical_codeql,
         "status": "completed",
         "conclusion": "failure",
     }
     if _select_main_codeql_run([failed_codeql], current_main_sha) is not None:
-        raise AutohealError("failed exact-main CodeQL run was accepted as refresh evidence")
+        raise AutohealError("failed exact-main CodeQL run was accepted as liveness evidence")
 
-    class _MainCodeqlRefreshApi(GitHubApi):
+    class _MainCodeqlObservationApi(GitHubApi):
         def __init__(self, *, move_main: bool = False, existing: bool = False) -> None:
-            self.dispatched = False
             self.move_main = move_main
             self.existing = existing
             self.main_reads = 0
-            self.calls: list[tuple[str, dict[str, Any] | None]] = []
 
         def get(self, path: str) -> Any:
             if path == "/branches/main":
                 self.main_reads += 1
                 observed = "4" * 40 if self.move_main and self.main_reads >= 2 else current_main_sha
                 return {"commit": {"sha": observed}}
-            raise AutohealError(f"unexpected CodeQL refresh self-test GET path: {path}")
+            raise AutohealError(f"unexpected CodeQL observation self-test GET path: {path}")
 
         def list_all(
             self,
@@ -4385,16 +4399,19 @@ def selftest(config: dict[str, Any]) -> None:
             max_pages: int = 10,
             max_items: int | None = None,
         ) -> list[dict[str, Any]]:
-            expected = f"/actions/runs?head_sha={current_main_sha}"
+            expected = (
+                f"/actions/workflows/{MAIN_CODEQL_WORKFLOW_ID}/runs?head_sha={current_main_sha}"
+            )
             if path != expected or max_pages != 2:
-                raise AutohealError(f"unexpected CodeQL refresh self-test list path: {path}")
-            if self.existing or self.dispatched:
-                row = {
-                    **canonical_codeql,
-                    "status": "completed" if self.existing else "queued",
-                    "conclusion": "success" if self.existing else None,
-                }
-                return [row]
+                raise AutohealError(f"unexpected CodeQL observation self-test list path: {path}")
+            if self.existing:
+                return [
+                    {
+                        **canonical_codeql,
+                        "status": "completed",
+                        "conclusion": "success",
+                    }
+                ]
             return []
 
         def post(
@@ -4404,47 +4421,32 @@ def selftest(config: dict[str, Any]) -> None:
             *,
             token: str | None = None,
         ) -> Any:
-            if token is not None:
-                raise AutohealError("CodeQL refresh self-test received unexpected alternate token")
-            self.calls.append((path, payload))
-            self.dispatched = True
-            return None
+            raise AutohealError(f"CodeQL liveness observation attempted mutation: {path}")
 
-    codeql_refresh_api = _MainCodeqlRefreshApi()
-    codeql_refresh = _ensure_current_main_codeql(codeql_refresh_api, current_main_sha, config)
-    expected_codeql_dispatch = (
-        "/actions/workflows/codeql.yml/dispatches",
-        {
-            "ref": "main",
-            "inputs": {"subject_sha": current_main_sha, "subject_ref": "main"},
-        },
-    )
-    if codeql_refresh_api.calls != [expected_codeql_dispatch]:
-        raise AutohealError("exact-main CodeQL refresh dispatch payload drifted")
-    if codeql_refresh != {
+    missing_codeql_api = _MainCodeqlObservationApi()
+    missing_codeql = _observe_current_main_codeql(missing_codeql_api, current_main_sha, config)
+    if missing_codeql != {"codeqlObserved": False}:
+        raise AutohealError("missing exact-main CodeQL was not represented as unavailable evidence")
+
+    existing_codeql_api = _MainCodeqlObservationApi(existing=True)
+    existing_codeql = _observe_current_main_codeql(existing_codeql_api, current_main_sha, config)
+    if existing_codeql != {
+        "codeqlObserved": True,
         "codeqlRunId": 801,
         "codeqlRunAttempt": 1,
         "codeqlEvent": "workflow_dispatch",
-        "codeqlStatus": "queued",
-        "codeqlDispatched": True,
+        "codeqlStatus": "completed",
     }:
-        raise AutohealError("exact-main CodeQL refresh evidence payload drifted")
+        raise AutohealError("existing exact-main CodeQL evidence payload drifted")
 
-    existing_codeql_api = _MainCodeqlRefreshApi(existing=True)
-    existing_codeql = _ensure_current_main_codeql(existing_codeql_api, current_main_sha, config)
-    if existing_codeql_api.calls:
-        raise AutohealError("existing exact-main CodeQL success triggered a duplicate dispatch")
-    if existing_codeql["codeqlDispatched"] is not False:
-        raise AutohealError("existing exact-main CodeQL success was not reused")
-
-    moved_codeql_api = _MainCodeqlRefreshApi(move_main=True)
+    moved_codeql_api = _MainCodeqlObservationApi(move_main=True)
     try:
-        _ensure_current_main_codeql(moved_codeql_api, current_main_sha, config)
+        _observe_current_main_codeql(moved_codeql_api, current_main_sha, config)
     except AutohealError as exc:
-        if str(exc) != "current main changed after CodeQL refresh registration":
-            raise AutohealError("moved-main CodeQL refresh guard changed semantics") from exc
+        if str(exc) != "current main changed during CodeQL liveness observation":
+            raise AutohealError("moved-main CodeQL observation guard changed semantics") from exc
     else:
-        raise AutohealError("moved main was accepted after CodeQL refresh registration")
+        raise AutohealError("moved main was accepted during CodeQL liveness observation")
 
     merge_sha = "9" * 40
     base_sha = "a" * 40
@@ -4529,7 +4531,9 @@ def selftest(config: dict[str, Any]) -> None:
             max_pages: int = 10,
             max_items: int | None = None,
         ) -> list[dict[str, Any]]:
-            if path == f"/actions/runs?head_sha={merge_sha}":
+            if path == (
+                f"/actions/workflows/{POST_MERGE_CI_WORKFLOW_ID}/runs?head_sha={merge_sha}"
+            ):
                 if max_pages != 2:
                     raise AutohealError("post-merge CI pagination contract drifted")
                 return [canonical_ci]
@@ -4597,10 +4601,19 @@ def selftest(config: dict[str, Any]) -> None:
             main_sha="c" * 40,
         )
     except PolicyBlock as exc:
-        if str(exc) != "generated repair is stale relative to current main":
+        if str(exc) != STALE_REPAIR_POLICY_REASON:
             raise AutohealError("stale repair lifecycle ordering changed") from exc
     else:
         raise AutohealError("stale repair did not fail as stale")
+
+    if (
+        _repair_waiting_log_reason(PolicyBlock(STALE_REPAIR_POLICY_REASON))
+        != REPAIR_WAITING_LOG_STALE
+        or _repair_waiting_log_reason(PolicyBlock("untrusted diagnostic detail"))
+        != REPAIR_WAITING_LOG_BLOCKED
+        or AUTOFIX_PENDING_LOG_REASON != "provider-pending"
+    ):
+        raise AutohealError("repair-waiting diagnostic redaction changed semantics")
 
     try:
         _require_repair_lifecycle(

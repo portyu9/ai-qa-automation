@@ -31,9 +31,18 @@ trusted_status = _load_trusted_status()
 
 
 class _FakeApi:
-    def __init__(self, event: str, *, run_head_sha: str = BASE) -> None:
+    def __init__(
+        self,
+        event: str,
+        *,
+        run_head_sha: str = BASE,
+        workflow_id: int = trusted_status.EXPECTED_GATE_WORKFLOW_ID,
+        run_attempt: int = 1,
+    ) -> None:
         self.event = event
         self.run_head_sha = run_head_sha
+        self.workflow_id = workflow_id
+        self.run_attempt = run_attempt
 
     def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
         assert path == f"/commits/{HEAD}/statuses"
@@ -84,6 +93,8 @@ class _FakeApi:
         if path == f"/actions/runs/{RUN_ID}":
             return {
                 "id": RUN_ID,
+                "workflow_id": self.workflow_id,
+                "run_attempt": self.run_attempt,
                 "name": trusted_status.EXPECTED_GATE_WORKFLOW_NAME,
                 "path": trusted_status.EXPECTED_GATE_WORKFLOW_PATH,
                 "event": self.event,
@@ -129,6 +140,35 @@ def test_scheduled_trusted_status_still_requires_exact_current_main() -> None:
     ):
         trusted_status.require_automatic_trusted_gate(
             _FakeApi("schedule", run_head_sha="d" * 40),
+            PR_NUMBER,
+            HEAD,
+            BASE,
+        )
+
+
+def test_trusted_status_rejects_workflow_identity_drift() -> None:
+    with pytest.raises(
+        trusted_status.TrustedStatusError,
+        match="target run is not exact-current-main gate evidence",
+    ):
+        trusted_status.require_automatic_trusted_gate(
+            _FakeApi(
+                "workflow_run",
+                workflow_id=trusted_status.EXPECTED_GATE_WORKFLOW_ID + 1,
+            ),
+            PR_NUMBER,
+            HEAD,
+            BASE,
+        )
+
+
+def test_trusted_status_rejects_rerun_attempt() -> None:
+    with pytest.raises(
+        trusted_status.TrustedStatusError,
+        match="target run is not exact-current-main gate evidence",
+    ):
+        trusted_status.require_automatic_trusted_gate(
+            _FakeApi("workflow_run", run_attempt=2),
             PR_NUMBER,
             HEAD,
             BASE,

@@ -169,16 +169,18 @@ def _codeql_run(
     run_attempt: int = 1,
     status: str = "completed",
     conclusion: str | None = "success",
+    event: str = "push",
+    workflow_id: int = autoheal.MAIN_CODEQL_WORKFLOW_ID,
 ) -> dict[str, Any]:
     return {
         "id": run_id,
-        "workflow_id": autoheal.MAIN_CODEQL_WORKFLOW_ID,
+        "workflow_id": workflow_id,
         "run_attempt": run_attempt,
         "name": autoheal.MAIN_CODEQL_NAME,
         "path": autoheal.MAIN_CODEQL_PATH,
         "head_branch": "main",
         "head_sha": MERGE,
-        "event": "push",
+        "event": event,
         "status": status,
         "conclusion": conclusion,
     }
@@ -326,9 +328,14 @@ class _TerminalApi:
         if path == "/pulls?state=closed&sort=updated&direction=desc":
             assert max_pages == 10
             return [self.pr]
-        if path == f"/actions/runs?head_sha={MERGE}":
+        if path == (
+            f"/actions/workflows/{autoheal.POST_MERGE_CI_WORKFLOW_ID}/runs?head_sha={MERGE}"
+        ):
             assert max_pages == 2
-            return [*self.ci_runs, *self.codeql_runs]
+            return list(self.ci_runs)
+        if path == (f"/actions/workflows/{autoheal.MAIN_CODEQL_WORKFLOW_ID}/runs?head_sha={MERGE}"):
+            assert max_pages == 2
+            return list(self.codeql_runs)
         if path == f"/issues/{PR_NUMBER}/comments":
             assert max_pages == 2
             return self.comments
@@ -552,6 +559,49 @@ def test_terminal_closure_accepts_certificate_after_certifying_run_completes_suc
 
     assert autoheal._reconcile_terminal_closure(api, MERGE, config) is False
     assert len(api.comments) == 1
+
+
+def test_current_main_codeql_failed_dispatch_is_unavailable_without_replay(
+    config: dict[str, Any],
+) -> None:
+    failed = _codeql_run(
+        event="workflow_dispatch",
+        status="completed",
+        conclusion="startup_failure",
+    )
+    api = _TerminalApi(codeql_runs=[failed])
+
+    assert autoheal._observe_current_main_codeql(api, MERGE, config) == {"codeqlObserved": False}
+    assert api.dispatches == []
+
+
+def test_current_main_codeql_failed_dispatch_rejects_workflow_identity_drift(
+    config: dict[str, Any],
+) -> None:
+    failed = _codeql_run(
+        event="workflow_dispatch",
+        status="completed",
+        conclusion="startup_failure",
+        workflow_id=autoheal.MAIN_CODEQL_WORKFLOW_ID + 1,
+    )
+    api = _TerminalApi(codeql_runs=[failed])
+
+    with pytest.raises(
+        autoheal.AutohealError,
+        match="exact-main CodeQL run has mismatched workflow identity",
+    ):
+        autoheal._observe_current_main_codeql(api, MERGE, config)
+
+    assert api.dispatches == []
+
+
+def test_current_main_codeql_missing_evidence_does_not_dispatch(
+    config: dict[str, Any],
+) -> None:
+    api = _TerminalApi(codeql_runs=[])
+
+    assert autoheal._observe_current_main_codeql(api, MERGE, config) == {"codeqlObserved": False}
+    assert api.dispatches == []
 
 
 def test_terminal_closure_dispatches_liveness_ci_but_waits_for_automatic_push(
@@ -792,6 +842,11 @@ def test_finalize_post_merge_orders_topology_before_ci_registration(
             [_ci_run()],
             [_codeql_run(status="completed", conclusion="failure")],
             "CodeQL run completed non-successfully",
+        ),
+        (
+            [_ci_run()],
+            [_codeql_run(workflow_id=autoheal.MAIN_CODEQL_WORKFLOW_ID + 1)],
+            "mismatched workflow identity",
         ),
     ),
 )
