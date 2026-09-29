@@ -36,27 +36,20 @@ author = _load("protected_security_remediation_test", AUTHOR_SCRIPT)
 
 
 def _reviewed_vulnerable_source() -> bytes:
-    """Reconstruct the exact reviewed alert #17 source from the fixed live target."""
+    """Return the exact current alert #21 source admitted by the reviewed strategy."""
 
     source = TARGET.read_bytes()
-    assert source.count(author._SECURITY_AUTOHEAL_LOG_OLD) == 0
-    assert source.count(author._SECURITY_AUTOHEAL_LOG_NEW) == 1
-    vulnerable = source.replace(
-        author._SECURITY_AUTOHEAL_LOG_NEW,
-        author._SECURITY_AUTOHEAL_LOG_OLD,
-        1,
-    )
-    assert vulnerable.count(author._SECURITY_AUTOHEAL_LOG_OLD) == 1
-    assert vulnerable.count(author._SECURITY_AUTOHEAL_LOG_NEW) == 0
-    return vulnerable
+    assert source.count(author._SECURITY_AUTOHEAL_LOG_OLD) == 1
+    assert source.count(author._SECURITY_AUTOHEAL_LOG_NEW) == 0
+    return source
 
 
 def _alert(
     *,
-    number: int = 17,
+    number: int = 21,
     path: str = ".github/scripts/security_autoheal.py",
     rule: str = "py/clear-text-logging-sensitive-data",
-    message: str = "dynamic merge evidence reaches a log sink",
+    message: str = "clear-text head SHA reaches a log sink",
 ) -> dict[str, Any]:
     return {
         "number": number,
@@ -69,8 +62,8 @@ def _alert(
             "commit_sha": MAIN,
             "location": {
                 "path": path,
-                "start_line": 4102,
-                "end_line": 4110,
+                "start_line": 4046,
+                "end_line": 4053,
                 "start_column": 21,
                 "end_column": 22,
             },
@@ -87,7 +80,7 @@ def _record(**kwargs: Any) -> dict[str, Any]:
     )
 
 
-def test_alert17_class_builds_one_exact_deterministic_protected_plan() -> None:
+def test_current_clear_text_alert_builds_one_exact_deterministic_protected_plan() -> None:
     record = _record()
     assert record["decision"] == "protected-independent-remediation"
     assert record["authority"] == "protected-independent-remediation"
@@ -99,9 +92,9 @@ def test_alert17_class_builds_one_exact_deterministic_protected_plan() -> None:
     assert plan["changedFiles"] == [".github/scripts/security_autoheal.py"]
     assert plan["maxChangedFiles"] == 1
     assert plan["routeRecordDigest"] == record["recordDigest"]
-    assert plan["authorStrategy"] == "protected-security-autoheal-clear-text-log-v1"
-    assert b"merge_evidence = _merge(api, number, validated_metadata, live, config)" not in repaired
-    assert b"**merge_evidence" not in repaired
+    assert plan["authorStrategy"] == "protected-security-autoheal-clear-text-log-v2"
+    assert b'"headSha": live["headSha"]' not in repaired
+    assert b'"decision": "repair-merged"' in repaired
     assert b"_merge(api, number, validated_metadata, live, config)" in repaired
     assert author.canonical_plan(plan).endswith(b"\n")
     assert author.revalidate_repair_plan(plan, source, record, main_sha=MAIN) == repaired
@@ -383,7 +376,7 @@ def test_generated_protected_pr_reproves_live_route_bytes_and_app_identity() -> 
         "targetPath": ".github/scripts/security_autoheal.py",
         "routeRecordDigest": api.record["recordDigest"],
         "planDigest": author.parse_marker(api.pr["body"])["repairPlan"]["planDigest"],
-        "authorStrategy": "protected-security-autoheal-clear-text-log-v1",
+        "authorStrategy": "protected-security-autoheal-clear-text-log-v2",
     }
 
 
@@ -806,7 +799,7 @@ def test_guarded_merge_revalidates_and_rechecks_trusted_gate_immediately_before_
         "targetPath": ".github/scripts/security_autoheal.py",
         "routeRecordDigest": "e" * 64,
         "planDigest": "f" * 64,
-        "authorStrategy": "protected-security-autoheal-clear-text-log-v1",
+        "authorStrategy": "protected-security-autoheal-clear-text-log-v2",
     }
 
     class MergeApi:
@@ -1104,7 +1097,7 @@ def test_guarded_merge_rejects_stale_control_before_mutation(
         "targetPath": ".github/scripts/security_autoheal.py",
         "routeRecordDigest": "e" * 64,
         "planDigest": "f" * 64,
-        "authorStrategy": "protected-security-autoheal-clear-text-log-v1",
+        "authorStrategy": "protected-security-autoheal-clear-text-log-v2",
     }
     merged = False
 

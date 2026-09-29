@@ -110,6 +110,7 @@ jobs:
     needs: bind
     if: ${{ needs.bind.outputs.run_validation == 'true' }}
     permissions:
+      checks: write
       contents: read
     uses: ./.github/workflows/ci.yml
 
@@ -119,6 +120,7 @@ jobs:
     if: ${{ needs.bind.outputs.run_validation == 'true' }}
     permissions:
       actions: read
+      checks: write
       contents: read
       security-events: write
     uses: ./.github/workflows/codeql.yml

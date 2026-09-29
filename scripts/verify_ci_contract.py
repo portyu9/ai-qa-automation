@@ -48,7 +48,7 @@ EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
     "315e1ea71105e9760d006331b570398b5f7c8af4"  # pragma: allowlist secret
 )
 EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA = (
-    "b0105fd8d4d603611f4325fcd690dafbda41a70d"  # pragma: allowlist secret
+    "4b337b65f8bab2cd305a45a27413787dc7cbf0b8"  # pragma: allowlist secret
 )
 EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
@@ -721,7 +721,6 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         "TRUSTED_GATE_APP_CLIENT_ID",
         "TRUSTED_GATE_APP_PRIVATE_KEY",
         "contents: write",
-        "checks: write",
         "statuses: write",
         "pull-requests: write",
         "actions/create-github-app-token",
@@ -783,7 +782,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         "    name: Validate exact governed main CI",
         "    needs: bind",
         "    if: ${{ needs.bind.outputs.run_validation == 'true' }}",
-        "    permissions:\n      contents: read",
+        "    permissions:\n      checks: write\n      contents: read",
         "    uses: ./.github/workflows/ci.yml",
     ):
         if fragment not in validate_ci:
@@ -794,13 +793,18 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         "    name: Validate exact governed main CodeQL",
         "    needs: bind",
         "    if: ${{ needs.bind.outputs.run_validation == 'true' }}",
-        "    permissions:\n      actions: read\n      contents: read\n      security-events: write",
+        "    permissions:\n      actions: read\n      checks: write\n      contents: read\n      security-events: write",
         "    uses: ./.github/workflows/codeql.yml",
     ):
         if fragment not in validate_codeql:
             raise ValueError(
                 "post-merge-ci.yml must isolate CodeQL SARIF authority to canonical reusable CodeQL"
             )
+
+    if semantic.count("checks: write") != 2:
+        raise ValueError(
+            "post-merge-ci.yml checks write authority must exist exactly on two reusable callers"
+        )
 
     required = base._semantic_text(base._job_block(text, "required"))
     for fragment in (
@@ -827,7 +831,8 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         "subject": "single-signed-lane-bound-github-actions-merge-child-of-upstream-control-sha",
         "canonical_ci": "reusable-ci.yml",
         "canonical_codeql": "reusable-codeql.yml",
-        "security_events_write": "isolated-codeql-only",
+        "security_events_write": "reusable-codeql-call-ceiling-only",
+        "checks_write": "two-canonical-reusable-call-ceilings-only",
         "merge_authority": "none",
         "trusted_status_authority": "none",
     }

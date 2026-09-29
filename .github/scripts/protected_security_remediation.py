@@ -93,15 +93,15 @@ class RepairStrategy:
     new: bytes
 
 
-_SECURITY_AUTOHEAL_LOG_OLD = b"""                merge_evidence = _merge(api, number, validated_metadata, live, config)\n                print(\n                    json.dumps(\n                        {\n                            "pr": number,\n                            "decision": "repair-merged",\n                            "headSha": live["headSha"],\n                            **merge_evidence,\n                        },\n                        sort_keys=True,\n                    )\n                )\n"""
+_SECURITY_AUTOHEAL_LOG_OLD = b"""                _merge(api, number, validated_metadata, live, config)\n                print(\n                    json.dumps(\n                        {\n                            "pr": number,\n                            "decision": "repair-merged",\n                            "headSha": live["headSha"],\n                        },\n                        sort_keys=True,\n                    )\n                )\n"""
 
-_SECURITY_AUTOHEAL_LOG_NEW = b"""                _merge(api, number, validated_metadata, live, config)\n                print(\n                    json.dumps(\n                        {\n                            "pr": number,\n                            "decision": "repair-merged",\n                            "headSha": live["headSha"],\n                        },\n                        sort_keys=True,\n                    )\n                )\n"""
+_SECURITY_AUTOHEAL_LOG_NEW = b"""                _merge(api, number, validated_metadata, live, config)\n                print(\n                    json.dumps(\n                        {\n                            "pr": number,\n                            "decision": "repair-merged",\n                        },\n                        sort_keys=True,\n                    )\n                )\n"""
 
 REPAIR_STRATEGIES = (
     RepairStrategy(
         rule="py/clear-text-logging-sensitive-data",
         path=".github/scripts/security_autoheal.py",
-        author_strategy="protected-security-autoheal-clear-text-log-v1",
+        author_strategy="protected-security-autoheal-clear-text-log-v2",
         old=_SECURITY_AUTOHEAL_LOG_OLD,
         new=_SECURITY_AUTOHEAL_LOG_NEW,
     ),

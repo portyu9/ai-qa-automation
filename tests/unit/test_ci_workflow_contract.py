@@ -1163,6 +1163,25 @@ def test_post_merge_ci_rejects_write_authority(tmp_path: Path) -> None:
         ci_contract.verify_ci_contract(root)
 
 
+def test_post_merge_ci_rejects_check_write_outside_reusable_calls(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "post-merge-ci.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = "    permissions:\n      contents: read\n    outputs:"
+    assert marker in text
+    path.write_text(
+        text.replace(
+            marker,
+            "    permissions:\n      checks: write\n      contents: read\n    outputs:",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="exactly on two reusable callers"):
+        ci_contract.verify_ci_contract(root)
+
+
 def test_post_merge_ci_rejects_alternate_validation_workflow(tmp_path: Path) -> None:
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "post-merge-ci.yml"
