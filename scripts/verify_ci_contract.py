@@ -61,7 +61,7 @@ EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
     "fb756e342504bb6ffb95bc67149158dd37c9b4b9"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA = (
-    "aa909649885eacfa45174c793157a5f995a2d91a"  # pragma: allowlist secret
+    "3f87760751e0354c8b4ece242e64bc480fe5a922"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_PR_WORKFLOW_BLOB_SHA = (
     "b7aa78a859ae3a0fdedc299f92555a61645d559a"  # pragma: allowlist secret
@@ -946,8 +946,8 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         "          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}",
         "          python .github/scripts/dependency_trusted_merge.py",
         '          --trusted-run-id "${{ github.event.workflow_run.id }}"',
-        '          --trusted-run-attempt "${{ github.event.workflow_run.run_attempt }}"',
-        '          --github-output "$GITHUB_OUTPUT"',
+        '            --trusted-run-attempt "${{ github.event.workflow_run.run_attempt }}" >> "$GITHUB_OUTPUT"',
+        "          set -euo pipefail",
         "      - name: Capture Python 3.11 resolver",
         "        if: steps.target.outputs.lane == 'dependency-promotion'",
         "      - name: Set up Python 3.14",
@@ -979,6 +979,10 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
     if "contents: write" in resolve or "pull-requests: write" in resolve:
         raise ValueError(
             "trusted dependency target resolution must not gain step-scoped mutation authority"
+        )
+    if "--github-output" in resolve or '>> "$GITHUB_OUTPUT"' not in resolve:
+        raise ValueError(
+            "trusted dependency target resolution must use only the runner-owned output channel"
         )
     promotion = base._semantic_text(
         base._step_block(job, "Merge exact trusted dependency promotion")
