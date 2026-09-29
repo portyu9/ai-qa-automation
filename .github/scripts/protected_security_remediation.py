@@ -1770,20 +1770,12 @@ def _validate_merged_repair(
     }
 
 
-def _require_merge_ancestor(api: Any, merge_sha: str, current_main: str) -> None:
+def _require_exact_merge_main(merge_sha: str, current_main: str) -> None:
     merge_sha = _require_sha(merge_sha, "terminal protected repair merge SHA")
     current_main = _require_sha(current_main, "terminal current main SHA")
-    if merge_sha == current_main:
-        return
-    comparison = api.get(f"/compare/{merge_sha}...{current_main}")
-    if (
-        not isinstance(comparison, dict)
-        or comparison.get("status") != "ahead"
-        or ((comparison.get("base_commit") or {}).get("sha")) != merge_sha
-        or ((comparison.get("merge_base_commit") or {}).get("sha")) != merge_sha
-    ):
+    if merge_sha != current_main:
         raise ProtectedRemediationError(
-            "terminal protected repair merge is not an ancestor of current main"
+            "terminal protected repair merge is not exact current main"
         )
 
 
@@ -2100,7 +2092,7 @@ def _reconcile_terminal_closure(
         expected_bot_login=bot_login,
         expected_bot_id=bot_id,
     )
-    _require_merge_ancestor(read_api, str(evidence["mergeSha"]), current_main)
+    _require_exact_merge_main(str(evidence["mergeSha"]), current_main)
     trusted = _terminal_trusted_gate_evidence(read_api, evidence)
     ci = _terminal_workflow_evidence(
         read_api,
