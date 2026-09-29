@@ -897,9 +897,7 @@ def test_promotion_qualification_wake_accepts_github_canonical_job_url(
             self.check = {
                 **payload,
                 "id": job_id,
-                "details_url": (
-                    f"https://github.com/{gate.EXPECTED_REPOSITORY}/runs/{job_id}"
-                ),
+                "details_url": (f"https://github.com/{gate.EXPECTED_REPOSITORY}/runs/{job_id}"),
                 "app": {
                     "id": promotion.GITHUB_ACTIONS_APP_ID,
                     "slug": "github-actions",

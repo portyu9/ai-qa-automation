@@ -39,10 +39,7 @@ def _actions_check_details_url_is_canonical(
     run_url = f"https://github.com/{EXPECTED_REPOSITORY}/actions/runs/{run_id}"
     if details_url == run_url:
         return True
-    if (
-        re.fullmatch(re.escape(run_url) + r"/job/[1-9][0-9]*", details_url)
-        is not None
-    ):
+    if re.fullmatch(re.escape(run_url) + r"/job/[1-9][0-9]*", details_url) is not None:
         return True
     return details_url == f"https://github.com/{EXPECTED_REPOSITORY}/runs/{check_id}"
 
@@ -99,15 +96,15 @@ def _check_candidate(
     if not isinstance(conclusion, str) or not conclusion:
         raise TrustedQualificationError(f"{name} trusted qualification conclusion is invalid")
     check_id = _positive_int(row.get("id"), f"{name} check id")
+    details_url = row.get("details_url")
     if not _actions_check_details_url_is_canonical(
-        row.get("details_url"),
+        details_url,
         check_id=check_id,
         run_id=run_id,
     ):
         raise TrustedQualificationError(
             f"{name} trusted qualification details URL is not canonical"
         )
-    expected_url = f"https://github.com/{EXPECTED_REPOSITORY}/actions/runs/{run_id}"
 
     run = api.get(f"/actions/runs/{run_id}")
     if not isinstance(run, dict):
@@ -166,7 +163,7 @@ def _check_candidate(
         "run_id": run_id,
         "run_attempt": attempt,
         "conclusion": conclusion,
-        "details_url": expected_url,
+        "details_url": details_url,
     }
 
 

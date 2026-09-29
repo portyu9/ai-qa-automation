@@ -43,9 +43,7 @@ class _Api:
         details_url: str | None = None,
     ) -> None:
         spec = qualification.QUALIFICATION_SPECS["Required PR Gate"]
-        self.external_id = external_id or (
-            f"{spec['external_prefix']}:{HEAD}:{RUN_ID}:1"
-        )
+        self.external_id = external_id or (f"{spec['external_prefix']}:{HEAD}:{RUN_ID}:1")
         self.app_id = app_id
         self.workflow_id = int(workflow_id or spec["workflow_id"])
         self.details_url = details_url
@@ -63,10 +61,7 @@ class _Api:
                 "conclusion": "success",
                 # GitHub canonicalizes an Actions-authored check to the publishing job URL.
                 "details_url": self.details_url
-                or (
-                    "https://github.com/portyu9/ai-qa-automation/"
-                    "actions/runs/778899/job/998877"
-                ),
+                or ("https://github.com/portyu9/ai-qa-automation/actions/runs/778899/job/998877"),
                 "app": {
                     "id": self.app_id,
                     "slug": "github-actions",
@@ -116,7 +111,8 @@ def test_qualification_accepts_github_canonical_job_details_url() -> None:
         "run_attempt": 1,
         "conclusion": "success",
         "details_url": (
-            f"https://github.com/{qualification.EXPECTED_REPOSITORY}/actions/runs/{RUN_ID}"
+            f"https://github.com/{qualification.EXPECTED_REPOSITORY}/"
+            f"actions/runs/{RUN_ID}/job/998877"
         ),
     }
 
