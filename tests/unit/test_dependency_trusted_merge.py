@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -112,6 +113,31 @@ class Api:
 @pytest.fixture
 def config() -> dict[str, Any]:
     return {"repository": REPOSITORY, "baseBranch": "main"}
+
+
+@pytest.mark.parametrize(
+    "authority_path",
+    (
+        ".github/scripts/dependency_trusted_merge.py",
+        ".github/workflows/dependency-trusted-merge.yml",
+    ),
+)
+def test_trusted_merge_authority_paths_require_manual_review(
+    tmp_path: Path,
+    authority_path: str,
+) -> None:
+    live_config = merge.load_config()
+    assert authority_path in live_config["manualReviewPaths"]
+
+    mutated = dict(live_config)
+    mutated["manualReviewPaths"] = [
+        path for path in live_config["manualReviewPaths"] if path != authority_path
+    ]
+    config_path = tmp_path / "dependency-governance.json"
+    config_path.write_text(json.dumps(mutated), encoding="utf-8")
+
+    with pytest.raises(merge.GovernanceError, match="must require manual review"):
+        merge.load_config(config_path)
 
 
 def test_resolves_exact_promotion_bound_to_same_trusted_run(
