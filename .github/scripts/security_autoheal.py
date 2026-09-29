@@ -1239,11 +1239,7 @@ def _changed_files(api: GitHubApi, base_sha: str, head_sha: str) -> list[dict[st
     if not isinstance(payload, dict):
         raise PolicyBlock("repair candidate comparison is malformed")
     files = payload.get("files")
-    if (
-        not isinstance(files, list)
-        or not files
-        or any(not isinstance(row, dict) for row in files)
-    ):
+    if not isinstance(files, list) or not files or any(not isinstance(row, dict) for row in files):
         raise PolicyBlock("repair candidate changed-file evidence is malformed or empty")
     return files
 

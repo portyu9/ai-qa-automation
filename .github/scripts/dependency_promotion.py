@@ -1367,9 +1367,7 @@ def _validate_promotion_changed_paths(files: list[dict[str, Any]]) -> set[str]:
     for row in files:
         path = row.get("filename")
         if not isinstance(path, str) or path not in PROMOTION_PATHS:
-            raise PolicyBlock(
-                f"promotion changed path is outside generated authority: {path!r}"
-            )
+            raise PolicyBlock(f"promotion changed path is outside generated authority: {path!r}")
         if path in paths:
             raise PolicyBlock(f"promotion changed-file list is ambiguous for path: {path}")
         if row.get("status") != "modified" or row.get("previous_filename") is not None:
