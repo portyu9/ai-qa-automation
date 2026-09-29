@@ -36,12 +36,15 @@ author = _load("protected_security_remediation_test", AUTHOR_SCRIPT)
 
 
 def _reviewed_vulnerable_source() -> bytes:
-    """Return the exact current alert #21 source admitted by the reviewed strategy."""
+    """Return the reviewed vulnerable fixture from either admitted live source state."""
 
     source = TARGET.read_bytes()
-    assert source.count(author._SECURITY_AUTOHEAL_LOG_OLD) == 1
-    assert source.count(author._SECURITY_AUTOHEAL_LOG_NEW) == 0
-    return source
+    old_count = source.count(author._SECURITY_AUTOHEAL_LOG_OLD)
+    new_count = source.count(author._SECURITY_AUTOHEAL_LOG_NEW)
+    assert (old_count, new_count) in {(1, 0), (0, 1)}
+    if old_count == 1:
+        return source
+    return source.replace(author._SECURITY_AUTOHEAL_LOG_NEW, author._SECURITY_AUTOHEAL_LOG_OLD, 1)
 
 
 def _alert(
