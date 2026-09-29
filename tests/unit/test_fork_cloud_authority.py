@@ -355,6 +355,17 @@ def test_post_merge_ci_has_no_cloud_or_merge_authority() -> None:
     ):
         _verify_workflow_text("post-merge-ci.yml", elevated)
 
+    expanded_checks = workflow.replace(
+        "permissions:\n  contents: read",
+        "permissions:\n  contents: read\n  checks: write",
+        1,
+    )
+    with pytest.raises(
+        ValueError,
+        match="must isolate exactly two canonical reusable-call checks write ceilings",
+    ):
+        _verify_workflow_text("post-merge-ci.yml", expanded_checks)
+
     duplicated_sarif = workflow.replace(
         "permissions:\n  contents: read",
         "permissions:\n  contents: read\n  security-events: write",

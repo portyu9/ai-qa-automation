@@ -41,8 +41,25 @@ LOCK_NAMES = (
 )
 
 
-def _observed(pyproject: bytes) -> dict[str, bytes]:
-    result = {"pyproject.toml": pyproject, ".github/lock-authority.json": b"authority\n"}
+def _readme(version: str) -> bytes:
+    return (
+        f"[![Claude Agent SDK](https://img.shields.io/badge/Claude%20Agent%20SDK-{version}-purple)]\n"
+        f"Runtime: `claude-agent-sdk=={version}`\n"
+    ).encode()
+
+
+def _sdk_pyproject(version: str) -> bytes:
+    return (
+        f'[project]\nname = "ai-qa-automation"\ndependencies = ["claude-agent-sdk=={version}"]\n'
+    ).encode()
+
+
+def _observed(pyproject: bytes, *, readme: bytes | None = None) -> dict[str, bytes]:
+    result = {
+        "README.md": readme if readme is not None else _readme("0.2.159"),
+        "pyproject.toml": pyproject,
+        ".github/lock-authority.json": b"authority\n",
+    }
     for name in LOCK_NAMES:
         result[f"requirements/{name}"] = f"{name}\n".encode()
     return result
@@ -51,8 +68,10 @@ def _observed(pyproject: bytes) -> dict[str, bytes]:
 def test_generated_validation_replays_exact_observed_lock_without_recompiling(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    pyproject = b"[project]\nname='ai-qa-automation'\n"
-    observed = _observed(pyproject)
+    base_pyproject = _sdk_pyproject("0.2.136")
+    pyproject = _sdk_pyproject("0.2.159")
+    base_readme = _readme("0.2.136")
+    observed = _observed(pyproject, readme=_readme("0.2.159"))
     (tmp_path / "requirements").mkdir()
     (tmp_path / "requirements" / "base-image.lock").write_text("image@sha256:" + "1" * 64 + "\n")
     monkeypatch.setattr(promotion, "ROOT", tmp_path)
@@ -80,7 +99,11 @@ def test_generated_validation_replays_exact_observed_lock_without_recompiling(
         return {"schemaVersion": 1}
 
     monkeypatch.setattr(promotion, "validate_frozen_locks", fake_validate)
-    promotion._validate_generated_bytes(object(), {"pyproject": pyproject}, HEAD)
+    promotion._validate_generated_bytes(
+        object(),
+        {"basePyproject": base_pyproject, "pyproject": pyproject, "readme": base_readme},
+        HEAD,
+    )
 
     assert captured["python311"] == "/python311"
     assert captured["python314"] == "/python314"
@@ -112,8 +135,10 @@ def test_generated_validation_rejects_pyproject_drift_before_replay(
 def test_generated_validation_translates_frozen_replay_failure_to_policy_block(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    pyproject = b"[project]\nname='ai-qa-automation'\n"
-    observed = _observed(pyproject)
+    base_pyproject = _sdk_pyproject("0.2.136")
+    pyproject = _sdk_pyproject("0.2.159")
+    base_readme = _readme("0.2.136")
+    observed = _observed(pyproject, readme=_readme("0.2.159"))
     (tmp_path / "requirements").mkdir()
     (tmp_path / "requirements" / "base-image.lock").write_text("base\n")
     monkeypatch.setattr(promotion, "ROOT", tmp_path)
@@ -126,7 +151,11 @@ def test_generated_validation_translates_frozen_replay_failure_to_policy_block(
 
     monkeypatch.setattr(promotion, "validate_frozen_locks", fail)
     with pytest.raises(promotion.PolicyBlock, match="promotion frozen lock replay failed"):
-        promotion._validate_generated_bytes(object(), {"pyproject": pyproject}, HEAD)
+        promotion._validate_generated_bytes(
+            object(),
+            {"basePyproject": base_pyproject, "pyproject": pyproject, "readme": base_readme},
+            HEAD,
+        )
 
 
 BASE = "b" * 40
@@ -159,6 +188,7 @@ def test_source_subject_rebases_stale_dependabot_when_live_pyproject_is_exact(
     live_main = "f" * 40
     base_raw = _stale_source_pyproject()
     head_raw = _stale_source_pyproject(hatchling="1.32.4")
+    readme_raw = b"exact live README\n"
     reads: list[tuple[str, str]] = []
 
     class Api:
@@ -202,8 +232,11 @@ def test_source_subject_rebases_stale_dependabot_when_live_pyproject_is_exact(
 
     def contents(api: Any, path: str, ref: str) -> bytes:
         assert api.__class__ is Api
-        assert path == "pyproject.toml"
         reads.append((path, ref))
+        if path == "README.md":
+            assert ref == live_main
+            return readme_raw
+        assert path == "pyproject.toml"
         return {
             source_base: base_raw,
             source_head: head_raw,
@@ -218,11 +251,14 @@ def test_source_subject_rebases_stale_dependabot_when_live_pyproject_is_exact(
     assert observed["headSha"] == source_head
     assert observed["sourceBaseSha"] == source_base
     assert observed["baseSha"] == live_main
+    assert observed["basePyproject"] == base_raw
     assert observed["pyproject"] == head_raw
+    assert observed["readme"] == readme_raw
     assert reads == [
         ("pyproject.toml", source_base),
         ("pyproject.toml", source_head),
         ("pyproject.toml", live_main),
+        ("README.md", live_main),
     ]
 
 
@@ -356,13 +392,44 @@ def _promotion_pr(
     }
 
 
+def test_sdk_readme_synchronization_updates_only_exact_reviewed_tokens() -> None:
+    base = _sdk_pyproject("0.2.136")
+    head = _sdk_pyproject("0.2.159")
+    readme = _readme("0.2.136")
+
+    assert promotion._synchronize_readme_sdk_claim(readme, base, head) == _readme("0.2.159")
+    assert promotion._synchronize_readme_sdk_claim(readme, base, base) == readme
+
+
+def test_sdk_readme_synchronization_rejects_missing_or_duplicate_authority() -> None:
+    base = _sdk_pyproject("0.2.136")
+    head = _sdk_pyproject("0.2.159")
+    readme = _readme("0.2.136")
+
+    with pytest.raises(
+        promotion.PolicyBlock, match="badge is missing, duplicated, or already drifted"
+    ):
+        promotion._synchronize_readme_sdk_claim(readme + readme, base, head)
+
+    with pytest.raises(
+        promotion.PolicyBlock, match="runtime claim is missing, duplicated, or already drifted"
+    ):
+        promotion._synchronize_readme_sdk_claim(
+            readme.replace(b"`claude-agent-sdk==0.2.136`", b"SDK"),
+            base,
+            head,
+        )
+
+
 def test_promotion_changed_paths_accept_only_unique_modified_generated_files() -> None:
     files = [
+        {"filename": "README.md", "status": "modified"},
         {"filename": "pyproject.toml", "status": "modified"},
         {"filename": ".github/lock-authority.json", "status": "modified"},
     ]
 
     assert promotion._validate_promotion_changed_paths(files) == {
+        "README.md",
         "pyproject.toml",
         ".github/lock-authority.json",
     }

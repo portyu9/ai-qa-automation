@@ -108,9 +108,8 @@ _POST_MERGE_CI_AUTHORITY_FRAGMENTS = (
     'test "$UPSTREAM_REPOSITORY" = "$GITHUB_REPOSITORY"',
     'test "$UPSTREAM_HEAD_REPOSITORY" = "$GITHUB_REPOSITORY"',
     'test "$live_main" = "$SUBJECT_SHA"',
-    "uses: ./.github/workflows/ci.yml",
-    "uses: ./.github/workflows/codeql.yml",
-    "permissions:\n      actions: read\n      contents: read\n      security-events: write",
+    "permissions:\n      checks: write\n      contents: read\n    uses: ./.github/workflows/ci.yml",
+    "permissions:\n      actions: read\n      checks: write\n      contents: read\n      security-events: write\n    uses: ./.github/workflows/codeql.yml",
 )
 
 _SECURITY_AUTOHEAL_SECRET_CONTEXT_FRAGMENTS = (
@@ -277,13 +276,16 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
                 "${{ vars.",
                 "contents: write",
                 "actions: write",
-                "checks: write",
                 "statuses: write",
                 "pull-requests: write",
             )
         ):
             raise ValueError(
                 "post-merge-ci.yml must remain exact accepted-main validation without cloud or merge authority"
+            )
+        if text.count("checks: write") != 2:
+            raise ValueError(
+                "post-merge-ci.yml must isolate exactly two canonical reusable-call checks write ceilings"
             )
         if text.count("security-events: write") != 1:
             raise ValueError(
