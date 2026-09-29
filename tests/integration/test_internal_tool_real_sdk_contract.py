@@ -132,29 +132,66 @@ def make_services(tmp_path: Path) -> internal_tools.RuntimeServices:
 
 
 def real_sdk_server(services: internal_tools.RuntimeServices) -> Any:
-    from mcp.types import CallToolRequest, ListToolsRequest
-
     server_config, names = internal_tools.build_internal_mcp_server(services)
     assert server_config["type"] == "sdk"
     assert server_config["name"] == "qa"
     assert names == [f"mcp__qa__{name}" for name in EXPECTED_TOOL_NAMES]
 
     server = server_config["instance"]
-    assert ListToolsRequest in server.request_handlers
-    assert CallToolRequest in server.request_handlers
+    legacy_handlers = getattr(server, "request_handlers", None)
+    if legacy_handlers is not None:
+        from mcp.types import CallToolRequest, ListToolsRequest
+
+        assert ListToolsRequest in legacy_handlers
+        assert CallToolRequest in legacy_handlers
     return server
 
 
-async def call_real_sdk_tool(server: Any, name: str, arguments: dict[str, Any]) -> Any:
-    from mcp.types import CallToolRequest, CallToolRequestParams
+async def list_real_sdk_tools(server: Any) -> list[Any]:
+    legacy_handlers = getattr(server, "request_handlers", None)
+    if legacy_handlers is not None:
+        from mcp.types import ListToolsRequest
 
-    handler = server.request_handlers[CallToolRequest]
-    request = CallToolRequest(
-        method="tools/call",
-        params=CallToolRequestParams(name=name, arguments=arguments),
-    )
-    response = await handler(request)
-    return response.root
+        listed = await legacy_handlers[ListToolsRequest](ListToolsRequest(method="tools/list"))
+        return list(listed.root.tools)
+
+    from mcp.client import Client
+
+    async with Client(server) as client:
+        listed = await client.list_tools()
+        return list(listed.tools)
+
+
+def tool_input_schema(tool: Any) -> dict[str, Any]:
+    schema = tool.input_schema if hasattr(tool, "input_schema") else tool.inputSchema
+    assert isinstance(schema, dict)
+    return schema
+
+
+def normalized_tool_result(result: Any) -> Any:
+    if hasattr(result, "isError"):
+        return result
+    return SimpleNamespace(content=result.content, isError=result.is_error)
+
+
+async def call_real_sdk_tool(server: Any, name: str, arguments: dict[str, Any]) -> Any:
+    legacy_handlers = getattr(server, "request_handlers", None)
+    if legacy_handlers is not None:
+        from mcp.types import CallToolRequest, CallToolRequestParams
+
+        handler = legacy_handlers[CallToolRequest]
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(name=name, arguments=arguments),
+        )
+        response = await handler(request)
+        return normalized_tool_result(response.root)
+
+    from mcp.client import Client
+
+    async with Client(server) as client:
+        result = await client.call_tool(name, arguments)
+    return normalized_tool_result(result)
 
 
 def response_text(result: Any) -> str:
@@ -166,17 +203,14 @@ def response_text(result: Any) -> str:
 
 @pytest.mark.asyncio
 async def test_all_registered_adapters_cross_pinned_sdk_mcp_boundary(tmp_path: Path) -> None:
-    from mcp.types import ListToolsRequest
-
     services = make_services(tmp_path)
     server = real_sdk_server(services)
 
-    list_handler = server.request_handlers[ListToolsRequest]
-    listed = await list_handler(ListToolsRequest(method="tools/list"))
-    assert [tool.name for tool in listed.root.tools] == EXPECTED_TOOL_NAMES
-    listed_by_name = {tool.name: tool for tool in listed.root.tools}
+    listed_tools = await list_real_sdk_tools(server)
+    assert [tool.name for tool in listed_tools] == EXPECTED_TOOL_NAMES
+    listed_by_name = {tool.name: tool for tool in listed_tools}
     for name, properties in EXPECTED_TOOL_PROPERTIES.items():
-        assert listed_by_name[name].inputSchema == {
+        assert tool_input_schema(listed_by_name[name]) == {
             "type": "object",
             "properties": properties,
             "required": list(properties),

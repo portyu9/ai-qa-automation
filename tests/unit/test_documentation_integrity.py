@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -83,6 +84,18 @@ def _minimal_public_docs(root: Path) -> None:
     )
 
 
+def _repository_sdk_pin() -> str:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    dependencies = project["project"]["dependencies"]
+    sdk_pins = [
+        dependency
+        for dependency in dependencies
+        if isinstance(dependency, str) and dependency.startswith("claude-agent-sdk==")
+    ]
+    assert len(sdk_pins) == 1
+    return sdk_pins[0].split("==", 1)[1]
+
+
 def test_repository_public_documentation_contract_is_self_consistent() -> None:
     result = verify_documentation(ROOT)
 
@@ -92,7 +105,7 @@ def test_repository_public_documentation_contract_is_self_consistent() -> None:
     assert result["local_links_checked"] > 0
     assert result["mermaid_blocks_checked"] > 0
     assert result["implementation_claims"] == {
-        "claude_agent_sdk": "0.2.136",
+        "claude_agent_sdk": _repository_sdk_pin(),
         "default_model": "claude-sonnet-5",
         "internal_qa_tools": 18,
         "trusted_skills": 5,
