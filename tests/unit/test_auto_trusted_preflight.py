@@ -614,7 +614,7 @@ def _governance_wake_api(*, wake_conclusion: str = "neutral") -> GovernanceWakeF
                 "status": "completed",
                 "conclusion": wake_conclusion,
                 "details_url": (
-                    f"https://github.com/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"
+                    f"https://github.com/{preflight.EXPECTED_REPOSITORY}/runs/777"
                 ),
                 "app": {"id": preflight.GITHUB_ACTIONS_APP_ID, "slug": "github-actions"},
             }
