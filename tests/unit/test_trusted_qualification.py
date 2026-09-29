@@ -124,7 +124,7 @@ def test_qualification_still_rejects_unbound_external_identity() -> None:
         match="external_id is malformed",
     ):
         qualification.require_success(
-            _Api(external_id=f"aiqa-ci-qualification:{HEAD}:{RUN_ID + 1}:1"),
+            _Api(external_id=f"aiqa-ci-qualification:{HEAD}:{RUN_ID}:0"),
             HEAD,
             BASE,
             required=("Required PR Gate",),
