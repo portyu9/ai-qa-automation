@@ -48,7 +48,7 @@ EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
     "315e1ea71105e9760d006331b570398b5f7c8af4"  # pragma: allowlist secret
 )
 EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA = (
-    "4b337b65f8bab2cd305a45a27413787dc7cbf0b8"  # pragma: allowlist secret
+    "d21b1e4dd8a9928ff52cf116f1904fe54d946a99"  # pragma: allowlist secret
 )
 EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
@@ -57,7 +57,7 @@ EXPECTED_DEPENDENCY_GOVERNANCE_PR_WORKFLOW_BLOB_SHA = (
     "81eb77100e4e227f6705ae9b3f953ec226358b52"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
-    "5d6503c81ce98adc4e5fd37a6b54805762504b71"  # pragma: allowlist secret
+    "fb756e342504bb6ffb95bc67149158dd37c9b4b9"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_PR_WORKFLOW_BLOB_SHA = (
     "b7aa78a859ae3a0fdedc299f92555a61645d559a"  # pragma: allowlist secret
@@ -750,7 +750,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         '          test "$UPSTREAM_RUN_ATTEMPT" = "1"',
         '          case "$UPSTREAM_NAME:$UPSTREAM_PATH" in',
         '"dependency-governance:.github/workflows/dependency-governance.yml"',
-        "workflow_run|status|schedule) ;;",
+        "workflow_run|schedule) ;;",
         '"Security Auto-Heal:.github/workflows/security-autoheal.yml"',
         "workflow_run|schedule) ;;",
         "merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/(dependabot/|automation/dependency-promotion-)'",
@@ -849,25 +849,35 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
             "  workflow_run:",
             "    workflows: ['CI — ƳƤ AI QA Automation Framework', CodeQL]",
             "    types: [completed]",
-            "  status:",
             "  schedule:",
-            "    - cron: '29 */6 * * *'",
+            "    - cron: '*/5 * * * *'",
         )
     )
     on_block = base._semantic_text(base._top_level_block(text, "on")).strip("\n")
     if on_block != expected_on or base._top_level_keys(base._top_level_block(text, "on")) != {
         "workflow_run",
-        "status",
         "schedule",
     }:
         raise ValueError(
-            "dependency-governance.yml must remain accepted-main workflow_run/status/schedule only"
+            "dependency-governance.yml must remain accepted-main workflow_run/schedule only"
         )
-    for forbidden_trigger in ("pull_request:", "pull_request_target:", "github.event.pull_request"):
+    for forbidden_trigger in (
+        "pull_request:",
+        "pull_request_target:",
+        "workflow_dispatch:",
+        "repository_dispatch:",
+        "  status:",
+        "github.event.pull_request",
+        "github.event_name == 'status'",
+        "--await-trusted-status-event",
+        "status-sync:",
+        "status-merge:",
+    ):
         if forbidden_trigger in semantic:
             raise ValueError(
-                "dependency-governance.yml privileged controller must never execute candidate PR workflow bytes"
+                f"dependency-governance.yml contains forbidden trigger/legacy wake: {forbidden_trigger}"
             )
+
     concurrency = base._semantic_text(base._top_level_block(text, "concurrency"))
     required_concurrency = (
         "concurrency:",
@@ -880,59 +890,15 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         raise ValueError(
             "dependency-governance.yml non-action structure differs from reviewed dependency authority"
         )
+
     required = (
         "name: dependency-governance",
         "  workflow_run:",
         "    workflows: ['CI — ƳƤ AI QA Automation Framework', CodeQL]",
         "    types: [completed]",
-        "  status:",
         "  schedule:",
+        "    - cron: '*/5 * * * *'",
         "permissions:\n  contents: read",
-        "    name: trusted-status-synchronization",
-        "      github.event_name == 'status' &&",
-        "      github.event.context == 'Trusted PR Gate' &&",
-        "      github.event.description == 'Automatic exact-subject trusted validation passed' &&",
-        "      github.event.state == 'success'",
-        "    timeout-minutes: 2",
-        "    permissions:\n      actions: read\n      contents: read\n      pull-requests: read\n      statuses: read",
-        "      pr_number: ${{ steps.sync.outputs.pr_number }}",
-        "      lane: ${{ steps.sync.outputs.lane }}",
-        "      - name: Checkout exact trusted status-event revision without credentials",
-        "          ref: ${{ github.sha }}",
-        "          persist-credentials: false",
-        "      - name: Verify trusted workflow revision",
-        '        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"',
-        "      - name: Synchronize exact Trusted PR Gate workflow completion",
-        "        id: sync",
-        "          GITHUB_TOKEN: ${{ github.token }}",
-        "          --await-trusted-status-event",
-        '          --github-output "$GITHUB_OUTPUT"',
-        "    name: merge-exact-trusted-dependency-update",
-        "    needs: status-sync",
-        "    env:\n      GOVERNANCE_CONTROL_SHA: ${{ github.sha }}",
-        "      github.event_name == 'status' &&",
-        "      needs.status-sync.result == 'success'",
-        "      needs.status-sync.outputs.pr_number != ''",
-        "      needs.status-sync.outputs.lane != ''",
-        "      actions: read",
-        "      contents: write",
-        "      pull-requests: write",
-        "      statuses: read",
-        "      - name: Checkout exact trusted status-event revision without credentials",
-        "          ref: ${{ github.sha }}",
-        "      - name: Verify exact trusted status-event revision",
-        '        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"',
-        "      - name: Validate trusted status-target dependency policy",
-        "      - name: Merge only synchronized dependency update",
-        "          GITHUB_TOKEN: ${{ github.token }}",
-        "          STATUS_DEPENDENCY_PR: ${{ needs.status-sync.outputs.pr_number }}",
-        "          STATUS_DEPENDENCY_LANE: ${{ needs.status-sync.outputs.lane }}",
-        '          [[ "$STATUS_DEPENDENCY_PR" =~ ^[1-9][0-9]*$ ]]',
-        '          case "$STATUS_DEPENDENCY_LANE" in',
-        "            dependency-promotion)",
-        '                --target-promotion-pr "$STATUS_DEPENDENCY_PR"',
-        "            dependabot-actions)",
-        '                --target-dependabot-pr "$STATUS_DEPENDENCY_PR"',
         "    name: govern-dependabot",
         "    environment:\n      name: protected-remediation-author\n      deployment: false",
         "    env:\n      GOVERNANCE_CONTROL_SHA: ${{ github.sha }}",
@@ -971,7 +937,6 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "          --allow-merge",
         "      - name: Reconcile Dependabot action merge authority",
         "        if: steps.revision.outputs.current == 'true' && steps.python_promotion.outputs.merged != 'true'",
-        "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
         '          case "$GITHUB_EVENT_NAME" in',
         "            workflow_run|schedule) args+=(--allow-merge) ;;",
         '          python .github/scripts/dependency_governance.py "${args[@]}"',
@@ -983,17 +948,14 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
             raise ValueError(
                 f"dependency-governance.yml missing reviewed authority invariant: {fragment}"
             )
+
     for forbidden in (
-        "pull_request:",
-        "pull_request_target:",
-        "repository_dispatch:",
-        "workflow_dispatch:",
-        "github.event.pull_request",
         "workflows: ['Trusted PR Auto Gate — ƳƤ AI QA Automation Framework']",
         "ubuntu-latest",
         "continue-on-error: true",
         "ref: ${{ github.event.pull_request.head.sha }}",
         "ref: ${{ github.event.workflow_run.head_sha }}",
+        "ref: ${{ github.event.repository.default_branch }}",
         "TRUSTED_GATE_APP_CLIENT_ID",
         "TRUSTED_GATE_APP_PRIVATE_KEY",
         "TRUSTED_STATUS_TOKEN",
@@ -1004,12 +966,14 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
             raise ValueError(
                 f"dependency-governance.yml contains forbidden authority token: {forbidden}"
             )
+
     if semantic.count("actions/create-github-app-token@") != 1:
         raise ValueError("dependency governance must mint exactly one independent author App token")
     if semantic.count("${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}") != 1:
         raise ValueError("dependency governance private key must have exactly one consumer")
     if semantic.count("${{ steps.promotion-author-app.outputs.token }}") != 1:
         raise ValueError("dependency governance author App token must have exactly one consumer")
+
     mint = base._semantic_text(
         base._step_block(semantic, "Mint independent promotion author token")
     )
@@ -1024,6 +988,7 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
             raise ValueError(
                 f"dependency promotion author App has forbidden permission: {forbidden_permission}"
             )
+
     govern_job = base._semantic_text(base._job_block(text, "govern"))
     governance_wake_guard = (
         "    if: >-\n"
@@ -1035,15 +1000,16 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "        startsWith(github.event.workflow_run.head_branch, "
         "'automation/dependency-promotion-')))"
     )
-    if governance_wake_guard not in govern_job or "needs: status-sync" in govern_job:
+    if governance_wake_guard not in govern_job:
         raise ValueError(
             "general dependency governance must be restricted to schedule or reviewed same-repository dependency wakes"
         )
+
     exact_main_guard = (
         "          current=\"$(PYTHONPATH=.github/scripts python -c 'import os; import dependency_governance as g; "
         'config=g.load_config(); api=g.GitHubApi(os.environ["GITHUB_TOKEN"], '
         'os.environ["GITHUB_REPOSITORY"]); live=g._live_main_sha(api, config); '
-        'expected=os.environ["GITHUB_SHA"]; print("true" if live == expected else "false")\')"'
+        'expected=os.environ["GITHUB_SHA"]; print("true" if live == expected else "false")\')\"'
     )
     if (
         "      - name: Checkout exact trusted default-branch governance revision" not in govern_job
@@ -1057,94 +1023,6 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
     ):
         raise ValueError(
             "general dependency governance must be exact-current-main bound before mutation"
-        )
-
-    status_sync_job = base._semantic_text(base._job_block(text, "status-sync"))
-    if (
-        status_sync_job.count("    outputs:") != 1
-        or status_sync_job.count("      pr_number: ${{ steps.sync.outputs.pr_number }}") != 1
-        or status_sync_job.count("      lane: ${{ steps.sync.outputs.lane }}") != 1
-        or "head_sha:" in status_sync_job
-        or "base_sha:" in status_sync_job
-        or "run_id:" in status_sync_job
-    ):
-        raise ValueError(
-            "dependency trusted-status synchronization must export only the exact dependency lane and PR number"
-        )
-    if (
-        "    permissions:\n      actions: read\n      contents: read\n      pull-requests: read\n      statuses: read"
-        not in status_sync_job
-        or status_sync_job.count("    permissions:") != 1
-        or "environment:" in status_sync_job
-        or "${{ secrets." in status_sync_job
-        or base.WRITE_PERMISSION_RE.search(status_sync_job)
-        or status_sync_job.count("${{ github.token }}") != 1
-    ):
-        raise ValueError(
-            "dependency trusted-status synchronization must remain read-only and secret-free"
-        )
-    if (
-        "ref: ${{ github.sha }}" not in status_sync_job
-        or "ref: ${{ github.event.repository.default_branch }}" in status_sync_job
-        or 'test "$(git rev-parse HEAD)" = "$GITHUB_SHA"' not in status_sync_job
-    ):
-        raise ValueError(
-            "dependency trusted-status synchronization must remain exact-revision-bound"
-        )
-    if (
-        status_sync_job.count("actions/checkout@") != 1
-        or status_sync_job.count("actions/setup-python@") != 1
-    ):
-        raise ValueError(
-            "dependency trusted-status synchronization must use exactly one reviewed checkout/setup"
-        )
-
-    status_merge_job = base._semantic_text(base._job_block(text, "status-merge"))
-    if (
-        "    permissions:\n"
-        "      actions: read\n"
-        "      contents: write\n"
-        "      pull-requests: write\n"
-        "      statuses: read"
-        not in status_merge_job
-        or status_merge_job.count("    permissions:") != 1
-        or "environment:" in status_merge_job
-        or "${{ secrets." in status_merge_job
-        or "checks: write" in status_merge_job
-        or "actions: write" in status_merge_job
-        or "actions/create-github-app-token@" in status_merge_job
-        or status_merge_job.count("${{ github.token }}") != 1
-        or "needs.status-sync.outputs.pr_number != ''" not in status_merge_job
-        or "needs.status-sync.outputs.lane != ''" not in status_merge_job
-        or "--target-promotion-pr" not in status_merge_job
-        or "--target-dependabot-pr" not in status_merge_job
-        or 'case "$STATUS_DEPENDENCY_LANE" in' not in status_merge_job
-        or "PROMOTION_AUTHOR_TOKEN" in status_merge_job
-        or "PROTECTED_REMEDIATION_BOT_" in status_merge_job
-        or "${{ vars." in status_merge_job
-    ):
-        raise ValueError(
-            "dependency status-target merge must remain exact-subject, secret-free, and non-authoring"
-        )
-    if (
-        "ref: ${{ github.sha }}" not in status_merge_job
-        or "ref: ${{ github.event.repository.default_branch }}" in status_merge_job
-        or 'test "$(git rev-parse HEAD)" = "$GITHUB_SHA"' not in status_merge_job
-        or "    env:\n      GOVERNANCE_CONTROL_SHA: ${{ github.sha }}" not in status_merge_job
-    ):
-        raise ValueError("dependency status-target merge must remain exact-revision-bound")
-    if (
-        status_merge_job.count("actions/checkout@") != 1
-        or status_merge_job.count("actions/setup-python@") != 2
-    ):
-        raise ValueError(
-            "dependency status-target merge must use one reviewed checkout and two reviewed resolvers"
-        )
-
-    if "ref: ${{ github.event.repository.default_branch }}" in semantic:
-        raise ValueError(
-            "dependency-governance.yml contains forbidden authority token: "
-            "ref: ${{ github.event.repository.default_branch }}"
         )
 
     guarded_steps = (
@@ -1203,8 +1081,9 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         raise ValueError(
             "dependency recovery, promotion, and action reconciliation are out of reviewed order"
         )
+
     return {
-        "triggers": ["workflow_run", "status", "schedule"],
+        "triggers": ["workflow_run", "schedule"],
         "trusted_code_source": "default-branch-only-for-authority-job",
         "recovery_authority": "one-rerun-no-branch-mutation-no-merge",
         "python_dependency_authority": "signed-dependabot-intent-to-deterministic-lock-promotion",
@@ -1212,15 +1091,13 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
             "independent-noncertifying-app:contents-write+pull-requests-write:new-subject-only"
         ),
         "reconciliation_concurrency": "single-global-mutex",
+        "reconciliation_cadence": "five-minute-schedule-plus-reviewed-workflow-wakes",
         "trusted_revision": "exact-current-main-or-safe-noop-before-any-non-pr-mutation",
         "merge_authority": "single-provenance-qualified-dependabot-controller",
         "trusted_status_authority": "read-only-observation-of-centralized-app-gate",
-        "status_merge_authority": (
-            "exact-synchronized-dependency-lane:current-main-bound:no-secrets:no-author-token:no-check-write"
-        ),
+        "status_event_merge_authority": "forbidden-startup-failure-path-retired",
         "workflow_definition": "action-pin-normalized-reviewed-git-blob",
     }
-
 
 def _verify_security_autoheal_pr_workflow(text: str) -> dict[str, Any]:
     base = _trusted_auto._base
