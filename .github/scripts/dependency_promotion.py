@@ -476,7 +476,9 @@ def _sdk_version(pyproject_raw: bytes) -> str:
     try:
         document = tomllib.loads(pyproject_raw.decode("utf-8"))
     except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
-        raise PolicyBlock("SDK documentation synchronization requires canonical UTF-8 TOML") from exc
+        raise PolicyBlock(
+            "SDK documentation synchronization requires canonical UTF-8 TOML"
+        ) from exc
     dependencies = (document.get("project") or {}).get("dependencies")
     if not isinstance(dependencies, list):
         raise PolicyBlock("SDK documentation synchronization requires project dependencies")

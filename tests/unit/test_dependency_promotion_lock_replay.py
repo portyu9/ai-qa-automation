@@ -50,9 +50,7 @@ def _readme(version: str) -> bytes:
 
 def _sdk_pyproject(version: str) -> bytes:
     return (
-        "[project]\n"
-        'name = "ai-qa-automation"\n'
-        f'dependencies = ["claude-agent-sdk=={version}"]\n'
+        f'[project]\nname = "ai-qa-automation"\ndependencies = ["claude-agent-sdk=={version}"]\n'
     ).encode()
 
 
@@ -408,10 +406,14 @@ def test_sdk_readme_synchronization_rejects_missing_or_duplicate_authority() -> 
     head = _sdk_pyproject("0.2.159")
     readme = _readme("0.2.136")
 
-    with pytest.raises(promotion.PolicyBlock, match="badge is missing, duplicated, or already drifted"):
+    with pytest.raises(
+        promotion.PolicyBlock, match="badge is missing, duplicated, or already drifted"
+    ):
         promotion._synchronize_readme_sdk_claim(readme + readme, base, head)
 
-    with pytest.raises(promotion.PolicyBlock, match="runtime claim is missing, duplicated, or already drifted"):
+    with pytest.raises(
+        promotion.PolicyBlock, match="runtime claim is missing, duplicated, or already drifted"
+    ):
         promotion._synchronize_readme_sdk_claim(
             readme.replace(b"`claude-agent-sdk==0.2.136`", b"SDK"),
             base,
