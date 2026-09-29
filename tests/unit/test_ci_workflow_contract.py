@@ -775,6 +775,7 @@ def test_dependency_trusted_merge_cannot_gain_app_or_status_authority(
     with pytest.raises(ValueError, match="forbidden authority token"):
         ci_contract.verify_ci_contract(root)
 
+
 def test_dependency_governance_general_reconciler_rejects_status_reentry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
