@@ -1429,7 +1429,7 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         'test "$(git rev-parse HEAD)" = "$GITHUB_SHA"',
         'live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"',
         'if [ "$live_main" = "$GITHUB_SHA" ]; then',
-        "printf 'current=%s\\n' \"$current\" >> \"$GITHUB_OUTPUT\"",
+        'printf \'current=%s\\n\' "$current" >> "$GITHUB_OUTPUT"',
     ):
         if fragment not in route_revision:
             raise ValueError(

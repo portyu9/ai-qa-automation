@@ -158,6 +158,7 @@ def test_security_autoheal_privileged_controller_rejects_pr_branch_workflow_wake
     ):
         ci_contract.verify_ci_contract(root)
 
+
 def test_security_autoheal_requires_exact_current_main_control_revision(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
