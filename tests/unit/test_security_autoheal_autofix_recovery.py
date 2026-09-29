@@ -612,7 +612,14 @@ class _ReconcileRecoveryApi(_AmbiguousCommitApi):
         if path == f"/code-scanning/alerts/{ALERT}":
             return _alert("src/ai_qa_automation/example.py")
         if path == f"/compare/{BASE}...{HEAD}":
-            return {"files": [{"filename": "src/ai_qa_automation/example.py"}]}
+            return {
+                "files": [
+                    {
+                        "filename": "src/ai_qa_automation/example.py",
+                        "status": "modified",
+                    }
+                ]
+            }
         return super().get(path)
 
     def request_status(
