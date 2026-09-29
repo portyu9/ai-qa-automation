@@ -880,6 +880,68 @@ def test_legacy_duplicate_head_cleanup_rejects_unreviewed_claimant() -> None:
         )
 
 
+def test_promotion_qualification_wake_accepts_github_canonical_job_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = 778899
+    run_attempt = 1
+    job_id = 998877
+    subject = {"number": PR_NUMBER, "headSha": HEAD, "baseSha": BASE}
+
+    class _WakeApi:
+        def __init__(self) -> None:
+            self.check: dict[str, Any] | None = None
+
+        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            assert path == "/check-runs"
+            self.check = {
+                **payload,
+                "id": 12345,
+                "details_url": (
+                    f"https://github.com/{gate.EXPECTED_REPOSITORY}/runs/{job_id}"
+                ),
+                "app": {
+                    "id": promotion.GITHUB_ACTIONS_APP_ID,
+                    "slug": "github-actions",
+                },
+            }
+            return self.check
+
+        def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+            assert path == f"/commits/{HEAD}/check-runs?filter=all"
+            assert max_pages == 2
+            assert self.check is not None
+            return [self.check]
+
+        def get(self, path: str) -> dict[str, Any]:
+            assert path == f"/actions/runs/{run_id}"
+            return {
+                "id": run_id,
+                "run_attempt": run_attempt,
+                "name": promotion.DEPENDENCY_GOVERNANCE_WORKFLOW_NAME,
+                "path": promotion.DEPENDENCY_GOVERNANCE_WORKFLOW_PATH,
+                "event": "workflow_run",
+                "head_branch": "main",
+                "head_sha": BASE,
+                "status": "completed",
+                "conclusion": "success",
+                "repository": {"full_name": gate.EXPECTED_REPOSITORY},
+                "head_repository": {"full_name": gate.EXPECTED_REPOSITORY},
+            }
+
+    monkeypatch.setenv("GITHUB_RUN_ID", str(run_id))
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", str(run_attempt))
+    api = _WakeApi()
+
+    promotion._publish_qualification_wake(api, subject, stage="trusted-gate")
+
+    assert api.check is not None
+    assert api.check["details_url"] == (
+        f"https://github.com/{gate.EXPECTED_REPOSITORY}/runs/{job_id}"
+    )
+    assert promotion._qualification_wake_stage(api, subject) == "trusted-gate"
+
+
 def test_dependency_promotion_reconcile_stops_after_new_qualification_wake(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
