@@ -1238,13 +1238,20 @@ def test_post_merge_workflow_is_event_driven_and_reuses_canonical_validations() 
         ROOT / ".github" / "workflows" / governance.POST_MERGE_VALIDATION_WORKFLOW
     ).read_text(encoding="utf-8")
 
-    assert "workflows: [dependency-governance, Security Auto-Heal]" in workflow
+    assert (
+        "workflows: [dependency-governance, Dependency Trusted Merge — ƳƤ AI QA Automation Framework, Security Auto-Heal]"
+        in workflow
+    )
     assert "types: [completed]" in workflow
     assert "workflow_dispatch:" not in workflow
     assert "github.event.workflow_run.conclusion == 'success'" in workflow
     assert 'test "$GITHUB_REF" = "refs/heads/main"' in workflow
     assert 'case "$UPSTREAM_NAME:$UPSTREAM_PATH" in' in workflow
     assert '"dependency-governance:.github/workflows/dependency-governance.yml")' in workflow
+    assert (
+        '"Dependency Trusted Merge — ƳƤ AI QA Automation Framework:.github/workflows/dependency-trusted-merge.yml")'
+        in workflow
+    )
     assert '"Security Auto-Heal:.github/workflows/security-autoheal.yml")' in workflow
     assert 'test "$live_main" = "$SUBJECT_SHA"' in workflow
     assert "uses: ./.github/workflows/ci.yml" in workflow
