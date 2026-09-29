@@ -61,7 +61,7 @@ EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
     "fb756e342504bb6ffb95bc67149158dd37c9b4b9"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA = (
-    "3f87760751e0354c8b4ece242e64bc480fe5a922"  # pragma: allowlist secret
+    "8d4aff7bb6bdd9a88da63ca7ba7805ccff0c4171"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_PR_WORKFLOW_BLOB_SHA = (
     "b7aa78a859ae3a0fdedc299f92555a61645d559a"  # pragma: allowlist secret
@@ -946,7 +946,7 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         "          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}",
         "          python .github/scripts/dependency_trusted_merge.py",
         '          --trusted-run-id "${{ github.event.workflow_run.id }}"',
-        '            --trusted-run-attempt "${{ github.event.workflow_run.run_attempt }}" >> "$GITHUB_OUTPUT"',
+        '            --trusted-run-attempt "${{ github.event.workflow_run.run_attempt }}" 3>> "$GITHUB_OUTPUT"',
         "          set -euo pipefail",
         "      - name: Capture Python 3.11 resolver",
         "        if: steps.target.outputs.lane == 'dependency-promotion'",
@@ -980,9 +980,13 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         raise ValueError(
             "trusted dependency target resolution must not gain step-scoped mutation authority"
         )
-    if "--github-output" in resolve or '>> "$GITHUB_OUTPUT"' not in resolve:
+    if (
+        "--github-output" in resolve
+        or '3>> "$GITHUB_OUTPUT"' not in resolve
+        or '>> "$GITHUB_OUTPUT"' in resolve.replace('3>> "$GITHUB_OUTPUT"', "")
+    ):
         raise ValueError(
-            "trusted dependency target resolution must use only the runner-owned output channel"
+            "trusted dependency target resolution must use only inherited fd 3 for runner output"
         )
     promotion = base._semantic_text(
         base._step_block(job, "Merge exact trusted dependency promotion")
