@@ -808,7 +808,7 @@ def test_ambiguous_pull_request_resolution_fails_closed() -> None:
     responses[_pulls_path()].append(deepcopy(responses[_pulls_path()][0]))
     responses[_pulls_path()][1]["number"] = 66
 
-    with pytest.raises(ValueError, match="exactly one"):
+    with pytest.raises(ValueError, match="maps to multiple"):
         preflight.evaluate_admission(FakeAPI(responses), event=_event())
 
 
