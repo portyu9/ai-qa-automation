@@ -1779,9 +1779,7 @@ def _require_exact_merge_main(merge_sha: str, current_main: str) -> None:
     merge_sha = _require_sha(merge_sha, "terminal protected repair merge SHA")
     current_main = _require_sha(current_main, "terminal current main SHA")
     if merge_sha != current_main:
-        raise ProtectedRemediationError(
-            "terminal protected repair merge is not exact current main"
-        )
+        raise ProtectedRemediationError("terminal protected repair merge is not exact current main")
 
 
 def _terminal_trusted_gate_evidence(
