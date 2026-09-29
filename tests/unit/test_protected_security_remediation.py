@@ -1872,7 +1872,6 @@ def test_terminal_comments_reject_edited_github_actions_certificate() -> None:
         author._terminal_comments(Api(), 301)
 
 
-
 def test_terminal_comments_ignore_author_app_certificate() -> None:
     certificate = {
         "schemaVersion": author.TERMINAL_SCHEMA_VERSION,
