@@ -17,6 +17,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "codeql.yml",
     "dependency-governance-pr.yml",
     "dependency-governance.yml",
+    "dependency-trusted-merge.yml",
     "manual-validation.yml",
     "post-merge-ci.yml",
     "protected-security-remediation.yml",
@@ -87,6 +88,31 @@ _GOVERNANCE_SECRET_CONTEXT_FRAGMENTS = (
     "- name: Reconcile exact-subject Python dependency promotion\n        if: steps.revision.outputs.current == 'true'\n        id: python_promotion\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n          PROMOTION_AUTHOR_TOKEN: ${{ steps.promotion-author-app.outputs.token }}",
     "- name: Reconcile Dependabot action merge authority\n        if: steps.revision.outputs.current == 'true' && steps.python_promotion.outputs.merged != 'true'\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
 )
+_DEPENDENCY_TRUSTED_MERGE_AUTHORITY_FRAGMENTS = (
+    'on:\n  workflow_run:\n    workflows: ["Trusted PR Auto Gate — ƳƤ AI QA Automation Framework"]\n    types: [completed]',
+    "permissions:\n  contents: read",
+    "group: dependency-trusted-merge-global-reconcile",
+    "name: Resolve exact trusted dependency subject",
+    "github.event.workflow_run.conclusion == 'success'",
+    "github.event.workflow_run.head_repository.full_name == github.repository",
+    "github.event.workflow_run.head_branch == 'main'",
+    "github.event.workflow_run.head_sha == github.sha",
+    "permissions:\n      actions: read\n      contents: read\n      pull-requests: read\n      statuses: read",
+    "outputs:\n      lane: ${{ steps.target.outputs.lane }}\n      pr_number: ${{ steps.target.outputs.pr_number }}",
+    '3>> "$GITHUB_OUTPUT"',
+    "name: Merge exact trusted dependency subject",
+    "environment:\n      name: protected-remediation-author\n      deployment: false",
+    "permissions:\n      actions: read\n      contents: write\n      pull-requests: write\n      statuses: read",
+    "needs.resolve.outputs.pr_number != ''",
+    "needs.resolve.outputs.lane == 'dependency-promotion'",
+    "needs.resolve.outputs.lane == 'dependabot-actions'",
+    '[[ "$TARGET_PR" =~ ^[1-9][0-9]*$ ]]',
+    'case "$TARGET_LANE" in',
+    "dependency-promotion|dependabot-actions) ;;",
+    '--target-promotion-pr "${{ needs.resolve.outputs.pr_number }}"',
+    '--target-dependabot-pr "${{ needs.resolve.outputs.pr_number }}"',
+)
+
 _PROTECTED_REMEDIATION_SECRET_CONTEXT_FRAGMENTS = (
     'on:\n  workflow_run:\n    workflows: ["Security Auto-Heal"]\n    types: [completed]\n  schedule:\n    - cron: "*/5 * * * *"',
     "if: >-\n      github.event_name == 'schedule' ||\n      (github.event_name == 'workflow_run' &&\n       github.event.workflow_run.conclusion == 'success' &&\n       github.event.workflow_run.head_repository.full_name == github.repository &&\n       github.event.workflow_run.head_sha == github.sha)",
@@ -100,9 +126,10 @@ _PROTECTED_REMEDIATION_SECRET_CONTEXT_FRAGMENTS = (
     "python .github/scripts/protected_security_remediation.py --reconcile --allow-merge",
 )
 _POST_MERGE_CI_AUTHORITY_FRAGMENTS = (
-    "on:\n  workflow_run:\n    workflows: [dependency-governance, Security Auto-Heal]\n    types: [completed]",
+    "on:\n  workflow_run:\n    workflows: [dependency-governance, Dependency Trusted Merge — ƳƤ AI QA Automation Framework, Security Auto-Heal]\n    types: [completed]",
     'case "$UPSTREAM_NAME:$UPSTREAM_PATH" in',
     '"dependency-governance:.github/workflows/dependency-governance.yml")',
+    '"Dependency Trusted Merge — ƳƤ AI QA Automation Framework:.github/workflows/dependency-trusted-merge.yml")',
     '"Security Auto-Heal:.github/workflows/security-autoheal.yml")',
     "permissions:\n  contents: read",
     'test "$UPSTREAM_REPOSITORY" = "$GITHUB_REPOSITORY"',
@@ -263,6 +290,43 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
         if missing:
             raise ValueError(
                 "dependency-governance.yml: reviewed credential consumers moved or changed"
+            )
+    if name == "dependency-trusted-merge.yml":
+        if any(
+            token in text
+            for token in (
+                "pull_request:",
+                "pull_request_target:",
+                "push:",
+                "schedule:",
+                "status:",
+                "issue_comment:",
+                "workflow_dispatch:",
+                "repository_dispatch:",
+                "${{ secrets.",
+                "checks: write",
+                "statuses: write",
+                "security-events: write",
+                "id-token: write",
+                "packages: write",
+                "actions/create-github-app-token",
+            )
+        ):
+            raise ValueError(
+                "dependency-trusted-merge.yml must remain one-way, secret-free, and non-certifying"
+            )
+        if text.count("contents: write") != 1 or text.count("pull-requests: write") != 1:
+            raise ValueError(
+                "dependency-trusted-merge.yml must isolate exactly one merge write ceiling"
+            )
+        missing = [
+            fragment
+            for fragment in _DEPENDENCY_TRUSTED_MERGE_AUTHORITY_FRAGMENTS
+            if fragment not in text
+        ]
+        if missing:
+            raise ValueError(
+                "dependency-trusted-merge.yml reviewed one-way merge authority changed"
             )
     if name == "post-merge-ci.yml":
         if any(
