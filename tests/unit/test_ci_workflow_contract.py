@@ -67,7 +67,8 @@ def test_repository_ci_contract_is_self_consistent() -> None:
         == "workflow_run:dependency-governance-or-security-autoheal:completed"
     )
     assert (
-        post_merge_ci["authority"] == "exact-governed-main-validation-plus-codeql-sarif-only-write"
+        post_merge_ci["authority"]
+        == "exact-governed-main-validation-plus-isolated-check-and-codeql-sarif-write"
     )
     assert post_merge_ci["canonical_codeql"] == "reusable-codeql.yml"
     assert post_merge_ci["security_events_write"] == "isolated-codeql-only"
@@ -1194,7 +1195,7 @@ def test_post_merge_ci_rejects_alternate_validation_workflow(tmp_path: Path) -> 
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="must call canonical reusable CI read-only"):
+    with pytest.raises(ValueError, match="isolated check publication ceiling"):
         ci_contract.verify_ci_contract(root)
 
 
