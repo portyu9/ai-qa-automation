@@ -49,7 +49,7 @@ EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
     "315e1ea71105e9760d006331b570398b5f7c8af4"  # pragma: allowlist secret
 )
 EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA = (
-    "9b042b88ad16a474e57426fea6bf6a190018575c"  # pragma: allowlist secret
+    "784b7521180f32854e1cbf923a8e6a69ee3f7dce"  # pragma: allowlist secret
 )
 EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
@@ -697,7 +697,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         (
             "on:",
             "  workflow_run:",
-            "    workflows: [dependency-governance, Dependency Trusted Merge — ƳƤ AI QA Automation Framework, Security Auto-Heal]",
+            "    workflows: [dependency-governance, Dependency Trusted Merge — ƳƤ AI QA Automation Framework, Security Auto-Heal, Protected Security Remediation — ƳƤ AI QA Automation Framework]",
             "    types: [completed]",
         )
     )
@@ -758,9 +758,15 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         '"Dependency Trusted Merge — ƳƤ AI QA Automation Framework:.github/workflows/dependency-trusted-merge.yml"',
         'test "$UPSTREAM_EVENT" = "workflow_run"',
         '"Security Auto-Heal:.github/workflows/security-autoheal.yml"',
+        '"Protected Security Remediation — ƳƤ AI QA Automation Framework:.github/workflows/protected-security-remediation.yml"',
         "workflow_run|schedule) ;;",
         "merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/(dependabot/|automation/dependency-promotion-)'",
         "merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/automation/codeql-autoheal-'",
+        "merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/automation/protected-security-remediation-'",
+        "merge_author_login='github-actions[bot]'",
+        "merge_author_id=41898282",
+        "merge_author_login='portyu9-security-remediator[bot]'",
+        "merge_author_id=333833782",
         '          test "$UPSTREAM_STATUS" = "completed"',
         '          test "$UPSTREAM_CONCLUSION" = "success"',
         '          test "$UPSTREAM_REPOSITORY" = "$GITHUB_REPOSITORY"',
@@ -770,9 +776,11 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         '          if [ "$SUBJECT_SHA" = "$CONTROL_SHA" ]; then',
         "            printf 'run_validation=false\\n' >> \"$GITHUB_OUTPUT\"",
         '--arg merge_source_re "$merge_source_re"',
+        '--arg merge_author_login "$merge_author_login"',
+        '--argjson merge_author_id "$merge_author_id"',
         ".parents[0].sha == $control",
-        '.author.login == "github-actions[bot]"',
-        ".author.id == 41898282",
+        ".author.login == $merge_author_login",
+        ".author.id == $merge_author_id",
         '.committer.login == "web-flow"',
         ".committer.id == 19864447",
         ".commit.verification.verified == true",
@@ -834,9 +842,9 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
             "post-merge-ci.yml non-action structure differs from the reviewed post-merge definition"
         )
     return {
-        "trigger": "workflow_run:dependency-governance-or-trusted-dependency-merge-or-security-autoheal:completed",
+        "trigger": "workflow_run:dependency-governance-or-trusted-dependency-merge-or-security-autoheal-or-protected-security-remediation:completed",
         "authority": "exact-governed-main-validation-plus-isolated-check-and-codeql-sarif-write",
-        "subject": "single-signed-lane-bound-github-actions-merge-child-of-upstream-control-sha",
+        "subject": "single-signed-lane-bound-controller-merge-child-of-upstream-control-sha",
         "canonical_ci": "reusable-ci.yml",
         "canonical_codeql": "reusable-codeql.yml",
         "security_events_write": "isolated-codeql-only",
