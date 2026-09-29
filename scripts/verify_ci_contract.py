@@ -1132,7 +1132,10 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
             "dependency-governance.yml non-action structure differs from reviewed dependency authority"
         )
 
-    if "      - name: Verify exact current-main governance revision before mutation" not in semantic:
+    if (
+        "      - name: Verify exact current-main governance revision before mutation"
+        not in semantic
+    ):
         raise ValueError(
             "general dependency governance must be exact-current-main bound before mutation"
         )
