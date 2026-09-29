@@ -1550,10 +1550,9 @@ def _qualification_wake_stage(
             raise GovernanceError("promotion qualification wake check provenance is invalid")
         run_id = int(match.group("run"))
         run_attempt = int(match.group("attempt"))
-        if row.get("details_url") != (
-            f"https://github.com/{EXPECTED_REPOSITORY}/actions/runs/{run_id}"
-        ):
-            raise GovernanceError("promotion qualification wake details URL is not exact-run-bound")
+        # GitHub Actions may canonicalize a requested check details URL to the
+        # workflow job URL. The authority-bearing identity is the immutable external_id
+        # plus the independently re-fetched exact workflow run below, not display routing.
         run = api.get(f"/actions/runs/{run_id}")
         repository = (run or {}).get("repository") or {}
         head_repository = (run or {}).get("head_repository") or {}
@@ -1625,7 +1624,8 @@ def _publish_qualification_wake(
         or response.get("head_sha") != head_sha
         or response.get("status") != "completed"
         or response.get("conclusion") != "neutral"
-        or response.get("details_url") != details_url
+        # GitHub Actions owns the returned check and may rewrite details_url to its
+        # canonical job page. external_id and exact run provenance remain authoritative.
         or response.get("external_id") != external_id
         or app.get("id") != GITHUB_ACTIONS_APP_ID
         or app.get("slug") != "github-actions"
