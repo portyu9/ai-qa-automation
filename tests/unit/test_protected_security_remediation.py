@@ -1581,10 +1581,19 @@ def test_terminal_alert_requires_exact_fixed_codeql_identity() -> None:
         author._terminal_alert_is_fixed(Api("fixed", ".github/workflows/ci.yml"), evidence)
 
 
+def test_terminal_closure_requires_repair_merge_as_exact_current_main() -> None:
+    author._require_exact_merge_main(MAIN, MAIN)
+    with pytest.raises(
+        author.ProtectedRemediationError,
+        match="terminal protected repair merge is not exact current main",
+    ):
+        author._require_exact_merge_main("c" * 40, MAIN)
+
+
 def test_terminal_closure_publishes_one_durable_app_certificate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    merge_sha = "c" * 40
+    merge_sha = MAIN
     prospective_sha = "d" * 40
     evidence = {
         "number": 301,
@@ -1646,7 +1655,6 @@ def test_terminal_closure_publishes_one_durable_app_certificate(
         "_validate_merged_repair",
         lambda *args, **kwargs: dict(evidence),
     )
-    monkeypatch.setattr(author, "_require_merge_ancestor", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         author,
         "_terminal_trusted_gate_evidence",
@@ -1687,7 +1695,7 @@ def test_terminal_closure_waits_without_publication_for_incomplete_validation(
         "number": 301,
         "baseSha": MAIN,
         "headSha": HEAD,
-        "mergeSha": "c" * 40,
+        "mergeSha": MAIN,
         "alertNumber": 17,
         "rule": "py/clear-text-logging-sensitive-data",
         "path": ".github/scripts/security_autoheal.py",
@@ -1715,7 +1723,6 @@ def test_terminal_closure_waits_without_publication_for_incomplete_validation(
         "_validate_merged_repair",
         lambda *args, **kwargs: dict(evidence),
     )
-    monkeypatch.setattr(author, "_require_merge_ancestor", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         author,
         "_terminal_trusted_gate_evidence",
