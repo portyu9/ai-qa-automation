@@ -1617,8 +1617,8 @@ def test_terminal_closure_publishes_one_durable_app_certificate(
             max_items: int | None = None,
         ) -> list[dict[str, Any]]:
             assert path == "/issues/301/comments"
-            assert max_pages == 2
-            assert max_items == 200
+            assert max_pages == 4
+            assert max_items is None
             return list(comments)
 
         def get(self, path: str) -> dict[str, Any]:

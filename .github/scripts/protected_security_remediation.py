@@ -1512,7 +1512,7 @@ def _terminal_comments(
     bot_login: str,
     bot_id: int,
 ) -> list[dict[str, Any]]:
-    rows = api.list_all(f"/issues/{number}/comments", max_pages=2, max_items=200)
+    rows = api.list_all(f"/issues/{number}/comments", max_pages=4)
     certificates: list[dict[str, Any]] = []
     for row in rows:
         actor = row.get("user") or {}
@@ -1558,7 +1558,28 @@ def _pending_merged_repair(
             row.get("number"),
             "merged protected repair PR number",
         )
-        if _terminal_comments(api, number, bot_login=bot_login, bot_id=bot_id):
+        certificates = _terminal_comments(
+            api,
+            number,
+            bot_login=bot_login,
+            bot_id=bot_id,
+        )
+        if certificates:
+            certificate = certificates[0]
+            head = row.get("head") or {}
+            base = row.get("base") or {}
+            if (
+                certificate.get("schemaVersion") != TERMINAL_SCHEMA_VERSION
+                or certificate.get("kind") != "protected-security-remediation-terminal"
+                or certificate.get("pr") != number
+                or certificate.get("mergeSha") != row.get("merge_commit_sha")
+                or certificate.get("headSha") != head.get("sha")
+                or certificate.get("baseSha") != base.get("sha")
+                or certificate.get("result") != "fixed"
+            ):
+                raise ProtectedRemediationError(
+                    "protected remediation terminal certificate does not match its merged PR"
+                )
             continue
         pending.append(row)
     if len(pending) > 1:
@@ -1649,6 +1670,16 @@ def _validate_merged_repair(
         raise ProtectedRemediationError("terminal protected repair marker evidence is malformed")
     strategy = validate_route_record(record, main_sha=base_sha)
     canonical_plan(plan)
+    expected_title = f"security: remediate protected CodeQL alert #{record['alertNumber']}"
+    expected_body = (
+        "Automated independent protected-control-plane remediation. "
+        "The authoring App cannot publish Trusted PR Gate.\n\n"
+        + marker(record, plan, head_sha=head_sha)
+    )
+    if pr.get("title") != expected_title or pr.get("body") != expected_body:
+        raise ProtectedRemediationError(
+            "terminal protected repair presentation identity drifted"
+        )
     if (
         plan.get("baseSha") != base_sha
         or plan.get("targetPath") != strategy.path
