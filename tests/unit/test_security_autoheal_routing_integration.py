@@ -840,7 +840,10 @@ def test_workflow_persists_route_plan_before_live_reconcile() -> None:
     )
     assert '"$RUNNER_TEMP/security-autoheal-route-plan/route-plan.json"' in workflow
     assert "${{ runner.temp }}/security-autoheal-route-plan" in workflow
-    assert ".github/scripts/security_alert_routing.py" in workflow
+    self_test_workflow = (ROOT / ".github" / "workflows" / "security-autoheal-pr.yml").read_text(
+        encoding="utf-8"
+    )
+    assert ".github/scripts/security_alert_routing.py" in self_test_workflow
 
     route_job = workflow[workflow.index("  route-plan:") : workflow.index("\n  reconcile:")]
     assert ": write" not in route_job

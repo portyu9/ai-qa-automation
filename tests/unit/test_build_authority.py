@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -33,7 +35,8 @@ def test_repository_build_authority_is_static() -> None:
 
     assert result["result"] == "PASS"
     assert result["build_backend"] == "hatchling.build"
-    assert result["build_requirements"] == ["hatchling==1.32.0"]
+    assert len(result["build_requirements"]) == 1
+    assert result["build_requirements"][0].startswith("hatchling==")
     assert result["project_name"] == "ai-qa-automation"
     assert result["project_scripts"] == {"ai-qa": "ai_qa_automation.cli:app"}
     assert result["project_entry_points"] is False
@@ -58,6 +61,97 @@ def test_repository_build_authority_is_static() -> None:
     assert result["source_execution_extensions"] is False
     assert result["installed_hatch_entry_points"] == []
     assert len(result["pyproject_sha256"]) == 64
+
+
+def test_build_authority_accepts_exact_promoted_hatchling_pin_with_bound_manifest(
+    tmp_path: Path,
+) -> None:
+    root = _copy_build_inputs(tmp_path)
+    pyproject_path = root / "pyproject.toml"
+    current_requirement = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))["build-system"][
+        "requires"
+    ][0]
+    assert isinstance(current_requirement, str)
+    promoted_requirement = "hatchling==1.32.4"
+    pyproject_text = pyproject_path.read_text(encoding="utf-8")
+    current_declaration = f'requires = ["{current_requirement}"]'
+    assert pyproject_text.count(current_declaration) == 1
+    pyproject_path.write_text(
+        pyproject_text.replace(
+            current_declaration,
+            f'requires = ["{promoted_requirement}"]',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    for name in ("build-py311.lock", "dev-py311.lock", "dev-py314.lock"):
+        lock_path = root / "requirements" / name
+        lock_text = lock_path.read_text(encoding="utf-8")
+        assert lock_text.count(current_requirement) == 1
+        lock_path.write_text(
+            lock_text.replace(current_requirement, promoted_requirement, 1),
+            encoding="utf-8",
+        )
+
+    authority_path = root / build_authority.LOCK_AUTHORITY_PATH
+    authority = json.loads(authority_path.read_text(encoding="utf-8"))
+    pyproject_digest = hashlib.sha256(pyproject_path.read_bytes()).hexdigest()
+    authority["sourcePyprojectSha256Parts"] = [
+        pyproject_digest[index : index + 8] for index in range(0, len(pyproject_digest), 8)
+    ]
+    lock_blob_parts: dict[str, list[str]] = {}
+    for name in sorted(build_authority.EXPECTED_LOCK_NAMES):
+        raw = (root / "requirements" / name).read_bytes()
+        header = f"blob {len(raw)}".encode("ascii") + bytes([0])
+        digest = hashlib.sha1(header + raw, usedforsecurity=False).hexdigest()
+        lock_blob_parts[name] = [digest[index : index + 8] for index in range(0, len(digest), 8)]
+    authority["lockBlobParts"] = lock_blob_parts
+    authority_path.write_text(
+        json.dumps(authority, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    result = build_authority.verify_build_authority(root)
+
+    assert result["result"] == "PASS"
+    assert result["build_requirements"] == [promoted_requirement]
+    assert result["pyproject_sha256"] == pyproject_digest
+    assert result["reviewed_lock_blobs"] == {
+        name: "".join(parts) for name, parts in lock_blob_parts.items()
+    }
+
+
+@pytest.mark.parametrize(
+    "build_requirement",
+    [
+        "hatchling>=1.32.0",
+        "hatchling==1.32.*",
+        "hatchling[extra]==1.32.4",
+        "hatchling==1.32.4; python_version >= '3.11'",
+        "setuptools==80.0.0",
+    ],
+)
+def test_build_authority_rejects_expanded_build_requirement(
+    tmp_path: Path,
+    build_requirement: str,
+) -> None:
+    root = _copy_build_inputs(tmp_path)
+    path = root / "pyproject.toml"
+    current = tomllib.loads(path.read_text(encoding="utf-8"))["build-system"]["requires"][0]
+    assert isinstance(current, str)
+    text = path.read_text(encoding="utf-8").replace(
+        f'requires = ["{current}"]',
+        f'requires = ["{build_requirement}"]',
+        1,
+    )
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match="one exact hatchling==VERSION declaration",
+    ):
+        build_authority.verify_build_authority(root)
 
 
 def test_build_authority_rejects_backend_path(tmp_path: Path) -> None:

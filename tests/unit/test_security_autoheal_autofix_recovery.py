@@ -413,6 +413,78 @@ def test_branch_binding_accepts_legacy_or_exact_attempt_and_rejects_mismatch() -
         )
 
 
+def test_changed_files_rejects_malformed_compare_rows() -> None:
+    class Api:
+        def get(self, path: str) -> dict[str, Any]:
+            assert path == f"/compare/{BASE}...{HEAD}"
+            return {
+                "files": [
+                    {"filename": "src/ai_qa_automation/example.py", "status": "modified"},
+                    "malformed",
+                ]
+            }
+
+    with pytest.raises(autoheal.PolicyBlock, match="changed-file evidence is malformed"):
+        autoheal._changed_files(Api(), BASE, HEAD)
+
+
+def test_candidate_diff_rejects_rename_delete_and_duplicate_provenance() -> None:
+    config = autoheal.load_config()
+    subject = {"path": "src/ai_qa_automation/example.py"}
+
+    with pytest.raises(autoheal.PolicyBlock, match="rename provenance"):
+        autoheal._validate_candidate_diff(
+            [
+                {
+                    "filename": subject["path"],
+                    "status": "renamed",
+                    "previous_filename": ".github/workflows/ci.yml",
+                }
+            ],
+            subject,
+            config,
+            deterministic=False,
+        )
+
+    with pytest.raises(autoheal.PolicyBlock, match="modify or add"):
+        autoheal._validate_candidate_diff(
+            [{"filename": subject["path"], "status": "removed"}],
+            subject,
+            config,
+            deterministic=False,
+        )
+
+    with pytest.raises(autoheal.PolicyBlock, match="ambiguous"):
+        autoheal._validate_candidate_diff(
+            [
+                {"filename": subject["path"], "status": "modified"},
+                {"filename": subject["path"], "status": "modified"},
+            ],
+            subject,
+            config,
+            deterministic=False,
+        )
+
+
+def test_candidate_diff_allows_model_added_support_file_but_not_deterministic_addition() -> None:
+    config = autoheal.load_config()
+    subject = {"path": "src/ai_qa_automation/example.py"}
+    files = [
+        {"filename": subject["path"], "status": "modified"},
+        {"filename": "tests/test_example_regression.py", "status": "added"},
+    ]
+
+    autoheal._validate_candidate_diff(files, subject, config, deterministic=False)
+
+    with pytest.raises(autoheal.PolicyBlock, match="ordinary file modification"):
+        autoheal._validate_candidate_diff(
+            [{"filename": subject["path"], "status": "added"}],
+            subject,
+            config,
+            deterministic=True,
+        )
+
+
 def test_model_repair_uses_attempt_scoped_branch(monkeypatch: pytest.MonkeyPatch) -> None:
     config = autoheal.load_config()
     route_record = _model_route(config, prior=1)
@@ -451,7 +523,7 @@ def test_model_repair_uses_attempt_scoped_branch(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(
         autoheal,
         "_changed_files",
-        lambda api, base, head: [{"filename": subject["path"]}],
+        lambda api, base, head: [{"filename": subject["path"], "status": "modified"}],
     )
 
     expected_route_evidence = route_evidence
@@ -540,7 +612,14 @@ class _ReconcileRecoveryApi(_AmbiguousCommitApi):
         if path == f"/code-scanning/alerts/{ALERT}":
             return _alert("src/ai_qa_automation/example.py")
         if path == f"/compare/{BASE}...{HEAD}":
-            return {"files": [{"filename": "src/ai_qa_automation/example.py"}]}
+            return {
+                "files": [
+                    {
+                        "filename": "src/ai_qa_automation/example.py",
+                        "status": "modified",
+                    }
+                ]
+            }
         return super().get(path)
 
     def request_status(
@@ -570,10 +649,14 @@ class _StaleAlertRecoveryApi(_ReconcileRecoveryApi):
             assert max_pages == 2
             assert max_items == 101
             return [_alert("src/ai_qa_automation/example.py", sha="c" * 40)]
+        if path == (f"/actions/workflows/{autoheal.MAIN_CODEQL_WORKFLOW_ID}/runs?head_sha={BASE}"):
+            assert max_pages == 1
+            assert max_items == autoheal.MAIN_CODEQL_MAX_RUNS
+            return []
         return super().list_all(path, max_pages=max_pages, max_items=max_items)
 
 
-def test_stale_codeql_evidence_refreshes_before_orphan_cleanup(
+def test_stale_codeql_evidence_is_observed_without_mutation_before_orphan_cleanup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     api = _StaleAlertRecoveryApi()
@@ -581,30 +664,9 @@ def test_stale_codeql_evidence_refreshes_before_orphan_cleanup(
     config = autoheal.load_config()
     monkeypatch.setenv("GITHUB_REPOSITORY", config["repository"])
     monkeypatch.setattr(autoheal, "GitHubApi", lambda token, repository: api)
-    refresh_calls: list[str] = []
-
-    def refresh(
-        api_arg: object,
-        main_sha: str,
-        config_arg: dict[str, Any],
-    ) -> dict[str, Any]:
-        assert api_arg is api
-        assert main_sha == BASE
-        assert config_arg is config
-        refresh_calls.append(main_sha)
-        return {
-            "codeqlRunId": 123,
-            "codeqlRunAttempt": 1,
-            "codeqlEvent": "workflow_dispatch",
-            "codeqlStatus": "queued",
-            "codeqlDispatched": True,
-        }
-
-    monkeypatch.setattr(autoheal, "_ensure_current_main_codeql", refresh)
     route_args = _route_reconcile_args(monkeypatch, {})
 
     assert autoheal.reconcile(config, allow_merge=False, **route_args) == 0
-    assert refresh_calls == [BASE]
     assert api.branch_sha == HEAD
     assert api.commit_posts == 0
 

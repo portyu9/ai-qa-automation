@@ -1,14 +1,16 @@
 name: Trusted PR Auto Gate — ƳƤ AI QA Automation Framework
 
-# Default-branch-owned automatic admission for routine owner PRs and exact governed bot lanes.
-# workflow_run is a wake-up signal only. Candidate bytes never grant themselves authority:
-# the trusted default branch resolves live identity/provenance, then validates the prospective merge.
+# Default-branch-owned admission for routine owner PRs, exact governed bot lanes, and an explicit
+# protected-owner maintenance authorization comment. Candidate bytes never grant themselves authority: trusted
+# main resolves live identity/provenance and the exact prospective merge before any validation.
 on:
   workflow_run:
-    workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL"]
+    workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL", "dependency-governance"]
     types: [completed]
   schedule:
     - cron: "*/5 * * * *"
+  issue_comment:
+    types: [created]
 
 permissions:
   actions: read
@@ -16,7 +18,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: trusted-pr-auto-${{ github.event_name == 'schedule' && 'scheduled-bot-reconcile' || github.event.workflow_run.id }}
+  group: trusted-pr-auto-${{ github.event_name == 'schedule' && 'scheduled-bot-reconcile' || github.event_name == 'issue_comment' && format('protected-owner-{0}-{1}', github.event.issue.number, github.event.comment.id) || github.event.workflow_run.id }}
   cancel-in-progress: false
 
 env:
@@ -27,7 +29,14 @@ env:
 jobs:
   preflight:
     name: Automatic Trusted Admission
-    if: ${{ github.event_name == 'schedule' || github.event.workflow_run.conclusion == 'success' }}
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       github.event.sender.login == github.repository_owner &&
+       github.event.comment.user.login == github.repository_owner &&
+       startsWith(github.event.comment.body, '/trusted-maintenance ')) ||
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -92,6 +101,12 @@ jobs:
                 test "$PROTECTED_CHANGES_JSON" != "[]"
               fi
               ;;
+            owner-protected-maintenance)
+              test "$GITHUB_EVENT_NAME" = "issue_comment"
+              test "$TRUSTED_SHA" = "$GITHUB_SHA"
+              test "$ELIGIBLE" = "true"
+              test "$PROTECTED_CHANGES_JSON" != "[]"
+              ;;
             dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation)
               test "$TRUSTED_SHA" = "$GITHUB_SHA"
               test "$ELIGIBLE" = "true" -o "$ELIGIBLE" = "false"
@@ -110,7 +125,7 @@ jobs:
   bot-authority:
     name: Governed Bot Provenance + Authority
     needs: preflight
-    if: ${{ needs.preflight.result == 'success' && needs.preflight.outputs.eligible == 'true' && needs.preflight.outputs.lane != 'owner-routine' }}
+    if: ${{ needs.preflight.result == 'success' && needs.preflight.outputs.eligible == 'true' && needs.preflight.outputs.lane != 'owner-routine' && needs.preflight.outputs.lane != 'owner-protected-maintenance' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -174,7 +189,7 @@ jobs:
   subject-guard:
     name: Exact Subject + Protected Authority Guard
     needs: [preflight, bot-authority]
-    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.eligible == 'true' && (needs.preflight.outputs.lane == 'owner-routine' || needs.bot-authority.result == 'success') }}
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.eligible == 'true' && (needs.preflight.outputs.lane == 'owner-routine' || needs.preflight.outputs.lane == 'owner-protected-maintenance' || needs.bot-authority.result == 'success') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -193,6 +208,7 @@ jobs:
           EXPECTED_TRUSTED_SHA: ${{ needs.preflight.outputs.trusted_sha }}
           ADMISSION_LANE: ${{ needs.preflight.outputs.lane }}
           BOT_AUTHORITY_RESULT: ${{ needs.bot-authority.result }}
+          PROTECTED_CHANGES_JSON: ${{ needs.preflight.outputs.protected_changes_json }}
         run: |
           set -euo pipefail
           sha_re='^[0-9a-f]{40}$'
@@ -240,23 +256,30 @@ jobs:
             [[ "$oid" =~ ^[0-9a-f]{40}$ ]]
             printf '%s' "$oid"
           }
-          if test "$ADMISSION_LANE" = "owner-routine"; then
-            for path in "${protected_paths[@]}"; do
-              base_oid="$(oid_for "$EXPECTED_BASE_SHA" "$path")"
-              subject_oid="$(oid_for "$EXPECTED_MERGE_SHA" "$path")"
-              test "$base_oid" = "$subject_oid"
-            done
-          else
-            case "$ADMISSION_LANE" in
-              dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation) ;;
-              *)
-                echo "::error::unreviewed bot lane reached subject guard"
-                exit 1
-                ;;
-            esac
-            test "$BOT_AUTHORITY_RESULT" = "success"
-            "${git_clean_env[@]}" /usr/bin/git diff --quiet "$EXPECTED_HEAD_SHA" "$EXPECTED_MERGE_SHA" --
-          fi
+          case "$ADMISSION_LANE" in
+            owner-routine)
+              for path in "${protected_paths[@]}"; do
+                base_oid="$(oid_for "$EXPECTED_BASE_SHA" "$path")"
+                subject_oid="$(oid_for "$EXPECTED_MERGE_SHA" "$path")"
+                test "$base_oid" = "$subject_oid"
+              done
+              test "$BOT_AUTHORITY_RESULT" = "skipped"
+              ;;
+            owner-protected-maintenance)
+              test "$GITHUB_EVENT_NAME" = "issue_comment"
+              test "$BOT_AUTHORITY_RESULT" = "skipped"
+              test "$PROTECTED_CHANGES_JSON" != "[]"
+              "${git_clean_env[@]}" /usr/bin/git diff --quiet "$EXPECTED_HEAD_SHA" "$EXPECTED_MERGE_SHA" --
+              ;;
+            dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation)
+              test "$BOT_AUTHORITY_RESULT" = "success"
+              "${git_clean_env[@]}" /usr/bin/git diff --quiet "$EXPECTED_HEAD_SHA" "$EXPECTED_MERGE_SHA" --
+              ;;
+            *)
+              echo "::error::unreviewed admission lane reached subject guard"
+              exit 1
+              ;;
+          esac
 
   supply-chain:
     name: Trusted Supply Chain / Wheel + SBOM + Container
@@ -717,7 +740,13 @@ jobs:
           set -euo pipefail
           if test "$ELIGIBLE" = "true"; then
             case "$LANE" in
-              dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation) ;;
+              owner-protected-maintenance)
+                test "$GITHUB_EVENT_NAME" = "issue_comment"
+                mode="protected-owner-maintenance"
+                ;;
+              dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation)
+                mode="governed-bot"
+                ;;
               *)
                 echo "::error::unreviewed CodeQL candidate lane: $LANE"
                 exit 1
@@ -726,7 +755,6 @@ jobs:
             test -n "$BOT_HEAD_REF"
             subject_ref="refs/heads/$BOT_HEAD_REF"
             subject_sha="$BOT_HEAD_SHA"
-            mode="governed-bot"
           else
             test "$GITHUB_EVENT_NAME" = "schedule"
             test "$LANE" = "none"
@@ -860,7 +888,7 @@ jobs:
 
   trusted-status:
     name: Automatic Trusted PR Gate Reporter
-    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.eligible == 'true' }}
+    if: ${{ !cancelled() && github.run_attempt == 1 && needs.preflight.result == 'success' && needs.preflight.outputs.eligible == 'true' }}
     needs: [preflight, required-gate]
     environment:
       name: trusted-pr-gate
@@ -925,17 +953,20 @@ jobs:
           set -euo pipefail
           test "$FINAL_ELIGIBLE" = "true"
           test "$FINAL_LANE" = "$EXPECTED_LANE"
-          if test "$FINAL_LANE" = "owner-routine"; then
-            test "$FINAL_PROTECTED_CHANGES" = "[]"
-          else
-            case "$FINAL_LANE" in
-              dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation) ;;
-              *)
-                echo "::error::unreviewed final automatic admission lane"
-                exit 1
-                ;;
-            esac
-          fi
+          case "$FINAL_LANE" in
+            owner-routine)
+              test "$FINAL_PROTECTED_CHANGES" = "[]"
+              ;;
+            owner-protected-maintenance)
+              test "$GITHUB_EVENT_NAME" = "issue_comment"
+              test "$FINAL_PROTECTED_CHANGES" != "[]"
+              ;;
+            dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation) ;;
+            *)
+              echo "::error::unreviewed final automatic admission lane"
+              exit 1
+              ;;
+          esac
           test "$FINAL_PR_NUMBER" = "$EXPECTED_PR_NUMBER"
           test "$FINAL_HEAD_SHA" = "$EXPECTED_HEAD_SHA"
           test "$FINAL_BASE_SHA" = "$EXPECTED_BASE_SHA"
@@ -944,7 +975,7 @@ jobs:
           test "$FINAL_TRUSTED_SHA" = "$GITHUB_SHA"
 
       - name: Reprove governed bot authority immediately before App publication
-        if: ${{ needs.preflight.outputs.lane != 'owner-routine' }}
+        if: ${{ needs.preflight.outputs.lane != 'owner-routine' && needs.preflight.outputs.lane != 'owner-protected-maintenance' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
@@ -1008,6 +1039,52 @@ jobs:
           echo "::add-mask::$token"
           printf 'token=%s\n' "$token" >> "$GITHUB_OUTPUT"
 
+      - name: Revalidate protected-owner authorization with dedicated App
+        if: ${{ needs.preflight.outputs.lane == 'owner-protected-maintenance' }}
+        env:
+          GITHUB_TOKEN: ${{ steps.trusted-app.outputs.token }}
+          EXPECTED_PR_NUMBER: ${{ needs.preflight.outputs.pr_number }}
+          EXPECTED_HEAD_REF: ${{ needs.preflight.outputs.head_ref }}
+          EXPECTED_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
+          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+          EXPECTED_MERGE_SHA: ${{ needs.preflight.outputs.merge_sha }}
+          EXPECTED_TRUSTED_SHA: ${{ needs.preflight.outputs.trusted_sha }}
+          EXPECTED_PROTECTED_CHANGES_JSON: ${{ needs.preflight.outputs.protected_changes_json }}
+        run: |
+          set -euo pipefail
+          output="$(mktemp "$RUNNER_TEMP/protected-owner-publication-admission.XXXXXX")"
+          trap 'rm -f "$output"' EXIT
+          python scripts/auto_trusted_preflight.py \
+            --event "$GITHUB_EVENT_PATH" \
+            --event-name "$GITHUB_EVENT_NAME" \
+            --github-output "$output"
+          python - "$output" <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+
+          values = {}
+          for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+              key, separator, value = line.partition("=")
+              if separator != "=" or not key or key in values:
+                  raise SystemExit("protected-owner publication admission output is malformed")
+              values[key] = value
+          expected = {
+              "eligible": "true",
+              "lane": "owner-protected-maintenance",
+              "pr_number": os.environ["EXPECTED_PR_NUMBER"],
+              "head_ref": os.environ["EXPECTED_HEAD_REF"],
+              "head_sha": os.environ["EXPECTED_HEAD_SHA"],
+              "base_sha": os.environ["EXPECTED_BASE_SHA"],
+              "merge_sha": os.environ["EXPECTED_MERGE_SHA"],
+              "trusted_sha": os.environ["EXPECTED_TRUSTED_SHA"],
+              "protected_changes_json": os.environ["EXPECTED_PROTECTED_CHANGES_JSON"],
+          }
+          if values != expected:
+              raise SystemExit("protected-owner publication admission drifted after App mint")
+          PY
+          rm -f "$output"
+          trap - EXIT
       - name: Publish automatic exact-subject trusted status
         env:
           GITHUB_TOKEN: ${{ steps.trusted-app.outputs.token }}

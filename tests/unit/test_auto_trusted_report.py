@@ -18,7 +18,8 @@ BASE_SHA = "2" * 40
 MERGE_SHA = "3" * 40
 OTHER_SHA = "4" * 40
 REPOSITORY = "portyu9/ai-qa-automation"
-RUN_URL = f"https://github.com/{REPOSITORY}/actions/runs/123"
+RUN_ID = 123
+RUN_URL = f"https://github.com/{REPOSITORY}/actions/runs/{RUN_ID}"
 BOUND_RUN_URL = f"{RUN_URL}?pr=43&base={BASE_SHA}&head={HEAD_SHA}&merge={MERGE_SHA}"
 
 
@@ -48,6 +49,7 @@ class FakeApi:
     payload_sequence: ClassVar[list[Mapping[str, Any]]] = []
     merge_ref_payload: ClassVar[Mapping[str, Any]] = _merge_ref_payload()
     merge_ref_sequence: ClassVar[list[Mapping[str, Any]]] = []
+    main_ref_sequence: ClassVar[list[Mapping[str, Any]]] = []
     instances: ClassVar[list[FakeApi]] = []
 
     def __init__(self, *, repository: str, token: str) -> None:
@@ -55,6 +57,12 @@ class FakeApi:
         self.token = token
         self.statuses: list[dict[str, str]] = []
         type(self).instances.append(self)
+
+    def get_json(self, path: str) -> Mapping[str, Any]:
+        assert path == f"/repos/{REPOSITORY}/git/ref/heads/main"
+        if type(self).main_ref_sequence:
+            return type(self).main_ref_sequence.pop(0)
+        return {"ref": "refs/heads/main", "object": {"sha": BASE_SHA, "type": "commit"}}
 
     def fetch_pull_request(self, number: int) -> Mapping[str, Any]:
         assert number == 43
@@ -96,6 +104,7 @@ def _reset_fake_api() -> None:
     FakeApi.payload_sequence = []
     FakeApi.merge_ref_payload = _merge_ref_payload()
     FakeApi.merge_ref_sequence = []
+    FakeApi.main_ref_sequence = []
     FakeApi.instances = []
 
 
@@ -103,21 +112,44 @@ def _subject() -> control.PullRequestSubject:
     return control.PullRequestSubject(43, HEAD_SHA, BASE_SHA, MERGE_SHA)
 
 
+def _authorization_snapshot(*, merge_sha: str = MERGE_SHA) -> dict[str, Any]:
+    return {
+        "pr_number": 43,
+        "head_sha": HEAD_SHA,
+        "base_sha": BASE_SHA,
+        "merge_sha": merge_sha,
+        "trusted_sha": BASE_SHA,
+        "protected_changes": ({"path": "scripts/auto_trusted_report.py", "change": "modified"},),
+    }
+
+
 def _report(
     monkeypatch: pytest.MonkeyPatch,
     *,
     result: str = "success",
     event: str = "workflow_run",
+    run_id: int | str = RUN_ID,
+    run_attempt: int | str = 1,
+    target_url: str = RUN_URL,
 ) -> dict[str, Any]:
     monkeypatch.setattr(reporter, "GitHubApi", FakeApi)
+    if event == "issue_comment":
+        authorization_snapshot = _authorization_snapshot()
+        monkeypatch.setattr(
+            reporter,
+            "_require_protected_owner_authorization",
+            lambda **_: authorization_snapshot,
+        )
     return reporter.report_automatic_result(
         repository=REPOSITORY,
         token="app-token",
         workflow_event=event,
         workflow_ref="refs/heads/main",
+        workflow_run_id=run_id,
+        workflow_run_attempt=run_attempt,
         expected=_subject(),
         job_results={"validation": result},
-        target_url=RUN_URL,
+        target_url=target_url,
     )
 
 
@@ -141,10 +173,63 @@ def test_automatic_report_uses_shared_exact_subject_resolver(
     ]
 
 
+def test_protected_maintenance_report_is_explicit_and_exact_subject(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = _report(monkeypatch, event="issue_comment")
+
+    assert result["result"] == "SUCCESS"
+    assert result["authorization_mode"] == "explicit-default-branch-protected-maintenance"
+    assert result["status_target_url"] == BOUND_RUN_URL
+    assert FakeApi.instances[0].statuses == [
+        {
+            "sha": HEAD_SHA,
+            "state": "success",
+            "description": "Protected-maintenance exact-subject trusted validation passed",
+            "target_url": BOUND_RUN_URL,
+        }
+    ]
+
+
+def test_protected_maintenance_report_rejects_authorization_drift_before_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authorization_snapshots = [
+        _authorization_snapshot(),
+        _authorization_snapshot(merge_sha=OTHER_SHA),
+    ]
+
+    def _next_authorization(**_: Any) -> dict[str, Any]:
+        return authorization_snapshots.pop(0)
+
+    monkeypatch.setattr(reporter, "GitHubApi", FakeApi)
+    monkeypatch.setattr(
+        reporter,
+        "_require_protected_owner_authorization",
+        _next_authorization,
+    )
+
+    with pytest.raises(PermissionError, match="changed before status publication"):
+        reporter.report_automatic_result(
+            repository=REPOSITORY,
+            token="app-token",
+            workflow_event="issue_comment",
+            workflow_ref="refs/heads/main",
+            workflow_run_id=RUN_ID,
+            workflow_run_attempt=1,
+            expected=_subject(),
+            job_results={"validation": "success"},
+            target_url=RUN_URL,
+        )
+
+    assert authorization_snapshots == []
+    assert FakeApi.instances[0].statuses == []
+
+
 @pytest.mark.parametrize(
     ("event", "ref", "match"),
     [
-        ("repository_dispatch", "refs/heads/main", "workflow_run or schedule"),
+        ("repository_dispatch", "refs/heads/main", "workflow_run, schedule"),
         ("workflow_run", "refs/heads/feature", "refs/heads/main"),
     ],
 )
@@ -161,11 +246,35 @@ def test_automatic_report_rejects_wrong_execution_context_before_api(
             token="app-token",
             workflow_event=event,
             workflow_ref=ref,
+            workflow_run_id=RUN_ID,
+            workflow_run_attempt=1,
             expected=_subject(),
             job_results={"validation": "success"},
             target_url=RUN_URL,
         )
     assert FakeApi.instances == []
+
+
+@pytest.mark.parametrize(
+    "main_sequence",
+    [
+        [{"ref": "refs/heads/main", "object": {"sha": OTHER_SHA, "type": "commit"}}],
+        [
+            {"ref": "refs/heads/main", "object": {"sha": BASE_SHA, "type": "commit"}},
+            {"ref": "refs/heads/main", "object": {"sha": OTHER_SHA, "type": "commit"}},
+        ],
+    ],
+)
+def test_automatic_report_fails_closed_on_current_main_drift(
+    monkeypatch: pytest.MonkeyPatch,
+    main_sequence: list[Mapping[str, Any]],
+) -> None:
+    FakeApi.main_ref_sequence = main_sequence
+
+    with pytest.raises(ValueError, match="current main changed after authorization"):
+        _report(monkeypatch)
+
+    assert FakeApi.instances[0].statuses == []
 
 
 def test_automatic_report_fails_closed_on_final_subject_drift(
@@ -202,6 +311,30 @@ def test_automatic_failed_validation_posts_failure(
     assert FakeApi.instances[0].statuses[0]["state"] == "failure"
 
 
+@pytest.mark.parametrize("event", ["workflow_run", "schedule", "issue_comment"])
+def test_automatic_report_rejects_rerun_before_status_publication(
+    monkeypatch: pytest.MonkeyPatch,
+    event: str,
+) -> None:
+    monkeypatch.setattr(reporter, "GitHubApi", FakeApi)
+    with pytest.raises(PermissionError, match="workflow run attempt 1"):
+        _report(monkeypatch, event=event, run_attempt=2)
+    assert FakeApi.instances == []
+
+
+def test_automatic_report_rejects_target_url_not_bound_to_current_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(reporter, "GitHubApi", FakeApi)
+    with pytest.raises(PermissionError, match="exact reporter workflow run"):
+        _report(
+            monkeypatch,
+            run_id=RUN_ID,
+            target_url=f"https://github.com/{REPOSITORY}/actions/runs/{RUN_ID + 1}",
+        )
+    assert FakeApi.instances == []
+
+
 def test_automatic_report_rejects_invalid_validation_contract_before_api(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -212,6 +345,8 @@ def test_automatic_report_rejects_invalid_validation_contract_before_api(
             token="app-token",
             workflow_event="workflow_run",
             workflow_ref="refs/heads/main",
+            workflow_run_id=RUN_ID,
+            workflow_run_attempt=1,
             expected=_subject(),
             job_results={"validation": "success", "other": "success"},
             target_url=RUN_URL,

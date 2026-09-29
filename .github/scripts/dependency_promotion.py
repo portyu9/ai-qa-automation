@@ -12,6 +12,7 @@ import re
 import shutil
 import stat
 import tempfile
+import time
 import tomllib
 import urllib.parse
 from pathlib import Path
@@ -31,14 +32,25 @@ from dependency_governance import (
     changed_files,
     finalize_post_merge_evidence,
     load_config,
+    require_current_control_revision,
     require_green_checks,
     require_sha,
     validate_pr_identity,
 )
 from dependency_lock_compiler import LockCompileError, compile_locks, validate_frozen_locks
-from dependency_trusted_gate import require_schedule_trusted_gate
+from dependency_trusted_gate import TRUSTED_PR_AUTO_WORKFLOW_ID, require_promotion_trusted_gate
 from trusted_qualification import EXPECTED_REPOSITORY
-from trusted_status import TrustedStatusError
+from trusted_status import (
+    EXPECTED_GATE_EVENTS,
+    EXPECTED_GATE_WORKFLOW_NAME,
+    EXPECTED_GATE_WORKFLOW_PATH,
+    TARGET_URL_RE,
+    TRUSTED_STATUS_BOT_ID,
+    TRUSTED_STATUS_BOT_LOGIN,
+    TRUSTED_STATUS_CONTEXT,
+    TRUSTED_STATUS_DESCRIPTION,
+    TrustedStatusError,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 BRANCH_PREFIX = "automation/dependency-promotion-"
@@ -52,6 +64,34 @@ MARKER_PREFIX = "<!-- aiqa-dependency-promotion:"
 MARKER_SUFFIX = " -->"
 GITHUB_ACTIONS_LOGIN = "github-actions[bot]"
 GITHUB_ACTIONS_USER_ID = 41898282
+GITHUB_ACTIONS_APP_ID = 15368
+DEPENDABOT_LOGIN = "dependabot[bot]"
+DEPENDABOT_USER_ID = 49699333
+DEPENDABOT_ACTION_REF_RE = re.compile(
+    r"^dependabot/github_actions/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$"
+)
+TRUSTED_GATE_LOGIN = "trusted-pr-gate[bot]"
+PROMOTION_AUTHOR_TOKEN_ENV = "PROMOTION_AUTHOR_TOKEN"
+PROMOTION_AUTHOR_LOGIN = "portyu9-security-remediator[bot]"
+PROMOTION_AUTHOR_USER_ID = 333833782
+PROMOTION_AUTHOR_LOGIN_ENV = "PROTECTED_REMEDIATION_BOT_LOGIN"
+PROMOTION_AUTHOR_ID_ENV = "PROTECTED_REMEDIATION_BOT_ID"
+QUALIFICATION_WAKE_CHECK = "Dependency Promotion Qualification Wake"
+QUALIFICATION_WAKE_PREFIX = "aiqa-dependency-promotion-qualification-wake"
+QUALIFICATION_WAKE_RE = re.compile(
+    rf"^{QUALIFICATION_WAKE_PREFIX}:(?P<head>[0-9a-f]{{40}}):(?P<base>[0-9a-f]{{40}}):"
+    r"(?P<stage>trusted-gate):(?P<run>[1-9][0-9]*):(?P<attempt>[1-9][0-9]*)$"
+)
+DEPENDENCY_GOVERNANCE_WORKFLOW_NAME = "dependency-governance"
+DEPENDENCY_GOVERNANCE_WORKFLOW_PATH = ".github/workflows/dependency-governance.yml"
+DEPENDENCY_GOVERNANCE_EVENTS = {"workflow_run", "schedule"}
+MAX_STATUS_EVENT_BYTES = 1024 * 1024
+STATUS_EVENT_TERMINAL_ATTEMPTS = 20
+STATUS_EVENT_POLL_SECONDS = 1.0
+STATUS_EVENT_HISTORY_PAGES = 2
+STATUS_EVENT_PENDING_STATES = frozenset(
+    {"queued", "in_progress", "waiting", "pending", "requested"}
+)
 REQUIREMENT = re.compile(
     r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)(?P<extras>\[[A-Za-z0-9_,.-]+\])?(?P<specifier>[^;@\s]*)$"
 )
@@ -63,6 +103,269 @@ PROMOTION_PATHS = {
     "requirements/runtime-py311.lock",
     ".github/lock-authority.json",
 }
+
+
+class QualificationWakeRegistered(PolicyBlock):
+    """A single exact-run qualification wake was durably published."""
+
+
+def _read_status_event_payload() -> dict[str, Any]:
+    raw_path = os.environ.get("GITHUB_EVENT_PATH", "")
+    if not raw_path:
+        raise GovernanceError("GITHUB_EVENT_PATH is required for trusted status synchronization")
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if not nofollow:
+        raise GovernanceError("trusted status synchronization requires O_NOFOLLOW")
+    try:
+        fd = os.open(Path(raw_path), os.O_RDONLY | nofollow)
+    except OSError as exc:
+        raise GovernanceError("trusted status event payload could not be opened safely") from exc
+    try:
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode) or before.st_size > MAX_STATUS_EVENT_BYTES:
+            raise GovernanceError("trusted status event payload is not one bounded regular file")
+        chunks: list[bytes] = []
+        total = 0
+        while total <= MAX_STATUS_EVENT_BYTES:
+            chunk = os.read(fd, min(64 * 1024, MAX_STATUS_EVENT_BYTES + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+        after = os.fstat(fd)
+    finally:
+        os.close(fd)
+    if total > MAX_STATUS_EVENT_BYTES:
+        raise GovernanceError("trusted status event payload exceeds bounded ingestion")
+    before_signature = (
+        before.st_dev,
+        before.st_ino,
+        before.st_mode,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+    after_signature = (
+        after.st_dev,
+        after.st_ino,
+        after.st_mode,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    )
+    if before_signature != after_signature or total != before.st_size:
+        raise GovernanceError("trusted status event payload changed during bounded read")
+    try:
+        payload = json.loads(b"".join(chunks).decode("utf-8", errors="strict"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise GovernanceError("trusted status event payload is not canonical UTF-8 JSON") from exc
+    if not isinstance(payload, dict):
+        raise GovernanceError("trusted status event payload must be one JSON object")
+    return payload
+
+
+def _require_exact_trusted_status_record(
+    api: GitHubApi,
+    payload: dict[str, Any],
+    head_sha: str,
+    target_url: str,
+) -> None:
+    status_id = payload.get("id")
+    if isinstance(status_id, bool) or not isinstance(status_id, int) or status_id < 1:
+        raise GovernanceError("trusted status event id is invalid")
+
+    for page in range(1, STATUS_EVENT_HISTORY_PAGES + 1):
+        rows = api.get(f"/commits/{head_sha}/statuses?per_page=100&page={page}")
+        if not isinstance(rows, list) or len(rows) > 100:
+            raise GovernanceError("trusted status history is not a bounded status list")
+        matches = [
+            row
+            for row in rows
+            if isinstance(row, dict)
+            and not isinstance(row.get("id"), bool)
+            and isinstance(row.get("id"), int)
+            and row.get("id") == status_id
+        ]
+        if len(matches) > 1:
+            raise GovernanceError("trusted status event id is duplicated in GitHub status history")
+        if matches:
+            status = matches[0]
+            creator = status.get("creator")
+            if (
+                status.get("context") != TRUSTED_STATUS_CONTEXT
+                or status.get("state") != "success"
+                or status.get("description") != TRUSTED_STATUS_DESCRIPTION
+                or status.get("target_url") != target_url
+                or not isinstance(creator, dict)
+                or creator.get("login") != TRUSTED_STATUS_BOT_LOGIN
+                or creator.get("id") != TRUSTED_STATUS_BOT_ID
+                or creator.get("type") != "Bot"
+            ):
+                raise GovernanceError(
+                    "trusted status REST record is not exact dedicated-App gate evidence"
+                )
+            return
+        if len(rows) < 100:
+            break
+
+    raise GovernanceError("trusted status event id is absent from bounded GitHub status history")
+
+
+def await_trusted_status_event() -> dict[str, Any] | None:
+    """Synchronize a trusted status wake to the exact completed validating workflow.
+
+    This is a bounded read-only barrier. It executes before any recovery or repository
+    mutation so an App status emitted near the end of the reporter job cannot race the
+    workflow-run completion required by terminal merge authority.
+    """
+
+    repository = os.environ.get("GITHUB_REPOSITORY", "")
+    if repository != EXPECTED_REPOSITORY:
+        raise GovernanceError("trusted status synchronization repository identity drifted")
+    payload = _read_status_event_payload()
+    event_repository = payload.get("repository")
+    if (
+        payload.get("context") != TRUSTED_STATUS_CONTEXT
+        or payload.get("state") != "success"
+        or not isinstance(event_repository, dict)
+        or event_repository.get("full_name") != EXPECTED_REPOSITORY
+    ):
+        raise GovernanceError("status wake is not an exact Trusted PR Gate success event")
+
+    head_sha = require_sha(payload.get("sha"), "trusted status event SHA")
+    target_url = payload.get("target_url")
+    if not isinstance(target_url, str):
+        raise GovernanceError("trusted status event target URL is missing")
+    match = TARGET_URL_RE.fullmatch(target_url)
+    if match is None or match.group("head") != head_sha:
+        raise GovernanceError("trusted status event target URL is not exact-subject-bound")
+    run_id = int(match.group("run_id"))
+    pr_number = int(match.group("pr"))
+    base_sha = require_sha(match.group("base"), "trusted status event base SHA")
+    token = os.environ.get("GITHUB_TOKEN", "")
+    api = GitHubApi(token, repository)
+    _require_exact_trusted_status_record(api, payload, head_sha, target_url)
+
+    pr = api.get(f"/pulls/{pr_number}")
+    pr_head = (pr or {}).get("head") if isinstance(pr, dict) else None
+    pr_base = (pr or {}).get("base") if isinstance(pr, dict) else None
+    branch = (pr_head or {}).get("ref") if isinstance(pr_head, dict) else None
+    if (
+        not isinstance(pr, dict)
+        or pr.get("state") != "open"
+        or pr.get("draft") is not False
+        or not isinstance(branch, str)
+        or require_sha((pr_head or {}).get("sha"), "trusted status PR head SHA") != head_sha
+        or ((pr_head or {}).get("repo") or {}).get("full_name") != EXPECTED_REPOSITORY
+        or require_sha((pr_base or {}).get("sha"), "trusted status PR base SHA") != base_sha
+        or (pr_base or {}).get("ref") != "main"
+        or ((pr_base or {}).get("repo") or {}).get("full_name") != EXPECTED_REPOSITORY
+    ):
+        raise GovernanceError("Trusted PR Gate status is not bound to an exact open same-repo PR")
+    user = pr.get("user") or {}
+    if PROMOTION_BRANCH_RE.fullmatch(branch) is not None:
+        if not _promotion_actor_matches(user):
+            raise GovernanceError(
+                "Trusted PR Gate dependency promotion is not authored by the independent App"
+            )
+        lane = "dependency-promotion"
+    elif DEPENDABOT_ACTION_REF_RE.fullmatch(branch) is not None:
+        if (
+            not isinstance(user, dict)
+            or user.get("login") != DEPENDABOT_LOGIN
+            or user.get("id") != DEPENDABOT_USER_ID
+        ):
+            raise GovernanceError(
+                "Trusted PR Gate Dependabot Actions subject has unexpected actor identity"
+            )
+        lane = "dependabot-actions"
+    else:
+        if branch.startswith(BRANCH_PREFIX) or branch.startswith("dependabot/github_actions/"):
+            raise GovernanceError(
+                "Trusted PR Gate status claims a malformed dependency update namespace"
+            )
+        return None
+    live = api.get("/branches/main")
+    if (
+        require_sha(
+            ((live or {}).get("commit") or {}).get("sha"),
+            "trusted status live main SHA",
+        )
+        != base_sha
+    ):
+        raise GovernanceError(
+            "Trusted PR Gate dependency promotion is stale relative to current main"
+        )
+
+    for attempt in range(STATUS_EVENT_TERMINAL_ATTEMPTS):
+        run = api.get(f"/actions/runs/{run_id}")
+        run_repository = (run or {}).get("repository") if isinstance(run, dict) else None
+        head_repository = (run or {}).get("head_repository") if isinstance(run, dict) else None
+        if (
+            not isinstance(run, dict)
+            or run.get("id") != run_id
+            or run.get("workflow_id") != TRUSTED_PR_AUTO_WORKFLOW_ID
+            or run.get("name") != EXPECTED_GATE_WORKFLOW_NAME
+            or run.get("path") != EXPECTED_GATE_WORKFLOW_PATH
+            or run.get("event") not in EXPECTED_GATE_EVENTS
+            or run.get("run_attempt") != 1
+            or run.get("head_branch") != "main"
+            or require_sha(run.get("head_sha"), "trusted status workflow head SHA") != base_sha
+            or not isinstance(run_repository, dict)
+            or run_repository.get("full_name") != EXPECTED_REPOSITORY
+            or not isinstance(head_repository, dict)
+            or head_repository.get("full_name") != EXPECTED_REPOSITORY
+        ):
+            raise GovernanceError("status wake target is not the exact reviewed trusted workflow")
+
+        state = run.get("status")
+        if state == "completed":
+            if run.get("conclusion") != "success":
+                raise GovernanceError("trusted status workflow completed without success")
+            return {
+                "runId": run_id,
+                "prNumber": pr_number,
+                "baseSha": base_sha,
+                "headSha": head_sha,
+                "event": str(run.get("event")),
+                "lane": lane,
+            }
+        if state not in STATUS_EVENT_PENDING_STATES:
+            raise GovernanceError("trusted status workflow has an unsupported nonterminal state")
+        if attempt + 1 == STATUS_EVENT_TERMINAL_ATTEMPTS:
+            raise GovernanceError("trusted status workflow did not become terminal within bound")
+        time.sleep(STATUS_EVENT_POLL_SECONDS)
+
+    raise GovernanceError("trusted status workflow synchronization exhausted unexpectedly")
+
+
+def _promotion_author_identity() -> tuple[str, int]:
+    login = os.environ.get(PROMOTION_AUTHOR_LOGIN_ENV, "")
+    raw_id = os.environ.get(PROMOTION_AUTHOR_ID_ENV, "")
+    if bool(login) != bool(raw_id):
+        raise GovernanceError("independent promotion author App identity is partially configured")
+    if (login or raw_id) and (
+        login != PROMOTION_AUTHOR_LOGIN
+        or not raw_id.isdigit()
+        or int(raw_id) != PROMOTION_AUTHOR_USER_ID
+    ):
+        raise GovernanceError(
+            "independent promotion author App identity drifted from trusted policy"
+        )
+    return PROMOTION_AUTHOR_LOGIN, PROMOTION_AUTHOR_USER_ID
+
+
+def _legacy_promotion_actor_matches(user: Any) -> bool:
+    return isinstance(user, dict) and (
+        user.get("login") == GITHUB_ACTIONS_LOGIN and user.get("id") == GITHUB_ACTIONS_USER_ID
+    )
+
+
+def _promotion_actor_matches(user: Any) -> bool:
+    if not isinstance(user, dict):
+        return False
+    identity = _promotion_author_identity()
+    return user.get("login") == identity[0] and user.get("id") == identity[1]
 
 
 def _canonical_name(value: str) -> str:
@@ -165,7 +468,9 @@ def validate_pyproject_transition(base_raw: bytes, head_raw: bytes) -> None:
 
 
 def _decode_contents_base64(content: str, path: str) -> bytes:
-    compact = "".join(content.split())
+    compact = content.replace("\r", "").replace("\n", "")
+    if not compact:
+        raise PolicyBlock(f"repository content base64 is invalid: {path}")
     try:
         return base64.b64decode(compact, validate=True)
     except (ValueError, binascii.Error) as exc:
@@ -288,21 +593,52 @@ def _staging_base_name(source_number: int, fingerprint: str) -> str:
     return f"{STAGING_BASE_PREFIX}{source_number}-{fingerprint[:12]}"
 
 
-def _owned_generated_promotion_commit(payload: Any, head_sha: str) -> bool:
+def _owned_generated_promotion_commit(
+    payload: Any,
+    head_sha: str,
+    *,
+    allow_legacy_cleanup: bool = False,
+) -> bool:
     if not isinstance(payload, dict) or payload.get("sha") != head_sha:
         return False
     author = payload.get("author") or {}
     commit = payload.get("commit") or {}
     message = commit.get("message")
+    actor_matches = _promotion_actor_matches(author) or (
+        allow_legacy_cleanup and _legacy_promotion_actor_matches(author)
+    )
     return (
-        author.get("login") == GITHUB_ACTIONS_LOGIN
-        and author.get("id") == GITHUB_ACTIONS_USER_ID
+        actor_matches
         and isinstance(message, str)
         and PROMOTION_COMMIT_MESSAGE_RE.fullmatch(message) is not None
     )
 
 
-def _prune_orphan_promotion_refs(api: GitHubApi) -> int:
+def _require_ref_unclaimed_by_open_pr(
+    api: GitHubApi,
+    branch: str,
+    *,
+    role: str,
+) -> None:
+    """Re-prove an exact generated ref is not in use immediately before deletion."""
+
+    if role not in {"head", "base"}:
+        raise GovernanceError("promotion cleanup claim role is invalid")
+    rows = api.list_all("/pulls?state=open&sort=created&direction=asc", max_pages=4)
+    for row in rows:
+        subject = row.get(role) or {}
+        repository = subject.get("repo") or {}
+        if (
+            row.get("state") == "open"
+            and subject.get("ref") == branch
+            and repository.get("full_name") == EXPECTED_REPOSITORY
+        ):
+            raise PolicyBlock(
+                f"dependency promotion {role} ref became claimed by an open PR before cleanup"
+            )
+
+
+def _prune_orphan_promotion_refs(api: GitHubApi, config: dict[str, Any]) -> int:
     open_prs = api.list_all("/pulls?state=open&sort=created&direction=asc", max_pages=4)
     open_heads = {
         str((row.get("head") or {}).get("ref"))
@@ -360,7 +696,11 @@ def _prune_orphan_promotion_refs(api: GitHubApi) -> int:
             generated_commit = api.get(f"/commits/{generated_sha}")
             parents = (generated_commit or {}).get("parents")
             if (
-                not _owned_generated_promotion_commit(generated_commit, generated_sha)
+                not _owned_generated_promotion_commit(
+                    generated_commit,
+                    generated_sha,
+                    allow_legacy_cleanup=True,
+                )
                 or not isinstance(parents, list)
                 or len(parents) != 1
                 or require_sha(
@@ -372,11 +712,13 @@ def _prune_orphan_promotion_refs(api: GitHubApi) -> int:
                 raise PolicyBlock(
                     "orphan promotion staging-base lacks exact generated counterpart provenance"
                 )
+            require_current_control_revision(api, config)
             _delete_exact_ref(
                 api,
                 branch,
                 ref_sha,
                 label="orphan promotion staging-base ref",
+                claim_role="base",
             )
             pruned += 1
             print(
@@ -396,15 +738,19 @@ def _prune_orphan_promotion_refs(api: GitHubApi) -> int:
         if branch in open_heads:
             continue
         commit = api.get(f"/commits/{ref_sha}")
-        if not _owned_generated_promotion_commit(commit, ref_sha):
-            raise PolicyBlock(
-                "orphan dependency promotion ref lacks exact GitHub Actions ownership"
-            )
+        if not _owned_generated_promotion_commit(
+            commit,
+            ref_sha,
+            allow_legacy_cleanup=True,
+        ):
+            raise PolicyBlock("orphan dependency promotion ref lacks reviewed cleanup provenance")
+        require_current_control_revision(api, config)
         _delete_exact_ref(
             api,
             branch,
             ref_sha,
             label="orphan generated promotion ref",
+            claim_role="head",
         )
         try:
             encoded_branch = urllib.parse.quote(branch, safe="")
@@ -512,16 +858,20 @@ def _existing_promotion_head(
         tree_sha=tree_sha,
         base_sha=base_sha,
         message=message,
-    ):
+    ) or not _owned_generated_promotion_commit(api.get(f"/commits/{head_sha}"), head_sha):
         raise PolicyBlock(
-            "existing dependency promotion branch does not match the exact generated subject"
+            "existing dependency promotion branch does not match the exact independent-App subject"
         )
     return head_sha
 
 
 def _create_promotion_commit(
-    api: GitHubApi, source: dict[str, Any], branch: str
+    api: GitHubApi,
+    source: dict[str, Any],
+    branch: str,
+    config: dict[str, Any],
 ) -> tuple[str, dict[str, bytes]]:
+    _promotion_author_identity()
     generated = _compile(source)
     base_commit = api.get(f"/git/commits/{source['baseSha']}")
     base_tree = require_sha(
@@ -557,18 +907,21 @@ def _create_promotion_commit(
         },
     )
     head_sha = require_sha((commit or {}).get("sha"), "promotion commit SHA")
+    require_current_control_revision(api, config)
     created = api.post("/git/refs", {"ref": f"refs/heads/{branch}", "sha": head_sha})
     if (created or {}).get("ref") != f"refs/heads/{branch}":
         raise GovernanceError("GitHub did not acknowledge dependency promotion branch creation")
+    observed = api.get(f"/commits/{head_sha}")
+    if not _owned_generated_promotion_commit(observed, head_sha):
+        raise GovernanceError(
+            "new dependency promotion commit is not authored by the exact independent App"
+        )
+    try:
+        require_current_control_revision(api, config)
+    except (GovernanceError, PolicyBlock):
+        _delete_exact_generated_branch(api, branch, head_sha)
+        raise
     return head_sha, generated
-
-
-def _github_actions_pr_creation_denied(exc: Exception) -> bool:
-    detail = str(exc)
-    return (
-        "HTTP 403" in detail
-        and "GitHub Actions is not permitted to create or approve pull requests" in detail
-    )
 
 
 def _delete_exact_ref(
@@ -577,18 +930,25 @@ def _delete_exact_ref(
     expected_sha: str,
     *,
     label: str,
+    claim_role: str,
 ) -> None:
     encoded = urllib.parse.quote(branch, safe="")
-    ref = api.get(f"/git/ref/heads/{encoded}")
-    obj = (ref or {}).get("object") or {}
-    if (ref or {}).get("ref") != f"refs/heads/{branch}" or obj.get("type") != "commit":
-        raise PolicyBlock(f"{label} identity changed before exact cleanup")
-    observed = require_sha(
-        obj.get("sha"),
-        f"{label} SHA before cleanup",
-    )
-    if observed != expected_sha:
-        raise PolicyBlock(f"{label} changed before exact cleanup")
+
+    def require_exact_ref(*, phase: str) -> None:
+        ref = api.get(f"/git/ref/heads/{encoded}")
+        obj = (ref or {}).get("object") or {}
+        if (ref or {}).get("ref") != f"refs/heads/{branch}" or obj.get("type") != "commit":
+            raise PolicyBlock(f"{label} identity changed {phase}")
+        observed = require_sha(
+            obj.get("sha"),
+            f"{label} SHA {phase}",
+        )
+        if observed != expected_sha:
+            raise PolicyBlock(f"{label} changed {phase}")
+
+    require_exact_ref(phase="before exact cleanup")
+    _require_ref_unclaimed_by_open_pr(api, branch, role=claim_role)
+    require_exact_ref(phase="at terminal cleanup boundary")
     api.request("DELETE", f"/git/refs/heads/{encoded}")
 
 
@@ -598,45 +958,8 @@ def _delete_exact_generated_branch(api: GitHubApi, branch: str, head_sha: str) -
         branch,
         head_sha,
         label="generated promotion branch",
+        claim_role="head",
     )
-
-
-def _ensure_staging_base_ref(api: GitHubApi, source: dict[str, Any]) -> str:
-    branch = _staging_base_name(int(source["number"]), str(source["fingerprint"]))
-    encoded = urllib.parse.quote(branch, safe="")
-    try:
-        existing = api.get(f"/git/ref/heads/{encoded}")
-    except GovernanceError as exc:
-        if "HTTP 404" not in str(exc):
-            raise
-        created = api.post(
-            "/git/refs",
-            {"ref": f"refs/heads/{branch}", "sha": source["baseSha"]},
-        )
-        created_obj = (created or {}).get("object") or {}
-        if (created or {}).get("ref") != f"refs/heads/{branch}" or created_obj.get(
-            "type"
-        ) != "commit":
-            raise GovernanceError(
-                "GitHub did not acknowledge exact promotion staging-base creation"
-            ) from None
-        observed = require_sha(
-            created_obj.get("sha"),
-            "created promotion staging-base SHA",
-        )
-    else:
-        existing_obj = (existing or {}).get("object") or {}
-        if (existing or {}).get("ref") != f"refs/heads/{branch}" or existing_obj.get(
-            "type"
-        ) != "commit":
-            raise PolicyBlock("existing promotion staging-base ref identity drifted")
-        observed = require_sha(
-            existing_obj.get("sha"),
-            "existing promotion staging-base SHA",
-        )
-    if observed != source["baseSha"]:
-        raise PolicyBlock("promotion staging-base ref does not equal exact current main")
-    return branch
 
 
 def _promotion_body(metadata: dict[str, Any]) -> str:
@@ -652,7 +975,7 @@ def _promotion_body(metadata: dict[str, Any]) -> str:
     )
 
 
-def _validate_staged_or_main_pr(
+def _validate_promotion_pr_identity(
     pr: dict[str, Any],
     *,
     number: int,
@@ -663,21 +986,56 @@ def _validate_staged_or_main_pr(
     repository: str,
 ) -> None:
     if pr.get("number") != number or pr.get("state") != "open" or pr.get("draft") is not False:
-        raise GovernanceError("promotion PR lifecycle changed during staged-base transition")
+        raise GovernanceError("promotion PR lifecycle drifted from the exact generated subject")
     head = pr.get("head") or {}
     base = pr.get("base") or {}
     if (
-        (head.get("repo") or {}).get("full_name") != repository
+        not _promotion_actor_matches(pr.get("user") or {})
+        or (head.get("repo") or {}).get("full_name") != repository
         or (base.get("repo") or {}).get("full_name") != repository
         or head.get("ref") != branch
         or require_sha(head.get("sha"), "promotion PR head SHA") != head_sha
         or base.get("ref") != base_ref
         or require_sha(base.get("sha"), "promotion PR base SHA") != base_sha
     ):
-        raise GovernanceError("promotion PR identity changed during staged-base transition")
+        raise GovernanceError("promotion PR identity drifted from the exact generated subject")
 
 
-def _create_promotion_pr(api: GitHubApi, source: dict[str, Any], branch: str, head_sha: str) -> int:
+def _validate_promotion_pr_cleanup_identity(
+    pr: dict[str, Any],
+    *,
+    number: int,
+    branch: str,
+    head_sha: str,
+    base_ref: str,
+    repository: str,
+) -> None:
+    """Prove rollback ownership while allowing the target branch SHA to advance."""
+
+    if pr.get("number") != number or pr.get("state") != "open" or pr.get("draft") is not False:
+        raise GovernanceError("promotion PR cleanup lifecycle drifted from the created subject")
+    head = pr.get("head") or {}
+    base = pr.get("base") or {}
+    require_sha(base.get("sha"), "promotion PR cleanup base SHA")
+    if (
+        not _promotion_actor_matches(pr.get("user") or {})
+        or (head.get("repo") or {}).get("full_name") != repository
+        or (base.get("repo") or {}).get("full_name") != repository
+        or head.get("ref") != branch
+        or require_sha(head.get("sha"), "promotion PR cleanup head SHA") != head_sha
+        or base.get("ref") != base_ref
+    ):
+        raise GovernanceError("promotion PR cleanup identity drifted from the created subject")
+
+
+def _create_promotion_pr(
+    api: GitHubApi,
+    source: dict[str, Any],
+    branch: str,
+    head_sha: str,
+    config: dict[str, Any],
+) -> int:
+    _promotion_author_identity()
     metadata = {
         "version": 1,
         "sourcePr": source["number"],
@@ -688,62 +1046,67 @@ def _create_promotion_pr(api: GitHubApi, source: dict[str, Any], branch: str, he
         "fingerprint": source["fingerprint"],
     }
     body = _promotion_body(metadata)
-    staging_base = _ensure_staging_base_ref(api, source)
-    try:
-        pr = api.post(
-            "/pulls",
-            {
-                "title": f"deps: promote Dependabot PR #{source['number']}",
-                "head": branch,
-                "base": staging_base,
-                "body": body,
-                "draft": False,
-            },
-        )
-    except GovernanceError as exc:
-        _delete_exact_ref(
-            api,
-            staging_base,
-            source["baseSha"],
-            label="promotion staging-base ref",
-        )
-        if not _github_actions_pr_creation_denied(exc):
-            raise
-        _delete_exact_generated_branch(api, branch, head_sha)
-        raise GovernanceError(
-            "repository Actions policy blocks generated pull-request creation; "
-            "enable 'Allow GitHub Actions to create and approve pull requests'"
-        ) from exc
+    require_current_control_revision(api, config)
+    pr = api.post(
+        "/pulls",
+        {
+            "title": f"deps: promote Dependabot PR #{source['number']}",
+            "head": branch,
+            "base": "main",
+            "body": body,
+            "draft": False,
+        },
+    )
     number = (pr or {}).get("number")
-    if not isinstance(number, int) or number < 1:
-        raise GovernanceError("GitHub did not acknowledge dependency promotion PR creation")
-    _validate_staged_or_main_pr(
-        pr,
-        number=number,
-        branch=branch,
-        head_sha=head_sha,
-        base_ref=staging_base,
-        base_sha=source["baseSha"],
-        repository=os.environ.get("GITHUB_REPOSITORY", ""),
-    )
-    retargeted = api.request("PATCH", f"/pulls/{number}", {"base": "main"})
-    if not isinstance(retargeted, dict):
-        raise GovernanceError("GitHub returned a malformed promotion retarget response")
-    _validate_staged_or_main_pr(
-        retargeted,
-        number=number,
-        branch=branch,
-        head_sha=head_sha,
-        base_ref="main",
-        base_sha=source["baseSha"],
-        repository=os.environ.get("GITHUB_REPOSITORY", ""),
-    )
-    _delete_exact_ref(
-        api,
-        staging_base,
-        source["baseSha"],
-        label="promotion staging-base ref",
-    )
+    if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+        raise GovernanceError(
+            "GitHub promotion PR creation response is ambiguous; retaining exact branch for recovery"
+        )
+    try:
+        _validate_promotion_pr_identity(
+            pr,
+            number=number,
+            branch=branch,
+            head_sha=head_sha,
+            base_ref="main",
+            base_sha=source["baseSha"],
+            repository=os.environ.get("GITHUB_REPOSITORY", ""),
+        )
+        require_current_control_revision(api, config)
+    except (GovernanceError, PolicyBlock) as exc:
+        before_close = api.get(f"/pulls/{number}")
+        try:
+            _validate_promotion_pr_cleanup_identity(
+                before_close,
+                number=number,
+                branch=branch,
+                head_sha=head_sha,
+                base_ref="main",
+                repository=os.environ.get("GITHUB_REPOSITORY", ""),
+            )
+        except (GovernanceError, PolicyBlock) as cleanup_exc:
+            raise GovernanceError(
+                "malformed promotion PR could not be proven exact for cleanup; "
+                "retaining exact branch"
+            ) from cleanup_exc
+        if (
+            before_close.get("title") != f"deps: promote Dependabot PR #{source['number']}"
+            or before_close.get("body") != body
+        ):
+            raise GovernanceError(
+                "malformed promotion PR metadata drifted before cleanup; retaining exact branch"
+            ) from exc
+        closed = api.request("PATCH", f"/pulls/{number}", {"state": "closed"})
+        if (
+            not isinstance(closed, dict)
+            or closed.get("number") != number
+            or closed.get("state") != "closed"
+        ):
+            raise GovernanceError(
+                "malformed promotion PR could not be durably closed; retaining exact branch"
+            ) from exc
+        _delete_exact_generated_branch(api, branch, head_sha)
+        raise
     return number
 
 
@@ -752,6 +1115,8 @@ def _normalize_staged_promotion(
     pr: dict[str, Any],
     config: dict[str, Any],
 ) -> dict[str, Any]:
+    if pr.get("state") != "open" or pr.get("draft") is not False:
+        raise PolicyBlock("staged promotion is no longer open and non-draft")
     base = pr.get("base") or {}
     if base.get("ref") == config["baseBranch"]:
         return pr
@@ -768,8 +1133,7 @@ def _normalize_staged_promotion(
     user = pr.get("user") or {}
     head = pr.get("head") or {}
     if (
-        user.get("login") != GITHUB_ACTIONS_LOGIN
-        or user.get("id") != GITHUB_ACTIONS_USER_ID
+        not _promotion_actor_matches(user)
         or (head.get("repo") or {}).get("full_name") != config["repository"]
         or (base.get("repo") or {}).get("full_name") != config["repository"]
         or head.get("ref")
@@ -798,12 +1162,40 @@ def _normalize_staged_promotion(
     ):
         raise PolicyBlock("promotion staging-base ref drifted before retarget")
     number = pr.get("number")
-    if not isinstance(number, int) or number < 1:
+    if isinstance(number, bool) or not isinstance(number, int) or number < 1:
         raise PolicyBlock("staged promotion PR number is invalid")
-    retargeted = api.request("PATCH", f"/pulls/{number}", {"base": config["baseBranch"]})
+    require_current_control_revision(api, config)
+    try:
+        retargeted = api.request("PATCH", f"/pulls/{number}", {"base": config["baseBranch"]})
+    except GovernanceError as retarget_error:
+        converged = api.get(f"/pulls/{number}")
+        rebound = dict(converged) if isinstance(converged, dict) else {}
+        rebound["state"] = "open"
+        try:
+            _validate_promotion_pr_identity(
+                rebound,
+                number=number,
+                branch=str(head.get("ref")),
+                head_sha=str(metadata["head"]),
+                base_ref=expected_base,
+                base_sha=live_sha,
+                repository=config["repository"],
+            )
+        except (GovernanceError, PolicyBlock) as validation_error:
+            raise retarget_error from validation_error
+        if (
+            not isinstance(converged, dict)
+            or converged.get("state") != "closed"
+            or converged.get("title") != pr.get("title")
+            or converged.get("body") != pr.get("body")
+        ):
+            raise retarget_error
+        raise PolicyBlock(
+            "staged promotion closed before retarget; reconciliation already converged"
+        ) from retarget_error
     if not isinstance(retargeted, dict):
         raise GovernanceError("GitHub returned a malformed staged promotion retarget response")
-    _validate_staged_or_main_pr(
+    _validate_promotion_pr_identity(
         retargeted,
         number=number,
         branch=str(head.get("ref")),
@@ -812,13 +1204,64 @@ def _normalize_staged_promotion(
         base_sha=live_sha,
         repository=config["repository"],
     )
+    require_current_control_revision(api, config)
     _delete_exact_ref(
         api,
         expected_base,
         live_sha,
         label="promotion staging-base ref",
+        claim_role="base",
     )
     return retargeted
+
+
+def _publish_status_sync_outputs(
+    github_output: Path | None,
+    result: dict[str, Any] | None,
+) -> None:
+    if github_output is None or result is None:
+        return
+    expected = os.environ.get("GITHUB_OUTPUT")
+    if (
+        os.environ.get("GITHUB_ACTIONS") != "true"
+        or not expected
+        or Path(expected) != github_output
+    ):
+        raise GovernanceError(
+            "status synchronization output is not the exact GitHub Actions output file"
+        )
+    pr_number = result.get("prNumber")
+    lane = result.get("lane")
+    if (
+        isinstance(pr_number, bool)
+        or not isinstance(pr_number, int)
+        or pr_number < 1
+        or lane not in {"dependency-promotion", "dependabot-actions"}
+    ):
+        raise GovernanceError("status synchronization output identity is malformed")
+    payload = f"pr_number={pr_number}\nlane={lane}\n".encode()
+    flags = os.O_WRONLY | os.O_APPEND
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(github_output, flags)
+    except OSError as exc:
+        raise GovernanceError(
+            f"unable to open exact GitHub Actions status synchronization output: {exc}"
+        ) from exc
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
+            raise GovernanceError(
+                "GitHub Actions status synchronization output is not an owned regular file"
+            )
+        if os.write(descriptor, payload) != len(payload):
+            raise GovernanceError(
+                "GitHub Actions status synchronization output write was incomplete"
+            )
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _publish_merge_signal(github_output: Path | None) -> None:
@@ -855,8 +1298,10 @@ def _promotion_pulls(api: GitHubApi) -> list[dict[str, Any]]:
     return [
         row
         for row in rows
-        if (row.get("user") or {}).get("login") == GITHUB_ACTIONS_LOGIN
-        and (row.get("user") or {}).get("id") == GITHUB_ACTIONS_USER_ID
+        if (
+            _promotion_actor_matches(row.get("user") or {})
+            or _legacy_promotion_actor_matches(row.get("user") or {})
+        )
         and isinstance(((row.get("head") or {}).get("ref")), str)
         and str((row.get("head") or {}).get("ref")).startswith(BRANCH_PREFIX)
         and _parse_marker(row.get("body")) is not None
@@ -913,6 +1358,30 @@ def _require_promotion_lifecycle(
         raise PolicyBlock("promotion PR is not definitively mergeable")
 
 
+def _validate_promotion_changed_paths(files: list[dict[str, Any]]) -> set[str]:
+    """Require an exact ordinary-modification file set for generated promotions."""
+
+    if not files:
+        raise PolicyBlock("promotion has no changed files")
+    paths: set[str] = set()
+    for row in files:
+        path = row.get("filename")
+        if not isinstance(path, str) or path not in PROMOTION_PATHS:
+            raise PolicyBlock(f"promotion changed path is outside generated authority: {path!r}")
+        if path in paths:
+            raise PolicyBlock(f"promotion changed-file list is ambiguous for path: {path}")
+        if row.get("status") != "modified" or row.get("previous_filename") is not None:
+            raise PolicyBlock(
+                "promotion generated paths must be ordinary modified files without rename provenance"
+            )
+        paths.add(path)
+    if "pyproject.toml" not in paths or ".github/lock-authority.json" not in paths:
+        raise PolicyBlock(
+            f"promotion changed-path set is outside generated authority: {sorted(paths)}"
+        )
+    return paths
+
+
 def _validate_promotion(
     api: GitHubApi,
     pr: dict[str, Any],
@@ -924,10 +1393,8 @@ def _validate_promotion(
     metadata = _parse_marker(pr.get("body"))
     if metadata is None or metadata.get("version") != 1:
         raise PolicyBlock("promotion PR lacks exact promotion marker")
-    if (pr.get("user") or {}).get("login") != GITHUB_ACTIONS_LOGIN or (pr.get("user") or {}).get(
-        "id"
-    ) != GITHUB_ACTIONS_USER_ID:
-        raise PolicyBlock("promotion PR is not authored by canonical GitHub Actions")
+    if not _promotion_actor_matches(pr.get("user") or {}):
+        raise PolicyBlock("promotion PR is not authored by the independent promotion App")
     head = pr.get("head") or {}
     base = pr.get("base") or {}
     if (head.get("repo") or {}).get("full_name") != config["repository"] or (
@@ -960,7 +1427,7 @@ def _validate_promotion(
         raise PolicyBlock("source Dependabot PR changed after promotion generation")
     commit = api.get(f"/commits/{head_sha}")
     if not _owned_generated_promotion_commit(commit, head_sha):
-        raise PolicyBlock("promotion head lacks exact GitHub Actions ownership")
+        raise PolicyBlock("promotion head lacks exact independent-App ownership")
     parents = (commit or {}).get("parents")
     if (
         not isinstance(parents, list)
@@ -969,21 +1436,204 @@ def _validate_promotion(
     ):
         raise PolicyBlock("promotion commit is not directly parented to exact current main")
     files = api.list_all(f"/pulls/{pr['number']}/files", max_pages=2)
-    paths = {str(row.get("filename")) for row in files if isinstance(row.get("filename"), str)}
-    if (
-        not paths
-        or not paths <= PROMOTION_PATHS
-        or "pyproject.toml" not in paths
-        or ".github/lock-authority.json" not in paths
-    ):
-        raise PolicyBlock(
-            f"promotion changed-path set is outside generated authority: {sorted(paths)}"
-        )
+    _validate_promotion_changed_paths(files)
     if validate_generated_bytes:
         _validate_generated_bytes(api, source, head_sha)
     if require_checks:
         _require_green(api, head_sha, config)
     return source, {"number": pr["number"], "headSha": head_sha, "baseSha": base_sha}
+
+
+def _qualification_wake_stage(
+    api: GitHubApi,
+    promotion: dict[str, Any],
+) -> str | None:
+    head_sha = require_sha(promotion.get("headSha"), "promotion qualification head SHA")
+    base_sha = require_sha(promotion.get("baseSha"), "promotion qualification base SHA")
+    rows = api.list_all(
+        f"/commits/{head_sha}/check-runs?filter=all",
+        max_pages=2,
+    )
+    matches: list[tuple[int, str]] = []
+    for row in rows:
+        if row.get("name") != QUALIFICATION_WAKE_CHECK:
+            continue
+        external_id = row.get("external_id")
+        if not isinstance(external_id, str):
+            raise GovernanceError("promotion qualification wake has no external identity")
+        match = QUALIFICATION_WAKE_RE.fullmatch(external_id)
+        if match is None:
+            raise GovernanceError("promotion qualification wake external identity is malformed")
+        if match.group("head") != head_sha or match.group("base") != base_sha:
+            raise GovernanceError("promotion qualification wake subject drifted")
+        app = row.get("app") or {}
+        if (
+            row.get("head_sha") != head_sha
+            or row.get("status") != "completed"
+            or row.get("conclusion") != "neutral"
+            or app.get("id") != GITHUB_ACTIONS_APP_ID
+            or app.get("slug") != "github-actions"
+        ):
+            raise GovernanceError("promotion qualification wake check provenance is invalid")
+        run_id = int(match.group("run"))
+        run_attempt = int(match.group("attempt"))
+        if row.get("details_url") != (
+            f"https://github.com/{EXPECTED_REPOSITORY}/actions/runs/{run_id}"
+        ):
+            raise GovernanceError("promotion qualification wake details URL is not exact-run-bound")
+        run = api.get(f"/actions/runs/{run_id}")
+        repository = (run or {}).get("repository") or {}
+        head_repository = (run or {}).get("head_repository") or {}
+        if (
+            (run or {}).get("id") != run_id
+            or (run or {}).get("run_attempt") != run_attempt
+            or (run or {}).get("name") != DEPENDENCY_GOVERNANCE_WORKFLOW_NAME
+            or (run or {}).get("path") != DEPENDENCY_GOVERNANCE_WORKFLOW_PATH
+            or (run or {}).get("event") not in DEPENDENCY_GOVERNANCE_EVENTS
+            or (run or {}).get("head_branch") != "main"
+            or (run or {}).get("head_sha") != base_sha
+            or (run or {}).get("status") != "completed"
+            or (run or {}).get("conclusion") != "success"
+            or repository.get("full_name") != EXPECTED_REPOSITORY
+            or head_repository.get("full_name") != EXPECTED_REPOSITORY
+        ):
+            raise GovernanceError("promotion qualification wake workflow provenance is invalid")
+        check_id = row.get("id")
+        if not isinstance(check_id, int) or isinstance(check_id, bool) or check_id < 1:
+            raise GovernanceError("promotion qualification wake check id is invalid")
+        matches.append((check_id, match.group("stage")))
+    return max(matches)[1] if matches else None
+
+
+def _publish_qualification_wake(
+    api: GitHubApi,
+    promotion: dict[str, Any],
+    *,
+    stage: str,
+) -> None:
+    if stage != "trusted-gate":
+        raise GovernanceError("promotion qualification wake stage is outside reviewed authority")
+    head_sha = require_sha(promotion.get("headSha"), "promotion qualification head SHA")
+    base_sha = require_sha(promotion.get("baseSha"), "promotion qualification base SHA")
+    raw_run_id = os.environ.get("GITHUB_RUN_ID", "")
+    raw_attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "")
+    if not raw_run_id.isdigit() or not raw_attempt.isdigit():
+        raise GovernanceError("workflow run identity is required for qualification wake evidence")
+    run_id = int(raw_run_id)
+    run_attempt = int(raw_attempt)
+    if run_id < 1 or run_attempt < 1:
+        raise GovernanceError("workflow run identity for qualification wake must be positive")
+    external_id = (
+        f"{QUALIFICATION_WAKE_PREFIX}:{head_sha}:{base_sha}:{stage}:{run_id}:{run_attempt}"
+    )
+    details_url = f"https://github.com/{EXPECTED_REPOSITORY}/actions/runs/{run_id}"
+    response = api.post(
+        "/check-runs",
+        {
+            "name": QUALIFICATION_WAKE_CHECK,
+            "head_sha": head_sha,
+            "status": "completed",
+            "conclusion": "neutral",
+            "details_url": details_url,
+            "external_id": external_id,
+            "output": {
+                "title": "Trusted-main automatic gate qualification wake registered",
+                "summary": (
+                    "Wake evidence only; this check is not validation authority and cannot "
+                    "satisfy Required PR Gate, CodeQL, or Trusted PR Gate."
+                ),
+            },
+        },
+    )
+    app = (response or {}).get("app") or {}
+    if (
+        not isinstance(response, dict)
+        or response.get("name") != QUALIFICATION_WAKE_CHECK
+        or response.get("head_sha") != head_sha
+        or response.get("status") != "completed"
+        or response.get("conclusion") != "neutral"
+        or response.get("details_url") != details_url
+        or response.get("external_id") != external_id
+        or app.get("id") != GITHUB_ACTIONS_APP_ID
+        or app.get("slug") != "github-actions"
+    ):
+        raise GovernanceError("GitHub did not acknowledge exact promotion qualification wake")
+
+
+def _exact_terminal_trusted_gate_state(
+    api: GitHubApi,
+    promotion: dict[str, Any],
+) -> str | None:
+    head_sha = require_sha(promotion.get("headSha"), "promotion trusted gate head SHA")
+    base_sha = require_sha(promotion.get("baseSha"), "promotion trusted gate base SHA")
+    number = promotion.get("number")
+    if isinstance(number, bool) or not isinstance(number, int) or number < 1:
+        raise GovernanceError("promotion trusted gate PR number is invalid")
+    merge_ref = api.get(f"/git/ref/pull/{number}/merge")
+    if (
+        not isinstance(merge_ref, dict)
+        or merge_ref.get("ref") != f"refs/pull/{number}/merge"
+        or ((merge_ref.get("object") or {}).get("type")) != "commit"
+    ):
+        raise PolicyBlock("promotion trusted gate merge ref is unavailable")
+    merge_sha = require_sha(
+        (merge_ref.get("object") or {}).get("sha"),
+        "promotion trusted gate merge SHA",
+    )
+    matches: list[dict[str, Any]] = []
+    for row in api.list_all(f"/commits/{head_sha}/statuses", max_pages=4):
+        if row.get("context") != TRUSTED_STATUS_CONTEXT:
+            continue
+        creator = row.get("creator") or {}
+        if (
+            creator.get("login") != TRUSTED_STATUS_BOT_LOGIN
+            or creator.get("id") != TRUSTED_STATUS_BOT_ID
+            or creator.get("type") != "Bot"
+        ):
+            continue
+        target_url = row.get("target_url")
+        match = TARGET_URL_RE.fullmatch(target_url) if isinstance(target_url, str) else None
+        if (
+            match is None
+            or int(match.group("pr")) != number
+            or match.group("base") != base_sha
+            or match.group("head") != head_sha
+            or match.group("merge") != merge_sha
+        ):
+            continue
+        status_id = row.get("id")
+        if isinstance(status_id, bool) or not isinstance(status_id, int) or status_id < 1:
+            raise GovernanceError("exact Trusted PR Gate status id is invalid")
+        matches.append(row)
+    if not matches:
+        return None
+    latest = max(matches, key=lambda row: int(row["id"]))
+    state = latest.get("state")
+    if state not in {"pending", "success", "failure", "error"}:
+        raise GovernanceError("exact Trusted PR Gate status state is invalid")
+    return str(state)
+
+
+def _advance_promotion_qualification(
+    api: GitHubApi,
+    promotion: dict[str, Any],
+    branch: str,
+    config: dict[str, Any],
+) -> None:
+    if PROMOTION_BRANCH_RE.fullmatch(branch) is None:
+        raise PolicyBlock("promotion qualification branch is outside reviewed authority")
+    terminal_state = _exact_terminal_trusted_gate_state(api, promotion)
+    if terminal_state is not None:
+        raise PolicyBlock(
+            "automatic Trusted PR Gate already has exact-subject state "
+            f"{terminal_state}; refusing duplicate qualification wake"
+        )
+    wake_stage = _qualification_wake_stage(api, promotion)
+    if wake_stage is not None:
+        raise PolicyBlock("automatic Trusted PR Gate qualification wake is registered and pending")
+    require_current_control_revision(api, config)
+    _publish_qualification_wake(api, promotion, stage="trusted-gate")
+    raise QualificationWakeRegistered("automatic Trusted PR Gate qualification wake registered")
 
 
 def _publish_and_merge(
@@ -995,15 +1645,18 @@ def _publish_and_merge(
     )
     if rebound_before_merge != promotion:
         raise PolicyBlock("promotion changed before guarded merge")
+    branch = str((fresh_before_merge.get("head") or {}).get("ref") or "")
     try:
-        require_schedule_trusted_gate(
+        require_promotion_trusted_gate(
             api,
             promotion["number"],
             promotion["headSha"],
             promotion["baseSha"],
         )
     except TrustedStatusError as exc:
-        raise PolicyBlock("automatic Trusted PR Gate is not yet schedule-admissible") from exc
+        _advance_promotion_qualification(api, promotion, branch, config)
+        raise GovernanceError("promotion qualification wake returned unexpectedly") from exc
+    require_current_control_revision(api, config)
     result = api.put(
         f"/pulls/{promotion['number']}/merge",
         {"sha": promotion["headSha"], "merge_method": config["mergeMethod"]},
@@ -1031,8 +1684,7 @@ def _close_stale(
     if (
         (fresh or {}).get("state") != "open"
         or (fresh or {}).get("draft") is not False
-        or ((fresh or {}).get("user") or {}).get("login") != GITHUB_ACTIONS_LOGIN
-        or ((fresh or {}).get("user") or {}).get("id") != GITHUB_ACTIONS_USER_ID
+        or not _promotion_actor_matches((fresh or {}).get("user") or {})
         or (fresh_head.get("repo") or {}).get("full_name") != config["repository"]
         or (fresh_base.get("repo") or {}).get("full_name") != config["repository"]
         or fresh_head.get("ref") != branch
@@ -1057,18 +1709,280 @@ def _close_stale(
 
     commit = api.get(f"/commits/{head_sha}")
     if not _owned_generated_promotion_commit(commit, head_sha):
-        raise PolicyBlock("stale promotion head lacks exact GitHub Actions ownership")
+        raise PolicyBlock("stale promotion head lacks exact independent-App ownership")
+    require_current_control_revision(api, config)
     closed = api.request("PATCH", f"/pulls/{number}", {"state": "closed"})
     if not isinstance(closed, dict) or closed.get("state") != "closed":
         raise GovernanceError("GitHub did not acknowledge stale promotion closure")
     if staging_base is not None:
+        require_current_control_revision(api, config)
         _delete_exact_ref(
             api,
             staging_base,
             require_sha(metadata.get("base"), "stale promotion marker base SHA"),
             label="stale promotion staging-base ref",
+            claim_role="base",
         )
+    require_current_control_revision(api, config)
     _delete_exact_generated_branch(api, branch, head_sha)
+
+
+def _remaining_exact_legacy_head_claims(
+    api: GitHubApi,
+    *,
+    branch: str,
+    head_sha: str,
+    source_number: int,
+    fingerprint: str,
+) -> list[int]:
+    """Identify only exact legacy duplicate PRs still claiming a generated head."""
+
+    rows = api.list_all("/pulls?state=open&sort=created&direction=asc", max_pages=4)
+    remaining: list[int] = []
+    for row in rows:
+        head = row.get("head") or {}
+        repository = head.get("repo") or {}
+        if head.get("ref") != branch or repository.get("full_name") != EXPECTED_REPOSITORY:
+            continue
+        metadata = _parse_marker(row.get("body"))
+        number = row.get("number")
+        if (
+            not _legacy_promotion_actor_matches(row.get("user") or {})
+            or row.get("state") != "open"
+            or row.get("draft") is not False
+            or isinstance(number, bool)
+            or not isinstance(number, int)
+            or number < 1
+            or require_sha(head.get("sha"), "remaining legacy promotion head SHA") != head_sha
+            or metadata is None
+            or metadata.get("version") != 1
+            or metadata.get("sourcePr") != source_number
+            or metadata.get("fingerprint") != fingerprint
+            or metadata.get("head") != head_sha
+            or row.get("title") != f"deps: promote Dependabot PR #{source_number}"
+        ):
+            raise PolicyBlock(
+                "generated promotion branch is claimed by a non-exact legacy subject during cleanup"
+            )
+        remaining.append(number)
+    return sorted(remaining)
+
+
+def _retire_legacy_promotion(
+    api: GitHubApi,
+    number: int,
+    branch: str,
+    head_sha: str,
+    config: dict[str, Any],
+) -> None:
+    """Remove one exact pre-App promotion without granting it merge authority."""
+
+    if (
+        isinstance(number, bool)
+        or not isinstance(number, int)
+        or number < 1
+        or PROMOTION_BRANCH_RE.fullmatch(branch) is None
+    ):
+        raise PolicyBlock("legacy promotion cleanup identity is malformed")
+    fresh = api.get(f"/pulls/{number}")
+    head = (fresh or {}).get("head") or {}
+    base = (fresh or {}).get("base") or {}
+    metadata = _parse_marker((fresh or {}).get("body"))
+    if (
+        not isinstance(fresh, dict)
+        or fresh.get("number") != number
+        or fresh.get("state") != "open"
+        or fresh.get("draft") is not False
+        or not _legacy_promotion_actor_matches(fresh.get("user") or {})
+        or (head.get("repo") or {}).get("full_name") != config["repository"]
+        or (base.get("repo") or {}).get("full_name") != config["repository"]
+        or head.get("ref") != branch
+        or require_sha(head.get("sha"), "legacy promotion head SHA") != head_sha
+        or metadata is None
+        or metadata.get("version") != 1
+        or metadata.get("head") != head_sha
+    ):
+        raise PolicyBlock("legacy promotion changed before exact retirement")
+
+    initial_base_sha = require_sha(base.get("sha"), "legacy promotion initial base SHA")
+    source_number = metadata.get("sourcePr")
+    fingerprint = metadata.get("fingerprint")
+    if (
+        isinstance(source_number, bool)
+        or not isinstance(source_number, int)
+        or source_number < 1
+        or not isinstance(fingerprint, str)
+        or re.fullmatch(r"[0-9a-f]{64}", fingerprint) is None
+        or branch != _branch_name({"number": source_number, "fingerprint": fingerprint})
+        or fresh.get("title") != f"deps: promote Dependabot PR #{source_number}"
+    ):
+        raise PolicyBlock("legacy promotion marker does not bind the exact reserved subject")
+
+    marker_base = require_sha(metadata.get("base"), "legacy promotion marker base SHA")
+    require_sha(metadata.get("sourceHead"), "legacy promotion source head SHA")
+    require_sha(metadata.get("sourceBase"), "legacy promotion source base SHA")
+    staging_base: str | None = None
+    if base.get("ref") == config["baseBranch"]:
+        pass
+    else:
+        staging_base = _staging_base_name(source_number, fingerprint)
+        if base.get("ref") != staging_base or initial_base_sha != marker_base:
+            raise PolicyBlock("legacy promotion base is outside exact migration authority")
+
+    commit = api.get(f"/commits/{head_sha}")
+    author = (commit or {}).get("author") or {}
+    details = (commit or {}).get("commit") or {}
+    parents = (commit or {}).get("parents")
+    if (
+        not isinstance(commit, dict)
+        or commit.get("sha") != head_sha
+        or not _legacy_promotion_actor_matches(author)
+        or details.get("message")
+        != f"deps: promote Dependabot PR #{source_number} with synchronized locks"
+        or not isinstance(parents, list)
+        or len(parents) != 1
+        or require_sha((parents[0] or {}).get("sha"), "legacy promotion parent SHA") != marker_base
+    ):
+        raise PolicyBlock("legacy promotion commit provenance is outside migration authority")
+
+    files = api.list_all(f"/pulls/{number}/files", max_pages=2)
+    paths = {str(row.get("filename")) for row in files if isinstance(row.get("filename"), str)}
+    if (
+        not paths
+        or not paths <= PROMOTION_PATHS
+        or "pyproject.toml" not in paths
+        or ".github/lock-authority.json" not in paths
+    ):
+        raise PolicyBlock("legacy promotion changed-path set is outside migration authority")
+
+    before_close = api.get(f"/pulls/{number}")
+    before_head = (before_close or {}).get("head") or {}
+    before_base = (before_close or {}).get("base") or {}
+    before_base_sha = require_sha(before_base.get("sha"), "legacy promotion pre-close base SHA")
+    if (
+        not isinstance(before_close, dict)
+        or before_close.get("number") != number
+        or before_close.get("state") != "open"
+        or before_close.get("draft") is not False
+        or not _legacy_promotion_actor_matches(before_close.get("user") or {})
+        or before_close.get("title") != fresh.get("title")
+        or before_close.get("body") != fresh.get("body")
+        or before_head.get("ref") != branch
+        or require_sha(before_head.get("sha"), "legacy promotion pre-close head SHA") != head_sha
+        or (before_head.get("repo") or {}).get("full_name") != config["repository"]
+        or before_base.get("ref") != base.get("ref")
+        or before_base_sha != initial_base_sha
+        or (before_base.get("repo") or {}).get("full_name") != config["repository"]
+    ):
+        raise PolicyBlock("legacy promotion changed during retirement revalidation")
+
+    require_current_control_revision(api, config)
+    closed = api.request("PATCH", f"/pulls/{number}", {"state": "closed"})
+    if (
+        not isinstance(closed, dict)
+        or closed.get("number") != number
+        or closed.get("state") != "closed"
+    ):
+        raise GovernanceError("GitHub did not acknowledge legacy promotion retirement")
+    if staging_base is not None:
+        require_current_control_revision(api, config)
+        _delete_exact_ref(
+            api,
+            staging_base,
+            marker_base,
+            label="legacy promotion staging-base ref",
+            claim_role="base",
+        )
+    remaining_claims = _remaining_exact_legacy_head_claims(
+        api,
+        branch=branch,
+        head_sha=head_sha,
+        source_number=source_number,
+        fingerprint=fingerprint,
+    )
+    if remaining_claims:
+        return
+    require_current_control_revision(api, config)
+    _delete_exact_generated_branch(api, branch, head_sha)
+
+
+def reconcile_status_target(
+    config: dict[str, Any],
+    *,
+    target_pr_number: int,
+    allow_merge: bool,
+    github_output: Path | None = None,
+) -> int:
+    """Merge only the exact promotion admitted by the trusted status synchronization job."""
+
+    if config.get("pipMode") != "promotion":
+        raise GovernanceError("dependency promotion requires pipMode=promotion")
+    if (
+        isinstance(target_pr_number, bool)
+        or not isinstance(target_pr_number, int)
+        or target_pr_number < 1
+    ):
+        raise GovernanceError("status-target promotion PR number is invalid")
+    repository = os.environ.get("GITHUB_REPOSITORY", "")
+    if repository != config["repository"]:
+        raise GovernanceError("workflow repository does not match dependency promotion config")
+    api = GitHubApi(os.environ.get("GITHUB_TOKEN", ""), repository)
+    require_current_control_revision(api, config)
+    live_pr = api.get(f"/pulls/{target_pr_number}")
+    _, promotion = _validate_promotion(api, live_pr, config, require_checks=False)
+    if promotion["number"] != target_pr_number:
+        raise GovernanceError("status-target promotion identity drifted during revalidation")
+    print(
+        json.dumps(
+            {"pr": target_pr_number, "decision": "status-target-promotion-qualified"},
+            sort_keys=True,
+        )
+    )
+    if not allow_merge or not config["automergeEnabled"]:
+        return 0
+    fresh_before_merge = api.get(f"/pulls/{target_pr_number}")
+    _, rebound_before_merge = _validate_promotion(
+        api,
+        fresh_before_merge,
+        config,
+        require_checks=False,
+    )
+    if rebound_before_merge != promotion:
+        raise PolicyBlock("status-target promotion changed before guarded merge")
+    try:
+        require_promotion_trusted_gate(
+            api,
+            promotion["number"],
+            promotion["headSha"],
+            promotion["baseSha"],
+        )
+    except TrustedStatusError as exc:
+        raise PolicyBlock(
+            "status-target Trusted PR Gate is no longer exact-subject admissible"
+        ) from exc
+    require_current_control_revision(api, config)
+    result = api.put(
+        f"/pulls/{target_pr_number}/merge",
+        {"sha": promotion["headSha"], "merge_method": config["mergeMethod"]},
+    )
+    if not isinstance(result, dict) or result.get("merged") is not True:
+        raise GovernanceError(
+            f"GitHub declined status-target dependency promotion merge: "
+            f"{(result or {}).get('message')}"
+        )
+    merge_evidence = finalize_post_merge_evidence(api, result, promotion, config)
+    print(
+        json.dumps(
+            {
+                "pr": target_pr_number,
+                "decision": "status-target-promotion-merged",
+                **merge_evidence,
+            },
+            sort_keys=True,
+        )
+    )
+    _publish_merge_signal(github_output)
+    return 0
 
 
 def reconcile(
@@ -1083,7 +1997,8 @@ def reconcile(
     if repository != config["repository"]:
         raise GovernanceError("workflow repository does not match dependency promotion config")
     api = GitHubApi(os.environ.get("GITHUB_TOKEN", ""), repository)
-    _prune_orphan_promotion_refs(api)
+    require_current_control_revision(api, config)
+    _prune_orphan_promotion_refs(api, config)
 
     active_sources: set[int] = set()
     for summary in _promotion_pulls(api):
@@ -1093,7 +2008,30 @@ def reconcile(
         source_number = metadata.get("sourcePr")
         if isinstance(source_number, int):
             active_sources.add(source_number)
+        if _legacy_promotion_actor_matches(summary.get("user") or {}):
+            legacy_head_sha = require_sha(
+                metadata.get("head"),
+                "legacy promotion marker head SHA",
+            )
+            require_current_control_revision(api, config)
+            _retire_legacy_promotion(
+                api,
+                number,
+                branch,
+                legacy_head_sha,
+                config,
+            )
+            if isinstance(source_number, int):
+                active_sources.discard(source_number)
+            print(
+                json.dumps(
+                    {"pr": number, "decision": "legacy-promotion-retired"},
+                    sort_keys=True,
+                )
+            )
+            continue
         try:
+            require_current_control_revision(api, config)
             live_pr = _normalize_staged_promotion(
                 api,
                 api.get(f"/pulls/{number}"),
@@ -1102,6 +2040,7 @@ def reconcile(
             _, promotion = _validate_promotion(api, live_pr, config, require_checks=False)
             print(json.dumps({"pr": number, "decision": "promotion-qualified"}, sort_keys=True))
             if allow_merge and config["automergeEnabled"]:
+                require_current_control_revision(api, config)
                 merge_evidence = _publish_and_merge(api, promotion, config)
                 print(
                     json.dumps(
@@ -1111,6 +2050,14 @@ def reconcile(
                 )
                 _publish_merge_signal(github_output)
                 return 0
+        except QualificationWakeRegistered as exc:
+            print(
+                json.dumps(
+                    {"pr": number, "decision": "promotion-waiting", "reason": str(exc)},
+                    sort_keys=True,
+                )
+            )
+            return 0
         except PolicyBlock as exc:
             reason = str(exc)
             print(
@@ -1127,6 +2074,7 @@ def reconcile(
                     metadata.get("head"),
                     "stale promotion marker head SHA",
                 )
+                require_current_control_revision(api, config)
                 _close_stale(api, int(number), branch, stale_head_sha, config)
                 if isinstance(source_number, int):
                     active_sources.discard(source_number)
@@ -1143,8 +2091,24 @@ def reconcile(
         try:
             source = source_subject(api, api.get(f"/pulls/{number}"), config)
             branch = _branch_name(source)
-            head_sha, _ = _create_promotion_commit(api, source, branch)
-            promotion_number = _create_promotion_pr(api, source, branch, head_sha)
+            author_token = os.environ.get(PROMOTION_AUTHOR_TOKEN_ENV, "")
+            if not author_token:
+                raise GovernanceError(
+                    "independent promotion author App token is required for new promotion creation"
+                )
+            _promotion_author_identity()
+            author_api = GitHubApi(author_token, repository)
+            require_current_control_revision(api, config)
+            head_sha, _ = _create_promotion_commit(author_api, source, branch, config)
+            require_current_control_revision(api, config)
+            promotion_number = _create_promotion_pr(author_api, source, branch, head_sha, config)
+            created_pr = api.get(f"/pulls/{promotion_number}")
+            if not _promotion_actor_matches(
+                (created_pr or {}).get("user") or {},
+            ):
+                raise GovernanceError(
+                    "created promotion PR is not authored by the exact independent App"
+                )
             active_sources.add(number)
             created += 1
             print(
@@ -1196,11 +2160,23 @@ dev = ["mypy>=2,<3", "playwright>=1.52,<2"]
 
     owned_commit = {
         "sha": "d" * 40,
-        "author": {"login": GITHUB_ACTIONS_LOGIN, "id": GITHUB_ACTIONS_USER_ID},
+        "author": {"login": PROMOTION_AUTHOR_LOGIN, "id": PROMOTION_AUTHOR_USER_ID},
         "commit": {"message": "deps: promote Dependabot PR #170 with synchronized locks"},
     }
     if not _owned_generated_promotion_commit(owned_commit, "d" * 40):
-        raise GovernanceError("canonical generated promotion commit ownership was rejected")
+        raise GovernanceError("canonical generated promotion App ownership was rejected")
+    legacy_commit = {
+        **owned_commit,
+        "author": {"login": GITHUB_ACTIONS_LOGIN, "id": GITHUB_ACTIONS_USER_ID},
+    }
+    if _owned_generated_promotion_commit(legacy_commit, "d" * 40):
+        raise GovernanceError("legacy GitHub Actions promotion retained merge authority")
+    if not _owned_generated_promotion_commit(
+        legacy_commit,
+        "d" * 40,
+        allow_legacy_cleanup=True,
+    ):
+        raise GovernanceError("legacy GitHub Actions promotion lost bounded cleanup recognition")
     for drifted in (
         {**owned_commit, "sha": "e" * 40},
         {**owned_commit, "author": {"login": "portyu9", "id": 35150859}},
@@ -1208,15 +2184,6 @@ dev = ["mypy>=2,<3", "playwright>=1.52,<2"]
     ):
         if _owned_generated_promotion_commit(drifted, "d" * 40):
             raise GovernanceError("non-canonical generated promotion ownership was accepted")
-
-    denied = GovernanceError(
-        "GitHub API POST /pulls failed HTTP 403: "
-        '{"message":"GitHub Actions is not permitted to create or approve pull requests."}'
-    )
-    if not _github_actions_pr_creation_denied(denied):
-        raise GovernanceError("GitHub Actions PR creation denial was not classified")
-    if _github_actions_pr_creation_denied(GovernanceError("HTTP 403: unrelated policy")):
-        raise GovernanceError("unrelated HTTP 403 was misclassified as PR creation denial")
 
     exact_commit = {
         "tree": {"sha": "c" * 40},
@@ -1249,12 +2216,13 @@ dev = ["mypy>=2,<3", "playwright>=1.52,<2"]
     )
     if _decode_contents_base64(wrapped_base, "pyproject.toml") != base_raw:
         raise GovernanceError("wrapped GitHub Contents base64 did not round-trip")
-    try:
-        _decode_contents_base64(encoded_base + "%", "pyproject.toml")
-    except PolicyBlock:
-        pass
-    else:
-        raise GovernanceError("malformed GitHub Contents base64 did not fail closed")
+    for malformed in (encoded_base + "%", "Y Q==", "", "\r\n"):
+        try:
+            _decode_contents_base64(malformed, "pyproject.toml")
+        except PolicyBlock:
+            pass
+        else:
+            raise GovernanceError("malformed GitHub Contents base64 did not fail closed")
 
     if _promotion_base("a" * 40, "b" * 40, base_raw, base_raw) != "b" * 40:
         raise GovernanceError(
@@ -1330,6 +2298,19 @@ dev = ["mypy>=2,<3", "playwright>=1.52,<2"]
                 f"promotion self-test accepted external dependency authority: {bad!r}"
             )
 
+    wake_re = QUALIFICATION_WAKE_RE.fullmatch(
+        f"{QUALIFICATION_WAKE_PREFIX}:{'a' * 40}:{'b' * 40}:trusted-gate:123:1"
+    )
+    if wake_re is None or wake_re.group("stage") != "trusted-gate":
+        raise GovernanceError("qualification wake identity parser rejected canonical evidence")
+    for malformed in (
+        f"{QUALIFICATION_WAKE_PREFIX}:{'a' * 39}:{'b' * 40}:trusted-gate:123:1",
+        f"{QUALIFICATION_WAKE_PREFIX}:{'a' * 40}:{'b' * 40}:other:123:1",
+        f"{QUALIFICATION_WAKE_PREFIX}:{'a' * 40}:{'b' * 40}:trusted-gate:0:1",
+    ):
+        if QUALIFICATION_WAKE_RE.fullmatch(malformed) is not None:
+            raise GovernanceError("qualification wake identity parser accepted malformed evidence")
+
     print("dependency-promotion self-test: ok")
 
 
@@ -1337,21 +2318,46 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Deterministic Python dependency promotion")
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--reconcile", action="store_true")
+    parser.add_argument("--await-trusted-status-event", action="store_true")
+    parser.add_argument("--target-promotion-pr", type=int)
     parser.add_argument("--allow-merge", action="store_true")
     parser.add_argument("--github-output", type=Path)
     args = parser.parse_args()
-    if args.github_output is not None and (not args.reconcile or not args.allow_merge):
-        parser.error("--github-output requires --reconcile --allow-merge")
+    if args.github_output is not None and not (
+        args.await_trusted_status_event or (args.reconcile and args.allow_merge)
+    ):
+        parser.error(
+            "--github-output requires --await-trusted-status-event or --reconcile --allow-merge"
+        )
+    if args.await_trusted_status_event and (
+        args.self_test or args.reconcile or args.allow_merge or args.target_promotion_pr is not None
+    ):
+        parser.error("--await-trusted-status-event must run as a standalone read-only barrier")
+    if args.target_promotion_pr is not None and (not args.reconcile or not args.allow_merge):
+        parser.error("--target-promotion-pr requires --reconcile --allow-merge")
     if args.self_test:
         selftest()
+    if args.await_trusted_status_event:
+        status_result = await_trusted_status_event()
+        _publish_status_sync_outputs(args.github_output, status_result)
+        if status_result is None:
+            print(json.dumps({"decision": "trusted-status-not-governed-dependency"}))
     if args.reconcile:
-        reconcile(
-            load_config(),
-            allow_merge=args.allow_merge,
-            github_output=args.github_output,
-        )
-    if not args.self_test and not args.reconcile:
-        parser.error("choose --self-test or --reconcile")
+        if args.target_promotion_pr is not None:
+            reconcile_status_target(
+                load_config(),
+                target_pr_number=args.target_promotion_pr,
+                allow_merge=args.allow_merge,
+                github_output=args.github_output,
+            )
+        else:
+            reconcile(
+                load_config(),
+                allow_merge=args.allow_merge,
+                github_output=args.github_output,
+            )
+    if not args.self_test and not args.reconcile and not args.await_trusted_status_event:
+        parser.error("choose --self-test, --await-trusted-status-event, or --reconcile")
 
 
 if __name__ == "__main__":

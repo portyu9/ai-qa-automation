@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from dependency_trusted_gate import require_schedule_trusted_gate
+from dependency_trusted_gate import require_action_trusted_gate
 from trusted_qualification import TrustedQualificationError
 from trusted_qualification import (
     require_success as require_trusted_qualification_success,
@@ -26,7 +26,7 @@ DEFAULT_CONFIG = ROOT / ".github" / "dependency-governance.json"
 API_ROOT = "https://api.github.com"
 API_VERSION = "2022-11-28"
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
-POST_MERGE_CI_WORKFLOW_ID = 339754724
+POST_MERGE_VALIDATION_WORKFLOW = "post-merge-ci.yml"
 BOT_LOGIN = "dependabot[bot]"
 BOT_USER_ID = 49699333
 BOT_EMAIL = "49699333+dependabot[bot]@users.noreply.github.com"
@@ -43,21 +43,13 @@ UPDATE_TYPE = re.compile(
     re.MULTILINE,
 )
 SHA = re.compile(r"^[0-9a-f]{40}$")
-POST_MERGE_CI_WORKFLOW = "ci.yml"
-POST_MERGE_CI_PATH = ".github/workflows/ci.yml"
 CODEQL_WORKFLOW = "codeql.yml"
-POST_MERGE_CI_NAME = "CI — ƳƤ AI QA Automation Framework"
-POST_MERGE_CI_EVENTS = {"push", "workflow_dispatch"}
-CI_DISPATCH_PROMOTION_REF = re.compile(
-    r"^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$"
-)
 DEPENDABOT_ACTION_REF = re.compile(
     r"^dependabot/github_actions/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$"
 )
-POST_MERGE_CI_REGISTRATION_ATTEMPTS = 15
-POST_MERGE_CI_REGISTRATION_DELAY_SECONDS = 2
 TRANSIENT_GET_ATTEMPTS = 3
 TRANSIENT_GET_DELAY_SECONDS = 1
+GOVERNANCE_CONTROL_SHA_ENV = "GOVERNANCE_CONTROL_SHA"
 
 
 class GovernanceError(RuntimeError):
@@ -130,11 +122,17 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         ".github/scripts/dependency_governance_selfcheck.py",
         ".github/scripts/dependency_recovery.py",
         ".github/scripts/dependency_recovery_selfcheck.py",
+        ".github/scripts/protected_security_remediation.py",
+        ".github/scripts/security_alert_routing.py",
         ".github/scripts/security_autoheal.py",
         ".github/scripts/security_autoheal_selfcheck.py",
         ".github/scripts/trusted_qualification.py",
         ".github/scripts/trusted_status.py",
+        ".github/workflows/dependency-governance-pr.yml",
         ".github/workflows/dependency-governance.yml",
+        ".github/workflows/post-merge-ci.yml",
+        ".github/workflows/protected-security-remediation.yml",
+        ".github/workflows/security-autoheal-pr.yml",
         ".github/workflows/security-autoheal.yml",
         ".github/workflows/trusted-pr-auto.yml",
         "scripts/auto_trusted_preflight.py",
@@ -584,159 +582,22 @@ def _ensure_action_qualification(
     return subject
 
 
-def _post_merge_ci_candidates(rows: list[dict[str, Any]], subject_sha: str) -> list[dict[str, Any]]:
-    subject_sha = require_sha(subject_sha, "post-merge CI subject SHA")
-    candidates: list[dict[str, Any]] = []
-    for row in rows:
-        claims_ci_identity = (
-            row.get("workflow_id") == POST_MERGE_CI_WORKFLOW_ID
-            or row.get("name") == POST_MERGE_CI_NAME
-            or row.get("path") == POST_MERGE_CI_PATH
-        )
-        if not claims_ci_identity:
-            continue
-        if (
-            row.get("workflow_id") != POST_MERGE_CI_WORKFLOW_ID
-            or row.get("name") != POST_MERGE_CI_NAME
-            or row.get("path") != POST_MERGE_CI_PATH
-        ):
-            raise GovernanceError("exact-subject CI run has mismatched workflow identity")
-        if row.get("head_sha") != subject_sha:
-            raise GovernanceError("exact-subject CI run is bound to a different head SHA")
-        if row.get("head_branch") != "main":
-            raise GovernanceError("exact-subject CI run is not bound to main")
-        event = row.get("event")
-        if event not in POST_MERGE_CI_EVENTS:
-            raise GovernanceError(f"exact-subject CI run has unexpected event: {event}")
-        attempt = row.get("run_attempt")
-        if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt != 1:
-            raise GovernanceError("exact-subject CI run_attempt must equal 1")
-        run_id = row.get("id")
-        if not isinstance(run_id, int) or isinstance(run_id, bool) or run_id < 1:
-            raise GovernanceError("exact-subject CI run has invalid run id")
-        status = row.get("status")
-        conclusion = row.get("conclusion")
-        if status not in {"queued", "in_progress", "completed"}:
-            raise GovernanceError(f"exact-subject CI run has invalid status: {status}")
-        if status == "completed" and conclusion != "success":
-            raise GovernanceError(f"exact-subject CI run completed non-successfully: {conclusion}")
-        candidates.append(row)
-    return candidates
-
-
-def _select_post_merge_ci_run(
-    rows: list[dict[str, Any]], subject_sha: str
-) -> dict[str, Any] | None:
-    candidates = _post_merge_ci_candidates(rows, subject_sha)
-    if len(candidates) > 1:
-        run_ids = sorted(int(row["id"]) for row in candidates)
-        raise GovernanceError(
-            f"ambiguous exact-subject CI evidence for {subject_sha}: run ids {run_ids}"
-        )
-    return candidates[0] if candidates else None
-
-
 def _live_main_sha(api: GitHubApi, config: dict[str, Any]) -> str:
     branch = urllib.parse.quote(config["baseBranch"], safe="")
     payload = api.get(f"/branches/{branch}")
     return require_sha(((payload or {}).get("commit") or {}).get("sha"), "live main SHA")
 
 
-def _post_merge_ci_runs(api: GitHubApi, subject_sha: str) -> list[dict[str, Any]]:
-    encoded_sha = urllib.parse.quote(require_sha(subject_sha, "post-merge CI subject SHA"), safe="")
-    return api.list_all(f"/actions/runs?head_sha={encoded_sha}", max_pages=2)
-
-
-def _post_merge_ci_evidence(row: dict[str, Any], *, dispatched: bool) -> dict[str, Any]:
-    return {
-        "postMergeCiWorkflowId": POST_MERGE_CI_WORKFLOW_ID,
-        "postMergeCiRunId": int(row["id"]),
-        "postMergeCiRunAttempt": int(row["run_attempt"]),
-        "postMergeCiEvent": str(row["event"]),
-        "postMergeCiStatus": str(row["status"]),
-        "postMergeCiDispatched": dispatched,
-    }
-
-
-def _ensure_post_merge_ci(
-    api: GitHubApi,
-    subject_sha: str,
-    config: dict[str, Any],
-) -> dict[str, Any]:
-    subject_sha = require_sha(subject_sha, "post-merge CI subject SHA")
-    if _live_main_sha(api, config) != subject_sha:
-        raise GovernanceError("current main changed before post-merge CI registration")
-
-    rows = _post_merge_ci_runs(api, subject_sha)
-    existing = _select_post_merge_ci_run(rows, subject_sha)
-    if existing is not None:
-        if _live_main_sha(api, config) != subject_sha:
-            raise GovernanceError("current main changed after post-merge CI evidence admission")
-        return _post_merge_ci_evidence(existing, dispatched=False)
-
-    observed_ids = {
-        int(row["id"])
-        for row in rows
-        if isinstance(row.get("id"), int)
-        and not isinstance(row.get("id"), bool)
-        and int(row["id"]) > 0
-    }
-    dispatch_exact_ci(api, "main", subject_sha)
-
-    registered: dict[str, Any] | None = None
-    for attempt in range(POST_MERGE_CI_REGISTRATION_ATTEMPTS):
-        candidate = _select_post_merge_ci_run(_post_merge_ci_runs(api, subject_sha), subject_sha)
-        if candidate is not None and int(candidate["id"]) not in observed_ids:
-            if candidate.get("event") != "workflow_dispatch":
-                raise GovernanceError(
-                    "post-merge CI appeared through an unexpected event after explicit dispatch"
-                )
-            registered = candidate
-            break
-        if attempt + 1 < POST_MERGE_CI_REGISTRATION_ATTEMPTS:
-            time.sleep(POST_MERGE_CI_REGISTRATION_DELAY_SECONDS)
-    if registered is None:
+def require_current_control_revision(api: GitHubApi, config: dict[str, Any]) -> str:
+    raw = os.environ.get(GOVERNANCE_CONTROL_SHA_ENV, "")
+    if SHA.fullmatch(raw) is None:
+        raise GovernanceError("GOVERNANCE_CONTROL_SHA must be an exact 40-character SHA")
+    live = _live_main_sha(api, config)
+    if live != raw:
         raise GovernanceError(
-            f"explicit CI dispatch did not register for exact current main {subject_sha}"
+            "trusted governance control revision is stale relative to current main"
         )
-    if _live_main_sha(api, config) != subject_sha:
-        raise GovernanceError("current main changed after post-merge CI registration")
-    return _post_merge_ci_evidence(registered, dispatched=True)
-
-
-def _validate_qualification_ref(ref: str) -> None:
-    if (
-        ref != "main"
-        and CI_DISPATCH_PROMOTION_REF.fullmatch(ref) is None
-        and DEPENDABOT_ACTION_REF.fullmatch(ref) is None
-    ):
-        raise GovernanceError(
-            f"explicit maintenance qualification ref is outside reviewed authority: {ref!r}"
-        )
-
-
-def dispatch_exact_ci(api: GitHubApi, ref: str, subject_sha: str) -> None:
-    subject_sha = require_sha(subject_sha, "explicit CI dispatch subject SHA")
-    _validate_qualification_ref(ref)
-    api.post(
-        f"/actions/workflows/{POST_MERGE_CI_WORKFLOW}/dispatches",
-        {
-            "ref": "main",
-            "inputs": {"subject_sha": subject_sha, "subject_ref": ref},
-        },
-    )
-
-
-def dispatch_exact_codeql(api: GitHubApi, ref: str, subject_sha: str) -> None:
-    subject_sha = require_sha(subject_sha, "explicit CodeQL dispatch subject SHA")
-    _validate_qualification_ref(ref)
-    api.post(
-        f"/actions/workflows/{CODEQL_WORKFLOW}/dispatches",
-        {
-            "ref": "main",
-            "inputs": {"subject_sha": subject_sha, "subject_ref": ref},
-        },
-    )
+    return raw
 
 
 def _verify_actual_merge_commit(
@@ -774,14 +635,14 @@ def finalize_post_merge_evidence(
     api: GitHubApi, result: dict[str, Any], subject: dict[str, Any], config: dict[str, Any]
 ) -> dict[str, Any]:
     merge_sha, merge_tree = _verify_actual_merge_commit(api, result, subject, config)
-    ci_evidence = _ensure_post_merge_ci(api, merge_sha, config)
     return {
         "mergeSha": merge_sha,
         "sourceTreeSha": merge_tree,
         "postMergeBinding": (
-            "exact-current-main-parents-validated-source-tree-and-ci-registration"
+            "exact-current-main-parents-validated-source-tree-and-event-driven-ci"
         ),
-        **ci_evidence,
+        "postMergeValidationWorkflow": POST_MERGE_VALIDATION_WORKFLOW,
+        "postMergeValidationStatus": "pending-workflow-run",
     }
 
 
@@ -791,14 +652,15 @@ def _merge(api: GitHubApi, subject: dict[str, Any], config: dict[str, Any]) -> d
     if rebound != subject:
         raise PolicyBlock("pull request changed before merge")
     try:
-        require_schedule_trusted_gate(
+        require_action_trusted_gate(
             api,
             subject["number"],
             subject["headSha"],
             subject["baseSha"],
         )
     except TrustedStatusError as exc:
-        raise PolicyBlock("automatic Trusted PR Gate is not yet schedule-admissible") from exc
+        raise PolicyBlock("automatic Trusted PR Gate is not yet admissible") from exc
+    require_current_control_revision(api, config)
     result = api.put(
         f"/pulls/{subject['number']}/merge",
         {"sha": subject["headSha"], "merge_method": config["mergeMethod"]},
@@ -809,11 +671,80 @@ def _merge(api: GitHubApi, subject: dict[str, Any], config: dict[str, Any]) -> d
     return finalize_post_merge_evidence(api, result, subject, config)
 
 
+def reconcile_status_target(
+    config: dict[str, Any],
+    *,
+    target_pr_number: int,
+    allow_merge: bool,
+) -> int:
+    """Merge only the exact Dependabot Actions PR admitted by trusted status sync."""
+
+    if (
+        isinstance(target_pr_number, bool)
+        or not isinstance(target_pr_number, int)
+        or target_pr_number < 1
+    ):
+        raise GovernanceError("status-target Dependabot Actions PR number is invalid")
+    repository = os.environ.get("GITHUB_REPOSITORY", "")
+    if repository != config["repository"]:
+        raise GovernanceError(f"workflow repository {repository!r} does not match bound config")
+    api = GitHubApi(os.environ.get("GITHUB_TOKEN", ""), repository)
+    require_current_control_revision(api, config)
+    live_pr = api.get(f"/pulls/{target_pr_number}")
+    subject = _ensure_action_qualification(api, live_pr, config)
+    if subject["number"] != target_pr_number:
+        raise GovernanceError("status-target Dependabot Actions identity drifted")
+    print(
+        json.dumps(
+            {"pr": target_pr_number, "decision": "status-target-actions-qualified"},
+            sort_keys=True,
+        )
+    )
+    if not allow_merge or not config["automergeEnabled"]:
+        return 0
+    fresh = api.get(f"/pulls/{target_pr_number}")
+    rebound = _ensure_action_qualification(api, fresh, config)
+    if rebound != subject:
+        raise PolicyBlock("status-target Dependabot Actions subject changed before guarded merge")
+    try:
+        require_action_trusted_gate(
+            api,
+            subject["number"],
+            subject["headSha"],
+            subject["baseSha"],
+        )
+    except TrustedStatusError as exc:
+        raise PolicyBlock(
+            "status-target Dependabot Actions Trusted PR Gate is no longer exact-subject admissible"
+        ) from exc
+    require_current_control_revision(api, config)
+    result = api.put(
+        f"/pulls/{target_pr_number}/merge",
+        {"sha": subject["headSha"], "merge_method": config["mergeMethod"]},
+    )
+    if not isinstance(result, dict) or result.get("merged") is not True:
+        message = result.get("message") if isinstance(result, dict) else result
+        raise GovernanceError(f"GitHub declined status-target Dependabot Actions merge: {message}")
+    merge_evidence = finalize_post_merge_evidence(api, result, subject, config)
+    print(
+        json.dumps(
+            {
+                "pr": target_pr_number,
+                "decision": "status-target-actions-merged",
+                **merge_evidence,
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
 def reconcile(config: dict[str, Any], *, allow_merge: bool) -> int:
     repository = os.environ.get("GITHUB_REPOSITORY", "")
     if repository != config["repository"]:
         raise GovernanceError(f"workflow repository {repository!r} does not match bound config")
     api = GitHubApi(os.environ.get("GITHUB_TOKEN", ""), repository)
+    require_current_control_revision(api, config)
     eligible = 0
     for summary in open_dependabot_prs(api):
         number = summary.get("number")
@@ -914,7 +845,6 @@ def selftest(config: dict[str, Any]) -> None:
         pass
     else:
         raise GovernanceError("semantic validator accepted action version downgrade")
-    exact_sha = "1" * 40
     merge_base_sha = "2" * 40
     merge_head_sha = "3" * 40
     merge_sha = "4" * 40
@@ -997,143 +927,55 @@ def selftest(config: dict[str, Any]) -> None:
         else:
             raise GovernanceError(f"merge-ref authority accepted {label}")
 
-    class _EmptyWorkflowRunsApi(GitHubApi):
-        def __init__(self) -> None:
-            pass
+    source_tree_sha = "5" * 40
+
+    class _PostMergeEvidenceApi(GitHubApi):
+        def __init__(self, *, live_sha: str = merge_sha) -> None:
+            self.live_sha = live_sha
 
         def get(self, path: str) -> Any:
-            if not path.startswith("/actions/runs?"):
-                raise GovernanceError(f"unexpected self-test API path: {path}")
-            return {"workflow_runs": []}
+            if path == f"/git/commits/{merge_sha}":
+                return {
+                    "sha": merge_sha,
+                    "parents": [{"sha": merge_base_sha}, {"sha": merge_head_sha}],
+                    "tree": {"sha": source_tree_sha},
+                }
+            if path == f"/git/commits/{merge_head_sha}":
+                return {"sha": merge_head_sha, "tree": {"sha": source_tree_sha}}
+            if path == "/branches/main":
+                return {"commit": {"sha": self.live_sha}}
+            raise GovernanceError(f"unexpected post-merge evidence self-test API path: {path}")
 
-    if _EmptyWorkflowRunsApi().list_all(f"/actions/runs?head_sha={exact_sha}", max_pages=2) != []:
-        raise GovernanceError("pagination rejected canonical empty workflow_runs response")
-
-    class _RecordingDispatchApi(GitHubApi):
-        def __init__(self) -> None:
-            self.calls: list[tuple[str, dict[str, Any] | None]] = []
-
-        def post(
-            self,
-            path: str,
-            payload: dict[str, Any] | None = None,
-            *,
-            token: str | None = None,
-        ) -> Any:
-            if token is not None:
-                raise GovernanceError("dispatch self-test received unexpected alternate token")
-            self.calls.append((path, payload))
-            return None
-
-    dispatch_api = _RecordingDispatchApi()
-    dispatch_exact_ci(dispatch_api, "main", exact_sha)
-    dispatch_exact_ci(
-        dispatch_api,
-        "automation/dependency-promotion-170-abcdef123456",
-        exact_sha,
+    post_merge = finalize_post_merge_evidence(
+        _PostMergeEvidenceApi(),
+        {"sha": merge_sha},
+        {"baseSha": merge_base_sha, "headSha": merge_head_sha},
+        config,
     )
-    expected_dispatch = (
-        "/actions/workflows/ci.yml/dispatches",
-        {
-            "ref": "main",
-            "inputs": {"subject_sha": exact_sha, "subject_ref": "main"},
-        },
-    )
-    if dispatch_api.calls[0] != expected_dispatch:
-        raise GovernanceError("main exact-subject CI dispatch payload drifted")
-    if dispatch_api.calls[1][1] != {
-        "ref": "main",
-        "inputs": {
-            "subject_sha": exact_sha,
-            "subject_ref": "automation/dependency-promotion-170-abcdef123456",
-        },
-    }:
-        raise GovernanceError("promotion exact-subject CI dispatch payload drifted")
-    dispatch_exact_codeql(
-        dispatch_api,
-        "automation/dependency-promotion-170-abcdef123456",
-        exact_sha,
-    )
-    if dispatch_api.calls[2] != (
-        "/actions/workflows/codeql.yml/dispatches",
-        {
-            "ref": "main",
-            "inputs": {
-                "subject_sha": exact_sha,
-                "subject_ref": "automation/dependency-promotion-170-abcdef123456",
-            },
-        },
-    ):
-        raise GovernanceError("promotion exact-subject CodeQL dispatch payload drifted")
-    for bad_ref in (
-        "feature/unreviewed",
-        "automation/dependency-promotion-0-abcdef123456",
-        "automation/dependency-promotion-170-nothex123456",
-        "automation/dependency-promotion-170-abcdef123456-extra",
-    ):
-        for dispatcher, label in (
-            (dispatch_exact_ci, "CI"),
-            (dispatch_exact_codeql, "CodeQL"),
-        ):
-            try:
-                dispatcher(dispatch_api, bad_ref, exact_sha)
-            except GovernanceError:
-                pass
-            else:
-                raise GovernanceError(f"unreviewed {label} dispatch ref was accepted: {bad_ref}")
-
-    canonical_run = {
-        "id": 101,
-        "workflow_id": POST_MERGE_CI_WORKFLOW_ID,
-        "name": POST_MERGE_CI_NAME,
-        "path": POST_MERGE_CI_PATH,
-        "head_branch": "main",
-        "head_sha": exact_sha,
-        "event": "workflow_dispatch",
-        "run_attempt": 1,
-        "status": "queued",
-        "conclusion": None,
-    }
-    if _select_post_merge_ci_run([canonical_run], exact_sha) != canonical_run:
-        raise GovernanceError("post-merge CI selector rejected canonical exact-subject dispatch")
-    for drifted, expected in (
-        (dict(canonical_run, head_sha="2" * 40), "different head SHA"),
-        (
-            dict(canonical_run, path=".github/workflows/not-ci.yml"),
-            "mismatched workflow identity",
+    expected_post_merge = {
+        "mergeSha": merge_sha,
+        "sourceTreeSha": source_tree_sha,
+        "postMergeBinding": (
+            "exact-current-main-parents-validated-source-tree-and-event-driven-ci"
         ),
-        (dict(canonical_run, event="schedule"), "unexpected event"),
-        (dict(canonical_run, run_attempt=2), "run_attempt must equal 1"),
-    ):
-        try:
-            _select_post_merge_ci_run([drifted], exact_sha)
-        except GovernanceError as exc:
-            if expected not in str(exc):
-                raise GovernanceError(
-                    "post-merge CI drift self-test failed with unexpected error"
-                ) from exc
-        else:
-            raise GovernanceError("post-merge CI selector accepted mismatched evidence")
-    for terminal in ("failure", "cancelled", "timed_out"):
-        try:
-            _select_post_merge_ci_run(
-                [dict(canonical_run, status="completed", conclusion=terminal)], exact_sha
-            )
-        except GovernanceError:
-            pass
-        else:
-            raise GovernanceError(
-                f"post-merge CI selector accepted terminal non-success: {terminal}"
-            )
+        "postMergeValidationWorkflow": POST_MERGE_VALIDATION_WORKFLOW,
+        "postMergeValidationStatus": "pending-workflow-run",
+    }
+    if post_merge != expected_post_merge:
+        raise GovernanceError("post-merge event-driven validation evidence drifted")
     try:
-        _select_post_merge_ci_run([canonical_run, dict(canonical_run, id=102)], exact_sha)
-    except GovernanceError:
-        pass
+        finalize_post_merge_evidence(
+            _PostMergeEvidenceApi(live_sha="6" * 40),
+            {"sha": merge_sha},
+            {"baseSha": merge_base_sha, "headSha": merge_head_sha},
+            config,
+        )
+    except GovernanceError as exc:
+        if "main advanced during guarded merge" not in str(exc):
+            raise GovernanceError("stale post-merge self-test failed unexpectedly") from exc
     else:
-        raise GovernanceError("post-merge CI selector accepted ambiguous duplicate runs")
-    completed = dict(canonical_run, status="completed", conclusion="success")
-    if _select_post_merge_ci_run([completed], exact_sha) != completed:
-        raise GovernanceError("post-merge CI selector rejected successful exact-subject evidence")
+        raise GovernanceError("post-merge evidence accepted a non-current merge")
+
     print("dependency-governance self-test: ok")
 
 
@@ -1143,14 +985,24 @@ def main() -> None:
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--reconcile", action="store_true")
     parser.add_argument("--allow-merge", action="store_true")
+    parser.add_argument("--target-dependabot-pr", type=int)
     args = parser.parse_args()
+    if args.target_dependabot_pr is not None and (not args.reconcile or not args.allow_merge):
+        parser.error("--target-dependabot-pr requires --reconcile --allow-merge")
     config = load_config()
     if args.validate_config:
         print("dependency-governance config: valid")
     if args.self_test:
         selftest(config)
     if args.reconcile:
-        reconcile(config, allow_merge=args.allow_merge)
+        if args.target_dependabot_pr is not None:
+            reconcile_status_target(
+                config,
+                target_pr_number=args.target_dependabot_pr,
+                allow_merge=args.allow_merge,
+            )
+        else:
+            reconcile(config, allow_merge=args.allow_merge)
     if not (args.validate_config or args.self_test or args.reconcile):
         parser.error("choose --validate-config, --self-test, or --reconcile")
 

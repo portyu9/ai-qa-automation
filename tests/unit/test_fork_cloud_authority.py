@@ -30,17 +30,35 @@ def _reviewed_manual_secret_payload() -> str:
 def _reviewed_governance_secret_payload() -> str:
     return """jobs:
   govern:
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       (github.event.workflow_run.head_branch == 'main' ||
+        startsWith(github.event.workflow_run.head_branch, 'dependabot/') ||
+        startsWith(github.event.workflow_run.head_branch, 'automation/dependency-promotion-')))
+    env:
+      GOVERNANCE_CONTROL_SHA: ${{ github.sha }}
     steps:
       - name: Attempt one bounded transient recovery
-        if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        if: steps.revision.outputs.current == 'true' && (github.event_name == 'workflow_run' || github.event_name == 'schedule')
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Mint independent promotion author token
+        if: steps.revision.outputs.current == 'true'
+        id: promotion-author-app
+        with:
+          private-key: ${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
       - name: Reconcile exact-subject Python dependency promotion
+        if: steps.revision.outputs.current == 'true'
         id: python_promotion
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROMOTION_AUTHOR_TOKEN: ${{ steps.promotion-author-app.outputs.token }}
       - name: Reconcile Dependabot action merge authority
-        if: steps.python_promotion.outputs.merged != 'true'
+        if: steps.revision.outputs.current == 'true' && steps.python_promotion.outputs.merged != 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 """
@@ -124,7 +142,44 @@ def test_reviewed_governance_secret_consumers_do_not_create_aws_authority() -> N
     )
     assert result["aws_authentication"] == "forbidden"
     assert result["pull_request_target"] == "forbidden"
-    assert result["secrets"] == {"GITHUB_TOKEN": 3}
+    assert result["secrets"] == {
+        "GITHUB_TOKEN": 3,
+        "PROTECTED_REMEDIATION_APP_PRIVATE_KEY": 1,
+    }
+
+
+def test_reviewed_governance_secret_consumers_require_control_sha_binding() -> None:
+    payload = _reviewed_governance_secret_payload()
+    assert "GOVERNANCE_CONTROL_SHA: ${{ github.sha }}" in payload
+    mutated = payload.replace(
+        "    env:\n      GOVERNANCE_CONTROL_SHA: ${{ github.sha }}\n",
+        "",
+        1,
+    )
+    with pytest.raises(ValueError, match="reviewed credential consumers moved or changed"):
+        _verify_workflow_text("dependency-governance.yml", mutated)
+
+
+def test_reviewed_governance_secret_consumers_require_current_main() -> None:
+    payload = _reviewed_governance_secret_payload()
+    assert payload.count("steps.revision.outputs.current == 'true'") == 4
+    mutated = payload.replace("steps.revision.outputs.current == 'true' && ", "", 1)
+    with pytest.raises(ValueError, match="reviewed credential consumers moved or changed"):
+        _verify_workflow_text("dependency-governance.yml", mutated)
+
+
+def test_reviewed_governance_secret_boundary_rejects_fork_workflow_wake() -> None:
+    payload = _reviewed_governance_secret_payload().replace(
+        "       github.event.workflow_run.head_repository.full_name == github.repository &&\n"
+        "       (github.event.workflow_run.head_branch == 'main' ||\n"
+        "        startsWith(github.event.workflow_run.head_branch, 'dependabot/') ||\n"
+        "        startsWith(github.event.workflow_run.head_branch, "
+        "'automation/dependency-promotion-')))",
+        "       github.event.workflow_run.head_repository.full_name == github.repository)",
+        1,
+    )
+    with pytest.raises(ValueError, match="reviewed credential consumers moved or changed"):
+        _verify_workflow_text("dependency-governance.yml", payload)
 
 
 def test_reviewed_governance_secret_consumer_movement_fails_closed() -> None:
@@ -135,6 +190,52 @@ def test_reviewed_governance_secret_consumer_movement_fails_closed() -> None:
     )
     with pytest.raises(ValueError, match="reviewed credential consumers moved or changed"):
         _verify_workflow_text("dependency-governance.yml", payload)
+
+
+@pytest.mark.parametrize("trigger", ("pull_request", "workflow_dispatch", "repository_dispatch"))
+def test_reviewed_governance_rejects_candidate_manual_or_external_mutation_triggers(
+    trigger: str,
+) -> None:
+    payload = f"on:\n  {trigger}:\n" + _reviewed_governance_secret_payload()
+    with pytest.raises(
+        ValueError,
+        match="must remain accepted-main-only and reject candidate/manual mutation triggers",
+    ):
+        _verify_workflow_text("dependency-governance.yml", payload)
+
+
+def test_dependency_governance_pr_workflow_is_secret_free_candidate_evidence() -> None:
+    root = Path(__file__).parents[2]
+    workflow = (root / ".github" / "workflows" / "dependency-governance-pr.yml").read_text(
+        encoding="utf-8"
+    )
+    result = _verify_workflow_text("dependency-governance-pr.yml", workflow)
+    assert result["secrets"] == {}
+    assert result["pull_request_target"] == "forbidden"
+
+
+@pytest.mark.parametrize(
+    "injected",
+    (
+        "  workflow_run:\n",
+        "  status:\n",
+        "  schedule:\n",
+        "  environment: candidate-secret\n",
+        "  contents: write\n",
+        "  pull-requests: write\n",
+    ),
+)
+def test_dependency_governance_pr_rejects_authority_expansion(injected: str) -> None:
+    root = Path(__file__).parents[2]
+    workflow = (root / ".github" / "workflows" / "dependency-governance-pr.yml").read_text(
+        encoding="utf-8"
+    )
+    mutated = workflow.replace("on:\n", f"on:\n{injected}", 1)
+    with pytest.raises(
+        ValueError,
+        match="must remain read-only candidate development evidence",
+    ):
+        _verify_workflow_text("dependency-governance-pr.yml", mutated)
 
 
 def test_trusted_preflight_requires_canonical_repository_and_fork_rejection() -> None:
@@ -159,6 +260,62 @@ def test_trusted_preflight_fails_if_fork_rejection_is_removed() -> None:
         _verify_trusted_preflight(mutated)
 
 
+@pytest.mark.parametrize(
+    "fragment",
+    (
+        'actor.get("login") == EXPECTED_OWNER',
+        'actor.get("id") == EXPECTED_OWNER_ID',
+        'triggering_actor.get("login") == EXPECTED_OWNER',
+        'triggering_actor.get("id") == EXPECTED_OWNER_ID',
+    ),
+)
+def test_trusted_preflight_fails_if_owner_wake_identity_exactness_is_removed(
+    fragment: str,
+) -> None:
+    preflight = (Path(__file__).parents[2] / "scripts" / "auto_trusted_preflight.py").read_text()
+    assert fragment in preflight
+    mutated = preflight.replace(fragment, fragment.replace(" == ", " != "), 1)
+    with pytest.raises(ValueError, match="lost canonical repository/fork isolation"):
+        _verify_trusted_preflight(mutated)
+
+
+def test_trusted_auto_secret_is_isolated_to_exact_main_protected_maintenance() -> None:
+    root = Path(__file__).parents[2]
+    workflow = (root / ".github" / "workflows" / "trusted-pr-auto.yml").read_text(encoding="utf-8")
+
+    result = _verify_workflow_text("trusted-pr-auto.yml", workflow)
+
+    assert result["secrets"] == {"TRUSTED_GATE_APP_PRIVATE_KEY": 1}
+    assert result["pull_request_target"] == "forbidden"
+
+
+@pytest.mark.parametrize("trigger", ("workflow_dispatch", "repository_dispatch"))
+def test_trusted_auto_rejects_candidate_ref_or_external_authority(trigger: str) -> None:
+    root = Path(__file__).parents[2]
+    workflow = (root / ".github" / "workflows" / "trusted-pr-auto.yml").read_text(encoding="utf-8")
+    mutated = workflow.replace(
+        "  issue_comment:\n    types: [created]\n",
+        f"  {trigger}:\n  issue_comment:\n    types: [created]\n",
+        1,
+    )
+
+    with pytest.raises(ValueError, match="candidate-ref or external authority triggers"):
+        _verify_workflow_text("trusted-pr-auto.yml", mutated)
+
+
+def test_trusted_auto_rejects_private_key_consumer_movement() -> None:
+    root = Path(__file__).parents[2]
+    workflow = (root / ".github" / "workflows" / "trusted-pr-auto.yml").read_text(encoding="utf-8")
+    mutated = workflow.replace(
+        "- name: Mint dedicated Trusted PR Gate token",
+        "- name: Export Trusted Gate private key elsewhere",
+        1,
+    )
+
+    with pytest.raises(ValueError, match="reviewed protected-maintenance credential boundary"):
+        _verify_workflow_text("trusted-pr-auto.yml", mutated)
+
+
 def test_current_repository_has_no_github_actions_aws_authority() -> None:
     result = verify_repository(Path(__file__).parents[2])
     assert result["canonical_repository"] == EXPECTED_REPOSITORY
@@ -168,16 +325,125 @@ def test_current_repository_has_no_github_actions_aws_authority() -> None:
     assert {row["workflow"] for row in result["workflows"]} == {
         "ci.yml",
         "codeql.yml",
+        "dependency-governance-pr.yml",
         "dependency-governance.yml",
         "manual-validation.yml",
+        "post-merge-ci.yml",
         "protected-security-remediation.yml",
         "release-candidate.yml",
+        "security-autoheal-pr.yml",
         "security-autoheal.yml",
         "trusted-pr-auto.yml",
     }
 
 
-def test_protected_remediation_author_secret_is_schedule_only() -> None:
+def test_post_merge_ci_has_no_cloud_or_merge_authority() -> None:
+    root = Path(__file__).parents[2]
+    workflow = (root / ".github" / "workflows" / "post-merge-ci.yml").read_text(encoding="utf-8")
+    result = _verify_workflow_text("post-merge-ci.yml", workflow)
+    assert result["secrets"] == {}
+    assert result["pull_request_target"] == "forbidden"
+
+    elevated = workflow.replace(
+        "permissions:\n  contents: read",
+        "permissions:\n  contents: write",
+        1,
+    )
+    with pytest.raises(
+        ValueError,
+        match="must remain exact accepted-main validation without cloud or merge authority",
+    ):
+        _verify_workflow_text("post-merge-ci.yml", elevated)
+
+    duplicated_sarif = workflow.replace(
+        "permissions:\n  contents: read",
+        "permissions:\n  contents: read\n  security-events: write",
+        1,
+    )
+    with pytest.raises(
+        ValueError,
+        match="must isolate exactly one CodeQL SARIF write authority",
+    ):
+        _verify_workflow_text("post-merge-ci.yml", duplicated_sarif)
+
+
+def test_security_autoheal_pr_workflow_is_read_only_candidate_evidence() -> None:
+    root = Path(__file__).parents[2]
+    workflow = (root / ".github" / "workflows" / "security-autoheal-pr.yml").read_text(
+        encoding="utf-8"
+    )
+    result = _verify_workflow_text("security-autoheal-pr.yml", workflow)
+    assert result["secrets"] == {}
+    assert result["pull_request_target"] == "forbidden"
+
+
+@pytest.mark.parametrize(
+    "injected",
+    (
+        "  workflow_run:\n",
+        "  schedule:\n",
+        "  workflow_dispatch:\n",
+        "  contents: write\n",
+        "  pull-requests: write\n",
+        "  security-events: write\n",
+    ),
+)
+def test_security_autoheal_pr_rejects_authority_expansion(injected: str) -> None:
+    root = Path(__file__).parents[2]
+    workflow = (root / ".github" / "workflows" / "security-autoheal-pr.yml").read_text(
+        encoding="utf-8"
+    )
+    mutated = workflow.replace("on:\n", f"on:\n{injected}", 1)
+    with pytest.raises(
+        ValueError,
+        match="must remain read-only candidate development evidence",
+    ):
+        _verify_workflow_text("security-autoheal-pr.yml", mutated)
+
+
+def test_security_autoheal_privileged_controller_rejects_pull_request_execution() -> None:
+    root = Path(__file__).parents[2]
+    workflow = (root / ".github" / "workflows" / "security-autoheal.yml").read_text(
+        encoding="utf-8"
+    )
+    mutated = workflow.replace("on:\n", "on:\n  pull_request:\n", 1)
+    with pytest.raises(ValueError, match="must remain accepted-main-only"):
+        _verify_workflow_text("security-autoheal.yml", mutated)
+
+
+@pytest.mark.parametrize(
+    ("guarded_fragment", "unguarded_fragment"),
+    (
+        (
+            "- name: Plan exact-main deterministic security routes\n"
+            "        if: steps.revision.outputs.current == 'true'\n"
+            "        env:",
+            "- name: Plan exact-main deterministic security routes\n        env:",
+        ),
+        (
+            "- name: Persist exact-run route plan before mutation\n"
+            "        if: steps.revision.outputs.current == 'true'\n"
+            "        id: route-plan-artifact",
+            "- name: Persist exact-run route plan before mutation\n        id: route-plan-artifact",
+        ),
+    ),
+)
+def test_security_autoheal_requires_current_main_guards_on_route_evidence(
+    guarded_fragment: str,
+    unguarded_fragment: str,
+) -> None:
+    root = Path(__file__).parents[2]
+    workflow = (root / ".github" / "workflows" / "security-autoheal.yml").read_text(
+        encoding="utf-8"
+    )
+    assert guarded_fragment in workflow
+    mutated = workflow.replace(guarded_fragment, unguarded_fragment, 1)
+
+    with pytest.raises(ValueError, match="reviewed credential consumers moved or changed"):
+        _verify_workflow_text("security-autoheal.yml", mutated)
+
+
+def test_protected_remediation_author_secret_is_trusted_wake_only() -> None:
     root = Path(__file__).parents[2]
     workflow = (root / ".github" / "workflows" / "protected-security-remediation.yml").read_text(
         encoding="utf-8"
@@ -194,7 +460,24 @@ def test_protected_remediation_author_secret_rejects_pull_request_execution() ->
     workflow = (root / ".github" / "workflows" / "protected-security-remediation.yml").read_text(
         encoding="utf-8"
     )
-    mutated = workflow.replace("on:\n  schedule:\n", "on:\n  pull_request:\n  schedule:\n", 1)
+    mutated = workflow.replace(
+        "on:\n  workflow_run:\n",
+        "on:\n  pull_request:\n  workflow_run:\n",
+        1,
+    )
 
-    with pytest.raises(ValueError, match="default-branch schedule-only"):
+    with pytest.raises(ValueError, match="default-branch trusted-wake-only"):
+        _verify_workflow_text("protected-security-remediation.yml", mutated)
+
+
+def test_protected_remediation_author_secret_rejects_unbound_workflow_run() -> None:
+    root = Path(__file__).parents[2]
+    workflow = (root / ".github" / "workflows" / "protected-security-remediation.yml").read_text(
+        encoding="utf-8"
+    )
+    marker = "       github.event.workflow_run.head_sha == github.sha)\n"
+    assert marker in workflow
+    mutated = workflow.replace(marker, "       github.event.workflow_run.head_sha != '')\n", 1)
+
+    with pytest.raises(ValueError, match="reviewed author credential boundary changed"):
         _verify_workflow_text("protected-security-remediation.yml", mutated)

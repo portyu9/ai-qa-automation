@@ -15,6 +15,7 @@ MERGE = "3" * 40
 BASE_TREE = "4" * 40
 MERGE_TREE = "5" * 40
 UNCHANGED = "6" * 40
+PROTECTED_COMMENT_ID = 701
 
 
 class FakeAPI:
@@ -28,6 +29,33 @@ class FakeAPI:
             return deepcopy(self.responses[path])
         except KeyError as exc:
             raise AssertionError(f"unexpected API path: {path}") from exc
+
+
+class GovernanceWakeFakeAPI(FakeAPI):
+    def __init__(
+        self,
+        responses: dict[str, Any],
+        pulls: list[dict[str, Any]],
+        checks: dict[str, list[dict[str, Any]]],
+    ) -> None:
+        super().__init__(responses)
+        self.pulls = pulls
+        self.checks = checks
+        self.list_calls: list[tuple[str, int]] = []
+
+    def list_all(
+        self, path: str, *, max_pages: int = preflight.MAX_API_PAGES
+    ) -> list[dict[str, Any]]:
+        self.list_calls.append((path, max_pages))
+        pulls_path = (
+            f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls"
+            f"?state=open&base={preflight.EXPECTED_DEFAULT_BRANCH}"
+        )
+        if path == pulls_path and max_pages == 1:
+            return deepcopy(self.pulls)
+        if path in self.checks and max_pages == 2:
+            return deepcopy(self.checks[path])
+        raise AssertionError(f"unexpected governance wake list path: {path} max_pages={max_pages}")
 
 
 class ScheduledFakeAPI(FakeAPI):
@@ -150,6 +178,92 @@ def _pulls_path() -> str:
     )
 
 
+def _dependabot_actions_responses(
+    *,
+    changed_path: str | None = ".github",
+    head_ref: str = "dependabot/github_actions/routine-actions-4b2c77c676",
+) -> dict[str, Any]:
+    responses = _responses(changed_path=changed_path)
+    bot = {"login": preflight.DEPENDABOT_LOGIN, "id": preflight.DEPENDABOT_USER_ID}
+    run = responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]
+    run["actor"] = dict(bot)
+    run["triggering_actor"] = dict(bot)
+    candidate = responses[_pulls_path()][0]
+    candidate["head"]["ref"] = head_ref
+    live = responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]
+    live["user"] = dict(bot)
+    live["head"]["ref"] = head_ref
+    return responses
+
+
+def _protected_comment_body(**overrides: str) -> str:
+    fields = {
+        "authorization": preflight.PROTECTED_OWNER_REASON,
+        "pr_number": "65",
+        "head_sha": HEAD,
+        "base_sha": BASE,
+        "merge_sha": MERGE,
+    }
+    fields.update(overrides)
+    return (
+        f"/trusted-maintenance authorization={fields['authorization']} "
+        f"pr={fields['pr_number']} head={fields['head_sha']} "
+        f"base={fields['base_sha']} merge={fields['merge_sha']}"
+    )
+
+
+def _protected_comment_event(**command_overrides: str) -> dict[str, Any]:
+    body = _protected_comment_body(**command_overrides)
+    issue_url = f"https://api.github.com/repos/{preflight.EXPECTED_REPOSITORY}/issues/65"
+    owner = {
+        "login": preflight.EXPECTED_OWNER,
+        "id": preflight.EXPECTED_OWNER_ID,
+        "type": "User",
+    }
+    return {
+        "action": "created",
+        "repository": {"full_name": preflight.EXPECTED_REPOSITORY},
+        "sender": dict(owner),
+        "issue": {
+            "number": 65,
+            "pull_request": {
+                "url": f"https://api.github.com/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"
+            },
+        },
+        "comment": {
+            "id": PROTECTED_COMMENT_ID,
+            "body": body,
+            "issue_url": issue_url,
+            "user": dict(owner),
+        },
+    }
+
+
+def _protected_comment_responses(
+    *,
+    changed_path: str | None = ".github",
+    **command_overrides: str,
+) -> dict[str, Any]:
+    responses = _responses(changed_path=changed_path)
+    event = _protected_comment_event(**command_overrides)
+    responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/issues/comments/{PROTECTED_COMMENT_ID}"] = (
+        deepcopy(event["comment"])
+    )
+    return responses
+
+
+def _configure_protected_comment_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GITHUB_REF", "refs/heads/main")
+    monkeypatch.setenv("GITHUB_SHA", BASE)
+    monkeypatch.setenv("GITHUB_ACTOR", preflight.EXPECTED_OWNER)
+    monkeypatch.setenv("GITHUB_TRIGGERING_ACTOR", preflight.EXPECTED_OWNER)
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.setenv(
+        "GITHUB_WORKFLOW_REF",
+        f"{preflight.EXPECTED_REPOSITORY}/.github/workflows/trusted-pr-auto.yml@refs/heads/main",
+    )
+
+
 def test_exact_live_subject_without_protected_changes_is_auto_eligible() -> None:
     admission = preflight.evaluate_admission(FakeAPI(_responses()), event=_event())
 
@@ -162,6 +276,59 @@ def test_exact_live_subject_without_protected_changes_is_auto_eligible() -> None
     assert admission.merge_sha == MERGE
     assert admission.trusted_sha == BASE
     assert admission.protected_changes == ()
+
+
+def test_exact_dependabot_actions_ci_wake_selects_only_live_bot_subject() -> None:
+    admission = preflight.evaluate_admission(
+        FakeAPI(_dependabot_actions_responses()),
+        event=_event(),
+    )
+
+    assert admission is not None
+    assert admission.eligible is True
+    assert admission.lane == "dependabot-actions"
+    assert admission.qualification_ready is True
+    assert admission.pr_number == 65
+    assert admission.head_sha == HEAD
+    assert admission.base_sha == BASE
+    assert admission.merge_sha == MERGE
+    assert admission.trusted_sha == BASE
+    assert admission.protected_changes == (
+        {
+            "path": ".github",
+            "base_oid": UNCHANGED,
+            "subject_oid": "7" * 40,
+        },
+    )
+
+
+def test_dependabot_ci_wake_rejects_non_actions_dependabot_pr() -> None:
+    responses = _dependabot_actions_responses(
+        changed_path=None,
+        head_ref="dependabot/pip/routine-dependencies-71a4d8ee02",
+    )
+
+    assert preflight.evaluate_admission(FakeAPI(responses), event=_event()) is None
+
+
+def test_dependabot_ci_wake_rejects_triggering_actor_drift() -> None:
+    responses = _dependabot_actions_responses(changed_path=None)
+    responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]["triggering_actor"] = {
+        "login": preflight.EXPECTED_OWNER,
+        "id": preflight.EXPECTED_OWNER_ID,
+    }
+
+    assert preflight.evaluate_admission(FakeAPI(responses), event=_event()) is None
+
+
+def test_owner_ci_wake_cannot_reclassify_dependabot_actions_pr() -> None:
+    responses = _dependabot_actions_responses(changed_path=None)
+    owner = {"login": preflight.EXPECTED_OWNER, "id": preflight.EXPECTED_OWNER_ID}
+    run = responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]
+    run["actor"] = dict(owner)
+    run["triggering_actor"] = dict(owner)
+
+    assert preflight.evaluate_admission(FakeAPI(responses), event=_event()) is None
 
 
 def test_repository_control_plane_is_never_routine_auto_eligible() -> None:
@@ -187,6 +354,359 @@ def test_protected_change_is_observed_but_not_auto_authorized(changed_path: str)
             "subject_oid": "7" * 40,
         },
     )
+
+
+def test_exact_owner_protected_comment_is_eligible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+
+    admission = preflight.evaluate_admission(
+        FakeAPI(_protected_comment_responses()),
+        event=_protected_comment_event(),
+        event_name="issue_comment",
+    )
+
+    assert admission.eligible is True
+    assert admission.lane == preflight.PROTECTED_OWNER_LANE
+    assert admission.pr_number == 65
+    assert admission.head_sha == HEAD
+    assert admission.base_sha == BASE
+    assert admission.merge_sha == MERGE
+    assert admission.trusted_sha == BASE
+    assert admission.protected_changes == (
+        {"path": ".github", "base_oid": UNCHANGED, "subject_oid": "7" * 40},
+    )
+
+
+def test_protected_comment_cannot_authorize_routine_owner_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+
+    with pytest.raises(ValueError, match="requires a protected-path transition"):
+        preflight.evaluate_admission(
+            FakeAPI(_protected_comment_responses(changed_path=None)),
+            event=_protected_comment_event(),
+            event_name="issue_comment",
+        )
+
+
+@pytest.mark.parametrize(
+    ("env_name", "value", "match"),
+    [
+        ("GITHUB_REF", "refs/heads/feature", "refs/heads/main"),
+        ("GITHUB_SHA", "9" * 40, "exact current main"),
+        ("GITHUB_ACTOR", "attacker", "actor is not"),
+        ("GITHUB_TRIGGERING_ACTOR", "attacker", "triggering actor is not"),
+        ("GITHUB_RUN_ATTEMPT", "2", "cannot be rerun"),
+        (
+            "GITHUB_WORKFLOW_REF",
+            "attacker/repo/.github/workflows/x.yml@refs/heads/main",
+            "workflow ref",
+        ),
+    ],
+)
+def test_protected_comment_execution_context_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    env_name: str,
+    value: str,
+    match: str,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    monkeypatch.setenv(env_name, value)
+
+    with pytest.raises(ValueError, match=match):
+        preflight.evaluate_admission(
+            FakeAPI(_protected_comment_responses()),
+            event=_protected_comment_event(),
+            event_name="issue_comment",
+        )
+
+
+@pytest.mark.parametrize(
+    ("override", "match"),
+    [
+        ({"head_sha": "8" * 40}, "head identity drifted"),
+        ({"base_sha": "8" * 40}, "exact base claim drifted"),
+        ({"merge_sha": "8" * 40}, "exact merge claim drifted"),
+        ({"authorization": "anything-else"}, "exact reviewed authorization"),
+        ({"pr_number": "66"}, "PR claim differs"),
+    ],
+)
+def test_protected_comment_exact_claims_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    override: dict[str, str],
+    match: str,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+
+    with pytest.raises(ValueError, match=match):
+        preflight.evaluate_admission(
+            FakeAPI(_protected_comment_responses(**override)),
+            event=_protected_comment_event(**override),
+            event_name="issue_comment",
+        )
+
+
+def test_protected_comment_requires_exact_owner_pr_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    responses = _protected_comment_responses()
+    responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]["user"] = {
+        "login": preflight.DEPENDABOT_LOGIN,
+        "id": preflight.DEPENDABOT_USER_ID,
+    }
+
+    with pytest.raises(ValueError, match="exact repository owner identity"):
+        preflight.evaluate_admission(
+            FakeAPI(responses),
+            event=_protected_comment_event(),
+            event_name="issue_comment",
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("action", "edited", "newly created"),
+        ("repository", {"full_name": "attacker/repo"}, "repository identity drifted"),
+        (
+            "sender",
+            {"login": "attacker", "id": preflight.EXPECTED_OWNER_ID, "type": "User"},
+            "exact repository owner",
+        ),
+        ("issue", {"number": 65}, "must belong to a pull request"),
+    ],
+)
+def test_protected_comment_event_envelope_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: Any,
+    match: str,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    event = _protected_comment_event()
+    event[field] = value
+
+    with pytest.raises(ValueError, match=match):
+        preflight.evaluate_admission(
+            FakeAPI(_protected_comment_responses()),
+            event=event,
+            event_name="issue_comment",
+        )
+
+
+def test_protected_comment_author_identity_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    event = _protected_comment_event()
+    comment = event["comment"]
+    assert isinstance(comment, dict)
+    comment["user"] = {
+        "login": "attacker",
+        "id": preflight.EXPECTED_OWNER_ID,
+        "type": "User",
+    }
+
+    with pytest.raises(ValueError, match="comment author"):
+        preflight.evaluate_admission(
+            FakeAPI(_protected_comment_responses()),
+            event=event,
+            event_name="issue_comment",
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "match"),
+    [
+        ("body", "changed or lost provenance"),
+        ("user", "changed or lost provenance"),
+        ("issue_url", "changed or lost provenance"),
+    ],
+)
+def test_protected_comment_live_record_drift_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+    match: str,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    responses = _protected_comment_responses()
+    live = responses[
+        f"/repos/{preflight.EXPECTED_REPOSITORY}/issues/comments/{PROTECTED_COMMENT_ID}"
+    ]
+    assert isinstance(live, dict)
+    if mutation == "body":
+        live["body"] = str(live["body"]) + " changed"
+    elif mutation == "user":
+        live["user"] = {"login": "attacker", "id": 999, "type": "User"}
+    else:
+        live["issue_url"] = "https://api.github.com/repos/attacker/repo/issues/65"
+
+    with pytest.raises(ValueError, match=match):
+        preflight.evaluate_admission(
+            FakeAPI(responses),
+            event=_protected_comment_event(),
+            event_name="issue_comment",
+        )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "/trusted-maintenance",
+        "/trusted-maintenance authorization=protected-control-plane-maintenance",
+        _protected_comment_body() + " extra=1",
+        "\n" + _protected_comment_body(),
+    ],
+)
+def test_protected_comment_command_shape_is_exact(
+    monkeypatch: pytest.MonkeyPatch,
+    body: str,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    event = _protected_comment_event()
+    comment = event["comment"]
+    assert isinstance(comment, dict)
+    comment["body"] = body
+
+    with pytest.raises(ValueError, match="exact reviewed authorization"):
+        preflight.evaluate_admission(
+            FakeAPI(_protected_comment_responses()),
+            event=event,
+            event_name="issue_comment",
+        )
+
+
+def _governance_wake_api(*, wake_conclusion: str = "neutral") -> GovernanceWakeFakeAPI:
+    responses = _responses()
+    run = responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]
+    run.update(
+        {
+            "workflow_id": preflight.EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_ID,
+            "name": preflight.EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_NAME,
+            "path": preflight.EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_PATH,
+            "event": "workflow_run",
+            "head_branch": preflight.EXPECTED_DEFAULT_BRANCH,
+            "head_sha": BASE,
+        }
+    )
+    live = responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]
+    live["user"] = {
+        "login": preflight.PROTECTED_REMEDIATION_BOT_LOGIN,
+        "id": preflight.PROTECTED_REMEDIATION_BOT_USER_ID,
+    }
+    live["head"]["ref"] = "automation/dependency-promotion-179-abcdef123456"
+    summary = deepcopy(live)
+    check_path = f"/repos/{preflight.EXPECTED_REPOSITORY}/commits/{HEAD}/check-runs?filter=all"
+    wake_external_id = (
+        f"{preflight.DEPENDENCY_PROMOTION_WAKE_PREFIX}:{HEAD}:{BASE}:trusted-gate:42:1"
+    )
+    checks = {
+        check_path: [
+            {
+                "id": 77,
+                "name": preflight.DEPENDENCY_PROMOTION_WAKE_CHECK,
+                "head_sha": HEAD,
+                "external_id": wake_external_id,
+                "status": "completed",
+                "conclusion": wake_conclusion,
+                "details_url": (
+                    f"https://github.com/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"
+                ),
+                "app": {"id": preflight.GITHUB_ACTIONS_APP_ID, "slug": "github-actions"},
+            }
+        ]
+    }
+    return GovernanceWakeFakeAPI(responses, [summary], checks)
+
+
+def test_successful_governance_wake_selects_exact_dependency_promotion() -> None:
+    api = _governance_wake_api()
+    event = {"action": "completed", "workflow_run": {"id": 42, "head_sha": BASE}}
+
+    admission = preflight.evaluate_admission(api, event=event)
+
+    assert admission is not None
+    assert admission.eligible is True
+    assert admission.qualification_ready is True
+    assert admission.lane == "dependency-promotion"
+    assert admission.pr_number == 65
+    assert admission.head_sha == HEAD
+    assert admission.base_sha == BASE
+
+
+def test_stale_successful_governance_noop_cannot_wake_trusted_validation() -> None:
+    api = _governance_wake_api()
+    stale_sha = "c" * 40
+    api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]["head_sha"] = stale_sha
+    event = {"action": "completed", "workflow_run": {"id": 42, "head_sha": stale_sha}}
+
+    assert preflight.evaluate_admission(api, event=event) is None
+
+
+def test_dependency_governance_manual_dispatch_cannot_wake_trusted_validation() -> None:
+    api = _governance_wake_api()
+    api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]["event"] = (
+        "workflow_dispatch"
+    )
+    event = {"action": "completed", "workflow_run": {"id": 42, "head_sha": BASE}}
+
+    assert preflight.evaluate_admission(api, event=event) is None
+
+
+def test_successful_governance_wake_rejects_legacy_github_actions_promotion() -> None:
+    api = _governance_wake_api()
+    legacy = {
+        "login": preflight.GITHUB_ACTIONS_LOGIN,
+        "id": preflight.GITHUB_ACTIONS_USER_ID,
+    }
+    live = api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]
+    live["user"] = legacy
+    api.pulls[0]["user"] = legacy
+    event = {"action": "completed", "workflow_run": {"id": 42, "head_sha": BASE}}
+
+    assert preflight.evaluate_admission(api, event=event) is None
+
+
+def test_governance_wake_actor_is_not_admission_authority() -> None:
+    api = _governance_wake_api()
+    run = api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]
+    run["actor"] = {
+        "login": preflight.GITHUB_ACTIONS_LOGIN,
+        "id": preflight.GITHUB_ACTIONS_USER_ID,
+    }
+    run["triggering_actor"] = {
+        "login": preflight.GITHUB_ACTIONS_LOGIN,
+        "id": preflight.GITHUB_ACTIONS_USER_ID,
+    }
+    event = {"action": "completed", "workflow_run": {"id": 42, "head_sha": BASE}}
+
+    admission = preflight.evaluate_admission(api, event=event)
+
+    assert admission is not None
+    assert admission.eligible is True
+    assert admission.lane == "dependency-promotion"
+    assert admission.pr_number == 65
+
+
+def test_governance_wake_check_is_neutral_only_and_non_authoritative() -> None:
+    api = _governance_wake_api(wake_conclusion="success")
+    event = {"action": "completed", "workflow_run": {"id": 42, "head_sha": BASE}}
+
+    assert preflight.evaluate_admission(api, event=event) is None
+
+
+def test_failed_governance_run_cannot_wake_trusted_validation() -> None:
+    api = _governance_wake_api()
+    api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]["conclusion"] = (
+        "failure"
+    )
+    event = {"action": "completed", "workflow_run": {"id": 42, "head_sha": BASE}}
+
+    assert preflight.evaluate_admission(api, event=event) is None
 
 
 def test_scheduled_bot_reconciliation_selects_security_lane_from_fresh_pr() -> None:
@@ -346,7 +866,10 @@ def test_unreviewed_or_unsuccessful_workflow_wake_is_ignored(
             "dependabot-actions",
         ),
         (
-            {"login": preflight.GITHUB_ACTIONS_LOGIN, "id": preflight.GITHUB_ACTIONS_USER_ID},
+            {
+                "login": preflight.PROTECTED_REMEDIATION_BOT_LOGIN,
+                "id": preflight.PROTECTED_REMEDIATION_BOT_USER_ID,
+            },
             "automation/dependency-promotion-171-abcdef123456",
             "dependency-promotion",
         ),
@@ -364,6 +887,18 @@ def test_governed_bot_lane_requires_exact_identity_and_branch_grammar(
 ) -> None:
     pr = {"user": user, "head": {"ref": branch}}
     assert preflight._bot_lane(pr) == expected_lane
+
+
+def test_legacy_github_actions_promotion_has_no_governed_lane() -> None:
+    pr = {
+        "user": {
+            "login": preflight.GITHUB_ACTIONS_LOGIN,
+            "id": preflight.GITHUB_ACTIONS_USER_ID,
+        },
+        "head": {"ref": "automation/dependency-promotion-171-abcdef123456"},
+    }
+
+    assert preflight._bot_lane(pr) is None
 
 
 @pytest.mark.parametrize(
@@ -490,14 +1025,14 @@ def test_api_path_rejects_traversal_before_network() -> None:
         api.get("/repos/portyu9/ai-qa-automation/../other")
 
 
-def test_protected_remediation_lane_requires_external_exact_app_identity(
+def test_protected_remediation_lane_requires_exact_pinned_app_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    login = "protected-remediation[bot]"
-    user_id = 424242
+    login = preflight.PROTECTED_REMEDIATION_BOT_LOGIN
+    user_id = preflight.PROTECTED_REMEDIATION_BOT_USER_ID
     branch = "automation/protected-security-remediation-17-" + ("a" * 64) + "-a1"
-    monkeypatch.setenv(preflight.PROTECTED_REMEDIATION_BOT_LOGIN_ENV, login)
-    monkeypatch.setenv(preflight.PROTECTED_REMEDIATION_BOT_ID_ENV, str(user_id))
+    monkeypatch.delenv(preflight.PROTECTED_REMEDIATION_BOT_LOGIN_ENV, raising=False)
+    monkeypatch.delenv(preflight.PROTECTED_REMEDIATION_BOT_ID_ENV, raising=False)
 
     assert (
         preflight._bot_lane({"user": {"login": login, "id": user_id}, "head": {"ref": branch}})
@@ -508,8 +1043,12 @@ def test_protected_remediation_lane_requires_external_exact_app_identity(
         is None
     )
 
-    monkeypatch.delenv(preflight.PROTECTED_REMEDIATION_BOT_ID_ENV)
-    with pytest.raises(ValueError, match="identity is missing or malformed"):
+    monkeypatch.setenv(preflight.PROTECTED_REMEDIATION_BOT_LOGIN_ENV, login)
+    with pytest.raises(ValueError, match="partially configured"):
+        preflight._bot_lane({"user": {"login": login, "id": user_id}, "head": {"ref": branch}})
+
+    monkeypatch.setenv(preflight.PROTECTED_REMEDIATION_BOT_ID_ENV, str(user_id + 1))
+    with pytest.raises(ValueError, match="drifted from trusted policy"):
         preflight._bot_lane({"user": {"login": login, "id": user_id}, "head": {"ref": branch}})
 
 
@@ -524,5 +1063,5 @@ def test_protected_remediation_lane_rejects_collapsed_author_identity(
     monkeypatch.setenv(preflight.PROTECTED_REMEDIATION_BOT_LOGIN_ENV, login)
     monkeypatch.setenv(preflight.PROTECTED_REMEDIATION_BOT_ID_ENV, "42")
 
-    with pytest.raises(ValueError, match="identity is missing or malformed"):
+    with pytest.raises(ValueError, match="drifted from trusted policy"):
         preflight._bot_lane({"user": {"login": login, "id": 42}, "head": {"ref": branch}})

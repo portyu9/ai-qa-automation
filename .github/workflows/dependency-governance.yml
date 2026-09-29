@@ -1,32 +1,20 @@
 name: dependency-governance
 
+# Privileged accepted-main controller. Candidate PR validation is isolated in
+# dependency-governance-pr.yml so candidate-controlled workflow bytes cannot reach secrets.
+
 on:
-  pull_request:
-    paths:
-      - '.github/dependabot.yml'
-      - '.github/dependency-governance.json'
-      - '.github/dependency-recovery.json'
-      - '.github/scripts/dependency_governance.py'
-      - '.github/scripts/dependency_governance_selfcheck.py'
-      - '.github/scripts/dependency_lock_compiler.py'
-      - '.github/scripts/dependency_promotion.py'
-      - '.github/scripts/dependency_recovery.py'
-      - '.github/scripts/dependency_recovery_selfcheck.py'
-      - '.github/workflows/dependency-governance.yml'
-      - '.github/workflows/ci.yml'
-      - '.github/workflows/codeql.yml'
   workflow_run:
-    workflows: ['CI — ƳƤ AI QA Automation Framework', CodeQL, 'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework']
+    workflows: ['CI — ƳƤ AI QA Automation Framework', CodeQL]
     types: [completed]
+  status:
   schedule:
     - cron: '29 */6 * * *'
-  workflow_dispatch:
-
 permissions:
   contents: read
 
 concurrency:
-  group: dependency-governance-${{ github.event.pull_request.head.ref || github.event.workflow_run.head_branch || github.ref_name || github.run_id }}-${{ github.event_name == 'pull_request' && 'self-test' || 'reconcile' }}
+  group: dependency-governance-global-reconcile
   cancel-in-progress: false
 
 env:
@@ -34,61 +22,73 @@ env:
   RECOVERY_CONFIG: .github/dependency-recovery.json
 
 jobs:
-  self-test:
-    name: governance-self-test
-    if: github.event_name == 'pull_request'
+  status-sync:
+    name: trusted-status-synchronization
+    if: >-
+      github.event_name == 'status' &&
+      github.event.context == 'Trusted PR Gate' &&
+      github.event.description == 'Automatic exact-subject trusted validation passed' &&
+      github.event.state == 'success'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 2
     permissions:
+      actions: read
       contents: read
+      pull-requests: read
+      statuses: read
+    outputs:
+      pr_number: ${{ steps.sync.outputs.pr_number }}
+      lane: ${{ steps.sync.outputs.lane }}
     steps:
-      - name: Checkout proposed governance code without credentials
+      - name: Checkout exact trusted status-event revision without credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
+          fetch-depth: 1
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.11.16'
-      - name: Compile governance control plane
+      - name: Verify trusted workflow revision
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Synchronize exact Trusted PR Gate workflow completion
+        id: sync
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: >-
-          python -m compileall -q
-          .github/scripts/dependency_governance.py
-          .github/scripts/dependency_governance_selfcheck.py
-          .github/scripts/dependency_lock_compiler.py
-          .github/scripts/dependency_promotion.py
-          .github/scripts/dependency_recovery.py
-          .github/scripts/dependency_recovery_selfcheck.py
-          .github/scripts/trusted_qualification.py
-          .github/scripts/trusted_status.py
-      - name: Validate governance and recovery configuration
-        run: |
-          python .github/scripts/dependency_governance.py --validate-config
-          python .github/scripts/dependency_recovery.py --validate-config
-      - name: Exercise fail-closed policy self-checks
-        run: |
-          python .github/scripts/dependency_governance_selfcheck.py
-          python .github/scripts/dependency_promotion.py --self-test
-          python .github/scripts/dependency_recovery_selfcheck.py
+          python .github/scripts/dependency_promotion.py
+          --await-trusted-status-event
+          --github-output "$GITHUB_OUTPUT"
 
-  govern:
-    name: govern-dependabot
-    if: github.event_name != 'pull_request'
+  status-merge:
+    name: merge-exact-trusted-dependency-update
+    needs: status-sync
+    if: >-
+      always() &&
+      !cancelled() &&
+      github.event_name == 'status' &&
+      needs.status-sync.result == 'success' &&
+      needs.status-sync.outputs.pr_number != '' &&
+      needs.status-sync.outputs.lane != ''
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    env:
+      GOVERNANCE_CONTROL_SHA: ${{ github.sha }}
     permissions:
-      actions: write
-      checks: write
+      actions: read
       contents: write
       pull-requests: write
       statuses: read
     steps:
-      - name: Checkout trusted default-branch governance code only
+      - name: Checkout exact trusted status-event revision without credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 1
+      - name: Verify exact trusted status-event revision
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - name: Set up Python 3.11
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -101,32 +101,163 @@ jobs:
           python-version: '3.14.7'
       - name: Capture Python 3.14 resolver
         run: printf 'PROMOTION_PYTHON314=%s\n' "$(command -v python)" >> "$GITHUB_ENV"
+      - name: Validate trusted status-target dependency policy
+        run: |
+          python .github/scripts/dependency_governance.py --validate-config --self-test
+          python .github/scripts/dependency_promotion.py --self-test
+      - name: Merge only synchronized dependency update
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          STATUS_DEPENDENCY_PR: ${{ needs.status-sync.outputs.pr_number }}
+          STATUS_DEPENDENCY_LANE: ${{ needs.status-sync.outputs.lane }}
+        run: |
+          set -euo pipefail
+          [[ "$STATUS_DEPENDENCY_PR" =~ ^[1-9][0-9]*$ ]]
+          case "$STATUS_DEPENDENCY_LANE" in
+            dependency-promotion)
+              python .github/scripts/dependency_promotion.py \
+                --reconcile \
+                --allow-merge \
+                --target-promotion-pr "$STATUS_DEPENDENCY_PR"
+              ;;
+            dependabot-actions)
+              python .github/scripts/dependency_governance.py \
+                --reconcile \
+                --allow-merge \
+                --target-dependabot-pr "$STATUS_DEPENDENCY_PR"
+              ;;
+            *)
+              exit 1
+              ;;
+          esac
+
+  govern:
+    name: govern-dependabot
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       (github.event.workflow_run.head_branch == 'main' ||
+        startsWith(github.event.workflow_run.head_branch, 'dependabot/') ||
+        startsWith(github.event.workflow_run.head_branch, 'automation/dependency-promotion-')))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment:
+      name: protected-remediation-author
+      deployment: false
+    env:
+      GOVERNANCE_CONTROL_SHA: ${{ github.sha }}
+    permissions:
+      actions: write
+      checks: write
+      contents: write
+      pull-requests: write
+      statuses: read
+    steps:
+      - name: Checkout exact trusted default-branch governance revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Set up Python 3.11
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11.16'
+      - name: Verify exact current-main governance revision before mutation
+        id: revision
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          current="$(PYTHONPATH=.github/scripts python -c 'import os; import dependency_governance as g; config=g.load_config(); api=g.GitHubApi(os.environ["GITHUB_TOKEN"], os.environ["GITHUB_REPOSITORY"]); live=g._live_main_sha(api, config); expected=os.environ["GITHUB_SHA"]; print("true" if live == expected else "false")')"
+          case "$current" in true|false) ;; *) exit 1 ;; esac
+          printf 'current=%s\n' "$current" >> "$GITHUB_OUTPUT"
+      - name: Record stale governance wake without mutation
+        if: steps.revision.outputs.current == 'false'
+        run: echo "Trusted governance wake is stale relative to current main; no mutation authority exercised."
+      - name: Capture Python 3.11 resolver
+        if: steps.revision.outputs.current == 'true'
+        run: printf 'PROMOTION_PYTHON311=%s\n' "$(command -v python)" >> "$GITHUB_ENV"
+      - name: Set up Python 3.14
+        if: steps.revision.outputs.current == 'true'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14.7'
+      - name: Capture Python 3.14 resolver
+        if: steps.revision.outputs.current == 'true'
+        run: printf 'PROMOTION_PYTHON314=%s\n' "$(command -v python)" >> "$GITHUB_ENV"
       - name: Validate trusted governance and recovery policy
+        if: steps.revision.outputs.current == 'true'
         run: |
           python .github/scripts/dependency_governance.py --validate-config --self-test
           python .github/scripts/dependency_promotion.py --self-test
           python .github/scripts/dependency_recovery.py --validate-config --self-test
       - name: Attempt one bounded transient recovery
-        if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        if: steps.revision.outputs.current == 'true' && (github.event_name == 'workflow_run' || github.event_name == 'schedule')
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python .github/scripts/dependency_recovery.py --recover
+      - name: Validate independent promotion author identity configuration
+        if: steps.revision.outputs.current == 'true'
+        env:
+          AUTHOR_APP_CLIENT_ID: ${{ vars.PROTECTED_REMEDIATION_APP_CLIENT_ID }}
+          AUTHOR_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
+          AUTHOR_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}
+        run: |
+          set -euo pipefail
+          test -n "$AUTHOR_APP_CLIENT_ID"
+          case "$AUTHOR_BOT_LOGIN" in
+            *"[bot]") ;;
+            *) exit 1 ;;
+          esac
+          case "$AUTHOR_BOT_LOGIN" in
+            "github-actions[bot]"|"dependabot[bot]"|"trusted-pr-gate[bot]") exit 1 ;;
+          esac
+          case "$AUTHOR_BOT_ID" in
+            ''|*[!0-9]*) exit 1 ;;
+          esac
+          test "$AUTHOR_BOT_ID" -gt 0
+      - name: Mint independent promotion author token
+        if: steps.revision.outputs.current == 'true'
+        id: promotion-author-app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.PROTECTED_REMEDIATION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}
+          owner: portyu9
+          repositories: ai-qa-automation
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Bind promotion author token to reviewed bot identity
+        if: steps.revision.outputs.current == 'true'
+        env:
+          OBSERVED_APP_SLUG: ${{ steps.promotion-author-app.outputs.app-slug }}
+          EXPECTED_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
+        run: |
+          set -euo pipefail
+          test "${OBSERVED_APP_SLUG}[bot]" = "$EXPECTED_BOT_LOGIN"
       - name: Reconcile exact-subject Python dependency promotion
+        if: steps.revision.outputs.current == 'true'
         id: python_promotion
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROMOTION_AUTHOR_TOKEN: ${{ steps.promotion-author-app.outputs.token }}
+          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
+          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}
         run: >-
           python .github/scripts/dependency_promotion.py
           --reconcile
           --allow-merge
           --github-output "$GITHUB_OUTPUT"
       - name: Reconcile Dependabot action merge authority
-        if: steps.python_promotion.outputs.merged != 'true'
+        if: steps.revision.outputs.current == 'true' && steps.python_promotion.outputs.merged != 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           args=(--reconcile)
           case "$GITHUB_EVENT_NAME" in
-            workflow_run|schedule|workflow_dispatch) args+=(--allow-merge) ;;
+            workflow_run|schedule) args+=(--allow-merge) ;;
           esac
           python .github/scripts/dependency_governance.py "${args[@]}"

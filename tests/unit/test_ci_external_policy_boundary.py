@@ -29,12 +29,19 @@ def test_ci_contract_reports_autonomous_governed_bot_boundary() -> None:
     assert ordinary["protected_maintenance_authority"] == "centralized-app-gate-for-governed-bots"
     assert trusted_auto["status_writer"] == "dedicated-github-app"
     assert trusted_auto["maintenance_authority"] == (
-        "autonomous-governed-bots;external-one-shot-only-for-unrecognized-protected-change"
+        "autonomous-governed-bots;exact-owner-default-branch-comment-authorization;first-attempt-only;dedicated-app-terminal-writer"
     )
     assert "automatic read-only development evidence" in limitations
-    assert "finite governed bot lanes" in limitations
-    assert "autonomously admitted by the centralized App gate" in limitations
-    assert "unrecognized protected maintenance" in limitations
+    assert (
+        "governed bot lanes retain their independent lane-specific provenance proofs" in limitations
+    )
+    assert (
+        "Owner-protected maintenance is separately admissible only through an explicit first-attempt"
+        in limitations
+    )
+    assert "external service is compatibility/fallback" in limitations
+    assert "future accepted-main maintenance authority only" in limitations
+    assert "initial bootstrap remains fail-closed" in limitations
     assert "App status-write credentials itself" in limitations
     assert "exact PR/base/head/merge-bound" in limitations
     assert "defense in depth" in limitations
@@ -101,6 +108,8 @@ class _TrustedStatusApi:
         if path == f"/actions/runs/{self.run_id}":
             return {
                 "id": self.run_id,
+                "workflow_id": trusted_status.EXPECTED_GATE_WORKFLOW_ID,
+                "run_attempt": 1,
                 "name": "Trusted PR Auto Gate — ƳƤ AI QA Automation Framework",
                 "path": self.run_path,
                 "event": "workflow_run",

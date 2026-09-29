@@ -17,6 +17,16 @@ _control = importlib.util.module_from_spec(_CONTROL_SPEC)
 sys.modules[_CONTROL_SPEC.name] = _control
 _CONTROL_SPEC.loader.exec_module(_control)
 
+_PREFLIGHT_PATH = Path(__file__).with_name("auto_trusted_preflight.py")
+_PREFLIGHT_SPEC = importlib.util.spec_from_file_location(
+    "aiqa_auto_trusted_preflight", _PREFLIGHT_PATH
+)
+if _PREFLIGHT_SPEC is None or _PREFLIGHT_SPEC.loader is None:
+    raise RuntimeError("unable to load trusted admission preflight")
+_preflight = importlib.util.module_from_spec(_PREFLIGHT_SPEC)
+sys.modules[_PREFLIGHT_SPEC.name] = _preflight
+_PREFLIGHT_SPEC.loader.exec_module(_preflight)
+
 EXPECTED_WORKFLOW_REF = _control.EXPECTED_WORKFLOW_REF
 GitHubApi = _control.GitHubApi
 PullRequestSubject = _control.PullRequestSubject
@@ -26,7 +36,77 @@ _require_sha = _control._require_sha
 parse_job_results = _control.parse_job_results
 resolve_current_subject = _control.resolve_current_subject
 
-EXPECTED_WORKFLOW_EVENTS = frozenset({"schedule", "workflow_run"})
+EXPECTED_WORKFLOW_EVENTS = frozenset({"schedule", "workflow_run", "issue_comment"})
+
+
+def _require_protected_owner_authorization(
+    *,
+    repository: str,
+    token: str,
+    workflow_event: str,
+    expected: PullRequestSubject,
+) -> dict[str, Any] | None:
+    """Re-prove exact owner authorization with the same App token used for publication."""
+
+    if workflow_event != "issue_comment":
+        return None
+    event_path = os.environ.get("GITHUB_EVENT_PATH", "")
+    if not event_path:
+        raise PermissionError("protected-maintenance status publication requires GITHUB_EVENT_PATH")
+    event = _preflight._require_dict(
+        _preflight._read_json_file(
+            Path(event_path),
+            max_bytes=_preflight.MAX_EVENT_BYTES,
+            label="protected-maintenance publication event",
+        ),
+        label="protected-maintenance publication event",
+    )
+    admission = _preflight.evaluate_admission(
+        _preflight.GitHubAPI(
+            api_url=os.environ.get("GITHUB_API_URL", ""),
+            token=token,
+            repository=repository,
+        ),
+        event=event,
+        event_name="issue_comment",
+    )
+    if (
+        admission is None
+        or admission.lane != _preflight.PROTECTED_OWNER_LANE
+        or admission.eligible is not True
+        or admission.pr_number != expected.number
+        or admission.head_sha != expected.head_sha
+        or admission.base_sha != expected.base_sha
+        or admission.merge_sha != expected.merge_sha
+        or admission.trusted_sha != expected.base_sha
+        or not admission.protected_changes
+    ):
+        raise PermissionError(
+            "protected-maintenance authorization is not exact for status publication"
+        )
+    return {
+        "pr_number": admission.pr_number,
+        "head_sha": admission.head_sha,
+        "base_sha": admission.base_sha,
+        "merge_sha": admission.merge_sha,
+        "trusted_sha": admission.trusted_sha,
+        "protected_changes": admission.protected_changes,
+    }
+
+
+def _require_current_main(api: GitHubApi, expected: PullRequestSubject) -> None:
+    payload = api.get_json(f"/repos/{api.repository}/git/ref/heads/main")
+    if payload.get("ref") != "refs/heads/main":
+        raise ValueError("trusted status current-main ref identity drifted")
+    obj = payload.get("object")
+    if not isinstance(obj, Mapping) or obj.get("type") != "commit":
+        raise ValueError("trusted status current-main ref must point to a commit")
+    observed = _require_sha(obj.get("sha"), label="current main SHA")
+    if observed != expected.base_sha:
+        raise ValueError(
+            "current main changed after authorization: "
+            f"expected {expected.base_sha}, observed {observed}"
+        )
 
 
 def report_automatic_result(
@@ -35,34 +115,73 @@ def report_automatic_result(
     token: str,
     workflow_event: str,
     workflow_ref: str,
+    workflow_run_id: int | str,
+    workflow_run_attempt: int | str,
     expected: PullRequestSubject,
     job_results: Mapping[str, str],
     target_url: str,
 ) -> dict[str, Any]:
     if workflow_event not in EXPECTED_WORKFLOW_EVENTS:
         raise PermissionError(
-            "automatic trusted status publication requires workflow_run or schedule"
+            "trusted status publication requires workflow_run, schedule, or reviewed issue_comment"
         )
     if workflow_ref != EXPECTED_WORKFLOW_REF:
         raise PermissionError("automatic trusted status publication requires refs/heads/main")
+    run_id = _require_positive_int(workflow_run_id, label="trusted reporter workflow run id")
+    run_attempt = _require_positive_int(
+        workflow_run_attempt,
+        label="trusted reporter workflow run attempt",
+    )
+    if run_attempt != 1:
+        raise PermissionError("trusted status publication requires workflow run attempt 1")
+    expected_target_url = f"https://github.com/{repository}/actions/runs/{run_id}"
+    if target_url != expected_target_url:
+        raise PermissionError("trusted status target URL is not the exact reporter workflow run")
     if set(job_results) != {"validation"}:
         raise ValueError("trusted validation results must contain exactly the validation job")
     validation_result = job_results["validation"]
     if validation_result not in {"cancelled", "failure", "skipped", "success"}:
         raise ValueError("trusted validation job has an invalid terminal result")
 
+    authorization_snapshot = _require_protected_owner_authorization(
+        repository=repository,
+        token=token,
+        workflow_event=workflow_event,
+        expected=expected,
+    )
     api = GitHubApi(repository=repository, token=token)
+    _require_current_main(api, expected)
     current = resolve_current_subject(api, expected)
+    _require_current_main(api, current)
+    maintenance = workflow_event == "issue_comment"
     if validation_result == "success":
         state = "success"
-        description = "Automatic exact-subject trusted validation passed"
+        description = (
+            "Protected-maintenance exact-subject trusted validation passed"
+            if maintenance
+            else "Automatic exact-subject trusted validation passed"
+        )
     else:
         state = "failure"
-        description = f"Automatic trusted validation ended {validation_result}"
+        description = (
+            f"Protected-maintenance trusted validation ended {validation_result}"
+            if maintenance
+            else f"Automatic trusted validation ended {validation_result}"
+        )
     bound_target_url = (
         f"{target_url}?pr={current.number}&base={current.base_sha}"
         f"&head={current.head_sha}&merge={current.merge_sha}"
     )
+    publication_authorization_snapshot = _require_protected_owner_authorization(
+        repository=repository,
+        token=token,
+        workflow_event=workflow_event,
+        expected=current,
+    )
+    if publication_authorization_snapshot != authorization_snapshot:
+        raise PermissionError(
+            "protected-maintenance authorization changed before status publication"
+        )
     api.post_status(
         sha=current.head_sha,
         state=state,
@@ -76,7 +195,11 @@ def report_automatic_result(
         "status_subject": current.head_sha,
         "status_target_url": bound_target_url,
         "validation_result": validation_result,
-        "authorization_mode": "automatic-default-branch",
+        "authorization_mode": (
+            "explicit-default-branch-protected-maintenance"
+            if maintenance
+            else "automatic-default-branch"
+        ),
     }
 
 
@@ -107,6 +230,8 @@ def main() -> None:
         token=os.environ.get("GITHUB_TOKEN", ""),
         workflow_event=os.environ.get("GITHUB_EVENT_NAME", ""),
         workflow_ref=os.environ.get("GITHUB_REF", ""),
+        workflow_run_id=os.environ.get("GITHUB_RUN_ID", ""),
+        workflow_run_attempt=os.environ.get("GITHUB_RUN_ATTEMPT", ""),
         expected=_subject_from_args(args),
         job_results=parse_job_results(args.job_results_json),
         target_url=args.target_url,

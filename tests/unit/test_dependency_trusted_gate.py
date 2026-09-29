@@ -173,6 +173,44 @@ def test_dependency_gate_accepts_exact_schedule_attempt_one() -> None:
     }
 
 
+def test_dependency_promotion_gate_accepts_exact_workflow_run_attempt_one() -> None:
+    evidence = gate.require_promotion_trusted_gate(
+        _GateApi(event="workflow_run"),
+        PR_NUMBER,
+        HEAD,
+        BASE,
+    )
+
+    assert evidence == {
+        "statusId": STATUS_ID,
+        "runId": RUN_ID,
+        "workflowId": gate.TRUSTED_PR_AUTO_WORKFLOW_ID,
+        "event": "workflow_run",
+        "runAttempt": 1,
+        "mergeSha": MERGE,
+        "mergeTreeSha": TREE,
+    }
+
+
+def test_dependency_action_gate_accepts_exact_workflow_run_attempt_one() -> None:
+    evidence = gate.require_action_trusted_gate(
+        _GateApi(event="workflow_run"),
+        PR_NUMBER,
+        HEAD,
+        BASE,
+    )
+
+    assert evidence == {
+        "statusId": STATUS_ID,
+        "runId": RUN_ID,
+        "workflowId": gate.TRUSTED_PR_AUTO_WORKFLOW_ID,
+        "event": "workflow_run",
+        "runAttempt": 1,
+        "mergeSha": MERGE,
+        "mergeTreeSha": TREE,
+    }
+
+
 def test_dependency_gate_rejects_workflow_run_for_schedule_only_path() -> None:
     with pytest.raises(gate.TrustedStatusError):
         gate.require_schedule_trusted_gate(
@@ -323,6 +361,24 @@ def test_dependency_gate_rejects_status_target_run_mismatch() -> None:
         )
 
 
+def test_dependency_governance_control_revision_requires_exact_live_main(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = _GateApi(live_main=BASE)
+    config = {"baseBranch": "main"}
+
+    monkeypatch.setenv(governance.GOVERNANCE_CONTROL_SHA_ENV, BASE)
+    assert governance.require_current_control_revision(api, config) == BASE
+
+    monkeypatch.setenv(governance.GOVERNANCE_CONTROL_SHA_ENV, HEAD)
+    with pytest.raises(governance.GovernanceError, match="stale relative to current main"):
+        governance.require_current_control_revision(api, config)
+
+    monkeypatch.setenv(governance.GOVERNANCE_CONTROL_SHA_ENV, "not-a-sha")
+    with pytest.raises(governance.GovernanceError, match="exact 40-character SHA"):
+        governance.require_current_control_revision(api, config)
+
+
 class _MergeApi:
     def __init__(self) -> None:
         self.events: list[str] = []
@@ -380,11 +436,95 @@ def test_dependency_governance_revalidates_gate_after_fresh_rebind(
         return {"mergeSha": MERGE}
 
     monkeypatch.setattr(governance, "assess", assess)
-    monkeypatch.setattr(governance, "require_schedule_trusted_gate", require_gate)
+    monkeypatch.setattr(governance, "require_action_trusted_gate", require_gate)
+
+    def require_control(api_arg: Any, config_arg: dict[str, Any]) -> str:
+        assert api_arg is api
+        assert config_arg is config
+        api.events.append("control")
+        return BASE
+
+    monkeypatch.setattr(governance, "require_current_control_revision", require_control)
     monkeypatch.setattr(governance, "finalize_post_merge_evidence", finalize)
 
     assert governance._merge(api, subject, config) == {"mergeSha": MERGE}
-    assert api.events == ["fresh-pr", "rebind", "gate", "merge", "finalize"]
+    assert api.events == ["fresh-pr", "rebind", "gate", "control", "merge", "finalize"]
+
+
+def test_dependency_governance_status_target_revalidates_before_exact_merge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = _MergeApi()
+    subject = {"number": PR_NUMBER, "headSha": HEAD, "baseSha": BASE}
+    config = {
+        "repository": gate.EXPECTED_REPOSITORY,
+        "automergeEnabled": True,
+        "mergeMethod": "merge",
+    }
+    monkeypatch.setenv("GITHUB_REPOSITORY", gate.EXPECTED_REPOSITORY)
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.setattr(governance, "GitHubApi", lambda token, repository: api)
+
+    def qualify(
+        api_arg: Any,
+        pr: dict[str, Any],
+        config_arg: dict[str, Any],
+    ) -> dict[str, Any]:
+        assert api_arg is api
+        assert pr == {"number": PR_NUMBER}
+        assert config_arg is config
+        api.events.append("qualify")
+        return subject
+
+    def require_gate(api_arg: Any, number: int, head: str, base: str) -> dict[str, Any]:
+        assert api_arg is api
+        assert (number, head, base) == (PR_NUMBER, HEAD, BASE)
+        api.events.append("gate")
+        return {"runId": RUN_ID}
+
+    def require_control(api_arg: Any, config_arg: dict[str, Any]) -> str:
+        assert api_arg is api
+        assert config_arg is config
+        api.events.append("control")
+        return BASE
+
+    def finalize(
+        api_arg: Any,
+        result: dict[str, Any],
+        subject_arg: dict[str, Any],
+        config_arg: dict[str, Any],
+    ) -> dict[str, Any]:
+        assert api_arg is api
+        assert result == {"merged": True, "sha": MERGE}
+        assert subject_arg is subject
+        assert config_arg is config
+        api.events.append("finalize")
+        return {"mergeSha": MERGE}
+
+    monkeypatch.setattr(governance, "_ensure_action_qualification", qualify)
+    monkeypatch.setattr(governance, "require_action_trusted_gate", require_gate)
+    monkeypatch.setattr(governance, "require_current_control_revision", require_control)
+    monkeypatch.setattr(governance, "finalize_post_merge_evidence", finalize)
+
+    assert (
+        governance.reconcile_status_target(
+            config,
+            target_pr_number=PR_NUMBER,
+            allow_merge=True,
+        )
+        == 0
+    )
+    assert api.events == [
+        "control",
+        "fresh-pr",
+        "qualify",
+        "fresh-pr",
+        "qualify",
+        "gate",
+        "control",
+        "merge",
+        "finalize",
+    ]
 
 
 def test_dependency_governance_moved_subject_stops_before_gate(
@@ -413,14 +553,14 @@ def test_dependency_governance_moved_subject_stops_before_gate(
         raise AssertionError("gate must not be consulted for moved subject")
 
     monkeypatch.setattr(governance, "assess", assess)
-    monkeypatch.setattr(governance, "require_schedule_trusted_gate", forbidden_gate)
+    monkeypatch.setattr(governance, "require_action_trusted_gate", forbidden_gate)
 
     with pytest.raises(governance.PolicyBlock, match="changed before merge"):
         governance._merge(api, subject, config)
     assert api.events == ["fresh-pr", "rebind"]
 
 
-def test_dependency_promotion_revalidates_gate_after_fresh_rebind(
+def test_dependency_promotion_revalidates_gate_before_merge(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     api = _MergeApi()
@@ -460,12 +600,102 @@ def test_dependency_promotion_revalidates_gate_after_fresh_rebind(
         api.events.append("finalize")
         return {"mergeSha": MERGE}
 
+    def forbidden_advance(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("green trusted gate must not emit another qualification wake")
+
     monkeypatch.setattr(promotion, "_validate_promotion", validate)
-    monkeypatch.setattr(promotion, "require_schedule_trusted_gate", require_gate)
+    monkeypatch.setattr(promotion, "_advance_promotion_qualification", forbidden_advance)
+    monkeypatch.setattr(promotion, "require_promotion_trusted_gate", require_gate)
     monkeypatch.setattr(promotion, "finalize_post_merge_evidence", finalize)
 
+    def require_control(api_arg: Any, config_arg: dict[str, Any]) -> str:
+        assert api_arg is api
+        assert config_arg is config
+        api.events.append("control")
+        return BASE
+
+    monkeypatch.setattr(promotion, "require_current_control_revision", require_control)
+
     assert promotion._publish_and_merge(api, promoted, config) == {"mergeSha": MERGE}
-    assert api.events == ["fresh-pr", "rebind", "gate", "merge", "finalize"]
+    assert api.events == ["fresh-pr", "rebind", "gate", "control", "merge", "finalize"]
+
+
+def test_dependency_promotion_registers_one_non_authoritative_trusted_gate_wake(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = object()
+    promoted = {"number": PR_NUMBER, "headSha": HEAD, "baseSha": BASE}
+    branch = f"automation/dependency-promotion-{PR_NUMBER}-aaaaaaaaaaaa"
+    events: list[str] = []
+
+    monkeypatch.setattr(promotion, "_exact_terminal_trusted_gate_state", lambda *args: None)
+    monkeypatch.setattr(promotion, "_qualification_wake_stage", lambda *args: None)
+    monkeypatch.setattr(
+        promotion,
+        "_publish_qualification_wake",
+        lambda api_arg, subject, *, stage: events.append(f"wake:{stage}"),
+    )
+    config = {"baseBranch": "main"}
+    monkeypatch.setattr(
+        promotion,
+        "require_current_control_revision",
+        lambda api_arg, config_arg: events.append("control") or BASE,
+    )
+
+    with pytest.raises(
+        promotion.QualificationWakeRegistered,
+        match="qualification wake registered",
+    ):
+        promotion._advance_promotion_qualification(api, promoted, branch, config)
+
+    assert events == ["control", "wake:trusted-gate"]
+
+
+def test_dependency_promotion_pending_wake_suppresses_duplicate_registration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    promoted = {"number": PR_NUMBER, "headSha": HEAD, "baseSha": BASE}
+    branch = f"automation/dependency-promotion-{PR_NUMBER}-aaaaaaaaaaaa"
+    monkeypatch.setattr(promotion, "_exact_terminal_trusted_gate_state", lambda *args: None)
+    monkeypatch.setattr(promotion, "_qualification_wake_stage", lambda *args: "trusted-gate")
+    monkeypatch.setattr(
+        promotion,
+        "_publish_qualification_wake",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("registered wake must suppress duplicate publication")
+        ),
+    )
+
+    with pytest.raises(promotion.PolicyBlock, match="wake is registered and pending"):
+        promotion._advance_promotion_qualification(object(), promoted, branch, {})
+
+
+def test_dependency_promotion_exact_terminal_failure_suppresses_retry_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    promoted = {"number": PR_NUMBER, "headSha": HEAD, "baseSha": BASE}
+    branch = f"automation/dependency-promotion-{PR_NUMBER}-aaaaaaaaaaaa"
+    monkeypatch.setattr(promotion, "_exact_terminal_trusted_gate_state", lambda *args: "failure")
+    monkeypatch.setattr(
+        promotion,
+        "_publish_qualification_wake",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("terminal exact-subject gate must suppress duplicate wake")
+        ),
+    )
+
+    with pytest.raises(promotion.PolicyBlock, match="exact-subject state failure"):
+        promotion._advance_promotion_qualification(object(), promoted, branch, {})
+
+
+def test_dependency_promotion_qualification_rejects_unreviewed_branch() -> None:
+    with pytest.raises(promotion.PolicyBlock, match="branch is outside reviewed authority"):
+        promotion._advance_promotion_qualification(
+            object(),
+            {"number": PR_NUMBER, "headSha": HEAD, "baseSha": BASE},
+            "automation/not-reviewed",
+            {},
+        )
 
 
 def test_dependency_promotion_moved_subject_stops_before_gate(
@@ -494,7 +724,7 @@ def test_dependency_promotion_moved_subject_stops_before_gate(
         raise AssertionError("gate must not be consulted for moved promotion")
 
     monkeypatch.setattr(promotion, "_validate_promotion", validate)
-    monkeypatch.setattr(promotion, "require_schedule_trusted_gate", forbidden_gate)
+    monkeypatch.setattr(promotion, "require_promotion_trusted_gate", forbidden_gate)
 
     with pytest.raises(promotion.PolicyBlock, match="changed before guarded merge"):
         promotion._publish_and_merge(api, promoted, config)
@@ -520,6 +750,15 @@ def test_dependency_governance_reconcile_stops_after_successful_merge(
     }
     monkeypatch.setenv("GITHUB_REPOSITORY", gate.EXPECTED_REPOSITORY)
     monkeypatch.setattr(governance, "GitHubApi", lambda token, repository: api)
+    control_checks: list[dict[str, Any]] = []
+
+    def require_control(api_arg: Any, config_arg: dict[str, Any]) -> str:
+        assert api_arg is api
+        assert config_arg is config
+        control_checks.append(config_arg)
+        return BASE
+
+    monkeypatch.setattr(governance, "require_current_control_revision", require_control)
     monkeypatch.setattr(
         governance,
         "open_dependabot_prs",
@@ -550,6 +789,173 @@ def test_dependency_governance_reconcile_stops_after_successful_merge(
 
     assert governance.reconcile(config, allow_merge=True) == 1
     assert observed_gets == ["/pulls/601"]
+    assert control_checks == [config]
+
+
+def test_legacy_duplicate_head_claims_defer_cleanup_until_exact_claims_close() -> None:
+    source_number = 179
+    fingerprint = "a" * 64
+    branch = promotion._branch_name({"number": source_number, "fingerprint": fingerprint})
+    metadata = {
+        "version": 1,
+        "sourcePr": source_number,
+        "fingerprint": fingerprint,
+        "head": HEAD,
+    }
+
+    def claim(number: int) -> dict[str, Any]:
+        return {
+            "number": number,
+            "state": "open",
+            "draft": False,
+            "title": f"deps: promote Dependabot PR #{source_number}",
+            "user": {
+                "login": promotion.GITHUB_ACTIONS_LOGIN,
+                "id": promotion.GITHUB_ACTIONS_USER_ID,
+            },
+            "head": {
+                "ref": branch,
+                "sha": HEAD,
+                "repo": {"full_name": gate.EXPECTED_REPOSITORY},
+            },
+            "body": promotion._marker(metadata),
+        }
+
+    class _Api:
+        def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+            assert path == "/pulls?state=open&sort=created&direction=asc"
+            assert max_pages == 4
+            return [claim(302), claim(301)]
+
+    assert promotion._remaining_exact_legacy_head_claims(
+        _Api(),
+        branch=branch,
+        head_sha=HEAD,
+        source_number=source_number,
+        fingerprint=fingerprint,
+    ) == [301, 302]
+
+
+def test_legacy_duplicate_head_cleanup_rejects_unreviewed_claimant() -> None:
+    source_number = 179
+    fingerprint = "a" * 64
+    branch = promotion._branch_name({"number": source_number, "fingerprint": fingerprint})
+    metadata = {
+        "version": 1,
+        "sourcePr": source_number,
+        "fingerprint": fingerprint,
+        "head": HEAD,
+    }
+
+    class _Api:
+        def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+            assert path == "/pulls?state=open&sort=created&direction=asc"
+            assert max_pages == 4
+            return [
+                {
+                    "number": 302,
+                    "state": "open",
+                    "draft": False,
+                    "title": f"deps: promote Dependabot PR #{source_number}",
+                    "user": {"login": "unreviewed[bot]", "id": 1},
+                    "head": {
+                        "ref": branch,
+                        "sha": HEAD,
+                        "repo": {"full_name": gate.EXPECTED_REPOSITORY},
+                    },
+                    "body": promotion._marker(metadata),
+                }
+            ]
+
+    with pytest.raises(
+        promotion.PolicyBlock,
+        match="non-exact legacy subject",
+    ):
+        promotion._remaining_exact_legacy_head_claims(
+            _Api(),
+            branch=branch,
+            head_sha=HEAD,
+            source_number=source_number,
+            fingerprint=fingerprint,
+        )
+
+
+def test_dependency_promotion_reconcile_stops_after_new_qualification_wake(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_gets: list[str] = []
+    published: list[int] = []
+
+    class _Api:
+        def get(self, path: str) -> dict[str, Any]:
+            observed_gets.append(path)
+            if path == "/pulls/701":
+                return {"number": 701}
+            raise AssertionError(f"promotion continued after qualification wake: {path}")
+
+    api = _Api()
+    config = {
+        "repository": gate.EXPECTED_REPOSITORY,
+        "automergeEnabled": True,
+        "pipMode": "promotion",
+    }
+    monkeypatch.setenv("GITHUB_REPOSITORY", gate.EXPECTED_REPOSITORY)
+    monkeypatch.setattr(promotion, "GitHubApi", lambda token, repository: api)
+    control_checks: list[dict[str, Any]] = []
+
+    def require_control(api_arg: Any, config_arg: dict[str, Any]) -> str:
+        assert api_arg is api
+        assert config_arg is config
+        control_checks.append(config_arg)
+        return BASE
+
+    monkeypatch.setattr(promotion, "require_current_control_revision", require_control)
+    monkeypatch.setattr(promotion, "_prune_orphan_promotion_refs", lambda api_arg, config_arg: 0)
+    monkeypatch.setattr(
+        promotion,
+        "_promotion_pulls",
+        lambda api_arg: [
+            {"number": 701, "head": {"ref": "automation/dependency-promotion-1-aaaaaaaaaaaa"}},
+            {"number": 702, "head": {"ref": "automation/dependency-promotion-2-bbbbbbbbbbbb"}},
+        ],
+    )
+    monkeypatch.setattr(
+        promotion,
+        "_normalize_staged_promotion",
+        lambda api_arg, pr, config_arg: pr,
+    )
+
+    def validate(
+        api_arg: object,
+        pr: dict[str, Any],
+        config_arg: dict[str, Any],
+        *,
+        require_checks: bool,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        assert api_arg is api
+        assert config_arg is config
+        assert require_checks is False
+        return {"source": True}, {"number": pr["number"], "headSha": HEAD, "baseSha": BASE}
+
+    def publish_and_merge(
+        api_arg: object,
+        promotion_arg: dict[str, Any],
+        config_arg: dict[str, Any],
+    ) -> dict[str, Any]:
+        assert api_arg is api
+        assert config_arg is config
+        published.append(int(promotion_arg["number"]))
+        raise promotion.QualificationWakeRegistered(
+            "automatic Trusted PR Gate qualification wake registered"
+        )
+
+    monkeypatch.setattr(promotion, "_validate_promotion", validate)
+    monkeypatch.setattr(promotion, "_publish_and_merge", publish_and_merge)
+
+    assert promotion.reconcile(config, allow_merge=True) == 0
+    assert observed_gets == ["/pulls/701"]
+    assert published == [701]
+    assert control_checks == [config, config, config]
 
 
 def test_dependency_promotion_reconcile_stops_after_successful_merge(
@@ -574,7 +980,16 @@ def test_dependency_promotion_reconcile_stops_after_successful_merge(
     }
     monkeypatch.setenv("GITHUB_REPOSITORY", gate.EXPECTED_REPOSITORY)
     monkeypatch.setattr(promotion, "GitHubApi", lambda token, repository: api)
-    monkeypatch.setattr(promotion, "_prune_orphan_promotion_refs", lambda api_arg: 0)
+    control_checks: list[dict[str, Any]] = []
+
+    def require_control(api_arg: Any, config_arg: dict[str, Any]) -> str:
+        assert api_arg is api
+        assert config_arg is config
+        control_checks.append(config_arg)
+        return BASE
+
+    monkeypatch.setattr(promotion, "require_current_control_revision", require_control)
+    monkeypatch.setattr(promotion, "_prune_orphan_promotion_refs", lambda api_arg, config_arg: 0)
     monkeypatch.setattr(
         promotion,
         "_promotion_pulls",
@@ -637,6 +1052,7 @@ def test_dependency_promotion_reconcile_stops_after_successful_merge(
     assert observed_gets == ["/pulls/701"]
     assert validation_modes == [False]
     assert events == ["post-merge-finalized", "merge-signal"]
+    assert control_checks == [config, config, config]
 
 
 def test_dependency_promotion_merge_signal_is_exact_owned_github_output(
@@ -662,223 +1078,13 @@ def test_dependency_workflow_skips_action_governance_after_promotion_merge() -> 
     workflow = GOVERNANCE_WORKFLOW.read_text(encoding="utf-8")
     assert "id: python_promotion" in workflow
     assert '--github-output "$GITHUB_OUTPUT"' in workflow
-    assert "if: steps.python_promotion.outputs.merged != 'true'" in workflow
+    assert (
+        "if: steps.revision.outputs.current == 'true' && "
+        "steps.python_promotion.outputs.merged != 'true'"
+    ) in workflow
 
 
-def _post_merge_ci_row(
-    *,
-    run_id: int = 88001,
-    workflow_id: int = governance.POST_MERGE_CI_WORKFLOW_ID,
-    run_attempt: int = 1,
-    name: str = governance.POST_MERGE_CI_NAME,
-    path: str = governance.POST_MERGE_CI_PATH,
-    head_branch: str = "main",
-    head_sha: str = MERGE,
-    event: str = "push",
-    status: str = "queued",
-    conclusion: str | None = None,
-) -> dict[str, Any]:
-    return {
-        "id": run_id,
-        "workflow_id": workflow_id,
-        "run_attempt": run_attempt,
-        "name": name,
-        "path": path,
-        "head_branch": head_branch,
-        "head_sha": head_sha,
-        "event": event,
-        "status": status,
-        "conclusion": conclusion,
-    }
-
-
-def test_post_merge_ci_selector_requires_exact_attempt_one_identity() -> None:
-    canonical = _post_merge_ci_row()
-    assert governance._select_post_merge_ci_run([canonical], MERGE) == canonical
-
-    for row, message in (
-        ({**canonical, "workflow_id": 1}, "mismatched workflow identity"),
-        ({**canonical, "name": "lookalike"}, "mismatched workflow identity"),
-        ({**canonical, "path": ".github/workflows/lookalike.yml"}, "mismatched workflow identity"),
-        ({**canonical, "head_sha": "e" * 40}, "different head SHA"),
-        ({**canonical, "head_branch": "other"}, "not bound to main"),
-        ({**canonical, "event": "pull_request"}, "unexpected event"),
-        ({**canonical, "run_attempt": 2}, "run_attempt must equal 1"),
-        (
-            {**canonical, "status": "completed", "conclusion": "failure"},
-            "completed non-successfully",
-        ),
-    ):
-        with pytest.raises(governance.GovernanceError, match=message):
-            governance._select_post_merge_ci_run([row], MERGE)
-
-    with pytest.raises(governance.GovernanceError, match="ambiguous exact-subject CI evidence"):
-        governance._select_post_merge_ci_run(
-            [canonical, {**canonical, "id": 88002}],
-            MERGE,
-        )
-
-
-class _PostMergeCiApi:
-    def __init__(
-        self,
-        *,
-        existing: dict[str, Any] | None = None,
-        registered: dict[str, Any] | None = None,
-        move_main_after_registration: bool = False,
-    ) -> None:
-        self.existing = existing
-        self.registered = registered
-        self.move_main_after_registration = move_main_after_registration
-        self.dispatched = False
-        self.main_reads = 0
-        self.posts: list[tuple[str, dict[str, Any] | None]] = []
-
-    def get(self, path: str) -> Any:
-        if path == "/branches/main":
-            self.main_reads += 1
-            observed = (
-                "f" * 40
-                if self.move_main_after_registration and self.dispatched and self.main_reads >= 2
-                else MERGE
-            )
-            return {"commit": {"sha": observed}}
-        raise governance.GovernanceError(f"unexpected post-merge CI GET path: {path}")
-
-    def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
-        assert path == f"/actions/runs?head_sha={MERGE}"
-        assert max_pages == 2
-        if self.existing is not None:
-            return [self.existing]
-        if self.dispatched and self.registered is not None:
-            return [self.registered]
-        return []
-
-    def post(
-        self,
-        path: str,
-        payload: dict[str, Any] | None = None,
-        *,
-        token: str | None = None,
-    ) -> Any:
-        assert token is None
-        self.posts.append((path, payload))
-        self.dispatched = True
-        return None
-
-
-def test_post_merge_ci_liveness_reuses_existing_exact_run() -> None:
-    existing = _post_merge_ci_row(
-        status="completed",
-        conclusion="success",
-    )
-    api = _PostMergeCiApi(existing=existing)
-    evidence = governance._ensure_post_merge_ci(api, MERGE, {"baseBranch": "main"})
-
-    assert api.posts == []
-    assert evidence == {
-        "postMergeCiWorkflowId": governance.POST_MERGE_CI_WORKFLOW_ID,
-        "postMergeCiRunId": 88001,
-        "postMergeCiRunAttempt": 1,
-        "postMergeCiEvent": "push",
-        "postMergeCiStatus": "completed",
-        "postMergeCiDispatched": False,
-    }
-
-
-def test_post_merge_ci_liveness_fails_closed_on_dispatch_failure() -> None:
-    class _DispatchFailureApi(_PostMergeCiApi):
-        def post(
-            self,
-            path: str,
-            payload: dict[str, Any] | None = None,
-            *,
-            token: str | None = None,
-        ) -> Any:
-            assert path == "/actions/workflows/ci.yml/dispatches"
-            assert payload == {
-                "ref": "main",
-                "inputs": {"subject_sha": MERGE, "subject_ref": "main"},
-            }
-            assert token is None
-            raise governance.GovernanceError("synthetic CI dispatch failure")
-
-    with pytest.raises(governance.GovernanceError, match="synthetic CI dispatch failure"):
-        governance._ensure_post_merge_ci(
-            _DispatchFailureApi(),
-            MERGE,
-            {"baseBranch": "main"},
-        )
-
-
-def test_post_merge_ci_liveness_dispatches_exact_main_subject(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    registered = _post_merge_ci_row(
-        run_id=88003,
-        event="workflow_dispatch",
-        status="queued",
-    )
-    api = _PostMergeCiApi(registered=registered)
-    monkeypatch.setattr(governance.time, "sleep", lambda _seconds: None)
-
-    evidence = governance._ensure_post_merge_ci(api, MERGE, {"baseBranch": "main"})
-
-    assert api.posts == [
-        (
-            "/actions/workflows/ci.yml/dispatches",
-            {
-                "ref": "main",
-                "inputs": {"subject_sha": MERGE, "subject_ref": "main"},
-            },
-        )
-    ]
-    assert evidence == {
-        "postMergeCiWorkflowId": governance.POST_MERGE_CI_WORKFLOW_ID,
-        "postMergeCiRunId": 88003,
-        "postMergeCiRunAttempt": 1,
-        "postMergeCiEvent": "workflow_dispatch",
-        "postMergeCiStatus": "queued",
-        "postMergeCiDispatched": True,
-    }
-
-
-def test_post_merge_ci_liveness_fails_closed_on_registration_and_main_drift(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(governance.time, "sleep", lambda _seconds: None)
-
-    absent = _PostMergeCiApi()
-    with pytest.raises(
-        governance.GovernanceError,
-        match="explicit CI dispatch did not register",
-    ):
-        governance._ensure_post_merge_ci(absent, MERGE, {"baseBranch": "main"})
-
-    wrong_event = _PostMergeCiApi(
-        registered=_post_merge_ci_row(run_id=88004, event="push"),
-    )
-    with pytest.raises(
-        governance.GovernanceError,
-        match="unexpected event after explicit dispatch",
-    ):
-        governance._ensure_post_merge_ci(wrong_event, MERGE, {"baseBranch": "main"})
-
-    moved = _PostMergeCiApi(
-        registered=_post_merge_ci_row(
-            run_id=88005,
-            event="workflow_dispatch",
-        ),
-        move_main_after_registration=True,
-    )
-    with pytest.raises(
-        governance.GovernanceError,
-        match="current main changed after post-merge CI registration",
-    ):
-        governance._ensure_post_merge_ci(moved, MERGE, {"baseBranch": "main"})
-
-
-def test_finalize_post_merge_evidence_requires_ci_registration(
+def test_finalize_post_merge_evidence_records_event_driven_validation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     subject = {"baseSha": BASE, "headSha": HEAD}
@@ -899,26 +1105,7 @@ def test_finalize_post_merge_evidence_requires_ci_registration(
         calls.append("verify")
         return MERGE, TREE
 
-    def ensure(
-        api_arg: object,
-        subject_sha: str,
-        config_arg: dict[str, Any],
-    ) -> dict[str, Any]:
-        assert api_arg is api
-        assert subject_sha == MERGE
-        assert config_arg is config
-        calls.append("ci")
-        return {
-            "postMergeCiWorkflowId": governance.POST_MERGE_CI_WORKFLOW_ID,
-            "postMergeCiRunId": 88006,
-            "postMergeCiRunAttempt": 1,
-            "postMergeCiEvent": "push",
-            "postMergeCiStatus": "queued",
-            "postMergeCiDispatched": False,
-        }
-
     monkeypatch.setattr(governance, "_verify_actual_merge_commit", verify)
-    monkeypatch.setattr(governance, "_ensure_post_merge_ci", ensure)
 
     evidence = governance.finalize_post_merge_evidence(
         api,
@@ -927,17 +1114,51 @@ def test_finalize_post_merge_evidence_requires_ci_registration(
         config,
     )
 
-    assert calls == ["verify", "ci"]
+    assert calls == ["verify"]
     assert evidence == {
         "mergeSha": MERGE,
         "sourceTreeSha": TREE,
         "postMergeBinding": (
-            "exact-current-main-parents-validated-source-tree-and-ci-registration"
+            "exact-current-main-parents-validated-source-tree-and-event-driven-ci"
         ),
-        "postMergeCiWorkflowId": governance.POST_MERGE_CI_WORKFLOW_ID,
-        "postMergeCiRunId": 88006,
-        "postMergeCiRunAttempt": 1,
-        "postMergeCiEvent": "push",
-        "postMergeCiStatus": "queued",
-        "postMergeCiDispatched": False,
+        "postMergeValidationWorkflow": governance.POST_MERGE_VALIDATION_WORKFLOW,
+        "postMergeValidationStatus": "pending-workflow-run",
     }
+    assert governance.POST_MERGE_VALIDATION_WORKFLOW == "post-merge-ci.yml"
+
+
+def test_finalize_post_merge_evidence_fails_closed_on_topology_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def reject(*args: Any, **kwargs: Any) -> tuple[str, str]:
+        raise governance.GovernanceError("synthetic merge topology drift")
+
+    monkeypatch.setattr(governance, "_verify_actual_merge_commit", reject)
+
+    with pytest.raises(governance.GovernanceError, match="synthetic merge topology drift"):
+        governance.finalize_post_merge_evidence(
+            object(),
+            {"sha": MERGE},
+            {"baseSha": BASE, "headSha": HEAD},
+            {"baseBranch": "main"},
+        )
+
+
+def test_post_merge_workflow_is_event_driven_and_reuses_canonical_validations() -> None:
+    workflow = (
+        ROOT / ".github" / "workflows" / governance.POST_MERGE_VALIDATION_WORKFLOW
+    ).read_text(encoding="utf-8")
+
+    assert "workflows: [dependency-governance, Security Auto-Heal]" in workflow
+    assert "types: [completed]" in workflow
+    assert "workflow_dispatch:" not in workflow
+    assert "github.event.workflow_run.conclusion == 'success'" in workflow
+    assert 'test "$GITHUB_REF" = "refs/heads/main"' in workflow
+    assert 'case "$UPSTREAM_NAME:$UPSTREAM_PATH" in' in workflow
+    assert '"dependency-governance:.github/workflows/dependency-governance.yml")' in workflow
+    assert '"Security Auto-Heal:.github/workflows/security-autoheal.yml")' in workflow
+    assert 'test "$live_main" = "$SUBJECT_SHA"' in workflow
+    assert "uses: ./.github/workflows/ci.yml" in workflow
+    assert "uses: ./.github/workflows/codeql.yml" in workflow
+    assert "needs.validate-ci.result" in workflow
+    assert "needs.validate-codeql.result" in workflow
