@@ -981,7 +981,9 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
                 f"dependency trusted resolver missing reviewed authority invariant: {fragment}"
             )
     resolve_step = base._semantic_text(
-        base._step_block(resolve_job, "Resolve exact dependency subject from completed Trusted PR Gate")
+        base._step_block(
+            resolve_job, "Resolve exact dependency subject from completed Trusted PR Gate"
+        )
     )
     if (
         "--github-output" in resolve_step
