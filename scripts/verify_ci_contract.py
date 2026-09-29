@@ -955,10 +955,10 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         "      - name: Capture Python 3.14 resolver",
         "      - name: Merge exact trusted dependency promotion",
         "          python .github/scripts/dependency_promotion.py",
-        "          --target-promotion-pr \"${{ steps.target.outputs.pr_number }}\"",
+        '          --target-promotion-pr "${{ steps.target.outputs.pr_number }}"',
         "      - name: Merge exact trusted Dependabot Actions subject",
         "          python .github/scripts/dependency_governance.py",
-        "          --target-dependabot-pr \"${{ steps.target.outputs.pr_number }}\"",
+        '          --target-dependabot-pr "${{ steps.target.outputs.pr_number }}"',
     )
     for fragment in required:
         if fragment not in job:
@@ -977,7 +977,9 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         base._step_block(job, "Resolve exact dependency subject from completed Trusted PR Gate")
     )
     if "contents: write" in resolve or "pull-requests: write" in resolve:
-        raise ValueError("trusted dependency target resolution must not gain step-scoped mutation authority")
+        raise ValueError(
+            "trusted dependency target resolution must not gain step-scoped mutation authority"
+        )
     promotion = base._semantic_text(
         base._step_block(job, "Merge exact trusted dependency promotion")
     )
