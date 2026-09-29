@@ -2,10 +2,8 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
-import stat
-from pathlib import Path
+import sys
 from typing import Any
 
 from dependency_governance import (
@@ -164,10 +162,7 @@ def resolve_trusted_dependency_target(
     return matches[0]
 
 
-def _publish_target(github_output: Path, *, lane: str, pr_number: int | None) -> None:
-    expected = os.environ.get("GITHUB_OUTPUT", "")
-    if not expected or github_output != Path(expected):
-        raise GovernanceError("trusted dependency target output is not exact GITHUB_OUTPUT")
+def _target_output(*, lane: str, pr_number: int | None) -> str:
     if lane not in {LANE_NONE, LANE_ACTIONS, LANE_PROMOTION}:
         raise GovernanceError("trusted dependency target lane is outside reviewed policy")
     if lane == LANE_NONE:
@@ -176,26 +171,7 @@ def _publish_target(github_output: Path, *, lane: str, pr_number: int | None) ->
         pr_value = ""
     else:
         pr_value = str(_positive_int(pr_number, label="trusted dependency target PR"))
-    payload = f"lane={lane}\npr_number={pr_value}\n".encode()
-    nofollow = getattr(os, "O_NOFOLLOW", 0)
-    if not nofollow:
-        raise GovernanceError("trusted dependency target publication requires O_NOFOLLOW")
-    flags = os.O_WRONLY | os.O_APPEND | nofollow
-    try:
-        descriptor = os.open(github_output, flags)
-    except OSError as exc:
-        raise GovernanceError(
-            "trusted dependency target output could not be opened safely"
-        ) from exc
-    try:
-        info = os.fstat(descriptor)
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
-            raise GovernanceError("trusted dependency target output is not an owned regular file")
-        if os.write(descriptor, payload) != len(payload):
-            raise GovernanceError("trusted dependency target output write was incomplete")
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
+    return f"lane={lane}\npr_number={pr_value}\n"
 
 
 def main() -> None:
@@ -204,7 +180,6 @@ def main() -> None:
     )
     parser.add_argument("--trusted-run-id", type=int, required=True)
     parser.add_argument("--trusted-run-attempt", type=int, required=True)
-    parser.add_argument("--github-output", type=Path, required=True)
     args = parser.parse_args()
 
     config = load_config()
@@ -218,19 +193,7 @@ def main() -> None:
         trusted_run_id=args.trusted_run_id,
         trusted_run_attempt=args.trusted_run_attempt,
     )
-    _publish_target(args.github_output, lane=lane, pr_number=pr_number)
-    print(
-        json.dumps(
-            {
-                "decision": "trusted-dependency-target",
-                "lane": lane,
-                "pr": pr_number,
-                "trustedRunId": args.trusted_run_id,
-                "trustedRunAttempt": args.trusted_run_attempt,
-            },
-            sort_keys=True,
-        )
-    )
+    sys.stdout.write(_target_output(lane=lane, pr_number=pr_number))
 
 
 if __name__ == "__main__":
