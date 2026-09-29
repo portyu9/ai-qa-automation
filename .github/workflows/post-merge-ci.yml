@@ -57,7 +57,7 @@ jobs:
           case "$UPSTREAM_NAME:$UPSTREAM_PATH" in
             "dependency-governance:.github/workflows/dependency-governance.yml")
               case "$UPSTREAM_EVENT" in
-                workflow_run|status|schedule) ;;
+                workflow_run|schedule) ;;
                 *) exit 1 ;;
               esac
               merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/(dependabot/|automation/dependency-promotion-)'
