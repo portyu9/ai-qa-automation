@@ -4,7 +4,7 @@ name: Post-Merge CI — ƳƤ AI QA Automation Framework
 # It never merges, publishes Trusted PR Gate, consumes secrets, or executes candidate workflow bytes.
 on:
   workflow_run:
-    workflows: [dependency-governance, Security Auto-Heal]
+    workflows: [dependency-governance, Dependency Trusted Merge — ƳƤ AI QA Automation Framework, Security Auto-Heal]
     types: [completed]
 
 permissions:
@@ -60,6 +60,10 @@ jobs:
                 workflow_run|schedule) ;;
                 *) exit 1 ;;
               esac
+              merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/(dependabot/|automation/dependency-promotion-)'
+              ;;
+            "Dependency Trusted Merge — ƳƤ AI QA Automation Framework:.github/workflows/dependency-trusted-merge.yml")
+              test "$UPSTREAM_EVENT" = "workflow_run"
               merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/(dependabot/|automation/dependency-promotion-)'
               ;;
             "Security Auto-Heal:.github/workflows/security-autoheal.yml")
