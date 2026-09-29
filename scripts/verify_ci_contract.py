@@ -831,7 +831,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         "subject": "single-signed-lane-bound-github-actions-merge-child-of-upstream-control-sha",
         "canonical_ci": "reusable-ci.yml",
         "canonical_codeql": "reusable-codeql.yml",
-        "security_events_write": "reusable-codeql-call-ceiling-only",
+        "security_events_write": "isolated-codeql-only",
         "checks_write": "two-canonical-reusable-call-ceilings-only",
         "merge_authority": "none",
         "trusted_status_authority": "none",
