@@ -36,6 +36,24 @@ DEPENDENCY_PROMOTION_WAKE_RE = re.compile(
     rf"^{DEPENDENCY_PROMOTION_WAKE_PREFIX}:(?P<head>[0-9a-f]{{40}}):(?P<base>[0-9a-f]{{40}}):"
     r"trusted-gate:(?P<run>[1-9][0-9]*):(?P<attempt>[1-9][0-9]*)$"
 )
+
+
+def _actions_check_details_url_is_canonical(
+    details_url: Any,
+    *,
+    check_id: int,
+    run_id: int,
+) -> bool:
+    if not isinstance(details_url, str):
+        return False
+    run_url = f"https://github.com/{EXPECTED_REPOSITORY}/actions/runs/{run_id}"
+    if details_url == run_url:
+        return True
+    if re.fullmatch(re.escape(run_url) + r"/job/[1-9][0-9]*", details_url) is not None:
+        return True
+    return details_url == f"https://github.com/{EXPECTED_REPOSITORY}/runs/{check_id}"
+
+
 GITHUB_ACTIONS_LOGIN = "github-actions[bot]"
 GITHUB_ACTIONS_USER_ID = 41898282
 DEPENDABOT_LOGIN = "dependabot[bot]"
@@ -543,8 +561,14 @@ def _select_bot_pull_request(
                 and check.get("status") == "completed"
                 and check.get("conclusion") == "success"
                 and app.get("id") == GITHUB_ACTIONS_APP_ID
-                and check.get("details_url")
-                == f"https://github.com/{EXPECTED_REPOSITORY}/actions/runs/{wake.run_id}"
+                and isinstance(check.get("id"), int)
+                and not isinstance(check.get("id"), bool)
+                and check["id"] > 0
+                and _actions_check_details_url_is_canonical(
+                    check.get("details_url"),
+                    check_id=check["id"],
+                    run_id=wake.run_id,
+                )
             ):
                 matches.append((pr, lane))
                 break
@@ -616,8 +640,14 @@ def _select_dependency_governance_pull_request(
                 and check.get("conclusion") == "neutral"
                 and app.get("id") == GITHUB_ACTIONS_APP_ID
                 and app.get("slug") == "github-actions"
-                and check.get("details_url")
-                == f"https://github.com/{EXPECTED_REPOSITORY}/actions/runs/{wake.run_id}"
+                and isinstance(check.get("id"), int)
+                and not isinstance(check.get("id"), bool)
+                and check["id"] > 0
+                and _actions_check_details_url_is_canonical(
+                    check.get("details_url"),
+                    check_id=check["id"],
+                    run_id=wake.run_id,
+                )
             ):
                 matches.append(pr)
                 break
