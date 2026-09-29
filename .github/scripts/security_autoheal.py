@@ -2795,7 +2795,9 @@ def _reconcile_terminal_closure(
                 "terminal closure certificate no longer has exact successful workflow evidence"
             )
         if _current_main(api, config) != main_sha:
-            raise AutohealError("current main changed before terminal closure certificate revalidation")
+            raise AutohealError(
+                "current main changed before terminal closure certificate revalidation"
+            )
         if not _terminal_alert_is_fixed(api, metadata):
             raise PolicyBlock(
                 "terminal closure certificate no longer has exact fixed alert evidence"
@@ -2809,7 +2811,7 @@ def _reconcile_terminal_closure(
                 sort_keys=True,
             )
         )
-        return True
+        return False
 
     _require_marker_route_artifact(
         api,
