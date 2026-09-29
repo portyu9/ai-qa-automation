@@ -418,15 +418,13 @@ def test_security_autoheal_privileged_controller_rejects_pull_request_execution(
             "- name: Plan exact-main deterministic security routes\n"
             "        if: steps.revision.outputs.current == 'true'\n"
             "        env:",
-            "- name: Plan exact-main deterministic security routes\n"
-            "        env:",
+            "- name: Plan exact-main deterministic security routes\n        env:",
         ),
         (
             "- name: Persist exact-run route plan before mutation\n"
             "        if: steps.revision.outputs.current == 'true'\n"
             "        id: route-plan-artifact",
-            "- name: Persist exact-run route plan before mutation\n"
-            "        id: route-plan-artifact",
+            "- name: Persist exact-run route plan before mutation\n        id: route-plan-artifact",
         ),
     ),
 )
