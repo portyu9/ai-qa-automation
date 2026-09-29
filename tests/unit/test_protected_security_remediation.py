@@ -284,7 +284,7 @@ def _generated_subject() -> tuple[dict[str, Any], dict[str, Any], bytes]:
             "sha": MAIN,
             "repo": {"full_name": "portyu9/ai-qa-automation"},
         },
-        "title": "security: remediate protected CodeQL alert #17",
+        "title": f"security: remediate protected CodeQL alert #{record['alertNumber']}",
         "body": (
             "Automated independent protected-control-plane remediation. "
             "The authoring App cannot publish Trusted PR Gate.\n\n"
@@ -336,7 +336,7 @@ class _AdmissionApi:
         target = ".github/scripts/security_autoheal.py"
         if path == "/branches/main":
             return {"commit": {"sha": MAIN}}
-        if path == "/code-scanning/alerts/17":
+        if path == f"/code-scanning/alerts/{self.record['alertNumber']}":
             return self.alert
         if path == f"/contents/{target}?ref={MAIN}":
             return self._content(_reviewed_vulnerable_source())
@@ -372,7 +372,7 @@ def test_generated_protected_pr_reproves_live_route_bytes_and_app_identity() -> 
         "number": 301,
         "headSha": HEAD,
         "baseSha": MAIN,
-        "alertNumber": 17,
+        "alertNumber": api.record["alertNumber"],
         "targetPath": ".github/scripts/security_autoheal.py",
         "routeRecordDigest": api.record["recordDigest"],
         "planDigest": author.parse_marker(api.pr["body"])["repairPlan"]["planDigest"],
@@ -719,8 +719,8 @@ def test_candidate_discovery_skips_history_reads_for_nonprotected_routes(
         bot_id=BOT_ID,
     )
 
-    assert calls == [17]
-    assert [row["alertNumber"] for row in rows] == [17]
+    assert calls == [protected["number"]]
+    assert [row["alertNumber"] for row in rows] == [protected["number"]]
 
 
 def test_attempt_history_uses_exact_subject_branch_queries() -> None:
@@ -1139,7 +1139,7 @@ def test_created_pr_rollback_requires_durable_closed_state() -> None:
     source = _reviewed_vulnerable_source()
     plan, _ = author.build_repair_plan(source, record, main_sha=MAIN)
     branch = author.branch_name(record)
-    title = "security: remediate protected CodeQL alert #17"
+    title = f"security: remediate protected CodeQL alert #{record['alertNumber']}"
     body = (
         "Automated independent protected-control-plane remediation. "
         "The authoring App cannot publish Trusted PR Gate.\n\n"
@@ -1207,7 +1207,7 @@ def test_created_pr_is_rolled_back_if_control_moves_during_creation(
     plan, repaired = author.build_repair_plan(source, record, main_sha=MAIN)
     branch = author.branch_name(record)
     encoded = branch.replace("/", "%2F")
-    title = "security: remediate protected CodeQL alert #17"
+    title = f"security: remediate protected CodeQL alert #{record['alertNumber']}"
     body = (
         "Automated independent protected-control-plane remediation. "
         "The authoring App cannot publish Trusted PR Gate.\n\n"
