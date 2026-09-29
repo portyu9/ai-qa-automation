@@ -1854,9 +1854,7 @@ def _post_merge_bridge_runs(
     )
     rows: list[dict[str, Any]] = []
     for page in range(1, POST_MERGE_BRIDGE_MAX_PAGES + 1):
-        payload = api.get(
-            f"{base_path}&per_page={POST_MERGE_BRIDGE_PAGE_SIZE}&page={page}"
-        )
+        payload = api.get(f"{base_path}&per_page={POST_MERGE_BRIDGE_PAGE_SIZE}&page={page}")
         batch = payload.get("workflow_runs") if isinstance(payload, dict) else None
         if not isinstance(batch, list) or any(not isinstance(row, dict) for row in batch):
             raise AutohealError("post-merge bridge run listing returned malformed data")
@@ -1949,8 +1947,7 @@ def _post_merge_bridge_candidates(
             continue
         if job_status == "completed" and job_conclusion != "success":
             raise AutohealError(
-                "post-merge bridge required-gate job completed non-successfully: "
-                f"{job_conclusion}"
+                f"post-merge bridge required-gate job completed non-successfully: {job_conclusion}"
             )
         if status == "completed" and row.get("conclusion") != "success":
             raise AutohealError(
@@ -2919,9 +2916,7 @@ def _finalize_post_merge_evidence(
     return {
         "mergeSha": merge_sha,
         "sourceTreeSha": merge_tree,
-        "postMergeBinding": (
-            "exact-current-main-parents-validated-source-tree-validation-pending"
-        ),
+        "postMergeBinding": ("exact-current-main-parents-validated-source-tree-validation-pending"),
     }
 
 
@@ -4448,10 +4443,7 @@ def selftest(config: dict[str, Any]) -> None:
     original_get = duplicate_api.get
 
     def _duplicate_get(path: str) -> Any:
-        if path == (
-            f"/actions/runs/904/jobs"
-            f"?filter=latest&per_page={POST_MERGE_BRIDGE_MAX_JOBS}"
-        ):
+        if path == (f"/actions/runs/904/jobs?filter=latest&per_page={POST_MERGE_BRIDGE_MAX_JOBS}"):
             return {
                 "total_count": 1,
                 "jobs": [{**bridge_job, "id": 905}],
@@ -4476,9 +4468,7 @@ def selftest(config: dict[str, Any]) -> None:
     if evidence != {
         "mergeSha": merge_sha,
         "sourceTreeSha": source_tree,
-        "postMergeBinding": (
-            "exact-current-main-parents-validated-source-tree-validation-pending"
-        ),
+        "postMergeBinding": ("exact-current-main-parents-validated-source-tree-validation-pending"),
     }:
         raise AutohealError("post-merge structural binding evidence payload drifted")
 

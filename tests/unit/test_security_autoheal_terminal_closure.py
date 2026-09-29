@@ -309,9 +309,7 @@ class _TerminalApi:
         )
         if path == expected_bridge_runs:
             return {"workflow_runs": self.bridge_runs}
-        jobs_suffix = (
-            f"/jobs?filter=latest&per_page={autoheal.POST_MERGE_BRIDGE_MAX_JOBS}"
-        )
+        jobs_suffix = f"/jobs?filter=latest&per_page={autoheal.POST_MERGE_BRIDGE_MAX_JOBS}"
         if path.startswith("/actions/runs/") and path.endswith(jobs_suffix):
             run_id = int(path[len("/actions/runs/") : -len(jobs_suffix)])
             job = self.bridge_jobs.get(run_id)
@@ -368,9 +366,7 @@ class _TerminalApi:
         if path == "/pulls?state=closed&sort=updated&direction=desc":
             assert max_pages == 10
             return [self.pr]
-        if path == (
-            f"/actions/workflows/{autoheal.MAIN_CODEQL_WORKFLOW_ID}/runs?head_sha={MERGE}"
-        ):
+        if path == (f"/actions/workflows/{autoheal.MAIN_CODEQL_WORKFLOW_ID}/runs?head_sha={MERGE}"):
             assert max_pages == 2
             return list(self.codeql_runs)
         if path == f"/issues/{PR_NUMBER}/comments":
@@ -746,9 +742,7 @@ def test_finalize_post_merge_stops_at_structural_proof(
     assert evidence == {
         "mergeSha": MERGE,
         "sourceTreeSha": TREE,
-        "postMergeBinding": (
-            "exact-current-main-parents-validated-source-tree-validation-pending"
-        ),
+        "postMergeBinding": ("exact-current-main-parents-validated-source-tree-validation-pending"),
     }
 
 
