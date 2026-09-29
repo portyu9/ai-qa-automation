@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import argparse
 import os
-import sys
+import stat
 from typing import Any
 
 from dependency_governance import (
@@ -34,6 +34,7 @@ LANE_ACTIONS = "dependabot-actions"
 LANE_PROMOTION = "dependency-promotion"
 LANE_NONE = "none"
 MAX_OPEN_PULL_REQUESTS = 400
+TARGET_OUTPUT_FD = 3
 
 
 def _positive_int(value: Any, *, label: str) -> int:
@@ -174,6 +175,23 @@ def _target_output(*, lane: str, pr_number: int | None) -> str:
     return f"lane={lane}\npr_number={pr_value}\n"
 
 
+def _publish_target(*, lane: str, pr_number: int | None) -> None:
+    payload = _target_output(lane=lane, pr_number=pr_number).encode()
+    try:
+        info = os.fstat(TARGET_OUTPUT_FD)
+    except OSError as exc:
+        raise GovernanceError("trusted dependency target output descriptor is unavailable") from exc
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
+        raise GovernanceError("trusted dependency target output descriptor is not an owned regular file")
+    try:
+        written = os.write(TARGET_OUTPUT_FD, payload)
+        os.fsync(TARGET_OUTPUT_FD)
+    except OSError as exc:
+        raise GovernanceError("trusted dependency target output descriptor write failed") from exc
+    if written != len(payload):
+        raise GovernanceError("trusted dependency target output descriptor write was incomplete")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Resolve one exact dependency subject from Trusted PR Gate"
@@ -193,7 +211,7 @@ def main() -> None:
         trusted_run_id=args.trusted_run_id,
         trusted_run_attempt=args.trusted_run_attempt,
     )
-    sys.stdout.write(_target_output(lane=lane, pr_number=pr_number))
+    _publish_target(lane=lane, pr_number=pr_number)
 
 
 if __name__ == "__main__":
