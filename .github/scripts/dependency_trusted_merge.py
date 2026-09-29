@@ -182,7 +182,9 @@ def _publish_target(*, lane: str, pr_number: int | None) -> None:
     except OSError as exc:
         raise GovernanceError("trusted dependency target output descriptor is unavailable") from exc
     if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
-        raise GovernanceError("trusted dependency target output descriptor is not an owned regular file")
+        raise GovernanceError(
+            "trusted dependency target output descriptor is not an owned regular file"
+        )
     try:
         written = os.write(TARGET_OUTPUT_FD, payload)
         os.fsync(TARGET_OUTPUT_FD)
