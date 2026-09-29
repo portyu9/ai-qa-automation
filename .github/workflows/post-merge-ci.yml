@@ -4,7 +4,7 @@ name: Post-Merge CI — ƳƤ AI QA Automation Framework
 # It never merges, publishes Trusted PR Gate, consumes secrets, or executes candidate workflow bytes.
 on:
   workflow_run:
-    workflows: [dependency-governance, Security Auto-Heal]
+    workflows: [dependency-governance, Dependency Trusted Merge — ƳƤ AI QA Automation Framework, Security Auto-Heal, Protected Security Remediation — ƳƤ AI QA Automation Framework]
     types: [completed]
 
 permissions:
@@ -57,10 +57,18 @@ jobs:
           case "$UPSTREAM_NAME:$UPSTREAM_PATH" in
             "dependency-governance:.github/workflows/dependency-governance.yml")
               case "$UPSTREAM_EVENT" in
-                workflow_run|status|schedule) ;;
+                workflow_run|schedule) ;;
                 *) exit 1 ;;
               esac
               merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/(dependabot/|automation/dependency-promotion-)'
+              merge_author_login='github-actions[bot]'
+              merge_author_id=41898282
+              ;;
+            "Dependency Trusted Merge — ƳƤ AI QA Automation Framework:.github/workflows/dependency-trusted-merge.yml")
+              test "$UPSTREAM_EVENT" = "workflow_run"
+              merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/(dependabot/|automation/dependency-promotion-)'
+              merge_author_login='github-actions[bot]'
+              merge_author_id=41898282
               ;;
             "Security Auto-Heal:.github/workflows/security-autoheal.yml")
               case "$UPSTREAM_EVENT" in
@@ -68,6 +76,17 @@ jobs:
                 *) exit 1 ;;
               esac
               merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/automation/codeql-autoheal-'
+              merge_author_login='github-actions[bot]'
+              merge_author_id=41898282
+              ;;
+            "Protected Security Remediation — ƳƤ AI QA Automation Framework:.github/workflows/protected-security-remediation.yml")
+              case "$UPSTREAM_EVENT" in
+                workflow_run|schedule) ;;
+                *) exit 1 ;;
+              esac
+              merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/automation/protected-security-remediation-'
+              merge_author_login='portyu9-security-remediator[bot]'
+              merge_author_id=333833782
               ;;
             *) exit 1 ;;
           esac
@@ -89,13 +108,15 @@ jobs:
             --arg subject "$SUBJECT_SHA" \
             --arg control "$CONTROL_SHA" \
             --arg merge_source_re "$merge_source_re" \
+            --arg merge_author_login "$merge_author_login" \
+            --argjson merge_author_id "$merge_author_id" \
             '
               .sha == $subject and
               (.parents | length) == 2 and
               .parents[0].sha == $control and
               (.parents[1].sha | test("^[0-9a-f]{40}$")) and
-              .author.login == "github-actions[bot]" and
-              .author.id == 41898282 and
+              .author.login == $merge_author_login and
+              .author.id == $merge_author_id and
               .committer.login == "web-flow" and
               .committer.id == 19864447 and
               .commit.verification.verified == true and

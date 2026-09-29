@@ -49,14 +49,21 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     assert dependency_governance["promotion_authority"] == (
         "independent-noncertifying-app:contents-write+pull-requests-write:new-subject-only"
     )
-    assert dependency_governance["status_merge_authority"] == (
-        "exact-synchronized-dependency-lane:current-main-bound:no-secrets:no-author-token:no-check-write"
+    assert dependency_governance["status_event_merge_authority"] == (
+        "forbidden-startup-failure-path-retired"
     )
-    assert dependency_governance["triggers"] == [
-        "workflow_run",
-        "status",
-        "schedule",
-    ]
+    assert dependency_governance["triggers"] == ["workflow_run", "schedule"]
+    dependency_trusted_merge = result["workflows"]["dependency_trusted_merge"]
+    assert dependency_trusted_merge["trigger"] == "workflow_run:trusted-pr-auto:completed"
+    assert dependency_trusted_merge["trusted_code_source"] == "accepted-main-only"
+    assert dependency_trusted_merge["resolver_authority"] == "separate-read-only-job"
+    assert dependency_trusted_merge["merge_authority"] == "existing-exact-target-mergers-only"
+    assert dependency_trusted_merge["branch_or_pr_creation_authority"] == "none"
+    assert dependency_trusted_merge["trusted_status_authority"] == "none"
+    assert dependency_trusted_merge["app_credential_authority"] == "none"
+    assert dependency_trusted_merge["feedback_loop"] == (
+        "forbidden-trusted-gate-does-not-listen-to-this-workflow"
+    )
     assert dependency_governance["trusted_revision"] == (
         "exact-current-main-or-safe-noop-before-any-non-pr-mutation"
     )
@@ -64,7 +71,7 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     post_merge_ci = result["workflows"]["post_merge_ci"]
     assert (
         post_merge_ci["trigger"]
-        == "workflow_run:dependency-governance-or-security-autoheal:completed"
+        == "workflow_run:dependency-governance-or-trusted-dependency-merge-or-security-autoheal-or-protected-security-remediation:completed"
     )
     assert (
         post_merge_ci["authority"]
@@ -327,7 +334,7 @@ def test_dependency_governance_privileged_controller_rejects_pull_request_trigge
 
     with pytest.raises(
         ValueError,
-        match="must remain accepted-main workflow_run/status/schedule only",
+        match="must remain accepted-main workflow_run/schedule only",
     ):
         ci_contract.verify_ci_contract(root)
 
@@ -397,35 +404,33 @@ def test_dependency_governance_requires_control_sha_for_general_mutation_job(
 
     with pytest.raises(
         ValueError,
-        match="general dependency governance must be exact-current-main bound before mutation",
+        match=r"dependency-governance\.yml missing reviewed authority invariant",
     ):
         ci_contract.verify_ci_contract(root)
 
 
-def test_dependency_governance_status_merge_requires_control_sha(
+def test_dependency_trusted_merge_requires_control_sha(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = _copy_workflows(tmp_path)
-    path = root / ".github" / "workflows" / "dependency-governance.yml"
+    path = root / ".github" / "workflows" / "dependency-trusted-merge.yml"
     text = path.read_text(encoding="utf-8")
-    status_start = text.index("  status-merge:\n")
-    govern_start = text.index("\n  govern:\n", status_start)
-    block = text[status_start:govern_start]
+    merge_start = text.index("  merge:\n")
+    block = text[merge_start:]
     binding = "    env:\n      GOVERNANCE_CONTROL_SHA: ${{ github.sha }}\n"
     assert binding in block
     mutated_block = block.replace(binding, "", 1)
-    mutated = text[:status_start] + mutated_block + text[govern_start:]
+    mutated = text[:merge_start] + mutated_block
     path.write_text(mutated, encoding="utf-8")
     monkeypatch.setattr(
         ci_contract,
-        "EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA",
+        "EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA",
         ci_contract._workflow_structure_sha1(mutated),
     )
 
     with pytest.raises(
-        ValueError,
-        match="status-target merge must remain exact-revision-bound",
+        ValueError, match="dependency trusted merger missing reviewed authority invariant"
     ):
         ci_contract.verify_ci_contract(root)
 
@@ -496,7 +501,7 @@ def test_dependency_governance_rejects_unguarded_author_token_mint(
         ci_contract.verify_ci_contract(root)
 
 
-def test_dependency_governance_rejects_revision_guard_moved_out_of_govern_job(
+def test_dependency_governance_rejects_revision_guard_removed_from_govern_job(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -509,13 +514,7 @@ def test_dependency_governance_rejects_revision_guard_moved_out_of_govern_job(
         govern_start,
     )
     guard_end = text.index("      - name: Capture Python 3.11 resolver\n", guard_start)
-    guard_block = text[guard_start:guard_end]
-    assert guard_block
-
-    status_start = text.index("  status-sync:\n")
-    status_insert = text.index("    steps:\n", status_start) + len("    steps:\n")
-    without_guard = text[:guard_start] + text[guard_end:]
-    mutated = without_guard[:status_insert] + guard_block + without_guard[status_insert:]
+    mutated = text[:guard_start] + text[guard_end:]
     path.write_text(mutated, encoding="utf-8")
     monkeypatch.setattr(
         ci_contract,
@@ -530,44 +529,40 @@ def test_dependency_governance_rejects_revision_guard_moved_out_of_govern_job(
         ci_contract.verify_ci_contract(root)
 
 
-def test_dependency_governance_post_gate_handoff_is_status_driven_and_acyclic(
+def test_dependency_governance_post_gate_handoff_is_one_way_and_acyclic(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = _copy_workflows(tmp_path)
-    path = root / ".github" / "workflows" / "dependency-governance.yml"
-    text = path.read_text(encoding="utf-8")
-    assert "    workflows: ['CI — ƳƤ AI QA Automation Framework', CodeQL]\n" in text
-    assert "  status:\n" in text
-    assert "'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework'" not in text
-    assert "      github.event.context == 'Trusted PR Gate' &&\n" in text
-    assert "      needs.status-sync.result == 'success' &&\n" in text
-    assert "      needs.status-sync.outputs.pr_number != '' &&\n" in text
-    assert "      needs.status-sync.outputs.lane != ''\n" in text
-    assert (
-        "    if: >-\n"
-        "      github.event_name == 'schedule' ||\n"
-        "      (github.event_name == 'workflow_run' &&\n"
-        "       github.event.workflow_run.head_repository.full_name == github.repository &&\n"
-        "       (github.event.workflow_run.head_branch == 'main' ||\n"
-        "        startsWith(github.event.workflow_run.head_branch, 'dependabot/') ||\n"
-        "        startsWith(github.event.workflow_run.head_branch, "
-        "'automation/dependency-promotion-')))\n" in text
-    )
+    governance_path = root / ".github" / "workflows" / "dependency-governance.yml"
+    governance = governance_path.read_text(encoding="utf-8")
+    merger_path = root / ".github" / "workflows" / "dependency-trusted-merge.yml"
+    merger = merger_path.read_text(encoding="utf-8")
 
-    mutated = text.replace(
-        "github.event.context == 'Trusted PR Gate'",
-        "github.event.context == 'Spoofed Gate'",
+    assert "  status:\n" not in governance
+    assert "github.event_name == 'status'" not in governance
+    assert "'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework'" not in governance
+    assert 'workflows: ["Trusted PR Auto Gate — ƳƤ AI QA Automation Framework"]' in merger
+    assert "schedule:" not in merger
+    assert "status:" not in merger
+    assert "issue_comment:" not in merger
+
+    mutated = merger.replace(
+        'workflows: ["Trusted PR Auto Gate — ƳƤ AI QA Automation Framework"]',
+        'workflows: ["Spoofed Trusted Gate"]',
         1,
     )
-    path.write_text(mutated, encoding="utf-8")
+    merger_path.write_text(mutated, encoding="utf-8")
     monkeypatch.setattr(
         ci_contract,
-        "EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA",
+        "EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA",
         ci_contract._workflow_structure_sha1(mutated),
     )
 
-    with pytest.raises(ValueError, match="missing reviewed authority invariant"):
+    with pytest.raises(
+        ValueError,
+        match="must remain Trusted PR Auto Gate workflow_run only",
+    ):
         ci_contract.verify_ci_contract(root)
 
 
@@ -592,281 +587,45 @@ def test_dependency_governance_rejects_reciprocal_trusted_auto_workflow_run(
         ci_contract._workflow_structure_sha1(mutated),
     )
 
-    with pytest.raises(
-        ValueError, match="must remain accepted-main workflow_run/status/schedule only"
-    ):
+    with pytest.raises(ValueError, match="must remain accepted-main workflow_run/schedule only"):
         ci_contract.verify_ci_contract(root)
 
 
-def test_dependency_governance_status_sync_requires_automatic_gate_description(
+def test_dependency_trusted_merge_resolver_is_read_only(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = _copy_workflows(tmp_path)
-    path = root / ".github" / "workflows" / "dependency-governance.yml"
+    path = root / ".github" / "workflows" / "dependency-trusted-merge.yml"
     text = path.read_text(encoding="utf-8")
-    status_start = text.index("  status-sync:\n")
-    status_merge_start = text.index("\n  status-merge:\n", status_start)
-    block = text[status_start:status_merge_start]
-    current = (
-        "      github.event.description == 'Automatic exact-subject trusted validation passed' &&\n"
-    )
-    assert current in block
-    mutated_block = block.replace(current, "", 1)
-    mutated = text[:status_start] + mutated_block + text[status_merge_start:]
+    resolve_start = text.index("  resolve:\n")
+    merge_start = text.index("\n  merge:\n", resolve_start)
+    block = text[resolve_start:merge_start]
+    assert "      contents: read\n" in block
+    assert "      pull-requests: read\n" in block
+    assert "      statuses: read\n" in block
+    assert "contents: write" not in block
+    mutated_block = block.replace("      contents: read\n", "      contents: write\n", 1)
+    mutated = text[:resolve_start] + mutated_block + text[merge_start:]
     path.write_text(mutated, encoding="utf-8")
     monkeypatch.setattr(
         ci_contract,
-        "EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA",
+        "EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA",
         ci_contract._workflow_structure_sha1(mutated),
     )
-
-    with pytest.raises(ValueError, match="missing reviewed authority invariant"):
+    with pytest.raises(ValueError, match="resolver must remain job-level read-only"):
         ci_contract.verify_ci_contract(root)
 
 
-def test_dependency_governance_status_sync_rejects_floating_main_checkout(
+def test_dependency_trusted_merge_write_authority_is_isolated_to_merger(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = _copy_workflows(tmp_path)
-    path = root / ".github" / "workflows" / "dependency-governance.yml"
+    path = root / ".github" / "workflows" / "dependency-trusted-merge.yml"
     text = path.read_text(encoding="utf-8")
-    status_start = text.index("  status-sync:\n")
-    status_merge_start = text.index("\n  status-merge:\n", status_start)
-    block = text[status_start:status_merge_start]
-    current = "          ref: ${{ github.sha }}\n"
-    assert current in block
-    mutated_block = block.replace(
-        current,
-        "          ref: ${{ github.event.repository.default_branch }}\n",
-        1,
-    )
-    mutated = text[:status_start] + mutated_block + text[status_merge_start:]
-    path.write_text(mutated, encoding="utf-8")
-    monkeypatch.setattr(
-        ci_contract,
-        "EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA",
-        ci_contract._workflow_structure_sha1(mutated),
-    )
-
-    with pytest.raises(
-        ValueError,
-        match="status synchronization must remain exact-revision-bound",
-    ):
-        ci_contract.verify_ci_contract(root)
-
-
-def test_dependency_governance_status_sync_exports_only_target_identity(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    root = _copy_workflows(tmp_path)
-    path = root / ".github" / "workflows" / "dependency-governance.yml"
-    text = path.read_text(encoding="utf-8")
-    current = (
-        "    outputs:\n"
-        "      pr_number: ${{ steps.sync.outputs.pr_number }}\n"
-        "      lane: ${{ steps.sync.outputs.lane }}\n"
-    )
-    assert current in text
-    mutated = text.replace(
-        current,
-        current + "      head_sha: ${{ steps.sync.outputs.head_sha }}\n",
-        1,
-    )
-    path.write_text(mutated, encoding="utf-8")
-    monkeypatch.setattr(
-        ci_contract,
-        "EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA",
-        ci_contract._workflow_structure_sha1(mutated),
-    )
-
-    with pytest.raises(ValueError, match="export only the exact dependency lane and PR number"):
-        ci_contract.verify_ci_contract(root)
-
-
-def test_dependency_governance_status_sync_requires_status_read_authority(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    root = _copy_workflows(tmp_path)
-    path = root / ".github" / "workflows" / "dependency-governance.yml"
-    text = path.read_text(encoding="utf-8")
-    status_start = text.index("  status-sync:\n")
-    status_merge_start = text.index("\n  status-merge:\n", status_start)
-    block = text[status_start:status_merge_start]
-    current = "      statuses: read\n"
-    assert current in block
-    mutated_block = block.replace(current, "", 1)
-    mutated = text[:status_start] + mutated_block + text[status_merge_start:]
-    path.write_text(mutated, encoding="utf-8")
-    monkeypatch.setattr(
-        ci_contract,
-        "EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA",
-        ci_contract._workflow_structure_sha1(mutated),
-    )
-
-    with pytest.raises(
-        ValueError,
-        match=r"dependency-governance\.yml missing reviewed authority invariant",
-    ):
-        ci_contract.verify_ci_contract(root)
-
-
-def test_dependency_governance_status_sync_requires_pull_request_read_authority(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    root = _copy_workflows(tmp_path)
-    path = root / ".github" / "workflows" / "dependency-governance.yml"
-    text = path.read_text(encoding="utf-8")
-    status_start = text.index("  status-sync:\n")
-    status_merge_start = text.index("\n  status-merge:\n", status_start)
-    block = text[status_start:status_merge_start]
-    current = "      pull-requests: read\n"
-    assert current in block
-    mutated_block = block.replace(current, "", 1)
-    mutated = text[:status_start] + mutated_block + text[status_merge_start:]
-    path.write_text(mutated, encoding="utf-8")
-    monkeypatch.setattr(
-        ci_contract,
-        "EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA",
-        ci_contract._workflow_structure_sha1(mutated),
-    )
-
-    with pytest.raises(
-        ValueError,
-        match=r"dependency-governance\.yml missing reviewed authority invariant",
-    ):
-        ci_contract.verify_ci_contract(root)
-
-
-def test_dependency_governance_status_sync_cannot_gain_write_authority(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    root = _copy_workflows(tmp_path)
-    path = root / ".github" / "workflows" / "dependency-governance.yml"
-    text = path.read_text(encoding="utf-8")
-    status_start = text.index("  status-sync:\n")
-    status_merge_start = text.index("\n  status-merge:\n", status_start)
-    block = text[status_start:status_merge_start]
-    current = "      contents: read\n"
-    assert current in block
-    mutated_block = block.replace(current, "      contents: write\n", 1)
-    mutated = text[:status_start] + mutated_block + text[status_merge_start:]
-    path.write_text(mutated, encoding="utf-8")
-    monkeypatch.setattr(
-        ci_contract,
-        "EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA",
-        ci_contract._workflow_structure_sha1(mutated),
-    )
-
-    with pytest.raises(ValueError, match="missing reviewed authority invariant"):
-        ci_contract.verify_ci_contract(root)
-
-
-def test_dependency_governance_status_merge_requires_successful_sync_result(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    root = _copy_workflows(tmp_path)
-    path = root / ".github" / "workflows" / "dependency-governance.yml"
-    text = path.read_text(encoding="utf-8")
-    current = "      needs.status-sync.result == 'success' &&\n"
-    assert current in text
-    mutated = text.replace(current, "      github.event.state == 'success' &&\n", 1)
-    path.write_text(mutated, encoding="utf-8")
-    monkeypatch.setattr(
-        ci_contract,
-        "EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA",
-        ci_contract._workflow_structure_sha1(mutated),
-    )
-
-    with pytest.raises(ValueError, match="missing reviewed authority invariant"):
-        ci_contract.verify_ci_contract(root)
-
-
-def test_dependency_governance_status_merge_requires_nonempty_target(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    root = _copy_workflows(tmp_path)
-    path = root / ".github" / "workflows" / "dependency-governance.yml"
-    text = path.read_text(encoding="utf-8")
-    current = (
-        "      needs.status-sync.outputs.pr_number != '' &&\n"
-        "      needs.status-sync.outputs.lane != ''\n"
-    )
-    assert current in text
-    mutated = text.replace(current, "      github.event.state == 'success'\n", 1)
-    path.write_text(mutated, encoding="utf-8")
-    monkeypatch.setattr(
-        ci_contract,
-        "EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA",
-        ci_contract._workflow_structure_sha1(mutated),
-    )
-
-    with pytest.raises(ValueError, match="missing reviewed authority invariant"):
-        ci_contract.verify_ci_contract(root)
-
-
-def test_dependency_governance_status_merge_routes_only_exact_dependency_lanes() -> None:
-    text = (ROOT / ".github" / "workflows" / "dependency-governance.yml").read_text(
-        encoding="utf-8"
-    )
-    status_start = text.index("  status-merge:\n")
-    govern_start = text.index("\n  govern:\n", status_start)
-    block = text[status_start:govern_start]
-
-    assert 'case "$STATUS_DEPENDENCY_LANE" in' in block
-    assert "            dependency-promotion)\n" in block
-    assert "            dependabot-actions)\n" in block
-    assert '--target-promotion-pr "$STATUS_DEPENDENCY_PR"' in block
-    assert '--target-dependabot-pr "$STATUS_DEPENDENCY_PR"' in block
-    assert "            *)\n              exit 1\n" in block
-
-
-def test_dependency_governance_status_merge_rejects_floating_main_checkout(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    root = _copy_workflows(tmp_path)
-    path = root / ".github" / "workflows" / "dependency-governance.yml"
-    text = path.read_text(encoding="utf-8")
-    status_start = text.index("  status-merge:\n")
-    govern_start = text.index("\n  govern:\n", status_start)
-    block = text[status_start:govern_start]
-    current = "          ref: ${{ github.sha }}\n"
-    assert current in block
-    mutated_block = block.replace(
-        current,
-        "          ref: ${{ github.event.repository.default_branch }}\n",
-        1,
-    )
-    mutated = text[:status_start] + mutated_block + text[govern_start:]
-    path.write_text(mutated, encoding="utf-8")
-    monkeypatch.setattr(
-        ci_contract,
-        "EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA",
-        ci_contract._workflow_structure_sha1(mutated),
-    )
-
-    with pytest.raises(
-        ValueError,
-        match="status-target merge must remain exact-revision-bound",
-    ):
-        ci_contract.verify_ci_contract(root)
-
-
-def test_dependency_governance_status_merge_cannot_gain_author_or_check_authority(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    root = _copy_workflows(tmp_path)
-    path = root / ".github" / "workflows" / "dependency-governance.yml"
-    text = path.read_text(encoding="utf-8")
+    merge_start = text.index("  merge:\n")
+    block = text[merge_start:]
     marker = (
         "    permissions:\n"
         "      actions: read\n"
@@ -874,48 +633,146 @@ def test_dependency_governance_status_merge_cannot_gain_author_or_check_authorit
         "      pull-requests: write\n"
         "      statuses: read\n"
     )
-    assert marker in text
+    assert marker in block
+    mutated_block = block.replace(marker, marker + "      checks: write\n", 1)
+    mutated = text[:merge_start] + mutated_block
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
+    )
+    with pytest.raises(ValueError, match="permission ceiling drifted"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_dependency_trusted_merge_exports_only_lane_and_pr_number(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "dependency-trusted-merge.yml"
+    text = path.read_text(encoding="utf-8")
+    current = (
+        "    outputs:\n"
+        "      lane: ${{ steps.target.outputs.lane }}\n"
+        "      pr_number: ${{ steps.target.outputs.pr_number }}\n"
+    )
+    assert current in text
     mutated = text.replace(
-        marker,
-        marker.replace(
-            "      statuses: read\n",
-            "      statuses: read\n      checks: write\n",
-        ),
+        current,
+        current + "      head_sha: ${{ steps.target.outputs.head_sha }}\n",
         1,
     )
     path.write_text(mutated, encoding="utf-8")
     monkeypatch.setattr(
         ci_contract,
-        "EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA",
+        "EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA",
         ci_contract._workflow_structure_sha1(mutated),
     )
-
-    with pytest.raises(ValueError, match="exact-subject, secret-free, and non-authoring"):
+    with pytest.raises(ValueError, match="non-action structure differs"):
         ci_contract.verify_ci_contract(root)
 
 
-def test_dependency_governance_status_merge_cannot_regain_actions_write_authority(
+def test_dependency_trusted_merge_resolver_output_uses_inherited_fd_only(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = _copy_workflows(tmp_path)
-    path = root / ".github" / "workflows" / "dependency-governance.yml"
+    path = root / ".github" / "workflows" / "dependency-trusted-merge.yml"
     text = path.read_text(encoding="utf-8")
-    status_start = text.index("  status-merge:\n")
-    govern_start = text.index("\n  govern:\n", status_start)
-    block = text[status_start:govern_start]
-    current = "      actions: read\n"
-    assert current in block
-    mutated_block = block.replace(current, "      actions: write\n", 1)
-    mutated = text[:status_start] + mutated_block + text[govern_start:]
+    current = '            --trusted-run-attempt "${{ github.event.workflow_run.run_attempt }}" 3>> "$GITHUB_OUTPUT"\n'
+    assert current in text
+    mutated = text.replace(current, current.replace("3>>", ">>"), 1)
     path.write_text(mutated, encoding="utf-8")
     monkeypatch.setattr(
         ci_contract,
-        "EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA",
+        "EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA",
         ci_contract._workflow_structure_sha1(mutated),
     )
+    with pytest.raises(ValueError, match="must use only inherited fd 3"):
+        ci_contract.verify_ci_contract(root)
 
-    with pytest.raises(ValueError, match="exact-subject, secret-free, and non-authoring"):
+
+def test_dependency_trusted_merge_rejects_floating_main_checkout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "dependency-trusted-merge.yml"
+    text = path.read_text(encoding="utf-8")
+    current = "          ref: ${{ github.sha }}\n"
+    assert text.count(current) == 2
+    mutated = text.replace(
+        current,
+        "          ref: ${{ github.event.repository.default_branch }}\n",
+        1,
+    )
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
+    )
+    with pytest.raises(ValueError, match="resolver missing reviewed authority invariant"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_dependency_trusted_merge_requires_closed_lane_and_nonempty_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "dependency-trusted-merge.yml"
+    text = path.read_text(encoding="utf-8")
+    current = (
+        "      needs.resolve.result == 'success' &&\n"
+        "      needs.resolve.outputs.pr_number != '' &&\n"
+        "      (needs.resolve.outputs.lane == 'dependency-promotion' ||\n"
+        "       needs.resolve.outputs.lane == 'dependabot-actions')\n"
+    )
+    assert current in text
+    mutated = text.replace(current, "      needs.resolve.result == 'success'\n", 1)
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
+    )
+    with pytest.raises(ValueError, match="merger missing reviewed authority invariant"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_dependency_trusted_merge_routes_only_exact_dependency_lanes() -> None:
+    text = (ROOT / ".github" / "workflows" / "dependency-trusted-merge.yml").read_text(
+        encoding="utf-8"
+    )
+    merge_start = text.index("  merge:\n")
+    block = text[merge_start:]
+    assert 'case "$TARGET_LANE" in' in block
+    assert "            dependency-promotion|dependabot-actions) ;;\n" in block
+    assert '--target-promotion-pr "${{ needs.resolve.outputs.pr_number }}"' in block
+    assert '--target-dependabot-pr "${{ needs.resolve.outputs.pr_number }}"' in block
+    assert "            *) exit 1 ;;\n" in block
+
+
+def test_dependency_trusted_merge_cannot_gain_app_or_status_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "dependency-trusted-merge.yml"
+    text = path.read_text(encoding="utf-8")
+    current = "      statuses: read\n"
+    assert current in text
+    mutated = text.replace(current, "      statuses: write\n", 1)
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
+    )
+    with pytest.raises(ValueError, match="forbidden authority token"):
         ci_contract.verify_ci_contract(root)
 
 
@@ -1122,6 +979,25 @@ def test_post_merge_ci_rejects_cross_lane_security_merge_binding(tmp_path: Path)
             security_binding,
             "merge_source_re='^Merge pull request #[1-9][0-9]* from "
             "portyu9/automation/dependency-promotion-'",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="exact governed-merge binding drifted"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_post_merge_ci_rejects_protected_remediation_author_drift(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "post-merge-ci.yml"
+    text = path.read_text(encoding="utf-8")
+    exact_author = "merge_author_login='portyu9-security-remediator[bot]'"
+    assert exact_author in text
+    path.write_text(
+        text.replace(
+            exact_author,
+            "merge_author_login='github-actions[bot]'",
             1,
         ),
         encoding="utf-8",

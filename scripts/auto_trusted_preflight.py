@@ -439,7 +439,7 @@ def _validate_wake(run: dict[str, Any], *, expected_run_id: int, trusted_sha: st
     )
 
 
-def _select_pull_request(candidates: Any, *, head_sha: str) -> int:
+def _select_pull_request(candidates: Any, *, head_sha: str) -> int | None:
     rows = _require_list(candidates, label="commit pull requests")
     if len(rows) >= MAX_PULL_REQUEST_CANDIDATES:
         raise ValueError("commit pull-request resolution reached the bounded pagination limit")
@@ -458,9 +458,11 @@ def _select_pull_request(candidates: Any, *, head_sha: str) -> int:
             and base_repo.get("full_name") == EXPECTED_REPOSITORY
         ):
             matching.append(_require_positive_int(row.get("number"), label="pull request number"))
+    if not matching:
+        return None
     if len(matching) != 1:
         raise ValueError(
-            "workflow head must resolve to exactly one open same-repository pull request targeting main"
+            "workflow head maps to multiple open same-repository pull requests targeting main"
         )
     return matching[0]
 
@@ -1045,6 +1047,8 @@ def evaluate_admission(
             f"?per_page={MAX_PULL_REQUEST_CANDIDATES}"
         )
         pr_number = _select_pull_request(pulls, head_sha=wake.head_sha)
+        if pr_number is None:
+            return None
         pr = _require_dict(
             api.get(f"/repos/{EXPECTED_REPOSITORY}/pulls/{pr_number}"),
             label="live pull request",
