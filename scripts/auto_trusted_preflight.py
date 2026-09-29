@@ -543,9 +543,10 @@ def _select_bot_pull_request(
                 and check.get("status") == "completed"
                 and check.get("conclusion") == "success"
                 and app.get("id") == GITHUB_ACTIONS_APP_ID
-                and check.get("details_url")
-                == f"https://github.com/{EXPECTED_REPOSITORY}/actions/runs/{wake.run_id}"
             ):
+                # GitHub Actions can canonicalize check details_url to a job page.
+                # external_id binds this check to the already re-fetched wake run.
+
                 matches.append((pr, lane))
                 break
     if not matches:
@@ -616,9 +617,10 @@ def _select_dependency_governance_pull_request(
                 and check.get("conclusion") == "neutral"
                 and app.get("id") == GITHUB_ACTIONS_APP_ID
                 and app.get("slug") == "github-actions"
-                and check.get("details_url")
-                == f"https://github.com/{EXPECTED_REPOSITORY}/actions/runs/{wake.run_id}"
             ):
+                # GitHub Actions can canonicalize check details_url to a job page.
+                # The external wake identity and live governance run are authoritative.
+
                 matches.append(pr)
                 break
     if not matches:
