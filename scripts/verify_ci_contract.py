@@ -48,7 +48,7 @@ EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
     "315e1ea71105e9760d006331b570398b5f7c8af4"  # pragma: allowlist secret
 )
 EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA = (
-    "727cf22a1abd4f4d2b65b2d122b6f409959e7cd9"  # pragma: allowlist secret
+    "b0105fd8d4d603611f4325fcd690dafbda41a70d"  # pragma: allowlist secret
 )
 EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
@@ -693,7 +693,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         (
             "on:",
             "  workflow_run:",
-            "    workflows: [dependency-governance]",
+            "    workflows: [dependency-governance, Security Auto-Heal]",
             "    types: [completed]",
         )
     )
@@ -702,7 +702,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         "workflow_run"
     }:
         raise ValueError(
-            "post-merge-ci.yml must remain exact dependency-governance workflow_run only"
+            "post-merge-ci.yml must remain exact dependency/security-controller workflow_run only"
         )
     base._verify_top_level_read_only_permissions(text, name=name)
     concurrency = base._semantic_text(base._top_level_block(text, "concurrency"))
@@ -740,16 +740,22 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         "    name: Bind exact governed main advance",
         "      github.event.workflow_run.conclusion == 'success' &&",
         "      github.event.workflow_run.head_repository.full_name == github.repository &&",
-        "      github.event.workflow_run.head_branch == 'main'",
+        "      github.event.workflow_run.head_branch == 'main' &&",
+        "      github.event.workflow_run.head_sha != github.sha",
         "      run_validation: ${{ steps.bind.outputs.run_validation }}",
         "          CONTROL_SHA: ${{ github.event.workflow_run.head_sha }}",
         "          SUBJECT_SHA: ${{ github.sha }}",
         "          UPSTREAM_RUN_ID: ${{ github.event.workflow_run.id }}",
         "          UPSTREAM_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}",
         "          UPSTREAM_PATH: ${{ github.event.workflow_run.path }}",
-        '          test "$UPSTREAM_PATH" = ".github/workflows/dependency-governance.yml"',
-        '          case "$UPSTREAM_EVENT" in',
-        "            workflow_run|status|schedule) ;;",
+        '          test "$UPSTREAM_RUN_ATTEMPT" = "1"',
+        '          case "$UPSTREAM_NAME:$UPSTREAM_PATH" in',
+        '"dependency-governance:.github/workflows/dependency-governance.yml"',
+        "workflow_run|status|schedule) ;;",
+        '"Security Auto-Heal:.github/workflows/security-autoheal.yml"',
+        "workflow_run|schedule) ;;",
+        "merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/(dependabot/|automation/dependency-promotion-)'",
+        "merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/automation/codeql-autoheal-'",
         '          test "$UPSTREAM_STATUS" = "completed"',
         '          test "$UPSTREAM_CONCLUSION" = "success"',
         '          test "$UPSTREAM_REPOSITORY" = "$GITHUB_REPOSITORY"',
@@ -758,6 +764,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         '          test "$live_main" = "$SUBJECT_SHA"',
         '          if [ "$SUBJECT_SHA" = "$CONTROL_SHA" ]; then',
         "            printf 'run_validation=false\\n' >> \"$GITHUB_OUTPUT\"",
+        '--arg merge_source_re "$merge_source_re"',
         ".parents[0].sha == $control",
         '.author.login == "github-actions[bot]"',
         ".author.id == 41898282",
@@ -765,7 +772,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         ".committer.id == 19864447",
         ".commit.verification.verified == true",
         '.commit.verification.reason == "valid"',
-        "automation/dependency-promotion-",
+        "(.commit.message | test($merge_source_re))",
         "          printf 'run_validation=true\\n' >> \"$GITHUB_OUTPUT\"",
     )
     if any(fragment not in bind for fragment in required_bind):
@@ -815,9 +822,9 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
             "post-merge-ci.yml non-action structure differs from the reviewed post-merge definition"
         )
     return {
-        "trigger": "workflow_run:dependency-governance:completed",
+        "trigger": "workflow_run:dependency-governance-or-security-autoheal:completed",
         "authority": "exact-governed-main-validation-plus-codeql-sarif-only-write",
-        "subject": "single-signed-github-actions-merge-child-of-upstream-control-sha",
+        "subject": "single-signed-lane-bound-github-actions-merge-child-of-upstream-control-sha",
         "canonical_ci": "reusable-ci.yml",
         "canonical_codeql": "reusable-codeql.yml",
         "security_events_write": "isolated-codeql-only",

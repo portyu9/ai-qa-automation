@@ -35,13 +35,15 @@ MERGE = "c" * 40
 TREE = "d" * 40
 PROSPECTIVE = "f" * 40
 PR_NUMBER = 321
-CI_RUN_ID = 7001
-CODEQL_RUN_ID = 7002
-AUTOHEAL_RUN_ID = 7003
-GATE_RUN_ID = 7004
-TRUSTED_STATUS_ID = 7005
-ROUTE_PLAN_RUN_ID = 7006
-ROUTE_ARTIFACT_ID = 7007
+BRIDGE_RUN_ID = 7001
+BRIDGE_WORKFLOW_ID = 7002
+BRIDGE_JOB_ID = 7003
+CODEQL_RUN_ID = 7004
+AUTOHEAL_RUN_ID = 7005
+GATE_RUN_ID = 7006
+TRUSTED_STATUS_ID = 7007
+ROUTE_PLAN_RUN_ID = 7008
+ROUTE_ARTIFACT_ID = 7009
 ROUTE_PLAN_DIGEST = "2" * 64
 ROUTE_ARTIFACT_DIGEST = "sha256:" + ("3" * 64)
 
@@ -136,18 +138,18 @@ def _repair_pr() -> dict[str, Any]:
     }
 
 
-def _ci_run(
-    run_id: int = CI_RUN_ID,
+def _bridge_run(
+    run_id: int = BRIDGE_RUN_ID,
     *,
+    workflow_id: int = BRIDGE_WORKFLOW_ID,
     run_attempt: int = 1,
     status: str = "completed",
     conclusion: str | None = "success",
-    event: str = "push",
-    workflow_id: int = autoheal.POST_MERGE_CI_WORKFLOW_ID,
-    name: str = autoheal.POST_MERGE_CI_NAME,
-    path: str = autoheal.POST_MERGE_CI_PATH,
+    name: str = autoheal.POST_MERGE_BRIDGE_NAME,
+    path: str = autoheal.POST_MERGE_BRIDGE_PATH,
     head_branch: str = "main",
     head_sha: str = MERGE,
+    event: str = autoheal.POST_MERGE_BRIDGE_EVENT,
 ) -> dict[str, Any]:
     return {
         "id": run_id,
@@ -158,6 +160,21 @@ def _ci_run(
         "head_branch": head_branch,
         "head_sha": head_sha,
         "event": event,
+        "status": status,
+        "conclusion": conclusion,
+    }
+
+
+def _bridge_job(
+    job_id: int = BRIDGE_JOB_ID,
+    *,
+    status: str = "completed",
+    conclusion: str | None = "success",
+    name: str = autoheal.POST_MERGE_REQUIRED_JOB_NAME,
+) -> dict[str, Any]:
+    return {
+        "id": job_id,
+        "name": name,
         "status": status,
         "conclusion": conclusion,
     }
@@ -190,7 +207,8 @@ class _TerminalApi:
     def __init__(
         self,
         *,
-        ci_runs: list[dict[str, Any]] | None = None,
+        bridge_runs: list[dict[str, Any]] | None = None,
+        bridge_jobs: dict[int, dict[str, Any] | None] | None = None,
         codeql_runs: list[dict[str, Any]] | None = None,
         alert_state: str = "fixed",
         alert_path: str | None = "examples/reference_sut/app.py",
@@ -203,7 +221,14 @@ class _TerminalApi:
         gate_event: str = "schedule",
     ) -> None:
         self.pr = _repair_pr()
-        self.ci_runs = [_ci_run()] if ci_runs is None else list(ci_runs)
+        self.bridge_runs = [_bridge_run()] if bridge_runs is None else list(bridge_runs)
+        if bridge_jobs is None:
+            self.bridge_jobs = {
+                int(run["id"]): _bridge_job(BRIDGE_JOB_ID + index)
+                for index, run in enumerate(self.bridge_runs)
+            }
+        else:
+            self.bridge_jobs = dict(bridge_jobs)
         self.codeql_runs = [_codeql_run()] if codeql_runs is None else list(codeql_runs)
         self.alert_state = alert_state
         self.alert_path = alert_path
@@ -277,6 +302,21 @@ class _TerminalApi:
                     "head_branch": "main",
                 },
             }
+        expected_bridge_runs = (
+            f"/actions/workflows/{autoheal.POST_MERGE_BRIDGE_WORKFLOW}/runs"
+            f"?head_sha={MERGE}&event={autoheal.POST_MERGE_BRIDGE_EVENT}"
+            f"&per_page={autoheal.POST_MERGE_BRIDGE_PAGE_SIZE}&page=1"
+        )
+        if path == expected_bridge_runs:
+            return {"workflow_runs": self.bridge_runs}
+        jobs_suffix = (
+            f"/jobs?filter=latest&per_page={autoheal.POST_MERGE_BRIDGE_MAX_JOBS}"
+        )
+        if path.startswith("/actions/runs/") and path.endswith(jobs_suffix):
+            run_id = int(path[len("/actions/runs/") : -len(jobs_suffix)])
+            job = self.bridge_jobs.get(run_id)
+            jobs = [] if job is None else [job]
+            return {"total_count": len(jobs), "jobs": jobs}
         if path.startswith("/actions/runs/"):
             run_id = int(path.rsplit("/", 1)[1])
             if run_id == ROUTE_PLAN_RUN_ID:
@@ -318,7 +358,7 @@ class _TerminalApi:
                     "repository": {"full_name": "portyu9/ai-qa-automation"},
                     "head_repository": {"full_name": "portyu9/ai-qa-automation"},
                 }
-            for run in [*self.ci_runs, *self.codeql_runs]:
+            for run in [*self.bridge_runs, *self.codeql_runs]:
                 if run["id"] == run_id:
                     return run
             raise AssertionError(f"unknown workflow run id: {run_id}")
@@ -329,11 +369,8 @@ class _TerminalApi:
             assert max_pages == 10
             return [self.pr]
         if path == (
-            f"/actions/workflows/{autoheal.POST_MERGE_CI_WORKFLOW_ID}/runs?head_sha={MERGE}"
+            f"/actions/workflows/{autoheal.MAIN_CODEQL_WORKFLOW_ID}/runs?head_sha={MERGE}"
         ):
-            assert max_pages == 2
-            return list(self.ci_runs)
-        if path == (f"/actions/workflows/{autoheal.MAIN_CODEQL_WORKFLOW_ID}/runs?head_sha={MERGE}"):
             assert max_pages == 2
             return list(self.codeql_runs)
         if path == f"/issues/{PR_NUMBER}/comments":
@@ -382,25 +419,7 @@ class _TerminalApi:
             }
             self.comments.append(created)
             return created
-        if path == f"/actions/workflows/{autoheal.POST_MERGE_CI_WORKFLOW}/dispatches":
-            self.dispatches.append((path, payload))
-            self.ci_runs.append(
-                _ci_run(
-                    status="queued",
-                    conclusion=None,
-                    event="workflow_dispatch",
-                )
-            )
-            return None
-        if path == f"/actions/workflows/{autoheal.MAIN_CODEQL_WORKFLOW}/dispatches":
-            self.dispatches.append((path, payload))
-            self.codeql_runs.append(
-                _codeql_run(
-                    status="queued",
-                    conclusion=None,
-                )
-            )
-            return None
+        self.dispatches.append((path, payload))
         raise AssertionError(f"unexpected POST path: {path}")
 
 
@@ -424,7 +443,7 @@ def test_terminal_closure_persists_exact_idempotent_certificate(
     assert len(api.comments) == 1
     certificate = autoheal._parse_terminal_closure_comment(api.comments[0]["body"])
     assert certificate is not None
-    assert certificate["version"] == 2
+    assert certificate["version"] == 3
     assert certificate["outcome"] == "resolved"
     assert certificate["pr"] == PR_NUMBER
     assert certificate["alert"] == 7
@@ -438,8 +457,12 @@ def test_terminal_closure_persists_exact_idempotent_certificate(
     assert certificate["routePlanRunId"] == ROUTE_PLAN_RUN_ID
     assert certificate["routeArtifactId"] == ROUTE_ARTIFACT_ID
     assert certificate["routeArtifactDigest"] == ROUTE_ARTIFACT_DIGEST
-    assert certificate["ciRunId"] == CI_RUN_ID
-    assert certificate["codeqlRunId"] == CODEQL_RUN_ID
+    assert certificate["postMergeWorkflowId"] == BRIDGE_WORKFLOW_ID
+    assert certificate["postMergeRunId"] == BRIDGE_RUN_ID
+    assert certificate["postMergeRunAttempt"] == 1
+    assert certificate["postMergeEvent"] == autoheal.POST_MERGE_BRIDGE_EVENT
+    assert certificate["postMergeRequiredJobId"] == BRIDGE_JOB_ID
+    assert certificate["postMergeRequiredJobName"] == autoheal.POST_MERGE_REQUIRED_JOB_NAME
     assert certificate["workflowRunId"] == AUTOHEAL_RUN_ID
     assert certificate["trustedStatusId"] == TRUSTED_STATUS_ID
     assert certificate["trustedGateWorkflowId"] == autoheal.TRUSTED_PR_GATE_WORKFLOW_ID
@@ -604,189 +627,103 @@ def test_current_main_codeql_missing_evidence_does_not_dispatch(
     assert api.dispatches == []
 
 
-def test_terminal_closure_dispatches_liveness_ci_but_waits_for_automatic_push(
+def test_terminal_closure_waits_for_post_merge_bridge_without_dispatch(
     config: dict[str, Any],
 ) -> None:
-    api = _TerminalApi(ci_runs=[])
+    api = _TerminalApi(bridge_runs=[], bridge_jobs={})
 
     assert autoheal._reconcile_terminal_closure(api, MERGE, config) is True
-    assert api.dispatches == [
-        (
-            f"/actions/workflows/{autoheal.POST_MERGE_CI_WORKFLOW}/dispatches",
-            {
-                "ref": "main",
-                "inputs": {"subject_sha": MERGE, "subject_ref": "main"},
-            },
-        )
-    ]
-    assert api.ci_runs[0]["event"] == "workflow_dispatch"
     assert api.comments == []
-
-
-def test_post_merge_ci_reuses_existing_push_without_dispatch(
-    config: dict[str, Any],
-) -> None:
-    api = _TerminalApi()
-
-    evidence = autoheal._ensure_post_merge_ci(api, MERGE, config)
-
-    assert evidence == {
-        "postMergeCiWorkflowId": autoheal.POST_MERGE_CI_WORKFLOW_ID,
-        "postMergeCiRunId": CI_RUN_ID,
-        "postMergeCiRunAttempt": 1,
-        "postMergeCiEvent": "push",
-        "postMergeCiStatus": "completed",
-        "postMergeCiDispatched": False,
-    }
     assert api.dispatches == []
 
 
-def test_post_merge_ci_dispatches_new_exact_subject_run(
+def test_terminal_closure_ignores_skipped_post_merge_bridge(
     config: dict[str, Any],
 ) -> None:
-    api = _TerminalApi(ci_runs=[])
+    api = _TerminalApi(
+        bridge_jobs={BRIDGE_RUN_ID: _bridge_job(conclusion="skipped")},
+    )
 
-    evidence = autoheal._ensure_post_merge_ci(api, MERGE, config)
-
-    assert evidence["postMergeCiRunId"] == CI_RUN_ID
-    assert evidence["postMergeCiRunAttempt"] == 1
-    assert evidence["postMergeCiEvent"] == "workflow_dispatch"
-    assert evidence["postMergeCiStatus"] == "queued"
-    assert evidence["postMergeCiDispatched"] is True
-    assert len(api.dispatches) == 1
+    assert autoheal._reconcile_terminal_closure(api, MERGE, config) is True
+    assert api.comments == []
+    assert api.dispatches == []
 
 
-@pytest.mark.parametrize(
-    ("row", "message"),
-    (
-        (
-            _ci_run(run_attempt=2),
-            "exact-subject CI run_attempt must equal 1",
-        ),
-        (
-            _ci_run(workflow_id=autoheal.POST_MERGE_CI_WORKFLOW_ID + 1),
-            "mismatched workflow identity",
-        ),
-        (
-            _ci_run(name="Different CI"),
-            "mismatched workflow identity",
-        ),
-        (
-            _ci_run(path=".github/workflows/not-ci.yml"),
-            "mismatched workflow identity",
-        ),
-        (
-            _ci_run(head_sha="8" * 40),
-            "different head SHA",
-        ),
-        (
-            _ci_run(head_branch="feature"),
-            "not bound to main",
-        ),
-        (
-            _ci_run(event="workflow_run"),
-            "unexpected event",
-        ),
-        (
-            _ci_run(status="completed", conclusion="failure"),
-            "completed non-successfully",
-        ),
-    ),
-)
-def test_post_merge_ci_rejects_malformed_canonical_evidence(
-    config: dict[str, Any],
-    row: dict[str, Any],
-    message: str,
-) -> None:
-    api = _TerminalApi(ci_runs=[row])
-
-    with pytest.raises(autoheal.AutohealError, match=message):
-        autoheal._ensure_post_merge_ci(api, MERGE, config)
-
-
-def test_post_merge_ci_rejects_duplicate_canonical_runs(
+def test_terminal_closure_rejects_failed_post_merge_required_gate(
     config: dict[str, Any],
 ) -> None:
-    api = _TerminalApi(ci_runs=[_ci_run(), _ci_run(7101)])
-
-    with pytest.raises(autoheal.AutohealError, match="ambiguous exact-subject CI evidence"):
-        autoheal._ensure_post_merge_ci(api, MERGE, config)
-
-
-def test_post_merge_ci_rejects_main_drift_after_dispatch_registration(
-    config: dict[str, Any],
-) -> None:
-    class _DriftApi(_TerminalApi):
-        def post(
-            self,
-            path: str,
-            payload: dict[str, Any] | None = None,
-            *,
-            token: str | None = None,
-        ) -> Any:
-            result = super().post(path, payload, token=token)
-            self.main_sha = "9" * 40
-            return result
-
-    api = _DriftApi(ci_runs=[])
+    api = _TerminalApi(
+        bridge_jobs={BRIDGE_RUN_ID: _bridge_job(conclusion="failure")},
+    )
 
     with pytest.raises(
         autoheal.AutohealError,
-        match="current main changed after post-merge CI registration",
+        match="required-gate job completed non-successfully",
     ):
-        autoheal._ensure_post_merge_ci(api, MERGE, config)
+        autoheal._reconcile_terminal_closure(api, MERGE, config)
+    assert api.comments == []
 
 
-def test_post_merge_ci_dispatch_failure_fails_closed(
+def test_terminal_closure_rejects_duplicate_post_merge_bridge_runs(
     config: dict[str, Any],
 ) -> None:
-    class _DispatchFailureApi(_TerminalApi):
-        def post(
-            self,
-            path: str,
-            payload: dict[str, Any] | None = None,
-            *,
-            token: str | None = None,
-        ) -> Any:
-            assert path == f"/actions/workflows/{autoheal.POST_MERGE_CI_WORKFLOW}/dispatches"
-            assert payload == {
-                "ref": "main",
-                "inputs": {"subject_sha": MERGE, "subject_ref": "main"},
-            }
-            assert token is None
-            raise autoheal.AutohealError("simulated dispatch failure")
+    second = _bridge_run(BRIDGE_RUN_ID + 10)
+    api = _TerminalApi(
+        bridge_runs=[_bridge_run(), second],
+        bridge_jobs={
+            BRIDGE_RUN_ID: _bridge_job(),
+            BRIDGE_RUN_ID + 10: _bridge_job(BRIDGE_JOB_ID + 10),
+        },
+    )
 
-    api = _DispatchFailureApi(ci_runs=[])
-
-    with pytest.raises(autoheal.AutohealError, match="simulated dispatch failure"):
-        autoheal._ensure_post_merge_ci(api, MERGE, config)
+    with pytest.raises(autoheal.AutohealError, match="ambiguous post-merge bridge evidence"):
+        autoheal._reconcile_terminal_closure(api, MERGE, config)
+    assert api.comments == []
 
 
-def test_post_merge_ci_registration_exhaustion_fails_closed(
+@pytest.mark.parametrize(
+    ("bridge_run", "message"),
+    (
+        (_bridge_run(run_attempt=2), "run_attempt must equal 1"),
+        (_bridge_run(name="Different Bridge"), "mismatched workflow identity"),
+        (_bridge_run(path=".github/workflows/ci.yml"), "mismatched workflow identity"),
+        (_bridge_run(head_sha="8" * 40), "not exact-main workflow_run evidence"),
+        (_bridge_run(head_branch="feature"), "not exact-main workflow_run evidence"),
+        (_bridge_run(event="schedule"), "not exact-main workflow_run evidence"),
+    ),
+)
+def test_terminal_closure_rejects_malformed_post_merge_bridge(
     config: dict[str, Any],
-    monkeypatch: pytest.MonkeyPatch,
+    bridge_run: dict[str, Any],
+    message: str,
 ) -> None:
-    class _NoRegistrationApi(_TerminalApi):
-        def post(
-            self,
-            path: str,
-            payload: dict[str, Any] | None = None,
-            *,
-            token: str | None = None,
-        ) -> Any:
-            assert token is None
-            self.dispatches.append((path, payload))
-            return None
+    api = _TerminalApi(
+        bridge_runs=[bridge_run],
+        bridge_jobs={int(bridge_run["id"]): _bridge_job()},
+    )
 
-    api = _NoRegistrationApi(ci_runs=[])
-    monkeypatch.setattr(autoheal, "POST_MERGE_CI_REGISTRATION_ATTEMPTS", 2)
-    monkeypatch.setattr(autoheal, "POST_MERGE_CI_REGISTRATION_DELAY_SECONDS", 0)
-
-    with pytest.raises(autoheal.AutohealError, match="explicit CI dispatch did not register"):
-        autoheal._ensure_post_merge_ci(api, MERGE, config)
+    with pytest.raises(autoheal.AutohealError, match=message):
+        autoheal._reconcile_terminal_closure(api, MERGE, config)
+    assert api.comments == []
 
 
-def test_finalize_post_merge_orders_topology_before_ci_registration(
+def test_terminal_closure_rejects_bridge_evidence_if_certifying_run_later_fails(
+    config: dict[str, Any],
+) -> None:
+    api = _TerminalApi()
+    assert autoheal._reconcile_terminal_closure(api, MERGE, config) is True
+    assert len(api.comments) == 1
+
+    api.bridge_runs[0]["conclusion"] = "failure"
+
+    with pytest.raises(
+        autoheal.PolicyBlock,
+        match="terminal closure certificate no longer has exact successful workflow evidence",
+    ):
+        autoheal._reconcile_terminal_closure(api, MERGE, config)
+
+
+def test_finalize_post_merge_stops_at_structural_proof(
     config: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -796,20 +733,7 @@ def test_finalize_post_merge_orders_topology_before_ci_registration(
         events.append("topology")
         return MERGE, TREE
 
-    def _ensure(*args: Any) -> dict[str, Any]:
-        assert events == ["topology"]
-        events.append("ci-registration")
-        return {
-            "postMergeCiWorkflowId": autoheal.POST_MERGE_CI_WORKFLOW_ID,
-            "postMergeCiRunId": CI_RUN_ID,
-            "postMergeCiRunAttempt": 1,
-            "postMergeCiEvent": "push",
-            "postMergeCiStatus": "completed",
-            "postMergeCiDispatched": False,
-        }
-
     monkeypatch.setattr(autoheal, "_verify_actual_merge_commit", _verify)
-    monkeypatch.setattr(autoheal, "_ensure_post_merge_ci", _ensure)
 
     evidence = autoheal._finalize_post_merge_evidence(
         _TerminalApi(),
@@ -818,52 +742,17 @@ def test_finalize_post_merge_orders_topology_before_ci_registration(
         config,
     )
 
-    assert events == ["topology", "ci-registration"]
-    assert evidence["mergeSha"] == MERGE
-    assert evidence["sourceTreeSha"] == TREE
-    assert evidence["postMergeCiRunId"] == CI_RUN_ID
-
-
-@pytest.mark.parametrize(
-    ("ci_runs", "codeql_runs", "message"),
-    (
-        ([_ci_run(), _ci_run(7101)], [_codeql_run()], "ambiguous exact-subject CI evidence"),
-        (
-            [_ci_run()],
-            [_codeql_run(), _codeql_run(7102)],
-            "ambiguous terminal exact-main CodeQL evidence",
+    assert events == ["topology"]
+    assert evidence == {
+        "mergeSha": MERGE,
+        "sourceTreeSha": TREE,
+        "postMergeBinding": (
+            "exact-current-main-parents-validated-source-tree-validation-pending"
         ),
-        (
-            [_ci_run(status="completed", conclusion="failure")],
-            [_codeql_run()],
-            "CI run completed non-successfully",
-        ),
-        (
-            [_ci_run()],
-            [_codeql_run(status="completed", conclusion="failure")],
-            "CodeQL run completed non-successfully",
-        ),
-        (
-            [_ci_run()],
-            [_codeql_run(workflow_id=autoheal.MAIN_CODEQL_WORKFLOW_ID + 1)],
-            "mismatched workflow identity",
-        ),
-    ),
-)
-def test_terminal_closure_rejects_failed_or_ambiguous_workflow_evidence(
-    config: dict[str, Any],
-    ci_runs: list[dict[str, Any]],
-    codeql_runs: list[dict[str, Any]],
-    message: str,
-) -> None:
-    api = _TerminalApi(ci_runs=ci_runs, codeql_runs=codeql_runs)
-
-    with pytest.raises(autoheal.AutohealError, match=message):
-        autoheal._reconcile_terminal_closure(api, MERGE, config)
-    assert api.comments == []
+    }
 
 
-def test_terminal_closure_waits_for_unresolved_alert_after_green_codeql(
+def test_terminal_closure_waits_for_unresolved_alert_after_green_post_merge_validation(
     config: dict[str, Any],
 ) -> None:
     api = _TerminalApi(alert_state="open")
@@ -887,30 +776,16 @@ def test_terminal_closure_rejects_missing_or_moved_alert_path(
     assert api.comments == []
 
 
-@pytest.mark.parametrize(
-    ("ci_runs", "codeql_runs", "message"),
-    (
-        (
-            [_ci_run(run_attempt=2)],
-            [_codeql_run()],
-            "exact-subject CI run_attempt must equal 1",
-        ),
-        (
-            [_ci_run()],
-            [_codeql_run(run_attempt=2)],
-            "terminal exact-main CodeQL run_attempt must equal 1",
-        ),
-    ),
-)
-def test_terminal_closure_rejects_manual_rerun_evidence(
+def test_terminal_closure_rejects_post_merge_bridge_rerun(
     config: dict[str, Any],
-    ci_runs: list[dict[str, Any]],
-    codeql_runs: list[dict[str, Any]],
-    message: str,
 ) -> None:
-    api = _TerminalApi(ci_runs=ci_runs, codeql_runs=codeql_runs)
+    rerun = _bridge_run(run_attempt=2)
+    api = _TerminalApi(
+        bridge_runs=[rerun],
+        bridge_jobs={BRIDGE_RUN_ID: _bridge_job()},
+    )
 
-    with pytest.raises(autoheal.AutohealError, match=message):
+    with pytest.raises(autoheal.AutohealError, match="run_attempt must equal 1"):
         autoheal._reconcile_terminal_closure(api, MERGE, config)
     assert api.comments == []
 

@@ -62,7 +62,10 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     )
     assert result["workflows"]["manual"]["credentialed_model"] == "manual-only"
     post_merge_ci = result["workflows"]["post_merge_ci"]
-    assert post_merge_ci["trigger"] == "workflow_run:dependency-governance:completed"
+    assert (
+        post_merge_ci["trigger"]
+        == "workflow_run:dependency-governance-or-security-autoheal:completed"
+    )
     assert (
         post_merge_ci["authority"] == "exact-governed-main-validation-plus-codeql-sarif-only-write"
     )
@@ -997,8 +1000,43 @@ def test_post_merge_ci_rejects_trigger_expansion(tmp_path: Path) -> None:
     path.write_text(text.replace("on:\n", "on:\n  pull_request:\n", 1), encoding="utf-8")
 
     with pytest.raises(
-        ValueError, match="must remain exact dependency-governance workflow_run only"
+        ValueError, match="must remain exact dependency/security-controller workflow_run only"
     ):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_post_merge_ci_rejects_cross_lane_security_merge_binding(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "post-merge-ci.yml"
+    text = path.read_text(encoding="utf-8")
+    security_binding = (
+        "merge_source_re='^Merge pull request #[1-9][0-9]* from "
+        "portyu9/automation/codeql-autoheal-'"
+    )
+    assert security_binding in text
+    path.write_text(
+        text.replace(
+            security_binding,
+            "merge_source_re='^Merge pull request #[1-9][0-9]* from "
+            "portyu9/automation/dependency-promotion-'",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="exact governed-merge binding drifted"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_post_merge_ci_rejects_missing_main_advance_guard(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "post-merge-ci.yml"
+    text = path.read_text(encoding="utf-8")
+    guard = "      github.event.workflow_run.head_sha != github.sha\n"
+    assert guard in text
+    path.write_text(text.replace(guard, "", 1), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="exact governed-merge binding drifted"):
         ci_contract.verify_ci_contract(root)
 
 

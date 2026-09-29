@@ -4,7 +4,7 @@ name: Post-Merge CI — ƳƤ AI QA Automation Framework
 # It never merges, publishes Trusted PR Gate, consumes secrets, or executes candidate workflow bytes.
 on:
   workflow_run:
-    workflows: [dependency-governance]
+    workflows: [dependency-governance, Security Auto-Heal]
     types: [completed]
 
 permissions:
@@ -20,7 +20,8 @@ jobs:
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_repository.full_name == github.repository &&
-      github.event.workflow_run.head_branch == 'main'
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_sha != github.sha
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     permissions:
@@ -51,11 +52,23 @@ jobs:
           [[ "$SUBJECT_SHA" =~ $sha_re ]]
           [[ "$UPSTREAM_RUN_ID" =~ ^[1-9][0-9]*$ ]]
           [[ "$UPSTREAM_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          test "$UPSTREAM_RUN_ATTEMPT" = "1"
           test "$GITHUB_REF" = "refs/heads/main"
-          test "$UPSTREAM_NAME" = "dependency-governance"
-          test "$UPSTREAM_PATH" = ".github/workflows/dependency-governance.yml"
-          case "$UPSTREAM_EVENT" in
-            workflow_run|status|schedule) ;;
+          case "$UPSTREAM_NAME:$UPSTREAM_PATH" in
+            "dependency-governance:.github/workflows/dependency-governance.yml")
+              case "$UPSTREAM_EVENT" in
+                workflow_run|status|schedule) ;;
+                *) exit 1 ;;
+              esac
+              merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/(dependabot/|automation/dependency-promotion-)'
+              ;;
+            "Security Auto-Heal:.github/workflows/security-autoheal.yml")
+              case "$UPSTREAM_EVENT" in
+                workflow_run|schedule) ;;
+                *) exit 1 ;;
+              esac
+              merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/automation/codeql-autoheal-'
+              ;;
             *) exit 1 ;;
           esac
           test "$UPSTREAM_STATUS" = "completed"
@@ -75,6 +88,7 @@ jobs:
           jq -e \
             --arg subject "$SUBJECT_SHA" \
             --arg control "$CONTROL_SHA" \
+            --arg merge_source_re "$merge_source_re" \
             '
               .sha == $subject and
               (.parents | length) == 2 and
@@ -86,7 +100,7 @@ jobs:
               .committer.id == 19864447 and
               .commit.verification.verified == true and
               .commit.verification.reason == "valid" and
-              (.commit.message | test("^Merge pull request #[1-9][0-9]* from portyu9/(dependabot/|automation/dependency-promotion-)"))
+              (.commit.message | test($merge_source_re))
             ' <<<"$commit_json" >/dev/null
 
           printf 'run_validation=true\n' >> "$GITHUB_OUTPUT"
