@@ -1420,7 +1420,6 @@ def test_created_branch_rolls_back_on_post_ref_provenance_failure(
     assert branch_exists is False
 
 
-
 def test_terminal_workflow_evidence_requires_exact_app_push_and_required_gate() -> None:
     run_id = 7001
     required_job_id = 7002
@@ -1428,8 +1427,7 @@ def test_terminal_workflow_evidence_requires_exact_app_push_and_required_gate() 
     class Api:
         def get(self, path: str) -> dict[str, Any]:
             if path == (
-                "/actions/workflows/ci.yml/runs"
-                f"?head_sha={MAIN}&event=push&per_page=100&page=1"
+                f"/actions/workflows/ci.yml/runs?head_sha={MAIN}&event=push&per_page=100&page=1"
             ):
                 return {
                     "total_count": 1,
@@ -1499,8 +1497,7 @@ def test_terminal_workflow_evidence_rejects_wrong_actor_and_manual_rerun() -> No
 
         def get(self, path: str) -> dict[str, Any]:
             assert path == (
-                "/actions/workflows/codeql.yml/runs"
-                f"?head_sha={MAIN}&event=push&per_page=100&page=1"
+                f"/actions/workflows/codeql.yml/runs?head_sha={MAIN}&event=push&per_page=100&page=1"
             )
             return {
                 "total_count": 1,

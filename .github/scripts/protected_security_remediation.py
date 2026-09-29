@@ -1477,7 +1477,6 @@ def _close_stale_generated_repair(
     }
 
 
-
 def _terminal_comment_body(certificate: Mapping[str, Any]) -> str:
     return (
         TERMINAL_COMMENT_PREFIX
@@ -1641,10 +1640,14 @@ def _validate_merged_repair(
         or (base.get("repo") or {}).get("full_name") != EXPECTED_REPOSITORY
         or base.get("ref") != EXPECTED_BASE_BRANCH
     ):
-        raise ProtectedRemediationError("terminal protected repair repository/base identity drifted")
+        raise ProtectedRemediationError(
+            "terminal protected repair repository/base identity drifted"
+        )
     branch = head.get("ref")
     if not isinstance(branch, str) or BRANCH_RE.fullmatch(branch) is None:
-        raise ProtectedRemediationError("terminal protected repair branch is outside reviewed grammar")
+        raise ProtectedRemediationError(
+            "terminal protected repair branch is outside reviewed grammar"
+        )
     head_sha = _require_sha(head.get("sha"), "terminal protected repair head SHA")
     base_sha = _require_sha(base.get("sha"), "terminal protected repair base SHA")
     merge_sha = _require_sha(pr.get("merge_commit_sha"), "terminal protected repair merge SHA")
@@ -1677,9 +1680,7 @@ def _validate_merged_repair(
         + marker(record, plan, head_sha=head_sha)
     )
     if pr.get("title") != expected_title or pr.get("body") != expected_body:
-        raise ProtectedRemediationError(
-            "terminal protected repair presentation identity drifted"
-        )
+        raise ProtectedRemediationError("terminal protected repair presentation identity drifted")
     if (
         plan.get("baseSha") != base_sha
         or plan.get("targetPath") != strategy.path
@@ -1809,12 +1810,11 @@ def _terminal_trusted_gate_evidence(
             _require_positive_int(row.get("id"), "terminal trusted status id")
             matches.append(row)
     if not matches:
-        raise ProtectedRemediationError("terminal protected repair lacks dedicated-App trusted status")
+        raise ProtectedRemediationError(
+            "terminal protected repair lacks dedicated-App trusted status"
+        )
     latest = max(matches, key=lambda row: int(row["id"]))
-    if (
-        latest.get("state") != "success"
-        or latest.get("description") != TRUSTED_STATUS_DESCRIPTION
-    ):
+    if latest.get("state") != "success" or latest.get("description") != TRUSTED_STATUS_DESCRIPTION:
         raise ProtectedRemediationError(
             "terminal protected repair latest dedicated-App trusted status is not green"
         )
@@ -1846,8 +1846,7 @@ def _terminal_trusted_gate_evidence(
         or _require_sha(prospective.get("sha"), "terminal trusted prospective merge SHA")
         != prospective_sha
         or not isinstance(prospective_parents, list)
-        or [((parent or {}).get("sha")) for parent in prospective_parents]
-        != [base_sha, head_sha]
+        or [((parent or {}).get("sha")) for parent in prospective_parents] != [base_sha, head_sha]
         or ((prospective.get("tree") or {}).get("sha"))
         != ((head_commit.get("tree") or {}).get("sha"))
     ):
@@ -1968,9 +1967,7 @@ def _terminal_workflow_evidence(
             f"/actions/runs/{run_id}/jobs?filter=latest&per_page={TERMINAL_JOB_LIMIT}"
         )
         jobs = jobs_payload.get("jobs") if isinstance(jobs_payload, dict) else None
-        jobs_total = (
-            jobs_payload.get("total_count") if isinstance(jobs_payload, dict) else None
-        )
+        jobs_total = jobs_payload.get("total_count") if isinstance(jobs_payload, dict) else None
         if (
             not isinstance(jobs_total, int)
             or isinstance(jobs_total, bool)
@@ -2176,9 +2173,7 @@ def _reconcile_terminal_closure(
     body = _terminal_comment_body(certificate)
     created = write_api.post(f"/issues/{number}/comments", {"body": body})
     created_user = (created or {}).get("user") if isinstance(created, dict) else None
-    comment_id = (
-        (created or {}).get("id") if isinstance(created, dict) else None
-    )
+    comment_id = (created or {}).get("id") if isinstance(created, dict) else None
     if (
         not isinstance(created, dict)
         or created.get("body") != body
@@ -2218,6 +2213,7 @@ def _reconcile_terminal_closure(
         )
     )
     return True
+
 
 def _merge_repair(
     read_api: GitHubApi,
