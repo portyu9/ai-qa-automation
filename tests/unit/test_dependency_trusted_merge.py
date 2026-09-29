@@ -254,10 +254,7 @@ def test_target_output_is_closed_and_uses_inherited_descriptor(
         merge._target_output(lane=merge.LANE_PROMOTION, pr_number=314)
         == "lane=dependency-promotion\npr_number=314\n"
     )
-    assert (
-        merge._target_output(lane=merge.LANE_NONE, pr_number=None)
-        == "lane=none\npr_number=\n"
-    )
+    assert merge._target_output(lane=merge.LANE_NONE, pr_number=None) == "lane=none\npr_number=\n"
     with pytest.raises(merge.GovernanceError, match="outside reviewed policy"):
         merge._target_output(lane="other", pr_number=314)
     with pytest.raises(merge.GovernanceError, match="unexpectedly carries a PR"):
@@ -267,7 +264,4 @@ def test_target_output_is_closed_and_uses_inherited_descriptor(
     with output.open("ab", buffering=0) as handle:
         monkeypatch.setattr(merge, "TARGET_OUTPUT_FD", handle.fileno())
         merge._publish_target(lane=merge.LANE_PROMOTION, pr_number=314)
-    assert (
-        output.read_text(encoding="utf-8")
-        == "lane=dependency-promotion\npr_number=314\n"
-    )
+    assert output.read_text(encoding="utf-8") == "lane=dependency-promotion\npr_number=314\n"

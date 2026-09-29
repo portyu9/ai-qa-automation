@@ -914,9 +914,7 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         "pull-requests": "read",
         "statuses": "read",
     }:
-        raise ValueError(
-            "dependency trusted target resolver must remain job-level read-only"
-        )
+        raise ValueError("dependency trusted target resolver must remain job-level read-only")
     if (
         "    environment:" in resolve_job
         or "contents: write" in resolve_job
@@ -1071,6 +1069,7 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         "feedback_loop": "forbidden-trusted-gate-does-not-listen-to-this-workflow",
         "workflow_definition": "action-pin-normalized-reviewed-git-blob",
     }
+
 
 def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
     base = _trusted_auto._base
