@@ -1,7 +1,7 @@
 name: Dependency Trusted Merge — ƳƤ AI QA Automation Framework
 
 # One-way accepted-main merger for dependency subjects already validated by Trusted PR Gate.
-# It cannot create branches/PRs or publish trusted status, and Trusted PR Gate does not listen to it.
+# Resolution is a separate read-only job; only the exact-target merger receives write authority.
 on:
   workflow_run:
     workflows: ["Trusted PR Auto Gate — ƳƤ AI QA Automation Framework"]
@@ -15,8 +15,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  merge:
-    name: Merge exact trusted dependency subject
+  resolve:
+    name: Resolve exact trusted dependency subject
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_repository.full_name == github.repository &&
@@ -24,6 +24,54 @@ jobs:
        github.event.workflow_run.event == 'schedule') &&
       github.event.workflow_run.head_branch == 'main' &&
       github.event.workflow_run.head_sha == github.sha
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GOVERNANCE_CONTROL_SHA: ${{ github.sha }}
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+      statuses: read
+    outputs:
+      lane: ${{ steps.target.outputs.lane }}
+      pr_number: ${{ steps.target.outputs.pr_number }}
+    steps:
+      - name: Checkout exact trusted default-branch resolver
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Set up resolver Python 3.11
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11.16'
+      - name: Verify exact accepted-main resolver revision
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Resolve exact dependency subject from completed Trusted PR Gate
+        id: target
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
+          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}
+        run: |
+          set -euo pipefail
+          python .github/scripts/dependency_trusted_merge.py \
+            --trusted-run-id "${{ github.event.workflow_run.id }}" \
+            --trusted-run-attempt "${{ github.event.workflow_run.run_attempt }}" 3>> "$GITHUB_OUTPUT"
+
+  merge:
+    name: Merge exact trusted dependency subject
+    needs: resolve
+    if: >-
+      needs.resolve.result == 'success' &&
+      needs.resolve.outputs.pr_number != '' &&
+      (needs.resolve.outputs.lane == 'dependency-promotion' ||
+       needs.resolve.outputs.lane == 'dependabot-actions')
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment:
@@ -47,35 +95,35 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.11.16'
-      - name: Verify exact accepted-main controller revision
+      - name: Verify exact accepted-main merge controller revision
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = "refs/heads/main"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-      - name: Resolve exact dependency subject from completed Trusted PR Gate
-        id: target
+      - name: Validate resolved dependency mutation target
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
-          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}
+          TARGET_LANE: ${{ needs.resolve.outputs.lane }}
+          TARGET_PR: ${{ needs.resolve.outputs.pr_number }}
         run: |
           set -euo pipefail
-          python .github/scripts/dependency_trusted_merge.py \
-            --trusted-run-id "${{ github.event.workflow_run.id }}" \
-            --trusted-run-attempt "${{ github.event.workflow_run.run_attempt }}" 3>> "$GITHUB_OUTPUT"
+          [[ "$TARGET_PR" =~ ^[1-9][0-9]*$ ]]
+          case "$TARGET_LANE" in
+            dependency-promotion|dependabot-actions) ;;
+            *) exit 1 ;;
+          esac
       - name: Capture Python 3.11 resolver
-        if: steps.target.outputs.lane == 'dependency-promotion'
+        if: needs.resolve.outputs.lane == 'dependency-promotion'
         run: printf 'PROMOTION_PYTHON311=%s\n' "$(command -v python)" >> "$GITHUB_ENV"
       - name: Set up Python 3.14
-        if: steps.target.outputs.lane == 'dependency-promotion'
+        if: needs.resolve.outputs.lane == 'dependency-promotion'
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.14.7'
       - name: Capture Python 3.14 resolver
-        if: steps.target.outputs.lane == 'dependency-promotion'
+        if: needs.resolve.outputs.lane == 'dependency-promotion'
         run: printf 'PROMOTION_PYTHON314=%s\n' "$(command -v python)" >> "$GITHUB_ENV"
       - name: Merge exact trusted dependency promotion
-        if: steps.target.outputs.lane == 'dependency-promotion'
+        if: needs.resolve.outputs.lane == 'dependency-promotion'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
@@ -84,13 +132,13 @@ jobs:
           python .github/scripts/dependency_promotion.py
           --reconcile
           --allow-merge
-          --target-promotion-pr "${{ steps.target.outputs.pr_number }}"
+          --target-promotion-pr "${{ needs.resolve.outputs.pr_number }}"
       - name: Merge exact trusted Dependabot Actions subject
-        if: steps.target.outputs.lane == 'dependabot-actions'
+        if: needs.resolve.outputs.lane == 'dependabot-actions'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
           python .github/scripts/dependency_governance.py
           --reconcile
           --allow-merge
-          --target-dependabot-pr "${{ steps.target.outputs.pr_number }}"
+          --target-dependabot-pr "${{ needs.resolve.outputs.pr_number }}"
