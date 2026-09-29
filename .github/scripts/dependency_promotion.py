@@ -83,6 +83,7 @@ QUALIFICATION_WAKE_RE = re.compile(
     r"(?P<stage>trusted-gate):(?P<run>[1-9][0-9]*):(?P<attempt>[1-9][0-9]*)$"
 )
 
+
 def _actions_check_details_url_is_canonical(
     details_url: Any,
     *,
@@ -94,7 +95,10 @@ def _actions_check_details_url_is_canonical(
     run_url = f"https://github.com/{EXPECTED_REPOSITORY}/actions/runs/{run_id}"
     if details_url == run_url:
         return True
-    if re.fullmatch(re.escape(run_url) + r"/job/[1-9][0-9]*", details_url) is not None:
+    if (
+        re.fullmatch(re.escape(run_url) + r"/job/[1-9][0-9]*", details_url)
+        is not None
+    ):
         return True
     return details_url == f"https://github.com/{EXPECTED_REPOSITORY}/runs/{check_id}"
 
