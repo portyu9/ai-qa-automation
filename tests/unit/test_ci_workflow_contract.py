@@ -382,7 +382,6 @@ def test_dependency_governance_pr_self_test_rejects_privileged_trigger(
         ci_contract.verify_ci_contract(root)
 
 
-
 def test_dependency_governance_requires_control_sha_for_general_mutation_job(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -430,8 +429,11 @@ def test_dependency_trusted_merge_requires_control_sha(
         ci_contract._workflow_structure_sha1(mutated),
     )
 
-    with pytest.raises(ValueError, match="dependency trusted merger missing reviewed authority invariant"):
+    with pytest.raises(
+        ValueError, match="dependency trusted merger missing reviewed authority invariant"
+    ):
         ci_contract.verify_ci_contract(root)
+
 
 def test_dependency_governance_mutation_requires_exact_current_main(
     tmp_path: Path,
@@ -497,7 +499,6 @@ def test_dependency_governance_rejects_unguarded_author_token_mint(
         match="mutation-capable steps must require exact-current-main admission",
     ):
         ci_contract.verify_ci_contract(root)
-
 
 
 def test_dependency_governance_rejects_revision_guard_removed_from_govern_job(
@@ -586,10 +587,9 @@ def test_dependency_governance_rejects_reciprocal_trusted_auto_workflow_run(
         ci_contract._workflow_structure_sha1(mutated),
     )
 
-    with pytest.raises(
-        ValueError, match="must remain accepted-main workflow_run/schedule only"
-    ):
+    with pytest.raises(ValueError, match="must remain accepted-main workflow_run/schedule only"):
         ci_contract.verify_ci_contract(root)
+
 
 def test_dependency_trusted_merge_resolver_is_read_only(
     tmp_path: Path,
@@ -683,7 +683,7 @@ def test_dependency_trusted_merge_resolver_output_uses_inherited_fd_only(
     text = path.read_text(encoding="utf-8")
     current = '            --trusted-run-attempt "${{ github.event.workflow_run.run_attempt }}" 3>> "$GITHUB_OUTPUT"\n'
     assert current in text
-    mutated = text.replace(current, current.replace('3>>', '>>'), 1)
+    mutated = text.replace(current, current.replace("3>>", ">>"), 1)
     path.write_text(mutated, encoding="utf-8")
     monkeypatch.setattr(
         ci_contract,
