@@ -251,6 +251,7 @@ def test_policy_self_test_keeps_single_file_self_excluding_authority() -> None:
         ".github/scripts/trusted_status.py",
         ".github/workflows/ci.yml",
         ".github/workflows/codeql.yml",
+        ".github/workflows/post-merge-ci.yml",
         ".github/workflows/protected-security-remediation.yml",
         ".github/workflows/trusted-pr-auto.yml",
         "scripts/auto_trusted_bot_admission.py",
@@ -1417,3 +1418,325 @@ def test_created_branch_rolls_back_on_post_ref_provenance_failure(
 
     assert deleted == [f"/git/refs/heads/{encoded}"]
     assert branch_exists is False
+
+
+
+def test_terminal_workflow_evidence_requires_exact_app_push_and_required_gate() -> None:
+    run_id = 7001
+    required_job_id = 7002
+
+    class Api:
+        def get(self, path: str) -> dict[str, Any]:
+            if path == (
+                "/actions/workflows/ci.yml/runs"
+                f"?head_sha={MAIN}&event=push&per_page=100&page=1"
+            ):
+                return {
+                    "total_count": 1,
+                    "workflow_runs": [
+                        {
+                            "id": run_id,
+                            "workflow_id": author.TERMINAL_CI_WORKFLOW_ID,
+                            "name": author.TERMINAL_CI_WORKFLOW_NAME,
+                            "path": author.TERMINAL_CI_WORKFLOW_PATH,
+                            "event": "push",
+                            "head_branch": "main",
+                            "head_sha": MAIN,
+                            "run_attempt": 1,
+                            "status": "completed",
+                            "conclusion": "success",
+                            "repository": {"full_name": routing.EXPECTED_REPOSITORY},
+                            "head_repository": {"full_name": routing.EXPECTED_REPOSITORY},
+                            "actor": {
+                                "login": BOT_LOGIN,
+                                "id": BOT_ID,
+                                "type": "Bot",
+                            },
+                            "triggering_actor": {
+                                "login": BOT_LOGIN,
+                                "id": BOT_ID,
+                                "type": "Bot",
+                            },
+                        }
+                    ],
+                }
+            if path == f"/actions/runs/{run_id}/jobs?filter=latest&per_page=100":
+                return {
+                    "total_count": 1,
+                    "jobs": [
+                        {
+                            "id": required_job_id,
+                            "name": author.TERMINAL_CI_REQUIRED_JOB,
+                            "status": "completed",
+                            "conclusion": "success",
+                        }
+                    ],
+                }
+            raise AssertionError(path)
+
+    evidence = author._terminal_workflow_evidence(
+        Api(),
+        workflow=author.TERMINAL_CI_WORKFLOW,
+        workflow_id=author.TERMINAL_CI_WORKFLOW_ID,
+        workflow_name=author.TERMINAL_CI_WORKFLOW_NAME,
+        workflow_path=author.TERMINAL_CI_WORKFLOW_PATH,
+        subject_sha=MAIN,
+        bot_login=BOT_LOGIN,
+        bot_id=BOT_ID,
+        required_job=author.TERMINAL_CI_REQUIRED_JOB,
+    )
+
+    assert evidence is not None
+    assert evidence["run"]["id"] == run_id
+    assert evidence["requiredJob"]["id"] == required_job_id
+
+
+def test_terminal_workflow_evidence_rejects_wrong_actor_and_manual_rerun() -> None:
+    class Api:
+        def __init__(self, *, attempt: int, actor: str) -> None:
+            self.attempt = attempt
+            self.actor = actor
+
+        def get(self, path: str) -> dict[str, Any]:
+            assert path == (
+                "/actions/workflows/codeql.yml/runs"
+                f"?head_sha={MAIN}&event=push&per_page=100&page=1"
+            )
+            return {
+                "total_count": 1,
+                "workflow_runs": [
+                    {
+                        "id": 7101,
+                        "workflow_id": author.TERMINAL_CODEQL_WORKFLOW_ID,
+                        "name": author.TERMINAL_CODEQL_WORKFLOW_NAME,
+                        "path": author.TERMINAL_CODEQL_WORKFLOW_PATH,
+                        "event": "push",
+                        "head_branch": "main",
+                        "head_sha": MAIN,
+                        "run_attempt": self.attempt,
+                        "status": "completed",
+                        "conclusion": "success",
+                        "repository": {"full_name": routing.EXPECTED_REPOSITORY},
+                        "head_repository": {"full_name": routing.EXPECTED_REPOSITORY},
+                        "actor": {
+                            "login": self.actor,
+                            "id": BOT_ID,
+                            "type": "Bot",
+                        },
+                        "triggering_actor": {
+                            "login": self.actor,
+                            "id": BOT_ID,
+                            "type": "Bot",
+                        },
+                    }
+                ],
+            }
+
+    with pytest.raises(author.ProtectedRemediationError, match="independent-App push"):
+        author._terminal_workflow_evidence(
+            Api(attempt=1, actor="github-actions[bot]"),
+            workflow=author.TERMINAL_CODEQL_WORKFLOW,
+            workflow_id=author.TERMINAL_CODEQL_WORKFLOW_ID,
+            workflow_name=author.TERMINAL_CODEQL_WORKFLOW_NAME,
+            workflow_path=author.TERMINAL_CODEQL_WORKFLOW_PATH,
+            subject_sha=MAIN,
+            bot_login=BOT_LOGIN,
+            bot_id=BOT_ID,
+        )
+
+    with pytest.raises(author.ProtectedRemediationError, match="independent-App push"):
+        author._terminal_workflow_evidence(
+            Api(attempt=2, actor=BOT_LOGIN),
+            workflow=author.TERMINAL_CODEQL_WORKFLOW,
+            workflow_id=author.TERMINAL_CODEQL_WORKFLOW_ID,
+            workflow_name=author.TERMINAL_CODEQL_WORKFLOW_NAME,
+            workflow_path=author.TERMINAL_CODEQL_WORKFLOW_PATH,
+            subject_sha=MAIN,
+            bot_login=BOT_LOGIN,
+            bot_id=BOT_ID,
+        )
+
+
+def test_terminal_alert_requires_exact_fixed_codeql_identity() -> None:
+    evidence = {
+        "alertNumber": 17,
+        "rule": "py/clear-text-logging-sensitive-data",
+        "path": ".github/scripts/security_autoheal.py",
+    }
+
+    class Api:
+        def __init__(self, state: str, path: str = ".github/scripts/security_autoheal.py") -> None:
+            self.state = state
+            self.path = path
+
+        def get(self, path: str) -> dict[str, Any]:
+            assert path == "/code-scanning/alerts/17"
+            return {
+                "state": self.state,
+                "tool": {"name": "CodeQL"},
+                "rule": {"id": "py/clear-text-logging-sensitive-data"},
+                "most_recent_instance": {"location": {"path": self.path}},
+            }
+
+    assert author._terminal_alert_is_fixed(Api("fixed"), evidence) is True
+    assert author._terminal_alert_is_fixed(Api("open"), evidence) is False
+    with pytest.raises(author.ProtectedRemediationError, match="identity drifted"):
+        author._terminal_alert_is_fixed(Api("fixed", ".github/workflows/ci.yml"), evidence)
+
+
+def test_terminal_closure_publishes_one_durable_app_certificate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    merge_sha = "c" * 40
+    prospective_sha = "d" * 40
+    evidence = {
+        "number": 301,
+        "baseSha": MAIN,
+        "headSha": HEAD,
+        "mergeSha": merge_sha,
+        "alertNumber": 17,
+        "rule": "py/clear-text-logging-sensitive-data",
+        "path": ".github/scripts/security_autoheal.py",
+        "recordDigest": "e" * 64,
+        "planDigest": "f" * 64,
+    }
+    trusted = {"statusId": 7201, "runId": 7202, "prospectiveMergeSha": prospective_sha}
+    ci = {
+        "run": {"id": 7203, "status": "completed"},
+        "requiredJob": {"id": 7204, "status": "completed"},
+    }
+    codeql = {"run": {"id": 7205, "status": "completed"}, "requiredJob": None}
+    comments: list[dict[str, Any]] = []
+
+    class ReadApi:
+        def list_all(
+            self,
+            path: str,
+            *,
+            max_pages: int = 4,
+            max_items: int | None = None,
+        ) -> list[dict[str, Any]]:
+            assert path == "/issues/301/comments"
+            assert max_pages == 2
+            assert max_items == 200
+            return list(comments)
+
+        def get(self, path: str) -> dict[str, Any]:
+            if path == "/branches/main":
+                return {"commit": {"sha": MAIN}}
+            if path == "/issues/comments/7301":
+                return comments[0]
+            raise AssertionError(path)
+
+    class WriteApi:
+        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            assert path == "/issues/301/comments"
+            created = {
+                "id": 7301,
+                "body": payload["body"],
+                "user": {"login": BOT_LOGIN, "id": BOT_ID, "type": "Bot"},
+            }
+            comments.append(created)
+            return created
+
+    monkeypatch.setattr(
+        author,
+        "_pending_merged_repair",
+        lambda *args, **kwargs: {"number": 301},
+    )
+    monkeypatch.setattr(
+        author,
+        "_validate_merged_repair",
+        lambda *args, **kwargs: dict(evidence),
+    )
+    monkeypatch.setattr(author, "_require_merge_ancestor", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        author,
+        "_terminal_trusted_gate_evidence",
+        lambda *args, **kwargs: dict(trusted),
+    )
+
+    def workflow_evidence(*args: Any, workflow: str, **kwargs: Any) -> dict[str, Any]:
+        return dict(ci if workflow == author.TERMINAL_CI_WORKFLOW else codeql)
+
+    monkeypatch.setattr(author, "_terminal_workflow_evidence", workflow_evidence)
+    monkeypatch.setattr(author, "_terminal_alert_is_fixed", lambda *args, **kwargs: True)
+
+    assert (
+        author._reconcile_terminal_closure(
+            ReadApi(),
+            WriteApi(),
+            bot_login=BOT_LOGIN,
+            bot_id=BOT_ID,
+            current_main=MAIN,
+        )
+        is True
+    )
+    assert len(comments) == 1
+    certificate = author._parse_terminal_comment(comments[0]["body"])
+    assert certificate is not None
+    assert certificate["result"] == "fixed"
+    assert certificate["mergeSha"] == merge_sha
+    assert certificate["ciRunId"] == 7203
+    assert certificate["ciRequiredJobId"] == 7204
+    assert certificate["codeqlRunId"] == 7205
+    assert certificate["trustedStatusId"] == 7201
+
+
+def test_terminal_closure_waits_without_publication_for_incomplete_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence = {
+        "number": 301,
+        "baseSha": MAIN,
+        "headSha": HEAD,
+        "mergeSha": "c" * 40,
+        "alertNumber": 17,
+        "rule": "py/clear-text-logging-sensitive-data",
+        "path": ".github/scripts/security_autoheal.py",
+        "recordDigest": "e" * 64,
+        "planDigest": "f" * 64,
+    }
+
+    class ReadApi:
+        def get(self, path: str) -> dict[str, Any]:
+            if path == "/branches/main":
+                return {"commit": {"sha": MAIN}}
+            raise AssertionError(path)
+
+    class WriteApi:
+        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            raise AssertionError((path, payload))
+
+    monkeypatch.setattr(
+        author,
+        "_pending_merged_repair",
+        lambda *args, **kwargs: {"number": 301},
+    )
+    monkeypatch.setattr(
+        author,
+        "_validate_merged_repair",
+        lambda *args, **kwargs: dict(evidence),
+    )
+    monkeypatch.setattr(author, "_require_merge_ancestor", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        author,
+        "_terminal_trusted_gate_evidence",
+        lambda *args, **kwargs: {
+            "statusId": 1,
+            "runId": 2,
+            "prospectiveMergeSha": "d" * 40,
+        },
+    )
+    monkeypatch.setattr(author, "_terminal_workflow_evidence", lambda *args, **kwargs: None)
+
+    assert (
+        author._reconcile_terminal_closure(
+            ReadApi(),
+            WriteApi(),
+            bot_login=BOT_LOGIN,
+            bot_id=BOT_ID,
+            current_main=MAIN,
+        )
+        is True
+    )

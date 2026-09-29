@@ -25,7 +25,19 @@ from security_alert_routing import (
     route_alert,
     route_alerts,
 )
-from trusted_status import TrustedStatusError, require_automatic_trusted_gate
+from trusted_status import (
+    EXPECTED_GATE_EVENTS,
+    EXPECTED_GATE_WORKFLOW_ID,
+    EXPECTED_GATE_WORKFLOW_NAME,
+    EXPECTED_GATE_WORKFLOW_PATH,
+    TARGET_URL_RE,
+    TRUSTED_STATUS_BOT_ID,
+    TRUSTED_STATUS_BOT_LOGIN,
+    TRUSTED_STATUS_CONTEXT,
+    TRUSTED_STATUS_DESCRIPTION,
+    TrustedStatusError,
+    require_automatic_trusted_gate,
+)
 
 SCHEMA_VERSION = 1
 AUTHORING_POLICY_VERSION = "protected-remediation-author-v1"
@@ -49,6 +61,22 @@ PLAN_TRAILER_PREFIX = "Protected-Repair-Plan-Digest: "
 DISALLOWED_AUTHOR_BOTS = frozenset(
     {"github-actions[bot]", "trusted-pr-gate[bot]", "dependabot[bot]"}
 )
+TERMINAL_COMMENT_PREFIX = "<!-- aiqa-protected-security-remediation-terminal:"
+TERMINAL_COMMENT_SUFFIX = " -->"
+TERMINAL_SCHEMA_VERSION = 1
+TERMINAL_CLOSED_PR_PAGES = 4
+TERMINAL_STATUS_PAGES = 4
+TERMINAL_RUN_PAGE_SIZE = 100
+TERMINAL_JOB_LIMIT = 100
+TERMINAL_CI_WORKFLOW = "ci.yml"
+TERMINAL_CI_WORKFLOW_ID = 339754724
+TERMINAL_CI_WORKFLOW_NAME = "CI — ƳƤ AI QA Automation Framework"
+TERMINAL_CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
+TERMINAL_CI_REQUIRED_JOB = "Required PR Gate"
+TERMINAL_CODEQL_WORKFLOW = "codeql.yml"
+TERMINAL_CODEQL_WORKFLOW_ID = 359681647
+TERMINAL_CODEQL_WORKFLOW_NAME = "CodeQL"
+TERMINAL_CODEQL_WORKFLOW_PATH = ".github/workflows/codeql.yml"
 
 
 class ProtectedRemediationError(RuntimeError):
@@ -89,6 +117,7 @@ SELF_AUTHORITY_PATHS = frozenset(
         ".github/scripts/trusted_status.py",
         ".github/workflows/ci.yml",
         ".github/workflows/codeql.yml",
+        ".github/workflows/post-merge-ci.yml",
         ".github/workflows/protected-security-remediation.yml",
         ".github/workflows/trusted-pr-auto.yml",
         "scripts/auto_trusted_bot_admission.py",
@@ -1448,6 +1477,717 @@ def _close_stale_generated_repair(
     }
 
 
+
+def _terminal_comment_body(certificate: Mapping[str, Any]) -> str:
+    return (
+        TERMINAL_COMMENT_PREFIX
+        + json.dumps(dict(certificate), separators=(",", ":"), sort_keys=True)
+        + TERMINAL_COMMENT_SUFFIX
+    )
+
+
+def _parse_terminal_comment(body: Any) -> dict[str, Any] | None:
+    if (
+        not isinstance(body, str)
+        or not body.startswith(TERMINAL_COMMENT_PREFIX)
+        or not body.endswith(TERMINAL_COMMENT_SUFFIX)
+        or "\n" in body
+        or "\r" in body
+    ):
+        return None
+    raw = body[len(TERMINAL_COMMENT_PREFIX) : -len(TERMINAL_COMMENT_SUFFIX)]
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(value, dict) or _terminal_comment_body(value) != body:
+        return None
+    return value
+
+
+def _terminal_comments(
+    api: Any,
+    number: int,
+    *,
+    bot_login: str,
+    bot_id: int,
+) -> list[dict[str, Any]]:
+    rows = api.list_all(f"/issues/{number}/comments", max_pages=2, max_items=200)
+    certificates: list[dict[str, Any]] = []
+    for row in rows:
+        actor = row.get("user") or {}
+        body = row.get("body")
+        if (
+            actor.get("login") != bot_login
+            or actor.get("id") != bot_id
+            or actor.get("type") != "Bot"
+            or not isinstance(body, str)
+            or not body.startswith(TERMINAL_COMMENT_PREFIX)
+        ):
+            continue
+        certificate = _parse_terminal_comment(body)
+        if certificate is None:
+            raise ProtectedRemediationError(
+                "protected remediation terminal certificate is malformed"
+            )
+        certificates.append(certificate)
+    if len(certificates) > 1:
+        raise ProtectedRemediationError(
+            "protected remediation has ambiguous terminal closure certificates"
+        )
+    return certificates
+
+
+def _pending_merged_repair(
+    api: Any,
+    *,
+    bot_login: str,
+    bot_id: int,
+) -> dict[str, Any] | None:
+    rows = api.list_all(
+        "/pulls?state=closed&sort=updated&direction=desc",
+        max_pages=TERMINAL_CLOSED_PR_PAGES,
+    )
+    pending: list[dict[str, Any]] = []
+    for row in rows:
+        if not _generated_bot_pull(row, login=bot_login, user_id=bot_id):
+            continue
+        if row.get("state") != "closed" or row.get("merged_at") is None:
+            continue
+        number = _require_positive_int(
+            row.get("number"),
+            "merged protected repair PR number",
+        )
+        if _terminal_comments(api, number, bot_login=bot_login, bot_id=bot_id):
+            continue
+        pending.append(row)
+    if len(pending) > 1:
+        numbers = sorted(
+            _require_positive_int(row.get("number"), "pending protected repair PR number")
+            for row in pending
+        )
+        raise ProtectedRemediationError(
+            f"multiple merged protected repairs lack terminal closure: {numbers}"
+        )
+    if not pending:
+        return None
+    number = _require_positive_int(
+        pending[0].get("number"),
+        "pending protected repair PR number",
+    )
+    live = api.get(f"/pulls/{number}")
+    if not isinstance(live, dict):
+        raise ProtectedRemediationError("merged protected repair lookup returned malformed data")
+    return live
+
+
+def _validate_merged_repair(
+    api: Any,
+    pr: Mapping[str, Any],
+    *,
+    expected_bot_login: str,
+    expected_bot_id: int,
+) -> dict[str, Any]:
+    bot_login, bot_id = _require_author_identity(expected_bot_login, expected_bot_id)
+    if (
+        not isinstance(pr, Mapping)
+        or pr.get("state") != "closed"
+        or pr.get("merged_at") is None
+        or pr.get("draft") is not False
+    ):
+        raise ProtectedRemediationError(
+            "terminal protected repair must be a merged non-draft pull request"
+        )
+    number = _require_positive_int(pr.get("number"), "terminal protected repair PR number")
+    user = pr.get("user") or {}
+    merged_by = pr.get("merged_by") or {}
+    if (
+        user.get("login") != bot_login
+        or user.get("id") != bot_id
+        or user.get("type") != "Bot"
+        or merged_by.get("login") != bot_login
+        or merged_by.get("id") != bot_id
+        or merged_by.get("type") != "Bot"
+    ):
+        raise ProtectedRemediationError(
+            "terminal protected repair was not authored and merged by the exact author App"
+        )
+
+    head = pr.get("head") or {}
+    base = pr.get("base") or {}
+    if (
+        (head.get("repo") or {}).get("full_name") != EXPECTED_REPOSITORY
+        or (base.get("repo") or {}).get("full_name") != EXPECTED_REPOSITORY
+        or base.get("ref") != EXPECTED_BASE_BRANCH
+    ):
+        raise ProtectedRemediationError("terminal protected repair repository/base identity drifted")
+    branch = head.get("ref")
+    if not isinstance(branch, str) or BRANCH_RE.fullmatch(branch) is None:
+        raise ProtectedRemediationError("terminal protected repair branch is outside reviewed grammar")
+    head_sha = _require_sha(head.get("sha"), "terminal protected repair head SHA")
+    base_sha = _require_sha(base.get("sha"), "terminal protected repair base SHA")
+    merge_sha = _require_sha(pr.get("merge_commit_sha"), "terminal protected repair merge SHA")
+
+    metadata = parse_marker(pr.get("body"))
+    if metadata is None or set(metadata) != {
+        "version",
+        "base",
+        "head",
+        "routeRecord",
+        "repairPlan",
+    }:
+        raise ProtectedRemediationError("terminal protected repair marker is missing or malformed")
+    if (
+        metadata.get("version") != 1
+        or metadata.get("base") != base_sha
+        or metadata.get("head") != head_sha
+    ):
+        raise ProtectedRemediationError("terminal protected repair marker subject drifted")
+    record = metadata.get("routeRecord")
+    plan = metadata.get("repairPlan")
+    if not isinstance(record, dict) or not isinstance(plan, dict):
+        raise ProtectedRemediationError("terminal protected repair marker evidence is malformed")
+    strategy = validate_route_record(record, main_sha=base_sha)
+    canonical_plan(plan)
+    if (
+        plan.get("baseSha") != base_sha
+        or plan.get("targetPath") != strategy.path
+        or plan.get("changedFiles") != [strategy.path]
+        or plan.get("maxChangedFiles") != MAX_CHANGED_FILES
+        or branch != branch_name(record)
+    ):
+        raise ProtectedRemediationError("terminal protected repair plan authority drifted")
+
+    base_source = _contents_bytes(api, strategy.path, base_sha)
+    repaired = revalidate_repair_plan(plan, base_source, record, main_sha=base_sha)
+    if _contents_bytes(api, strategy.path, head_sha) != repaired:
+        raise ProtectedRemediationError(
+            "terminal protected repair head bytes differ from deterministic output"
+        )
+
+    files = api.list_all(f"/pulls/{number}/files", max_pages=2)
+    if (
+        len(files) != 1
+        or files[0].get("filename") != strategy.path
+        or files[0].get("status") != "modified"
+        or files[0].get("previous_filename") is not None
+    ):
+        raise ProtectedRemediationError(
+            "terminal protected repair diff escaped exact one-file modification authority"
+        )
+
+    head_commit = api.get(f"/commits/{head_sha}")
+    head_author = (head_commit or {}).get("author") if isinstance(head_commit, dict) else None
+    head_parents = (head_commit or {}).get("parents") if isinstance(head_commit, dict) else None
+    if (
+        not isinstance(head_commit, dict)
+        or not isinstance(head_author, dict)
+        or head_author.get("login") != bot_login
+        or head_author.get("id") != bot_id
+        or head_author.get("type") != "Bot"
+        or not isinstance(head_parents, list)
+        or len(head_parents) != 1
+        or (head_parents[0] or {}).get("sha") != base_sha
+        or ((head_commit.get("commit") or {}).get("message")) != repair_commit_message(record, plan)
+    ):
+        raise ProtectedRemediationError(
+            "terminal protected repair head lacks exact App-authored provenance"
+        )
+
+    head_git_commit = api.get(f"/git/commits/{head_sha}")
+    merge_commit = api.get(f"/git/commits/{merge_sha}")
+    merge_parents = (merge_commit or {}).get("parents") if isinstance(merge_commit, dict) else None
+    verification = (
+        (merge_commit or {}).get("verification") if isinstance(merge_commit, dict) else None
+    )
+    if (
+        not isinstance(head_git_commit, dict)
+        or not isinstance(merge_commit, dict)
+        or _require_sha(merge_commit.get("sha"), "terminal protected merge commit SHA") != merge_sha
+        or not isinstance(merge_parents, list)
+        or [((parent or {}).get("sha")) for parent in merge_parents] != [base_sha, head_sha]
+        or ((merge_commit.get("tree") or {}).get("sha"))
+        != ((head_git_commit.get("tree") or {}).get("sha"))
+        or not isinstance(verification, dict)
+        or verification.get("verified") is not True
+        or verification.get("reason") != "valid"
+    ):
+        raise ProtectedRemediationError(
+            "terminal protected repair merge topology/tree/signature drifted"
+        )
+
+    return {
+        "number": number,
+        "baseSha": base_sha,
+        "headSha": head_sha,
+        "mergeSha": merge_sha,
+        "alertNumber": _require_positive_int(
+            record.get("alertNumber"),
+            "terminal protected repair alert number",
+        ),
+        "rule": str(record.get("rule")),
+        "path": strategy.path,
+        "recordDigest": _require_digest(
+            record.get("recordDigest"),
+            "terminal protected repair route digest",
+        ),
+        "planDigest": _require_digest(
+            plan.get("planDigest"),
+            "terminal protected repair plan digest",
+        ),
+    }
+
+
+def _require_merge_ancestor(api: Any, merge_sha: str, current_main: str) -> None:
+    merge_sha = _require_sha(merge_sha, "terminal protected repair merge SHA")
+    current_main = _require_sha(current_main, "terminal current main SHA")
+    if merge_sha == current_main:
+        return
+    comparison = api.get(f"/compare/{merge_sha}...{current_main}")
+    if (
+        not isinstance(comparison, dict)
+        or comparison.get("status") != "ahead"
+        or ((comparison.get("base_commit") or {}).get("sha")) != merge_sha
+        or ((comparison.get("merge_base_commit") or {}).get("sha")) != merge_sha
+    ):
+        raise ProtectedRemediationError(
+            "terminal protected repair merge is not an ancestor of current main"
+        )
+
+
+def _terminal_trusted_gate_evidence(
+    api: Any,
+    evidence: Mapping[str, Any],
+) -> dict[str, int | str]:
+    number = _require_positive_int(evidence.get("number"), "terminal protected repair PR number")
+    head_sha = _require_sha(evidence.get("headSha"), "terminal protected repair head SHA")
+    base_sha = _require_sha(evidence.get("baseSha"), "terminal protected repair base SHA")
+    rows = api.list_all(
+        f"/commits/{head_sha}/statuses",
+        max_pages=TERMINAL_STATUS_PAGES,
+    )
+    matches: list[dict[str, Any]] = []
+    for row in rows:
+        creator = row.get("creator") or {}
+        if (
+            row.get("context") == TRUSTED_STATUS_CONTEXT
+            and creator.get("login") == TRUSTED_STATUS_BOT_LOGIN
+            and creator.get("id") == TRUSTED_STATUS_BOT_ID
+            and creator.get("type") == "Bot"
+        ):
+            _require_positive_int(row.get("id"), "terminal trusted status id")
+            matches.append(row)
+    if not matches:
+        raise ProtectedRemediationError("terminal protected repair lacks dedicated-App trusted status")
+    latest = max(matches, key=lambda row: int(row["id"]))
+    if (
+        latest.get("state") != "success"
+        or latest.get("description") != TRUSTED_STATUS_DESCRIPTION
+    ):
+        raise ProtectedRemediationError(
+            "terminal protected repair latest dedicated-App trusted status is not green"
+        )
+    target_url = latest.get("target_url")
+    if not isinstance(target_url, str):
+        raise ProtectedRemediationError("terminal protected repair trusted target URL is missing")
+    match = TARGET_URL_RE.fullmatch(target_url)
+    if (
+        match is None
+        or int(match.group("pr")) != number
+        or match.group("base") != base_sha
+        or match.group("head") != head_sha
+    ):
+        raise ProtectedRemediationError(
+            "terminal protected repair trusted status is not exact-subject-bound"
+        )
+    prospective_sha = _require_sha(
+        match.group("merge"),
+        "terminal protected repair prospective merge SHA",
+    )
+    prospective = api.get(f"/git/commits/{prospective_sha}")
+    prospective_parents = (
+        (prospective or {}).get("parents") if isinstance(prospective, dict) else None
+    )
+    head_commit = api.get(f"/git/commits/{head_sha}")
+    if (
+        not isinstance(prospective, dict)
+        or not isinstance(head_commit, dict)
+        or _require_sha(prospective.get("sha"), "terminal trusted prospective merge SHA")
+        != prospective_sha
+        or not isinstance(prospective_parents, list)
+        or [((parent or {}).get("sha")) for parent in prospective_parents]
+        != [base_sha, head_sha]
+        or ((prospective.get("tree") or {}).get("sha"))
+        != ((head_commit.get("tree") or {}).get("sha"))
+    ):
+        raise ProtectedRemediationError(
+            "terminal protected repair trusted prospective merge evidence drifted"
+        )
+    run_id = int(match.group("run_id"))
+    run = api.get(f"/actions/runs/{run_id}")
+    repository = (run or {}).get("repository") if isinstance(run, dict) else None
+    head_repository = (run or {}).get("head_repository") if isinstance(run, dict) else None
+    if (
+        not isinstance(run, dict)
+        or _require_positive_int(run.get("id"), "terminal trusted gate run id") != run_id
+        or _require_positive_int(
+            run.get("workflow_id"),
+            "terminal trusted gate workflow id",
+        )
+        != EXPECTED_GATE_WORKFLOW_ID
+        or _require_positive_int(
+            run.get("run_attempt"),
+            "terminal trusted gate run attempt",
+        )
+        != 1
+        or run.get("name") != EXPECTED_GATE_WORKFLOW_NAME
+        or run.get("path") != EXPECTED_GATE_WORKFLOW_PATH
+        or run.get("event") not in EXPECTED_GATE_EVENTS
+        or run.get("head_branch") != EXPECTED_BASE_BRANCH
+        or _require_sha(run.get("head_sha"), "terminal trusted gate head SHA") != base_sha
+        or run.get("status") != "completed"
+        or run.get("conclusion") != "success"
+        or not isinstance(repository, dict)
+        or repository.get("full_name") != EXPECTED_REPOSITORY
+        or not isinstance(head_repository, dict)
+        or head_repository.get("full_name") != EXPECTED_REPOSITORY
+    ):
+        raise ProtectedRemediationError(
+            "terminal protected repair trusted run is not exact accepted-main evidence"
+        )
+    return {
+        "statusId": int(latest["id"]),
+        "runId": run_id,
+        "prospectiveMergeSha": prospective_sha,
+    }
+
+
+def _terminal_workflow_evidence(
+    api: Any,
+    *,
+    workflow: str,
+    workflow_id: int,
+    workflow_name: str,
+    workflow_path: str,
+    subject_sha: str,
+    bot_login: str,
+    bot_id: int,
+    required_job: str | None = None,
+) -> dict[str, Any] | None:
+    subject_sha = _require_sha(subject_sha, "terminal workflow subject SHA")
+    encoded_workflow = urllib.parse.quote(workflow, safe="")
+    encoded_sha = urllib.parse.quote(subject_sha, safe="")
+    payload = api.get(
+        f"/actions/workflows/{encoded_workflow}/runs"
+        f"?head_sha={encoded_sha}&event=push&per_page={TERMINAL_RUN_PAGE_SIZE}&page=1"
+    )
+    runs = payload.get("workflow_runs") if isinstance(payload, dict) else None
+    total = payload.get("total_count") if isinstance(payload, dict) else None
+    if (
+        not isinstance(total, int)
+        or isinstance(total, bool)
+        or total < 0
+        or total > TERMINAL_RUN_PAGE_SIZE
+        or not isinstance(runs, list)
+        or any(not isinstance(row, dict) for row in runs)
+        or total != len(runs)
+    ):
+        raise ProtectedRemediationError("terminal workflow run evidence is malformed or unbounded")
+    if not runs:
+        return None
+    if len(runs) != 1:
+        raise ProtectedRemediationError("terminal workflow run evidence is ambiguous")
+    run = runs[0]
+    actor = run.get("actor") or {}
+    triggering_actor = run.get("triggering_actor") or {}
+    repository = run.get("repository") or {}
+    head_repository = run.get("head_repository") or {}
+    if (
+        run.get("workflow_id") != workflow_id
+        or run.get("name") != workflow_name
+        or run.get("path") != workflow_path
+        or run.get("event") != "push"
+        or run.get("head_branch") != EXPECTED_BASE_BRANCH
+        or run.get("head_sha") != subject_sha
+        or run.get("run_attempt") != 1
+        or repository.get("full_name") != EXPECTED_REPOSITORY
+        or head_repository.get("full_name") != EXPECTED_REPOSITORY
+        or actor.get("login") != bot_login
+        or actor.get("id") != bot_id
+        or actor.get("type") != "Bot"
+        or triggering_actor.get("login") != bot_login
+        or triggering_actor.get("id") != bot_id
+        or triggering_actor.get("type") != "Bot"
+    ):
+        raise ProtectedRemediationError(
+            "terminal workflow run is not exact independent-App push evidence"
+        )
+    status = run.get("status")
+    if status in {"queued", "in_progress", "waiting", "pending", "requested"}:
+        return {"run": run, "requiredJob": None}
+    if status != "completed" or run.get("conclusion") != "success":
+        raise ProtectedRemediationError(
+            f"terminal workflow completed non-successfully: {run.get('conclusion')}"
+        )
+
+    required: dict[str, Any] | None = None
+    if required_job is not None:
+        run_id = _require_positive_int(run.get("id"), "terminal workflow run id")
+        jobs_payload = api.get(
+            f"/actions/runs/{run_id}/jobs?filter=latest&per_page={TERMINAL_JOB_LIMIT}"
+        )
+        jobs = jobs_payload.get("jobs") if isinstance(jobs_payload, dict) else None
+        jobs_total = (
+            jobs_payload.get("total_count") if isinstance(jobs_payload, dict) else None
+        )
+        if (
+            not isinstance(jobs_total, int)
+            or isinstance(jobs_total, bool)
+            or jobs_total < 0
+            or jobs_total > TERMINAL_JOB_LIMIT
+            or not isinstance(jobs, list)
+            or any(not isinstance(job, dict) for job in jobs)
+            or jobs_total != len(jobs)
+        ):
+            raise ProtectedRemediationError(
+                "terminal workflow job evidence is malformed or unbounded"
+            )
+        matches = [job for job in jobs if job.get("name") == required_job]
+        if len(matches) != 1:
+            raise ProtectedRemediationError(
+                "terminal workflow required-gate evidence is missing or ambiguous"
+            )
+        required = matches[0]
+        _require_positive_int(required.get("id"), "terminal workflow required-gate job id")
+        if required.get("status") != "completed" or required.get("conclusion") != "success":
+            raise ProtectedRemediationError(
+                "terminal workflow required gate did not complete successfully"
+            )
+    return {"run": run, "requiredJob": required}
+
+
+def _terminal_alert_is_fixed(
+    api: Any,
+    evidence: Mapping[str, Any],
+) -> bool:
+    alert_number = _require_positive_int(
+        evidence.get("alertNumber"),
+        "terminal protected repair alert number",
+    )
+    alert = api.get(f"/code-scanning/alerts/{alert_number}")
+    if not isinstance(alert, dict):
+        raise ProtectedRemediationError("terminal protected CodeQL alert is malformed")
+    if (
+        (alert.get("tool") or {}).get("name") != "CodeQL"
+        or (alert.get("rule") or {}).get("id") != evidence.get("rule")
+        or ((alert.get("most_recent_instance") or {}).get("location") or {}).get("path")
+        != evidence.get("path")
+    ):
+        raise ProtectedRemediationError("terminal protected CodeQL alert identity drifted")
+    state = alert.get("state")
+    if state == "fixed":
+        return True
+    if state == "open":
+        return False
+    raise ProtectedRemediationError(
+        f"terminal protected CodeQL alert has unsupported state: {state}"
+    )
+
+
+def _terminal_certificate(
+    evidence: Mapping[str, Any],
+    *,
+    trusted: Mapping[str, Any],
+    ci: Mapping[str, Any],
+    codeql: Mapping[str, Any],
+    observed_main: str,
+) -> dict[str, Any]:
+    ci_run = ci.get("run") or {}
+    ci_job = ci.get("requiredJob") or {}
+    codeql_run = codeql.get("run") or {}
+    return {
+        "schemaVersion": TERMINAL_SCHEMA_VERSION,
+        "kind": "protected-security-remediation-terminal",
+        "pr": _require_positive_int(evidence.get("number"), "terminal certificate PR number"),
+        "alertNumber": _require_positive_int(
+            evidence.get("alertNumber"),
+            "terminal certificate alert number",
+        ),
+        "rule": str(evidence.get("rule")),
+        "path": str(evidence.get("path")),
+        "baseSha": _require_sha(evidence.get("baseSha"), "terminal certificate base SHA"),
+        "headSha": _require_sha(evidence.get("headSha"), "terminal certificate head SHA"),
+        "mergeSha": _require_sha(evidence.get("mergeSha"), "terminal certificate merge SHA"),
+        "observedMainSha": _require_sha(observed_main, "terminal certificate observed main SHA"),
+        "routeRecordDigest": _require_digest(
+            evidence.get("recordDigest"),
+            "terminal certificate route digest",
+        ),
+        "repairPlanDigest": _require_digest(
+            evidence.get("planDigest"),
+            "terminal certificate plan digest",
+        ),
+        "trustedStatusId": _require_positive_int(
+            trusted.get("statusId"),
+            "terminal certificate trusted status id",
+        ),
+        "trustedRunId": _require_positive_int(
+            trusted.get("runId"),
+            "terminal certificate trusted run id",
+        ),
+        "trustedProspectiveMergeSha": _require_sha(
+            trusted.get("prospectiveMergeSha"),
+            "terminal certificate trusted prospective merge SHA",
+        ),
+        "ciRunId": _require_positive_int(
+            ci_run.get("id"),
+            "terminal certificate CI run id",
+        ),
+        "ciRequiredJobId": _require_positive_int(
+            ci_job.get("id"),
+            "terminal certificate CI required-gate job id",
+        ),
+        "codeqlRunId": _require_positive_int(
+            codeql_run.get("id"),
+            "terminal certificate CodeQL run id",
+        ),
+        "result": "fixed",
+    }
+
+
+def _reconcile_terminal_closure(
+    read_api: Any,
+    write_api: Any,
+    *,
+    bot_login: str,
+    bot_id: int,
+    current_main: str,
+) -> bool:
+    pr = _pending_merged_repair(read_api, bot_login=bot_login, bot_id=bot_id)
+    if pr is None:
+        return False
+    evidence = _validate_merged_repair(
+        read_api,
+        pr,
+        expected_bot_login=bot_login,
+        expected_bot_id=bot_id,
+    )
+    _require_merge_ancestor(read_api, str(evidence["mergeSha"]), current_main)
+    trusted = _terminal_trusted_gate_evidence(read_api, evidence)
+    ci = _terminal_workflow_evidence(
+        read_api,
+        workflow=TERMINAL_CI_WORKFLOW,
+        workflow_id=TERMINAL_CI_WORKFLOW_ID,
+        workflow_name=TERMINAL_CI_WORKFLOW_NAME,
+        workflow_path=TERMINAL_CI_WORKFLOW_PATH,
+        subject_sha=str(evidence["mergeSha"]),
+        bot_login=bot_login,
+        bot_id=bot_id,
+        required_job=TERMINAL_CI_REQUIRED_JOB,
+    )
+    codeql = _terminal_workflow_evidence(
+        read_api,
+        workflow=TERMINAL_CODEQL_WORKFLOW,
+        workflow_id=TERMINAL_CODEQL_WORKFLOW_ID,
+        workflow_name=TERMINAL_CODEQL_WORKFLOW_NAME,
+        workflow_path=TERMINAL_CODEQL_WORKFLOW_PATH,
+        subject_sha=str(evidence["mergeSha"]),
+        bot_login=bot_login,
+        bot_id=bot_id,
+    )
+    if (
+        ci is None
+        or codeql is None
+        or (ci.get("run") or {}).get("status") != "completed"
+        or (codeql.get("run") or {}).get("status") != "completed"
+    ):
+        print(
+            json.dumps(
+                {
+                    "decision": "protected-terminal-closure-waiting",
+                    "pr": evidence["number"],
+                    "mergeSha": evidence["mergeSha"],
+                    "reason": "exact independent-App push CI/CodeQL is not complete",
+                },
+                sort_keys=True,
+            )
+        )
+        return True
+    if not _terminal_alert_is_fixed(read_api, evidence):
+        print(
+            json.dumps(
+                {
+                    "decision": "protected-terminal-closure-waiting",
+                    "pr": evidence["number"],
+                    "mergeSha": evidence["mergeSha"],
+                    "reason": "fresh exact-main CodeQL passed but the alert remains open",
+                },
+                sort_keys=True,
+            )
+        )
+        return True
+    if _current_main(read_api) != current_main:
+        raise ProtectedRemediationError(
+            "current main changed before protected terminal closure publication"
+        )
+    certificate = _terminal_certificate(
+        evidence,
+        trusted=trusted,
+        ci=ci,
+        codeql=codeql,
+        observed_main=current_main,
+    )
+    number = int(evidence["number"])
+    if _terminal_comments(read_api, number, bot_login=bot_login, bot_id=bot_id):
+        raise ProtectedRemediationError(
+            "protected terminal certificate appeared concurrently before publication"
+        )
+    body = _terminal_comment_body(certificate)
+    created = write_api.post(f"/issues/{number}/comments", {"body": body})
+    created_user = (created or {}).get("user") if isinstance(created, dict) else None
+    comment_id = (
+        (created or {}).get("id") if isinstance(created, dict) else None
+    )
+    if (
+        not isinstance(created, dict)
+        or created.get("body") != body
+        or not isinstance(created_user, dict)
+        or created_user.get("login") != bot_login
+        or created_user.get("id") != bot_id
+        or created_user.get("type") != "Bot"
+    ):
+        raise ProtectedRemediationError(
+            "GitHub did not acknowledge exact protected terminal certificate"
+        )
+    comment_id = _require_positive_int(comment_id, "protected terminal certificate comment id")
+    durable = read_api.get(f"/issues/comments/{comment_id}")
+    if (
+        not isinstance(durable, dict)
+        or durable.get("body") != body
+        or (durable.get("user") or {}).get("login") != bot_login
+        or (durable.get("user") or {}).get("id") != bot_id
+        or (durable.get("user") or {}).get("type") != "Bot"
+    ):
+        raise ProtectedRemediationError(
+            "protected terminal certificate is not durably bound to the author App"
+        )
+    if _current_main(read_api) != current_main:
+        raise ProtectedRemediationError(
+            "current main changed after protected terminal closure publication"
+        )
+    print(
+        json.dumps(
+            {
+                "decision": "protected-repair-verified",
+                "pr": evidence["number"],
+                "mergeSha": evidence["mergeSha"],
+                "terminalCertificateCommentId": comment_id,
+            },
+            sort_keys=True,
+        )
+    )
+    return True
+
 def _merge_repair(
     read_api: GitHubApi,
     write_api: GitHubApi,
@@ -1609,6 +2349,14 @@ def reconcile(*, allow_merge: bool) -> int:
         return 0
 
     main_sha = require_current_control_revision(read_api, control_sha)
+    if _reconcile_terminal_closure(
+        read_api,
+        write_api,
+        bot_login=bot_login,
+        bot_id=bot_id,
+        current_main=main_sha,
+    ):
+        return 0
     candidates = _protected_route_candidates(
         read_api,
         main_sha=main_sha,
