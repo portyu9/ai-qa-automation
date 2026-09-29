@@ -246,7 +246,10 @@ def test_stale_candidate_base_cannot_match(
     ) == (merge.LANE_NONE, None)
 
 
-def test_target_output_is_closed_and_filesystem_free() -> None:
+def test_target_output_is_closed_and_uses_inherited_descriptor(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     assert (
         merge._target_output(lane=merge.LANE_PROMOTION, pr_number=314)
         == "lane=dependency-promotion\npr_number=314\n"
@@ -256,3 +259,9 @@ def test_target_output_is_closed_and_filesystem_free() -> None:
         merge._target_output(lane="other", pr_number=314)
     with pytest.raises(merge.GovernanceError, match="unexpectedly carries a PR"):
         merge._target_output(lane=merge.LANE_NONE, pr_number=314)
+
+    output = tmp_path / "runner-output"
+    with output.open("ab", buffering=0) as handle:
+        monkeypatch.setattr(merge, "TARGET_OUTPUT_FD", handle.fileno())
+        merge._publish_target(lane=merge.LANE_PROMOTION, pr_number=314)
+    assert output.read_text(encoding="utf-8") == "lane=dependency-promotion\npr_number=314\n"
