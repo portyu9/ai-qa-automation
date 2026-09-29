@@ -327,6 +327,7 @@ def test_current_repository_has_no_github_actions_aws_authority() -> None:
         "codeql.yml",
         "dependency-governance-pr.yml",
         "dependency-governance.yml",
+        "dependency-trusted-merge.yml",
         "manual-validation.yml",
         "post-merge-ci.yml",
         "protected-security-remediation.yml",
