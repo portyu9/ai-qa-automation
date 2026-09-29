@@ -1010,7 +1010,7 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "          current=\"$(PYTHONPATH=.github/scripts python -c 'import os; import dependency_governance as g; "
         'config=g.load_config(); api=g.GitHubApi(os.environ["GITHUB_TOKEN"], '
         'os.environ["GITHUB_REPOSITORY"]); live=g._live_main_sha(api, config); '
-        'expected=os.environ["GITHUB_SHA"]; print("true" if live == expected else "false")\')\"'
+        'expected=os.environ["GITHUB_SHA"]; print("true" if live == expected else "false")\')"'
     )
     if (
         "      - name: Checkout exact trusted default-branch governance revision" not in govern_job
@@ -1099,6 +1099,7 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "status_event_merge_authority": "forbidden-startup-failure-path-retired",
         "workflow_definition": "action-pin-normalized-reviewed-git-blob",
     }
+
 
 def _verify_security_autoheal_pr_workflow(text: str) -> dict[str, Any]:
     base = _trusted_auto._base
