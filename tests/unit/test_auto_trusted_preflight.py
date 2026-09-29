@@ -796,6 +796,13 @@ def test_fork_head_is_rejected_before_pr_admission() -> None:
         preflight.evaluate_admission(FakeAPI(responses), event=_event())
 
 
+def test_stale_workflow_head_after_pr_moves_is_safe_noop() -> None:
+    responses = _responses()
+    responses[_pulls_path()][0]["head"]["sha"] = "8" * 40
+
+    assert preflight.evaluate_admission(FakeAPI(responses), event=_event()) is None
+
+
 def test_ambiguous_pull_request_resolution_fails_closed() -> None:
     responses = _responses()
     responses[_pulls_path()].append(deepcopy(responses[_pulls_path()][0]))
