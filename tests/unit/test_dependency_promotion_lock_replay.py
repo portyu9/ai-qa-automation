@@ -356,6 +356,65 @@ def _promotion_pr(
     }
 
 
+def test_promotion_changed_paths_accept_only_unique_modified_generated_files() -> None:
+    files = [
+        {"filename": "pyproject.toml", "status": "modified"},
+        {"filename": ".github/lock-authority.json", "status": "modified"},
+    ]
+
+    assert promotion._validate_promotion_changed_paths(files) == {
+        "pyproject.toml",
+        ".github/lock-authority.json",
+    }
+
+
+@pytest.mark.parametrize(
+    ("files", "message"),
+    (
+        (
+            [
+                {
+                    "filename": "pyproject.toml",
+                    "status": "renamed",
+                    "previous_filename": ".github/workflows/ci.yml",
+                },
+                {"filename": ".github/lock-authority.json", "status": "modified"},
+            ],
+            "ordinary modified files without rename provenance",
+        ),
+        (
+            [
+                {"filename": "pyproject.toml", "status": "removed"},
+                {"filename": ".github/lock-authority.json", "status": "modified"},
+            ],
+            "ordinary modified files without rename provenance",
+        ),
+        (
+            [
+                {"filename": None, "status": "modified"},
+                {"filename": "pyproject.toml", "status": "modified"},
+                {"filename": ".github/lock-authority.json", "status": "modified"},
+            ],
+            "outside generated authority",
+        ),
+        (
+            [
+                {"filename": "pyproject.toml", "status": "modified"},
+                {"filename": "pyproject.toml", "status": "modified"},
+                {"filename": ".github/lock-authority.json", "status": "modified"},
+            ],
+            "ambiguous for path",
+        ),
+    ),
+)
+def test_promotion_changed_paths_reject_rename_delete_malformed_and_duplicate_rows(
+    files: list[dict[str, Any]],
+    message: str,
+) -> None:
+    with pytest.raises(promotion.PolicyBlock, match=message):
+        promotion._validate_promotion_changed_paths(files)
+
+
 def test_create_promotion_pr_opens_exact_app_subject_directly_to_main(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

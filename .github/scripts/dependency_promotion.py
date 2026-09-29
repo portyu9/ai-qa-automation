@@ -1358,6 +1358,32 @@ def _require_promotion_lifecycle(
         raise PolicyBlock("promotion PR is not definitively mergeable")
 
 
+def _validate_promotion_changed_paths(files: list[dict[str, Any]]) -> set[str]:
+    """Require an exact ordinary-modification file set for generated promotions."""
+
+    if not files:
+        raise PolicyBlock("promotion has no changed files")
+    paths: set[str] = set()
+    for row in files:
+        path = row.get("filename")
+        if not isinstance(path, str) or path not in PROMOTION_PATHS:
+            raise PolicyBlock(
+                f"promotion changed path is outside generated authority: {path!r}"
+            )
+        if path in paths:
+            raise PolicyBlock(f"promotion changed-file list is ambiguous for path: {path}")
+        if row.get("status") != "modified" or row.get("previous_filename") is not None:
+            raise PolicyBlock(
+                "promotion generated paths must be ordinary modified files without rename provenance"
+            )
+        paths.add(path)
+    if "pyproject.toml" not in paths or ".github/lock-authority.json" not in paths:
+        raise PolicyBlock(
+            f"promotion changed-path set is outside generated authority: {sorted(paths)}"
+        )
+    return paths
+
+
 def _validate_promotion(
     api: GitHubApi,
     pr: dict[str, Any],
@@ -1412,16 +1438,7 @@ def _validate_promotion(
     ):
         raise PolicyBlock("promotion commit is not directly parented to exact current main")
     files = api.list_all(f"/pulls/{pr['number']}/files", max_pages=2)
-    paths = {str(row.get("filename")) for row in files if isinstance(row.get("filename"), str)}
-    if (
-        not paths
-        or not paths <= PROMOTION_PATHS
-        or "pyproject.toml" not in paths
-        or ".github/lock-authority.json" not in paths
-    ):
-        raise PolicyBlock(
-            f"promotion changed-path set is outside generated authority: {sorted(paths)}"
-        )
+    _validate_promotion_changed_paths(files)
     if validate_generated_bytes:
         _validate_generated_bytes(api, source, head_sha)
     if require_checks:
