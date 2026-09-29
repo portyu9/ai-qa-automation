@@ -894,7 +894,6 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         "TRUSTED_GATE_APP_PRIVATE_KEY",
         "PROTECTED_REMEDIATION_APP_PRIVATE_KEY",
         "actions/create-github-app-token@",
-        "checks: write",
         "statuses: write",
         "security-events: write",
         "id-token: write",
@@ -941,6 +940,18 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
     ):
         raise ValueError("dependency trusted merge environment authority must exist only on merger")
 
+    exact_resolver_outputs = (
+        "    outputs:\n"
+        "      lane: ${{ steps.target.outputs.lane }}\n"
+        "      pr_number: ${{ steps.target.outputs.pr_number }}\n"
+        "    steps:"
+    )
+    if exact_resolver_outputs not in resolve_job:
+        raise ValueError(
+            "dependency-trusted-merge.yml non-action structure differs from reviewed one-way authority: "
+            "resolver outputs must be exactly lane and pr_number"
+        )
+
     resolve_required = (
         "    name: Resolve exact trusted dependency subject",
         "      github.event.workflow_run.conclusion == 'success' &&",
@@ -970,7 +981,7 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         "          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}",
         "          python .github/scripts/dependency_trusted_merge.py",
         '          --trusted-run-id "${{ github.event.workflow_run.id }}"',
-        '            --trusted-run-attempt "${{ github.event.workflow_run.run_attempt }}" 3>> "$GITHUB_OUTPUT"',
+        '            --trusted-run-attempt "${{ github.event.workflow_run.run_attempt }}"',
         "          set -euo pipefail",
     )
     for fragment in resolve_required:
@@ -1099,7 +1110,6 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "repository_dispatch:",
         "  status:",
         "github.event.pull_request",
-        "github.event_name == 'status'",
         "--await-trusted-status-event",
         "status-sync:",
         "status-merge:",
@@ -1120,6 +1130,11 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
     if base._workflow_structure_sha1(text) != EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA:
         raise ValueError(
             "dependency-governance.yml non-action structure differs from reviewed dependency authority"
+        )
+
+    if "      - name: Verify exact current-main governance revision before mutation" not in semantic:
+        raise ValueError(
+            "general dependency governance must be exact-current-main bound before mutation"
         )
 
     required = (
