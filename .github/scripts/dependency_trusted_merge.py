@@ -146,7 +146,9 @@ def resolve_trusted_dependency_target(
             elif lane == LANE_ACTIONS:
                 evidence = require_action_trusted_gate(api, number, head_sha, base_sha)
             else:  # pragma: no cover - candidate_lane owns the closed lane set
-                raise GovernanceError("trusted dependency candidate lane is outside reviewed policy")
+                raise GovernanceError(
+                    "trusted dependency candidate lane is outside reviewed policy"
+                )
         except TrustedStatusError:
             continue
         if (
@@ -182,7 +184,9 @@ def _publish_target(github_output: Path, *, lane: str, pr_number: int | None) ->
     try:
         descriptor = os.open(github_output, flags)
     except OSError as exc:
-        raise GovernanceError("trusted dependency target output could not be opened safely") from exc
+        raise GovernanceError(
+            "trusted dependency target output could not be opened safely"
+        ) from exc
     try:
         info = os.fstat(descriptor)
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
@@ -195,7 +199,9 @@ def _publish_target(github_output: Path, *, lane: str, pr_number: int | None) ->
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Resolve one exact dependency subject from Trusted PR Gate")
+    parser = argparse.ArgumentParser(
+        description="Resolve one exact dependency subject from Trusted PR Gate"
+    )
     parser.add_argument("--trusted-run-id", type=int, required=True)
     parser.add_argument("--trusted-run-attempt", type=int, required=True)
     parser.add_argument("--github-output", type=Path, required=True)
