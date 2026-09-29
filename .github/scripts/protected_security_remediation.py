@@ -2195,15 +2195,19 @@ def _reconcile_terminal_closure(
         )
     comment_id = _require_positive_int(comment_id, "protected terminal certificate comment id")
     durable = read_api.get(f"/issues/comments/{comment_id}")
+    durable_created_at = durable.get("created_at") if isinstance(durable, dict) else None
     if (
         not isinstance(durable, dict)
         or durable.get("body") != body
         or (durable.get("user") or {}).get("login") != bot_login
         or (durable.get("user") or {}).get("id") != bot_id
         or (durable.get("user") or {}).get("type") != "Bot"
+        or not isinstance(durable_created_at, str)
+        or not durable_created_at
+        or durable.get("updated_at") != durable_created_at
     ):
         raise ProtectedRemediationError(
-            "protected terminal certificate is not durably bound to the author App"
+            "protected terminal certificate is not durable, exact, and unedited"
         )
     if _current_main(read_api) != current_main:
         raise ProtectedRemediationError(
