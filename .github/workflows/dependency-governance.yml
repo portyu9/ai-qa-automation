@@ -7,9 +7,8 @@ on:
   workflow_run:
     workflows: ['CI — ƳƤ AI QA Automation Framework', CodeQL]
     types: [completed]
-  status:
   schedule:
-    - cron: '29 */6 * * *'
+    - cron: '*/5 * * * *'
 permissions:
   contents: read
 
@@ -22,115 +21,6 @@ env:
   RECOVERY_CONFIG: .github/dependency-recovery.json
 
 jobs:
-  status-sync:
-    name: trusted-status-synchronization
-    if: >-
-      github.event_name == 'status' &&
-      github.event.context == 'Trusted PR Gate' &&
-      github.event.description == 'Automatic exact-subject trusted validation passed' &&
-      github.event.state == 'success'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 2
-    permissions:
-      actions: read
-      contents: read
-      pull-requests: read
-      statuses: read
-    outputs:
-      pr_number: ${{ steps.sync.outputs.pr_number }}
-      lane: ${{ steps.sync.outputs.lane }}
-    steps:
-      - name: Checkout exact trusted status-event revision without credentials
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-          fetch-depth: 1
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.11.16'
-      - name: Verify trusted workflow revision
-        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-      - name: Synchronize exact Trusted PR Gate workflow completion
-        id: sync
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: >-
-          python .github/scripts/dependency_promotion.py
-          --await-trusted-status-event
-          --github-output "$GITHUB_OUTPUT"
-
-  status-merge:
-    name: merge-exact-trusted-dependency-update
-    needs: status-sync
-    if: >-
-      always() &&
-      !cancelled() &&
-      github.event_name == 'status' &&
-      needs.status-sync.result == 'success' &&
-      needs.status-sync.outputs.pr_number != '' &&
-      needs.status-sync.outputs.lane != ''
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    env:
-      GOVERNANCE_CONTROL_SHA: ${{ github.sha }}
-    permissions:
-      actions: read
-      contents: write
-      pull-requests: write
-      statuses: read
-    steps:
-      - name: Checkout exact trusted status-event revision without credentials
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-          fetch-depth: 1
-      - name: Verify exact trusted status-event revision
-        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-      - name: Set up Python 3.11
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.11.16'
-      - name: Capture Python 3.11 resolver
-        run: printf 'PROMOTION_PYTHON311=%s\n' "$(command -v python)" >> "$GITHUB_ENV"
-      - name: Set up Python 3.14
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.14.7'
-      - name: Capture Python 3.14 resolver
-        run: printf 'PROMOTION_PYTHON314=%s\n' "$(command -v python)" >> "$GITHUB_ENV"
-      - name: Validate trusted status-target dependency policy
-        run: |
-          python .github/scripts/dependency_governance.py --validate-config --self-test
-          python .github/scripts/dependency_promotion.py --self-test
-      - name: Merge only synchronized dependency update
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          STATUS_DEPENDENCY_PR: ${{ needs.status-sync.outputs.pr_number }}
-          STATUS_DEPENDENCY_LANE: ${{ needs.status-sync.outputs.lane }}
-        run: |
-          set -euo pipefail
-          [[ "$STATUS_DEPENDENCY_PR" =~ ^[1-9][0-9]*$ ]]
-          case "$STATUS_DEPENDENCY_LANE" in
-            dependency-promotion)
-              python .github/scripts/dependency_promotion.py \
-                --reconcile \
-                --allow-merge \
-                --target-promotion-pr "$STATUS_DEPENDENCY_PR"
-              ;;
-            dependabot-actions)
-              python .github/scripts/dependency_governance.py \
-                --reconcile \
-                --allow-merge \
-                --target-dependabot-pr "$STATUS_DEPENDENCY_PR"
-              ;;
-            *)
-              exit 1
-              ;;
-          esac
-
   govern:
     name: govern-dependabot
     if: >-
