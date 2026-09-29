@@ -1574,10 +1574,13 @@ def _pending_merged_repair(
         row.get("number"),
         "current-main protected repair PR number",
     )
-    if _require_sha(
-        row.get("merge_commit_sha"),
-        "current-main protected repair merge SHA",
-    ) != current_main:
+    if (
+        _require_sha(
+            row.get("merge_commit_sha"),
+            "current-main protected repair merge SHA",
+        )
+        != current_main
+    ):
         raise ProtectedRemediationError(
             "current-main protected repair association has mismatched merge SHA"
         )
