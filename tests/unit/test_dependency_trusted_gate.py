@@ -1239,7 +1239,7 @@ def test_post_merge_workflow_is_event_driven_and_reuses_canonical_validations() 
     ).read_text(encoding="utf-8")
 
     assert (
-        "workflows: [dependency-governance, Dependency Trusted Merge — ƳƤ AI QA Automation Framework, Security Auto-Heal]"
+        "workflows: [dependency-governance, Dependency Trusted Merge — ƳƤ AI QA Automation Framework, Security Auto-Heal, Protected Security Remediation — ƳƤ AI QA Automation Framework]"
         in workflow
     )
     assert "types: [completed]" in workflow
@@ -1253,6 +1253,16 @@ def test_post_merge_workflow_is_event_driven_and_reuses_canonical_validations() 
         in workflow
     )
     assert '"Security Auto-Heal:.github/workflows/security-autoheal.yml")' in workflow
+    assert (
+        '"Protected Security Remediation — ƳƤ AI QA Automation Framework:.github/workflows/protected-security-remediation.yml")'
+        in workflow
+    )
+    assert "merge_author_login='github-actions[bot]'" in workflow
+    assert "merge_author_id=41898282" in workflow
+    assert "merge_author_login='portyu9-security-remediator[bot]'" in workflow
+    assert "merge_author_id=333833782" in workflow
+    assert ".author.login == $merge_author_login" in workflow
+    assert ".author.id == $merge_author_id" in workflow
     assert 'test "$live_main" = "$SUBJECT_SHA"' in workflow
     assert "uses: ./.github/workflows/ci.yml" in workflow
     assert "uses: ./.github/workflows/codeql.yml" in workflow
