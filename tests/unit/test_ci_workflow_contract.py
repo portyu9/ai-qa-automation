@@ -70,7 +70,7 @@ def test_repository_ci_contract_is_self_consistent() -> None:
         post_merge_ci["authority"] == "exact-governed-main-validation-plus-codeql-sarif-only-write"
     )
     assert post_merge_ci["canonical_codeql"] == "reusable-codeql.yml"
-    assert post_merge_ci["security_events_write"] == "isolated-codeql-only"
+    assert post_merge_ci["security_events_write"] == "reusable-codeql-call-ceiling-only"
     assert post_merge_ci["merge_authority"] == "none"
     assert post_merge_ci["trusted_status_authority"] == "none"
     security_autoheal_pr = result["workflows"]["security_autoheal_pr"]
