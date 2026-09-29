@@ -79,12 +79,10 @@ def _check_candidate(
     conclusion = row.get("conclusion")
     if not isinstance(conclusion, str) or not conclusion:
         raise TrustedQualificationError(f"{name} trusted qualification conclusion is invalid")
-    details_url = row.get("details_url")
+    # GitHub Actions may canonicalize a check's display URL to the publishing
+    # job. The external_id binds the exact run and attempt, which are independently
+    # fetched and revalidated below; display routing is not authorization.
     expected_url = f"https://github.com/{EXPECTED_REPOSITORY}/actions/runs/{run_id}"
-    if details_url != expected_url:
-        raise TrustedQualificationError(
-            f"{name} trusted qualification details URL is not exact-run-bound"
-        )
 
     run = api.get(f"/actions/runs/{run_id}")
     if not isinstance(run, dict):
