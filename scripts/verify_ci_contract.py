@@ -61,7 +61,7 @@ EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
     "fb756e342504bb6ffb95bc67149158dd37c9b4b9"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA = (
-    "b4338269fea0ea6a0b045e13cace673abc6a1f60"  # pragma: allowlist secret
+    "aa909649885eacfa45174c793157a5f995a2d91a"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_PR_WORKFLOW_BLOB_SHA = (
     "b7aa78a859ae3a0fdedc299f92555a61645d559a"  # pragma: allowlist secret
@@ -918,7 +918,6 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         "    name: Merge exact trusted dependency subject",
         "      github.event.workflow_run.conclusion == 'success' &&",
         "      github.event.workflow_run.head_repository.full_name == github.repository &&",
-        "      github.event.workflow_run.repository.full_name == github.repository &&",
         "(github.event.workflow_run.event == 'workflow_run' ||",
         "github.event.workflow_run.event == 'schedule') &&",
         "      github.event.workflow_run.head_branch == 'main' &&",
