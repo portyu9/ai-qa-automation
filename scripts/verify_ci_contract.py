@@ -30,6 +30,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "codeql.yml",
     "dependency-governance-pr.yml",
     "dependency-governance.yml",
+    "dependency-trusted-merge.yml",
     "manual-validation.yml",
     "post-merge-ci.yml",
     "protected-security-remediation.yml",
@@ -48,7 +49,7 @@ EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
     "315e1ea71105e9760d006331b570398b5f7c8af4"  # pragma: allowlist secret
 )
 EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA = (
-    "d21b1e4dd8a9928ff52cf116f1904fe54d946a99"  # pragma: allowlist secret
+    "9b042b88ad16a474e57426fea6bf6a190018575c"  # pragma: allowlist secret
 )
 EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
@@ -58,6 +59,9 @@ EXPECTED_DEPENDENCY_GOVERNANCE_PR_WORKFLOW_BLOB_SHA = (
 )
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
     "fb756e342504bb6ffb95bc67149158dd37c9b4b9"  # pragma: allowlist secret
+)
+EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA = (
+    "b4338269fea0ea6a0b045e13cace673abc6a1f60"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_PR_WORKFLOW_BLOB_SHA = (
     "b7aa78a859ae3a0fdedc299f92555a61645d559a"  # pragma: allowlist secret
@@ -693,7 +697,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         (
             "on:",
             "  workflow_run:",
-            "    workflows: [dependency-governance, Security Auto-Heal]",
+            "    workflows: [dependency-governance, Dependency Trusted Merge — ƳƤ AI QA Automation Framework, Security Auto-Heal]",
             "    types: [completed]",
         )
     )
@@ -751,6 +755,8 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         '          case "$UPSTREAM_NAME:$UPSTREAM_PATH" in',
         '"dependency-governance:.github/workflows/dependency-governance.yml"',
         "workflow_run|schedule) ;;",
+        '"Dependency Trusted Merge — ƳƤ AI QA Automation Framework:.github/workflows/dependency-trusted-merge.yml"',
+        'test "$UPSTREAM_EVENT" = "workflow_run"',
         '"Security Auto-Heal:.github/workflows/security-autoheal.yml"',
         "workflow_run|schedule) ;;",
         "merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/(dependabot/|automation/dependency-promotion-)'",
@@ -828,7 +834,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
             "post-merge-ci.yml non-action structure differs from the reviewed post-merge definition"
         )
     return {
-        "trigger": "workflow_run:dependency-governance-or-security-autoheal:completed",
+        "trigger": "workflow_run:dependency-governance-or-trusted-dependency-merge-or-security-autoheal:completed",
         "authority": "exact-governed-main-validation-plus-isolated-check-and-codeql-sarif-write",
         "subject": "single-signed-lane-bound-github-actions-merge-child-of-upstream-control-sha",
         "canonical_ci": "reusable-ci.yml",
@@ -837,6 +843,180 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         "checks_write": "two-canonical-reusable-call-ceilings-only",
         "merge_authority": "none",
         "trusted_status_authority": "none",
+    }
+
+
+def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
+    base = _trusted_auto._base
+    semantic = base._semantic_text(text)
+    name = "dependency-trusted-merge.yml"
+    expected_on = "\n".join(
+        (
+            "on:",
+            "  workflow_run:",
+            '    workflows: ["Trusted PR Auto Gate — ƳƤ AI QA Automation Framework"]',
+            "    types: [completed]",
+        )
+    )
+    on_block = base._semantic_text(base._top_level_block(text, "on")).strip("\n")
+    if on_block != expected_on or base._top_level_keys(base._top_level_block(text, "on")) != {
+        "workflow_run"
+    }:
+        raise ValueError(
+            "dependency-trusted-merge.yml must remain Trusted PR Auto Gate workflow_run only"
+        )
+    base._verify_top_level_read_only_permissions(text, name=name)
+    if base._top_level_keys(base._top_level_block(text, "jobs")) != {"merge"}:
+        raise ValueError("dependency-trusted-merge.yml must expose exactly one merge job")
+    concurrency = base._semantic_text(base._top_level_block(text, "concurrency"))
+    for fragment in (
+        "  group: dependency-trusted-merge-global-reconcile",
+        "  cancel-in-progress: false",
+    ):
+        if fragment not in concurrency:
+            raise ValueError("dependency trusted merge concurrency contract drifted")
+
+    for forbidden in (
+        "pull_request:",
+        "pull_request_target:",
+        "push:",
+        "schedule:",
+        "status:",
+        "issue_comment:",
+        "workflow_dispatch:",
+        "repository_dispatch:",
+        "continue-on-error: true",
+        "ubuntu-latest",
+        "${{ secrets.",
+        "TRUSTED_GATE_APP_CLIENT_ID",
+        "TRUSTED_GATE_APP_PRIVATE_KEY",
+        "PROTECTED_REMEDIATION_APP_PRIVATE_KEY",
+        "actions/create-github-app-token@",
+        "checks: write",
+        "statuses: write",
+        "security-events: write",
+        "id-token: write",
+        "packages: write",
+        "PROMOTION_AUTHOR_TOKEN",
+    ):
+        if forbidden in semantic:
+            raise ValueError(
+                f"dependency-trusted-merge.yml contains forbidden authority token: {forbidden}"
+            )
+
+    job = base._semantic_text(base._job_block(text, "merge"))
+    if _trusted_auto._job_permissions(job) != {
+        "actions": "read",
+        "contents": "write",
+        "pull-requests": "write",
+        "statuses": "read",
+    }:
+        raise ValueError(
+            "dependency trusted merge job permission ceiling drifted from exact target-only authority"
+        )
+    required = (
+        "    name: Merge exact trusted dependency subject",
+        "      github.event.workflow_run.conclusion == 'success' &&",
+        "      github.event.workflow_run.head_repository.full_name == github.repository &&",
+        "      github.event.workflow_run.repository.full_name == github.repository &&",
+        "(github.event.workflow_run.event == 'workflow_run' ||",
+        "github.event.workflow_run.event == 'schedule') &&",
+        "      github.event.workflow_run.head_branch == 'main' &&",
+        "      github.event.workflow_run.head_sha == github.sha",
+        "    runs-on: ubuntu-24.04",
+        "    timeout-minutes: 20",
+        "    environment:\n      name: protected-remediation-author\n      deployment: false",
+        "    env:\n      GOVERNANCE_CONTROL_SHA: ${{ github.sha }}",
+        "      actions: read",
+        "      contents: write",
+        "      pull-requests: write",
+        "      statuses: read",
+        "      - name: Checkout exact trusted default-branch merge controller",
+        "          ref: ${{ github.sha }}",
+        "          persist-credentials: false",
+        "          fetch-depth: 1",
+        "      - name: Set up Python 3.11",
+        "          python-version: '3.11.16'",
+        "      - name: Verify exact accepted-main controller revision",
+        '          test "$GITHUB_REF" = "refs/heads/main"',
+        '          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"',
+        "      - name: Resolve exact dependency subject from completed Trusted PR Gate",
+        "        id: target",
+        "          GITHUB_TOKEN: ${{ github.token }}",
+        "          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}",
+        "          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}",
+        "          python .github/scripts/dependency_trusted_merge.py",
+        '          --trusted-run-id "${{ github.event.workflow_run.id }}"',
+        '          --trusted-run-attempt "${{ github.event.workflow_run.run_attempt }}"',
+        '          --github-output "$GITHUB_OUTPUT"',
+        "      - name: Capture Python 3.11 resolver",
+        "        if: steps.target.outputs.lane == 'dependency-promotion'",
+        "      - name: Set up Python 3.14",
+        "          python-version: '3.14.7'",
+        "      - name: Capture Python 3.14 resolver",
+        "      - name: Merge exact trusted dependency promotion",
+        "          python .github/scripts/dependency_promotion.py",
+        "          --target-promotion-pr \"${{ steps.target.outputs.pr_number }}\"",
+        "      - name: Merge exact trusted Dependabot Actions subject",
+        "          python .github/scripts/dependency_governance.py",
+        "          --target-dependabot-pr \"${{ steps.target.outputs.pr_number }}\"",
+    )
+    for fragment in required:
+        if fragment not in job:
+            raise ValueError(
+                f"dependency-trusted-merge.yml missing reviewed authority invariant: {fragment}"
+            )
+    if semantic.count("contents: write") != 1 or semantic.count("pull-requests: write") != 1:
+        raise ValueError(
+            "dependency trusted merge must expose exactly one contents/pull-request write ceiling"
+        )
+    if semantic.count("actions/setup-python@") != 2 or semantic.count("actions/checkout@") != 1:
+        raise ValueError(
+            "dependency trusted merge must use exactly one checkout and two exact Python runtimes"
+        )
+    resolve = base._semantic_text(
+        base._step_block(job, "Resolve exact dependency subject from completed Trusted PR Gate")
+    )
+    if "contents: write" in resolve or "pull-requests: write" in resolve:
+        raise ValueError("trusted dependency target resolution must not gain step-scoped mutation authority")
+    promotion = base._semantic_text(
+        base._step_block(job, "Merge exact trusted dependency promotion")
+    )
+    actions = base._semantic_text(
+        base._step_block(job, "Merge exact trusted Dependabot Actions subject")
+    )
+    for step, lane in (
+        (promotion, "dependency-promotion"),
+        (actions, "dependabot-actions"),
+    ):
+        if f"        if: steps.target.outputs.lane == '{lane}'" not in step:
+            raise ValueError("dependency trusted merge lane-to-target mutation binding drifted")
+        if "          GITHUB_TOKEN: ${{ github.token }}" not in step:
+            raise ValueError("dependency trusted merge mutation lacks exact native token binding")
+
+    resolve_index = job.index(
+        "      - name: Resolve exact dependency subject from completed Trusted PR Gate"
+    )
+    promotion_index = job.index("      - name: Merge exact trusted dependency promotion")
+    actions_index = job.index("      - name: Merge exact trusted Dependabot Actions subject")
+    if not resolve_index < promotion_index < actions_index:
+        raise ValueError("dependency trusted target resolution must precede all mutation")
+
+    if base._workflow_structure_sha1(text) != EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA:
+        raise ValueError(
+            "dependency-trusted-merge.yml non-action structure differs from reviewed one-way authority"
+        )
+    return {
+        "trigger": "workflow_run:trusted-pr-auto:completed",
+        "trusted_code_source": "accepted-main-only",
+        "upstream_authority": "exact-successful-trusted-gate-run-only",
+        "target_cardinality": "zero-or-one-exact-gate-bound-dependency-subject",
+        "merge_authority": "existing-exact-target-mergers-only",
+        "branch_or_pr_creation_authority": "none",
+        "trusted_status_authority": "none",
+        "app_credential_authority": "none",
+        "feedback_loop": "forbidden-trusted-gate-does-not-listen-to-this-workflow",
+        "workflow_definition": "action-pin-normalized-reviewed-git-blob",
     }
 
 
@@ -1780,6 +1960,9 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
     dependency_governance = _verify_dependency_governance_workflow(
         workflows["dependency-governance.yml"]
     )
+    dependency_trusted_merge = _verify_dependency_trusted_merge_workflow(
+        workflows["dependency-trusted-merge.yml"]
+    )
     manual = base._verify_manual_workflow(workflows["manual-validation.yml"])
     post_merge_ci = _verify_post_merge_ci_workflow(workflows["post-merge-ci.yml"])
     release_candidate = _verify_release_candidate_workflow(workflows["release-candidate.yml"])
@@ -1800,6 +1983,7 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
             "codeql": codeql,
             "dependency_governance_pr": dependency_governance_pr,
             "dependency_governance": dependency_governance,
+            "dependency_trusted_merge": dependency_trusted_merge,
             "manual": manual,
             "post_merge_ci": post_merge_ci,
             "protected_remediation": protected_remediation,
@@ -1828,7 +2012,10 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
             ),
             (
                 "Dependency governance consumes the App-owned Trusted PR Gate only after exact "
-                "bot/provenance/check proofs; it does not hold App status-write credentials itself."
+                "bot/provenance/check proofs; it does not hold App status-write credentials itself. "
+                "A separate one-way accepted-main dependency merger wakes only from completed Trusted "
+                "PR Auto Gate runs and rebinds that exact run to zero or one live dependency subject "
+                "before invoking the existing exact-target merge policy."
             ),
             (
                 "Dependency and Security Auto-Heal PR self-tests run in separate read-only, secret-free workflows. "
