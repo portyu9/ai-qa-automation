@@ -163,10 +163,7 @@ async def list_real_sdk_tools(server: Any) -> list[Any]:
 
 
 def tool_input_schema(tool: Any) -> dict[str, Any]:
-    if hasattr(tool, "input_schema"):
-        schema = tool.input_schema
-    else:
-        schema = tool.inputSchema
+    schema = tool.input_schema if hasattr(tool, "input_schema") else tool.inputSchema
     assert isinstance(schema, dict)
     return schema
 
