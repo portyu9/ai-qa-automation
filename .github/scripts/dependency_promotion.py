@@ -96,6 +96,7 @@ REQUIREMENT = re.compile(
     r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)(?P<extras>\[[A-Za-z0-9_,.-]+\])?(?P<specifier>[^;@\s]*)$"
 )
 PROMOTION_PATHS = {
+    "README.md",
     "pyproject.toml",
     "requirements/build-py311.lock",
     "requirements/dev-py311.lock",
@@ -467,6 +468,62 @@ def validate_pyproject_transition(base_raw: bytes, head_raw: bytes) -> None:
         raise PolicyBlock("pip update does not change any reviewed dependency specifier")
 
 
+SDK_REQUIREMENT_PREFIX = "claude-agent-sdk=="
+SDK_VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.!+_-]*$")
+
+
+def _sdk_version(pyproject_raw: bytes) -> str:
+    try:
+        document = tomllib.loads(pyproject_raw.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise PolicyBlock("SDK documentation synchronization requires canonical UTF-8 TOML") from exc
+    dependencies = (document.get("project") or {}).get("dependencies")
+    if not isinstance(dependencies, list):
+        raise PolicyBlock("SDK documentation synchronization requires project dependencies")
+    matches: list[str] = []
+    for dependency in dependencies:
+        if isinstance(dependency, str) and dependency.startswith(SDK_REQUIREMENT_PREFIX):
+            version = dependency[len(SDK_REQUIREMENT_PREFIX) :]
+            if SDK_VERSION_RE.fullmatch(version) is None:
+                raise PolicyBlock("claude-agent-sdk promotion version is malformed")
+            matches.append(version)
+    if len(matches) != 1:
+        raise PolicyBlock("promotion requires exactly one exact claude-agent-sdk dependency pin")
+    return matches[0]
+
+
+def _synchronize_readme_sdk_claim(
+    readme_raw: bytes,
+    base_pyproject_raw: bytes,
+    head_pyproject_raw: bytes,
+) -> bytes:
+    base_version = _sdk_version(base_pyproject_raw)
+    head_version = _sdk_version(head_pyproject_raw)
+    if base_version == head_version:
+        return readme_raw
+    try:
+        text = readme_raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise PolicyBlock("README.md is not canonical UTF-8") from exc
+    replacements = (
+        (
+            f"Claude%20Agent%20SDK-{base_version}-",
+            f"Claude%20Agent%20SDK-{head_version}-",
+            "README Claude Agent SDK badge",
+        ),
+        (
+            f"`claude-agent-sdk=={base_version}`",
+            f"`claude-agent-sdk=={head_version}`",
+            "README exact SDK runtime claim",
+        ),
+    )
+    for old, new, label in replacements:
+        if text.count(old) != 1 or text.count(new) != 0:
+            raise PolicyBlock(f"{label} is missing, duplicated, or already drifted")
+        text = text.replace(old, new, 1)
+    return text.encode("utf-8")
+
+
 def _decode_contents_base64(content: str, path: str) -> bytes:
     compact = content.replace("\r", "").replace("\n", "")
     if not compact:
@@ -561,6 +618,7 @@ def source_subject(api: GitHubApi, pr: dict[str, Any], config: dict[str, Any]) -
         source_base_raw,
         live_main_raw,
     )
+    live_readme_raw = _contents_bytes(api, "README.md", promotion_base_sha)
 
     fingerprint = hashlib.sha256(
         b"\0".join(
@@ -570,6 +628,7 @@ def source_subject(api: GitHubApi, pr: dict[str, Any], config: dict[str, Any]) -
                 head_sha.encode(),
                 promotion_base_sha.encode(),
                 hashlib.sha256(head_raw).hexdigest().encode(),
+                hashlib.sha256(live_readme_raw).hexdigest().encode(),
             )
         )
     ).hexdigest()
@@ -578,7 +637,9 @@ def source_subject(api: GitHubApi, pr: dict[str, Any], config: dict[str, Any]) -
         "headSha": head_sha,
         "sourceBaseSha": source_base_sha,
         "baseSha": promotion_base_sha,
+        "basePyproject": live_main_raw,
         "pyproject": head_raw,
+        "readme": live_readme_raw,
         "fingerprint": fingerprint,
     }
 
@@ -804,6 +865,11 @@ def _compile(source: dict[str, Any]) -> dict[str, bytes]:
         )
         compile_locks(root, python311, python314, output)
         result = {"pyproject.toml": source["pyproject"]}
+        synchronized_readme = _synchronize_readme_sdk_claim(
+            source["readme"], source["basePyproject"], source["pyproject"]
+        )
+        if synchronized_readme != source["readme"]:
+            result["README.md"] = synchronized_readme
         for name in (
             "build-py311.lock",
             "dev-py311.lock",
@@ -1320,6 +1386,11 @@ def _validate_generated_bytes(api: GitHubApi, source: dict[str, Any], head_sha: 
     observed = {path: _contents_bytes(api, path, head_sha) for path in PROMOTION_PATHS}
     if observed["pyproject.toml"] != source["pyproject"]:
         raise PolicyBlock("promotion pyproject.toml differs from exact Dependabot source")
+    expected_readme = _synchronize_readme_sdk_claim(
+        source["readme"], source["basePyproject"], source["pyproject"]
+    )
+    if observed["README.md"] != expected_readme:
+        raise PolicyBlock("promotion README.md differs from exact synchronized SDK claim")
     with tempfile.TemporaryDirectory(prefix="aiqa-promotion-replay-") as temporary:
         root = Path(temporary) / "root"
         bundle = Path(temporary) / "bundle"
