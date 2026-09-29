@@ -82,6 +82,9 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     security_autoheal = result["workflows"]["security_autoheal"]
     assert security_autoheal["triggers"] == ["workflow_run", "schedule", "workflow_dispatch"]
     assert security_autoheal["trusted_code_source"] == "accepted-main-only"
+    assert security_autoheal["trusted_revision"] == (
+        "exact-current-main-or-safe-noop-before-mutation"
+    )
     assert security_autoheal["candidate_workflow_execution"] == "forbidden"
 
 
@@ -138,6 +141,90 @@ def test_security_autoheal_privileged_controller_rejects_pr_branch_workflow_wake
     with pytest.raises(
         ValueError,
         match="must accept only successful same-repository main or Trusted PR Auto workflow wakes",
+    ):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_security_autoheal_requires_exact_current_main_control_revision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "security-autoheal.yml"
+    text = path.read_text(encoding="utf-8")
+    exact_ref = "          ref: ${{ github.sha }}\n"
+    assert text.count(exact_ref) == 2
+
+    mutated = text.replace(
+        exact_ref,
+        "          ref: ${{ github.event.repository.default_branch }}\n",
+        1,
+    )
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="must pin both planning and mutation to the exact workflow control revision",
+    ):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_security_autoheal_route_persistence_requires_current_revision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "security-autoheal.yml"
+    text = path.read_text(encoding="utf-8")
+    current = (
+        "      - name: Persist exact-run route plan before mutation\n"
+        "        if: steps.revision.outputs.current == 'true'\n"
+    )
+    assert current in text
+    mutated = text.replace(
+        current,
+        "      - name: Persist exact-run route plan before mutation\n",
+        1,
+    )
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="route planning and persistence must require exact-current-main admission",
+    ):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_security_autoheal_revalidates_current_main_before_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "security-autoheal.yml"
+    text = path.read_text(encoding="utf-8")
+    command = '          test "$live_main" = "$GITHUB_SHA"\n'
+    assert text.count(command) == 1
+    mutated = text.replace(command, '          test -n "$live_main"\n', 1)
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="mutation lacks immediate exact-current-main revalidation",
     ):
         ci_contract.verify_ci_contract(root)
 

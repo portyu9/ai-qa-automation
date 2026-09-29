@@ -63,7 +63,7 @@ EXPECTED_SECURITY_AUTOHEAL_PR_WORKFLOW_BLOB_SHA = (
     "b7aa78a859ae3a0fdedc299f92555a61645d559a"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
-    "fdb25c7d275e9f6acdc944318f928a7bfb1d5dd8"  # pragma: allowlist secret
+    "dab8aa71c43e51e72107de652976a47176b38cbc"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_REMEDIATION_WORKFLOW_BLOB_SHA = (
     "47feff3947ca5b7c11ea425951468d3ad6036e84"  # pragma: allowlist secret
@@ -1388,6 +1388,67 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
                 f"security-autoheal.yml {label} must accept only successful same-repository "
                 "main or Trusted PR Auto workflow wakes"
             )
+
+    exact_checkout = "          ref: ${{ github.sha }}"
+    moving_checkout = "          ref: ${{ github.event.repository.default_branch }}"
+    for label, job in (("route-plan", route_job), ("reconcile", reconcile_job)):
+        if job.count(exact_checkout) != 1 or moving_checkout in job:
+            raise ValueError(
+                "security-autoheal.yml must pin both planning and mutation to the exact "
+                "workflow control revision"
+            )
+
+    if "      current: ${{ steps.revision.outputs.current }}" not in route_job:
+        raise ValueError(
+            "security-autoheal.yml route plan must export exact-current-main admission"
+        )
+    route_revision = base._semantic_text(
+        base._step_block(
+            route_job,
+            "Verify exact current-main security controller before planning",
+        )
+    )
+    for fragment in (
+        'test "$(git rev-parse HEAD)" = "$GITHUB_SHA"',
+        'live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"',
+        'if [ "$live_main" = "$GITHUB_SHA" ]; then',
+        "printf 'current=%s\\n' \"$current\" >> \"$GITHUB_OUTPUT\"",
+    ):
+        if fragment not in route_revision:
+            raise ValueError(
+                "security-autoheal.yml route planning lacks exact-current-main revision proof"
+            )
+    for step_name in (
+        "Validate trusted security route planner",
+        "Plan exact-main deterministic security routes",
+        "Persist exact-run route plan before mutation",
+    ):
+        step = base._semantic_text(base._step_block(route_job, step_name))
+        if "        if: steps.revision.outputs.current == 'true'" not in step:
+            raise ValueError(
+                "security-autoheal.yml route planning and persistence must require "
+                "exact-current-main admission"
+            )
+    if "      needs.route-plan.outputs.current == 'true' &&" not in reconcile_job:
+        raise ValueError(
+            "security-autoheal.yml mutation job must consume exact-current-main admission"
+        )
+    mutation_revision = base._semantic_text(
+        base._step_block(
+            reconcile_job,
+            "Revalidate exact current-main security controller before mutation",
+        )
+    )
+    for fragment in (
+        'test "$(git rev-parse HEAD)" = "$GITHUB_SHA"',
+        'live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"',
+        'test "$live_main" = "$GITHUB_SHA"',
+    ):
+        if fragment not in mutation_revision:
+            raise ValueError(
+                "security-autoheal.yml mutation lacks immediate exact-current-main revalidation"
+            )
+
     required = (
         "name: Security Auto-Heal",
         "  workflow_run:",
@@ -1403,6 +1464,7 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         "      contents: read",
         "      pull-requests: read",
         "      security-events: read",
+        "      current: ${{ steps.revision.outputs.current }}",
         "      artifact-id: ${{ steps.route-plan-artifact.outputs.artifact-id }}",
         "      artifact-digest: ${{ steps.route-plan-artifact.outputs.artifact-digest }}",
         "    name: reconcile-codeql-autoheal",
@@ -1413,7 +1475,7 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         "      pull-requests: write",
         "      security-events: write",
         "      statuses: read",
-        "          ref: ${{ github.event.repository.default_branch }}",
+        "          ref: ${{ github.sha }}",
         "          persist-credentials: false",
         "      - name: Plan exact-main deterministic security routes",
         "          GITHUB_TOKEN: ${{ github.token }}",
@@ -1472,6 +1534,7 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
     return {
         "triggers": ["workflow_run", "schedule", "workflow_dispatch"],
         "trusted_code_source": "accepted-main-only",
+        "trusted_revision": "exact-current-main-or-safe-noop-before-mutation",
         "candidate_workflow_execution": "forbidden",
         "repair_authority": (
             "read-only-plan-job-to-persisted-exact-run-route-before-write-authority"

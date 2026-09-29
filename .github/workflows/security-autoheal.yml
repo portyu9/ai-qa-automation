@@ -43,22 +43,42 @@ jobs:
       pull-requests: read
       security-events: read
     outputs:
+      current: ${{ steps.revision.outputs.current }}
       artifact-id: ${{ steps.route-plan-artifact.outputs.artifact-id }}
       artifact-digest: ${{ steps.route-plan-artifact.outputs.artifact-digest }}
     steps:
       - name: Checkout trusted default-branch security controller for route planning
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 1
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.11.16'
+      - name: Verify exact current-main security controller before planning
+        id: revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
+          current=false
+          if [ "$live_main" = "$GITHUB_SHA" ]; then
+            current=true
+          fi
+          printf 'current=%s\n' "$current" >> "$GITHUB_OUTPUT"
+      - name: Record stale security wake without authority
+        if: steps.revision.outputs.current == 'false'
+        run: echo "Trusted security wake is stale relative to current main; no mutation authority exercised."
       - name: Validate trusted security route planner
+        if: steps.revision.outputs.current == 'true'
         run: python .github/scripts/security_autoheal.py --validate-config --self-test
       - name: Plan exact-main deterministic security routes
+        if: steps.revision.outputs.current == 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
@@ -66,6 +86,7 @@ jobs:
           --plan-routes
           --route-plan-output "$RUNNER_TEMP/security-autoheal-route-plan/route-plan.json"
       - name: Persist exact-run route plan before mutation
+        if: steps.revision.outputs.current == 'true'
         id: route-plan-artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -78,13 +99,15 @@ jobs:
   reconcile:
     name: reconcile-codeql-autoheal
     if: >-
-      github.event_name == 'schedule' ||
+      needs.route-plan.result == 'success' &&
+      needs.route-plan.outputs.current == 'true' &&
+      (github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'workflow_run' &&
        github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_repository.full_name == github.repository &&
        (github.event.workflow_run.head_branch == 'main' ||
-        github.event.workflow_run.name == 'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework'))
+        github.event.workflow_run.name == 'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework')))
     needs: route-plan
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -99,9 +122,18 @@ jobs:
       - name: Checkout trusted default-branch security controller for mutation
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 1
+      - name: Revalidate exact current-main security controller before mutation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
+          test "$live_main" = "$GITHUB_SHA"
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
