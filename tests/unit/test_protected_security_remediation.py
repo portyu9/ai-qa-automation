@@ -1807,6 +1807,30 @@ def test_terminal_closure_publishes_one_durable_app_certificate(
     assert certificate["codeqlRunId"] == 7205
     assert certificate["trustedStatusId"] == 7201
 
+    comments.clear()
+
+    class EditedDurableReadApi(ReadApi):
+        def get(self, path: str) -> dict[str, Any]:
+            value = super().get(path)
+            if path == "/issues/comments/7301":
+                return {
+                    **value,
+                    "updated_at": "2026-09-29T12:00:01Z",
+                }
+            return value
+
+    with pytest.raises(
+        author.ProtectedRemediationError,
+        match="not durable, exact, and unedited",
+    ):
+        author._reconcile_terminal_closure(
+            EditedDurableReadApi(),
+            WriteApi(),
+            bot_login=BOT_LOGIN,
+            bot_id=BOT_ID,
+            current_main=MAIN,
+        )
+
 
 def test_terminal_comments_reject_edited_author_app_certificate() -> None:
     certificate = {
