@@ -1236,10 +1236,16 @@ def _commit_copilot_autofix(
 
 def _changed_files(api: GitHubApi, base_sha: str, head_sha: str) -> list[dict[str, Any]]:
     payload = api.get(f"/compare/{base_sha}...{head_sha}")
-    files = (payload or {}).get("files")
-    if not isinstance(files, list) or not files:
-        raise PolicyBlock("repair candidate has no changed files")
-    return [row for row in files if isinstance(row, dict)]
+    if not isinstance(payload, dict):
+        raise PolicyBlock("repair candidate comparison is malformed")
+    files = payload.get("files")
+    if (
+        not isinstance(files, list)
+        or not files
+        or any(not isinstance(row, dict) for row in files)
+    ):
+        raise PolicyBlock("repair candidate changed-file evidence is malformed or empty")
+    return files
 
 
 def _validate_candidate_diff(
@@ -1251,12 +1257,23 @@ def _validate_candidate_diff(
 ) -> None:
     if len(files) > config["maxChangedFiles"]:
         raise PolicyBlock("repair candidate exceeds the automatic changed-file limit")
-    paths: list[str] = []
+    paths: set[str] = set()
     for row in files:
         path = row.get("filename")
         if not isinstance(path, str) or not path:
             raise PolicyBlock("repair candidate contains an invalid changed path")
-        paths.append(path)
+        if path in paths:
+            raise PolicyBlock(f"repair candidate changed-file evidence is ambiguous: {path}")
+        status = row.get("status")
+        previous = row.get("previous_filename")
+        if previous is not None:
+            raise PolicyBlock("repair candidate rename provenance is outside automatic authority")
+        if deterministic:
+            if status != "modified":
+                raise PolicyBlock("deterministic repair must be an ordinary file modification")
+        elif status not in {"modified", "added"}:
+            raise PolicyBlock("model-generated repair may only modify or add files")
+        paths.add(path)
         if any(_path_matches(path, blocked) for blocked in config["neverModifyPaths"]):
             raise PolicyBlock(f"repair candidate touched never-modify control plane: {path}")
         if deterministic:
