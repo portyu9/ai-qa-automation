@@ -614,7 +614,7 @@ def _governance_wake_api(*, wake_conclusion: str = "neutral") -> GovernanceWakeF
                 "status": "completed",
                 "conclusion": wake_conclusion,
                 "details_url": (
-                    f"https://github.com/{preflight.EXPECTED_REPOSITORY}/runs/777"
+                    f"https://github.com/{preflight.EXPECTED_REPOSITORY}/runs/77"
                 ),
                 "app": {"id": preflight.GITHUB_ACTIONS_APP_ID, "slug": "github-actions"},
             }
@@ -636,6 +636,17 @@ def test_successful_governance_wake_selects_exact_dependency_promotion() -> None
     assert admission.pr_number == 65
     assert admission.head_sha == HEAD
     assert admission.base_sha == BASE
+
+
+def test_governance_wake_rejects_noncanonical_check_url() -> None:
+    api = _governance_wake_api()
+    check_path = (
+        f"/repos/{preflight.EXPECTED_REPOSITORY}/commits/{HEAD}/check-runs?filter=all"
+    )
+    api.checks[check_path][0]["details_url"] = "https://example.invalid/forged"
+    event = {"action": "completed", "workflow_run": {"id": 42, "head_sha": BASE}}
+
+    assert preflight.evaluate_admission(api, event=event) is None
 
 
 def test_stale_successful_governance_noop_cannot_wake_trusted_validation() -> None:
