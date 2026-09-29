@@ -246,18 +246,13 @@ def test_stale_candidate_base_cannot_match(
     ) == (merge.LANE_NONE, None)
 
 
-def test_target_output_requires_exact_owned_github_output(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    output = tmp_path / "output"
-    output.write_text("", encoding="utf-8")
-    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
-
-    merge._publish_target(output, lane=merge.LANE_PROMOTION, pr_number=314)
-    assert output.read_text(encoding="utf-8") == "lane=dependency-promotion\npr_number=314\n"
-
-    other = tmp_path / "other"
-    other.write_text("", encoding="utf-8")
-    with pytest.raises(merge.GovernanceError, match="not exact GITHUB_OUTPUT"):
-        merge._publish_target(other, lane=merge.LANE_NONE, pr_number=None)
+def test_target_output_is_closed_and_filesystem_free() -> None:
+    assert (
+        merge._target_output(lane=merge.LANE_PROMOTION, pr_number=314)
+        == "lane=dependency-promotion\npr_number=314\n"
+    )
+    assert merge._target_output(lane=merge.LANE_NONE, pr_number=None) == "lane=none\npr_number=\n"
+    with pytest.raises(merge.GovernanceError, match="outside reviewed policy"):
+        merge._target_output(lane="other", pr_number=314)
+    with pytest.raises(merge.GovernanceError, match="unexpectedly carries a PR"):
+        merge._target_output(lane=merge.LANE_NONE, pr_number=314)
