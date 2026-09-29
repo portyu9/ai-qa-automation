@@ -411,6 +411,40 @@ def test_security_autoheal_privileged_controller_rejects_pull_request_execution(
         _verify_workflow_text("security-autoheal.yml", mutated)
 
 
+@pytest.mark.parametrize(
+    ("guarded_fragment", "unguarded_fragment"),
+    (
+        (
+            "- name: Plan exact-main deterministic security routes\n"
+            "        if: steps.revision.outputs.current == 'true'\n"
+            "        env:",
+            "- name: Plan exact-main deterministic security routes\n"
+            "        env:",
+        ),
+        (
+            "- name: Persist exact-run route plan before mutation\n"
+            "        if: steps.revision.outputs.current == 'true'\n"
+            "        id: route-plan-artifact",
+            "- name: Persist exact-run route plan before mutation\n"
+            "        id: route-plan-artifact",
+        ),
+    ),
+)
+def test_security_autoheal_requires_current_main_guards_on_route_evidence(
+    guarded_fragment: str,
+    unguarded_fragment: str,
+) -> None:
+    root = Path(__file__).parents[2]
+    workflow = (root / ".github" / "workflows" / "security-autoheal.yml").read_text(
+        encoding="utf-8"
+    )
+    assert guarded_fragment in workflow
+    mutated = workflow.replace(guarded_fragment, unguarded_fragment, 1)
+
+    with pytest.raises(ValueError, match="reviewed credential consumers moved or changed"):
+        _verify_workflow_text("security-autoheal.yml", mutated)
+
+
 def test_protected_remediation_author_secret_is_trusted_wake_only() -> None:
     root = Path(__file__).parents[2]
     workflow = (root / ".github" / "workflows" / "protected-security-remediation.yml").read_text(
