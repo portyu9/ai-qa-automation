@@ -896,7 +896,7 @@ def test_promotion_qualification_wake_accepts_github_canonical_job_url(
             assert path == "/check-runs"
             self.check = {
                 **payload,
-                "id": 12345,
+                "id": job_id,
                 "details_url": (
                     f"https://github.com/{gate.EXPECTED_REPOSITORY}/runs/{job_id}"
                 ),
@@ -940,6 +940,35 @@ def test_promotion_qualification_wake_accepts_github_canonical_job_url(
         f"https://github.com/{gate.EXPECTED_REPOSITORY}/runs/{job_id}"
     )
     assert promotion._qualification_wake_stage(api, subject) == "trusted-gate"
+
+
+def test_promotion_qualification_wake_rejects_noncanonical_returned_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = 778899
+    subject = {"number": PR_NUMBER, "headSha": HEAD, "baseSha": BASE}
+
+    class _WakeApi:
+        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            assert path == "/check-runs"
+            return {
+                **payload,
+                "id": 12345,
+                "details_url": "https://example.invalid/forged",
+                "app": {
+                    "id": promotion.GITHUB_ACTIONS_APP_ID,
+                    "slug": "github-actions",
+                },
+            }
+
+    monkeypatch.setenv("GITHUB_RUN_ID", str(run_id))
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+
+    with pytest.raises(
+        promotion.GovernanceError,
+        match="non-canonical promotion wake details URL",
+    ):
+        promotion._publish_qualification_wake(_WakeApi(), subject, stage="trusted-gate")
 
 
 def test_dependency_promotion_reconcile_stops_after_new_qualification_wake(
