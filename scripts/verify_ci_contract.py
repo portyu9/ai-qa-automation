@@ -786,7 +786,9 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         "    uses: ./.github/workflows/ci.yml",
     ):
         if fragment not in validate_ci:
-            raise ValueError("post-merge-ci.yml must call canonical reusable CI read-only")
+            raise ValueError(
+                "post-merge-ci.yml must call canonical reusable CI with isolated check publication ceiling"
+            )
 
     validate_codeql = base._semantic_text(base._job_block(text, "validate-codeql"))
     for fragment in (
@@ -827,7 +829,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         )
     return {
         "trigger": "workflow_run:dependency-governance-or-security-autoheal:completed",
-        "authority": "exact-governed-main-validation-plus-codeql-sarif-only-write",
+        "authority": "exact-governed-main-validation-plus-isolated-check-and-codeql-sarif-write",
         "subject": "single-signed-lane-bound-github-actions-merge-child-of-upstream-control-sha",
         "canonical_ci": "reusable-ci.yml",
         "canonical_codeql": "reusable-codeql.yml",
