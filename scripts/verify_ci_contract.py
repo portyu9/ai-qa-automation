@@ -1408,7 +1408,7 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
 
     exact_checkout = "          ref: ${{ github.sha }}"
     moving_checkout = "          ref: ${{ github.event.repository.default_branch }}"
-    for label, job in (("route-plan", route_job), ("reconcile", reconcile_job)):
+    for job in (route_job, reconcile_job):
         if job.count(exact_checkout) != 1 or moving_checkout in job:
             raise ValueError(
                 "security-autoheal.yml must pin both planning and mutation to the exact "
