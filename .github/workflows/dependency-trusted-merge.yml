@@ -58,11 +58,11 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
           PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}
-        run: >-
-          python .github/scripts/dependency_trusted_merge.py
-          --trusted-run-id "${{ github.event.workflow_run.id }}"
-          --trusted-run-attempt "${{ github.event.workflow_run.run_attempt }}"
-          --github-output "$GITHUB_OUTPUT"
+        run: |
+          set -euo pipefail
+          python .github/scripts/dependency_trusted_merge.py \
+            --trusted-run-id "${{ github.event.workflow_run.id }}" \
+            --trusted-run-attempt "${{ github.event.workflow_run.run_attempt }}" >> "$GITHUB_OUTPUT"
       - name: Capture Python 3.11 resolver
         if: steps.target.outputs.lane == 'dependency-promotion'
         run: printf 'PROMOTION_PYTHON311=%s\n' "$(command -v python)" >> "$GITHUB_ENV"
