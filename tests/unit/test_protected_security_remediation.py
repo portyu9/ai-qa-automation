@@ -1581,6 +1581,124 @@ def test_terminal_alert_requires_exact_fixed_codeql_identity() -> None:
         author._terminal_alert_is_fixed(Api("fixed", ".github/workflows/ci.yml"), evidence)
 
 
+def test_pending_terminal_repair_is_bound_to_exact_current_main_commit() -> None:
+    class Api:
+        def __init__(self, rows: list[dict[str, Any]]) -> None:
+            self.rows = rows
+
+        def list_all(
+            self,
+            path: str,
+            *,
+            max_pages: int = 4,
+            max_items: int | None = None,
+        ) -> list[dict[str, Any]]:
+            if path == f"/commits/{MAIN}/pulls":
+                assert max_pages == 1
+                assert max_items is None
+                return list(self.rows)
+            if path == "/issues/301/comments":
+                assert max_pages == 4
+                assert max_items is None
+                return []
+            raise AssertionError(path)
+
+        def get(self, path: str) -> dict[str, Any]:
+            assert path == "/pulls/301"
+            return {"number": 301}
+
+    exact = {
+        "number": 301,
+        "state": "closed",
+        "merged_at": "2026-09-29T12:00:00Z",
+        "merge_commit_sha": MAIN,
+        "user": {"login": BOT_LOGIN, "id": BOT_ID, "type": "Bot"},
+        "head": {
+            "ref": author.branch_name(_record()),
+            "sha": HEAD,
+            "repo": {"full_name": routing.EXPECTED_REPOSITORY},
+        },
+        "base": {
+            "ref": "main",
+            "sha": "c" * 40,
+            "repo": {"full_name": routing.EXPECTED_REPOSITORY},
+        },
+    }
+    assert author._pending_merged_repair(
+        Api([exact]),
+        current_main=MAIN,
+        bot_login=BOT_LOGIN,
+        bot_id=BOT_ID,
+    ) == {"number": 301}
+
+    unrelated = dict(exact)
+    unrelated["user"] = {"login": "github-actions[bot]", "id": 41898282, "type": "Bot"}
+    assert (
+        author._pending_merged_repair(
+            Api([unrelated]),
+            current_main=MAIN,
+            bot_login=BOT_LOGIN,
+            bot_id=BOT_ID,
+        )
+        is None
+    )
+
+
+def test_pending_terminal_repair_rejects_mismatched_or_ambiguous_current_main() -> None:
+    branch = author.branch_name(_record())
+
+    def row(number: int, merge_sha: str) -> dict[str, Any]:
+        return {
+            "number": number,
+            "state": "closed",
+            "merged_at": "2026-09-29T12:00:00Z",
+            "merge_commit_sha": merge_sha,
+            "user": {"login": BOT_LOGIN, "id": BOT_ID, "type": "Bot"},
+            "head": {
+                "ref": branch,
+                "sha": HEAD,
+                "repo": {"full_name": routing.EXPECTED_REPOSITORY},
+            },
+            "base": {
+                "ref": "main",
+                "sha": "c" * 40,
+                "repo": {"full_name": routing.EXPECTED_REPOSITORY},
+            },
+        }
+
+    class Api:
+        def __init__(self, rows: list[dict[str, Any]]) -> None:
+            self.rows = rows
+
+        def list_all(
+            self,
+            path: str,
+            *,
+            max_pages: int = 4,
+            max_items: int | None = None,
+        ) -> list[dict[str, Any]]:
+            assert path == f"/commits/{MAIN}/pulls"
+            assert max_pages == 1
+            assert max_items is None
+            return list(self.rows)
+
+    with pytest.raises(author.ProtectedRemediationError, match="mismatched merge SHA"):
+        author._pending_merged_repair(
+            Api([row(301, "d" * 40)]),
+            current_main=MAIN,
+            bot_login=BOT_LOGIN,
+            bot_id=BOT_ID,
+        )
+
+    with pytest.raises(author.ProtectedRemediationError, match="multiple merged"):
+        author._pending_merged_repair(
+            Api([row(301, MAIN), row(302, MAIN)]),
+            current_main=MAIN,
+            bot_login=BOT_LOGIN,
+            bot_id=BOT_ID,
+        )
+
+
 def test_terminal_closure_requires_repair_merge_as_exact_current_main() -> None:
     author._require_exact_merge_main(MAIN, MAIN)
     with pytest.raises(

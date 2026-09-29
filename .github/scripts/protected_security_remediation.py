@@ -64,7 +64,6 @@ DISALLOWED_AUTHOR_BOTS = frozenset(
 TERMINAL_COMMENT_PREFIX = "<!-- aiqa-protected-security-remediation-terminal:"
 TERMINAL_COMMENT_SUFFIX = " -->"
 TERMINAL_SCHEMA_VERSION = 1
-TERMINAL_CLOSED_PR_PAGES = 4
 TERMINAL_STATUS_PAGES = 4
 TERMINAL_RUN_PAGE_SIZE = 100
 TERMINAL_JOB_LIMIT = 100
@@ -1540,61 +1539,67 @@ def _terminal_comments(
 def _pending_merged_repair(
     api: Any,
     *,
+    current_main: str,
     bot_login: str,
     bot_id: int,
 ) -> dict[str, Any] | None:
-    rows = api.list_all(
-        "/pulls?state=closed&sort=updated&direction=desc",
-        max_pages=TERMINAL_CLOSED_PR_PAGES,
-    )
-    pending: list[dict[str, Any]] = []
-    for row in rows:
-        if not _generated_bot_pull(row, login=bot_login, user_id=bot_id):
-            continue
-        if row.get("state") != "closed" or row.get("merged_at") is None:
-            continue
-        number = _require_positive_int(
-            row.get("number"),
-            "merged protected repair PR number",
-        )
-        certificates = _terminal_comments(
-            api,
-            number,
-            bot_login=bot_login,
-            bot_id=bot_id,
-        )
-        if certificates:
-            certificate = certificates[0]
-            head = row.get("head") or {}
-            base = row.get("base") or {}
-            if (
-                certificate.get("schemaVersion") != TERMINAL_SCHEMA_VERSION
-                or certificate.get("kind") != "protected-security-remediation-terminal"
-                or certificate.get("pr") != number
-                or certificate.get("mergeSha") != row.get("merge_commit_sha")
-                or certificate.get("headSha") != head.get("sha")
-                or certificate.get("baseSha") != base.get("sha")
-                or certificate.get("result") != "fixed"
-            ):
-                raise ProtectedRemediationError(
-                    "protected remediation terminal certificate does not match its merged PR"
-                )
-            continue
-        pending.append(row)
-    if len(pending) > 1:
+    current_main = _require_sha(current_main, "terminal current main SHA")
+    rows = api.list_all(f"/commits/{current_main}/pulls", max_pages=1)
+    matches = [
+        row
+        for row in rows
+        if _generated_bot_pull(row, login=bot_login, user_id=bot_id)
+        and row.get("state") == "closed"
+        and row.get("merged_at") is not None
+    ]
+    if len(matches) > 1:
         numbers = sorted(
-            _require_positive_int(row.get("number"), "pending protected repair PR number")
-            for row in pending
+            _require_positive_int(row.get("number"), "current-main protected repair PR number")
+            for row in matches
         )
         raise ProtectedRemediationError(
-            f"multiple merged protected repairs lack terminal closure: {numbers}"
+            f"current main maps to multiple merged protected repairs: {numbers}"
         )
-    if not pending:
+    if not matches:
         return None
+
+    row = matches[0]
     number = _require_positive_int(
-        pending[0].get("number"),
-        "pending protected repair PR number",
+        row.get("number"),
+        "current-main protected repair PR number",
     )
+    if _require_sha(
+        row.get("merge_commit_sha"),
+        "current-main protected repair merge SHA",
+    ) != current_main:
+        raise ProtectedRemediationError(
+            "current-main protected repair association has mismatched merge SHA"
+        )
+
+    certificates = _terminal_comments(
+        api,
+        number,
+        bot_login=bot_login,
+        bot_id=bot_id,
+    )
+    if certificates:
+        certificate = certificates[0]
+        head = row.get("head") or {}
+        base = row.get("base") or {}
+        if (
+            certificate.get("schemaVersion") != TERMINAL_SCHEMA_VERSION
+            or certificate.get("kind") != "protected-security-remediation-terminal"
+            or certificate.get("pr") != number
+            or certificate.get("mergeSha") != current_main
+            or certificate.get("headSha") != head.get("sha")
+            or certificate.get("baseSha") != base.get("sha")
+            or certificate.get("result") != "fixed"
+        ):
+            raise ProtectedRemediationError(
+                "protected remediation terminal certificate does not match its merged PR"
+            )
+        return None
+
     live = api.get(f"/pulls/{number}")
     if not isinstance(live, dict):
         raise ProtectedRemediationError("merged protected repair lookup returned malformed data")
@@ -2083,7 +2088,12 @@ def _reconcile_terminal_closure(
     bot_id: int,
     current_main: str,
 ) -> bool:
-    pr = _pending_merged_repair(read_api, bot_login=bot_login, bot_id=bot_id)
+    pr = _pending_merged_repair(
+        read_api,
+        current_main=current_main,
+        bot_login=bot_login,
+        bot_id=bot_id,
+    )
     if pr is None:
         return False
     evidence = _validate_merged_repair(
