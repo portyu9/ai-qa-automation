@@ -71,7 +71,7 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     post_merge_ci = result["workflows"]["post_merge_ci"]
     assert (
         post_merge_ci["trigger"]
-        == "workflow_run:dependency-governance-or-trusted-dependency-merge-or-security-autoheal:completed"
+        == "workflow_run:dependency-governance-or-trusted-dependency-merge-or-security-autoheal-or-protected-security-remediation:completed"
     )
     assert (
         post_merge_ci["authority"]
@@ -979,6 +979,25 @@ def test_post_merge_ci_rejects_cross_lane_security_merge_binding(tmp_path: Path)
             security_binding,
             "merge_source_re='^Merge pull request #[1-9][0-9]* from "
             "portyu9/automation/dependency-promotion-'",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="exact governed-merge binding drifted"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_post_merge_ci_rejects_protected_remediation_author_drift(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "post-merge-ci.yml"
+    text = path.read_text(encoding="utf-8")
+    exact_author = "merge_author_login='portyu9-security-remediator[bot]'"
+    assert exact_author in text
+    path.write_text(
+        text.replace(
+            exact_author,
+            "merge_author_login='github-actions[bot]'",
             1,
         ),
         encoding="utf-8",
