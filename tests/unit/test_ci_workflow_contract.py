@@ -117,7 +117,7 @@ def test_security_autoheal_privileged_controller_rejects_pr_branch_workflow_wake
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "security-autoheal.yml"
     text = path.read_text(encoding="utf-8")
-    current = (
+    route_guard = (
         "      (github.event_name == 'workflow_run' &&\n"
         "       github.event.workflow_run.conclusion == 'success' &&\n"
         "       github.event.workflow_run.head_repository.full_name == github.repository &&\n"
@@ -125,12 +125,26 @@ def test_security_autoheal_privileged_controller_rejects_pr_branch_workflow_wake
         "        github.event.workflow_run.name == "
         "'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework'))\n"
     )
-    assert text.count(current) == 2
-    weakened = (
+    reconcile_guard = (
+        "      (github.event_name == 'workflow_run' &&\n"
+        "       github.event.workflow_run.conclusion == 'success' &&\n"
+        "       github.event.workflow_run.head_repository.full_name == github.repository &&\n"
+        "       (github.event.workflow_run.head_branch == 'main' ||\n"
+        "        github.event.workflow_run.name == "
+        "'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework')))\n"
+    )
+    assert text.count(route_guard) == 1
+    assert text.count(reconcile_guard) == 1
+    route_weakened = (
         "      (github.event_name == 'workflow_run' &&\n"
         "       github.event.workflow_run.head_repository.full_name == github.repository)\n"
     )
-    mutated = text.replace(current, weakened)
+    reconcile_weakened = (
+        "      (github.event_name == 'workflow_run' &&\n"
+        "       github.event.workflow_run.head_repository.full_name == github.repository))\n"
+    )
+    mutated = text.replace(route_guard, route_weakened, 1)
+    mutated = mutated.replace(reconcile_guard, reconcile_weakened, 1)
     path.write_text(mutated, encoding="utf-8")
     monkeypatch.setattr(
         ci_contract,
@@ -143,7 +157,6 @@ def test_security_autoheal_privileged_controller_rejects_pr_branch_workflow_wake
         match="must accept only successful same-repository main or Trusted PR Auto workflow wakes",
     ):
         ci_contract.verify_ci_contract(root)
-
 
 def test_security_autoheal_requires_exact_current_main_control_revision(
     tmp_path: Path,

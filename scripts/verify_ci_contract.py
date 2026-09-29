@@ -1369,7 +1369,7 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         raise ValueError(
             "security-autoheal.yml non-action structure differs from reviewed security authority"
         )
-    wake_guard = (
+    route_wake_guard = (
         "    if: >-\n"
         "      github.event_name == 'schedule' ||\n"
         "      github.event_name == 'workflow_dispatch' ||\n"
@@ -1380,14 +1380,31 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         "        github.event.workflow_run.name == "
         "'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework'))"
     )
+    reconcile_wake_guard = (
+        "    if: >-\n"
+        "      needs.route-plan.result == 'success' &&\n"
+        "      needs.route-plan.outputs.current == 'true' &&\n"
+        "      (github.event_name == 'schedule' ||\n"
+        "      github.event_name == 'workflow_dispatch' ||\n"
+        "      (github.event_name == 'workflow_run' &&\n"
+        "       github.event.workflow_run.conclusion == 'success' &&\n"
+        "       github.event.workflow_run.head_repository.full_name == github.repository &&\n"
+        "       (github.event.workflow_run.head_branch == 'main' ||\n"
+        "        github.event.workflow_run.name == "
+        "'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework')))"
+    )
     route_job = base._semantic_text(base._job_block(text, "route-plan"))
     reconcile_job = base._semantic_text(base._job_block(text, "reconcile"))
-    for label, job in (("route-plan", route_job), ("reconcile", reconcile_job)):
-        if wake_guard not in job:
-            raise ValueError(
-                f"security-autoheal.yml {label} must accept only successful same-repository "
-                "main or Trusted PR Auto workflow wakes"
-            )
+    if route_wake_guard not in route_job:
+        raise ValueError(
+            "security-autoheal.yml route-plan must accept only successful same-repository "
+            "main or Trusted PR Auto workflow wakes"
+        )
+    if reconcile_wake_guard not in reconcile_job:
+        raise ValueError(
+            "security-autoheal.yml reconcile must require exact-current-main admission and "
+            "only successful same-repository main or Trusted PR Auto workflow wakes"
+        )
 
     exact_checkout = "          ref: ${{ github.sha }}"
     moving_checkout = "          ref: ${{ github.event.repository.default_branch }}"
