@@ -82,6 +82,22 @@ QUALIFICATION_WAKE_RE = re.compile(
     rf"^{QUALIFICATION_WAKE_PREFIX}:(?P<head>[0-9a-f]{{40}}):(?P<base>[0-9a-f]{{40}}):"
     r"(?P<stage>trusted-gate):(?P<run>[1-9][0-9]*):(?P<attempt>[1-9][0-9]*)$"
 )
+
+def _actions_check_details_url_is_canonical(
+    details_url: Any,
+    *,
+    check_id: int,
+    run_id: int,
+) -> bool:
+    if not isinstance(details_url, str):
+        return False
+    run_url = f"https://github.com/{EXPECTED_REPOSITORY}/actions/runs/{run_id}"
+    if details_url == run_url:
+        return True
+    if re.fullmatch(re.escape(run_url) + r"/job/[1-9][0-9]*", details_url) is not None:
+        return True
+    return details_url == f"https://github.com/{EXPECTED_REPOSITORY}/runs/{check_id}"
+
 DEPENDENCY_GOVERNANCE_WORKFLOW_NAME = "dependency-governance"
 DEPENDENCY_GOVERNANCE_WORKFLOW_PATH = ".github/workflows/dependency-governance.yml"
 DEPENDENCY_GOVERNANCE_EVENTS = {"workflow_run", "schedule"}
@@ -1550,9 +1566,15 @@ def _qualification_wake_stage(
             raise GovernanceError("promotion qualification wake check provenance is invalid")
         run_id = int(match.group("run"))
         run_attempt = int(match.group("attempt"))
-        # GitHub Actions may canonicalize a requested check details URL to the
-        # workflow job URL. The authority-bearing identity is the immutable external_id
-        # plus the independently re-fetched exact workflow run below, not display routing.
+        check_id = row.get("id")
+        if not isinstance(check_id, int) or isinstance(check_id, bool) or check_id < 1:
+            raise GovernanceError("promotion qualification wake check id is invalid")
+        if not _actions_check_details_url_is_canonical(
+            row.get("details_url"),
+            check_id=check_id,
+            run_id=run_id,
+        ):
+            raise GovernanceError("promotion qualification wake details URL is not canonical")
         run = api.get(f"/actions/runs/{run_id}")
         repository = (run or {}).get("repository") or {}
         head_repository = (run or {}).get("head_repository") or {}
@@ -1570,9 +1592,6 @@ def _qualification_wake_stage(
             or head_repository.get("full_name") != EXPECTED_REPOSITORY
         ):
             raise GovernanceError("promotion qualification wake workflow provenance is invalid")
-        check_id = row.get("id")
-        if not isinstance(check_id, int) or isinstance(check_id, bool) or check_id < 1:
-            raise GovernanceError("promotion qualification wake check id is invalid")
         matches.append((check_id, match.group("stage")))
     return max(matches)[1] if matches else None
 
@@ -1624,13 +1643,23 @@ def _publish_qualification_wake(
         or response.get("head_sha") != head_sha
         or response.get("status") != "completed"
         or response.get("conclusion") != "neutral"
-        # GitHub Actions owns the returned check and may rewrite details_url to its
-        # canonical job page. external_id and exact run provenance remain authoritative.
         or response.get("external_id") != external_id
         or app.get("id") != GITHUB_ACTIONS_APP_ID
         or app.get("slug") != "github-actions"
     ):
         raise GovernanceError("GitHub did not acknowledge exact promotion qualification wake")
+    response_id = response.get("id")
+    if (
+        not isinstance(response_id, int)
+        or isinstance(response_id, bool)
+        or response_id < 1
+        or not _actions_check_details_url_is_canonical(
+            response.get("details_url"),
+            check_id=response_id,
+            run_id=run_id,
+        )
+    ):
+        raise GovernanceError("GitHub returned a non-canonical promotion wake details URL")
 
 
 def _exact_terminal_trusted_gate_state(
