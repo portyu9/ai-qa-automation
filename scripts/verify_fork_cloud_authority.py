@@ -100,7 +100,10 @@ _PROTECTED_REMEDIATION_SECRET_CONTEXT_FRAGMENTS = (
     "python .github/scripts/protected_security_remediation.py --reconcile --allow-merge",
 )
 _POST_MERGE_CI_AUTHORITY_FRAGMENTS = (
-    "on:\n  workflow_run:\n    workflows: [dependency-governance]\n    types: [completed]",
+    "on:\n  workflow_run:\n    workflows: [dependency-governance, Security Auto-Heal]\n    types: [completed]",
+    'case "$UPSTREAM_NAME:$UPSTREAM_PATH" in',
+    '"dependency-governance:.github/workflows/dependency-governance.yml")',
+    '"Security Auto-Heal:.github/workflows/security-autoheal.yml")',
     "permissions:\n  contents: read",
     'test "$UPSTREAM_REPOSITORY" = "$GITHUB_REPOSITORY"',
     'test "$UPSTREAM_HEAD_REPOSITORY" = "$GITHUB_REPOSITORY"',

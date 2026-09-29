@@ -719,6 +719,22 @@ def test_terminal_closure_rejects_bridge_evidence_if_certifying_run_later_fails(
         autoheal._reconcile_terminal_closure(api, MERGE, config)
 
 
+def test_terminal_closure_rejects_existing_certificate_if_alert_reopens(
+    config: dict[str, Any],
+) -> None:
+    api = _TerminalApi()
+    assert autoheal._reconcile_terminal_closure(api, MERGE, config) is True
+    assert len(api.comments) == 1
+
+    api.alert_state = "open"
+
+    with pytest.raises(
+        autoheal.PolicyBlock,
+        match="terminal closure certificate no longer has exact fixed alert evidence",
+    ):
+        autoheal._reconcile_terminal_closure(api, MERGE, config)
+
+
 def test_finalize_post_merge_stops_at_structural_proof(
     config: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,

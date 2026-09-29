@@ -2788,12 +2788,34 @@ def _reconcile_terminal_closure(
             existing_terminal_certificates.append(parsed)
     if len(existing_terminal_certificates) > 1:
         raise PolicyBlock("repair has ambiguous GitHub Actions terminal closure certificates")
-    if not existing_terminal_certificates:
-        _require_marker_route_artifact(
-            api,
-            metadata,
-            _require_sha(metadata.get("base"), "terminal repair base SHA"),
+    if existing_terminal_certificates:
+        certificate = existing_terminal_certificates[0]
+        if not _terminal_certificate_evidence_matches(api, certificate, metadata, number):
+            raise PolicyBlock(
+                "terminal closure certificate no longer has exact successful workflow evidence"
+            )
+        if _current_main(api, config) != main_sha:
+            raise AutohealError("current main changed before terminal closure certificate revalidation")
+        if not _terminal_alert_is_fixed(api, metadata):
+            raise PolicyBlock(
+                "terminal closure certificate no longer has exact fixed alert evidence"
+            )
+        print(
+            json.dumps(
+                {
+                    "decision": "repair-verified",
+                    "terminalCertificate": "durable-unedited-github-actions-comment",
+                },
+                sort_keys=True,
+            )
         )
+        return True
+
+    _require_marker_route_artifact(
+        api,
+        metadata,
+        _require_sha(metadata.get("base"), "terminal repair base SHA"),
+    )
     trusted_gate = _terminal_trusted_gate_evidence(api, number, metadata)
 
     post_merge_bridge = _select_post_merge_bridge(api, main_sha)
