@@ -66,7 +66,7 @@ EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
     "dab8aa71c43e51e72107de652976a47176b38cbc"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_REMEDIATION_WORKFLOW_BLOB_SHA = (
-    "47feff3947ca5b7c11ea425951468d3ad6036e84"  # pragma: allowlist secret
+    "a1bf207c299756212c4d15746efd138d684a381f"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_AUTHOR_ACTION_SHA = (
     "bcd2ba49218906704ab6c1aa796996da409d3eb1"  # pragma: allowlist secret
@@ -1765,11 +1765,15 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
         "actions": "read",
         "checks": "read",
         "contents": "read",
+        "issues": "write",
         "pull-requests": "read",
         "security-events": "read",
         "statuses": "read",
     }:
-        raise ValueError("protected remediation native GitHub token must remain exactly read-only")
+        raise ValueError(
+            "protected remediation native GitHub token must remain read-only except issues:write "
+            "for the terminal certificate"
+        )
     required_job = (
         "    name: Independent Protected Remediation Reconcile",
         "    if: >-\n      github.event_name == 'schedule' ||\n      (github.event_name == 'workflow_run' &&\n       github.event.workflow_run.conclusion == 'success' &&\n       github.event.workflow_run.head_repository.full_name == github.repository &&\n       github.event.workflow_run.head_sha == github.sha)",
@@ -1861,7 +1865,8 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
     return {
         "trigger": "workflow_run:Security Auto-Heal:completed+schedule:5m",
         "trusted_definition": "default-branch-exact-main-workflow-run-or-schedule",
-        "native_token": "read-only",
+        "native_token": "read+issues-write-terminal-certificate",
+        "terminal_certificate_writer": "github-actions[bot]",
         "author_token": "distinct-app:contents-write+pull-requests-write",
         "status_authority": "none",
         "candidate_workflow_execution": "forbidden",

@@ -64,6 +64,8 @@ DISALLOWED_AUTHOR_BOTS = frozenset(
 TERMINAL_COMMENT_PREFIX = "<!-- aiqa-protected-security-remediation-terminal:"
 TERMINAL_COMMENT_SUFFIX = " -->"
 TERMINAL_SCHEMA_VERSION = 1
+TERMINAL_CERTIFICATE_BOT_LOGIN = "github-actions[bot]"
+TERMINAL_CERTIFICATE_BOT_ID = 41898282
 TERMINAL_STATUS_PAGES = 4
 TERMINAL_RUN_PAGE_SIZE = 100
 TERMINAL_JOB_LIMIT = 100
@@ -1506,9 +1508,6 @@ def _parse_terminal_comment(body: Any) -> dict[str, Any] | None:
 def _terminal_comments(
     api: Any,
     number: int,
-    *,
-    bot_login: str,
-    bot_id: int,
 ) -> list[dict[str, Any]]:
     rows = api.list_all(f"/issues/{number}/comments", max_pages=4)
     certificates: list[dict[str, Any]] = []
@@ -1516,8 +1515,8 @@ def _terminal_comments(
         actor = row.get("user") or {}
         body = row.get("body")
         if (
-            actor.get("login") != bot_login
-            or actor.get("id") != bot_id
+            actor.get("login") != TERMINAL_CERTIFICATE_BOT_LOGIN
+            or actor.get("id") != TERMINAL_CERTIFICATE_BOT_ID
             or actor.get("type") != "Bot"
             or not isinstance(body, str)
             or not body.startswith(TERMINAL_COMMENT_PREFIX)
@@ -2065,7 +2064,7 @@ def _terminal_certificate(
 
 def _reconcile_terminal_closure(
     read_api: Any,
-    write_api: Any,
+    certificate_api: Any,
     *,
     bot_login: str,
     bot_id: int,
@@ -2151,12 +2150,7 @@ def _reconcile_terminal_closure(
         observed_main=current_main,
     )
     number = int(evidence["number"])
-    existing = _terminal_comments(
-        read_api,
-        number,
-        bot_login=bot_login,
-        bot_id=bot_id,
-    )
+    existing = _terminal_comments(read_api, number)
     if existing:
         if existing[0] != certificate:
             raise ProtectedRemediationError(
@@ -2172,22 +2166,22 @@ def _reconcile_terminal_closure(
                     "decision": "protected-repair-verified",
                     "pr": evidence["number"],
                     "mergeSha": evidence["mergeSha"],
-                    "terminalCertificate": "durable-unedited-author-app-comment",
+                    "terminalCertificate": "durable-unedited-github-actions-comment",
                 },
                 sort_keys=True,
             )
         )
         return False
     body = _terminal_comment_body(certificate)
-    created = write_api.post(f"/issues/{number}/comments", {"body": body})
+    created = certificate_api.post(f"/issues/{number}/comments", {"body": body})
     created_user = (created or {}).get("user") if isinstance(created, dict) else None
     comment_id = (created or {}).get("id") if isinstance(created, dict) else None
     if (
         not isinstance(created, dict)
         or created.get("body") != body
         or not isinstance(created_user, dict)
-        or created_user.get("login") != bot_login
-        or created_user.get("id") != bot_id
+        or created_user.get("login") != TERMINAL_CERTIFICATE_BOT_LOGIN
+        or created_user.get("id") != TERMINAL_CERTIFICATE_BOT_ID
         or created_user.get("type") != "Bot"
     ):
         raise ProtectedRemediationError(
@@ -2199,8 +2193,8 @@ def _reconcile_terminal_closure(
     if (
         not isinstance(durable, dict)
         or durable.get("body") != body
-        or (durable.get("user") or {}).get("login") != bot_login
-        or (durable.get("user") or {}).get("id") != bot_id
+        or (durable.get("user") or {}).get("login") != TERMINAL_CERTIFICATE_BOT_LOGIN
+        or (durable.get("user") or {}).get("id") != TERMINAL_CERTIFICATE_BOT_ID
         or (durable.get("user") or {}).get("type") != "Bot"
         or not isinstance(durable_created_at, str)
         or not durable_created_at
@@ -2312,6 +2306,7 @@ def reconcile(*, allow_merge: bool) -> int:
         int(os.environ.get("PROTECTED_REMEDIATION_BOT_ID", "0") or "0"),
     )
     read_api = GitHubApi(os.environ.get("GITHUB_TOKEN", ""), repository)
+    certificate_api = GitHubApi(os.environ.get("GITHUB_TOKEN", ""), repository)
     control_sha = _required_control_sha()
     require_current_control_revision(read_api, control_sha)
     write_api = GitHubApi(os.environ.get("PROTECTED_REMEDIATION_APP_TOKEN", ""), repository)
@@ -2390,7 +2385,7 @@ def reconcile(*, allow_merge: bool) -> int:
     main_sha = require_current_control_revision(read_api, control_sha)
     if _reconcile_terminal_closure(
         read_api,
-        write_api,
+        certificate_api,
         bot_login=bot_login,
         bot_id=bot_id,
         current_main=main_sha,

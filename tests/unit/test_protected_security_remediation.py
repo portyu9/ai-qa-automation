@@ -1708,7 +1708,7 @@ def test_terminal_closure_requires_repair_merge_as_exact_current_main() -> None:
         author._require_exact_merge_main("c" * 40, MAIN)
 
 
-def test_terminal_closure_publishes_one_durable_app_certificate(
+def test_terminal_closure_publishes_one_durable_github_actions_certificate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     merge_sha = MAIN
@@ -1760,7 +1760,11 @@ def test_terminal_closure_publishes_one_durable_app_certificate(
                 "body": payload["body"],
                 "created_at": "2026-09-29T12:00:00Z",
                 "updated_at": "2026-09-29T12:00:00Z",
-                "user": {"login": BOT_LOGIN, "id": BOT_ID, "type": "Bot"},
+                "user": {
+                    "login": author.TERMINAL_CERTIFICATE_BOT_LOGIN,
+                    "id": author.TERMINAL_CERTIFICATE_BOT_ID,
+                    "type": "Bot",
+                },
             }
             comments.append(created)
             return created
@@ -1832,7 +1836,7 @@ def test_terminal_closure_publishes_one_durable_app_certificate(
         )
 
 
-def test_terminal_comments_reject_edited_author_app_certificate() -> None:
+def test_terminal_comments_reject_edited_github_actions_certificate() -> None:
     certificate = {
         "schemaVersion": author.TERMINAL_SCHEMA_VERSION,
         "kind": "protected-security-remediation-terminal",
@@ -1856,13 +1860,48 @@ def test_terminal_comments_reject_edited_author_app_certificate() -> None:
                     "body": body,
                     "created_at": "2026-09-29T12:00:00Z",
                     "updated_at": "2026-09-29T12:00:01Z",
-                    "user": {"login": BOT_LOGIN, "id": BOT_ID, "type": "Bot"},
+                    "user": {
+                        "login": author.TERMINAL_CERTIFICATE_BOT_LOGIN,
+                        "id": author.TERMINAL_CERTIFICATE_BOT_ID,
+                        "type": "Bot",
+                    },
                 }
             ]
 
     with pytest.raises(author.ProtectedRemediationError, match="malformed or edited"):
-        author._terminal_comments(Api(), 301, bot_login=BOT_LOGIN, bot_id=BOT_ID)
+        author._terminal_comments(Api(), 301)
 
+
+
+def test_terminal_comments_ignore_author_app_certificate() -> None:
+    certificate = {
+        "schemaVersion": author.TERMINAL_SCHEMA_VERSION,
+        "kind": "protected-security-remediation-terminal",
+        "result": "fixed",
+    }
+    body = author._terminal_comment_body(certificate)
+
+    class Api:
+        def list_all(
+            self,
+            path: str,
+            *,
+            max_pages: int = 4,
+            max_items: int | None = None,
+        ) -> list[dict[str, Any]]:
+            assert path == "/issues/301/comments"
+            assert max_pages == 4
+            assert max_items is None
+            return [
+                {
+                    "body": body,
+                    "created_at": "2026-09-29T12:00:00Z",
+                    "updated_at": "2026-09-29T12:00:00Z",
+                    "user": {"login": BOT_LOGIN, "id": BOT_ID, "type": "Bot"},
+                }
+            ]
+
+    assert author._terminal_comments(Api(), 301) == []
 
 def test_existing_terminal_certificate_is_revalidated_against_live_evidence(
     monkeypatch: pytest.MonkeyPatch,
