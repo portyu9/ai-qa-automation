@@ -20,8 +20,8 @@ cffi==2.1.1 \
     --hash=sha256:34e261f78cb6ceaaa36f42f2613f4380d94d9c759a9c73c769ee6e0247364632
 charset-normalizer==3.5.1 \
     --hash=sha256:c7b742bf31c88566b4bb6335a7f393bb322e580b6bb98df7bd0c25e6e3519ce8
-claude-agent-sdk==0.2.159 \
-    --hash=sha256:d3ba57c187b07c87702b94e2b62dd7c61ed874899defcbb35bb5cef4cb94ace1
+claude-agent-sdk==0.2.160 \
+    --hash=sha256:70d1dd4286b69ecdc334d66e7b9dae8532790803f7cd7e0bf269bd5e407f2259
 click==8.5.0 \
     --hash=sha256:255bc9599cf7748b4b1a446ccc735421bd08a2ae529a8b88597d3de5664ee360
 coverage==7.16.2 \
@@ -36,8 +36,8 @@ detect-secrets==1.5.0 \
     --hash=sha256:e24e7b9b5a35048c313e983f76c4bd09dad89f045ff059e354f9943bf45aa060
 fastapi==0.142.1 \
     --hash=sha256:7eea2b5b1632ed43de2c090b3a43b7d92267189dfbbd55a967307ed763b6c57a
-filelock==4.0.6 \
-    --hash=sha256:9b139fb93b2ac5807f7feaf63aa4546fbd74074a2d3f554c040f40a4694d7b9f
+filelock==4.0.7 \
+    --hash=sha256:a93c4d93269b339a6af4848342c7e940d0f9928ad95eff64764699e5f1bf8a6a
 greenlet==3.5.6 \
     --hash=sha256:1c20ea32a73d17b9b60e3371240e17b0068120c98a5ec01a224a7dd8c89733ba
 h11==0.16.0 \
