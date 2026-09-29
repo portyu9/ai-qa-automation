@@ -65,6 +65,7 @@ MAIN_CODEQL_WORKFLOW_ID = 359681647
 MAIN_CODEQL_PATH = ".github/workflows/codeql.yml"
 MAIN_CODEQL_NAME = "CodeQL"
 MAIN_CODEQL_EVENTS = {"push", "workflow_dispatch", "schedule"}
+MAIN_CODEQL_MAX_RUNS = 100
 TRANSIENT_GET_ATTEMPTS = 3
 TRANSIENT_GET_DELAY_SECONDS = 1
 GITHUB_ACTIONS_LOGIN = "github-actions[bot]"
@@ -2025,7 +2026,8 @@ def _main_codeql_runs(api: GitHubApi, subject_sha: str) -> list[dict[str, Any]]:
     )
     return api.list_all(
         f"/actions/workflows/{MAIN_CODEQL_WORKFLOW_ID}/runs?head_sha={encoded_sha}",
-        max_pages=2,
+        max_pages=1,
+        max_items=MAIN_CODEQL_MAX_RUNS,
     )
 
 
@@ -4331,7 +4333,11 @@ def selftest(config: dict[str, Any]) -> None:
             expected = (
                 f"/actions/workflows/{MAIN_CODEQL_WORKFLOW_ID}/runs?head_sha={current_main_sha}"
             )
-            if path != expected or max_pages != 2:
+            if (
+                path != expected
+                or max_pages != 1
+                or max_items != MAIN_CODEQL_MAX_RUNS
+            ):
                 raise AutohealError(f"unexpected CodeQL observation self-test list path: {path}")
             if self.existing:
                 return [

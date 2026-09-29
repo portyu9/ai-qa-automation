@@ -362,12 +362,19 @@ class _TerminalApi:
             raise AssertionError(f"unknown workflow run id: {run_id}")
         raise AssertionError(f"unexpected GET path: {path}")
 
-    def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+    def list_all(
+        self,
+        path: str,
+        *,
+        max_pages: int = 10,
+        max_items: int | None = None,
+    ) -> list[dict[str, Any]]:
         if path == "/pulls?state=closed&sort=updated&direction=desc":
             assert max_pages == 10
             return [self.pr]
         if path == (f"/actions/workflows/{autoheal.MAIN_CODEQL_WORKFLOW_ID}/runs?head_sha={MERGE}"):
-            assert max_pages == 2
+            assert max_pages == 1
+            assert max_items == autoheal.MAIN_CODEQL_MAX_RUNS
             return list(self.codeql_runs)
         if path == f"/issues/{PR_NUMBER}/comments":
             assert max_pages == 2

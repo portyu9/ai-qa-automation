@@ -571,8 +571,8 @@ class _StaleAlertRecoveryApi(_ReconcileRecoveryApi):
             assert max_items == 101
             return [_alert("src/ai_qa_automation/example.py", sha="c" * 40)]
         if path == (f"/actions/workflows/{autoheal.MAIN_CODEQL_WORKFLOW_ID}/runs?head_sha={BASE}"):
-            assert max_pages == 2
-            assert max_items is None
+            assert max_pages == 1
+            assert max_items == autoheal.MAIN_CODEQL_MAX_RUNS
             return []
         return super().list_all(path, max_pages=max_pages, max_items=max_items)
 
