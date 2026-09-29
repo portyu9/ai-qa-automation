@@ -40,6 +40,7 @@ class _Api:
         external_id: str | None = None,
         app_id: int = qualification.GITHUB_ACTIONS_APP_ID,
         workflow_id: int | None = None,
+        details_url: str | None = None,
     ) -> None:
         spec = qualification.QUALIFICATION_SPECS["Required PR Gate"]
         self.external_id = external_id or (
@@ -47,6 +48,7 @@ class _Api:
         )
         self.app_id = app_id
         self.workflow_id = int(workflow_id or spec["workflow_id"])
+        self.details_url = details_url
 
     def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
         assert path == f"/commits/{HEAD}/check-runs?filter=latest"
@@ -60,7 +62,8 @@ class _Api:
                 "status": "completed",
                 "conclusion": "success",
                 # GitHub canonicalizes an Actions-authored check to the publishing job URL.
-                "details_url": (
+                "details_url": self.details_url
+                or (
                     "https://github.com/portyu9/ai-qa-automation/"
                     "actions/runs/778899/job/998877"
                 ),
@@ -116,6 +119,19 @@ def test_qualification_accepts_github_canonical_job_details_url() -> None:
             f"https://github.com/{qualification.EXPECTED_REPOSITORY}/actions/runs/{RUN_ID}"
         ),
     }
+
+
+def test_qualification_rejects_noncanonical_details_url() -> None:
+    with pytest.raises(
+        qualification.TrustedQualificationError,
+        match="details URL is not canonical",
+    ):
+        qualification.require_success(
+            _Api(details_url="https://example.invalid/forged"),
+            HEAD,
+            BASE,
+            required=("Required PR Gate",),
+        )
 
 
 def test_qualification_still_rejects_unbound_external_identity() -> None:
