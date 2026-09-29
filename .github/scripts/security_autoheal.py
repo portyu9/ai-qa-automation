@@ -4461,20 +4461,20 @@ def selftest(config: dict[str, Any]) -> None:
     else:
         raise AutohealError("failed post-merge bridge gate was accepted")
 
-    duplicate_api = _PostMergeEvidenceApi(
+    class _DuplicatePostMergeEvidenceApi(_PostMergeEvidenceApi):
+        def get(self, path: str) -> Any:
+            if path == (
+                f"/actions/runs/904/jobs?filter=latest&per_page={POST_MERGE_BRIDGE_MAX_JOBS}"
+            ):
+                return {
+                    "total_count": 1,
+                    "jobs": [{**bridge_job, "id": 905}],
+                }
+            return super().get(path)
+
+    duplicate_api = _DuplicatePostMergeEvidenceApi(
         bridge_rows=[bridge_run, {**bridge_run, "id": 904}],
     )
-    original_get = duplicate_api.get
-
-    def _duplicate_get(path: str) -> Any:
-        if path == (f"/actions/runs/904/jobs?filter=latest&per_page={POST_MERGE_BRIDGE_MAX_JOBS}"):
-            return {
-                "total_count": 1,
-                "jobs": [{**bridge_job, "id": 905}],
-            }
-        return original_get(path)
-
-    duplicate_api.get = _duplicate_get  # type: ignore[method-assign]
     try:
         _select_post_merge_bridge(duplicate_api, merge_sha)
     except AutohealError as exc:
