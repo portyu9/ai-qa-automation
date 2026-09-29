@@ -1902,6 +1902,7 @@ def test_terminal_comments_ignore_author_app_certificate() -> None:
 
     assert author._terminal_comments(Api(), 301) == []
 
+
 def test_existing_terminal_certificate_is_revalidated_against_live_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

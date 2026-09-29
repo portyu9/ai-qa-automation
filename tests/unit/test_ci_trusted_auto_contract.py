@@ -407,7 +407,8 @@ def test_protected_remediation_workflow_uses_trusted_wakes_and_narrow_author_tok
     assert protected == {
         "trigger": "workflow_run:Security Auto-Heal:completed+schedule:5m",
         "trusted_definition": "default-branch-exact-main-workflow-run-or-schedule",
-        "native_token": "read-only",
+        "native_token": "read+issues-write-terminal-certificate",
+        "terminal_certificate_writer": "github-actions[bot]",
         "author_token": "distinct-app:contents-write+pull-requests-write",
         "status_authority": "none",
         "candidate_workflow_execution": "forbidden",
