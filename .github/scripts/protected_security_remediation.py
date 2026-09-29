@@ -1524,9 +1524,15 @@ def _terminal_comments(
         ):
             continue
         certificate = _parse_terminal_comment(body)
-        if certificate is None:
+        created_at = row.get("created_at")
+        if (
+            certificate is None
+            or not isinstance(created_at, str)
+            or not created_at
+            or row.get("updated_at") != created_at
+        ):
             raise ProtectedRemediationError(
-                "protected remediation terminal certificate is malformed"
+                "protected remediation terminal certificate is malformed or edited"
             )
         certificates.append(certificate)
     if len(certificates) > 1:
@@ -1575,30 +1581,6 @@ def _pending_merged_repair(
         raise ProtectedRemediationError(
             "current-main protected repair association has mismatched merge SHA"
         )
-
-    certificates = _terminal_comments(
-        api,
-        number,
-        bot_login=bot_login,
-        bot_id=bot_id,
-    )
-    if certificates:
-        certificate = certificates[0]
-        head = row.get("head") or {}
-        base = row.get("base") or {}
-        if (
-            certificate.get("schemaVersion") != TERMINAL_SCHEMA_VERSION
-            or certificate.get("kind") != "protected-security-remediation-terminal"
-            or certificate.get("pr") != number
-            or certificate.get("mergeSha") != current_main
-            or certificate.get("headSha") != head.get("sha")
-            or certificate.get("baseSha") != base.get("sha")
-            or certificate.get("result") != "fixed"
-        ):
-            raise ProtectedRemediationError(
-                "protected remediation terminal certificate does not match its merged PR"
-            )
-        return None
 
     live = api.get(f"/pulls/{number}")
     if not isinstance(live, dict):
@@ -2166,10 +2148,33 @@ def _reconcile_terminal_closure(
         observed_main=current_main,
     )
     number = int(evidence["number"])
-    if _terminal_comments(read_api, number, bot_login=bot_login, bot_id=bot_id):
-        raise ProtectedRemediationError(
-            "protected terminal certificate appeared concurrently before publication"
+    existing = _terminal_comments(
+        read_api,
+        number,
+        bot_login=bot_login,
+        bot_id=bot_id,
+    )
+    if existing:
+        if existing[0] != certificate:
+            raise ProtectedRemediationError(
+                "protected terminal certificate no longer matches exact live evidence"
+            )
+        if _current_main(read_api) != current_main:
+            raise ProtectedRemediationError(
+                "current main changed before protected terminal certificate revalidation"
+            )
+        print(
+            json.dumps(
+                {
+                    "decision": "protected-repair-verified",
+                    "pr": evidence["number"],
+                    "mergeSha": evidence["mergeSha"],
+                    "terminalCertificate": "durable-unedited-author-app-comment",
+                },
+                sort_keys=True,
+            )
         )
+        return False
     body = _terminal_comment_body(certificate)
     created = write_api.post(f"/issues/{number}/comments", {"body": body})
     created_user = (created or {}).get("user") if isinstance(created, dict) else None

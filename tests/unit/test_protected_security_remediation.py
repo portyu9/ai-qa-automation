@@ -1758,6 +1758,8 @@ def test_terminal_closure_publishes_one_durable_app_certificate(
             created = {
                 "id": 7301,
                 "body": payload["body"],
+                "created_at": "2026-09-29T12:00:00Z",
+                "updated_at": "2026-09-29T12:00:00Z",
                 "user": {"login": BOT_LOGIN, "id": BOT_ID, "type": "Bot"},
             }
             comments.append(created)
@@ -1804,6 +1806,131 @@ def test_terminal_closure_publishes_one_durable_app_certificate(
     assert certificate["ciRequiredJobId"] == 7204
     assert certificate["codeqlRunId"] == 7205
     assert certificate["trustedStatusId"] == 7201
+
+
+def test_terminal_comments_reject_edited_author_app_certificate() -> None:
+    certificate = {
+        "schemaVersion": author.TERMINAL_SCHEMA_VERSION,
+        "kind": "protected-security-remediation-terminal",
+        "result": "fixed",
+    }
+    body = author._terminal_comment_body(certificate)
+
+    class Api:
+        def list_all(
+            self,
+            path: str,
+            *,
+            max_pages: int = 4,
+            max_items: int | None = None,
+        ) -> list[dict[str, Any]]:
+            assert path == "/issues/301/comments"
+            assert max_pages == 4
+            assert max_items is None
+            return [
+                {
+                    "body": body,
+                    "created_at": "2026-09-29T12:00:00Z",
+                    "updated_at": "2026-09-29T12:00:01Z",
+                    "user": {"login": BOT_LOGIN, "id": BOT_ID, "type": "Bot"},
+                }
+            ]
+
+    with pytest.raises(author.ProtectedRemediationError, match="malformed or edited"):
+        author._terminal_comments(Api(), 301, bot_login=BOT_LOGIN, bot_id=BOT_ID)
+
+
+def test_existing_terminal_certificate_is_revalidated_against_live_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence = {
+        "number": 301,
+        "baseSha": "c" * 40,
+        "headSha": HEAD,
+        "mergeSha": MAIN,
+        "alertNumber": 17,
+        "rule": "py/clear-text-logging-sensitive-data",
+        "path": ".github/scripts/security_autoheal.py",
+        "recordDigest": "e" * 64,
+        "planDigest": "f" * 64,
+    }
+    trusted = {"statusId": 8101, "runId": 8102, "prospectiveMergeSha": "d" * 40}
+    ci = {
+        "run": {"id": 8103, "status": "completed"},
+        "requiredJob": {"id": 8104, "status": "completed"},
+    }
+    codeql = {"run": {"id": 8105, "status": "completed"}, "requiredJob": None}
+    certificate = author._terminal_certificate(
+        evidence,
+        trusted=trusted,
+        ci=ci,
+        codeql=codeql,
+        observed_main=MAIN,
+    )
+
+    class ReadApi:
+        def get(self, path: str) -> dict[str, Any]:
+            if path == "/branches/main":
+                return {"commit": {"sha": MAIN}}
+            raise AssertionError(path)
+
+    class WriteApi:
+        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            raise AssertionError((path, payload))
+
+    monkeypatch.setattr(
+        author,
+        "_pending_merged_repair",
+        lambda *args, **kwargs: {"number": 301},
+    )
+    monkeypatch.setattr(
+        author,
+        "_validate_merged_repair",
+        lambda *args, **kwargs: dict(evidence),
+    )
+    monkeypatch.setattr(
+        author,
+        "_terminal_trusted_gate_evidence",
+        lambda *args, **kwargs: dict(trusted),
+    )
+
+    def workflow_evidence(*args: Any, workflow: str, **kwargs: Any) -> dict[str, Any]:
+        return dict(ci if workflow == author.TERMINAL_CI_WORKFLOW else codeql)
+
+    monkeypatch.setattr(author, "_terminal_workflow_evidence", workflow_evidence)
+    monkeypatch.setattr(author, "_terminal_alert_is_fixed", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        author,
+        "_terminal_comments",
+        lambda *args, **kwargs: [dict(certificate)],
+    )
+
+    assert (
+        author._reconcile_terminal_closure(
+            ReadApi(),
+            WriteApi(),
+            bot_login=BOT_LOGIN,
+            bot_id=BOT_ID,
+            current_main=MAIN,
+        )
+        is False
+    )
+
+    drifted = dict(certificate)
+    drifted["codeqlRunId"] = 9999
+    monkeypatch.setattr(
+        author,
+        "_terminal_comments",
+        lambda *args, **kwargs: [drifted],
+    )
+    with pytest.raises(author.ProtectedRemediationError, match="exact live evidence"):
+        author._reconcile_terminal_closure(
+            ReadApi(),
+            WriteApi(),
+            bot_login=BOT_LOGIN,
+            bot_id=BOT_ID,
+            current_main=MAIN,
+        )
 
 
 def test_terminal_closure_waits_without_publication_for_incomplete_validation(
