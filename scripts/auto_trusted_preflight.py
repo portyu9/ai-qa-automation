@@ -976,7 +976,7 @@ def _resolve_protected_owner_authorization(
     return admission
 
 
-def _has_exact_trusted_success(api: GitHubAPI, *, admission: Admission) -> bool:
+def _has_exact_trusted_terminal_status(api: GitHubAPI, *, admission: Admission) -> bool:
     rows = api.list_all(
         f"/repos/{EXPECTED_REPOSITORY}/commits/{admission.head_sha}/statuses",
         max_pages=MAX_API_PAGES,
@@ -997,24 +997,23 @@ def _has_exact_trusted_success(api: GitHubAPI, *, admission: Admission) -> bool:
             continue
         _require_positive_int(status.get("id"), label="trusted status id")
         trusted.append(status)
-    if not trusted:
-        return False
 
-    latest = max(trusted, key=lambda status: int(status["id"]))
-    if latest.get("state") != "success":
-        return False
-    target_url = latest.get("target_url")
-    if not isinstance(target_url, str):
-        return False
-    target = TRUSTED_STATUS_TARGET_RE.fullmatch(target_url)
-    if target is None:
-        return False
-    return (
-        int(target.group("pr")) == admission.pr_number
-        and target.group("base") == admission.base_sha
-        and target.group("head") == admission.head_sha
-        and target.group("merge") == admission.merge_sha
-    )
+    for status in sorted(trusted, key=lambda candidate: int(candidate["id"]), reverse=True):
+        target_url = status.get("target_url")
+        if not isinstance(target_url, str):
+            continue
+        target = TRUSTED_STATUS_TARGET_RE.fullmatch(target_url)
+        if target is None:
+            continue
+        exact_subject = (
+            int(target.group("pr")) == admission.pr_number
+            and target.group("base") == admission.base_sha
+            and target.group("head") == admission.head_sha
+            and target.group("merge") == admission.merge_sha
+        )
+        if exact_subject:
+            return status.get("state") in {"success", "failure"}
+    return False
 
 
 def _select_scheduled_protected_owner_admission(
@@ -1133,7 +1132,7 @@ def _select_scheduled_protected_owner_admission(
                 body=body,
                 trusted_sha=trusted_sha,
             )
-            if not _has_exact_trusted_success(api, admission=admission):
+            if not _has_exact_trusted_terminal_status(api, admission=admission):
                 matches.append(admission)
 
     if not matches:
