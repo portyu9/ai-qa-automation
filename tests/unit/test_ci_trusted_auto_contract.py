@@ -36,8 +36,8 @@ def test_trusted_auto_contract_is_frozen_and_bounded() -> None:
     auto = result["workflows"]["trusted_auto"]
 
     assert auto["trigger"] == (
-        "workflow_run:completed:reviewed-ci-codeql-or-dependency-governance+schedule:5m+"
-        "schedule:5m:exact-owner-protected-maintenance"
+        "workflow_run:completed:reviewed-ci-codeql-or-dependency-governance+"
+        "schedule:5m:bot-and-owner-maintenance-reconciliation"
     )
     assert auto["wake_signal"] == (
         "owner-ci-or-exact-dependabot-actions-ci-or-"
