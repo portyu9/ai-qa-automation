@@ -155,12 +155,16 @@ def _report(
     )
 
 
-@pytest.mark.parametrize("event", ["workflow_run", "schedule"])
+@pytest.mark.parametrize(
+    ("event", "lane"),
+    [("workflow_run", "owner-routine"), ("schedule", "security-autoheal")],
+)
 def test_automatic_report_uses_shared_exact_subject_resolver(
     monkeypatch: pytest.MonkeyPatch,
     event: str,
+    lane: str,
 ) -> None:
-    result = _report(monkeypatch, event=event)
+    result = _report(monkeypatch, event=event, lane=lane)
 
     assert result["result"] == "SUCCESS"
     assert result["authorization_mode"] == "automatic-default-branch"
@@ -236,7 +240,7 @@ def test_protected_maintenance_report_rejects_authorization_drift_before_status(
 @pytest.mark.parametrize(
     ("event", "ref", "match"),
     [
-        ("repository_dispatch", "refs/heads/main", "workflow_run, schedule"),
+        ("repository_dispatch", "refs/heads/main", "workflow_run or schedule"),
         ("workflow_run", "refs/heads/feature", "refs/heads/main"),
     ],
 )
@@ -319,14 +323,22 @@ def test_automatic_failed_validation_posts_failure(
     assert FakeApi.instances[0].statuses[0]["state"] == "failure"
 
 
-@pytest.mark.parametrize("event", ["workflow_run", "schedule"])
+@pytest.mark.parametrize(
+    ("event", "lane"),
+    [
+        ("workflow_run", "owner-routine"),
+        ("schedule", "security-autoheal"),
+        ("schedule", reporter._preflight.PROTECTED_OWNER_LANE),
+    ],
+)
 def test_automatic_report_rejects_rerun_before_status_publication(
     monkeypatch: pytest.MonkeyPatch,
     event: str,
+    lane: str,
 ) -> None:
     monkeypatch.setattr(reporter, "GitHubApi", FakeApi)
     with pytest.raises(PermissionError, match="workflow run attempt 1"):
-        _report(monkeypatch, event=event, run_attempt=2)
+        _report(monkeypatch, event=event, lane=lane, run_attempt=2)
     assert FakeApi.instances == []
 
 
@@ -360,6 +372,15 @@ def test_automatic_report_rejects_invalid_validation_contract_before_api(
             job_results={"validation": "success", "other": "success"},
             target_url=RUN_URL,
         )
+    assert FakeApi.instances == []
+
+
+def test_owner_routine_report_requires_workflow_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(reporter, "GitHubApi", FakeApi)
+    with pytest.raises(PermissionError, match="owner-routine status publication requires workflow_run"):
+        _report(monkeypatch, event="schedule", lane="owner-routine")
     assert FakeApi.instances == []
 
 
