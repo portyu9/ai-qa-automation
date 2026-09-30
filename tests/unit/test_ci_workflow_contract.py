@@ -32,6 +32,17 @@ def test_trusted_auto_workflow_concurrency_is_event_payload_independent() -> Non
     assert "github.event." not in concurrency
 
 
+def test_trusted_auto_rejects_issue_comment_as_execution_trigger() -> None:
+    text = (ROOT / ".github" / "workflows" / "trusted-pr-auto.yml").read_text(encoding="utf-8")
+    on_start = text.index("on:\n")
+    permissions_start = text.index("\npermissions:\n", on_start)
+    on_block = text[on_start:permissions_start]
+
+    assert "issue_comment:" not in on_block
+    assert "workflow_run:" in on_block
+    assert "schedule:" in on_block
+
+
 def test_repository_ci_contract_is_self_consistent() -> None:
     result = ci_contract.verify_ci_contract(ROOT)
 
@@ -49,7 +60,7 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     assert automatic["status_write_authority"] == "isolated-generated-maintenance-check-publication"
     assert automatic["protected_maintenance_authority"] == "centralized-app-gate-for-governed-bots"
     assert result["workflows"]["trusted_auto"]["maintenance_authority"] == (
-        "autonomous-governed-bots;exact-owner-default-branch-comment-authorization;first-attempt-only;dedicated-app-terminal-writer"
+        "autonomous-governed-bots;exact-owner-comment-authorization-observed-from-accepted-main-workflow-run;first-attempt-only;dedicated-app-terminal-writer"
     )
     dependency_governance_pr = result["workflows"]["dependency_governance_pr"]
     assert dependency_governance_pr["triggers"] == ["pull_request"]
