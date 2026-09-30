@@ -130,6 +130,8 @@ def report_automatic_result(
         raise PermissionError("trusted status publication requires workflow_run or schedule")
     if expected_lane not in EXPECTED_LANES:
         raise PermissionError("trusted status publication received an unreviewed admission lane")
+    if expected_lane == "owner-routine" and workflow_event != "workflow_run":
+        raise PermissionError("owner-routine status publication requires workflow_run")
     if expected_lane == _preflight.PROTECTED_OWNER_LANE and workflow_event != "schedule":
         raise PermissionError("protected-maintenance status publication requires trusted schedule")
     if workflow_ref != EXPECTED_WORKFLOW_REF:
