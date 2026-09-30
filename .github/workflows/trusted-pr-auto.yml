@@ -18,7 +18,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: trusted-pr-auto-${{ github.event_name == 'schedule' && 'scheduled-bot-reconcile' || github.event_name == 'issue_comment' && format('protected-owner-{0}-{1}', github.event.issue.number, github.event.comment.id) || github.event.workflow_run.id }}
+  group: trusted-pr-auto-${{ github.event_name == 'schedule' && 'scheduled-bot-reconcile' || github.event.workflow_run.id || github.run_id }}
   cancel-in-progress: false
 
 env:

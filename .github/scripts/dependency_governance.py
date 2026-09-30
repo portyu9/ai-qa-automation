@@ -50,6 +50,9 @@ DEPENDABOT_ACTION_REF = re.compile(
 TRANSIENT_GET_ATTEMPTS = 3
 TRANSIENT_GET_DELAY_SECONDS = 1
 GOVERNANCE_CONTROL_SHA_ENV = "GOVERNANCE_CONTROL_SHA"
+AUTOMATION_APPROVER_LOGIN = "github-actions[bot]"
+AUTOMATION_APPROVER_USER_ID = 41898282
+AUTOMATION_APPROVAL_TITLE = "ƳƤ autonomous dependency approval"
 
 
 class GovernanceError(RuntimeError):
@@ -290,6 +293,120 @@ def require_sha(value: Any, label: str) -> str:
     if not isinstance(value, str) or SHA.fullmatch(value) is None:
         raise PolicyBlock(f"{label} is not a canonical 40-character SHA")
     return value
+
+
+def _approval_positive_int(value: Any, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise GovernanceError(f"{label} must be a positive integer")
+    return value
+
+
+def _automation_approval_body(
+    *,
+    number: int,
+    head_sha: str,
+    base_sha: str,
+    gate_evidence: dict[str, Any],
+) -> str:
+    if isinstance(number, bool) or not isinstance(number, int) or number < 1:
+        raise GovernanceError("automation approval PR number is invalid")
+    if SHA.fullmatch(head_sha) is None or SHA.fullmatch(base_sha) is None:
+        raise GovernanceError("automation approval subject SHA is invalid")
+    status_id = _approval_positive_int(
+        gate_evidence.get("statusId"), "automation approval trusted status id"
+    )
+    run_id = _approval_positive_int(
+        gate_evidence.get("runId"), "automation approval trusted run id"
+    )
+    if gate_evidence.get("runAttempt") != 1:
+        raise GovernanceError("automation approval trusted run attempt must equal one")
+    merge_sha = gate_evidence.get("mergeSha")
+    if not isinstance(merge_sha, str) or SHA.fullmatch(merge_sha) is None:
+        raise GovernanceError("automation approval prospective merge SHA is invalid")
+    return (
+        f"{AUTOMATION_APPROVAL_TITLE}\n\n"
+        "Deterministic Trusted PR Gate evidence was revalidated for this exact dependency subject.\n\n"
+        f"- PR: #{number}\n"
+        f"- head: `{head_sha}`\n"
+        f"- base: `{base_sha}`\n"
+        f"- prospective merge: `{merge_sha}`\n"
+        f"- Trusted PR Gate run: `{run_id}`\n"
+        f"- Trusted PR Gate status id: `{status_id}`\n\n"
+        "Merge remains separately guarded by exact-subject and current-main revalidation."
+    )
+
+
+def _exact_automation_approval(
+    review: dict[str, Any],
+    *,
+    body: str,
+    head_sha: str,
+) -> bool:
+    user = review.get("user") or {}
+    if review.get("body") != body:
+        return False
+    if (
+        not isinstance(user, dict)
+        or user.get("login") != AUTOMATION_APPROVER_LOGIN
+        or user.get("id") != AUTOMATION_APPROVER_USER_ID
+    ):
+        return False
+    if review.get("state") != "APPROVED" or review.get("commit_id") != head_sha:
+        raise GovernanceError("exact automation approval body is not an approved exact-head review")
+    _approval_positive_int(review.get("id"), "automation approval review id")
+    return True
+
+
+def ensure_exact_automation_approval(
+    api: GitHubApi,
+    *,
+    number: int,
+    head_sha: str,
+    base_sha: str,
+    gate_evidence: dict[str, Any],
+) -> dict[str, Any]:
+    """Publish and re-read one exact-head approval before dependency mutation."""
+
+    body = _automation_approval_body(
+        number=number,
+        head_sha=head_sha,
+        base_sha=base_sha,
+        gate_evidence=gate_evidence,
+    )
+
+    def exact_matches() -> list[dict[str, Any]]:
+        reviews = api.list_all(f"/pulls/{number}/reviews", max_pages=2)
+        return [
+            review
+            for review in reviews
+            if _exact_automation_approval(review, body=body, head_sha=head_sha)
+        ]
+
+    matches = exact_matches()
+    if not matches:
+        response = api.post(
+            f"/pulls/{number}/reviews",
+            {"event": "APPROVE", "body": body, "commit_id": head_sha},
+        )
+        if not isinstance(response, dict) or not _exact_automation_approval(
+            response, body=body, head_sha=head_sha
+        ):
+            raise GovernanceError("GitHub did not acknowledge the exact automation approval")
+        matches = exact_matches()
+        if not matches:
+            raise GovernanceError(
+                "exact automation approval was not durably observable after publication"
+            )
+
+    review = max(
+        matches,
+        key=lambda row: _approval_positive_int(row.get("id"), "automation approval review id"),
+    )
+    return {
+        "reviewId": _approval_positive_int(review.get("id"), "automation approval review id"),
+        "reviewer": AUTOMATION_APPROVER_LOGIN,
+        "headSha": head_sha,
+    }
 
 
 def _labels(pr: dict[str, Any]) -> set[str]:
@@ -654,7 +771,7 @@ def _merge(api: GitHubApi, subject: dict[str, Any], config: dict[str, Any]) -> d
     if rebound != subject:
         raise PolicyBlock("pull request changed before merge")
     try:
-        require_action_trusted_gate(
+        gate_evidence = require_action_trusted_gate(
             api,
             subject["number"],
             subject["headSha"],
@@ -662,6 +779,28 @@ def _merge(api: GitHubApi, subject: dict[str, Any], config: dict[str, Any]) -> d
         )
     except TrustedStatusError as exc:
         raise PolicyBlock("automatic Trusted PR Gate is not yet admissible") from exc
+    ensure_exact_automation_approval(
+        api,
+        number=subject["number"],
+        head_sha=subject["headSha"],
+        base_sha=subject["baseSha"],
+        gate_evidence=gate_evidence,
+    )
+    terminal_pr = api.get(f"/pulls/{subject['number']}")
+    terminal_subject = assess(api, terminal_pr, config, require_checks=False)
+    if terminal_subject != subject:
+        raise PolicyBlock("pull request changed after automation approval")
+    try:
+        terminal_gate_evidence = require_action_trusted_gate(
+            api,
+            subject["number"],
+            subject["headSha"],
+            subject["baseSha"],
+        )
+    except TrustedStatusError as exc:
+        raise PolicyBlock("automatic Trusted PR Gate changed after automation approval") from exc
+    if terminal_gate_evidence != gate_evidence:
+        raise PolicyBlock("automatic Trusted PR Gate evidence changed after automation approval")
     require_current_control_revision(api, config)
     result = api.put(
         f"/pulls/{subject['number']}/merge",
@@ -709,7 +848,7 @@ def reconcile_status_target(
     if rebound != subject:
         raise PolicyBlock("status-target Dependabot Actions subject changed before guarded merge")
     try:
-        require_action_trusted_gate(
+        gate_evidence = require_action_trusted_gate(
             api,
             subject["number"],
             subject["headSha"],
@@ -719,6 +858,35 @@ def reconcile_status_target(
         raise PolicyBlock(
             "status-target Dependabot Actions Trusted PR Gate is no longer exact-subject admissible"
         ) from exc
+    ensure_exact_automation_approval(
+        api,
+        number=subject["number"],
+        head_sha=subject["headSha"],
+        base_sha=subject["baseSha"],
+        gate_evidence=gate_evidence,
+    )
+    terminal_pr = api.get(f"/pulls/{target_pr_number}")
+    terminal_subject = _ensure_action_qualification(api, terminal_pr, config)
+    if terminal_subject != subject:
+        raise PolicyBlock(
+            "status-target Dependabot Actions subject changed after automation approval"
+        )
+    try:
+        terminal_gate_evidence = require_action_trusted_gate(
+            api,
+            subject["number"],
+            subject["headSha"],
+            subject["baseSha"],
+        )
+    except TrustedStatusError as exc:
+        raise PolicyBlock(
+            "status-target Dependabot Actions Trusted PR Gate changed after automation approval"
+        ) from exc
+    if terminal_gate_evidence != gate_evidence:
+        raise PolicyBlock(
+            "status-target Dependabot Actions Trusted PR Gate evidence changed "
+            "after automation approval"
+        )
     require_current_control_revision(api, config)
     result = api.put(
         f"/pulls/{target_pr_number}/merge",

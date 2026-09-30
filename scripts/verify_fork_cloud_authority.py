@@ -80,13 +80,14 @@ _MANUAL_SECRET_CONTEXT_FRAGMENTS = (
 _GOVERNANCE_SECRET_CONTEXT_FRAGMENTS = (
     "env:\n      GOVERNANCE_CONTROL_SHA: ${{ github.sha }}",
     "if: >-\n      github.event_name == 'schedule' ||\n      (github.event_name == 'workflow_run' &&\n       github.event.workflow_run.head_repository.full_name == github.repository &&\n       (github.event.workflow_run.head_branch == 'main' ||\n        startsWith(github.event.workflow_run.head_branch, 'dependabot/') ||\n        startsWith(github.event.workflow_run.head_branch, 'automation/dependency-promotion-')))",
-    "- name: Attempt one bounded transient recovery\n        if: steps.revision.outputs.current == 'true' && (github.event_name == 'workflow_run' || github.event_name == 'schedule')\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
-    "- name: Mint independent promotion author token\n        if: steps.revision.outputs.current == 'true'\n        id: promotion-author-app",
+    "- name: Recover exact accepted-main dependency validation before mutation\n        if: steps.revision.outputs.current == 'true'\n        id: post_merge_recovery\n        env:\n          GITHUB_TOKEN: ${{ github.token }}",
+    "- name: Attempt one bounded transient recovery\n        if: steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true' && (github.event_name == 'workflow_run' || github.event_name == 'schedule')\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+    "- name: Mint independent promotion author token\n        if: steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true'\n        id: promotion-author-app",
     "private-key: ${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}",
     "permission-contents: write",
     "permission-pull-requests: write",
-    "- name: Reconcile exact-subject Python dependency promotion\n        if: steps.revision.outputs.current == 'true'\n        id: python_promotion\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n          PROMOTION_AUTHOR_TOKEN: ${{ steps.promotion-author-app.outputs.token }}",
-    "- name: Reconcile Dependabot action merge authority\n        if: steps.revision.outputs.current == 'true' && steps.python_promotion.outputs.merged != 'true'\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+    "- name: Reconcile exact-subject Python dependency promotion\n        if: steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true'\n        id: python_promotion\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n          PROMOTION_AUTHOR_TOKEN: ${{ steps.promotion-author-app.outputs.token }}",
+    "- name: Reconcile Dependabot action merge authority\n        if: steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true' && steps.python_promotion.outputs.merged != 'true'\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
 )
 _DEPENDENCY_TRUSTED_MERGE_AUTHORITY_FRAGMENTS = (
     'on:\n  workflow_run:\n    workflows: ["Trusted PR Auto Gate — ƳƤ AI QA Automation Framework"]\n    types: [completed]',
@@ -126,7 +127,15 @@ _PROTECTED_REMEDIATION_SECRET_CONTEXT_FRAGMENTS = (
     "python .github/scripts/protected_security_remediation.py --reconcile --allow-merge",
 )
 _POST_MERGE_CI_AUTHORITY_FRAGMENTS = (
-    "on:\n  workflow_run:\n    workflows: [dependency-governance, Dependency Trusted Merge — ƳƤ AI QA Automation Framework, Security Auto-Heal, Protected Security Remediation — ƳƤ AI QA Automation Framework]\n    types: [completed]",
+    "on:\n  workflow_run:\n    workflows: [dependency-governance, Dependency Trusted Merge — ƳƤ AI QA Automation Framework, Security Auto-Heal, Protected Security Remediation — ƳƤ AI QA Automation Framework]\n    types: [completed]\n  repository_dispatch:\n    types: [governed-post-merge-validation]",
+    "(github.event_name == 'repository_dispatch' &&",
+    "github.event.action == 'governed-post-merge-validation') ||",
+    "DISPATCH_SUBJECT_SHA: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.subject_sha || '' }}",
+    "DISPATCH_LANE: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.lane || '' }}",
+    'if [ "$EVENT_NAME" = "repository_dispatch" ]; then',
+    'test "$DISPATCH_LANE" = "dependency-trusted-merge"',
+    'test "$DISPATCH_SUBJECT_SHA" = "$SUBJECT_SHA"',
+    'test "$CONTROL_SHA" != "$SUBJECT_SHA"',
     'case "$UPSTREAM_NAME:$UPSTREAM_PATH" in',
     '"dependency-governance:.github/workflows/dependency-governance.yml")',
     '"Dependency Trusted Merge — ƳƤ AI QA Automation Framework:.github/workflows/dependency-trusted-merge.yml")',
@@ -150,7 +159,9 @@ _SECURITY_AUTOHEAL_SECRET_CONTEXT_FRAGMENTS = (
     "if: >-\n      github.event_name == 'schedule' ||\n      github.event_name == 'workflow_dispatch' ||\n      (github.event_name == 'workflow_run' &&\n       github.event.workflow_run.conclusion == 'success' &&\n       github.event.workflow_run.head_repository.full_name == github.repository &&\n       (github.event.workflow_run.head_branch == 'main' ||\n        github.event.workflow_run.name == 'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework'))",
     "- name: Plan exact-main deterministic security routes\n        if: steps.revision.outputs.current == 'true'\n        env:\n          GITHUB_TOKEN: ${{ github.token }}\n        run: >-\n          python .github/scripts/security_autoheal.py\n          --plan-routes",
     "- name: Persist exact-run route plan before mutation\n        if: steps.revision.outputs.current == 'true'\n        id: route-plan-artifact\n        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1",
-    '- name: Reconcile exact-subject CodeQL remediations from persisted routes\n        env:\n          GITHUB_TOKEN: ${{ github.token }}\n        run: >-\n          python .github/scripts/security_autoheal.py\n          --reconcile\n          --allow-merge\n          --route-plan "$RUNNER_TEMP/security-autoheal-route-plan/route-plan.json"',
+    '- name: Require accepted-main dependency validation before security mutation\n        id: post_merge_barrier\n        env:\n          GITHUB_TOKEN: ${{ github.token }}\n        run: >-\n          python .github/scripts/dependency_recovery.py\n          --check-post-merge\n          --github-output "$GITHUB_OUTPUT"',
+    "- name: Restore exact-run route plan from prior read-only job\n        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'\n        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8",
+    "- name: Reconcile exact-subject CodeQL remediations from persisted routes\n        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'\n        env:\n          GITHUB_TOKEN: ${{ github.token }}\n        run: >-\n          python .github/scripts/security_autoheal.py\n          --reconcile\n          --allow-merge\n          --route-plan \"$RUNNER_TEMP/security-autoheal-route-plan/route-plan.json\"",
 )
 
 _TRUSTED_AUTO_SECRET_CONTEXT_FRAGMENTS = (
@@ -342,7 +353,6 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
                 "pull_request:",
                 "schedule:",
                 "workflow_dispatch:",
-                "repository_dispatch:",
                 "environment:",
                 "${{ vars.",
                 "contents: write",
@@ -353,6 +363,10 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
         ):
             raise ValueError(
                 "post-merge-ci.yml must remain exact accepted-main validation without cloud or merge authority"
+            )
+        if text.count("repository_dispatch:") != 1:
+            raise ValueError(
+                "post-merge-ci.yml must expose exactly one reviewed repository dispatch trigger"
             )
         if text.count("checks: write") != 2:
             raise ValueError(

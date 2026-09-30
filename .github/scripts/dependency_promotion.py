@@ -30,6 +30,7 @@ from dependency_governance import (
     GovernanceError,
     PolicyBlock,
     changed_files,
+    ensure_exact_automation_approval,
     finalize_post_merge_evidence,
     load_config,
     require_current_control_revision,
@@ -1751,7 +1752,7 @@ def _publish_and_merge(
         raise PolicyBlock("promotion changed before guarded merge")
     branch = str((fresh_before_merge.get("head") or {}).get("ref") or "")
     try:
-        require_promotion_trusted_gate(
+        gate_evidence = require_promotion_trusted_gate(
             api,
             promotion["number"],
             promotion["headSha"],
@@ -1760,6 +1761,28 @@ def _publish_and_merge(
     except TrustedStatusError as exc:
         _advance_promotion_qualification(api, promotion, branch, config)
         raise GovernanceError("promotion qualification wake returned unexpectedly") from exc
+    ensure_exact_automation_approval(
+        api,
+        number=promotion["number"],
+        head_sha=promotion["headSha"],
+        base_sha=promotion["baseSha"],
+        gate_evidence=gate_evidence,
+    )
+    terminal_pr = api.get(f"/pulls/{promotion['number']}")
+    _, terminal_promotion = _validate_promotion(api, terminal_pr, config, require_checks=False)
+    if terminal_promotion != promotion:
+        raise PolicyBlock("promotion changed after automation approval")
+    try:
+        terminal_gate_evidence = require_promotion_trusted_gate(
+            api,
+            promotion["number"],
+            promotion["headSha"],
+            promotion["baseSha"],
+        )
+    except TrustedStatusError as exc:
+        raise PolicyBlock("Trusted PR Gate changed after automation approval") from exc
+    if terminal_gate_evidence != gate_evidence:
+        raise PolicyBlock("Trusted PR Gate evidence changed after automation approval")
     require_current_control_revision(api, config)
     result = api.put(
         f"/pulls/{promotion['number']}/merge",
@@ -2054,7 +2077,7 @@ def reconcile_status_target(
     if rebound_before_merge != promotion:
         raise PolicyBlock("status-target promotion changed before guarded merge")
     try:
-        require_promotion_trusted_gate(
+        gate_evidence = require_promotion_trusted_gate(
             api,
             promotion["number"],
             promotion["headSha"],
@@ -2064,6 +2087,37 @@ def reconcile_status_target(
         raise PolicyBlock(
             "status-target Trusted PR Gate is no longer exact-subject admissible"
         ) from exc
+    ensure_exact_automation_approval(
+        api,
+        number=promotion["number"],
+        head_sha=promotion["headSha"],
+        base_sha=promotion["baseSha"],
+        gate_evidence=gate_evidence,
+    )
+    terminal_pr = api.get(f"/pulls/{target_pr_number}")
+    _, terminal_promotion = _validate_promotion(
+        api,
+        terminal_pr,
+        config,
+        require_checks=False,
+    )
+    if terminal_promotion != promotion:
+        raise PolicyBlock("status-target promotion changed after automation approval")
+    try:
+        terminal_gate_evidence = require_promotion_trusted_gate(
+            api,
+            promotion["number"],
+            promotion["headSha"],
+            promotion["baseSha"],
+        )
+    except TrustedStatusError as exc:
+        raise PolicyBlock(
+            "status-target Trusted PR Gate changed after automation approval"
+        ) from exc
+    if terminal_gate_evidence != gate_evidence:
+        raise PolicyBlock(
+            "status-target Trusted PR Gate evidence changed after automation approval"
+        )
     require_current_control_revision(api, config)
     result = api.put(
         f"/pulls/{target_pr_number}/merge",

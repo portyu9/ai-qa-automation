@@ -24,6 +24,15 @@ RUN_ID = 99123
 STATUS_ID = 4422
 
 
+def _gate_evidence() -> dict[str, Any]:
+    return {
+        "statusId": STATUS_ID,
+        "runId": RUN_ID,
+        "runAttempt": 1,
+        "mergeSha": MERGE,
+    }
+
+
 def _load(path: Path, name: str) -> ModuleType:
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
@@ -395,6 +404,20 @@ class _MergeApi:
         return {"merged": True, "sha": MERGE}
 
 
+def _record_exact_automation_approval(
+    api: _MergeApi,
+    *,
+    number: int,
+    head_sha: str,
+    base_sha: str,
+    gate_evidence: dict[str, Any],
+) -> dict[str, Any]:
+    assert (number, head_sha, base_sha) == (PR_NUMBER, HEAD, BASE)
+    assert gate_evidence == _gate_evidence()
+    api.events.append("approval")
+    return {"reviewId": 7001, "reviewer": "github-actions[bot]", "headSha": HEAD}
+
+
 def test_dependency_governance_revalidates_gate_after_fresh_rebind(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -420,7 +443,7 @@ def test_dependency_governance_revalidates_gate_after_fresh_rebind(
         assert api_arg is api
         assert (number, head, base) == (PR_NUMBER, HEAD, BASE)
         api.events.append("gate")
-        return {"runId": RUN_ID}
+        return _gate_evidence()
 
     def finalize(
         api_arg: Any,
@@ -437,6 +460,11 @@ def test_dependency_governance_revalidates_gate_after_fresh_rebind(
 
     monkeypatch.setattr(governance, "assess", assess)
     monkeypatch.setattr(governance, "require_action_trusted_gate", require_gate)
+    monkeypatch.setattr(
+        governance,
+        "ensure_exact_automation_approval",
+        _record_exact_automation_approval,
+    )
 
     def require_control(api_arg: Any, config_arg: dict[str, Any]) -> str:
         assert api_arg is api
@@ -448,7 +476,18 @@ def test_dependency_governance_revalidates_gate_after_fresh_rebind(
     monkeypatch.setattr(governance, "finalize_post_merge_evidence", finalize)
 
     assert governance._merge(api, subject, config) == {"mergeSha": MERGE}
-    assert api.events == ["fresh-pr", "rebind", "gate", "control", "merge", "finalize"]
+    assert api.events == [
+        "fresh-pr",
+        "rebind",
+        "gate",
+        "approval",
+        "fresh-pr",
+        "rebind",
+        "gate",
+        "control",
+        "merge",
+        "finalize",
+    ]
 
 
 def test_dependency_governance_status_target_revalidates_before_exact_merge(
@@ -480,7 +519,7 @@ def test_dependency_governance_status_target_revalidates_before_exact_merge(
         assert api_arg is api
         assert (number, head, base) == (PR_NUMBER, HEAD, BASE)
         api.events.append("gate")
-        return {"runId": RUN_ID}
+        return _gate_evidence()
 
     def require_control(api_arg: Any, config_arg: dict[str, Any]) -> str:
         assert api_arg is api
@@ -503,6 +542,11 @@ def test_dependency_governance_status_target_revalidates_before_exact_merge(
 
     monkeypatch.setattr(governance, "_ensure_action_qualification", qualify)
     monkeypatch.setattr(governance, "require_action_trusted_gate", require_gate)
+    monkeypatch.setattr(
+        governance,
+        "ensure_exact_automation_approval",
+        _record_exact_automation_approval,
+    )
     monkeypatch.setattr(governance, "require_current_control_revision", require_control)
     monkeypatch.setattr(governance, "finalize_post_merge_evidence", finalize)
 
@@ -521,9 +565,138 @@ def test_dependency_governance_status_target_revalidates_before_exact_merge(
         "fresh-pr",
         "qualify",
         "gate",
+        "approval",
+        "fresh-pr",
+        "qualify",
+        "gate",
         "control",
         "merge",
         "finalize",
+    ]
+
+
+def test_dependency_governance_gate_drift_after_approval_stops_before_merge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = _MergeApi()
+    subject = {"number": PR_NUMBER, "headSha": HEAD, "baseSha": BASE}
+    config = {"mergeMethod": "merge"}
+    gate_calls = 0
+
+    def assess(
+        api_arg: Any,
+        pr: dict[str, Any],
+        config_arg: dict[str, Any],
+        *,
+        require_checks: bool,
+    ) -> dict[str, Any]:
+        assert api_arg is api
+        assert pr == {"number": PR_NUMBER}
+        assert config_arg is config
+        assert require_checks is False
+        api.events.append("rebind")
+        return subject
+
+    def require_gate(api_arg: Any, number: int, head: str, base: str) -> dict[str, Any]:
+        nonlocal gate_calls
+        assert api_arg is api
+        assert (number, head, base) == (PR_NUMBER, HEAD, BASE)
+        gate_calls += 1
+        api.events.append("gate")
+        evidence = _gate_evidence()
+        if gate_calls == 2:
+            evidence = {**evidence, "statusId": int(evidence["statusId"]) + 1}
+        return evidence
+
+    monkeypatch.setattr(governance, "assess", assess)
+    monkeypatch.setattr(governance, "require_action_trusted_gate", require_gate)
+    monkeypatch.setattr(
+        governance,
+        "ensure_exact_automation_approval",
+        _record_exact_automation_approval,
+    )
+    monkeypatch.setattr(
+        governance,
+        "require_current_control_revision",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("control check must not run after gate drift")
+        ),
+    )
+
+    with pytest.raises(
+        governance.PolicyBlock,
+        match="evidence changed after automation approval",
+    ):
+        governance._merge(api, subject, config)
+    assert api.events == [
+        "fresh-pr",
+        "rebind",
+        "gate",
+        "approval",
+        "fresh-pr",
+        "rebind",
+        "gate",
+    ]
+
+
+def test_dependency_promotion_subject_drift_after_approval_stops_before_merge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = _MergeApi()
+    promoted = {"number": PR_NUMBER, "headSha": HEAD, "baseSha": BASE}
+    moved = {"number": PR_NUMBER, "headSha": "e" * 40, "baseSha": BASE}
+    config = {"mergeMethod": "merge"}
+    validation_calls = 0
+
+    def validate(
+        api_arg: Any,
+        pr: dict[str, Any],
+        config_arg: dict[str, Any],
+        *,
+        require_checks: bool,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        nonlocal validation_calls
+        assert api_arg is api
+        assert pr == {"number": PR_NUMBER}
+        assert config_arg is config
+        assert require_checks is False
+        validation_calls += 1
+        api.events.append("rebind")
+        return {"source": True}, promoted if validation_calls == 1 else moved
+
+    def require_gate(api_arg: Any, number: int, head: str, base: str) -> dict[str, Any]:
+        assert api_arg is api
+        assert (number, head, base) == (PR_NUMBER, HEAD, BASE)
+        api.events.append("gate")
+        return _gate_evidence()
+
+    monkeypatch.setattr(promotion, "_validate_promotion", validate)
+    monkeypatch.setattr(promotion, "require_promotion_trusted_gate", require_gate)
+    monkeypatch.setattr(
+        promotion,
+        "ensure_exact_automation_approval",
+        _record_exact_automation_approval,
+    )
+    monkeypatch.setattr(
+        promotion,
+        "require_current_control_revision",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("control check must not run after subject drift")
+        ),
+    )
+
+    with pytest.raises(
+        promotion.PolicyBlock,
+        match="promotion changed after automation approval",
+    ):
+        promotion._publish_and_merge(api, promoted, config)
+    assert api.events == [
+        "fresh-pr",
+        "rebind",
+        "gate",
+        "approval",
+        "fresh-pr",
+        "rebind",
     ]
 
 
@@ -585,7 +758,7 @@ def test_dependency_promotion_revalidates_gate_before_merge(
         assert api_arg is api
         assert (number, head, base) == (PR_NUMBER, HEAD, BASE)
         api.events.append("gate")
-        return {"runId": RUN_ID}
+        return _gate_evidence()
 
     def finalize(
         api_arg: Any,
@@ -606,6 +779,11 @@ def test_dependency_promotion_revalidates_gate_before_merge(
     monkeypatch.setattr(promotion, "_validate_promotion", validate)
     monkeypatch.setattr(promotion, "_advance_promotion_qualification", forbidden_advance)
     monkeypatch.setattr(promotion, "require_promotion_trusted_gate", require_gate)
+    monkeypatch.setattr(
+        promotion,
+        "ensure_exact_automation_approval",
+        _record_exact_automation_approval,
+    )
     monkeypatch.setattr(promotion, "finalize_post_merge_evidence", finalize)
 
     def require_control(api_arg: Any, config_arg: dict[str, Any]) -> str:
@@ -617,7 +795,18 @@ def test_dependency_promotion_revalidates_gate_before_merge(
     monkeypatch.setattr(promotion, "require_current_control_revision", require_control)
 
     assert promotion._publish_and_merge(api, promoted, config) == {"mergeSha": MERGE}
-    assert api.events == ["fresh-pr", "rebind", "gate", "control", "merge", "finalize"]
+    assert api.events == [
+        "fresh-pr",
+        "rebind",
+        "gate",
+        "approval",
+        "fresh-pr",
+        "rebind",
+        "gate",
+        "control",
+        "merge",
+        "finalize",
+    ]
 
 
 def test_dependency_promotion_registers_one_non_authoritative_trusted_gate_wake(
@@ -1169,6 +1358,7 @@ def test_dependency_workflow_skips_action_governance_after_promotion_merge() -> 
     assert '--github-output "$GITHUB_OUTPUT"' in workflow
     assert (
         "if: steps.revision.outputs.current == 'true' && "
+        "steps.post_merge_recovery.outputs.mutation_ready == 'true' && "
         "steps.python_promotion.outputs.merged != 'true'"
     ) in workflow
 

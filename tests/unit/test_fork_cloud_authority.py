@@ -40,25 +40,30 @@ def _reviewed_governance_secret_payload() -> str:
     env:
       GOVERNANCE_CONTROL_SHA: ${{ github.sha }}
     steps:
+      - name: Recover exact accepted-main dependency validation before mutation
+        if: steps.revision.outputs.current == 'true'
+        id: post_merge_recovery
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - name: Attempt one bounded transient recovery
-        if: steps.revision.outputs.current == 'true' && (github.event_name == 'workflow_run' || github.event_name == 'schedule')
+        if: steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true' && (github.event_name == 'workflow_run' || github.event_name == 'schedule')
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Mint independent promotion author token
-        if: steps.revision.outputs.current == 'true'
+        if: steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true'
         id: promotion-author-app
         with:
           private-key: ${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}
           permission-contents: write
           permission-pull-requests: write
       - name: Reconcile exact-subject Python dependency promotion
-        if: steps.revision.outputs.current == 'true'
+        if: steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true'
         id: python_promotion
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PROMOTION_AUTHOR_TOKEN: ${{ steps.promotion-author-app.outputs.token }}
       - name: Reconcile Dependabot action merge authority
-        if: steps.revision.outputs.current == 'true' && steps.python_promotion.outputs.merged != 'true'
+        if: steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true' && steps.python_promotion.outputs.merged != 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 """
@@ -162,7 +167,7 @@ def test_reviewed_governance_secret_consumers_require_control_sha_binding() -> N
 
 def test_reviewed_governance_secret_consumers_require_current_main() -> None:
     payload = _reviewed_governance_secret_payload()
-    assert payload.count("steps.revision.outputs.current == 'true'") == 4
+    assert payload.count("steps.revision.outputs.current == 'true'") == 5
     mutated = payload.replace("steps.revision.outputs.current == 'true' && ", "", 1)
     with pytest.raises(ValueError, match="reviewed credential consumers moved or changed"):
         _verify_workflow_text("dependency-governance.yml", mutated)
@@ -377,6 +382,40 @@ def test_post_merge_ci_has_no_cloud_or_merge_authority() -> None:
         match="must isolate exactly one CodeQL SARIF write authority",
     ):
         _verify_workflow_text("post-merge-ci.yml", duplicated_sarif)
+
+
+def test_post_merge_ci_rejects_unreviewed_repository_dispatch_type() -> None:
+    root = Path(__file__).parents[2]
+    workflow = (root / ".github" / "workflows" / "post-merge-ci.yml").read_text(encoding="utf-8")
+    reviewed = "    types: [governed-post-merge-validation]\n"
+    assert reviewed in workflow
+    mutated = workflow.replace(
+        reviewed,
+        "    types: [unreviewed-post-merge-validation]\n",
+        1,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="reviewed accepted-main validation boundary changed",
+    ):
+        _verify_workflow_text("post-merge-ci.yml", mutated)
+
+
+def test_post_merge_ci_rejects_second_repository_dispatch_trigger() -> None:
+    root = Path(__file__).parents[2]
+    workflow = (root / ".github" / "workflows" / "post-merge-ci.yml").read_text(encoding="utf-8")
+    mutated = workflow.replace(
+        "  repository_dispatch:\n",
+        "  repository_dispatch:\n  repository_dispatch:\n",
+        1,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="must expose exactly one reviewed repository dispatch trigger",
+    ):
+        _verify_workflow_text("post-merge-ci.yml", mutated)
 
 
 def test_security_autoheal_pr_workflow_is_read_only_candidate_evidence() -> None:
