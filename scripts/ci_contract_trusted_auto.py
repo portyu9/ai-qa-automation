@@ -32,7 +32,7 @@ EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
     "0a1434d25ada3012bb2af52ad68e0b664e9cb9cf"  # pragma: allowlist secret
 )
 EXPECTED_TRUSTED_MAINTENANCE_WAKE_WORKFLOW_BLOB_SHA = (
-    "79e74b347147ffe57d9b0e1eb774f15c000268df"  # pragma: allowlist secret
+    "e8135b144be1a2c2574fc442789b6550b1e3c012"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
     "c086755ff72ce4f2916ed2436bf6404651800e1c"  # pragma: allowlist secret
@@ -119,6 +119,15 @@ def _verify_trusted_maintenance_wake_workflow(text: str) -> dict[str, str]:
         raise ValueError("trusted maintenance wake must have an empty permission set")
     if _base.WRITE_PERMISSION_RE.search(semantic):
         raise ValueError("trusted maintenance wake must not have write authority")
+    concurrency = _base._semantic_text(_base._top_level_block(text, "concurrency"))
+    if (
+        "  group: trusted-maintenance-wake-${{ github.run_id }}" not in concurrency
+        or "  cancel-in-progress: false" not in concurrency
+        or "github.event." in concurrency
+    ):
+        raise ValueError(
+            "trusted maintenance wake concurrency must use only event-independent run identity"
+        )
     for forbidden in (
         "uses:",
         "secrets.",
