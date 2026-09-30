@@ -3161,12 +3161,18 @@ def test_trusted_qualification_rejects_duplicate_exact_evidence(
 
 
 @pytest.mark.parametrize(
-    ("claim_role", "claim_key"),
-    [("head", "head"), ("base", "base")],
+    ("claim_role", "claim_key", "observed_role"),
+    [
+        ("head", "head", "head"),
+        ("head", "base", "base"),
+        ("base", "head", "head"),
+        ("base", "base", "base"),
+    ],
 )
 def test_exact_ref_delete_blocks_new_open_pr_claim_at_final_boundary(
     claim_role: str,
     claim_key: str,
+    observed_role: str,
 ) -> None:
     encoded = BRANCH.replace("/", "%2F")
 
@@ -3195,7 +3201,7 @@ def test_exact_ref_delete_blocks_new_open_pr_claim_at_final_boundary(
 
     with pytest.raises(
         promotion.PolicyBlock,
-        match=f"{claim_role} ref became claimed by an open PR before cleanup",
+        match=f"{observed_role} ref became claimed by an open PR before cleanup",
     ):
         promotion._delete_exact_ref(
             Api(),

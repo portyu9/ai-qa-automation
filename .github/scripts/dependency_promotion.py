@@ -708,16 +708,19 @@ def _require_ref_unclaimed_by_open_pr(
         raise GovernanceError("promotion cleanup claim role is invalid")
     rows = api.list_all("/pulls?state=open&sort=created&direction=asc", max_pages=4)
     for row in rows:
-        subject = row.get(role) or {}
-        repository = subject.get("repo") or {}
-        if (
-            row.get("state") == "open"
-            and subject.get("ref") == branch
-            and repository.get("full_name") == EXPECTED_REPOSITORY
-        ):
-            raise PolicyBlock(
-                f"dependency promotion {role} ref became claimed by an open PR before cleanup"
-            )
+        if row.get("state") != "open":
+            continue
+        for claim_role in ("head", "base"):
+            subject = row.get(claim_role) or {}
+            repository = subject.get("repo") or {}
+            if (
+                subject.get("ref") == branch
+                and repository.get("full_name") == EXPECTED_REPOSITORY
+            ):
+                raise PolicyBlock(
+                    f"dependency promotion {claim_role} ref became claimed by an open PR "
+                    "before cleanup"
+                )
 
 
 def _prune_orphan_promotion_refs(api: GitHubApi, config: dict[str, Any]) -> int:
