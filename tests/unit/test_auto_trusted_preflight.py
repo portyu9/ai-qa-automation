@@ -556,6 +556,16 @@ def test_governance_wake_check_is_neutral_only_and_non_authoritative() -> None:
     assert preflight.evaluate_admission(api, event=event) is None
 
 
+def test_startup_failed_governance_run_cannot_wake_trusted_validation() -> None:
+    api = _governance_wake_api()
+    api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]["conclusion"] = (
+        "startup_failure"
+    )
+    event = {"action": "completed", "workflow_run": {"id": 42, "head_sha": BASE}}
+
+    assert preflight.evaluate_admission(api, event=event) is None
+
+
 def test_failed_governance_run_cannot_wake_trusted_validation() -> None:
     api = _governance_wake_api()
     api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]["conclusion"] = (
@@ -584,7 +594,7 @@ def _protected_owner_wake_api(
     run = responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]
     run.update(
         {
-            "workflow_id": 999_001,
+            "workflow_id": preflight.EXPECTED_MAINTENANCE_WAKE_WORKFLOW_ID,
             "name": preflight.EXPECTED_MAINTENANCE_WAKE_WORKFLOW_NAME,
             "path": preflight.EXPECTED_MAINTENANCE_WAKE_WORKFLOW_PATH,
             "event": "issue_comment",
@@ -619,6 +629,17 @@ def test_owner_wake_requires_exact_live_source_identity(
     assert preflight.evaluate_admission(api, event=_protected_owner_wake_event()) is None
 
 
+def test_owner_wake_rejects_source_workflow_id_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    api = _protected_owner_wake_api()
+    run = api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]
+    run["workflow_id"] = preflight.EXPECTED_MAINTENANCE_WAKE_WORKFLOW_ID + 1
+
+    assert preflight.evaluate_admission(api, event=_protected_owner_wake_event()) is None
+
+
 def test_owner_wake_rejects_source_path_drift(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -646,6 +667,37 @@ def test_owner_wake_authorization_selects_exact_protected_subject(
     assert admission.base_sha == BASE
     assert admission.merge_sha == MERGE
     assert admission.protected_changes
+
+
+def test_owner_wake_startup_failure_is_neutral_liveness_signal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    api = _protected_owner_wake_api()
+    run = api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]
+    run["conclusion"] = "startup_failure"
+
+    admission = preflight.evaluate_admission(api, event=_protected_owner_wake_event())
+
+    assert admission is not None
+    assert admission.eligible is True
+    assert admission.lane == preflight.PROTECTED_OWNER_LANE
+    assert admission.pr_number == 65
+    assert admission.head_sha == HEAD
+    assert admission.base_sha == BASE
+    assert admission.merge_sha == MERGE
+
+
+def test_owner_wake_ordinary_failure_is_not_liveness_signal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    api = _protected_owner_wake_api()
+    api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]["conclusion"] = (
+        "failure"
+    )
+
+    assert preflight.evaluate_admission(api, event=_protected_owner_wake_event()) is None
 
 
 def test_owner_wake_authorization_requires_user_type_in_summary(
@@ -978,6 +1030,26 @@ def test_issue_comment_event_is_not_a_runtime_admission_path() -> None:
             event={},
             event_name="issue_comment",
         )
+
+
+def test_scheduled_reconciliation_selects_exact_protected_owner_authorization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    admission = preflight.evaluate_admission(
+        _protected_owner_wake_api(),
+        event={},
+        event_name="schedule",
+    )
+
+    assert admission is not None
+    assert admission.eligible is True
+    assert admission.lane == preflight.PROTECTED_OWNER_LANE
+    assert admission.pr_number == 65
+    assert admission.head_sha == HEAD
+    assert admission.base_sha == BASE
+    assert admission.merge_sha == MERGE
+    assert admission.protected_changes
 
 
 def test_scheduled_bot_reconciliation_selects_security_lane_from_fresh_pr() -> None:

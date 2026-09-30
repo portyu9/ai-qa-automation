@@ -45,19 +45,19 @@ def test_trusted_auto_contract_is_frozen_and_bounded() -> None:
 
     assert auto["trigger"] == (
         "workflow_run:completed:reviewed-ci-codeql-governance-or-maintenance-wake+"
-        "schedule:5m:bot-reconciliation"
+        "schedule:5m:protected-owner-and-bot-reconciliation"
     )
     assert auto["wake_signal"] == (
         "owner-ci-or-exact-dependabot-actions-ci-or-"
-        "exact-governance-neutral-wake-or-exact-owner-comment-maintenance-wake-or-"
-        "scheduled-bot-reconciliation"
+        "exact-governance-neutral-wake-or-exact-owner-comment-maintenance-success-or-startup-failure-signal-or-"
+        "scheduled-protected-owner-or-bot-reconciliation"
     )
     assert auto["trusted_definition"] == (
-        "default-branch-workflow-run-or-scheduled-bot-reconciliation"
+        "default-branch-workflow-run-or-scheduled-protected-owner-and-bot-reconciliation"
     )
     assert auto["candidate_execution_guard"] == (
-        "owner-zero-protected-drift-or-exact-owner-comment-wake-protected-comment-or-"
-        "exact-governed-bot-provenance"
+        "owner-zero-protected-drift-or-exact-owner-comment-success-or-startup-failure-wake-or-"
+        "scheduled-protected-comment-or-exact-governed-bot-provenance"
     )
     assert auto["candidate_subject_binding"] == "job-level-exact-prospective-merge"
     assert auto["needs_skip_policy"] == "not-cancelled-plus-explicit-direct-needs-success"
@@ -68,11 +68,12 @@ def test_trusted_auto_contract_is_frozen_and_bounded() -> None:
     assert auto["status_writer"] == "dedicated-github-app"
     assert auto["terminal_revalidation"] == (
         "fresh-live-admission-plus-lane-specific-terminal-reproof;"
-        "protected-owner-comment-wake-exact-comment-revalidation-before-and-after-app-mint"
+        "protected-owner-comment-success-or-startup-failure-wake-or-schedule-exact-comment-"
+        "revalidation-before-and-after-app-mint"
     )
     assert auto["maintenance_authority"] == (
-        "autonomous-governed-bots;exact-owner-default-branch-comment-wake-authorization;"
-        "first-attempt-only;dedicated-app-terminal-writer"
+        "autonomous-governed-bots;exact-owner-default-branch-comment-success-or-startup-failure-neutral-signal-"
+        "or-schedule-authorization;first-attempt-only;dedicated-app-terminal-writer"
     )
     assert auto["governed_bot_lanes"] == [
         "dependabot-actions",

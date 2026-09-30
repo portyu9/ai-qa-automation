@@ -29,6 +29,7 @@ EXPECTED_CODEQL_WORKFLOW_PATH = ".github/workflows/codeql.yml"
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_ID = 359681650
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_NAME = "dependency-governance"
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_PATH = ".github/workflows/dependency-governance.yml"
+EXPECTED_MAINTENANCE_WAKE_WORKFLOW_ID = 371554213
 EXPECTED_MAINTENANCE_WAKE_WORKFLOW_NAME = "Trusted Maintenance Wake — ƳƤ AI QA Automation Framework"
 EXPECTED_MAINTENANCE_WAKE_WORKFLOW_PATH = ".github/workflows/trusted-maintenance-wake.yml"
 PROTECTED_OWNER_WAKE_KIND = "protected-owner-comment-wake"
@@ -351,7 +352,10 @@ def _validate_wake(run: dict[str, Any], *, expected_run_id: int, trusted_sha: st
     if _require_positive_int(run.get("id"), label="workflow run id") != expected_run_id:
         raise ValueError("workflow run identity drifted")
     attempt = _require_positive_int(run.get("run_attempt"), label="workflow run attempt")
-    if run.get("status") != "completed" or run.get("conclusion") != "success":
+    if run.get("status") != "completed":
+        return None
+    conclusion = run.get("conclusion")
+    if conclusion not in {"success", "startup_failure"}:
         return None
     repository = _require_dict(run.get("repository"), label="workflow repository")
     head_repository = _require_dict(run.get("head_repository"), label="workflow head repository")
@@ -366,11 +370,13 @@ def _validate_wake(run: dict[str, Any], *, expected_run_id: int, trusted_sha: st
     triggering_actor = _require_dict(run.get("triggering_actor"), label="workflow triggering actor")
 
     if (
-        run.get("name") == EXPECTED_MAINTENANCE_WAKE_WORKFLOW_NAME
+        workflow_id == EXPECTED_MAINTENANCE_WAKE_WORKFLOW_ID
+        and run.get("name") == EXPECTED_MAINTENANCE_WAKE_WORKFLOW_NAME
         and run.get("path") == EXPECTED_MAINTENANCE_WAKE_WORKFLOW_PATH
     ):
         if (
-            run.get("event") != "issue_comment"
+            conclusion not in {"success", "startup_failure"}
+            or run.get("event") != "issue_comment"
             or run.get("head_branch") != EXPECTED_DEFAULT_BRANCH
             or _require_sha(run.get("head_sha"), label="maintenance wake head SHA") != trusted_sha
             or attempt != 1
@@ -391,6 +397,9 @@ def _validate_wake(run: dict[str, Any], *, expected_run_id: int, trusted_sha: st
             kind=PROTECTED_OWNER_WAKE_KIND,
             head_sha=trusted_sha,
         )
+
+    if conclusion != "success":
+        return None
 
     if (
         workflow_id == EXPECTED_CI_WORKFLOW_ID
@@ -1194,6 +1203,12 @@ def evaluate_admission(
 ) -> Admission | None:
     trusted_sha = _current_main(api)
     if event_name == "schedule":
+        protected_owner = _select_protected_owner_admission(
+            api,
+            trusted_sha=trusted_sha,
+        )
+        if protected_owner is not None:
+            return protected_owner
         selected = _select_scheduled_bot_pull_request(api, trusted_sha=trusted_sha)
         if selected is None:
             return None

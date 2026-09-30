@@ -54,9 +54,9 @@ def _require_protected_owner_authorization(
 
     if expected_lane != _preflight.PROTECTED_OWNER_LANE:
         return None
-    if workflow_event != "workflow_run":
+    if workflow_event not in {"workflow_run", "schedule"}:
         raise PermissionError(
-            "protected-maintenance publication requires trusted owner-comment wake execution"
+            "protected-maintenance publication requires trusted owner-comment wake or accepted-main schedule execution"
         )
     event_path = os.environ.get("GITHUB_EVENT_PATH", "")
     if not event_path:
@@ -76,7 +76,7 @@ def _require_protected_owner_authorization(
             repository=repository,
         ),
         event=event,
-        event_name="workflow_run",
+        event_name=workflow_event,
     )
     if (
         admission is None
@@ -136,9 +136,12 @@ def report_automatic_result(
         raise PermissionError("trusted status publication received an unreviewed admission lane")
     if expected_lane == "owner-routine" and workflow_event != "workflow_run":
         raise PermissionError("owner-routine status publication requires workflow_run")
-    if expected_lane == _preflight.PROTECTED_OWNER_LANE and workflow_event != "workflow_run":
+    if expected_lane == _preflight.PROTECTED_OWNER_LANE and workflow_event not in {
+        "workflow_run",
+        "schedule",
+    }:
         raise PermissionError(
-            "protected-maintenance status publication requires trusted owner-comment wake"
+            "protected-maintenance status publication requires trusted owner-comment wake or accepted-main schedule"
         )
     if workflow_ref != EXPECTED_WORKFLOW_REF:
         raise PermissionError("automatic trusted status publication requires refs/heads/main")

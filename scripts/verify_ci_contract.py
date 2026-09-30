@@ -41,7 +41,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
-    "b26d599c6c34503e157b74ec947ce62e96d19b5b"  # pragma: allowlist secret
+    "2416e48dd335134b6805dc6462ab9a52f0bd3413"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
     "57c5cb084d7b7d861aff477e6a3eab10344d648b"  # pragma: allowlist secret
@@ -2273,8 +2273,10 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
             (
                 "Automatic Trusted PR Gate admission refuses protected changes for owner-routine PRs. "
                 "Owner-protected maintenance is separately admissible only when a no-authority accepted-main "
-                "issue-comment wake succeeds and the trusted controller independently reconciles an exact owner "
-                "authorization comment with exact owner/comment identity plus exact PR/head/base/merge inputs and "
+                "issue-comment wake completes successfully or ends in zero-job startup_failure as a neutral liveness "
+                "signal, or an accepted-main schedule performs the fallback reconciliation; in every case the trusted "
+                "controller independently reconciles an exact owner authorization comment with exact "
+                "owner/comment identity plus exact PR/head/base/merge inputs and "
                 "a non-empty protected transition set; governed bot lanes retain their independent lane-specific "
                 "provenance proofs."
             ),
@@ -2288,9 +2290,10 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
             ),
             (
                 "The protected-owner authorization comment is consumed only after an accepted-main no-authority "
-                "wake and exact live trusted-controller revalidation. It cannot authorize the owner-protected PR "
-                "that first introduces that policy; the initial bootstrap remains fail-closed behind pre-existing "
-                "independent App authority."
+                "wake signal (including its zero-job startup_failure outcome) or accepted-main schedule fallback plus "
+                "exact live trusted-controller revalidation; the wake outcome itself grants no authorization. It cannot "
+                "authorize the owner-protected PR that first introduces or repairs that policy; that PR remains a "
+                "separately documented bootstrap boundary until accepted main proves the dedicated-App path."
             ),
             (
                 "The trusted-pr-gate Environment/App credential remains required by the routine "

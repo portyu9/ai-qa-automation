@@ -29,7 +29,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
-    "2fef3c11b7f9846159912742a31b07f09a95db74"  # pragma: allowlist secret
+    "0a1434d25ada3012bb2af52ad68e0b664e9cb9cf"  # pragma: allowlist secret
 )
 EXPECTED_TRUSTED_MAINTENANCE_WAKE_WORKFLOW_BLOB_SHA = (
     "79e74b347147ffe57d9b0e1eb774f15c000268df"  # pragma: allowlist secret
@@ -170,7 +170,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     concurrency = _base._semantic_text(_base._top_level_block(text, "concurrency"))
     required_concurrency = (
         "concurrency:",
-        "  group: trusted-pr-auto-${{ github.event_name == 'schedule' && 'scheduled-bot-reconcile' || github.run_id }}",
+        "  group: trusted-pr-auto-${{ github.event_name == 'schedule' && 'scheduled-reconcile' || github.run_id }}",
         "  cancel-in-progress: false",
     )
     for fragment in required_concurrency:
@@ -212,7 +212,10 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "    if: >-\n"
         "      github.event_name == 'schedule' ||\n"
         "      (github.event_name == 'workflow_run' &&\n"
-        "       github.event.workflow_run.conclusion == 'success')",
+        "       (github.event.workflow_run.conclusion == 'success' ||\n"
+        "        (github.event.workflow_run.conclusion == 'startup_failure' &&\n"
+        "         github.event.workflow_run.name == 'Trusted Maintenance Wake — ƳƤ AI QA Automation Framework' &&\n"
+        "         github.event.workflow_run.event == 'issue_comment')))",
         "      actions: read",
         "      checks: read",
         "      contents: read",
@@ -232,7 +235,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         '            --github-output "$GITHUB_OUTPUT"',
         "            owner-routine)",
         "            owner-protected-maintenance)",
-        '              test "$GITHUB_EVENT_NAME" = "workflow_run"',
+        '              [[ "$GITHUB_EVENT_NAME" = "workflow_run" || "$GITHUB_EVENT_NAME" = "schedule" ]]',
         '              test "$ELIGIBLE" = "true"',
         '              test "$PROTECTED_CHANGES_JSON" != "[]"',
         "            dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation)",
@@ -318,7 +321,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         '          read -r merge_sha base_sha head_sha extra_parent < <("${git_clean_env[@]}" /usr/bin/git rev-list --parents -n 1 "$EXPECTED_MERGE_SHA")',
         "            owner-routine)",
         "            owner-protected-maintenance)",
-        '              test "$GITHUB_EVENT_NAME" = "workflow_run"',
+        '              [[ "$GITHUB_EVENT_NAME" = "workflow_run" || "$GITHUB_EVENT_NAME" = "schedule" ]]',
         '              test "$BOT_AUTHORITY_RESULT" = "skipped"',
         '              test "$PROTECTED_CHANGES_JSON" != "[]"',
         "            dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation)",
@@ -436,7 +439,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}",
         '          if test "$ELIGIBLE" = "true"; then',
         "              owner-protected-maintenance)",
-        '                test "$GITHUB_EVENT_NAME" = "workflow_run"',
+        '                [[ "$GITHUB_EVENT_NAME" = "workflow_run" || "$GITHUB_EVENT_NAME" = "schedule" ]]',
         '                mode="protected-owner-maintenance"',
         "              dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation)",
         '                mode="governed-bot"',
@@ -528,7 +531,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         '          test "$FINAL_ELIGIBLE" = "true"',
         '          test "$FINAL_LANE" = "$EXPECTED_LANE"',
         "            owner-protected-maintenance)",
-        '              test "$GITHUB_EVENT_NAME" = "workflow_run"',
+        '              [[ "$GITHUB_EVENT_NAME" = "workflow_run" || "$GITHUB_EVENT_NAME" = "schedule" ]]',
         '              test "$FINAL_PROTECTED_CHANGES" != "[]"',
         "            dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation) ;;",
         '          test "$FINAL_MERGE_SHA" = "$EXPECTED_MERGE_SHA"',
@@ -598,17 +601,19 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     return {
         "trigger": (
             "workflow_run:completed:reviewed-ci-codeql-governance-or-maintenance-wake+"
-            "schedule:5m:bot-reconciliation"
+            "schedule:5m:protected-owner-and-bot-reconciliation"
         ),
         "wake_signal": (
             "owner-ci-or-exact-dependabot-actions-ci-or-"
-            "exact-governance-neutral-wake-or-exact-owner-comment-maintenance-wake-or-"
-            "scheduled-bot-reconciliation"
+            "exact-governance-neutral-wake-or-exact-owner-comment-maintenance-success-or-startup-failure-signal-or-"
+            "scheduled-protected-owner-or-bot-reconciliation"
         ),
-        "trusted_definition": ("default-branch-workflow-run-or-scheduled-bot-reconciliation"),
+        "trusted_definition": (
+            "default-branch-workflow-run-or-scheduled-protected-owner-and-bot-reconciliation"
+        ),
         "candidate_execution_guard": (
-            "owner-zero-protected-drift-or-exact-owner-comment-wake-protected-comment-or-"
-            "exact-governed-bot-provenance"
+            "owner-zero-protected-drift-or-exact-owner-comment-success-or-startup-failure-wake-or-"
+            "scheduled-protected-comment-or-exact-governed-bot-provenance"
         ),
         "governed_bot_lanes": [
             "dependabot-actions",
@@ -627,12 +632,13 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "quality_lanes": quality_lanes,
         "terminal_revalidation": (
             "fresh-live-admission-plus-lane-specific-terminal-reproof;"
-            "protected-owner-comment-wake-exact-comment-revalidation-before-and-after-app-mint"
+            "protected-owner-comment-success-or-startup-failure-wake-or-schedule-exact-comment-"
+            "revalidation-before-and-after-app-mint"
         ),
         "status_writer": "dedicated-github-app",
         "maintenance_authority": (
-            "autonomous-governed-bots;exact-owner-default-branch-comment-wake-authorization;"
-            "first-attempt-only;dedicated-app-terminal-writer"
+            "autonomous-governed-bots;exact-owner-default-branch-comment-success-or-startup-failure-neutral-signal-"
+            "or-schedule-authorization;first-attempt-only;dedicated-app-terminal-writer"
         ),
         "workflow_definition": "action-pin-normalized-reviewed-git-blob",
     }

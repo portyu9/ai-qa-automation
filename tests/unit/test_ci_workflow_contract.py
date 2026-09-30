@@ -27,7 +27,7 @@ def test_trusted_auto_workflow_concurrency_is_event_payload_independent() -> Non
 
     assert (
         "  group: trusted-pr-auto-${{ github.event_name == 'schedule' && "
-        "'scheduled-bot-reconcile' || github.run_id }}\n" in concurrency
+        "'scheduled-reconcile' || github.run_id }}\n" in concurrency
     )
     assert "github.event." not in concurrency
 
@@ -49,7 +49,7 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     assert automatic["status_write_authority"] == "isolated-generated-maintenance-check-publication"
     assert automatic["protected_maintenance_authority"] == "centralized-app-gate-for-governed-bots"
     assert result["workflows"]["trusted_auto"]["maintenance_authority"] == (
-        "autonomous-governed-bots;exact-owner-default-branch-comment-wake-authorization;first-attempt-only;dedicated-app-terminal-writer"
+        "autonomous-governed-bots;exact-owner-default-branch-comment-success-or-startup-failure-neutral-signal-or-schedule-authorization;first-attempt-only;dedicated-app-terminal-writer"
     )
     dependency_governance_pr = result["workflows"]["dependency_governance_pr"]
     assert dependency_governance_pr["triggers"] == ["pull_request"]
