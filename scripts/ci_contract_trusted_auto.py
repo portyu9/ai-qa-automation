@@ -498,6 +498,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "      - name: Publish automatic exact-subject trusted status",
         "          GITHUB_TOKEN: ${{ steps.trusted-app.outputs.token }}",
         "          python scripts/auto_trusted_report.py \\",
+        '--lane "${{ needs.preflight.outputs.lane }}"',
     )
     for fragment in required_reporter:
         if fragment not in reporter:
@@ -542,21 +543,16 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         raise ValueError("automatic trusted reporter authority steps are out of reviewed order")
 
     return {
-        "trigger": (
-            "workflow_run:completed:reviewed-ci-codeql-or-dependency-governance+schedule:5m+"
-            "issue_comment:created:exact-owner-protected-maintenance"
-        ),
+        "trigger": "workflow_run:completed:reviewed-ci-codeql-or-dependency-governance+schedule:5m",
         "wake_signal": (
-            "owner-ci-or-exact-dependabot-actions-ci-or-"
-            "exact-governance-neutral-wake-or-scheduled-bot-reconciliation-or-"
-            "exact-owner-comment-protected-maintenance"
+            "owner-ci-with-optional-exact-owner-protected-authorization-or-"
+            "exact-dependabot-actions-ci-or-exact-governance-neutral-wake-or-"
+            "scheduled-bot-reconciliation"
         ),
-        "trusted_definition": (
-            "default-branch-workflow-run-or-schedule-or-owner-comment-maintenance"
-        ),
+        "trusted_definition": "default-branch-workflow-run-or-schedule",
         "candidate_execution_guard": (
-            "owner-zero-protected-drift-or-exact-owner-protected-comment-or-"
-            "exact-governed-bot-provenance"
+            "owner-zero-protected-drift-or-exact-owner-protected-comment-observed-from-workflow-run-"
+            "or-exact-governed-bot-provenance"
         ),
         "governed_bot_lanes": [
             "dependabot-actions",
@@ -575,11 +571,11 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "quality_lanes": quality_lanes,
         "terminal_revalidation": (
             "fresh-live-admission-plus-lane-specific-terminal-reproof;"
-            "protected-owner-exact-comment-revalidation-before-and-after-app-mint"
+            "protected-owner-exact-comment-revalidation-during-workflow-run-before-and-after-app-mint"
         ),
         "status_writer": "dedicated-github-app",
         "maintenance_authority": (
-            "autonomous-governed-bots;exact-owner-default-branch-comment-authorization;"
+            "autonomous-governed-bots;exact-owner-comment-authorization-observed-from-accepted-main-workflow-run;"
             "first-attempt-only;dedicated-app-terminal-writer"
         ),
         "workflow_definition": "action-pin-normalized-reviewed-git-blob",
