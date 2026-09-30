@@ -379,7 +379,9 @@ def test_owner_routine_report_requires_workflow_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(reporter, "GitHubApi", FakeApi)
-    with pytest.raises(PermissionError, match="owner-routine status publication requires workflow_run"):
+    with pytest.raises(
+        PermissionError, match="owner-routine status publication requires workflow_run"
+    ):
         _report(monkeypatch, event="schedule", lane="owner-routine")
     assert FakeApi.instances == []
 
