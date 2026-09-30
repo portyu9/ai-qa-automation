@@ -37,7 +37,9 @@ parse_job_results = _control.parse_job_results
 resolve_current_subject = _control.resolve_current_subject
 
 EXPECTED_WORKFLOW_EVENTS = frozenset({"schedule", "workflow_run"})
-EXPECTED_LANES = frozenset({"owner-routine", _preflight.PROTECTED_OWNER_LANE, *_preflight.BOT_LANES})
+EXPECTED_LANES = frozenset(
+    {"owner-routine", _preflight.PROTECTED_OWNER_LANE, *_preflight.BOT_LANES}
+)
 
 
 def _require_protected_owner_authorization(
@@ -53,7 +55,9 @@ def _require_protected_owner_authorization(
     if expected_lane != _preflight.PROTECTED_OWNER_LANE:
         return None
     if workflow_event != "schedule":
-        raise PermissionError("protected-maintenance publication requires trusted schedule execution")
+        raise PermissionError(
+            "protected-maintenance publication requires trusted schedule execution"
+        )
     event_path = os.environ.get("GITHUB_EVENT_PATH", "")
     if not event_path:
         raise PermissionError("protected-maintenance status publication requires GITHUB_EVENT_PATH")
