@@ -40,7 +40,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
-    "88840072cff2c1865a741a0adc6fa8f94ee7eac2"  # pragma: allowlist secret
+    "733cbc4616fca7d5489059a3504082271fa128ba"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
     "57c5cb084d7b7d861aff477e6a3eab10344d648b"  # pragma: allowlist secret
@@ -49,7 +49,7 @@ EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
     "315e1ea71105e9760d006331b570398b5f7c8af4"  # pragma: allowlist secret
 )
 EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA = (
-    "784b7521180f32854e1cbf923a8e6a69ee3f7dce"  # pragma: allowlist secret
+    "75087db04af26d1aa03609033f308e4f7f5213d4"  # pragma: allowlist secret
 )
 EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
@@ -58,19 +58,19 @@ EXPECTED_DEPENDENCY_GOVERNANCE_PR_WORKFLOW_BLOB_SHA = (
     "81eb77100e4e227f6705ae9b3f953ec226358b52"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
-    "fb756e342504bb6ffb95bc67149158dd37c9b4b9"  # pragma: allowlist secret
+    "0a5302bcfcfd50c24919723ec9cb8412d7c60a49"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA = (
-    "a4f14b1d800eede0ab7c8c49264179a5bcd3e698"  # pragma: allowlist secret
+    "c5b4a0f475aaab9d6a583f5e9ad8d89e823f8c04"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_PR_WORKFLOW_BLOB_SHA = (
     "b7aa78a859ae3a0fdedc299f92555a61645d559a"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
-    "dab8aa71c43e51e72107de652976a47176b38cbc"  # pragma: allowlist secret
+    "e88fb2e7e93ae5d26efc7f3d83e5b30f5042b698"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_REMEDIATION_WORKFLOW_BLOB_SHA = (
-    "a1bf207c299756212c4d15746efd138d684a381f"  # pragma: allowlist secret
+    "0c0a1b5a09e0b59f31fb9829b1d67bef337757cd"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_AUTHOR_ACTION_SHA = (
     "bcd2ba49218906704ab6c1aa796996da409d3eb1"  # pragma: allowlist secret
@@ -699,19 +699,22 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
             "  workflow_run:",
             "    workflows: [dependency-governance, Dependency Trusted Merge — ƳƤ AI QA Automation Framework, Security Auto-Heal, Protected Security Remediation — ƳƤ AI QA Automation Framework]",
             "    types: [completed]",
+            "  repository_dispatch:",
+            "    types: [governed-post-merge-validation]",
         )
     )
     on_block = base._semantic_text(base._top_level_block(text, "on")).strip("\n")
     if on_block != expected_on or base._top_level_keys(base._top_level_block(text, "on")) != {
-        "workflow_run"
+        "workflow_run",
+        "repository_dispatch",
     }:
         raise ValueError(
-            "post-merge-ci.yml must remain exact dependency/security-controller workflow_run only"
+            "post-merge-ci.yml must remain exact governed workflow_run plus repository_dispatch only"
         )
     base._verify_top_level_read_only_permissions(text, name=name)
     concurrency = base._semantic_text(base._top_level_block(text, "concurrency"))
     for fragment in (
-        "  group: post-merge-ci-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}",
+        "  group: post-merge-ci-${{ github.event_name }}-${{ github.event.workflow_run.id || github.run_id }}",
         "  cancel-in-progress: false",
     ):
         if fragment not in concurrency:
@@ -720,7 +723,6 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         "pull_request:",
         "pull_request_target:",
         "workflow_dispatch:",
-        "repository_dispatch:",
         "${{ secrets.",
         "TRUSTED_GATE_APP_CLIENT_ID",
         "TRUSTED_GATE_APP_PRIVATE_KEY",
@@ -741,18 +743,30 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
     bind = base._semantic_text(base._job_block(text, "bind"))
     required_bind = (
         "    name: Bind exact governed main advance",
+        "(github.event_name == 'repository_dispatch' &&",
+        "github.event.action == 'governed-post-merge-validation') ||",
+        "(github.event_name == 'workflow_run' &&",
         "      github.event.workflow_run.conclusion == 'success' &&",
         "      github.event.workflow_run.head_repository.full_name == github.repository &&",
         "      github.event.workflow_run.head_branch == 'main' &&",
-        "      github.event.workflow_run.head_sha != github.sha",
+        "      github.event.workflow_run.head_sha != github.sha)",
         "      run_validation: ${{ steps.bind.outputs.run_validation }}",
-        "          CONTROL_SHA: ${{ github.event.workflow_run.head_sha }}",
+        "          EVENT_NAME: ${{ github.event_name }}",
+        "          CONTROL_SHA: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.control_sha || github.event.workflow_run.head_sha }}",
         "          SUBJECT_SHA: ${{ github.sha }}",
+        "          DISPATCH_SUBJECT_SHA: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.subject_sha || '' }}",
+        "          DISPATCH_LANE: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.lane || '' }}",
         "          UPSTREAM_RUN_ID: ${{ github.event.workflow_run.id }}",
         "          UPSTREAM_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}",
         "          UPSTREAM_PATH: ${{ github.event.workflow_run.path }}",
-        '          test "$UPSTREAM_RUN_ATTEMPT" = "1"',
-        '          case "$UPSTREAM_NAME:$UPSTREAM_PATH" in',
+        '          if [ "$EVENT_NAME" = "repository_dispatch" ]; then',
+        '            test "$DISPATCH_LANE" = "dependency-trusted-merge"',
+        '            test "$DISPATCH_SUBJECT_SHA" = "$SUBJECT_SHA"',
+        '            test "$CONTROL_SHA" != "$SUBJECT_SHA"',
+        "          else",
+        '            test "$EVENT_NAME" = "workflow_run"',
+        '            test "$UPSTREAM_RUN_ATTEMPT" = "1"',
+        '            case "$UPSTREAM_NAME:$UPSTREAM_PATH" in',
         '"dependency-governance:.github/workflows/dependency-governance.yml"',
         "workflow_run|schedule) ;;",
         '"Dependency Trusted Merge — ƳƤ AI QA Automation Framework:.github/workflows/dependency-trusted-merge.yml"',
@@ -770,7 +784,8 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         '          test "$UPSTREAM_STATUS" = "completed"',
         '          test "$UPSTREAM_CONCLUSION" = "success"',
         '          test "$UPSTREAM_REPOSITORY" = "$GITHUB_REPOSITORY"',
-        '          test "$UPSTREAM_HEAD_REPOSITORY" = "$GITHUB_REPOSITORY"',
+        '            test "$UPSTREAM_HEAD_REPOSITORY" = "$GITHUB_REPOSITORY"',
+        "          fi",
         '          live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"',
         '          test "$live_main" = "$SUBJECT_SHA"',
         '          if [ "$SUBJECT_SHA" = "$CONTROL_SHA" ]; then',
@@ -842,7 +857,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
             "post-merge-ci.yml non-action structure differs from the reviewed post-merge definition"
         )
     return {
-        "trigger": "workflow_run:dependency-governance-or-trusted-dependency-merge-or-security-autoheal-or-protected-security-remediation:completed",
+        "trigger": "workflow_run:dependency-governance-or-trusted-dependency-merge-or-security-autoheal-or-protected-security-remediation:completed+repository_dispatch:governed-post-merge-validation",
         "authority": "exact-governed-main-validation-plus-isolated-check-and-codeql-sarif-write",
         "subject": "single-signed-lane-bound-controller-merge-child-of-upstream-control-sha",
         "canonical_ci": "reusable-ci.yml",
@@ -1029,8 +1044,13 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         '          [[ "$TARGET_PR" =~ ^[1-9][0-9]*$ ]]',
         '          case "$TARGET_LANE" in',
         "            dependency-promotion|dependabot-actions) ;;",
+        "      - name: Require accepted-main dependency validation before mutation",
+        "        id: post_merge_barrier",
+        "          GITHUB_TOKEN: ${{ github.token }}",
+        "          --check-post-merge",
+        '          --github-output "$GITHUB_OUTPUT"',
         "      - name: Capture Python 3.11 resolver",
-        "        if: needs.resolve.outputs.lane == 'dependency-promotion'",
+        "        if: steps.post_merge_barrier.outputs.mutation_ready == 'true' && needs.resolve.outputs.lane == 'dependency-promotion'",
         "      - name: Set up Python 3.14",
         "          python-version: '3.14.7'",
         "      - name: Capture Python 3.14 resolver",
@@ -1040,6 +1060,25 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         "      - name: Merge exact trusted Dependabot Actions subject",
         "          python .github/scripts/dependency_governance.py",
         '          --target-dependabot-pr "${{ needs.resolve.outputs.pr_number }}"',
+        "      - name: Dispatch exact accepted-main post-merge validation",
+        "        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'",
+        "          GH_TOKEN: ${{ github.token }}",
+        "          CONTROL_SHA: ${{ github.sha }}",
+        "          TARGET_LANE: ${{ needs.resolve.outputs.lane }}",
+        "          TARGET_PR: ${{ needs.resolve.outputs.pr_number }}",
+        '          test "$(jq -r \'.merged\' <<<"$pr_json")" = "true"',
+        '          test "$live_main" = "$subject_sha"',
+        ".parents[0].sha == $control",
+        ".parents[1].sha == $head",
+        '.author.login == "github-actions[bot]"',
+        ".author.id == 41898282",
+        '.committer.login == "web-flow"',
+        ".committer.id == 19864447",
+        ".commit.verification.verified == true",
+        '.commit.verification.reason == "valid"',
+        'event_type:"governed-post-merge-validation"',
+        'lane:"dependency-trusted-merge"',
+        'gh api --method POST "repos/${GITHUB_REPOSITORY}/dispatches" --input - <<<"$payload"',
     )
     for fragment in merge_required:
         if fragment not in merge_job:
@@ -1060,16 +1099,28 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         (promotion, "dependency-promotion"),
         (actions, "dependabot-actions"),
     ):
-        if f"        if: needs.resolve.outputs.lane == '{lane}'" not in step:
+        required_guard = (
+            "        if: steps.post_merge_barrier.outputs.mutation_ready == 'true' && "
+            f"needs.resolve.outputs.lane == '{lane}'"
+        )
+        if required_guard not in step:
             raise ValueError("dependency trusted merge lane-to-target mutation binding drifted")
         if "          GITHUB_TOKEN: ${{ github.token }}" not in step:
             raise ValueError("dependency trusted merge mutation lacks exact native token binding")
 
     validate_index = merge_job.index("      - name: Validate resolved dependency mutation target")
+    barrier_index = merge_job.index(
+        "      - name: Require accepted-main dependency validation before mutation"
+    )
     promotion_index = merge_job.index("      - name: Merge exact trusted dependency promotion")
     actions_index = merge_job.index("      - name: Merge exact trusted Dependabot Actions subject")
-    if not validate_index < promotion_index < actions_index:
-        raise ValueError("dependency trusted target validation must precede all mutation")
+    dispatch_index = merge_job.index(
+        "      - name: Dispatch exact accepted-main post-merge validation"
+    )
+    if not validate_index < barrier_index < promotion_index < actions_index < dispatch_index:
+        raise ValueError(
+            "dependency post-merge barrier, target validation, merge, and dispatch are out of reviewed order"
+        )
 
     if base._workflow_structure_sha1(text) != EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA:
         raise ValueError(
@@ -1082,6 +1133,7 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         "target_cardinality": "zero-or-one-exact-gate-bound-dependency-subject",
         "resolver_authority": "separate-read-only-job",
         "merge_authority": "existing-exact-target-mergers-only",
+        "post_merge_wake": "exact-live-merged-pr-then-repository-dispatch",
         "branch_or_pr_creation_authority": "none",
         "trusted_status_authority": "none",
         "app_credential_authority": "none",
@@ -1170,10 +1222,16 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         '          printf \'current=%s\\n\' "$current" >> "$GITHUB_OUTPUT"',
         "      - name: Record stale governance wake without mutation",
         "        if: steps.revision.outputs.current == 'false'",
+        "      - name: Recover exact accepted-main dependency validation before mutation",
+        "        id: post_merge_recovery",
+        "          python .github/scripts/dependency_recovery.py",
+        "          --recover-post-merge",
+        '          --github-output "$GITHUB_OUTPUT"',
         "      - name: Attempt one bounded transient recovery",
-        "        if: steps.revision.outputs.current == 'true' && (github.event_name == 'workflow_run' || github.event_name == 'schedule')",
+        "        if: steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true' && (github.event_name == 'workflow_run' || github.event_name == 'schedule')",
         "        run: python .github/scripts/dependency_recovery.py --recover",
         "      - name: Validate independent promotion author identity configuration",
+        "        if: steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true'",
         "      - name: Mint independent promotion author token",
         "        id: promotion-author-app",
         f"        uses: actions/create-github-app-token@{EXPECTED_PROTECTED_AUTHOR_ACTION_SHA} # v3.2.0",
@@ -1193,7 +1251,7 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "          --reconcile",
         "          --allow-merge",
         "      - name: Reconcile Dependabot action merge authority",
-        "        if: steps.revision.outputs.current == 'true' && steps.python_promotion.outputs.merged != 'true'",
+        "        if: steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true' && steps.python_promotion.outputs.merged != 'true'",
         "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
         '          case "$GITHUB_EVENT_NAME" in',
         "            workflow_run|schedule) args+=(--allow-merge) ;;",
@@ -1292,26 +1350,33 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
             "steps.revision.outputs.current == 'true'",
         ),
         (
+            "Recover exact accepted-main dependency validation before mutation",
+            "steps.revision.outputs.current == 'true'",
+        ),
+        (
             "Attempt one bounded transient recovery",
-            "steps.revision.outputs.current == 'true' && "
+            "steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true' && "
             "(github.event_name == 'workflow_run' || github.event_name == 'schedule')",
         ),
         (
             "Validate independent promotion author identity configuration",
-            "steps.revision.outputs.current == 'true'",
+            "steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true'",
         ),
-        ("Mint independent promotion author token", "steps.revision.outputs.current == 'true'"),
+        (
+            "Mint independent promotion author token",
+            "steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true'",
+        ),
         (
             "Bind promotion author token to reviewed bot identity",
-            "steps.revision.outputs.current == 'true'",
+            "steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true'",
         ),
         (
             "Reconcile exact-subject Python dependency promotion",
-            "steps.revision.outputs.current == 'true'",
+            "steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true'",
         ),
         (
             "Reconcile Dependabot action merge authority",
-            "steps.revision.outputs.current == 'true' && "
+            "steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true' && "
             "steps.python_promotion.outputs.merged != 'true'",
         ),
     )
@@ -1325,6 +1390,12 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
     exact_revision = govern_job.index(
         "      - name: Verify exact current-main governance revision before mutation"
     )
+    policy_validation = govern_job.index(
+        "      - name: Validate trusted governance and recovery policy"
+    )
+    post_merge_recovery = govern_job.index(
+        "      - name: Recover exact accepted-main dependency validation before mutation"
+    )
     recovery = govern_job.index("      - name: Attempt one bounded transient recovery")
     identity = govern_job.index(
         "      - name: Validate independent promotion author identity configuration"
@@ -1335,15 +1406,28 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "      - name: Reconcile exact-subject Python dependency promotion"
     )
     reconcile = govern_job.index("      - name: Reconcile Dependabot action merge authority")
-    if not exact_revision < recovery < identity < mint_index < bind < promotion < reconcile:
+    if not (
+        exact_revision
+        < policy_validation
+        < post_merge_recovery
+        < recovery
+        < identity
+        < mint_index
+        < bind
+        < promotion
+        < reconcile
+    ):
         raise ValueError(
-            "dependency recovery, promotion, and action reconciliation are out of reviewed order"
+            "dependency post-merge recovery, transient recovery, promotion, and action reconciliation are out of reviewed order"
         )
 
     return {
         "triggers": ["workflow_run", "schedule"],
         "trusted_code_source": "default-branch-only-for-authority-job",
         "recovery_authority": "one-rerun-no-branch-mutation-no-merge",
+        "post_merge_validation_recovery": (
+            "exact-current-main-dependency-merge-watchdog-dispatch-before-further-mutation"
+        ),
         "python_dependency_authority": "signed-dependabot-intent-to-deterministic-lock-promotion",
         "promotion_authority": (
             "independent-noncertifying-app:contents-write+pull-requests-write:new-subject-only"
@@ -1647,11 +1731,18 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         "          path: ${{ runner.temp }}/security-autoheal-route-plan/route-plan.json",
         "          if-no-files-found: error",
         "          retention-days: 14",
+        "      - name: Require accepted-main dependency validation before security mutation",
+        "        id: post_merge_barrier",
+        "          GITHUB_TOKEN: ${{ github.token }}",
+        "          --check-post-merge",
+        '          --github-output "$GITHUB_OUTPUT"',
         "      - name: Restore exact-run route plan from prior read-only job",
+        "        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'",
         "        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8",
         "          artifact-ids: ${{ needs.route-plan.outputs.artifact-id }}",
         "          path: ${{ runner.temp }}/security-autoheal-route-plan",
         "      - name: Reconcile exact-subject CodeQL remediations from persisted routes",
+        "        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'",
         "          --reconcile",
         "          --allow-merge",
         '          --route-plan "$RUNNER_TEMP/security-autoheal-route-plan/route-plan.json"',
@@ -1680,16 +1771,47 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
             raise ValueError(
                 f"security-autoheal.yml contains forbidden authority token: {forbidden}"
             )
+    barrier_step = base._semantic_text(
+        base._step_block(
+            reconcile_job,
+            "Require accepted-main dependency validation before security mutation",
+        )
+    )
+    for fragment in (
+        "        id: post_merge_barrier",
+        "          GITHUB_TOKEN: ${{ github.token }}",
+        "          --check-post-merge",
+        '          --github-output "$GITHUB_OUTPUT"',
+    ):
+        if fragment not in barrier_step:
+            raise ValueError(
+                "security autoheal mutation lacks the read-only accepted-main dependency barrier"
+            )
+    mutation_step = base._semantic_text(
+        base._step_block(
+            reconcile_job,
+            "Reconcile exact-subject CodeQL remediations from persisted routes",
+        )
+    )
+    required_barrier_guard = "        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'"
+    if required_barrier_guard not in mutation_step:
+        raise ValueError(
+            "security autoheal mutation must require accepted-main dependency validation"
+        )
+
     plan = semantic.index("      - name: Plan exact-main deterministic security routes")
     persist = semantic.index("      - name: Persist exact-run route plan before mutation")
+    barrier = semantic.index(
+        "      - name: Require accepted-main dependency validation before security mutation"
+    )
     restore = semantic.index("      - name: Restore exact-run route plan from prior read-only job")
     reconcile = semantic.index(
         "      - name: Reconcile exact-subject CodeQL remediations from persisted routes"
     )
-    if not plan < persist < restore < reconcile:
+    if not plan < persist < barrier < restore < reconcile:
         raise ValueError(
-            "security route planning, durable persistence, artifact restoration, and "
-            "mutation reconciliation are out of reviewed order"
+            "security route planning, durable persistence, dependency barrier, artifact restoration, "
+            "and mutation reconciliation are out of reviewed order"
         )
     return {
         "triggers": ["workflow_run", "schedule", "workflow_dispatch"],
@@ -1932,6 +2054,11 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
         "      - name: Verify current trusted protected-remediation control revision",
         "          GITHUB_TOKEN: ${{ github.token }}",
         "          python .github/scripts/protected_security_remediation.py\n          --validate-control-revision",
+        "      - name: Require accepted-main dependency validation before protected mutation",
+        "        id: post_merge_barrier",
+        "          GITHUB_TOKEN: ${{ github.token }}",
+        "          --check-post-merge",
+        '          --github-output "$GITHUB_OUTPUT"',
         "      - name: Validate independent author identity configuration",
         '            "github-actions[bot]"|"dependabot[bot]"|"trusted-pr-gate[bot]") exit 1 ;;',
         "      - name: Mint dedicated protected-remediation author token",
@@ -1946,6 +2073,36 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
         if fragment not in job:
             raise ValueError(
                 f"protected remediation reconcile is missing reviewed fragment: {fragment}"
+            )
+
+    barrier = base._semantic_text(
+        base._step_block(
+            job,
+            "Require accepted-main dependency validation before protected mutation",
+        )
+    )
+    for fragment in (
+        "        id: post_merge_barrier",
+        "          GITHUB_TOKEN: ${{ github.token }}",
+        "          --check-post-merge",
+        '          --github-output "$GITHUB_OUTPUT"',
+    ):
+        if fragment not in barrier:
+            raise ValueError(
+                "protected remediation lacks the read-only accepted-main dependency barrier"
+            )
+    required_barrier_guard = "        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'"
+    for step_name in (
+        "Validate independent author identity configuration",
+        "Mint dedicated protected-remediation author token",
+        "Bind minted App to reviewed bot identity",
+        "Reconcile protected security remediation",
+    ):
+        guarded_step = base._semantic_text(base._step_block(job, step_name))
+        if required_barrier_guard not in guarded_step:
+            raise ValueError(
+                "protected remediation credential and mutation steps must require "
+                "accepted-main dependency validation"
             )
 
     mint = base._semantic_text(
@@ -1999,11 +2156,14 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
     control_position = job.index(
         "      - name: Verify current trusted protected-remediation control revision"
     )
+    barrier_position = job.index(
+        "      - name: Require accepted-main dependency validation before protected mutation"
+    )
     mint_position = job.index("      - name: Mint dedicated protected-remediation author token")
     reconcile_position = job.index("      - name: Reconcile protected security remediation")
-    if not control_position < mint_position < reconcile_position:
+    if not control_position < barrier_position < mint_position < reconcile_position:
         raise ValueError(
-            "protected remediation control/mint/reconcile steps are out of reviewed order"
+            "protected remediation control/barrier/mint/reconcile steps are out of reviewed order"
         )
     return {
         "trigger": "workflow_run:Security Auto-Heal:completed+schedule:5m",

@@ -60,7 +60,17 @@ jobs:
           python .github/scripts/protected_security_remediation.py
           --validate-control-revision
 
+      - name: Require accepted-main dependency validation before protected mutation
+        id: post_merge_barrier
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python .github/scripts/dependency_recovery.py
+          --check-post-merge
+          --github-output "$GITHUB_OUTPUT"
+
       - name: Validate independent author identity configuration
+        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'
         env:
           AUTHOR_APP_CLIENT_ID: ${{ vars.PROTECTED_REMEDIATION_APP_CLIENT_ID }}
           AUTHOR_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
@@ -81,6 +91,7 @@ jobs:
           test "$AUTHOR_BOT_ID" -gt 0
 
       - name: Mint dedicated protected-remediation author token
+        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'
         id: author-app
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
@@ -92,6 +103,7 @@ jobs:
           permission-pull-requests: write
 
       - name: Bind minted App to reviewed bot identity
+        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'
         env:
           OBSERVED_APP_SLUG: ${{ steps.author-app.outputs.app-slug }}
           EXPECTED_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
@@ -100,6 +112,7 @@ jobs:
           test "${OBSERVED_APP_SLUG}[bot]" = "$EXPECTED_BOT_LOGIN"
 
       - name: Reconcile protected security remediation
+        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PROTECTED_REMEDIATION_APP_TOKEN: ${{ steps.author-app.outputs.token }}

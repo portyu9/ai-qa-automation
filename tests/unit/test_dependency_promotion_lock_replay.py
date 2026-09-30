@@ -2487,10 +2487,25 @@ def test_status_target_reconcile_mutates_only_exact_target(
         lambda api, pr, config, require_checks=False: ({}, subject),
     )
     gate_calls: list[tuple[int, str, str]] = []
+    gate_evidence = {
+        "statusId": 7001,
+        "runId": 8001,
+        "runAttempt": 1,
+        "mergeSha": "8" * 40,
+    }
     monkeypatch.setattr(
         promotion,
         "require_promotion_trusted_gate",
-        lambda api, number, head, base: gate_calls.append((number, head, base)) or {},
+        lambda api, number, head, base: gate_calls.append((number, head, base)) or gate_evidence,
+    )
+    approval_calls: list[tuple[int, str, str, dict[str, Any]]] = []
+    monkeypatch.setattr(
+        promotion,
+        "ensure_exact_automation_approval",
+        lambda api, *, number, head_sha, base_sha, gate_evidence: (
+            approval_calls.append((number, head_sha, base_sha, gate_evidence))
+            or {"reviewId": 9001, "reviewer": "github-actions[bot]", "headSha": head_sha}
+        ),
     )
     monkeypatch.setattr(
         promotion,
@@ -2514,9 +2529,14 @@ def test_status_target_reconcile_mutates_only_exact_target(
     assert calls == [
         ("GET", "/pulls/901", None),
         ("GET", "/pulls/901", None),
+        ("GET", "/pulls/901", None),
         ("PUT", "/pulls/901/merge", {"sha": HEAD, "merge_method": "merge"}),
     ]
-    assert gate_calls == [(901, HEAD, BASE)]
+    assert gate_calls == [
+        (901, HEAD, BASE),
+        (901, HEAD, BASE),
+    ]
+    assert approval_calls == [(901, HEAD, BASE, gate_evidence)]
     assert control_revision_calls == [
         promotion.EXPECTED_REPOSITORY,
         promotion.EXPECTED_REPOSITORY,

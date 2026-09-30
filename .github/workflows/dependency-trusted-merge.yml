@@ -111,19 +111,27 @@ jobs:
             dependency-promotion|dependabot-actions) ;;
             *) exit 1 ;;
           esac
+      - name: Require accepted-main dependency validation before mutation
+        id: post_merge_barrier
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python .github/scripts/dependency_recovery.py
+          --check-post-merge
+          --github-output "$GITHUB_OUTPUT"
       - name: Capture Python 3.11 resolver
-        if: needs.resolve.outputs.lane == 'dependency-promotion'
+        if: steps.post_merge_barrier.outputs.mutation_ready == 'true' && needs.resolve.outputs.lane == 'dependency-promotion'
         run: printf 'PROMOTION_PYTHON311=%s\n' "$(command -v python)" >> "$GITHUB_ENV"
       - name: Set up Python 3.14
-        if: needs.resolve.outputs.lane == 'dependency-promotion'
+        if: steps.post_merge_barrier.outputs.mutation_ready == 'true' && needs.resolve.outputs.lane == 'dependency-promotion'
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.14.7'
       - name: Capture Python 3.14 resolver
-        if: needs.resolve.outputs.lane == 'dependency-promotion'
+        if: steps.post_merge_barrier.outputs.mutation_ready == 'true' && needs.resolve.outputs.lane == 'dependency-promotion'
         run: printf 'PROMOTION_PYTHON314=%s\n' "$(command -v python)" >> "$GITHUB_ENV"
       - name: Merge exact trusted dependency promotion
-        if: needs.resolve.outputs.lane == 'dependency-promotion'
+        if: steps.post_merge_barrier.outputs.mutation_ready == 'true' && needs.resolve.outputs.lane == 'dependency-promotion'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
@@ -134,7 +142,7 @@ jobs:
           --allow-merge
           --target-promotion-pr "${{ needs.resolve.outputs.pr_number }}"
       - name: Merge exact trusted Dependabot Actions subject
-        if: needs.resolve.outputs.lane == 'dependabot-actions'
+        if: steps.post_merge_barrier.outputs.mutation_ready == 'true' && needs.resolve.outputs.lane == 'dependabot-actions'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
@@ -142,3 +150,50 @@ jobs:
           --reconcile
           --allow-merge
           --target-dependabot-pr "${{ needs.resolve.outputs.pr_number }}"
+
+      - name: Dispatch exact accepted-main post-merge validation
+        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONTROL_SHA: ${{ github.sha }}
+          TARGET_LANE: ${{ needs.resolve.outputs.lane }}
+          TARGET_PR: ${{ needs.resolve.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          [[ "$CONTROL_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$TARGET_PR" =~ ^[1-9][0-9]*$ ]]
+          case "$TARGET_LANE" in
+            dependency-promotion|dependabot-actions) ;;
+            *) exit 1 ;;
+          esac
+
+          pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${TARGET_PR}")"
+          test "$(jq -r '.merged' <<<"$pr_json")" = "true"
+          subject_sha="$(jq -r '.merge_commit_sha' <<<"$pr_json")"
+          head_sha="$(jq -r '.head.sha' <<<"$pr_json")"
+          [[ "$subject_sha" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]
+          live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
+          test "$live_main" = "$subject_sha"
+
+          commit_json="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${subject_sha}")"
+          jq -e \
+            --arg control "$CONTROL_SHA" \
+            --arg head "$head_sha" \
+            '
+              (.parents | length) == 2 and
+              .parents[0].sha == $control and
+              .parents[1].sha == $head and
+              .author.login == "github-actions[bot]" and
+              .author.id == 41898282 and
+              .committer.login == "web-flow" and
+              .committer.id == 19864447 and
+              .commit.verification.verified == true and
+              .commit.verification.reason == "valid"
+            ' <<<"$commit_json" >/dev/null
+
+          payload="$(jq -cn \
+            --arg control "$CONTROL_SHA" \
+            --arg subject "$subject_sha" \
+            '{event_type:"governed-post-merge-validation",client_payload:{lane:"dependency-trusted-merge",control_sha:$control,subject_sha:$subject}}')"
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/dispatches" --input - <<<"$payload"

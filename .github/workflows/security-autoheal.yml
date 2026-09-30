@@ -140,12 +140,22 @@ jobs:
           python-version: '3.11.16'
       - name: Validate trusted security mutation controller
         run: python .github/scripts/security_autoheal.py --validate-config --self-test
+      - name: Require accepted-main dependency validation before security mutation
+        id: post_merge_barrier
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python .github/scripts/dependency_recovery.py
+          --check-post-merge
+          --github-output "$GITHUB_OUTPUT"
       - name: Restore exact-run route plan from prior read-only job
+        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           artifact-ids: ${{ needs.route-plan.outputs.artifact-id }}
           path: ${{ runner.temp }}/security-autoheal-route-plan
       - name: Reconcile exact-subject CodeQL remediations from persisted routes
+        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
