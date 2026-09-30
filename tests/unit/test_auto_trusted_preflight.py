@@ -586,7 +586,9 @@ def test_scheduled_owner_authorization_requires_user_type_after_live_refetch(
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
     api = _scheduled_owner_api()
-    api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]["user"]["type"] = "Bot"
+    api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]["user"][
+        "type"
+    ] = "Bot"
 
     assert preflight.evaluate_admission(api, event={}, event_name="schedule") is None
 
