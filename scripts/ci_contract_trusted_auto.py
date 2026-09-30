@@ -110,14 +110,11 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
             "    types: [completed]",
             "  schedule:",
             '    - cron: "*/5 * * * *"',
-            "  issue_comment:",
-            "    types: [created]",
         )
     )
     if on_block != expected_on:
         raise ValueError(
-            "trusted-pr-auto.yml must expose only reviewed workflow-run, schedule, and exact "
-            "protected-maintenance comment triggers"
+            "trusted-pr-auto.yml must expose only reviewed workflow-run and schedule triggers"
         )
 
     concurrency = _base._semantic_text(_base._top_level_block(text, "concurrency"))
@@ -163,11 +160,6 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "    name: Automatic Trusted Admission",
         "    if: >-\n"
         "      github.event_name == 'schedule' ||\n"
-        "      (github.event_name == 'issue_comment' &&\n"
-        "       github.event.issue.pull_request &&\n"
-        "       github.event.sender.login == github.repository_owner &&\n"
-        "       github.event.comment.user.login == github.repository_owner &&\n"
-        "       startsWith(github.event.comment.body, '/trusted-maintenance ')) ||\n"
         "      (github.event_name == 'workflow_run' &&\n"
         "       github.event.workflow_run.conclusion == 'success')",
         "      actions: read",
@@ -188,7 +180,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         '            --github-output "$GITHUB_OUTPUT"',
         "            owner-routine)",
         "            owner-protected-maintenance)",
-        '              test "$GITHUB_EVENT_NAME" = "issue_comment"',
+        '              test "$GITHUB_EVENT_NAME" = "workflow_run"',
         '              test "$ELIGIBLE" = "true"',
         '              test "$PROTECTED_CHANGES_JSON" != "[]"',
         "            dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation)",
@@ -274,7 +266,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         '          read -r merge_sha base_sha head_sha extra_parent < <("${git_clean_env[@]}" /usr/bin/git rev-list --parents -n 1 "$EXPECTED_MERGE_SHA")',
         "            owner-routine)",
         "            owner-protected-maintenance)",
-        '              test "$GITHUB_EVENT_NAME" = "issue_comment"',
+        '              test "$GITHUB_EVENT_NAME" = "workflow_run"',
         '              test "$BOT_AUTHORITY_RESULT" = "skipped"',
         '              test "$PROTECTED_CHANGES_JSON" != "[]"',
         "            dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation)",
@@ -392,7 +384,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}",
         '          if test "$ELIGIBLE" = "true"; then',
         "              owner-protected-maintenance)",
-        '                test "$GITHUB_EVENT_NAME" = "issue_comment"',
+        '                test "$GITHUB_EVENT_NAME" = "workflow_run"',
         '                mode="protected-owner-maintenance"',
         "              dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation)",
         '                mode="governed-bot"',
@@ -483,7 +475,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         '          test "$FINAL_ELIGIBLE" = "true"',
         '          test "$FINAL_LANE" = "$EXPECTED_LANE"',
         "            owner-protected-maintenance)",
-        '              test "$GITHUB_EVENT_NAME" = "issue_comment"',
+        '              test "$GITHUB_EVENT_NAME" = "workflow_run"',
         '              test "$FINAL_PROTECTED_CHANGES" != "[]"',
         "            dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation) ;;",
         '          test "$FINAL_MERGE_SHA" = "$EXPECTED_MERGE_SHA"',
