@@ -770,7 +770,11 @@ def _resolve_subject(
         if observed_lane is not None:
             raise ValueError("owner admission resolved to a governed bot pull request")
         owner = _require_dict(live_pr.get("user"), label="owner pull request user")
-        if owner.get("login") != EXPECTED_OWNER or owner.get("id") != EXPECTED_OWNER_ID:
+        if (
+            owner.get("login") != EXPECTED_OWNER
+            or owner.get("id") != EXPECTED_OWNER_ID
+            or owner.get("type") != "User"
+        ):
             raise ValueError("owner admission requires the exact repository owner identity")
     else:
         raise ValueError("automatic trusted admission lane is not reviewed")
