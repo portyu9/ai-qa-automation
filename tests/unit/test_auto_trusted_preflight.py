@@ -538,6 +538,7 @@ def _scheduled_owner_api(
 ) -> ScheduledOwnerFakeAPI:
     responses = _protected_comment_responses()
     live = responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]
+    live["user"]["type"] = "User"
     summary = deepcopy(live)
     summary.pop("mergeable", None)
     event = _protected_comment_event()
@@ -568,6 +569,26 @@ def test_scheduled_owner_authorization_selects_exact_protected_subject(
     assert admission.base_sha == BASE
     assert admission.merge_sha == MERGE
     assert admission.protected_changes
+
+
+def test_scheduled_owner_authorization_requires_user_type_in_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    api = _scheduled_owner_api()
+    api.pulls[0]["user"]["type"] = "Bot"
+
+    assert preflight.evaluate_admission(api, event={}, event_name="schedule") is None
+
+
+def test_scheduled_owner_authorization_requires_user_type_after_live_refetch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    api = _scheduled_owner_api()
+    api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]["user"]["type"] = "Bot"
+
+    assert preflight.evaluate_admission(api, event={}, event_name="schedule") is None
 
 
 def test_scheduled_owner_authorization_ignores_stale_exact_claim(
