@@ -547,8 +547,8 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
 
     return {
         "trigger": (
-            "workflow_run:completed:reviewed-ci-codeql-or-dependency-governance+schedule:5m+"
-            "schedule:5m:exact-owner-protected-maintenance"
+            "workflow_run:completed:reviewed-ci-codeql-or-dependency-governance+"
+            "schedule:5m:bot-and-owner-maintenance-reconciliation"
         ),
         "wake_signal": (
             "owner-ci-or-exact-dependabot-actions-ci-or-"
