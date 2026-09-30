@@ -36,45 +36,39 @@ _require_sha = _control._require_sha
 parse_job_results = _control.parse_job_results
 resolve_current_subject = _control.resolve_current_subject
 
-EXPECTED_WORKFLOW_EVENTS = frozenset({"schedule", "workflow_run", "issue_comment"})
+EXPECTED_WORKFLOW_EVENTS = frozenset({"schedule", "workflow_run"})
 
 
 def _require_protected_owner_authorization(
     *,
     repository: str,
     token: str,
-    workflow_event: str,
     expected: PullRequestSubject,
-) -> dict[str, Any] | None:
-    """Re-prove exact owner authorization with the same App token used for publication."""
+) -> dict[str, Any]:
+    """Re-prove the exact live owner authorization with the App publication token."""
 
-    if workflow_event != "issue_comment":
-        return None
-    event_path = os.environ.get("GITHUB_EVENT_PATH", "")
-    if not event_path:
-        raise PermissionError("protected-maintenance status publication requires GITHUB_EVENT_PATH")
-    event = _preflight._require_dict(
-        _preflight._read_json_file(
-            Path(event_path),
-            max_bytes=_preflight.MAX_EVENT_BYTES,
-            label="protected-maintenance publication event",
-        ),
-        label="protected-maintenance publication event",
+    api = _preflight.GitHubAPI(
+        api_url=os.environ.get("GITHUB_API_URL", ""),
+        token=token,
+        repository=repository,
     )
-    admission = _preflight.evaluate_admission(
-        _preflight.GitHubAPI(
-            api_url=os.environ.get("GITHUB_API_URL", ""),
-            token=token,
-            repository=repository,
-        ),
-        event=event,
-        event_name="issue_comment",
+    trusted_sha = _preflight._current_main(api)
+    if trusted_sha != expected.base_sha:
+        raise PermissionError("protected-maintenance current main drifted before publication")
+    pr = _preflight._require_dict(
+        api.get(f"/repos/{repository}/pulls/{expected.number}"),
+        label="protected-maintenance publication pull request",
+    )
+    admission = _preflight._resolve_subject(
+        api,
+        lane=_preflight.PROTECTED_OWNER_LANE,
+        pr=pr,
+        head_sha=expected.head_sha,
+        trusted_sha=trusted_sha,
+        qualification_ready=True,
     )
     if (
-        admission is None
-        or admission.lane != _preflight.PROTECTED_OWNER_LANE
-        or admission.eligible is not True
-        or admission.pr_number != expected.number
+        admission.pr_number != expected.number
         or admission.head_sha != expected.head_sha
         or admission.base_sha != expected.base_sha
         or admission.merge_sha != expected.merge_sha
@@ -84,15 +78,10 @@ def _require_protected_owner_authorization(
         raise PermissionError(
             "protected-maintenance authorization is not exact for status publication"
         )
-    return {
-        "pr_number": admission.pr_number,
-        "head_sha": admission.head_sha,
-        "base_sha": admission.base_sha,
-        "merge_sha": admission.merge_sha,
-        "trusted_sha": admission.trusted_sha,
-        "protected_changes": admission.protected_changes,
-    }
-
+    snapshot = _preflight._protected_owner_authorization(api, admission=admission)
+    if snapshot is None:
+        raise PermissionError("protected-maintenance exact owner authorization is absent")
+    return snapshot
 
 def _require_current_main(api: GitHubApi, expected: PullRequestSubject) -> None:
     payload = api.get_json(f"/repos/{api.repository}/git/ref/heads/main")
@@ -115,6 +104,7 @@ def report_automatic_result(
     token: str,
     workflow_event: str,
     workflow_ref: str,
+    lane: str,
     workflow_run_id: int | str,
     workflow_run_attempt: int | str,
     expected: PullRequestSubject,
@@ -122,9 +112,17 @@ def report_automatic_result(
     target_url: str,
 ) -> dict[str, Any]:
     if workflow_event not in EXPECTED_WORKFLOW_EVENTS:
+        raise PermissionError("trusted status publication requires workflow_run or schedule")
+    reviewed_lanes = {"owner-routine", _preflight.PROTECTED_OWNER_LANE, *_preflight.BOT_LANES}
+    if lane not in reviewed_lanes:
+        raise PermissionError("trusted status publication lane is not reviewed")
+    maintenance = lane == _preflight.PROTECTED_OWNER_LANE
+    if maintenance and workflow_event != "workflow_run":
         raise PermissionError(
-            "trusted status publication requires workflow_run, schedule, or reviewed issue_comment"
+            "protected-maintenance status publication requires the accepted-main workflow_run lane"
         )
+    if workflow_event == "schedule" and lane not in _preflight.BOT_LANES:
+        raise PermissionError("scheduled trusted status publication is restricted to governed bot lanes")
     if workflow_ref != EXPECTED_WORKFLOW_REF:
         raise PermissionError("automatic trusted status publication requires refs/heads/main")
     run_id = _require_positive_int(workflow_run_id, label="trusted reporter workflow run id")
@@ -143,17 +141,19 @@ def report_automatic_result(
     if validation_result not in {"cancelled", "failure", "skipped", "success"}:
         raise ValueError("trusted validation job has an invalid terminal result")
 
-    authorization_snapshot = _require_protected_owner_authorization(
-        repository=repository,
-        token=token,
-        workflow_event=workflow_event,
-        expected=expected,
+    authorization_snapshot = (
+        _require_protected_owner_authorization(
+            repository=repository,
+            token=token,
+            expected=expected,
+        )
+        if maintenance
+        else None
     )
     api = GitHubApi(repository=repository, token=token)
     _require_current_main(api, expected)
     current = resolve_current_subject(api, expected)
     _require_current_main(api, current)
-    maintenance = workflow_event == "issue_comment"
     if validation_result == "success":
         state = "success"
         description = (
@@ -172,13 +172,16 @@ def report_automatic_result(
         f"{target_url}?pr={current.number}&base={current.base_sha}"
         f"&head={current.head_sha}&merge={current.merge_sha}"
     )
-    publication_authorization_snapshot = _require_protected_owner_authorization(
-        repository=repository,
-        token=token,
-        workflow_event=workflow_event,
-        expected=current,
+    publication_authorization_snapshot = (
+        _require_protected_owner_authorization(
+            repository=repository,
+            token=token,
+            expected=current,
+        )
+        if maintenance
+        else None
     )
-    if publication_authorization_snapshot != authorization_snapshot:
+    if maintenance and publication_authorization_snapshot != authorization_snapshot:
         raise PermissionError(
             "protected-maintenance authorization changed before status publication"
         )
@@ -214,6 +217,7 @@ def _subject_from_args(args: argparse.Namespace) -> PullRequestSubject:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Automatic trusted PR status reporter")
+    parser.add_argument("--lane", required=True)
     parser.add_argument("--pr-number", required=True)
     parser.add_argument("--expected-head-sha", required=True)
     parser.add_argument("--expected-base-sha", required=True)
@@ -230,6 +234,7 @@ def main() -> None:
         token=os.environ.get("GITHUB_TOKEN", ""),
         workflow_event=os.environ.get("GITHUB_EVENT_NAME", ""),
         workflow_ref=os.environ.get("GITHUB_REF", ""),
+        lane=args.lane,
         workflow_run_id=os.environ.get("GITHUB_RUN_ID", ""),
         workflow_run_attempt=os.environ.get("GITHUB_RUN_ATTEMPT", ""),
         expected=_subject_from_args(args),
