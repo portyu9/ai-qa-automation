@@ -155,6 +155,7 @@ def test_trusted_auto_contract_rejects_issue_comment_preflight_reentry(
     with pytest.raises(ValueError, match="preflight is missing reviewed fragment"):
         ci_contract.verify_ci_contract(root)
 
+
 def test_trusted_auto_contract_rejects_protected_owner_bot_authority_reentry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

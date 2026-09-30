@@ -111,9 +111,7 @@ class ScheduledOwnerFakeAPI(FakeAPI):
             and max_pages == preflight.MAX_API_PAGES
         ):
             return deepcopy(self.statuses)
-        raise AssertionError(
-            f"unexpected scheduled-owner list path: {path} max_pages={max_pages}"
-        )
+        raise AssertionError(f"unexpected scheduled-owner list path: {path} max_pages={max_pages}")
 
 
 def _tree(*, changed_path: str | None = None) -> list[dict[str, Any]]:
@@ -585,9 +583,9 @@ def test_scheduled_owner_authorization_rejects_live_comment_provenance_drift(
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
     api = _scheduled_owner_api()
-    api.responses[
-        f"/repos/{preflight.EXPECTED_REPOSITORY}/issues/comments/{PROTECTED_COMMENT_ID}"
-    ]["user"] = {"login": "attacker", "id": 999, "type": "User"}
+    api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/issues/comments/{PROTECTED_COMMENT_ID}"][
+        "user"
+    ] = {"login": "attacker", "id": 999, "type": "User"}
 
     with pytest.raises(ValueError, match="changed or lost provenance"):
         preflight.evaluate_admission(api, event={}, event_name="schedule")

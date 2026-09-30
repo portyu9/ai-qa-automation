@@ -1171,9 +1171,7 @@ def evaluate_admission(
             qualification_ready=True,
         )
     if event_name != "workflow_run":
-        raise ValueError(
-            "automatic trusted admission supports workflow_run or schedule only"
-        )
+        raise ValueError("automatic trusted admission supports workflow_run or schedule only")
     if event.get("action") != "completed":
         raise ValueError("workflow_run event action must be completed")
     event_run = _require_dict(event.get("workflow_run"), label="workflow_run event")

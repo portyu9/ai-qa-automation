@@ -29,7 +29,7 @@ def test_ci_contract_reports_autonomous_governed_bot_boundary() -> None:
     assert ordinary["protected_maintenance_authority"] == "centralized-app-gate-for-governed-bots"
     assert trusted_auto["status_writer"] == "dedicated-github-app"
     assert trusted_auto["maintenance_authority"] == (
-        "autonomous-governed-bots;exact-owner-default-branch-comment-authorization;first-attempt-only;dedicated-app-terminal-writer"
+        "autonomous-governed-bots;scheduled-exact-owner-default-branch-comment-authorization;first-attempt-only;dedicated-app-terminal-writer"
     )
     assert "automatic read-only development evidence" in limitations
     assert (
