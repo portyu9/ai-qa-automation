@@ -114,6 +114,29 @@ class ScheduledOwnerFakeAPI(FakeAPI):
         raise AssertionError(f"unexpected scheduled-owner list path: {path} max_pages={max_pages}")
 
 
+class SequencedScheduledOwnerFakeAPI(ScheduledOwnerFakeAPI):
+    def __init__(
+        self,
+        responses: dict[str, Any],
+        pulls: list[dict[str, Any]],
+        comments: list[dict[str, Any]],
+        statuses: list[dict[str, Any]] | None = None,
+    ) -> None:
+        super().__init__(responses, pulls, comments, statuses)
+        self.pull_get_count = 0
+
+    def get(self, path: str) -> Any:
+        pull_path = f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"
+        if path != pull_path:
+            return super().get(path)
+        self.calls.append(path)
+        self.pull_get_count += 1
+        payload = deepcopy(self.responses[path])
+        if self.pull_get_count >= 3:
+            payload["user"]["type"] = "Bot"
+        return payload
+
+
 def _tree(*, changed_path: str | None = None) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for path in preflight.PROTECTED_PATHS:
@@ -589,6 +612,24 @@ def test_scheduled_owner_authorization_requires_user_type_after_live_refetch(
     api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]["user"]["type"] = "Bot"
 
     assert preflight.evaluate_admission(api, event={}, event_name="schedule") is None
+
+
+def test_scheduled_owner_authorization_reproves_user_type_at_subject_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    base_api = _scheduled_owner_api()
+    api = SequencedScheduledOwnerFakeAPI(
+        base_api.responses,
+        base_api.pulls,
+        base_api.comments,
+        base_api.statuses,
+    )
+
+    with pytest.raises(ValueError, match="exact repository owner identity"):
+        preflight.evaluate_admission(api, event={}, event_name="schedule")
+
+    assert api.pull_get_count == 3
 
 
 def test_scheduled_owner_authorization_ignores_stale_exact_claim(
