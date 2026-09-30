@@ -9,8 +9,6 @@ on:
     types: [completed]
   schedule:
     - cron: "*/5 * * * *"
-  issue_comment:
-    types: [created]
 
 permissions:
   actions: read
@@ -31,11 +29,6 @@ jobs:
     name: Automatic Trusted Admission
     if: >-
       github.event_name == 'schedule' ||
-      (github.event_name == 'issue_comment' &&
-       github.event.issue.pull_request &&
-       github.event.sender.login == github.repository_owner &&
-       github.event.comment.user.login == github.repository_owner &&
-       startsWith(github.event.comment.body, '/trusted-maintenance ')) ||
       (github.event_name == 'workflow_run' &&
        github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-24.04
@@ -103,7 +96,7 @@ jobs:
               fi
               ;;
             owner-protected-maintenance)
-              test "$GITHUB_EVENT_NAME" = "issue_comment"
+              test "$GITHUB_EVENT_NAME" = "workflow_run"
               test "$TRUSTED_SHA" = "$GITHUB_SHA"
               test "$ELIGIBLE" = "true"
               test "$PROTECTED_CHANGES_JSON" != "[]"
@@ -267,7 +260,7 @@ jobs:
               test "$BOT_AUTHORITY_RESULT" = "skipped"
               ;;
             owner-protected-maintenance)
-              test "$GITHUB_EVENT_NAME" = "issue_comment"
+              test "$GITHUB_EVENT_NAME" = "workflow_run"
               test "$BOT_AUTHORITY_RESULT" = "skipped"
               test "$PROTECTED_CHANGES_JSON" != "[]"
               "${git_clean_env[@]}" /usr/bin/git diff --quiet "$EXPECTED_HEAD_SHA" "$EXPECTED_MERGE_SHA" --
@@ -742,7 +735,7 @@ jobs:
           if test "$ELIGIBLE" = "true"; then
             case "$LANE" in
               owner-protected-maintenance)
-                test "$GITHUB_EVENT_NAME" = "issue_comment"
+                test "$GITHUB_EVENT_NAME" = "workflow_run"
                 mode="protected-owner-maintenance"
                 ;;
               dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation)
@@ -959,7 +952,7 @@ jobs:
               test "$FINAL_PROTECTED_CHANGES" = "[]"
               ;;
             owner-protected-maintenance)
-              test "$GITHUB_EVENT_NAME" = "issue_comment"
+              test "$GITHUB_EVENT_NAME" = "workflow_run"
               test "$FINAL_PROTECTED_CHANGES" != "[]"
               ;;
             dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation) ;;
@@ -1097,6 +1090,7 @@ jobs:
         run: |
           printf -v job_results_json '{"validation":"%s"}' "$VALIDATION_RESULT"
           python scripts/auto_trusted_report.py \
+            --lane "${{ needs.preflight.outputs.lane }}" \
             --pr-number "$PR_NUMBER" \
             --expected-head-sha "$EXPECTED_HEAD_SHA" \
             --expected-base-sha "$EXPECTED_BASE_SHA" \
