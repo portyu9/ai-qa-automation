@@ -6,7 +6,7 @@ Repository source defines reviewed behavior and validation contracts. GitHub App
 
 ## Core invariant
 
-The terminal context is `Trusted PR Gate`, but the context string alone is not authority. The live branch rule must bind that context to the dedicated **ƳƤ Trusted PR Gate GitHub App** integration. A candidate workflow may create a same-named status, but it must not satisfy the App-bound rule.
+The terminal context is `Trusted PR Gate`, but the context string alone is not authority. The intended protected-branch rule binds that context to the dedicated **ƳƤ Trusted PR Gate GitHub App** integration; live ruleset state is externally administered and must be observed separately before claiming enforcement. A candidate workflow may create a same-named status, but it must not satisfy the App-bound rule when that rule is deployed.
 
 Model output has no authorization role.
 
@@ -16,7 +16,7 @@ The authority chain is:
 
 ## Three admission classes
 
-The control plane distinguishes owner-routine changes, finite governed-bot changes, and explicit owner-protected maintenance. The strict App-bound branch rule is unchanged across all three classes.
+The control plane distinguishes owner-routine changes, finite governed-bot changes, and explicit owner-protected maintenance. The source-level admission and dedicated-App terminal-status contract is unchanged across all three classes; live ruleset enforcement is an external deployment condition and cannot be inferred from repository source.
 
 ### Owner-routine automatic path
 
