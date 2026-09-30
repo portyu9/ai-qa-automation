@@ -95,9 +95,9 @@ TRUSTED_STATUS_CONTEXT = "Trusted PR Gate"
 TRUSTED_STATUS_BOT_LOGIN = "trusted-pr-gate[bot]"
 TRUSTED_STATUS_BOT_USER_ID = 322661847
 TRUSTED_STATUS_TARGET_RE = re.compile(
-    r"^https://github\\.com/portyu9/ai-qa-automation/actions/runs/"
+    r"^https://github\.com/portyu9/ai-qa-automation/actions/runs/"
     r"(?P<run_id>[1-9][0-9]*)"
-    r"\\?pr=(?P<pr>[1-9][0-9]*)&base=(?P<base>[0-9a-f]{40})"
+    r"\?pr=(?P<pr>[1-9][0-9]*)&base=(?P<base>[0-9a-f]{40})"
     r"&head=(?P<head>[0-9a-f]{40})&merge=(?P<merge>[0-9a-f]{40})$"
 )
 BOT_LANES = {
@@ -1052,7 +1052,9 @@ def _select_scheduled_protected_owner_admission(
             or base.get("sha") != trusted_sha
         ):
             continue
-        number = _require_positive_int(pr.get("number"), label="scheduled protected-owner PR number")
+        number = _require_positive_int(
+            pr.get("number"), label="scheduled protected-owner PR number"
+        )
         _require_sha(head.get("sha"), label="scheduled protected-owner head SHA")
         owner_candidates.append((number, pr))
 
@@ -1084,7 +1086,8 @@ def _select_scheduled_protected_owner_admission(
             or base_repo.get("full_name") != EXPECTED_REPOSITORY
             or base.get("ref") != EXPECTED_DEFAULT_BRANCH
             or base.get("sha") != trusted_sha
-            or head.get("sha") != _require_dict(summary.get("head"), label="scheduled summary head").get("sha")
+            or head.get("sha")
+            != _require_dict(summary.get("head"), label="scheduled summary head").get("sha")
         ):
             continue
         head_sha = _require_sha(head.get("sha"), label="live scheduled protected-owner head SHA")
